@@ -13,7 +13,6 @@ import {
 } from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
 import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
-import { completeInstallBind, recordPendingBind } from "../../services/github-app-install-intents.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import {
@@ -44,13 +43,14 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
  * `GET /orgs/:orgId/github-app-installation/install-url` and surfaced both
  * in onboarding's "Connect your code" step and Settings → GitHub. After
  * that dialog GitHub redirects back here with `code + state +
- * installation_id`. The callback does NOT bind the installation: it records
- * a per-install pending bind (keyed by `installation_id`, authorized by the
- * signed kickoff state — `kickoffUserId`), and the actual bind is performed by
- * the trusted, HMAC-signed `installation.created` webhook once it proves the
- * installer IS the kickoff admin (and re-checks live admin). The URL
- * `installation_id` is only a correlation handle; a forged one never binds.
- * The browser's github.com session is independent of the First Tree session.
+ * installation_id` (or without `code` when the install is parked for
+ * owner approval, and without `state` when GitHub's own settings UI is
+ * the origin). The callback does NOT bind the installation: the trusted,
+ * HMAC-signed `installation.created` webhook records it unbound (with
+ * its requester/installer GitHub ids), and a team admin explicitly
+ * connects it from the Settings connect panel. The URL `installation_id`
+ * is never a binding input; a forged one changes nothing. The browser's
+ * github.com session is independent of the First Tree session.
  *
  * The live `/callback` is a full-page browser navigation, so its error
  * replies redirect to the SPA error surface
@@ -104,11 +104,25 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     }
     const parsed = githubCallbackQuerySchema.parse(request.query);
     // `installation_id` from the URL is unsigned/forgeable, so it is NEVER a
-    // binding authority on its own. On the kickoff install path it is used
-    // only as a *correlation handle*: we record a per-install pending bind,
-    // and the trusted `installation.created` webhook completes it only after
-    // proving this installation's installer is the kickoff admin.
+    // binding authority. Binding is an explicit connect-panel action against
+    // the row the trusted `installation.created` webhook recorded.
     const { code, state, installation_id: installationIdRaw } = parsed;
+
+    if (!state) {
+      // Stateless setup landing — GitHub redirects here from its OWN
+      // settings UI (an org owner approving or reconfiguring the App) with
+      // `setup_action` + `installation_id` but no First Tree state. Nothing
+      // to verify and nobody to sign in: the webhook records the
+      // installation, and connecting it is a panel action. Land the browser
+      // on the SPA instead of the raw Zod error page this shape used to
+      // produce.
+      app.log.info(
+        { event: "github_oauth.setup_landing_stateless", setupAction: parsed.setup_action ?? null },
+        "github callback without state — landing on SPA",
+      );
+      return reply.redirect("/", 302);
+    }
+
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
 
     let next: string;
@@ -128,6 +142,21 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         "github callback state rejected — redirecting to SPA error surface",
       );
       return redirectCallbackError(reply, "state-expired");
+    }
+
+    if (!code) {
+      // Kickoff round-trip that produced no OAuth code — the
+      // `setup_action=request` shape: the user asked to install on an org
+      // they don't own and GitHub parked the install pending owner approval
+      // (observed on staging: no `code`, no `installation_id`). Their First
+      // Tree session is untouched; send them back to the surface they
+      // started from (`next` from the signed state), where the connect
+      // panel's poll picks the installation up once an owner approves.
+      app.log.info(
+        { event: "github_oauth.setup_landing_no_code", setupAction: parsed.setup_action ?? null },
+        "github callback without code — landing back on the kickoff surface",
+      );
+      return reply.redirect(next, 302);
     }
 
     // Clear the state cookie even on success — it's single-use.
@@ -152,8 +181,8 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         redirectUri,
         // The OAuth code exchange resolves the signing-in identity for LOGIN.
         // It is not an installation-binding input, so we don't thread the URL
-        // `installation_id` through it; binding is handled separately via the
-        // per-install pending bind + trusted `installation.created` webhook.
+        // `installation_id` through it; binding is an explicit connect-panel
+        // action against the webhook-recorded row.
         installationId: null,
       });
       profile = result.profile;
@@ -169,10 +198,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Pass the URL `installation_id` (validated to a finite number, else null)
-    // through to completeOauthFlow. It is used ONLY inside the kickoff branch,
-    // and ONLY after that branch proves the OAuth-resolved user IS the kickoff
-    // admin — so no install-bind side effect happens on an identity mismatch
-    // (the pending-bind record + `completeInstallBind` live there, not here).
+    // through to completeOauthFlow. The real callback never binds it —
+    // `completeOauthFlow` only uses it on the dev-callback QA path
+    // (`devBindInstallation`); it rides along here purely for log context.
     const callbackInstallationId =
       installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
 
@@ -334,19 +362,18 @@ async function completeOauthFlow(
    */
   oauthTokens: GithubTokenBundle,
   /**
-   * The URL `installation_id` (validated) from the callback, or null. It is a
-   * correlation handle, NOT a binding authority: it is used ONLY inside the
-   * kickoff branch, and only after that branch proves the OAuth-resolved user
-   * is the kickoff admin, to record a per-install pending bind that the signed
-   * `installation.created` webhook then completes. `dev-callback` passes its
-   * stub id together with `opts.devBindInstallation` for a direct QA bind.
+   * The URL `installation_id` (validated) from the callback, or null. Never a
+   * binding input on the real callback — binding is an explicit connect-panel
+   * action against the webhook-recorded row. Only the dev-callback QA path
+   * consumes it (its stub id together with `opts.devBindInstallation`).
    */
   installationId: number | null,
   /**
-   * First Tree org the install should bind to, carried in the signed state when
-   * the flow was kicked off from an org's Settings panel (codex P1-3).
-   * The user MUST be an active admin of it (re-checked here against the
-   * live `members` row — the state JWT outlives a membership revoke).
+   * First Tree org whose panel kicked off the install, carried in the signed
+   * state (codex P1-3). Used to pin the browser back onto that org so the
+   * user lands on the panel they started from — not to bind anything. The
+   * user MUST be an active admin of it (re-checked here against the live
+   * `members` row — the state JWT outlives a membership revoke).
    * Overridden by invite-redemption: if `next` is an `/invite/<token>`
    * path, that org wins regardless. Null on the plain sign-in flow.
    */
@@ -462,14 +489,12 @@ async function completeOauthFlow(
       // The install was completed under a DIFFERENT GitHub identity than the
       // admin who kicked it off — the browser's github.com session differs
       // from the First Tree kickoff admin (a second GitHub account, someone
-      // else's github.com session in the same browser, …). Binding requires
-      // installer == kickoff admin: the install-intent is keyed by the
-      // kickoff admin's GitHub id and the trusted `installation.created`
-      // webhook only binds when its `sender` matches, so this install will
-      // NOT bind. Surface it as an error rather than sign the browser in as
-      // the foreign identity (which would replace the kickoff admin's
-      // session in every tab). Install must use the same GitHub account you
-      // signed in / started the install with.
+      // else's github.com session in the same browser, …). No bind side
+      // effect exists to worry about here (binding is a panel action), but
+      // completing the flow would sign the browser in as the foreign
+      // identity — replacing the kickoff admin's session in every tab.
+      // Surface it as an error instead: install must use the same GitHub
+      // account you signed in / started the install with.
       app.log.warn(
         {
           event: "github_app.install_callback_identity_mismatch",
@@ -483,40 +508,18 @@ async function completeOauthFlow(
       );
       return redirectCallbackError(reply, "install-not-verified", next);
     }
-    // Identity match confirmed (OAuth-resolved user IS the kickoff admin, who
-    // is an active admin of the target org — checked above). ONLY NOW is it
-    // safe to record the per-install pending bind: recording it before the
-    // mismatch guard would let a callback under a foreign identity trigger a
-    // bind side effect while still returning `install-not-verified`. Here
-    // `profile.githubId` is the kickoff admin's GitHub id, so the trusted
-    // `installation.created` webhook completes the bind only when THIS
-    // installation's installer matches (and the admin is still active).
-    // `completeInstallBind` also covers the webhook-arrived-before-callback
-    // ordering. Non-fatal on error — the webhook retries completion.
-    if (installationId !== null) {
-      try {
-        await recordPendingBind(app.db, {
-          installationId,
-          targetOrganizationId,
-          kickoffUserId: bindAuthorityUserId,
-          kickoffGithubId: Number(profile.githubId),
-        });
-        await completeInstallBind(app.db, installationId);
-      } catch (err) {
-        app.log.warn(
-          { err, installationId, targetOrganizationId, kickoffUserId: bindAuthorityUserId },
-          "install pending-bind record/complete failed in callback — webhook will retry",
-        );
-      }
-    }
+    // No bind happens here: the `installation.created` webhook records the
+    // installation (with its requester/installer anchors) and the admin
+    // connects it from the panel `next` points back to. This branch only
+    // pins the kickoff org so the browser lands on the right team's panel.
     resolved = true;
     resolvedOrganizationId = targetOrganizationId;
     // joinPath stays "returning"; keep caller's `next` (the Settings page)
-    // so the panel re-renders with the now-bound installation. Pin the org
-    // explicitly: this is a deliberate App-install destination, so the SPA
-    // must activate the just-bound org even though the join path reads as a
-    // returning sign-in — otherwise a concurrent org switch in another tab
-    // would land the Settings page on the user's last-used org instead.
+    // so the panel's poll can surface the just-recorded installation. Pin
+    // the org explicitly: this is a deliberate App-install destination, so
+    // the SPA must activate the kickoff org even though the join path reads
+    // as a returning sign-in — otherwise a concurrent org switch in another
+    // tab would land the Settings page on the user's last-used org instead.
     orgPinned = true;
   } else {
     const primary = await pickPrimaryMembership(app.db, userId);
@@ -558,14 +561,14 @@ async function completeOauthFlow(
   }
 
   // Direct installation bind — DEV-CALLBACK ONLY, gated by `devBindInstallation`.
-  // The real `/callback` NEVER sets that flag: real binding is driven
-  // exclusively by the trusted, HMAC-signed `installation.created` webhook via
-  // the per-install pending bind recorded above, never by the browser-supplied
-  // URL id. `dev-callback` passes a stub installation id + the flag so a local
+  // The real `/callback` NEVER sets that flag: real binding is an explicit
+  // connect-panel action against the row the trusted, HMAC-signed
+  // `installation.created` webhook recorded — never the browser-supplied URL
+  // id. `dev-callback` passes a stub installation id + the flag so a local
   // QA session looks connected without a real webhook. The flag gate (not just
-  // `installationId !== null`) is essential now that the real callback DOES
-  // pass a URL `installation_id` for the kickoff pending bind — binding it here
-  // would reopen the URL-forgery hole.
+  // `installationId !== null`) is essential because the real callback DOES
+  // still receive a URL `installation_id` — binding it here would reopen the
+  // URL-forgery hole.
   if (devBindInstallation && installationId !== null && resolvedOrganizationId) {
     try {
       await bindInstallationToOrg(app.db, installationId, resolvedOrganizationId);
@@ -577,12 +580,11 @@ async function completeOauthFlow(
     }
   }
 
-  // NOTE: the previous sign-in-time orphan-install auto-reclaim sweep (which
-  // matched unbound rows by the user's GitHub *account* id and auto-bound the
-  // single match) is removed. Binding is now webhook-driven, and recovery of
-  // an unbound install goes through the explicit `POST /claim`, which matches
-  // on the trusted `installer_github_id` (the webhook `sender`) rather than
-  // mere account membership.
+  // NOTE: sign-in performs no installation binding of any kind. Unbound
+  // installations (fresh installs, approval-flow installs, disconnected
+  // rows) surface on the Settings connect panel, matched to the signed-in
+  // user by the trusted `requester_github_id` / `installer_github_id`
+  // webhook anchors, and bind only on an explicit connect action there.
 
   if (!resolved) {
     if (browserFacing) return redirectCallbackError(reply, "membership-unresolved");

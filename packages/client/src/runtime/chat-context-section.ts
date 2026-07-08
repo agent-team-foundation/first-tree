@@ -94,12 +94,12 @@ export function renderRuntimeOutputContract(): string {
     'Who reads your output: inside First Tree, the "user" your underlying agent addresses — the reader of everything you produce apart from running a chat command, including the text you write outside of tool calls and the message that closes your turn — is the First Tree runtime, an automated operator that records it as a live reasoning/activity trace. Think, plan, and narrate there freely. That trace surfaces to people viewing the session as a one-line activity preview, so treat it as visible. This is your console.',
     "",
     "Your teammates — the humans and agents in this chat — are a separate audience. You reach a teammate by running the chat CLI as a command-line tool — a real command you run, the same execution path you use for any other tool:",
-    `- \`${bin} chat send <name> "<message>"\` — deliver a reply, or hand an agent its next step`,
-    `- \`${bin} chat ask <human> "<question>"\` — put a tracked decision to a human`,
+    `- \`${bin} chat send <name> "<message>"\` — deliver a reply, or hand an agent its next step (informational only; a question your next step depends on goes through \`chat ask\`, never a send)`,
+    `- \`${bin} chat ask <human> -F <body.md>\` — put a tracked decision to a human; the body is decision-self-sufficient: why the question exists + a recap of recent interactions + the single question and your recommendation`,
     `- \`${bin} chat update --description "<status>"\` — record status`,
     "The console addresses the runtime; running one of these commands is what places your message in front of a teammate. Describing a reply in your output records words on the console, while running the command delivers them.",
     "",
-    "So a request to hold off from acting scopes the business actions that change the workspace or the world — running a chat command delivers your words and changes nothing else, so it stays the way you finish a human-directed turn. (Replying to a human is required; an agent wake-up with nothing new to act on can end without a send.)",
+    "So a request to hold off from acting scopes the business actions that change the workspace or the world, while, unless the instruction sets a narrower scope, a teammate-assigned task whose completion state is a pull request is the explicit request to create the task branch/worktree, commit and push only the scoped changes, and open that PR without amending existing commits, force-pushing, or carrying unrelated work unless separately asked; running a chat command delivers your words and changes nothing else, so it stays the way you finish a human-directed turn. (Replying to a human is required; an agent wake-up with nothing new to act on can end without a send.)",
     "</first-tree-runtime-contract>",
   ].join("\n");
 }

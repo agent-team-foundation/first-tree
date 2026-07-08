@@ -1,12 +1,15 @@
+import { AGENT_BIND_REJECT_REASONS } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
+import * as agentRuntimeSessionService from "../services/agent-runtime-session.js";
 import { createChat } from "../services/chat.js";
 import * as clientService from "../services/client.js";
 import * as connectionManager from "../services/connection-manager.js";
@@ -333,6 +336,159 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     const row = await loadNotifyRow(sent.message.id);
     expect(row?.status).toBe("pending");
     expect(row?.deliveredAt).toBeNull();
+
+    ws.close();
+  }, 10_000);
+
+  it("rejects first-bind from a socket whose client was retired after register", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    await clientService.retireClient(app.db, clientId);
+    const agent = await createAgent(app.db, {
+      name: `race-retired-bind-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Race Retired Bind",
+      managerId: memberId,
+      runtimeProvider: "claude-code",
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: "agent:bind",
+        ref: `bind-retired-${crypto.randomUUID()}`,
+        agentId: agent.uuid,
+        runtimeType: "claude-code",
+      }),
+    );
+    const msg = (await waitForFrame(ws, (m) => m.type === "agent:bind:rejected")) as {
+      type?: string;
+      reason?: string;
+    };
+    expect(msg.reason).toBe(AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+
+    const [row] = await app.db.select({ clientId: agents.clientId }).from(agents).where(eq(agents.uuid, agent.uuid));
+    expect(row?.clientId).toBeNull();
+    ws.close();
+  }, 10_000);
+
+  it("does not publish presence when the client is retired after runtime-session claim", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agent = await createAgent(app.db, {
+      name: `race-retired-mid-bind-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Race Retired Mid Bind",
+      managerId: memberId,
+      clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const originalBind = agentRuntimeSessionService.bindAgentRuntimeSession;
+    const bindSpy = vi
+      .spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession")
+      .mockImplementationOnce(async (db, agentId, bindClientId) => {
+        const token = await originalBind(db, agentId, bindClientId);
+        await clientService.retireClient(app.db, clientId);
+        return token;
+      });
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: `bind-retired-mid-${crypto.randomUUID()}`,
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+        }),
+      );
+      const msg = (await waitForFrame(ws, (m) => m.type === "agent:bind:rejected")) as {
+        type?: string;
+        reason?: string;
+      };
+      expect(msg.reason).toBe(AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+    } finally {
+      bindSpy.mockRestore();
+      ws.close();
+    }
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agent.uuid));
+    expect(presence?.status ?? "offline").toBe("offline");
+    expect(presence?.clientId ?? null).toBeNull();
+
+    const [row] = await app.db
+      .select({ status: agents.status, clientId: agents.clientId, metadata: agents.metadata })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid));
+    expect(row?.status).toBe("suspended");
+    expect(row?.clientId).toBeNull();
+    expect((row?.metadata as Record<string, unknown> | null)?.runtimeSession).toBeUndefined();
+    expect(connectionManager.getAgentClientId(agent.uuid)).toBeUndefined();
+  }, 10_000);
+
+  it("does not revoke a successor bind when a displaced same-client socket aborts", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agent = await createAgent(app.db, {
+      name: `race-displaced-bind-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Race Displaced Bind",
+      managerId: memberId,
+      clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const originalPublish = presenceService.bindAgentIfActiveClient;
+    let successorToken: string | undefined;
+    const publishSpy = vi
+      .spyOn(presenceService, "bindAgentIfActiveClient")
+      .mockImplementationOnce(async (db, agentId, data) => {
+        const published = await originalPublish(db, agentId, data);
+        successorToken = await agentRuntimeSessionService.bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+        connectionManager.bindAgentToClient(clientId, agent.uuid, successorToken);
+        return published;
+      });
+
+    let activeChecks = 0;
+    const activeSpy = vi.spyOn(connectionManager, "isActiveClientConnection").mockImplementation((id) => {
+      if (id !== clientId) return false;
+      activeChecks += 1;
+      return activeChecks !== 2;
+    });
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: `bind-displaced-${crypto.randomUUID()}`,
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+        }),
+      );
+      const msg = (await waitForFrame(ws, (m) => m.type === "agent:bind:rejected")) as {
+        type?: string;
+        reason?: string;
+      };
+      expect(msg.reason).toBe(AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+    } finally {
+      publishSpy.mockRestore();
+      activeSpy.mockRestore();
+    }
+
+    expect(successorToken).toBeDefined();
+    await expect(
+      agentRuntimeSessionService.validateAgentRuntimeSession(app.db, agent.uuid, clientId, successorToken ?? ""),
+    ).resolves.toBe(true);
+    expect(connectionManager.getAgentClientId(agent.uuid)).toBe(clientId);
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agent.uuid));
+    expect(presence?.status).toBe("online");
+    expect(presence?.clientId).toBe(clientId);
 
     ws.close();
   }, 10_000);

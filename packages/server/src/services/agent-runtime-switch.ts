@@ -6,14 +6,14 @@ import {
   defaultRuntimeConfigPayload,
   type RuntimeProvider,
 } from "@first-tree/shared";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import * as semver from "semver";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ClientRetiredError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { ensureClientSupportsRuntimeProvider, selectAgentRowWithRuntime } from "./agent.js";
 import { revokeAgentRuntimeSession } from "./agent-runtime-session.js";
@@ -147,17 +147,18 @@ function maybeInjectRuntimeSwitchFault(options: RuntimeSwitchOptions, point: Run
 }
 
 async function abortRuntimeSwitchClaim(db: Database, agentId: string, claim: RuntimeSwitchClaim): Promise<boolean> {
+  const oldClientCondition = claim.oldClientId ? eq(agents.clientId, claim.oldClientId) : isNull(agents.clientId);
   const [row] = await db
     .update(agents)
     .set({
-      status: AGENT_STATUSES.ACTIVE,
+      status: claim.oldClientId ? AGENT_STATUSES.ACTIVE : AGENT_STATUSES.SUSPENDED,
       metadata: sql`${agents.metadata} - 'runtimeSwitch'`,
       updatedAt: new Date(),
     })
     .where(
       and(
         eq(agents.uuid, agentId),
-        eq(agents.clientId, claim.oldClientId),
+        oldClientCondition,
         eq(agents.runtimeProvider, claim.oldRuntimeProvider),
         sql`${agents.metadata}->'runtimeSwitch'->>'claimId' = ${claim.claimId}`,
         sql`${agents.metadata}->'runtimeSwitch'->>'phase' = 'claimed'`,
@@ -198,6 +199,7 @@ async function detachOldRuntimeAfterCommittedRoute(
   agentId: string,
   claim: Pick<RuntimeSwitchClaim, "oldClientId">,
 ): Promise<void> {
+  if (!claim.oldClientId) return;
   await revokeAgentRuntimeSession(db, agentId, claim.oldClientId);
   forceDisconnect(agentId, "agent_runtime_switch", claim.oldClientId);
   await setOffline(db, agentId);
@@ -221,17 +223,17 @@ export async function switchAgentRuntime(
   if (current.type === AGENT_TYPES.HUMAN) {
     throw new BadRequestError("Human agents do not have a runtime to switch");
   }
-  if (current.status !== AGENT_STATUSES.ACTIVE) {
-    throw new BadRequestError("Only active agents can switch runtime");
+  const activeBoundRoute = current.status === AGENT_STATUSES.ACTIVE && !!current.clientId;
+  const clearedSuspendedRoute = current.status === AGENT_STATUSES.SUSPENDED && !current.clientId;
+  if (!activeBoundRoute && !clearedSuspendedRoute) {
+    throw new BadRequestError("Only active agents or suspended agents without a computer can switch runtime");
   }
-  if (!current.clientId) {
-    throw new BadRequestError("Bind this agent to a computer before switching runtime");
-  }
-  const oldClientId = current.clientId;
+  const oldClientId = current.clientId ?? "";
+  const oldClientCondition = oldClientId ? eq(agents.clientId, oldClientId) : isNull(agents.clientId);
   assertNoRuntimeSwitchInProgress(current);
 
   const oldRuntimeProvider = current.runtimeProvider as RuntimeProvider;
-  if (input.clientId === oldClientId && input.runtimeProvider === oldRuntimeProvider) {
+  if (oldClientId && input.clientId === oldClientId && input.runtimeProvider === oldRuntimeProvider) {
     throw new BadRequestError("Target computer and runtime match the agent's current configuration");
   }
 
@@ -249,6 +251,7 @@ export async function switchAgentRuntime(
       id: clients.id,
       userId: clients.userId,
       sdkVersion: clients.sdkVersion,
+      retiredAt: clients.retiredAt,
     })
     .from(clients)
     .where(eq(clients.id, input.clientId))
@@ -262,24 +265,11 @@ export async function switchAgentRuntime(
   if (targetClient.userId !== manager.userId) {
     throw new ForbiddenError(`Client "${input.clientId}" is not owned by the agent manager's user`);
   }
+  if (targetClient.retiredAt) {
+    throw new ClientRetiredError(`Client "${input.clientId}" has been retired`);
+  }
   assertRuntimeSwitchClientVersion(targetClient.sdkVersion);
   await ensureClientSupportsRuntimeProvider(db, targetClient.id, input.runtimeProvider);
-
-  const [delegate] = await db
-    .select({ uuid: agents.uuid })
-    .from(agents)
-    .where(
-      and(
-        eq(agents.organizationId, current.organizationId),
-        eq(agents.type, AGENT_TYPES.HUMAN),
-        eq(agents.delegateMention, current.uuid),
-        ne(agents.status, AGENT_STATUSES.DELETED),
-      ),
-    )
-    .limit(1);
-  if (delegate) {
-    throw new ConflictError("Clear member delegate mention before switching this agent's runtime");
-  }
 
   const claim: RuntimeSwitchClaim = {
     claimId: uuidv7(),
@@ -304,8 +294,8 @@ export async function switchAgentRuntime(
       .where(
         and(
           eq(agents.uuid, current.uuid),
-          eq(agents.status, AGENT_STATUSES.ACTIVE),
-          eq(agents.clientId, oldClientId),
+          eq(agents.status, current.status),
+          oldClientCondition,
           eq(agents.runtimeProvider, oldRuntimeProvider),
           sql`NOT (${agents.metadata} ? 'runtimeSwitch')`,
         ),
@@ -333,10 +323,15 @@ export async function switchAgentRuntime(
           and(
             eq(agents.uuid, current.uuid),
             eq(agents.status, AGENT_STATUSES.SUSPENDED),
-            eq(agents.clientId, oldClientId),
+            oldClientCondition,
             eq(agents.runtimeProvider, oldRuntimeProvider),
             sql`${agents.metadata}->'runtimeSwitch'->>'claimId' = ${claim.claimId}`,
             sql`${agents.metadata}->'runtimeSwitch'->>'phase' = 'claimed'`,
+            sql`EXISTS (
+              SELECT 1 FROM ${clients}
+              WHERE ${clients.id} = ${input.clientId}
+                AND ${clients.retiredAt} IS NULL
+            )`,
           ),
         )
         .returning({ uuid: agents.uuid });

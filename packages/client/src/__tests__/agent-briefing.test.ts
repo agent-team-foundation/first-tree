@@ -717,6 +717,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // scoped to agents only.
     expect(briefing).toContain("Replying to a human is required, not optional");
     expect(briefing).toContain("no loop risk in always answering");
+    // The send/ask boundary routes by dependency, not importance: a send is
+    // self-sufficient (readable, then ignorable); a turn that ends blocked on
+    // the human ends with a `chat ask` — a blocking question never rides in a
+    // plain send (liuchao-001 2026-07-06).
+    expect(briefing).toMatch(/A send must be self-sufficient/);
+    expect(briefing).toMatch(/never a send with a blocking question\s+folded in/);
+    expect(briefing).toMatch(/Route by\s+dependency, not importance/);
     expect(briefing).toMatch(/This brake is for agents/);
     // Anti-spam discipline: at most one plain human reply per turn; ongoing
     // progress goes to `chat update --description`. The only skip-the-reply case
@@ -753,11 +760,41 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).not.toContain("--answer");
     expect(briefing).not.toContain("--question");
     expect(briefing).not.toContain("--close");
-    // Usage discipline: `chat ask` is ONLY for a genuine user decision that
-    // can't be inferred — never a progress / permission check.
+    // Usage discipline: importance governs whether a question should exist at
+    // all (never manufacture progress / permission checks); dependency governs
+    // routing — a genuine blocking question is ALWAYS an ask, never a question
+    // folded into a plain send (liuchao-001 2026-07-06).
+    expect(briefing).toMatch(/The routing test is \*\*dependency, not importance\*\*/);
     expect(briefing).toMatch(/genuinely the user's to make/);
-    expect(briefing).toMatch(/Do NOT use it for progress or[\s\n]+permission checks/);
+    expect(briefing).toMatch(/Do NOT manufacture progress or[\s\n]+permission checks/);
     expect(briefing).toContain("can I continue?");
+    // The ask body is decision-self-sufficient: three fixed markdown sections
+    // a human who remembers nothing of this chat can decide from — they run
+    // many chats in parallel, and a future cross-chat review surface may show
+    // the ask alone, outside the chat.
+    // Section labels match the example headings exactly (a future cross-chat
+    // ask-review surface may parse them): Why this question exists / Recent
+    // context / The question.
+    expect(briefing).toContain("decision-self-sufficient");
+    expect(briefing).toContain("Why this question exists");
+    expect(briefing).toContain("Recent context");
+    expect(briefing).toMatch(/\*\*The question\*\* — ONE question, plus your recommendation/);
+    // Reader-context bar (l42y 2026-07-06): the ask may not assume
+    // familiarity with, understanding of, or recall of the underlying
+    // context — a shorthand is undecidable not because it is technical but
+    // because its meaning lives in context the reader does not hold. And asks
+    // decrease over time as the agent learns the human's decision patterns
+    // from earlier answers.
+    expect(briefing).toMatch(/Assume no familiarity with the underlying context/);
+    expect(briefing).toMatch(/Unpack every compressed\s+reference/);
+    expect(briefing).toMatch(/meaning lives in\s+context the reader does not hold/);
+    expect(briefing).toMatch(/cannot produce a good\s+decision/);
+    // Evidence boundary (codex-assistant): a prior answer suppresses an ask
+    // only when citable — visible transcript, durable record, or just-provided
+    // material; an inferred preference settles nothing.
+    expect(briefing).toMatch(/only when you can\s+actually cite them/);
+    expect(briefing).toMatch(/without such a\s+source the question is not settled — ask/);
+    expect(briefing).toMatch(/Ask volume should fall as\s+you learn/);
 
     expect(briefing).toContain("## Chat Topic & Description");
     expect(briefing).toContain("first-tree chat update");
@@ -937,6 +974,9 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
+    expect(briefing).toMatch(/request explicitly includes[\s\n]+creating and updating the needed tree-node files/);
+    expect(briefing).toContain("`NODE.md` and other");
+    expect(briefing).toContain("`*.md` nodes");
     expect(briefing).toMatch(
       /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
     );
@@ -969,7 +1009,7 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });
 
-  it("substitutes a tree-less Tree Location stub that surfaces the gap to a human", () => {
+  it("substitutes a tree-less Tree Location stub that surfaces the gap for ordinary tasks but carves out the seed admin create+bind", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     // Section header still emitted so the briefing's # Context Tree always
     // contains all four subsections — predictable for the agent and for
@@ -978,10 +1018,17 @@ describe("buildAgentBriefing — # Context Tree", () => {
     const treeLocationStart = briefing.indexOf("## Tree Location");
     const stub = briefing.slice(treeLocationStart);
     expect(stub).toContain("This agent has no Context Tree bound");
-    expect(stub).toContain("surface that\ngap to a human");
+    // Ordinary task with no tree → still an operator action; surface the gap.
+    expect(stub).toContain("surface that gap to a human");
     expect(stub).toContain("operator action");
-    // The retired onboarding skill must not be named — there is no
-    // in-agent flow to bind a workspace anymore.
+    // Carve-out: a build / set-up-the-tree task IS the sanctioned in-agent
+    // create + bind for a confirmed admin — the agent must not turn that
+    // happy-path into a "who runs the bind?" question (reconciles the briefing
+    // with first-tree-seed State A).
+    expect(stub).toContain("build / set up the Context Tree");
+    expect(stub).toContain("confirmed org admin");
+    expect(stub).toContain('"who runs the bind?"');
+    // The retired onboarding skill must not be named.
     expect(stub).not.toContain("first-tree-onboarding");
   });
 

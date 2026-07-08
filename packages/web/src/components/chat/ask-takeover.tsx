@@ -97,7 +97,11 @@ export function AskTakeover({
   error,
   onReply,
   onSkip,
+  isTrial = false,
 }: {
+  /** Trial surface: match the minimal trial composer — no @mention / attach
+   *  affordances in the answer input, just plain text. */
+  isTrial?: boolean;
   /** The ask itself — the request message's markdown body. */
   body: string;
   payload: AskRequest;
@@ -127,9 +131,9 @@ export function AskTakeover({
   // Keep the card (and its pinned footer) above the on-screen keyboard.
   const keyboardInset = useKeyboardInset();
 
-  // Staged image attachments — same hook (and same `image/* ≤5MB` rules + object-
-  // URL lifecycle) the chat composer uses. A local validation error (oversized
-  // image) renders alongside any host send error below.
+  // Staged image attachments — same hook (and same `image/*` + attachment-cap
+  // rules + object-URL lifecycle) the chat composer uses. A local validation
+  // error (oversized image) renders alongside any host send error below.
   const [imageError, setImageError] = useState<string | null>(null);
   const { pendingImages, addImages, removeImage } = usePendingImages({
     onError: setImageError,
@@ -284,13 +288,16 @@ export function AskTakeover({
    *  image paste, with the text drawn by the mirror overlay. */
   const renderAnswerInput = (placeholder: string, minHeight: number) => (
     <div style={fieldChrome}>
-      <MentionAutocompletePopover
-        trigger={mention.trigger}
-        results={mention.results}
-        highlightIndex={mention.highlightIndex}
-        anchorRef={taRef}
-        onPick={mention.pick}
-      />
+      {/* No mention autocomplete on the trial answer input (single agent). */}
+      {isTrial ? null : (
+        <MentionAutocompletePopover
+          trigger={mention.trigger}
+          results={mention.results}
+          highlightIndex={mention.highlightIndex}
+          anchorRef={taRef}
+          onPick={mention.pick}
+        />
+      )}
       <MentionHighlightOverlay
         value={freeText}
         participants={mentionParticipants}
@@ -312,6 +319,9 @@ export function AskTakeover({
         }}
         onSelect={(e) => setCursor(e.currentTarget.selectionStart ?? freeText.length)}
         onPaste={(e) => {
+          // No image attachments on the trial answer input — let text paste
+          // fall through to the default handler.
+          if (isTrial) return;
           const files = Array.from(e.clipboardData.files);
           if (files.length > 0) {
             e.preventDefault();
@@ -325,7 +335,8 @@ export function AskTakeover({
           // active `@trigger`, Enter/Tab/Arrows/Escape drive the popover (and
           // are preventDefaulted, so the window-level Enter→Reply / Esc→Skip
           // backstop sees `defaultPrevented` and stays out of the way).
-          mention.handleKey(e);
+          // Disabled on trial (no mention), so Enter always resolves the ask.
+          if (!isTrial) mention.handleKey(e);
         }}
         placeholder={placeholder}
         style={{
@@ -392,57 +403,59 @@ export function AskTakeover({
     ) : null;
 
   /** The @ / attach icon row + hidden file input — below the input. */
-  const renderInputToolbar = () => (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", marginTop: "var(--sp-2)" }}>
-      <button
-        type="button"
-        onClick={insertMentionTrigger}
-        title="Mention an agent (or type @)"
-        aria-label="Mention an agent"
-        style={{
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          color: "var(--fg-3)",
-          padding: 0,
-          display: "inline-flex",
-          alignItems: "center",
-        }}
-      >
-        <AtSign className="h-3.5 w-3.5" />
-      </button>
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        title="Attach image"
-        aria-label="Attach image"
-        style={{
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          color: "var(--fg-3)",
-          padding: 0,
-          display: "inline-flex",
-          alignItems: "center",
-        }}
-      >
-        <Paperclip className="h-3.5 w-3.5" />
-      </button>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        style={{ display: "none" }}
-        onChange={(e) => {
-          if (e.target.files) {
-            addImages(Array.from(e.target.files));
-            e.target.value = "";
-          }
-        }}
-      />
-    </div>
-  );
+  const renderInputToolbar = () =>
+    // Trial: no @mention / attach toolbar — the answer input is just type + send.
+    isTrial ? null : (
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", marginTop: "var(--sp-2)" }}>
+        <button
+          type="button"
+          onClick={insertMentionTrigger}
+          title="Mention an agent (or type @)"
+          aria-label="Mention an agent"
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--fg-3)",
+            padding: 0,
+            display: "inline-flex",
+            alignItems: "center",
+          }}
+        >
+          <AtSign className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach image"
+          aria-label="Attach image"
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--fg-3)",
+            padding: 0,
+            display: "inline-flex",
+            alignItems: "center",
+          }}
+        >
+          <Paperclip className="h-3.5 w-3.5" />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files) {
+              addImages(Array.from(e.target.files));
+              e.target.value = "";
+            }
+          }}
+        />
+      </div>
+    );
 
   return (
     <div
@@ -515,8 +528,10 @@ export function AskTakeover({
               padding: `var(--sp-4) ${padX} var(--sp-5)`,
               borderTop: "var(--hairline) solid var(--border-faint)",
             }}
-            onDragOver={(e) => e.preventDefault()}
+            onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
             onDrop={(e) => {
+              // No drag-and-drop image attachments on the trial answer surface.
+              if (isTrial) return;
               e.preventDefault();
               addImages(Array.from(e.dataTransfer.files));
             }}

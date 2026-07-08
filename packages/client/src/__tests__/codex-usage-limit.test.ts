@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@first-tree/shared";
+import { RUNTIME_NOTICE_METADATA_KEY, type SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContext } from "../runtime/chat-context.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -99,16 +99,29 @@ vi.mock("../runtime/chat-context.js", () => ({
   }),
 }));
 
-import { createCodexHandler } from "../handlers/codex/index.js";
+import { createCodexHandler, createCodexSdkHandler } from "../handlers/codex/index.js";
+import { LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED } from "../handlers/codex/turn-completion.js";
 
 const AGENT_ID = "019e71c9-88d2-70be-be67-fdb033b2ef0b";
 
 let workspaceRoot: string;
 
+const trialAgentMetadata = {
+  landingCampaignTrial: true,
+  campaign: "production-scan",
+  skillSetId: "production-scan",
+  skillSetVersion: "2026.07.02.1",
+  repo: {
+    url: "https://github.com/acme/backend",
+    canonicalKey: "github.com/acme/backend",
+  },
+};
+
 type SendMessageMock = ReturnType<typeof vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>>;
 
-function makeMessage(id: string, content: string): SessionMessage {
+function makeMessage(id: string, content: string, inboxEntryId?: number): SessionMessage {
   return {
+    ...(inboxEntryId !== undefined ? { inboxEntryId } : {}),
     id,
     chatId: "chat-usage-limit",
     senderId: "sender-1",
@@ -123,8 +136,11 @@ function makeContext(
   opts: {
     sendMessage?: SendMessageMock;
     emitEvent?: SessionContext["emitEvent"];
+    emitEventConfirmed?: SessionContext["emitEventConfirmed"];
+    failSessionForRecovery?: SessionContext["failSessionForRecovery"];
     log?: SessionContext["log"];
     retryTurn?: SessionContext["retryTurn"];
+    agentMetadata?: Record<string, unknown>;
   } = {},
 ): SessionContext {
   const sendMessage =
@@ -138,13 +154,15 @@ function makeContext(
       type: "agent",
       visibility: "organization",
       delegateMention: null,
-      metadata: {},
+      metadata: opts.agentMetadata ?? {},
     },
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId: "chat-usage-limit",
     log: opts.log ?? (() => {}),
     recordProviderActivity: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
+    ...(opts.emitEventConfirmed ? { emitEventConfirmed: opts.emitEventConfirmed } : {}),
+    ...(opts.failSessionForRecovery ? { failSessionForRecovery: opts.failSessionForRecovery } : {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-usage-limit"),
     // Production-faithful: the final-text forward is retired, so it delivers
     // nothing. (mockCtxPlumbing's stub would proxy to sendMessage and mask
@@ -199,6 +217,7 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("usage limit");
     expect(sendMessage.mock.calls[0]?.[1].purpose).toBe("agent-final-text");
+    expect(sendMessage.mock.calls[0]?.[1].metadata).toMatchObject({ [RUNTIME_NOTICE_METADATA_KEY]: true });
 
     // Layer 2: an `error` event is emitted (daemon log + admin stream), and a
     // warn-style log line is recorded — not a phantom success.
@@ -294,6 +313,79 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     ).toBe(false);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
     expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not block ordinary SDK delivery on confirmed event rejection", async () => {
+    state.turns = [
+      [
+        { type: "item.completed", item: { type: "agent_message", text: "here is your answer" } },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 200, cached_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 0 },
+        },
+      ],
+    ];
+
+    const completedCounts: Array<number | undefined> = [];
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const emitEventConfirmed = vi
+      .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
+      .mockRejectedValue(new Error("session event persist failed"));
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { emitEvent, emitEventConfirmed });
+
+    await handler.start(makeMessage("m1", "hello"), ctx);
+
+    expect(emitEventConfirmed).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith({
+      kind: "turn_end",
+      payload: { status: "success" },
+    });
+    expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("leaves landing trial SDK delivery recoverable when confirmed success turn_end is rejected", async () => {
+    state.turns = [
+      [
+        { type: "item.completed", item: { type: "agent_message", text: "here is your answer" } },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 200, cached_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 0 },
+        },
+      ],
+    ];
+
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>();
+    const emitEventConfirmed = vi
+      .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
+      .mockRejectedValue(new Error("session event persist failed"));
+    const handler = createCodexSdkHandler({ workspaceRoot });
+    const message = makeMessage("m1", "hello", 101);
+    const ctx = makeContext((count) => completedCounts.push(count), {
+      emitEventConfirmed,
+      failSessionForRecovery,
+      retryTurn,
+      agentMetadata: trialAgentMetadata,
+    });
+
+    await handler.start(message, ctx);
+
+    expect(emitEventConfirmed).toHaveBeenCalledWith({
+      kind: "turn_end",
+      payload: { status: "success", turnCompletionId: "inbox:101" },
+    });
+    expect(completedCounts).toEqual([]);
+    expect(retryTurn).toHaveBeenCalledWith([message], LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+      "thread-usage-limit",
+    );
 
     await handler.shutdown();
   });

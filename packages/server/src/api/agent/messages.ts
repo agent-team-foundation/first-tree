@@ -18,6 +18,9 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     const user = requireUser(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    // Runtime-authenticated agents may delegate a narrow send-only capability
+    // to a scoped sandbox. The token is accepted only for this agent/chat's
+    // `POST /api/v1/agent/chats/:chatId/messages` path.
     return {
       accessToken: await signAgentOutboxToken(
         app.config.secrets.jwtSecret,

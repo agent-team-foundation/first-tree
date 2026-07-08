@@ -62,6 +62,30 @@ export const serverConfigSchema = defineConfig({
     landingPagesEnabled: field(z.boolean().default(false), {
       env: "FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED",
     }),
+    /**
+     * Maximum number of visible agent response turns allowed in a landing
+     * campaign trial chat. Default 6 covers the full external production-scan
+     * skill flow (calibration, scan report, fix offer, bounded follow-ups);
+     * deployments can override in either direction.
+     */
+    landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(6), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
+    }),
+    /**
+     * Approximate token budget for each landing campaign trial chat. Successful
+     * agent turns advance both the turn count and this metadata-backed estimate.
+     */
+    landingCampaignMaxEstimatedTokens: field(z.number().int().min(1).default(120_000), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS",
+    }),
+    /**
+     * Maximum number of new landing campaign trial chats a user can create
+     * across all organizations in a rolling 24-hour window. Idempotent starts
+     * for an existing campaign/repo chat do not consume this quota.
+     */
+    landingCampaignMaxTrialsPerUserPer24Hours: field(z.number().int().min(1).default(5), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_TRIALS_PER_USER_PER_24_HOURS",
+    }),
     landingCampaigns: optional({
       /**
        * First Tree official service user that manages landing campaign trial
@@ -99,6 +123,17 @@ export const serverConfigSchema = defineConfig({
       }),
     }),
   },
+  docs: {
+    /**
+     * Enables the document review (docloop) surface: the org document
+     * library API, the `doc` CLI namespace endpoints, and (later) the web
+     * Docs section. Product feature flag with a staging-first rollout —
+     * off by default until an operator enables it.
+     */
+    enabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_DOCS_ENABLED",
+    }),
+  },
   database: {
     url: field(z.string(), {
       env: "FIRST_TREE_DATABASE_URL",
@@ -119,8 +154,8 @@ export const serverConfigSchema = defineConfig({
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
     /**
      * Public-facing URL of this First Tree server. Required in production — used to:
-     *   1. Stamp the `iss` claim on connect tokens so `<binName> login`
-     *      can derive the server URL with no extra arg.
+     *   1. Build short connect URLs so `<binName> login` can derive the server
+     *      URL from the URL origin with no extra arg.
      *   2. Build invite-link URLs surfaced to admins.
      *   3. Construct the OAuth callback URL the GitHub app redirects back to.
      * Dev environments may omit it — we fall back to the request's host header
@@ -302,30 +337,6 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT",
     }),
   }),
-  feedback: optional(
-    {
-      /**
-       * GitHub repo where feedback issues are filed (owner/name).
-       * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
-       * the feedback token can be scoped narrowly (issues:write on a single repo)
-       * without widening First Tree's Context Tree access.
-       */
-      repo: field(z.string(), { env: "HEARBACK_FEEDBACK_REPO" }),
-      githubToken: field(z.string(), { env: "HEARBACK_GITHUB_TOKEN", secret: true }),
-      llm: optional({
-        apiKey: field(z.string(), { env: "LLM_API_KEY", secret: true }),
-        baseUrl: field(z.string().optional(), { env: "LLM_BASE_URL" }),
-        model: field(z.string().optional(), { env: "LLM_MODEL" }),
-      }),
-      /**
-       * Trust x-forwarded-for for rate-limit attribution. Default false; set true
-       * when First Tree sits behind a proxy you control (CDN, ingress). Otherwise
-       * clients can spoof the header and bypass per-ip limits.
-       */
-      trustProxyHeaders: field(z.boolean().default(false), { env: "HEARBACK_TRUST_PROXY_HEADERS" }),
-    },
-    { activateBy: ["repo", "githubToken"] },
-  ),
   observability: {
     logging: {
       level: field(logLevelSchema.default("info"), {

@@ -134,7 +134,7 @@ function agent(overrides: Partial<Agent> = {}): Agent {
     inboxId: overrides.inboxId ?? "inbox-1",
     metadata: overrides.metadata ?? {},
     source: overrides.source ?? "portal",
-    clientId: overrides.clientId ?? "client-1",
+    clientId: overrides.clientId === undefined ? "client-1" : overrides.clientId,
     runtimeProvider: overrides.runtimeProvider ?? "claude-code",
     runtimeState: overrides.runtimeState ?? "idle",
     createdAt: overrides.createdAt ?? NOW,
@@ -962,6 +962,45 @@ describe("AgentDetailPage", () => {
     await act(async () => view.root.unmount());
   });
 
+  it("offers runtime switch for suspended unbound agents cleared by client retirement", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    agentConfigMocks.getAgentClientStatus.mockResolvedValue({
+      online: false,
+      clientId: null,
+      offlineSince: null,
+    });
+    agentMocks.getAgent.mockResolvedValue(agent({ status: "suspended", clientId: null, runtimeState: null }));
+    agentMocks.switchAgentRuntime.mockResolvedValue(agent({ clientId: "client-2", runtimeProvider: "codex" }));
+
+    const view = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(view.container, "No computer bound");
+    await waitForText(view.container, "Switch runtime");
+    expect(buttonByText(view.container, "Bind computer")).toBeNull();
+
+    await click(buttonByText(view.container, "Switch runtime"));
+    await waitForText(document.body, "alice-linux");
+    await click(buttonByText(document.body, "alice-linux"));
+    await click(buttonByText(document.body, "Codex"));
+    await click(exactButtonByText(document.body, "Review impact"));
+    const confirm = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (!confirm) throw new Error("Runtime switch confirmation checkbox missing");
+    await click(confirm);
+    await click(
+      [...document.body.querySelectorAll("button")]
+        .filter((button) => button.textContent?.trim() === "Switch runtime")
+        .at(-1) ?? null,
+    );
+
+    await waitForCondition(() => agentMocks.switchAgentRuntime.mock.calls.length > 0, "Expected runtime switch");
+    expect(agentMocks.switchAgentRuntime).toHaveBeenCalledWith("agent-1", {
+      clientId: "client-2",
+      runtimeProvider: "codex",
+      confirmLocalDataLoss: true,
+    });
+
+    await act(async () => view.root.unmount());
+  });
+
   it("renders load failures and profile lifecycle actions", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
 
@@ -1002,6 +1041,13 @@ describe("AgentDetailPage", () => {
     await waitForCondition(() => agentMocks.reactivateAgent.mock.calls.length > 0, "Expected reactivate mutation");
     expect(agentMocks.reactivateAgent).toHaveBeenCalledWith("agent-1");
     await act(async () => suspended.root.unmount());
+
+    agentMocks.getAgent.mockResolvedValueOnce(agent({ status: "suspended", clientId: null, runtimeState: null }));
+    const unboundSuspended = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(unboundSuspended.container, "Agent lifecycle");
+    expect(unboundSuspended.container.textContent).toContain("Availability");
+    expect(unboundSuspended.container.textContent).not.toContain("Reactivate");
+    await act(async () => unboundSuspended.root.unmount());
 
     agentMocks.getAgent.mockResolvedValueOnce(agent({ status: "suspended", runtimeState: null }));
     const toDelete = await renderDom("/agents/agent-1/profile", <ProfileTab />);

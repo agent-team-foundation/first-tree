@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://cloud.first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=nav-app"><strong>Open App</strong></a> &middot;
+  <a href="https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=nav-app"><strong>Open App</strong></a> &middot;
   <a href="#get-started"><strong>Get Started</strong></a> &middot;
   <a href="#how-it-works"><strong>How It Works</strong></a> &middot;
   <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &middot;
@@ -25,7 +25,7 @@
   English | <a href="README_zh-CN.md">中文</a>
 </p>
 
-> Try [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) **free** — the fastest way to give every agent your team's shared context. [Open the app](https://cloud.first-tree.ai/login?utm_source=github&utm_medium=readme&utm_campaign=top-cta-app).
+> Try [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) **free** — the fastest way to give every agent your team's shared context.
 
 # First-Tree
 
@@ -116,11 +116,10 @@ during, and after execution.
 
 ## Get Started
 
-Open the app at **[cloud.first-tree.ai](https://cloud.first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-app)**
-(or your own deployment) and sign in. Learn more at
-[first-tree.ai](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-home).
-The guided setup walks you through the first run: name your team, connect a
-computer, create your first agent, connect code, and start work.
+Open the app at **[first-tree.ai](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-app)**
+(or your own deployment) and sign in. The guided setup walks you through the
+first run: name your team, connect a computer, create your first agent, and
+start work.
 
 See the [Quickstart](docs/quickstart.md) for the full walkthrough.
 
@@ -128,11 +127,16 @@ At the "connect a computer" step, setup gives you the command to install the
 CLI and link the machine:
 
 ```bash
-npm install -g first-tree
-first-tree login <connect-token>
+# Use the exact command shown in the web console; production portable installs
+# have this shape:
+curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-token>
 ```
 
-The binary lives at `first-tree`; a short alias `ft` is also installed.
+The portable installer bundles Node.js, so new users do not need to install
+Node separately. The npm global install path (`npm install -g first-tree`) is
+still supported for operators and fallback installs; npm mode uses your system
+Node runtime.
 
 ## CLI
 
@@ -160,6 +164,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - `packages/server/` — Fastify API server (`@first-tree/server`)
 - `packages/client/` — Agent SDK + Runtime (`@first-tree/client`)
 - `packages/web/` — React web workspace (`@first-tree/web`)
+- `packages/qa/` — internal QA workflow assets for agent-run validation (`@first-tree/qa`)
 - `skills/` — repo-local skill payloads for First Tree agents
 
 ## Documentation
@@ -168,6 +173,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - [Onboarding Guide](docs/onboarding-guide.md) — CLI flow, SDK, troubleshooting
 - [CLI Reference](docs/cli-reference.md) — every command and environment variable
 - [Observability](docs/observability.md) — logs and OpenTelemetry traces
+- [Portable Node Runtime](docs/development/portable-node-runtime.md) — bundled Node policy for portable releases
 - [docs/development/](docs/development/) — contributor reference
 - [docs/troubleshooting/](docs/troubleshooting/) — environment-specific gotchas
 - [docs/migration/](docs/migration/) — coming from `first-tree@0.4.x`

@@ -138,6 +138,12 @@ export type SessionContext = HandlerContext & {
    * what the agent said. There is no separate chat-delivery path for it.
    */
   emitEvent: (event: SessionEvent) => void;
+  /**
+   * Persist a session event and resolve only after the server confirms it.
+   * Business-critical events, such as Codex landing trial turn completion,
+   * must await this before ACKing the inbox work that produced the turn.
+   */
+  emitEventConfirmed?: (event: SessionEvent) => Promise<void>;
 
   /**
    * Turn-completion hook the runtime calls at the end of a turn. It does NOT
@@ -177,6 +183,14 @@ export type SessionContext = HandlerContext & {
    * handler instead of routing redelivery back into the dead one.
    */
   failSessionForRecovery?: (reason: string, sessionId?: string) => void;
+
+  /**
+   * Rebind the active runtime session to a provider-minted replacement id
+   * without dropping inbox custody. Used by handlers that can safely recover a
+   * stale local provider transcript/rollout by cold-starting the same inbound
+   * turn under a fresh provider thread.
+   */
+  replaceSessionId?: (sessionId: string, reason: string) => void;
 
   /**
    * Build env for CLI sub-processes that shell out to the First Tree CLI.

@@ -1261,10 +1261,13 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Install Node.js");
 
     // The install-popup landing page (auto-closes the script-opened tab; the
-    // effect is a no-op under SSR). Confirms it renders + carries role=status.
+    // effect is a no-op under SSR). It makes no success claim — success vs
+    // pending-approval is owned by the origin tab — so it reads neutral and
+    // just points the user back. Confirms it renders + carries role=status.
     const connectedHtml = renderPage(<GithubConnectedPage />);
-    expect(connectedHtml).toContain("Connected");
+    expect(connectedHtml).toContain("Back to First Tree");
     expect(connectedHtml).toContain("close this tab");
+    expect(connectedHtml).not.toContain("Connected");
     expect(connectedHtml).toContain('role="status"');
 
     expect(await renderOnboardingStep(<StepTeam />, { activeStep: "create-team" })).toContain(
@@ -1347,7 +1350,7 @@ describe("page SSR smoke coverage", () => {
         />,
       ),
     ).toContain("Join Acme");
-    expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected as");
+    expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected to");
     expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Repository");
     expect(renderPage(<UserMenu />)).toContain("user-menu");
     expect(() => renderPage(<TeamSetupModal action="create" onClose={() => undefined} />)).not.toThrow();

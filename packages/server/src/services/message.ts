@@ -5,6 +5,7 @@ import {
   imageRefContentSchema,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
+  RUNTIME_NOTICE_METADATA_KEY,
   requestResolutionSchema,
   type SendMessage,
   scanMentionTokens,
@@ -23,6 +24,7 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
+import { hasRemainingLandingCampaignTrialBudget } from "./landing-campaigns/chat-state.js";
 import { getLandingCampaignTrialChat, withLandingCampaignChatState } from "./landing-campaigns/metadata.js";
 
 const log = createLogger("message");
@@ -150,8 +152,15 @@ function assertLandingCampaignTrialMessageAllowed(input: {
       trial.state === "running";
     if (isSystemBootstrap) return;
 
+    if (!hasRemainingLandingCampaignTrialBudget(trial)) {
+      throw new ForbiddenError("Landing campaign trial chat is locked.");
+    }
+
     const resolvesRequest = requestResolutionSchema.safeParse(input.metadataToStore.resolves).success;
-    if (trial.state === "awaiting_user" && resolvesRequest) return;
+    if (trial.state === "awaiting_user" && trial.awaitingUserKind !== "follow_up" && !resolvesRequest) {
+      throw new ForbiddenError("Landing campaign trial chat is waiting for a request answer.");
+    }
+    return;
   }
 
   throw new ForbiddenError("Landing campaign trial chat is locked.");
@@ -389,7 +398,7 @@ export function preflightMessageSendIntent(input: {
         return participant !== undefined && participant.status === "active" && participant.type !== "human";
       })
     : [];
-  const metadataToStore = {
+  const metadataToStore: Record<string, unknown> = {
     ...incomingMeta,
     ...(mergedMentions.length > 0 ? { mentions: mergedMentions } : {}),
     ...(addressedAgentIds.length > 0 ? { [ADDRESSED_AGENT_IDS_METADATA_KEY]: addressedAgentIds } : {}),
@@ -450,16 +459,21 @@ export function preflightMessageSendIntent(input: {
   // Persist the final-text intent as a durable metadata flag. `purpose` is a
   // send-time-only tag that the server consumes above but never stores, so
   // without this stamp the web cannot tell a silent `agent-final-text` mirror
-  // apart from a deliberate agent `chat send`. The flag is SERVER-OWNED:
+  // apart from a deliberate agent `chat send`. Handler-emitted runtime notices
+  // reuse the same purpose only for delivery semantics; they are operator
+  // status rows and must not be hidden by the staging final-text toggle.
+  //
+  // The flag is SERVER-OWNED:
   //   1. strip any inbound client-supplied value, then
   //   2. set it true ONLY for a genuine mirror — a NON-HUMAN sender with the
-  //      final-text purpose.
+  //      final-text purpose, excluding `metadata.runtimeNotice=true`.
   // `purpose` rides the shared send schema, so a human/web send can carry it
   // (and gets the silent enforcement profile above) — but it must never be
   // persisted as a mirror, matching the unread-projection's
   // `senderRow.type !== "human"` gate. The staging-only "hide agent final
   // text" toggle filters on this flag.
-  const isAgentFinalTextMirror = isAgentFinalText && senderType !== "human";
+  const isRuntimeNotice = metadataToStore[RUNTIME_NOTICE_METADATA_KEY] === true;
+  const isAgentFinalTextMirror = isAgentFinalText && senderType !== "human" && !isRuntimeNotice;
   const metadataSansFlag =
     AGENT_FINAL_TEXT_METADATA_KEY in metadataToStore
       ? Object.fromEntries(Object.entries(metadataToStore).filter(([key]) => key !== AGENT_FINAL_TEXT_METADATA_KEY))
@@ -811,12 +825,17 @@ async function sendMessageInner(
     if (chatRow && trial) {
       let nextMetadata: Record<string, unknown> | null = null;
       if (senderId === trial.agentId && senderRow.type !== "human") {
-        nextMetadata =
-          data.format === MESSAGE_FORMATS.REQUEST
-            ? withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false)
-            : withLandingCampaignChatState(chatRow.metadata, "completed", true);
-      } else if (senderRow.type === "human" && trial.state === "awaiting_user" && resolvedRequest) {
-        nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", true);
+        if (data.format === MESSAGE_FORMATS.REQUEST) {
+          nextMetadata = withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false, {
+            awaitingUserKind: "request",
+          });
+        }
+      } else if (
+        senderRow.type === "human" &&
+        trial.state === "awaiting_user" &&
+        (resolvedRequest || trial.awaitingUserKind === "follow_up")
+      ) {
+        nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", false);
       }
       if (nextMetadata) {
         await tx.update(chats).set({ metadata: nextMetadata, updatedAt: new Date() }).where(eq(chats.id, chatId));

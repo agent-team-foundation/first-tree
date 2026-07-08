@@ -1,4 +1,4 @@
-import type { GithubAppInstallationOutput } from "@first-tree/shared";
+import type { GithubAppConnectPanelOutput, GithubAppInstallationOutput } from "@first-tree/shared";
 import { ApiError, api } from "./client.js";
 
 /**
@@ -70,4 +70,37 @@ export async function getGithubAppInstallUrl(organizationId: string, next?: stri
     `/orgs/${organizationId}/github-app-installation/install-url${qs}`,
   );
   return installUrl;
+}
+
+/**
+ * Fetch the caller's connect-panel view: every installation whose
+ * webhook-verified requester or installer is the caller's GitHub id,
+ * labeled `connectable` / `connected-here` / `connected-elsewhere`
+ * relative to the active team. The panel polls this while open —
+ * installations arrive asynchronously (owner approval, installs made
+ * directly on GitHub). Empty list when the caller has no GitHub identity
+ * or no associated installations.
+ */
+export async function getGithubAppConnectPanel(organizationId: string): Promise<GithubAppConnectPanelOutput> {
+  return api.get<GithubAppConnectPanelOutput>(`/orgs/${organizationId}/github-app-installation/connect-panel`);
+}
+
+/**
+ * Connect an installation from the panel to the active team. The server
+ * authorizes on data it already holds (team admin + the caller's GitHub id
+ * equals the installation's requester or installer) — no GitHub API call.
+ * 409 when the 1:1 rule blocks it (installation held by another team, or
+ * this team already holds a different installation).
+ */
+export async function connectGithubAppInstallation(organizationId: string, installationId: number): Promise<void> {
+  await api.post(`/orgs/${organizationId}/github-app-installation/connect`, { installationId });
+}
+
+/**
+ * Disconnect the active team's installation. First Tree-side only — the
+ * GitHub-side installation stays installed, and the row remains in the
+ * panel as connectable for a later reconnect.
+ */
+export async function disconnectGithubAppInstallation(organizationId: string): Promise<void> {
+  await api.post(`/orgs/${organizationId}/github-app-installation/disconnect`, {});
 }

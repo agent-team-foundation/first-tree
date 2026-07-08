@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { registerDaemonDoctorCommand } from "./doctor.js";
+import { registerDaemonEnsureServiceCommand } from "./ensure-service.js";
 import { registerDaemonHomeInfoCommand } from "./home-info.js";
 import { registerDaemonInstallClaudeCommand } from "./install-claude.js";
 import { registerDaemonInstallCodexCommand } from "./install-codex.js";
@@ -22,6 +23,9 @@ export function registerDaemonCommands(program: Command): void {
   registerDaemonProbeCommand(daemon);
   registerDaemonInstallCodexCommand(daemon);
   registerDaemonInstallClaudeCommand(daemon);
+  // Hidden — portable installer recovery hook. It refreshes/starts the
+  // supervised daemon when credentials already exist, and no-ops before login.
+  registerDaemonEnsureServiceCommand(daemon);
   // Hidden — supervisor-cooperation interface invoked by `createExecuteUpdate`
   // after a self-install to refresh the unit file with the new binary's
   // templates before exit(75).

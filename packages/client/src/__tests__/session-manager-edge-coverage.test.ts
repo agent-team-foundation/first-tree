@@ -125,6 +125,7 @@ function makeCache(
         }),
     ),
     refresh: vi.fn(),
+    updateSdk: vi.fn(),
     updateUrls: vi.fn(),
     allReferencedUrls: vi.fn(() => new Set<string>()),
     forget: vi.fn(),
@@ -147,6 +148,7 @@ function makeManager(
     onSessionRuntimeChange?: (chatId: string, state: TestRuntimeState) => void;
     onSessionEvent?: (chatId: string, event: SessionEvent) => void;
     workspaceRoot?: string;
+    runtimeSessionTokenFile?: string;
   } = {},
 ): SessionManager {
   const handlers = [...(opts.handlers ?? [handler()])];
@@ -176,6 +178,7 @@ function makeManager(
     log: silentLogger(),
     registryPath: opts.registryPath,
     agentConfigCache: opts.agentConfigCache,
+    runtimeSessionTokenFile: opts.runtimeSessionTokenFile,
     ackEntry: opts.ackEntry ?? vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     recoverChat: opts.recoverChat,
     onStateChange: opts.onStateChange,
@@ -473,6 +476,7 @@ describe("SessionManager edge coverage", () => {
       sdk,
       workspaceRoot,
       agentConfigCache: cache,
+      runtimeSessionTokenFile: "/tmp/runtime-session-token",
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-context" }));
@@ -489,6 +493,7 @@ describe("SessionManager edge coverage", () => {
     expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("source-repos/project");
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe(tmpdir());
     expect(env.FIRST_TREE_AGENT_SLUG).toBe(workspaceRoot.split("/").at(-1));
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBe("/tmp/runtime-session-token");
 
     const formatted = await ctx.formatInboundContent({
       id: "msg-format",

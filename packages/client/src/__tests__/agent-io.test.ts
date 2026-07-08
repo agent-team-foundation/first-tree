@@ -89,6 +89,22 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nhello");
   });
 
+  it("resolves the participant SDK lazily so rebound sessions use the current transport", async () => {
+    const firstSdk = mkSdk(async () => []);
+    const secondSdk = mkSdk(async () => participants);
+    let currentSdk = firstSdk;
+    const cache = createParticipantCache(
+      () => currentSdk,
+      "chat-1",
+      () => {},
+    );
+    currentSdk = secondSdk;
+
+    expect(await cache.get()).toEqual(participants);
+    expect(firstSdk.listChatParticipants).not.toHaveBeenCalled();
+    expect(secondSdk.listChatParticipants).toHaveBeenCalledWith("chat-1");
+  });
+
   it("does not append an agent-only directive for legacy First Tree onboarding metadata", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
@@ -460,6 +476,26 @@ describe("buildAgentEnv", () => {
     });
 
     expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+  });
+
+  it("injects a stable runtime session token file for long-lived child CLI calls", () => {
+    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      runtimeSessionTokenFile: "/tmp/runtime-session-token",
+    });
+
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBe("/tmp/runtime-session-token");
   });
 
   it("adds client switch drain markers when provider context is available", () => {

@@ -200,6 +200,110 @@ describe("runtime-bound agent HTTP enforcement", () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it("accepts scoped agent outbox message writes without a runtime session token", async () => {
+    const app = getApp();
+    const sender = await createTestAgent(app, { name: `outbox-sender-${crypto.randomUUID().slice(0, 6)}` });
+    const recipient = await createTestAgent(app, { name: `outbox-recipient-${crypto.randomUUID().slice(0, 6)}` });
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, sender.agent.uuid, sender.clientId);
+
+    const chatRes = await sender.request(
+      "POST",
+      "/api/v1/agent/chats",
+      {
+        type: "group",
+        participantIds: [recipient.agent.uuid],
+      },
+      { [AGENT_RUNTIME_SESSION_HEADER]: runtimeSessionToken },
+    );
+    expect(chatRes.statusCode).toBe(201);
+    const chatId = chatRes.json<{ id: string }>().id;
+
+    const tokenRes = await sender.request("POST", `/api/v1/agent/chats/${chatId}/outbox-token`, undefined, {
+      [AGENT_RUNTIME_SESSION_HEADER]: runtimeSessionToken,
+    });
+    expect(tokenRes.statusCode).toBe(200);
+    const outbox = tokenRes.json<{ accessToken: string }>();
+
+    const send = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${chatId}/messages`,
+      headers: {
+        authorization: `Bearer ${outbox.accessToken}`,
+        "x-agent-id": sender.agent.uuid,
+      },
+      payload: {
+        format: "text",
+        content: "Final trial report.",
+        metadata: { mentions: [recipient.agent.uuid] },
+        source: "cli",
+      },
+    });
+    expect(send.statusCode).toBe(201);
+
+    const wrongPath = await app.inject({
+      method: "GET",
+      url: `/api/v1/agent/chats/${chatId}/messages`,
+      headers: {
+        authorization: `Bearer ${outbox.accessToken}`,
+        "x-agent-id": sender.agent.uuid,
+      },
+    });
+    expect(wrongPath.statusCode).toBe(401);
+
+    const wrongSibling = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${chatId}/outbox-token`,
+      headers: {
+        authorization: `Bearer ${outbox.accessToken}`,
+        "x-agent-id": sender.agent.uuid,
+      },
+    });
+    expect(wrongSibling.statusCode).toBe(401);
+
+    const otherChatRes = await sender.request(
+      "POST",
+      "/api/v1/agent/chats",
+      {
+        type: "group",
+        participantIds: [recipient.agent.uuid],
+      },
+      { [AGENT_RUNTIME_SESSION_HEADER]: runtimeSessionToken },
+    );
+    expect(otherChatRes.statusCode).toBe(201);
+    const otherChatId = otherChatRes.json<{ id: string }>().id;
+    const wrongChat = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${otherChatId}/messages`,
+      headers: {
+        authorization: `Bearer ${outbox.accessToken}`,
+        "x-agent-id": sender.agent.uuid,
+      },
+      payload: {
+        format: "text",
+        content: "Wrong chat.",
+        metadata: { mentions: [recipient.agent.uuid] },
+        source: "cli",
+      },
+    });
+    expect(wrongChat.statusCode).toBe(401);
+
+    const wrongAgent = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${chatId}/messages`,
+      headers: {
+        authorization: `Bearer ${outbox.accessToken}`,
+        "x-agent-id": recipient.agent.uuid,
+      },
+      payload: {
+        format: "text",
+        content: "Wrong sender.",
+        metadata: { mentions: [sender.agent.uuid] },
+        source: "cli",
+      },
+    });
+    expect(wrongAgent.statusCode).toBe(401);
+  });
+
   it("rejects stale runtime session tokens after DB revocation", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);

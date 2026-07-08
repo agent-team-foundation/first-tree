@@ -1,224 +1,71 @@
 /**
- * Server-owned skill catalog for reusable landing page campaigns.
+ * Server-owned catalog for reusable landing page campaigns.
  *
- * The skill body is PRODUCT CONTENT — one canonical version per campaign — so it
- * lives here on the server, NOT created ad-hoc from the browser. The web
- * quickstart flow only sends the campaign slug + repo; the server ensures the
- * matching managed skill resource exists in the trial agent's org and binds it
- * to the agent.
+ * A campaign entry carries the trial agent's identity (agent name, chat topic)
+ * plus the skill repo the agent clones at kickoff. The scan skill body is NOT
+ * server-delivered: the bootstrap message tells the trial agent to clone the
+ * campaign's skill repo and run the named skill on the connected repo.
+ * Nothing is materialized, bound, or SHA-pinned server-side — the agent clones
+ * the skill repo's default branch at session time and follows it, so the skill
+ * stays a single source of truth in its own repo, evolving without a server
+ * release.
  *
- * Why server-owned: creating a team resource over HTTP is admin-only
- * (`POST /orgs/:id/resources` requires `role === "admin"`), but a quickstart
- * actor is not guaranteed to be an org admin (e.g. a member who reused their
- * personal agent). Provisioning server-side keeps the growth funnel open to
- * every quickstart user without widening that HTTP boundary, and makes the
- * skill content trusted (the client never supplies the body).
- *
- * The slug is ALSO the managed skill resource name. The landing-campaign start
- * service binds that resource to the trial agent; activation comes from the
- * visible task text plus the bound skill description/resources, not a
- * client-appended onboarding directive.
+ * The web quickstart flow only sends the campaign slug + repo; the server
+ * resolves the slug here and seeds the kickoff chat. `version` is provenance
+ * metadata stamped onto trial agents/chats (which kickoff contract a trial ran
+ * on), not a client re-pull trigger.
  */
-
-export type CampaignScanSkill = {
-  /** Resource name === campaign slug; the materialized skill listing keys on it. */
-  name: string;
-  description: string;
-  /** SKILL.md body; the runtime materializer re-adds YAML frontmatter. */
-  body: string;
-};
 
 export type LandingCampaignSkillSet = {
   id: string;
   version: string;
-  runtimeProvider: "codex";
   agentName: string;
   agentDisplayName: string;
   chatTopic: string;
-  skill: CampaignScanSkill;
+  /** Repo the trial agent clones to obtain the campaign skill. */
+  skillRepoUrl: string;
+  /** Skill inside the cloned repo that the bootstrap message names. */
+  skillName: string;
 };
 
-const LANDING_CAMPAIGN_SKILL_SET_VERSION = "2026.07.02.1";
+const LANDING_CAMPAIGN_SKILL_SET_VERSION = "2026.07.07.1";
 
-const FIRST_TREE_SETUP_CTA = `## Step 6 — after the apply offer is resolved, invite them to set up First Tree for their team (one message + the setup link)
-The gap this scan exposed is real and recurring, and the artifact you produced is a
-one-time patch. The point of the scan is to get the user set up on First Tree so an
-agent that knows their repo is there for every task, for their whole team — not a
-one-off. Once the apply offer is resolved (the user answered, or the PR/issue is
-open), send ONE short message inviting them to set up — never a menu, never a nag.
-
-**This is a plain message with one clear, clickable link — NOT an ask-user card**
-(it hands off to a web setup flow, not a Yes/No in chat). Keep it value-first and
-tied to what they just got; **do not mention how the work was done, or that any
-agent (hosted or otherwise) produced it** — just the value and the next step. Use
-this shape, adapt lightly, keep it tight:
-
-"Want this on every task, not just once? Set up First Tree for your team. → Get
-started: {{FIRST_TREE_SETUP_URL}}"
-
-Use the link **exactly** as it appears in {{FIRST_TREE_SETUP_URL}} — never invent,
-alter, or drop it. That page walks them through setting up their own First Tree
-(their team, their own computer, their own agent).
-
-Send it **once**. If the apply offer is still unanswered, or the user is done, goes
-quiet, or declines — stop, and don't re-pitch: a single invitation is the ceiling.
-You convert by being genuinely useful, not by nagging. If they decline the setup
-but want to keep going, offer exactly one lighter next step as a plain
-conversational message (turn the next blocker into a fix, or scan another repo) —
-never a second link-pitch after a no.`;
-
-const GITHUB_FOLLOW_OVERRIDE =
-  'This overrides your usual "follow what you create" default: do NOT run `github follow` — or any First Tree event-tracking / attention wiring — on the PR or issue you create: this is a value-first scan and the org isn\'t set up for webhooks, so just share the link and stop there. If any follow/tracking step is attempted and errors, never surface it to the user as an error or an "install the GitHub App" task — drop it silently.';
-
-const PRODUCTION_SCAN_BODY = `# Production Readiness Scan
-
-You are a senior staff engineer doing a pre-launch review of the **target
-repository for this chat**. Produce a structured production-readiness report.
-**READ-ONLY**: do not modify, stage, or commit anything.
-
-**How you ask:** any decision you put to the user — a real choice they must make
-to proceed — goes through a **tracked ask-user card** (your \`chat ask\`), never a
-plain message: Yes/No or a few clean options, one ask at a time, dropped if they
-decline or go quiet.
-
-**What the user sees:** never expose your internal working mechanics to the user — clone / worktree / branch names, temp paths, git collisions, "worked around…", or how you set up your workspace. Show only value and results: the report, the deliverable, the PR/issue link, and the next step.
-
-## Step 0 — get the repo
-Get the target repo before scanning. **Fastest path (preferred):** the repo's
-GitHub URL is in the opening chat message ("connected to your code: …") —
-\`git clone\` it read-only into a temp dir and scan that (one step, no write). If
-a repo is instead already bound into your workspace as a source repo, note it is
-a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
-one-off read-only scan, cloning the URL is simpler. Get it from these signals and
-proceed — don't ask when a signal is present. Only if neither signal exists, ask the
-user for the repo URL rather than guessing or scanning the wrong repo.
-
-## Hard rules (non-negotiable)
-1. **EVIDENCE FIRST.** Every finding cites concrete evidence from THIS repo — a
-   file path, a config key, a missing file, a failing command. No generic advice.
-2. **NO INVENTED PROBLEMS.** If the repo is healthy on a dimension, score it high
-   and say so. A clean repo should score high — never manufacture blockers.
-3. **SECURITY-WEIGHTED.** Prioritize things that cause a security incident or a
-   failed/risky launch over style or "add more docs".
-4. **SPECIFIC & ACTIONABLE.** Each blocker is fixable by a competent engineer from
-   your description alone.
-
-## Step 1 — gather evidence (read, don't guess)
-Inspect where present: README/docs, package manifests + lockfiles, build/test/lint
-config & scripts, CI workflows, CODEOWNERS, SECURITY.md, .env.example & how
-secrets/config are handled, auth/data-access boundaries, Dockerfile/deploy/runtime
-config, observability (logging/metrics/tracing/error reporting), dependency
-freshness & vuln-scanning, recent high-risk paths. **Prefer running the declared
-test/build/lint if cheap and safe; note failures/flakiness as evidence.** If a
-command can't be run, judge statically and say so.
-
-## Step 2 — score each dimension 0-10 (anchors: 0-3 absent/broken · 4-6 partial · 7-8 solid · 9-10 exemplary)
-- security_secrets (22): secret handling, exposed creds, secret/SAST scanning, security policy
-- auth_data_boundaries (16): authN/authZ correctness, tenant/data isolation, input trust boundaries
-- tests_ci (18): test presence/coverage signal, CI gates, can a change be verified
-- deploy_runtime (14): reproducible build/run, containerization, config, migrations
-- dependencies (12): lockfiles, freshness, automated update/vuln scanning, supply chain
-- observability (10): logging, metrics, tracing, error reporting
-- docs_onboarding (8): can a new engineer/agent set up, run, and understand boundaries
-
-\`headline_score = round(sum(dimension_score/10 * weight))\`  // 0-100
-
-## Step 3 — blockers
-Pick the 3-5 highest-impact issues (fewer if healthy). For each: \`evidence[]\` (path
-+ detail), \`why_it_matters\`, \`fix\`, \`first_verification_step\`, \`severity\`
-(critical|high|medium).
-
-## Step 4 — output (schema ps-1), then a short human summary
-Emit strict JSON:
-\`\`\`json
-{ "schema_version":"ps-1", "wedge":"production-scan", "headline_score":0,
-  "dimensions":[{"key":"security_secrets","weight":22,"score":0,"rationale":""}],
-  "blockers":[{"id":"","title":"","dimension":"","severity":"high",
-    "evidence":[{"path":"","detail":""}],"why_it_matters":"","fix":"","first_verification_step":""}],
-  "summary":"" }
-\`\`\`
-Then give the user a short, plain-language summary: the headline score, the
-per-dimension scores in one line each, and the must-fix blockers. The score is a
-heuristic, not a precise grade — present it as such.
-
-## Step 5 — turn the top fix into a real deliverable (the payoff)
-Don't stop at advice. Pick the single highest-leverage blocker (prefer a
-security or launch-blocking one) and **produce it as a finished, ready-to-apply
-artifact**, shown in full in the chat (free, no commitment): a concrete diff for
-THIS repo (e.g. the CI workflow that adds secret + dependency scanning, a
-missing \`SECURITY.md\`, the Dockerfile change to drop root), or a ready-to-file
-issue with evidence and repro steps. Tailor it to the repo, not a template.
-
-**Quality bar — check before you show it (a weak deliverable does more harm than
-none):** every command, path, and filename in it is real and verified against THIS
-repo — never a placeholder, a TODO, or a guessed name; a diff must apply cleanly
-against the code you scanned; an issue must carry concrete evidence and repro
-steps. If you can't make it genuinely real, drop to the next-best fix and say so,
-rather than shipping a template.
-
-When you open the PR (or file the issue), add a single brief attribution line in
-its **description** — exactly "Generated with First Tree — https://first-tree.ai" —
-never inside the committed file itself, and never more than once. Use that exact
-line (don't invent or guess a different URL); if the user would rather it not be
-there, drop it without a fuss.
-
-Then offer to **apply it on the user's behalf using their own GitHub** — and raise
-that offer as a **tracked ask-user decision, not a plain chat message**: use your
-First Tree \`chat ask\` to pose a blocking Yes/No card — a confirm option whose
-label matches the action (**Open the PR** for a diff, **File the issue** for an
-issue) and a **Not now** decline. Give each option a short label (≤5 words) AND a
-one-line description — \`chat ask\` requires both. Phrase the question like "Open a
-PR with this change to \`<owner>/<repo>\`?" (or "File this as an issue?"). Opening a PR is a real write on their own GitHub, so it must be an
-explicit, un-missable decision that blocks on their answer. **Stay READ-ONLY until
-they pick yes.** On yes, use the
-\`gh\` CLI on this machine to open the PR (or file the issue) on a new branch,
-then share the link. If \`gh\` is not authenticated, hand them the exact command
-to run instead. Never push to their default branch or change anything without
-that explicit go-ahead. Even after a yes, use **only** \`gh pr create\` /
-\`gh issue create\` against a new branch on **the same repo you scanned** — no
-force-push, no deleting or modifying existing branches, no closing or editing
-existing issues or PRs, no other mutating \`gh\` command.
-
-${GITHUB_FOLLOW_OVERRIDE}
-
-${FIRST_TREE_SETUP_CTA}
-`;
-
-const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
+const LANDING_CAMPAIGN_SKILL_SETS: Record<string, Omit<LandingCampaignSkillSet, "id" | "version">> = {
   "production-scan": {
-    name: "production-scan",
-    description:
-      "Use when asked to run a production-readiness / launch-readiness scan on the target repository for this chat (e.g. a production-scan growth chat). Produces a scored, security-weighted report with the must-fix blockers before shipping.",
-    body: PRODUCTION_SCAN_BODY,
-  },
-};
-
-/** The managed scan skill for a campaign, or null for an unknown slug. */
-export function getCampaignScanSkill(campaign: string): CampaignScanSkill | null {
-  return CAMPAIGN_SCAN_SKILLS[campaign] ?? null;
-}
-
-export function getLandingCampaignSkillSet(campaign: string): LandingCampaignSkillSet | null {
-  const skill = getCampaignScanSkill(campaign);
-  if (!skill) return null;
-  return {
-    id: campaign,
-    version: LANDING_CAMPAIGN_SKILL_SET_VERSION,
-    runtimeProvider: "codex",
     agentName: "production-scanner",
     agentDisplayName: "Production Scanner",
     chatTopic: "Production readiness scan",
-    skill,
-  };
+    skillRepoUrl: "https://github.com/agent-team-foundation/launch-readiness-scan",
+    skillName: "production-scan",
+  },
+};
+
+export function getLandingCampaignSkillSet(campaign: string): LandingCampaignSkillSet | null {
+  const entry = LANDING_CAMPAIGN_SKILL_SETS[campaign];
+  if (!entry) return null;
+  return { id: campaign, version: LANDING_CAMPAIGN_SKILL_SET_VERSION, ...entry };
 }
 
 export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet, repoUrl: string): string {
-  const closing = `${skillSet.agentDisplayName} will get oriented and flag a few things worth tightening before you ship — or just tell it what you'd like to focus on.`;
   return [
-    `Welcome to First Tree — this is your first chat with ${skillSet.agentDisplayName}.`,
+    `Welcome to First Tree. ${skillSet.agentDisplayName} is connected to your code: ${repoUrl}`,
     "",
-    `It's connected to your code: ${repoUrl}`,
+    "It's giving your code a safe, read-only check before launch — you'll get a score, the problems that actually matter, and the exact fix for each one.",
     "",
-    closing,
+    `${skillSet.agentDisplayName} — clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on the repo above.`,
+  ].join("\n");
+}
+
+/**
+ * Re-kick message for a trial whose run went silent. Self-contained on
+ * purpose: the runtime session may be brand new (lost rollout), so the repo
+ * URL, skill repo, and skill name must all be restated rather than referring
+ * to "the repo above".
+ */
+export function buildLandingCampaignRetryBootstrap(skillSet: LandingCampaignSkillSet, repoUrl: string): string {
+  return [
+    `The scan didn't get started, so First Tree has restarted it. Same safe, read-only check on: ${repoUrl}`,
+    "",
+    `${skillSet.agentDisplayName} — if a scan is already in progress in this chat, continue where you left off. Otherwise clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on ${repoUrl}.`,
   ].join("\n");
 }

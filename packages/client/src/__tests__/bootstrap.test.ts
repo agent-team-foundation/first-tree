@@ -359,12 +359,13 @@ function makeFixtureSkillsRoot(
 }
 
 describe("inline skill installer — copy/version/symlink mechanics", () => {
-  // Exercised via installCoreSkills, which carries the 3-skill set
-  // (welcome + write + seed) after write/seed moved TREE→CORE. The tree path
-  // (installFirstTreeIntegration) now installs the single remaining tree skill;
-  // its reconcile is covered by skills-state-reconcile.test.ts and its pin
-  // contract by the CLI-version pin describe below.
-  const CORE_SKILLS = ["first-tree-welcome", "first-tree-write", "first-tree-seed"];
+  // Exercised via installCoreSkills, which carries the core skill set
+  // (welcome + write + seed + file-bug) after write/seed moved TREE→CORE and
+  // file-bug was added. The tree path (installFirstTreeIntegration) now installs
+  // the single remaining tree skill; its reconcile is covered by
+  // skills-state-reconcile.test.ts and its pin contract by the CLI-version pin
+  // describe below.
+  const CORE_SKILLS = ["first-tree-welcome", "first-tree-write", "first-tree-seed", "first-tree-file-bug"];
 
   function expectSkillInstalled(workspace: string, name: string): void {
     const agentsDir = join(workspace, ".agents", "skills", name);
@@ -454,6 +455,7 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
       { name: "first-tree-welcome", version: "1.0.0" },
       { name: "first-tree-write", version: "2.0.0" },
       { name: "first-tree-seed", version: "1.0.0" },
+      { name: "first-tree-file-bug", version: "1.0.0" },
     ]);
 
     const logs: string[] = [];
@@ -493,10 +495,11 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
     });
 
     expect(result).toBe(false);
-    // first-tree-write installs successfully, welcome + seed fail (missing sources).
+    // first-tree-write installs successfully; welcome + seed + file-bug fail (missing sources).
     expectSkillInstalled(workspace, "first-tree-write");
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-seed"))).toBe(false);
-    expect(logs.join("\n")).toContain("failed first-tree-welcome, first-tree-seed");
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-file-bug"))).toBe(false);
+    expect(logs.join("\n")).toContain("failed first-tree-welcome, first-tree-seed, first-tree-file-bug");
     expect(logs.join("\n")).toContain("Core skill install failed (first-tree-welcome)");
   });
 
@@ -615,6 +618,7 @@ describe("installCoreSkills", () => {
       { name: "first-tree-welcome", version: "1.0.0" },
       { name: "first-tree-write", version: "1.0.0" },
       { name: "first-tree-seed", version: "1.0.0" },
+      { name: "first-tree-file-bug", version: "1.0.0" },
     ]);
 
     const logs: string[] = [];
@@ -651,6 +655,7 @@ describe("installCoreSkills", () => {
       { name: "first-tree-welcome", version: "1.0.0" },
       { name: "first-tree-write", version: "1.0.0" },
       { name: "first-tree-seed", version: "1.0.0" },
+      { name: "first-tree-file-bug", version: "1.0.0" },
     ]);
 
     const result = installCoreSkills({

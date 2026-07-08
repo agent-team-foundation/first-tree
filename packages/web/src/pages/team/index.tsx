@@ -242,14 +242,14 @@ export function TeamPage() {
     const actions: RowAction[] = [];
     // Suspend/Delete go through confirm dialogs; delete is gated behind
     // suspension (suspended-agent lifecycle, main PR 673).
-    if (agent.status === "suspended") {
-      actions.push({ key: "reactivate", label: "Reactivate", onSelect: () => reactivateAgentMut.mutate(agent.uuid) });
-    } else {
+    if (agent.status === "active") {
       actions.push({
         key: "suspend",
         label: "Suspend",
         onSelect: () => setSuspendTarget({ uuid: agent.uuid, label: agent.displayName || agent.name || agent.uuid }),
       });
+    } else if (agent.clientId !== null) {
+      actions.push({ key: "reactivate", label: "Reactivate", onSelect: () => reactivateAgentMut.mutate(agent.uuid) });
     }
     actions.push({
       key: "delete",

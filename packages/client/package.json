@@ -22,7 +22,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage --testTimeout=10000 --passWithNoTests",
-    "smoke:codex-sandbox": "node scripts/codex-sandbox-smoke.mjs"
+    "smoke:codex-sandbox": "node scripts/codex-sandbox-smoke.mjs",
+    "smoke:landing-codex-auth-sandbox": "RUN_CODEX_LANDING_APP_SERVER_SMOKE=1 vitest run --passWithNoTests --maxWorkers=1 --minWorkers=1 src/__tests__/codex-landing-app-server-smoke.test.ts"
   },
   "engines": {
     "node": ">=22.13.0"

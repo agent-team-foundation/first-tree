@@ -23,7 +23,7 @@ export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions, ClientRuntimeOutput } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime, createLoggerRuntimeOutput } from "./client-runtime.js";
-export type { LocalClientOwner } from "./client-switch.js";
+export type { LiveRuntimeMarker, LocalClientOwner, StopClientRuntimeProcessResult } from "./client-switch.js";
 // Local client account switching
 export {
   CLIENT_SWITCH_INTERRUPTED_REASON,
@@ -31,18 +31,24 @@ export {
   clientSwitchJournalPath,
   clientSwitchLockPath,
   confirmLocalClientSwitch,
+  ensureActiveRootClientIdPersisted,
   getClientSwitchStartupBlock,
   hasIncompleteClientSwitch,
+  listLiveClientRuntimeMarkers,
+  readActiveClientIdFromIndex,
   readActiveClientOwner,
   readActiveRootClientId,
   readRememberedLocalClientIdForAccount,
   recordActiveClientOwner,
   registerClientRuntimeMarker,
   resolveClientRuntimeStopReason,
+  stopClientRuntimeProcess,
   switchLocalClientForLogin,
 } from "./client-switch.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
+// Document review (docloop) CLI helpers
+export { slugFromFilename, titleFromMarkdown } from "./doc-review.js";
 // Diagnostics (doctor)
 export type { CheckResult } from "./doctor.js";
 export {

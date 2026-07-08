@@ -69,211 +69,53 @@ describe("Resources Phase 1", () => {
     expect(allowed.json()).toMatchObject({ id: agentRepo?.id, scope: "agent", ownerAgentId: agent.uuid });
   });
 
-  it("ensureAndBindCampaignScanSkill provisions an agent-private scan skill + binds it for the agent's manager, idempotently", async () => {
-    const app = getApp();
-    // The quickstart actor manages their own personal agent (createRuntimeAgent
-    // sets managerId = owner). A non-admin member who manages the agent passes
-    // the ownership gate — the funnel stays open without requiring org-admin.
-    const owner = await createOrgUser(app, "member");
-    const agent = await createRuntimeAgent(app, owner);
-
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "production-scan",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
-
-    // Agent-PRIVATE resource (scope=agent, owned by this agent) — not an org
-    // team resource, so it never lands in the org catalogue.
-    const skills = await app.db
-      .select()
-      .from(resources)
-      .where(
-        and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill"), eq(resources.name, "production-scan")),
-      );
-    expect(skills).toHaveLength(1);
-    expect(skills[0]?.scope).toBe("agent");
-    expect(skills[0]?.organizationId).toBe(owner.organizationId);
-    expect((skills[0]?.payload as { body?: string })?.body ?? "").toContain("ps-1");
-
-    const bindings = await app.db
-      .select()
-      .from(agentResourceBindings)
-      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
-    expect(bindings).toHaveLength(1);
-    expect(bindings[0]?.resourceId).toBe(skills[0]?.id);
-    expect(bindings[0]?.mode).toBe("include");
-
-    // Config version bumped so the client re-fetches + materializes the skill
-    // before the kickoff chat dispatches.
-    const [config] = await app.db
-      .select({ version: agentConfigs.version })
-      .from(agentConfigs)
-      .where(eq(agentConfigs.agentId, agent.uuid));
-    expect(config?.version).toBe(2);
-
-    // Idempotent: a returning user's second campaign / a retry neither
-    // duplicates the resource nor the binding, and does not re-bump the version.
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "production-scan",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
-    const skillsAfter = await app.db
-      .select()
-      .from(resources)
-      .where(
-        and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill"), eq(resources.name, "production-scan")),
-      );
-    expect(skillsAfter).toHaveLength(1);
-    const bindingsAfter = await app.db
-      .select()
-      .from(agentResourceBindings)
-      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
-    expect(bindingsAfter).toHaveLength(1);
-    const [configAfter] = await app.db
-      .select({ version: agentConfigs.version })
-      .from(agentConfigs)
-      .where(eq(agentConfigs.agentId, agent.uuid));
-    expect(configAfter?.version).toBe(2);
-  });
-
-  it("ensureAndBindCampaignScanSkill refreshes a stale skill body and bumps the version so a returning user re-scan gets the latest rubric", async () => {
+  it("round-trips a legacy agent-scoped skill binding through replaceAgentResources", async () => {
+    // The producer (ensureAndBindCampaignScanSkill) is gone, but trial agents
+    // provisioned before the 2026-07 migration still carry an agent-scoped
+    // `skill` resource + binding until a re-kickoff purges them. The web
+    // resource editors re-submit the FULL binding array on every save, so
+    // replaceAgentResources MUST keep admitting an owned agent-scoped skill
+    // (the surviving carve-out in validateBindingReferences) — otherwise every
+    // save on an un-migrated trial agent 400s. Seed such a row directly since
+    // nothing produces it anymore.
     const app = getApp();
     const owner = await createOrgUser(app, "member");
     const agent = await createRuntimeAgent(app, owner);
 
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "production-scan",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
+    const legacyResourceId = uuidv7();
+    await app.db.insert(resources).values({
+      id: legacyResourceId,
+      organizationId: owner.organizationId,
+      type: "skill",
+      scope: "agent",
+      ownerAgentId: agent.uuid,
+      name: "production-scan",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { name: "production-scan", description: "legacy", body: "LEGACY BODY", metadata: {} },
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: owner.organizationId,
+      agentId: agent.uuid,
+      type: "skill",
+      mode: "include",
+      resourceId: legacyResourceId,
+      replacesResourceId: null,
+      inlinePromptBody: null,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 0,
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
 
-    // Simulate a skill provisioned by an older server: overwrite the stored
-    // payload with a stale body, leaving the lookup key (the `name` column)
-    // intact, so the next ensure must refresh it to the current rubric.
-    const [before] = await app.db
-      .select()
-      .from(resources)
-      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill")));
-    await app.db
-      .update(resources)
-      .set({ payload: { name: "production-scan", description: "stale", body: "STALE BODY", metadata: {} } })
-      .where(eq(resources.id, before?.id ?? ""));
-
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "production-scan",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
-
-    // Payload refreshed back to the current server-owned rubric.
-    const [after] = await app.db
-      .select()
-      .from(resources)
-      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill")));
-    const body = (after?.payload as { body?: string })?.body ?? "";
-    expect(body).toContain("ps-1");
-    expect(body).not.toContain("STALE BODY");
-
-    // Linchpin: the already-bound path MUST bump the version when content
-    // changed — otherwise the client's refreshIfNewer never re-fetches the new
-    // rubric and the update silently never reaches the agent.
-    const [config] = await app.db
-      .select({ version: agentConfigs.version })
-      .from(agentConfigs)
-      .where(eq(agentConfigs.agentId, agent.uuid));
-    expect(config?.version).toBe(3);
-  });
-
-  it("ensureAndBindCampaignScanSkill binds an already-provisioned skill the agent is not yet bound to", async () => {
-    const app = getApp();
-    const owner = await createOrgUser(app, "member");
-    const agent = await createRuntimeAgent(app, owner);
-    // Simulate a prior run that created the agent-private resource but failed
-    // before binding. Re-running must find the existing resource and bind it,
-    // not duplicate.
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "production-scan",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
-    await app.db.delete(agentResourceBindings).where(eq(agentResourceBindings.agentId, agent.uuid));
-
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "production-scan",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
-    const skills = await app.db
-      .select()
-      .from(resources)
-      .where(
-        and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill"), eq(resources.name, "production-scan")),
-      );
-    expect(skills).toHaveLength(1);
-    const bindings = await app.db
-      .select()
-      .from(agentResourceBindings)
-      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
-    expect(bindings).toHaveLength(1);
-    expect(bindings[0]?.resourceId).toBe(skills[0]?.id);
-  });
-
-  it("ensureAndBindCampaignScanSkill rejects a caller who cannot manage the target agent (cross-org IDOR)", async () => {
-    const app = getApp();
-    const victimOwner = await createOrgUser(app, "admin");
-    const victimAgent = await createRuntimeAgent(app, victimOwner);
-    // A member of a DIFFERENT org — neither the agent's manager nor an admin in
-    // the agent's org. They must NOT be able to provision/bind onto the victim's
-    // agent (the IDOR vector): it throws, and leaves zero side effects.
-    const attacker = await createOrgUser(app, "admin");
-
-    await expect(
-      app.resourcesService.ensureAndBindCampaignScanSkill(
-        victimAgent.uuid,
-        "production-scan",
-        attacker.memberId,
-        "https://ft.test/onboarding",
-      ),
-    ).rejects.toThrow();
-
-    const skills = await app.db
-      .select()
-      .from(resources)
-      .where(and(eq(resources.ownerAgentId, victimAgent.uuid), eq(resources.type, "skill")));
-    expect(skills).toHaveLength(0);
-    const bindings = await app.db
-      .select()
-      .from(agentResourceBindings)
-      .where(eq(agentResourceBindings.agentId, victimAgent.uuid));
-    expect(bindings).toHaveLength(0);
-  });
-
-  it("an agent-private scan skill binding round-trips through replaceAgentResources", async () => {
-    const app = getApp();
-    const owner = await createOrgUser(app, "member");
-    const agent = await createRuntimeAgent(app, owner);
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "production-scan",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
-
-    // The web resource/prompt editors re-submit the FULL binding array on every
-    // save — which now includes the agent-private scan-skill binding. A normal
-    // save must accept it (not reject it as a non-repo agent-scoped resource)
-    // and preserve it, so a later edit (enable an MCP/skill, edit a prompt, add
-    // a repo) doesn't break.
     const current = await app.resourcesService.getAgentResources(agent.uuid);
-    expect(current.bindings.some((b) => b.type === "skill")).toBe(true);
+    expect(current.bindings.some((b) => b.type === "skill" && b.resourceId === legacyResourceId)).toBe(true);
+    // Re-submitting the full binding array must not reject the agent-scoped skill.
     await app.resourcesService.replaceAgentResources(
       agent.uuid,
       { expectedVersion: current.version, bindings: current.bindings },
@@ -285,30 +127,7 @@ describe("Resources Phase 1", () => {
       .from(agentResourceBindings)
       .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
     expect(bindings).toHaveLength(1);
-  });
-
-  it("ensureAndBindCampaignScanSkill is a no-op for an unknown campaign slug", async () => {
-    const app = getApp();
-    const owner = await createOrgUser(app, "member");
-    const agent = await createRuntimeAgent(app, owner);
-
-    await app.resourcesService.ensureAndBindCampaignScanSkill(
-      agent.uuid,
-      "not-a-real-campaign",
-      owner.memberId,
-      "https://ft.test/onboarding",
-    );
-
-    const skills = await app.db
-      .select()
-      .from(resources)
-      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill")));
-    expect(skills).toHaveLength(0);
-    const bindings = await app.db
-      .select()
-      .from(agentResourceBindings)
-      .where(eq(agentResourceBindings.agentId, agent.uuid));
-    expect(bindings).toHaveLength(0);
+    expect(bindings[0]?.resourceId).toBe(legacyResourceId);
   });
 
   it("resolves inline prompt replace as resourceId=null plus replacesResourceId", async () => {

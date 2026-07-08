@@ -35,12 +35,16 @@ export const landingCampaignTrialAgentMetadataSchema = z.object({
   campaign: landingCampaignSlugSchema,
   skillSetId: z.string().min(1),
   skillSetVersion: z.string().min(1),
-  repo: landingCampaignRepoMetadataSchema,
+  repo: landingCampaignRepoMetadataSchema.optional(),
 });
 export type LandingCampaignTrialAgentMetadata = z.infer<typeof landingCampaignTrialAgentMetadataSchema>;
 
 export const landingCampaignTrialChatStateSchema = z.enum(["running", "awaiting_user", "completed", "failed"]);
 export type LandingCampaignTrialChatState = z.infer<typeof landingCampaignTrialChatStateSchema>;
+export const landingCampaignTrialAwaitingUserKindSchema = z.enum(["request", "follow_up"]);
+export type LandingCampaignTrialAwaitingUserKind = z.infer<typeof landingCampaignTrialAwaitingUserKindSchema>;
+export const landingCampaignTrialLimitReasonSchema = z.enum(["turns", "tokens"]);
+export type LandingCampaignTrialLimitReason = z.infer<typeof landingCampaignTrialLimitReasonSchema>;
 
 export const landingCampaignTrialChatMetadataSchema = z.object({
   landingCampaignTrial: z.object({
@@ -51,6 +55,15 @@ export const landingCampaignTrialChatMetadataSchema = z.object({
     repo: landingCampaignRepoMetadataSchema,
     state: landingCampaignTrialChatStateSchema,
     inputLocked: z.boolean(),
+    awaitingUserKind: landingCampaignTrialAwaitingUserKindSchema.optional(),
+    maxAgentTurns: z.number().int().min(1).default(1),
+    completedAgentTurns: z.number().int().min(0).default(0),
+    completedAgentTurnIds: z.array(z.string().min(1)).default([]),
+    maxEstimatedTokens: z.number().int().min(1).nullable().default(null),
+    estimatedTokensUsed: z.number().int().min(0).default(0),
+    lastObservedEstimatedTokens: z.number().int().min(0).default(0),
+    lastObservedTokenUsageEventId: z.string().min(1).nullable().default(null),
+    limitReason: landingCampaignTrialLimitReasonSchema.optional(),
   }),
 });
 export type LandingCampaignTrialChatMetadata = z.infer<typeof landingCampaignTrialChatMetadataSchema>;

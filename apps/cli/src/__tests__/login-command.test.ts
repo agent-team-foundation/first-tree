@@ -62,6 +62,7 @@ vi.mock("../core/update-glue.js", async (importOriginal) => ({
 
 const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
+const originalClientId = process.env.FIRST_TREE_CLIENT_ID;
 
 let home: string;
 let runtimeInstance: {
@@ -241,6 +242,7 @@ beforeEach(() => {
   mkdirSync(join(home, "config"), { recursive: true });
   process.env.FIRST_TREE_HOME = home;
   delete process.env.FIRST_TREE_SERVER_URL;
+  delete process.env.FIRST_TREE_CLIENT_ID;
   cliFetchMock.mockReset();
   getClientServiceStatusMock.mockReset();
   installClientServiceMock.mockReset();
@@ -289,6 +291,8 @@ afterEach(() => {
   else process.env.FIRST_TREE_HOME = originalFirstTreeHome;
   if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
   else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
+  if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
+  else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
   process.exitCode = undefined;
 });
 
@@ -313,6 +317,69 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: http://first-tree.test");
     expect(installClientServiceMock).not.toHaveBeenCalled();
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("--no-start");
+  });
+
+  it("persists an env-provided client id during --no-start login", async () => {
+    process.env.FIRST_TREE_CLIENT_ID = "client_c0ffee00";
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test/" }), "--no-start"]);
+
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("id: client_c0ffee00");
+  });
+
+  it("exchanges a short connect URL token", async () => {
+    const token = "http://first-tree.test/connect/short_code-123";
+    await runLogin(["login", token, "--no-start"]);
+
+    expect(cliFetchMock).toHaveBeenCalledWith(
+      "http://first-tree.test/api/v1/auth/connect-token",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    );
+    expect(JSON.parse(readFileSync(credentialsPath(), "utf8"))).toMatchObject({
+      refreshToken: "r1",
+      serverUrl: "http://first-tree.test",
+    });
+  });
+
+  it("requires explicit confirmation for cross-account login with a short connect URL", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+
+    await expect(runLogin(["login", "http://first-tree.test/connect/short_code-123", "--no-start"])).rejects.toThrow(
+      "process.exit",
+    );
+
+    expect(cliFetchMock).toHaveBeenCalledTimes(1);
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    expect(installClientServiceMock).not.toHaveBeenCalled();
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("ACCOUNT_SWITCH_REQUIRES_CONFIRMATION");
+    expect(output).toContain("--force-switch");
+  });
+
+  it("parks the old local client when --force-switch confirms a short-URL account switch", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-old\nruntime: claude-code\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+
+    await runLogin(["login", "http://first-tree.test/connect/short_code-123", "--no-start", "--force-switch"]);
+
+    const parkedRoot = join(home, "parked-clients", "client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "client.yaml"), "utf8")).toContain("client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "agents", "nova", "agent.yaml"), "utf8")).toContain("agent-old");
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("r1");
+    expect(readFileSync(credentialsPath(), "utf8")).not.toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).not.toContain("client_aabbccdd");
+    expect(readFileSync(yamlPath, "utf8")).toContain("url: http://first-tree.test");
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Previous local client parked");
   });
 
   it("requires explicit confirmation for cross-account login before overwriting local credentials", async () => {

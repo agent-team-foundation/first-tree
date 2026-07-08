@@ -375,17 +375,10 @@ describe("ClientsPage computer cards", () => {
     await waitForText(container, "npm install -g @anthropic-ai/claude-code");
     await waitForText(container, "probe failed");
 
-    // Reconnect on an offline machine opens the daemon-first dialog: the
-    // primary command wakes the background service (no reinstall, no token),
-    // and the install+login path is a lazily-revealed "Still offline?" fallback.
-    await click(exactButton(container, "Reconnect"));
-    await waitForText(document.body, "Reconnect offline-box");
-    await waitForText(document.body, "first-tree-dev daemon start");
-    await click(copyButtonForCommand(document.body, "first-tree-dev daemon start"));
+    await click(buttonByText(container, "Daemon not running?"));
+    await waitForText(container, "first-tree-dev daemon start");
+    await click(copyButtonForCommand(container, "first-tree-dev daemon start"));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree-dev daemon start");
-    await click(buttonByText(document.body, "Still offline?"));
-    await waitForText(document.body, "first-tree-dev login connect-token");
-    await click(exactButton(document.body, "Cancel"));
 
     await click(exactButton(container, "Show"));
     await waitForText(container, "Team computers");

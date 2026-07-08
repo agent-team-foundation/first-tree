@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FirstTreeHubSDK, SdkError } from "@first-tree/client";
 import {
@@ -88,7 +89,7 @@ export function resolveLocalAgent(
 /** Build an SDK client scoped to the resolved local agent. */
 export function createSdk(agentName?: string): FirstTreeHubSDK {
   const { serverUrl, agentId } = resolveLocalAgent(agentName);
-  const runtimeSessionToken = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN?.trim() || undefined;
+  const runtimeSessionToken = resolveRuntimeSessionToken();
   return new FirstTreeHubSDK({
     serverUrl,
     getAccessToken: (opts) => ensureFreshAccessToken(opts),
@@ -96,6 +97,32 @@ export function createSdk(agentName?: string): FirstTreeHubSDK {
     runtimeSessionToken,
     userAgent: CLI_USER_AGENT,
   });
+}
+
+function resolveRuntimeSessionToken(): string | undefined {
+  const tokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
+  if (tokenFile) {
+    let token: string;
+    try {
+      token = readFileSync(tokenFile, "utf8").trim();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      fail(
+        "RUNTIME_SESSION_TOKEN_FILE_UNREADABLE",
+        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file could not be read: ${detail}`,
+        2,
+      );
+    }
+    if (!token) {
+      fail(
+        "RUNTIME_SESSION_TOKEN_FILE_EMPTY",
+        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file is empty.`,
+        2,
+      );
+    }
+    return token;
+  }
+  return process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN?.trim() || undefined;
 }
 
 /** Map an SdkError / connection error to the right CLI `fail()`. */

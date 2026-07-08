@@ -3,8 +3,10 @@ import {
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
 } from "@first-tree/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
+import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -16,9 +18,16 @@ import { organizations } from "../db/schema/organizations.js";
 import { resources } from "../db/schema/resources.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
+import { bindAgentRuntimeSession, validateAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { signTokensForUser } from "../services/auth.js";
+import { completeLandingCampaignTrialAgentTurn } from "../services/landing-campaigns/chat-state.js";
+import {
+  LANDING_CAMPAIGN_TRIAL_PROMPT,
+  LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME,
+} from "../services/landing-campaigns/trial-prompt.js";
 import { createMember } from "../services/member.js";
 import { sendMessage } from "../services/message.js";
+import * as sessionEventService from "../services/session-event.js";
 import { uuidv7 } from "../uuid.js";
 import { agentRequest, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
@@ -105,9 +114,28 @@ async function startProductionScan(
   return startCampaign(app, admin, "production-scan", repoUrl);
 }
 
+async function startProductionScanInOrg(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  organizationId: string,
+  repoUrl = "https://github.com/acme/backend",
+) {
+  return startCampaignInOrg(app, admin, organizationId, "production-scan", repoUrl);
+}
+
 async function startCampaign(
   app: ReturnType<ReturnType<typeof useTestApp>>,
   admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  campaign: string,
+  repoUrl = "https://github.com/acme/backend",
+) {
+  return startCampaignInOrg(app, admin, admin.organizationId, campaign, repoUrl);
+}
+
+async function startCampaignInOrg(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  organizationId: string,
   campaign: string,
   repoUrl = "https://github.com/acme/backend",
 ) {
@@ -115,7 +143,7 @@ async function startCampaign(
     method: "POST",
     url: START_URL,
     headers: { authorization: `Bearer ${admin.accessToken}` },
-    payload: { organizationId: admin.organizationId, campaign, repoUrl },
+    payload: { organizationId, campaign, repoUrl },
   });
 }
 
@@ -155,6 +183,23 @@ async function createLandingCampaignServiceAccessToken(
   return tokens.accessToken;
 }
 
+async function countTrialChatsForUser(app: ReturnType<ReturnType<typeof useTestApp>>, userId: string): Promise<number> {
+  const [row] = await app.db
+    .select({ count: sql<number>`count(DISTINCT ${chats.id})::int` })
+    .from(chats)
+    .innerJoin(
+      chatMembership,
+      and(
+        eq(chatMembership.chatId, chats.id),
+        eq(chatMembership.role, "owner"),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
+    .innerJoin(members, eq(members.agentId, chatMembership.agentId))
+    .where(and(eq(members.userId, userId), sql`${chats.metadata} ? 'landingCampaignTrial'`));
+  return row?.count ?? 0;
+}
+
 describe("POST /me/landing-campaigns/start", () => {
   const getApp = useTestApp({
     growthLandingPagesEnabled: true,
@@ -174,6 +219,73 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignRuntimeProvider: "claude-code",
   });
+  const getMultiTurnApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 2,
+  });
+  // Exercises the shipped production default (6) end-to-end through turn
+  // gating — the server-config unit test asserts the default value in
+  // isolation; this proves a 6-turn trial actually admits turns 1–5 and locks
+  // exactly at the 6th, so a regression in turn accounting at that boundary is
+  // caught.
+  const getSixTurnApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 6,
+  });
+  const getBudgetApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 3,
+    landingCampaignMaxEstimatedTokens: 500,
+  });
+  const getResetBudgetApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 3,
+    landingCampaignMaxEstimatedTokens: 900,
+  });
+  const getSingleTrialQuotaApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxTrialsPerUserPer24Hours: 1,
+  });
+
+  it("parses legacy trial chat metadata with estimated token defaults", () => {
+    const trial = parseLandingCampaignTrialChatMetadata({
+      landingCampaignTrial: {
+        campaign: "production-scan",
+        agentId: "agent-1",
+        skillSetId: "production-scan",
+        skillSetVersion: "test",
+        repo: { url: "https://github.com/acme/backend", canonicalKey: "github.com/acme/backend" },
+        state: "running",
+        inputLocked: false,
+      },
+    });
+
+    expect(trial).toMatchObject({
+      maxAgentTurns: 1,
+      completedAgentTurns: 0,
+      completedAgentTurnIds: [],
+      maxEstimatedTokens: null,
+      estimatedTokensUsed: 0,
+      lastObservedEstimatedTokens: 0,
+      lastObservedTokenUsageEventId: null,
+    });
+  });
+
   it("feature flag off rejects before creating service member, trial agent, chat, or resource", async () => {
     const app = getDisabledApp();
     const admin = await createTestAdmin(app);
@@ -267,7 +379,7 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(trialAgents).toHaveLength(0);
   });
 
-  it("creates the service-managed trial agent, installs the agent-scoped campaign skill, and starts a locked chat", async () => {
+  it("creates the service-managed trial agent, binds only the trial prompt, and starts an unlocked capped chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
@@ -291,8 +403,8 @@ describe("POST /me/landing-campaigns/start", () => {
       landingCampaignTrial: true,
       campaign: "production-scan",
       skillSetId: "production-scan",
-      repo: { canonicalKey: "github.com/acme/backend" },
     });
+    expect(agentMeta?.repo).toBeUndefined();
 
     const [serviceMember] = await app.db
       .select()
@@ -305,23 +417,59 @@ describe("POST /me/landing-campaigns/start", () => {
       status: "active",
     });
 
-    const [skill] = await app.db
+    // The scan skill is no longer server-materialized: the bootstrap message
+    // instructs the agent to clone the campaign's skill repo instead.
+    const skillResources = await app.db
       .select()
       .from(resources)
-      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill"), eq(resources.scope, "agent")))
+      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill")));
+    expect(skillResources).toHaveLength(0);
+    const skillBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.type, "skill")));
+    expect(skillBindings).toHaveLength(0);
+
+    const [prompt] = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "prompt"), eq(resources.scope, "agent")),
+      )
       .limit(1);
-    expect(skill?.name).toBe("production-scan");
-    expect(skill?.defaultEnabled).toBeNull();
-    expect(skill?.payload).toMatchObject({ name: "production-scan" });
-    expect(JSON.stringify(skill?.payload)).toContain("/onboarding");
-    expect(JSON.stringify(skill?.payload)).not.toContain("{{FIRST_TREE_SETUP_URL}}");
-    const bindings = await app.db
+    expect(prompt?.name).toBe(LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME);
+    expect(prompt?.defaultEnabled).toBeNull();
+    expect(prompt?.payload).toMatchObject({
+      body: LANDING_CAMPAIGN_TRIAL_PROMPT,
+    });
+
+    const promptBindings = await app.db
       .select()
       .from(agentResourceBindings)
       .where(
-        and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.resourceId, skill?.id ?? "")),
+        and(
+          eq(agentResourceBindings.agentId, body.agentUuid),
+          eq(agentResourceBindings.type, "prompt"),
+          eq(agentResourceBindings.resourceId, prompt?.id ?? ""),
+        ),
       );
-    expect(bindings).toHaveLength(1);
+    expect(promptBindings).toHaveLength(1);
+    expect(promptBindings[0]?.inlinePromptBody).toBeNull();
+    expect(JSON.stringify(prompt?.payload)).toContain("Workspace access");
+    expect(JSON.stringify(prompt?.payload)).toContain("Privacy and secrets");
+    expect(JSON.stringify(prompt?.payload)).toContain("passwords");
+    expect(JSON.stringify(prompt?.payload)).toContain("tokens");
+
+    const resolvedConfig = await app.resourcesService.resolveRuntimeConfig(await app.configService.get(body.agentUuid));
+    expect(resolvedConfig.payload.prompt.sections).toEqual([
+      {
+        scope: "agent",
+        name: LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME,
+        body: LANDING_CAMPAIGN_TRIAL_PROMPT,
+        editable: false,
+      },
+    ]);
+    expect(resolvedConfig.payload.prompt.append).toContain(LANDING_CAMPAIGN_TRIAL_PROMPT);
 
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
     expect(chat?.topic).toBe("Production readiness scan");
@@ -333,16 +481,143 @@ describe("POST /me/landing-campaigns/start", () => {
       agentId: body.agentUuid,
       repo: { canonicalKey: "github.com/acme/backend" },
       state: "running",
-      inputLocked: true,
+      inputLocked: false,
+      maxAgentTurns: 1,
+      completedAgentTurns: 0,
+      maxEstimatedTokens: 120_000,
+      estimatedTokensUsed: 0,
+      lastObservedEstimatedTokens: 0,
+      lastObservedTokenUsageEventId: null,
     });
 
     const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
     expect(bootstrap?.senderId).toBe(admin.humanAgentUuid);
     expect(bootstrap?.content).toContain("https://github.com/acme/backend");
+    // The kickoff instructs the agent to fetch the external skill instead of
+    // relying on a server-delivered body.
+    expect(bootstrap?.content).toContain("clone https://github.com/agent-team-foundation/launch-readiness-scan");
+    expect(bootstrap?.content).toContain("run its production-scan skill on the repo above");
+    // The kickoff no longer names a "trial mode" — the external skill is
+    // unconditionally trial-shaped, so the phrase would reference nothing.
+    expect(bootstrap?.content).not.toContain("trial mode");
+    expect(bootstrap?.content).toContain("safe, read-only check before launch");
     expect(bootstrap?.metadata).toMatchObject({
       systemSender: "first_tree_onboarding",
       campaign: "production-scan",
       landingCampaignTrial: true,
+    });
+  });
+
+  it("purges the legacy server-materialized campaign skill from a reused trial agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const body = first.json<{ agentUuid: string }>();
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    if (!trialAgent?.managerId) throw new Error("expected trial agent with manager");
+
+    // Simulate a pre-migration trial agent: old kickoffs provisioned an
+    // agent-scoped skill resource named after the campaign and bound it.
+    const legacyResourceId = uuidv7();
+    await app.db.insert(resources).values({
+      id: legacyResourceId,
+      organizationId: admin.organizationId,
+      type: "skill",
+      scope: "agent",
+      ownerAgentId: body.agentUuid,
+      name: "production-scan",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { name: "production-scan", description: "stale", body: "STALE INLINE BODY", metadata: {} },
+      createdBy: trialAgent.managerId,
+      updatedBy: trialAgent.managerId,
+    });
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: admin.organizationId,
+      agentId: body.agentUuid,
+      type: "skill",
+      mode: "include",
+      resourceId: legacyResourceId,
+      replacesResourceId: null,
+      inlinePromptBody: null,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 0,
+      createdBy: trialAgent.managerId,
+      updatedBy: trialAgent.managerId,
+    });
+    const [configBefore] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, body.agentUuid));
+
+    const again = await startProductionScan(app, admin);
+    expect(again.statusCode).toBe(200);
+
+    const skillRows = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill")));
+    expect(skillRows).toHaveLength(0);
+    const skillBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.type, "skill")));
+    expect(skillBindings).toHaveLength(0);
+    // Version bumped so the client re-fetches and prunes the materialized copy.
+    const [configAfter] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, body.agentUuid));
+    expect(configAfter?.version).toBe((configBefore?.version ?? 0) + 1);
+  });
+
+  it("presents stale running trial chats as unlocked while turns remain", async () => {
+    const app = getMultiTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string }>();
+
+    const [chat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
+    const trial = parseLandingCampaignTrialChatMetadata(chat?.metadata);
+    if (!chat || !trial) throw new Error("expected landing trial chat metadata");
+    await app.db
+      .update(chats)
+      .set({
+        metadata: {
+          ...chat.metadata,
+          landingCampaignTrial: { ...trial, state: "running", inputLocked: true, completedAgentTurns: 1 },
+        },
+      })
+      .where(eq(chats.id, body.chatId));
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${body.chatId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(detail.statusCode).toBe(200);
+    const detailTrial = parseLandingCampaignTrialChatMetadata(
+      detail.json<{ metadata: Record<string, unknown> }>().metadata,
+    );
+    expect(detailTrial).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+    });
+
+    const [storedChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(storedChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: true,
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
     });
   });
 
@@ -398,6 +673,253 @@ describe("POST /me/landing-campaigns/start", () => {
     const thirdMessages = await app.db.select().from(messages).where(eq(messages.chatId, thirdBody.chatId));
     expect(firstMessages).toHaveLength(1);
     expect(thirdMessages).toHaveLength(1);
+
+    const prompts = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(
+          eq(resources.ownerAgentId, firstBody.agentUuid),
+          eq(resources.type, "prompt"),
+          eq(resources.scope, "agent"),
+        ),
+      );
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.payload).toMatchObject({
+      body: LANDING_CAMPAIGN_TRIAL_PROMPT,
+    });
+
+    const promptBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(
+        and(
+          eq(agentResourceBindings.agentId, firstBody.agentUuid),
+          eq(agentResourceBindings.type, "prompt"),
+          eq(agentResourceBindings.resourceId, prompts[0]?.id ?? ""),
+        ),
+      );
+    expect(promptBindings).toHaveLength(1);
+    expect(promptBindings[0]?.inlinePromptBody).toBeNull();
+  });
+
+  it("does not charge quota for the same repo replay but rejects a second new repo in the rolling window", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    const replay = await startProductionScan(app, admin);
+    const secondRepo = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json<{ chatId: string }>().chatId).toBe(first.json<{ chatId: string }>().chatId);
+    expect(secondRepo.statusCode).toBe(403);
+    expect(secondRepo.json<{ error: string }>().error).toContain("free trial limit");
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(1);
+  });
+
+  it("counts landing trial quota across organizations for the same user", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const otherOrg = await attachOrg(app, admin.userId, "admin");
+
+    const first = await startProductionScan(app, admin);
+    const secondOrg = await startProductionScanInOrg(app, admin, otherOrg.orgId, "https://github.com/acme/api");
+
+    expect(first.statusCode).toBe(200);
+    expect(secondOrg.statusCode).toBe(403);
+    expect(secondOrg.json<{ error: string }>().error).toContain("last 24 hours");
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(1);
+  });
+
+  it("allows another new repo after the rolling 24-hour quota window expires", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string }>();
+    await app.db
+      .update(chats)
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+      .where(eq(chats.id, firstBody.chatId));
+
+    const second = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).not.toBe(firstBody.chatId);
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(2);
+  });
+
+  it("serializes concurrent new repo starts against the per-user quota", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const results = await Promise.all([
+      startProductionScan(app, admin, "https://github.com/acme/backend"),
+      startProductionScan(app, admin, "https://github.com/acme/api"),
+    ]);
+
+    expect(results.map((res) => res.statusCode).sort()).toEqual([200, 403]);
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(1);
+  });
+
+  it("resends the bootstrap when a running trial has been silent past the retry window", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string }>();
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, firstBody.chatId))
+      .orderBy(asc(messages.createdAt));
+    expect(chatMessages).toHaveLength(2);
+    const retry = chatMessages[1];
+    expect(retry?.metadata).toMatchObject({
+      systemSender: "first_tree_onboarding",
+      landingCampaignTrial: true,
+      bootstrapRetry: true,
+    });
+    expect(retry?.content).toContain("restarted");
+    expect(retry?.content).toContain("run its production-scan skill on https://github.com/acme/backend");
+  });
+
+  it("does not resend the bootstrap while the agent shows recent session activity", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+    await sessionEventService.appendEvent(app.db, firstBody.agentUuid, firstBody.chatId, {
+      kind: "thinking",
+      payload: {},
+    });
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(chatMessages).toHaveLength(1);
+  });
+
+  it("does not resend the bootstrap while the runtime reports fresh working state without session events", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+    // Codex no-events case: a long turn is in flight (fresh per-chat
+    // runtime_state='working') but has emitted zero session events.
+    await app.db
+      .insert(agentChatSessions)
+      .values({
+        agentId: firstBody.agentUuid,
+        chatId: firstBody.chatId,
+        state: "active",
+        runtimeState: "working",
+        runtimeStateAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [agentChatSessions.agentId, agentChatSessions.chatId],
+        set: { state: "active", runtimeState: "working", runtimeStateAt: new Date() },
+      });
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(chatMessages).toHaveLength(1);
+  });
+
+  it("does not resend the bootstrap when the trial agent has already replied", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    await sendMessage(app.db, firstBody.chatId, firstBody.agentUuid, {
+      format: "text",
+      content: "Cloning the scan skill now.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(chatMessages).toHaveLength(2);
+  });
+
+  it("preserves runtime session metadata when reusing the trial agent for a new repo", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ agentUuid: string }>();
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID);
+    expect(
+      await validateAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID, runtimeSessionToken),
+    ).toBe(true);
+
+    const second = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json<{ agentUuid: string; repoCanonicalKey: string }>();
+    expect(secondBody.agentUuid).toBe(firstBody.agentUuid);
+    expect(secondBody.repoCanonicalKey).toBe("github.com/acme/api");
+    expect(
+      await validateAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID, runtimeSessionToken),
+    ).toBe(true);
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, firstBody.agentUuid)).limit(1);
+    expect(parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata)).toMatchObject({
+      landingCampaignTrial: true,
+      campaign: "production-scan",
+    });
+    expect(parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata)?.repo).toBeUndefined();
+    const runtimeSession = (trialAgent?.metadata as Record<string, unknown> | undefined)?.runtimeSession;
+    expect(runtimeSession).toMatchObject({
+      clientId: OFFICIAL_CLIENT_ID,
+      boundAt: expect.any(String),
+      tokenHash: expect.any(String),
+    });
   });
 
   it("serializes concurrent starts for the same campaign and repo into one trial agent and chat", async () => {
@@ -519,7 +1041,7 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(metadata.statusCode).toBe(403);
   });
 
-  it("blocks ordinary chats and messages from continuing the single-run trial agent", async () => {
+  it("blocks ordinary chats while allowing trial-chat messages until the turn cap", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
@@ -547,7 +1069,16 @@ describe("POST /me/landing-campaigns/start", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: { format: "text", content: "Can you do another thing?", metadata: { mentions: [body.agentUuid] } },
     });
-    expect(message.statusCode).toBe(403);
+    expect(message.statusCode).toBe(201);
+
+    await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-default-cap");
+    const afterLimit = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { format: "text", content: "Can you keep going?", metadata: { mentions: [body.agentUuid] } },
+    });
+    expect(afterLimit.statusCode).toBe(403);
   });
 
   it("blocks adding ordinary participants to a landing campaign trial chat", async () => {
@@ -636,6 +1167,29 @@ describe("POST /me/landing-campaigns/start", () => {
       },
     });
     expect(send.statusCode).toBe(201);
+    const [runningChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      completedAgentTurns: 0,
+    });
+
+    const completedTurn = await completeLandingCampaignTrialAgentTurn(
+      app.db,
+      body.chatId,
+      body.agentUuid,
+      "turn-outbox",
+    );
+    expect(completedTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: true,
+      reachedLimit: true,
+      limitReason: "turns",
+      duplicate: false,
+    });
     const [completedChat] = await app.db
       .select({ metadata: chats.metadata })
       .from(chats)
@@ -643,6 +1197,7 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
       state: "completed",
       inputLocked: true,
+      completedAgentTurns: 1,
     });
 
     const sendAfterCompleted = await app.inject({
@@ -700,7 +1255,395 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(wrongAgent.statusCode).toBe(401);
   });
 
-  it("serializes concurrent trial outbox writes so only one state transition wins", async () => {
+  it("allows ordinary human messages while running until completed agent turns reach the limit", async () => {
+    const app = getMultiTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const [initialChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(initialChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 2,
+      completedAgentTurns: 0,
+    });
+
+    const whileRunning = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can you include deploy risk while you are running?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(whileRunning.statusCode).toBe(201);
+
+    const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-1");
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
+    const [runningChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    const runningTrial = parseLandingCampaignTrialChatMetadata(runningChat?.metadata);
+    expect(runningTrial).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+    });
+    expect(runningTrial?.awaitingUserKind).toBeUndefined();
+
+    const followUp = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can you expand on the deployment risk?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(followUp.statusCode).toBe(201);
+
+    const finalTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-2");
+    expect(finalTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: true,
+      reachedLimit: true,
+      limitReason: "turns",
+      duplicate: false,
+    });
+    const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    const completedTrial = parseLandingCampaignTrialChatMetadata(completedChat?.metadata);
+    expect(completedTrial).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 2,
+      completedAgentTurns: 2,
+    });
+    expect(completedTrial?.awaitingUserKind).toBeUndefined();
+
+    const afterLimit = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can we keep going?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(afterLimit.statusCode).toBe(403);
+  });
+
+  it("admits six agent turns then locks at the sixth under the shipped default cap", async () => {
+    const app = getSixTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const [initialChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(initialChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 6,
+      completedAgentTurns: 0,
+    });
+
+    // Turns 1–5 advance without hitting the cap.
+    for (let turn = 1; turn <= 5; turn++) {
+      const result = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, `turn-${turn}`);
+      expect(result).toMatchObject({ advanced: true, reachedTurnLimit: false, limitReason: null });
+      const [chat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+      expect(parseLandingCampaignTrialChatMetadata(chat?.metadata)).toMatchObject({
+        state: "running",
+        inputLocked: false,
+        completedAgentTurns: turn,
+      });
+    }
+
+    // The sixth turn reaches the cap and locks the chat.
+    const sixth = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-6");
+    expect(sixth).toMatchObject({ advanced: true, reachedTurnLimit: true, limitReason: "turns" });
+    const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 6,
+      completedAgentTurns: 6,
+    });
+
+    const afterLimit = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { format: "text", content: "One more?", metadata: { mentions: [body.agentUuid] } },
+    });
+    expect(afterLimit.statusCode).toBe(403);
+  });
+
+  it("keeps turn-only behavior for legacy uncapped trial metadata", async () => {
+    const app = getMultiTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+    const [initialChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    const initialTrial = parseLandingCampaignTrialChatMetadata(initialChat?.metadata);
+    if (!initialChat || !initialTrial) throw new Error("expected trial chat metadata");
+    await app.db
+      .update(chats)
+      .set({
+        metadata: {
+          ...initialChat.metadata,
+          landingCampaignTrial: { ...initialTrial, maxEstimatedTokens: null },
+        },
+      })
+      .where(eq(chats.id, body.chatId));
+
+    const uncappedEvent = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: {
+        provider: "codex",
+        model: "gpt-5",
+        inputTokens: 100_000,
+        cachedInputTokens: 10_000,
+        outputTokens: 20_000,
+      },
+    });
+
+    const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "uncapped-1");
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
+    const [runningChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+      maxEstimatedTokens: null,
+      estimatedTokensUsed: 130_000,
+      lastObservedEstimatedTokens: 130_000,
+      lastObservedTokenUsageEventId: uncappedEvent.id,
+    });
+
+    const followUp = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can you keep going after a large uncapped turn?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(followUp.statusCode).toBe(201);
+  });
+
+  it("locks a trial chat when the estimated token cap is reached before the turn cap", async () => {
+    const app = getBudgetApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const [initialChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(initialChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 3,
+      completedAgentTurns: 0,
+      maxEstimatedTokens: 500,
+      estimatedTokensUsed: 0,
+      lastObservedEstimatedTokens: 0,
+      lastObservedTokenUsageEventId: null,
+    });
+
+    const firstUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 100, cachedInputTokens: 25, outputTokens: 50 },
+    });
+    await sessionEventService.appendEvent(app.db, uuidv7(), body.chatId, {
+      kind: "token_usage",
+      payload: {
+        provider: "codex",
+        model: "gpt-5",
+        inputTokens: 10_000,
+        cachedInputTokens: 1_000,
+        outputTokens: 2_000,
+      },
+    });
+    const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "budget-1");
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
+    const [afterFirstChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(afterFirstChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      completedAgentTurns: 1,
+      estimatedTokensUsed: 175,
+      lastObservedEstimatedTokens: 175,
+      lastObservedTokenUsageEventId: firstUsage.id,
+    });
+
+    const whileUnderBudget = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Please continue while the token budget remains.",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(whileUnderBudget.statusCode).toBe(201);
+
+    const secondUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 200, cachedInputTokens: 50, outputTokens: 100 },
+    });
+    const secondTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "budget-2");
+    expect(secondTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: true,
+      limitReason: "tokens",
+      duplicate: false,
+    });
+    const [lockedChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(lockedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 3,
+      completedAgentTurns: 2,
+      maxEstimatedTokens: 500,
+      estimatedTokensUsed: 525,
+      lastObservedEstimatedTokens: 525,
+      lastObservedTokenUsageEventId: secondUsage.id,
+      limitReason: "tokens",
+    });
+
+    const duplicate = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "budget-2");
+    expect(duplicate).toEqual({
+      advanced: false,
+      reachedTurnLimit: false,
+      reachedLimit: true,
+      limitReason: "tokens",
+      duplicate: true,
+    });
+    const [afterDuplicateChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(afterDuplicateChat?.metadata)).toMatchObject({
+      completedAgentTurns: 2,
+      estimatedTokensUsed: 525,
+      completedAgentTurnIds: ["budget-1", "budget-2"],
+    });
+
+    const afterBudget = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can we keep going after the token budget?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(afterBudget.statusCode).toBe(403);
+  });
+
+  it("continues charging estimated tokens after session event traces reset", async () => {
+    const app = getResetBudgetApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const firstUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 300, cachedInputTokens: 50, outputTokens: 50 },
+    });
+    const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "reset-1");
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
+    const [afterFirstChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(afterFirstChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      completedAgentTurns: 1,
+      estimatedTokensUsed: 400,
+      lastObservedEstimatedTokens: 400,
+      lastObservedTokenUsageEventId: firstUsage.id,
+    });
+
+    await sessionEventService.clearEvents(app.db, body.agentUuid, body.chatId);
+    const secondUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 450, cachedInputTokens: 50, outputTokens: 100 },
+    });
+    const secondTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "reset-2");
+    expect(secondTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: true,
+      limitReason: "tokens",
+      duplicate: false,
+    });
+    const [lockedChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(lockedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      completedAgentTurns: 2,
+      completedAgentTurnIds: ["reset-1", "reset-2"],
+      maxEstimatedTokens: 900,
+      estimatedTokensUsed: 1000,
+      lastObservedEstimatedTokens: 600,
+      lastObservedTokenUsageEventId: secondUsage.id,
+      limitReason: "tokens",
+    });
+  });
+
+  it("serializes concurrent trial request writes so only one state transition wins", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
@@ -711,18 +1654,7 @@ describe("POST /me/landing-campaigns/start", () => {
     const tokenRes = await trialAgentRequest("POST", `/api/v1/agent/chats/${body.chatId}/outbox-token`);
     const outbox = tokenRes.json<{ accessToken: string }>();
 
-    const [finalRes, requestRes] = await Promise.all([
-      app.inject({
-        method: "POST",
-        url: `/api/v1/agent/chats/${body.chatId}/messages`,
-        headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": body.agentUuid },
-        payload: {
-          format: "text",
-          content: "Final trial report.",
-          metadata: { mentions: [admin.humanAgentUuid] },
-          source: "cli",
-        },
-      }),
+    const [firstRequestRes, secondRequestRes] = await Promise.all([
       app.inject({
         method: "POST",
         url: `/api/v1/agent/chats/${body.chatId}/messages`,
@@ -734,22 +1666,30 @@ describe("POST /me/landing-campaigns/start", () => {
           source: "cli",
         },
       }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/agent/chats/${body.chatId}/messages`,
+        headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": body.agentUuid },
+        payload: {
+          format: MESSAGE_FORMATS.REQUEST,
+          content: "Need another answer?",
+          metadata: { mentions: [admin.humanAgentUuid] },
+          source: "cli",
+        },
+      }),
     ]);
 
-    expect([finalRes.statusCode, requestRes.statusCode].sort()).toEqual([201, 403]);
+    expect([firstRequestRes.statusCode, secondRequestRes.statusCode].sort()).toEqual([201, 403]);
     const trialMessages = await app.db
       .select({ id: messages.id, format: messages.format })
       .from(messages)
       .where(and(eq(messages.chatId, body.chatId), eq(messages.senderId, body.agentUuid)));
     expect(trialMessages).toHaveLength(1);
+    expect(trialMessages[0]?.format).toBe(MESSAGE_FORMATS.REQUEST);
 
     const [chat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
     const trial = parseLandingCampaignTrialChatMetadata(chat?.metadata);
-    if (finalRes.statusCode === 201) {
-      expect(trial).toMatchObject({ state: "completed", inputLocked: true });
-    } else {
-      expect(trial).toMatchObject({ state: "awaiting_user", inputLocked: false });
-    }
+    expect(trial).toMatchObject({ state: "awaiting_user", inputLocked: false, awaitingUserKind: "request" });
   });
 
   it("blocks agent-runtime participant removal on landing campaign trial chats", async () => {
@@ -885,7 +1825,20 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(parseLandingCampaignTrialChatMetadata(awaitingChat?.metadata)).toMatchObject({
       state: "awaiting_user",
       inputLocked: false,
+      awaitingUserKind: "request",
     });
+
+    const plainMessageDuringRequest = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "I am not answering the request yet.",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(plainMessageDuringRequest.statusCode).toBe(403);
 
     const answer = await app.inject({
       method: "POST",
@@ -904,19 +1857,90 @@ describe("POST /me/landing-campaigns/start", () => {
     const [runningChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
     expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
       state: "running",
-      inputLocked: true,
+      inputLocked: false,
+      completedAgentTurns: 0,
     });
 
-    await sendMessage(app.db, body.chatId, body.agentUuid, {
-      format: "text",
-      content: "Here is the final report.",
-      source: "api",
-      metadata: { mentions: [admin.humanAgentUuid] },
+    const completedTurn = await completeLandingCampaignTrialAgentTurn(
+      app.db,
+      body.chatId,
+      body.agentUuid,
+      "turn-request-answer",
+    );
+    expect(completedTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: true,
+      reachedLimit: true,
+      limitReason: "turns",
+      duplicate: false,
     });
     const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
     expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
       state: "completed",
       inputLocked: true,
+      completedAgentTurns: 1,
+    });
+  });
+
+  it("treats legacy awaiting_user trial chats without a kind as request waits", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const ask = await sendMessage(app.db, body.chatId, body.agentUuid, {
+      format: MESSAGE_FORMATS.REQUEST,
+      content: "Choose a scan focus.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    const [awaitingChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    const awaitingTrial = parseLandingCampaignTrialChatMetadata(awaitingChat?.metadata);
+    if (!awaitingChat || !awaitingTrial) throw new Error("expected landing trial metadata");
+    const legacyTrial = { ...awaitingTrial };
+    delete legacyTrial.awaitingUserKind;
+    await app.db
+      .update(chats)
+      .set({
+        metadata: {
+          ...awaitingChat.metadata,
+          landingCampaignTrial: legacyTrial,
+        },
+      })
+      .where(eq(chats.id, body.chatId));
+
+    const plainMessageDuringLegacyRequest = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "I am not answering the legacy request yet.",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(plainMessageDuringLegacyRequest.statusCode).toBe(403);
+
+    const answer = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Focus on deploy risk.",
+        metadata: {
+          mentions: [body.agentUuid],
+          resolves: { request: ask.message.id, kind: "answered" },
+        },
+      },
+    });
+    expect(answer.statusCode).toBe(201);
+    const [runningChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      completedAgentTurns: 0,
     });
   });
 

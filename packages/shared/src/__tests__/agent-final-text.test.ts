@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_FINAL_TEXT_METADATA_KEY, isAgentFinalTextMetadata } from "../schemas/message.js";
+import {
+  AGENT_FINAL_TEXT_METADATA_KEY,
+  isAgentFinalTextMetadata,
+  isRuntimeNoticeMetadata,
+  RUNTIME_NOTICE_METADATA_KEY,
+} from "../schemas/message.js";
 
 /**
  * `isAgentFinalTextMetadata` is the shared reader the web uses to identify a
@@ -24,5 +29,13 @@ describe("isAgentFinalTextMetadata", () => {
   it("does not treat a truthy non-true value as a final-text marker", () => {
     expect(isAgentFinalTextMetadata({ [AGENT_FINAL_TEXT_METADATA_KEY]: "true" })).toBe(false);
     expect(isAgentFinalTextMetadata({ [AGENT_FINAL_TEXT_METADATA_KEY]: 1 })).toBe(false);
+  });
+});
+
+describe("isRuntimeNoticeMetadata", () => {
+  it("is true only when runtimeNotice is the boolean true", () => {
+    expect(isRuntimeNoticeMetadata({ [RUNTIME_NOTICE_METADATA_KEY]: true })).toBe(true);
+    expect(isRuntimeNoticeMetadata({ [RUNTIME_NOTICE_METADATA_KEY]: false })).toBe(false);
+    expect(isRuntimeNoticeMetadata({})).toBe(false);
   });
 });

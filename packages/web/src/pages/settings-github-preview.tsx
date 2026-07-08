@@ -167,7 +167,7 @@ function InstalledCard({ suspended = false, detailsOpen = false }: { suspended?:
         {suspended && <SuspendedBanner />}
         <div>
           <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-            Connected as
+            Connected to
           </div>
           <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
             <AccountIcon className="h-4 w-4" style={{ color: "var(--fg-2)" }} />

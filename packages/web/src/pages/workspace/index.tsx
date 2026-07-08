@@ -1,11 +1,12 @@
 import { CHAT_SOURCES, type ChatEngagementView, type ChatSource, chatEngagementViewSchema } from "@first-tree/shared";
 import { useCallback, useEffect, useState } from "react";
-import { Navigate, useSearchParams } from "react-router";
+import { Navigate, useLocation, useSearchParams } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
+import { isLandingTrialSurface } from "../quickstart/route.js";
 import { CenterPanel } from "./center/index.js";
 import {
   DEFAULT_GROUP_MODE,
@@ -107,9 +108,54 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 }
 
 export function WorkspacePage() {
-  const [searchParams, setSearchParams] = useSearchParams();
   const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasPersonalAgent } =
     useAuth();
+
+  // Users who haven't finished setup go through the standalone /onboarding
+  // flow — including the server-`completed`-but-no-start-chat case. Only
+  // terminally completed or dismissed users fall through to the normal
+  // workspace; the old inline center-panel onboarding has been retired.
+  //
+  // The gate lives HERE (the `/` index route), not inside `shouldEnterOnboarding`
+  // or `WorkspaceBody`: the landing-campaign quickstart funnel renders the same
+  // `WorkspaceBody` at `/quickstart?c=<id>` WITHOUT this gate, so an un-onboarded
+  // trial user is not bounced to /onboarding. Keeping the skip at the route/caller
+  // level leaves `shouldEnterOnboarding` a pure, campaign-agnostic function.
+  if (
+    shouldEnterOnboarding({
+      meLoaded,
+      onboardingStep,
+      onboardingSuppressedAt: onboardingDismissedAt,
+      currentOrgHasPersonalAgent,
+      // Not read by the entry gate (auto-entry keys off connect + org
+      // personal-agent readiness only); supplied because both gates share
+      // OnboardingGateFacts.
+      onboardingCompletedAt,
+    })
+  ) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  return <WorkspaceBody />;
+}
+
+/**
+ * Workspace body — the chat-first three-pane shell (conversation rail +
+ * center chat + doc-preview drawer) plus all the URL-backed rail state.
+ *
+ * Split out of `WorkspacePage` so the SAME shell renders in two places:
+ *   - `/` — behind the onboarding gate (via `WorkspacePage`).
+ *   - `/quickstart?c=<id>` — gate-free, inside the landing-campaign trial
+ *     funnel, so the trial chat shows the real workspace instead of a
+ *     bespoke standalone page.
+ */
+export function WorkspaceBody() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  // Trial surface (`/quickstart`): the single-run trial chat is the only
+  // supported surface, so drop the conversation rail (and its new-chat /
+  // filter affordances) and show the chat full-bleed.
+  const isTrial = isLandingTrialSurface(location.pathname);
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
@@ -259,23 +305,26 @@ export function WorkspacePage() {
     setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
 
-  // Users who haven't finished setup go through the standalone /onboarding
-  // flow — including the server-`completed`-but-no-start-chat case. Only
-  // terminally completed or dismissed users fall through to the normal
-  // workspace; the old inline center-panel onboarding has been retired.
-  if (
-    shouldEnterOnboarding({
-      meLoaded,
-      onboardingStep,
-      onboardingSuppressedAt: onboardingDismissedAt,
-      currentOrgHasPersonalAgent,
-      // Not read by the entry gate (auto-entry keys off connect + org
-      // personal-agent readiness only); supplied because both gates share
-      // OnboardingGateFacts.
-      onboardingCompletedAt,
-    })
-  ) {
-    return <Navigate to="/onboarding" replace />;
+  // Trial surface: no conversation rail (and no narrow overlay) — the trial
+  // chat renders full-bleed. Escape-hatch affordances (new chat, filters) live
+  // in the rail, so dropping it is what keeps the trial a controlled surface.
+  if (isTrial) {
+    return (
+      <div className="flex flex-1 overflow-hidden relative">
+        <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
+          <CenterPanel
+            selectedChatId={selectedChatId}
+            onSelectChat={selectChat}
+            onClearChat={clearSelectedChat}
+            narrow={isNarrow}
+            onShowConversations={null}
+            initialParticipantIds={participants}
+            isTrial
+          />
+        </main>
+        <DocPreviewDrawer />
+      </div>
+    );
   }
 
   // Pick the width prop based on what role the rail is playing:

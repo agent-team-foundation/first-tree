@@ -3,6 +3,7 @@ import {
   type AgentRuntimeConfigPayload,
   encodeProviderRetryEventMessage,
   isLandingCampaignTrialAgentMetadata,
+  RUNTIME_NOTICE_METADATA_KEY,
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
@@ -56,6 +57,16 @@ import {
   isTransientCodexErrorMessage,
 } from "../sdk.js";
 import {
+  extractCodexStaleRolloutThreadId,
+  isCodexStaleRolloutError,
+  staleRolloutRecoveryMessage,
+} from "../stale-rollout.js";
+import {
+  LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+  LandingTrialTurnCompletionConfirmError,
+  turnCompletionIdForMessages,
+} from "../turn-completion.js";
+import {
   CodexAppServerClient,
   type CodexAppServerClientOptions,
   type CodexAppServerNotification,
@@ -64,8 +75,10 @@ import {
   isCodexAppServerTransientError,
 } from "./client.js";
 import {
-  buildWorkspaceOnlyEnvironment,
-  createWorkspaceOnlySpawnProcess,
+  buildLandingCodexAppServerArgs,
+  buildLandingCodexPermissionProfile,
+  buildWorkspaceOnlyAppServerEnvironment,
+  LANDING_CODEX_PERMISSIONS_PROFILE,
   prepareWorkspaceOnlyOutboxHome,
 } from "./workspace-sandbox.js";
 
@@ -103,6 +116,24 @@ type ThreadTokenUsageSnapshot = {
   total: TokenUsageBreakdown;
   last: TokenUsageBreakdown;
 };
+
+async function emitTurnEnd(
+  sessionCtx: SessionContext,
+  event: Extract<SessionEvent, { kind: "turn_end" }>,
+): Promise<void> {
+  if (event.payload.status === "success" && isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata)) {
+    if (!sessionCtx.emitEventConfirmed) {
+      throw new LandingTrialTurnCompletionConfirmError("confirmed session event channel unavailable");
+    }
+    try {
+      await sessionCtx.emitEventConfirmed(event);
+    } catch (err) {
+      throw new LandingTrialTurnCompletionConfirmError(err);
+    }
+    return;
+  }
+  sessionCtx.emitEvent(event);
+}
 
 type TurnErrorInfo = {
   message: string;
@@ -151,7 +182,6 @@ const CODEX_CONTEXT_WINDOW_FAILURE_MESSAGE =
   "Start a new thread or clear earlier history before retrying.";
 const CODEX_COMPACT_FAILURE_MESSAGE =
   "Codex failed to compact this thread before answering. Start a new thread or clear earlier history before retrying.";
-
 export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfig): AgentHandler => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
@@ -168,6 +198,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let threadId: string | null = null;
   let currentModel = "";
   let currentReasoningEffort = "high";
+  let activePayload: AgentRuntimeConfigPayload | null = null;
   let currentTurn: CurrentTurn | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let turnSettlementInProgress = false;
@@ -182,6 +213,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let latestThreadUsageTotal: TokenUsageBreakdown | null = null;
   let latestCurrentSessionUsageTurnId: string | null = null;
   let workspaceOnly = false;
+  let workspaceOnlyCodexHome: string | null = null;
+  let workspaceOnlyHostHome: string | null = null;
 
   const pendingInputs: QueueEntry[] = [];
   const pendingNotificationsByTurn = new Map<string, CodexAppServerNotification[]>();
@@ -309,6 +342,19 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     return cfg;
   }
 
+  function buildLandingCodexConfig(payload: AgentRuntimeConfigPayload, workspacePath: string): CodexConfigObject {
+    const codexHome = workspaceOnlyCodexHome;
+    const hostHome = workspaceOnlyHostHome;
+    if (!codexHome || !hostHome) {
+      throw new CodexAppServerStartupError("workspace-sandbox", "missing workspace-only Codex host paths");
+    }
+    const cfg = buildCodexConfig(payload);
+    cfg.permissions = {
+      [LANDING_CODEX_PERMISSIONS_PROFILE]: buildLandingCodexPermissionProfile(workspacePath, codexHome, hostHome),
+    };
+    return cfg;
+  }
+
   function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
@@ -394,7 +440,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     let env = buildEnv(sessionCtx);
     if (workspaceOnly) {
       const { accessToken } = await sessionCtx.sdk.createAgentOutboxToken(sessionCtx.chatId);
-      env = prepareWorkspaceOnlyOutboxHome({
+      const outboxEnv = prepareWorkspaceOnlyOutboxHome({
         parentEnv: env,
         workspaceRoot: cwd,
         agentId: sessionCtx.agent.agentId,
@@ -402,41 +448,40 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         accessToken,
         serverUrl: env.FIRST_TREE_SERVER_URL ?? sessionCtx.sdk.serverUrl,
       }).env;
+      try {
+        const appServerEnv = buildWorkspaceOnlyAppServerEnvironment(outboxEnv, cwd);
+        env = appServerEnv.env;
+        workspaceOnlyCodexHome = appServerEnv.codexHome;
+        workspaceOnlyHostHome = appServerEnv.hostHome;
+      } catch (err) {
+        throw new CodexAppServerStartupError("workspace-sandbox", err);
+      }
+    } else {
+      workspaceOnlyCodexHome = null;
+      workspaceOnlyHostHome = null;
     }
     return { payload, env, briefingFingerprint: computeBriefingFingerprint(briefing) };
   }
 
   async function startAppServer(sessionCtx: SessionContext, env: NodeJS.ProcessEnv): Promise<void> {
     const workspacePath = cwd ?? workspaceRoot;
-    let workspaceSandbox: ReturnType<typeof buildWorkspaceOnlyEnvironment> | null = null;
-    if (workspaceOnly) {
-      try {
-        workspaceSandbox = buildWorkspaceOnlyEnvironment(env, workspacePath);
-      } catch (err) {
-        throw new CodexAppServerStartupError("workspace-sandbox", err);
-      }
-    }
-    const appServerEnv = workspaceSandbox?.env ?? env;
     let resolution: CodexBinaryResolution;
     try {
-      resolution = await resolveRuntimeBinary(appServerEnv);
+      resolution = await resolveRuntimeBinary(env);
     } catch (err) {
       throw new CodexAppServerStartupError("resolve-binary", err);
     }
     if (!resolution.ok) throw new CodexAppServerStartupError("resolve-binary", resolution.error);
     try {
+      const appServerArgs =
+        workspaceOnly && workspaceOnlyCodexHome && workspaceOnlyHostHome
+          ? buildLandingCodexAppServerArgs(workspacePath, workspaceOnlyCodexHome, workspaceOnlyHostHome)
+          : undefined;
       appServer = await clientFactory({
         binary: resolution.binary,
         cwd: workspacePath,
-        env: appServerEnv,
-        ...(workspaceOnly
-          ? {
-              spawnProcess: createWorkspaceOnlySpawnProcess({
-                workspaceRoot: workspacePath,
-                readOnlyPaths: workspaceSandbox?.readOnlyPaths,
-              }),
-            }
-          : {}),
+        env,
+        ...(appServerArgs ? { appServerArgs } : {}),
         onNotification: handleNotification,
         onClose: handleTransportClose,
         onLog: (message) => sessionCtx.log(message),
@@ -447,14 +492,21 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   }
 
   function threadParams(payload: AgentRuntimeConfigPayload): JsonRecord {
-    const opts = buildCodexThreadOptions(payload, cwd ?? workspaceRoot, { workspaceOnly });
-    return {
+    const workspacePath = cwd ?? workspaceRoot;
+    const opts = buildCodexThreadOptions(payload, workspacePath);
+    const params: JsonRecord = {
       cwd: opts.workingDirectory,
       approvalPolicy: opts.approvalPolicy,
-      sandbox: opts.sandboxMode,
-      config: buildCodexConfig(payload),
+      config: workspaceOnly ? buildLandingCodexConfig(payload, workspacePath) : buildCodexConfig(payload),
       ...(opts.model ? { model: opts.model } : {}),
     };
+    if (workspaceOnly) {
+      params.permissions = LANDING_CODEX_PERMISSIONS_PROFILE;
+      params.runtimeWorkspaceRoots = [workspacePath];
+    } else {
+      params.sandbox = opts.sandboxMode;
+    }
+    return params;
   }
 
   async function startThread(payload: AgentRuntimeConfigPayload): Promise<string> {
@@ -487,6 +539,23 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       throw new CodexAppServerStartupError("thread-resume", err);
     }
     threadId = sessionId;
+  }
+
+  async function startFreshThreadAfterStaleRollout(
+    payload: AgentRuntimeConfigPayload,
+    sessionCtx: SessionContext,
+    staleThreadId: string | null,
+  ): Promise<string> {
+    const recoveryMessage = staleRolloutRecoveryMessage(staleThreadId);
+    sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: recoveryMessage } });
+    sessionCtx.log(recoveryMessage);
+    const replacementThreadId = await startThread(payload);
+    sessionCtx.replaceSessionId?.(replacementThreadId, "codex_stale_rollout_recovered");
+    sessionCtx.emitEvent({
+      kind: "error",
+      payload: { source: "runtime", message: staleRolloutRecoveryMessage(staleThreadId, replacementThreadId) },
+    });
+    return replacementThreadId;
   }
 
   function emitToolCall(
@@ -934,6 +1003,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     messages: readonly SessionMessage[],
     token: DeliveryToken,
     sessionCtx: SessionContext,
+    allowStaleRolloutRecovery = true,
   ): Promise<boolean> {
     const client = appServer;
     if (!client || !threadId) {
@@ -949,6 +1019,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       return false;
     }
 
+    const promptSnapshot = pendingChatContextPrompt;
     const providerInputText = consumePendingChatContext(inputText);
     gitWriteTracker.captureBaseline();
     let result: unknown;
@@ -965,6 +1036,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       });
     } catch (err) {
       turnStartInProgress = false;
+      if (allowStaleRolloutRecovery && isCodexStaleRolloutError(err) && activePayload) {
+        turnStartAttempt = null;
+        pendingChatContextPrompt = promptSnapshot;
+        const staleThreadId = extractCodexStaleRolloutThreadId(err) ?? threadId;
+        await startFreshThreadAfterStaleRollout(activePayload, sessionCtx, staleThreadId);
+        return runTurnFromText(inputText, messages, token, sessionCtx, false);
+      }
       const attempt = turnStartAttempt ?? createProviderAttempt();
       turnStartAttempt = null;
       const syntheticFailure = {
@@ -1182,6 +1260,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           source: "api",
           format: "text",
           content: USAGE_LIMIT_NOTICE,
+          metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
           purpose: "agent-final-text",
         });
         consumedErrorReason = "usage_limit_notice_posted";
@@ -1294,10 +1373,28 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         consumedErrorReason,
         forwardFailed,
       });
-      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
       if (settlement.action.kind === "complete") {
+        const isLandingTrial = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
+        try {
+          await emitTurnEnd(sessionCtx, {
+            kind: "turn_end",
+            payload: {
+              status: settlement.status,
+              ...(settlement.status === "success" && isLandingTrial
+                ? { turnCompletionId: turnCompletionIdForMessages(turn.acceptedMessages) }
+                : {}),
+            },
+          });
+        } catch (err) {
+          if (!(err instanceof LandingTrialTurnCompletionConfirmError)) throw err;
+          sessionCtx.log(`landing trial turn completion confirmation failed after provider completion: ${err.message}`);
+          turn.primaryToken.retry(turn.acceptedMessages, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+          await closeAppServerAfterUncommittablePrefix(sessionCtx, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+          return;
+        }
         await turn.primaryToken.complete(turn.acceptedMessages, settlement.action.outcome);
       } else {
+        sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
         turn.primaryToken.retry(turn.acceptedMessages, settlement.action.reason);
         await closeAppServerAfterUncommittablePrefix(sessionCtx, settlement.action.reason);
         return;
@@ -1560,6 +1657,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       ctx = sessionCtx;
       try {
         const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
+        activePayload = payload;
         await startAppServer(sessionCtx, env);
         const id = await startThread(payload);
         let input: string;
@@ -1591,6 +1689,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       ctx = sessionCtx;
       try {
         const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
+        activePayload = payload;
         // Briefing-staleness notice: a resumed Codex thread read AGENTS.md once
         // at thread init and never re-reads it. If the briefing changed since
         // this session last ran a turn — or there is no baseline (a session
@@ -1607,7 +1706,14 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
         }
         await startAppServer(sessionCtx, env);
-        await resumeThread(sessionId, payload);
+        let effectiveSessionId = sessionId;
+        try {
+          await resumeThread(sessionId, payload);
+        } catch (err) {
+          if (!isCodexStaleRolloutError(err)) throw err;
+          const staleThreadId = extractCodexStaleRolloutThreadId(err) ?? sessionId;
+          effectiveSessionId = await startFreshThreadAfterStaleRollout(payload, sessionCtx, staleThreadId);
+        }
         if (message) {
           let input: string;
           try {
@@ -1617,16 +1723,19 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
             sessionCtx.log(
               `codex app-server resume formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`,
             );
-            return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
+            return hasExplicitDeliveryToken
+              ? { sessionId: effectiveSessionId, route: { kind: "owned", mode: "queued" } }
+              : effectiveSessionId;
           }
           const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+          effectiveSessionId = threadId ?? effectiveSessionId;
           // Advance the baseline ONLY when the notice-bearing turn actually
           // delivered; a retried / pre-provider turn leaves it for redelivery.
-          if (cwd && delivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
+          if (cwd && delivered) writeSessionBriefingFingerprint(cwd, effectiveSessionId, briefingFingerprint);
         }
         return hasExplicitDeliveryToken
-          ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-          : sessionId;
+          ? { sessionId: effectiveSessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+          : effectiveSessionId;
       } finally {
         startupTurnPending = false;
         schedulePendingDrain();
@@ -1648,8 +1757,11 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;
+      activePayload = null;
       pendingChatContextPrompt = null;
       workspaceOnly = false;
+      workspaceOnlyCodexHome = null;
+      workspaceOnlyHostHome = null;
       resetThreadUsageTracking(null);
     },
 
@@ -1659,6 +1771,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;
+      activePayload = null;
       currentTurn = null;
       currentTurnPromise = null;
       startupTurnPending = false;
@@ -1669,6 +1782,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       ctx = null;
       pendingChatContextPrompt = null;
       workspaceOnly = false;
+      workspaceOnlyCodexHome = null;
+      workspaceOnlyHostHome = null;
       resetThreadUsageTracking(null);
     },
   } satisfies AgentHandler;

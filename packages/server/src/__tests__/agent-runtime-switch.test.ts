@@ -10,6 +10,7 @@ import { sessionEvents } from "../db/schema/session-events.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { createChat } from "../services/chat.js";
+import { retireClient } from "../services/client.js";
 import * as sessionEventService from "../services/session-event.js";
 import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
 
@@ -130,6 +131,234 @@ describe("POST /agents/:uuid/switch-runtime", () => {
       .from(sessionEvents)
       .where(eq(sessionEvents.agentId, agent.uuid));
     expect(events).toEqual([]);
+  });
+
+  it("rejects a retired target client without changing the current route", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    await setClientRuntimeSupport(app, ctx.clientId, {
+      "claude-code": capability("ok"),
+      codex: capability("ok"),
+    });
+    const retiredClientId = await seedClient(app, ctx.userId, ctx.organizationId);
+    await setClientRuntimeSupport(app, retiredClientId, { codex: capability("ok") });
+    await app.db
+      .update(clients)
+      .set({ retiredAt: new Date(), status: "disconnected" })
+      .where(eq(clients.id, retiredClientId));
+    const agent = await createAgent(app.db, {
+      name: `switch-retired-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Retired",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+      payload: {
+        clientId: retiredClientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(410);
+    expect(res.json()).toMatchObject({ error: expect.stringContaining("has been retired") });
+    const [row] = await app.db
+      .select({ clientId: agents.clientId, runtimeProvider: agents.runtimeProvider, status: agents.status })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid));
+    expect(row).toMatchObject({ clientId: ctx.clientId, runtimeProvider: "claude-code", status: "active" });
+  });
+
+  it("switches a retired-cleared suspended agent onto a new runtime", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const targetClientId = await seedClient(app, ctx.userId, ctx.organizationId);
+    await setClientRuntimeSupport(app, targetClientId, {
+      "claude-code": capability("ok"),
+      codex: capability("ok"),
+    });
+    const agent = await createAgent(app.db, {
+      name: `switch-cleared-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Cleared",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+    const chat = await createChat(app.db, ctx.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
+    await app.db.insert(agentChatSessions).values({ agentId: agent.uuid, chatId: chat.id, state: "active" });
+
+    await retireClient(app.db, ctx.clientId);
+    const [cleared] = await app.db
+      .select({ status: agents.status, clientId: agents.clientId })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid))
+      .limit(1);
+    expect(cleared).toMatchObject({ status: "suspended", clientId: null });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+      payload: {
+        clientId: targetClientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      uuid: agent.uuid,
+      clientId: targetClientId,
+      runtimeProvider: "codex",
+      status: "active",
+    });
+
+    const [row] = await app.db
+      .select({
+        metadata: agents.metadata,
+        status: agents.status,
+        clientId: agents.clientId,
+        runtimeProvider: agents.runtimeProvider,
+      })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid))
+      .limit(1);
+    expect(row).toMatchObject({ status: "active", clientId: targetClientId, runtimeProvider: "codex" });
+    expect(row?.metadata.runtimeSwitch).toBeUndefined();
+    expect(row?.metadata.runtimeSession).toBeUndefined();
+
+    const [cfg] = await app.db
+      .select({ payload: agentConfigs.payload })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid))
+      .limit(1);
+    expect(cfg?.payload.kind).toBe("codex");
+
+    const [session] = await app.db
+      .select({ state: agentChatSessions.state, runtimeState: agentChatSessions.runtimeState })
+      .from(agentChatSessions)
+      .where(and(eq(agentChatSessions.agentId, agent.uuid), eq(agentChatSessions.chatId, chat.id)))
+      .limit(1);
+    expect(session).toMatchObject({ state: "evicted", runtimeState: "idle" });
+  });
+
+  it("blocks ordinary reactivation and direct first-bind for retired-cleared agents", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const targetClientId = await seedClient(app, ctx.userId, ctx.organizationId);
+    const agent = await createAgent(app.db, {
+      name: `switch-cleared-guard-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Cleared Guard",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    await retireClient(app.db, ctx.clientId);
+    const [cleared] = await app.db
+      .select({ status: agents.status, clientId: agents.clientId })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid))
+      .limit(1);
+    expect(cleared).toMatchObject({ status: "suspended", clientId: null });
+
+    const reactivateRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/reactivate`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(reactivateRes.statusCode).toBe(400);
+    expect(reactivateRes.json()).toMatchObject({ error: expect.stringContaining("runtime switch") });
+
+    const patchRes = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/agents/${agent.uuid}`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+      payload: { clientId: targetClientId },
+    });
+    expect(patchRes.statusCode).toBe(400);
+    expect(patchRes.json()).toMatchObject({ error: expect.stringContaining("runtime switch") });
+
+    const [row] = await app.db
+      .select({ status: agents.status, clientId: agents.clientId })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid))
+      .limit(1);
+    expect(row).toMatchObject({ status: "suspended", clientId: null });
+  });
+
+  it("switches a delegate agent without clearing the member delegate mention", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    await setClientRuntimeSupport(app, ctx.clientId, {
+      "claude-code": capability("ok"),
+      codex: capability("ok"),
+    });
+    const agent = await createAgent(app.db, {
+      name: `switch-delegate-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Delegate",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+    await app.db.update(agents).set({ delegateMention: agent.uuid }).where(eq(agents.uuid, ctx.humanAgentUuid));
+    const oldRuntimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+      payload: {
+        clientId: ctx.clientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      uuid: agent.uuid,
+      clientId: ctx.clientId,
+      runtimeProvider: "codex",
+      status: "active",
+    });
+
+    const [human] = await app.db
+      .select({ delegateMention: agents.delegateMention })
+      .from(agents)
+      .where(eq(agents.uuid, ctx.humanAgentUuid))
+      .limit(1);
+    expect(human?.delegateMention).toBe(agent.uuid);
+
+    const [row] = await app.db
+      .select({ metadata: agents.metadata, runtimeProvider: agents.runtimeProvider })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid))
+      .limit(1);
+    expect(row?.runtimeProvider).toBe("codex");
+    expect(row?.metadata.runtimeSwitch).toBeUndefined();
+    expect(row?.metadata.runtimeSession).toBeUndefined();
+
+    const staleRuntimeHttp = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-agent-id": agent.uuid,
+        "x-agent-runtime-session": oldRuntimeSessionToken,
+      },
+    });
+    expect(staleRuntimeHttp.statusCode).toBe(403);
   });
 
   it("allows an offline target client when its known version and capabilities are sufficient", async () => {

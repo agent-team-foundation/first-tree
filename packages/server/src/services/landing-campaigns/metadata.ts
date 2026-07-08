@@ -1,6 +1,8 @@
 import {
   type LandingCampaignRepoMetadata,
+  type LandingCampaignTrialAwaitingUserKind,
   type LandingCampaignTrialChatState,
+  type LandingCampaignTrialLimitReason,
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
 } from "@first-tree/shared";
@@ -25,14 +27,12 @@ export function buildLandingCampaignAgentMetadata(input: {
   campaign: string;
   skillSetId: string;
   skillSetVersion: string;
-  repo: LandingCampaignRepoMetadata;
 }): Record<string, unknown> {
   return {
     landingCampaignTrial: true,
     campaign: input.campaign,
     skillSetId: input.skillSetId,
     skillSetVersion: input.skillSetVersion,
-    repo: input.repo,
   };
 }
 
@@ -44,6 +44,16 @@ export function buildLandingCampaignChatMetadata(input: {
   repo: LandingCampaignRepoMetadata;
   state: LandingCampaignTrialChatState;
   inputLocked: boolean;
+  awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
+  /** Required: an omitted budget must not silently stamp a 1-turn trial. */
+  maxAgentTurns: number;
+  completedAgentTurns?: number;
+  completedAgentTurnIds?: string[];
+  maxEstimatedTokens?: number | null;
+  estimatedTokensUsed?: number;
+  lastObservedEstimatedTokens?: number;
+  lastObservedTokenUsageEventId?: string | null;
+  limitReason?: LandingCampaignTrialLimitReason;
 }): Record<string, unknown> {
   return {
     landingCampaignTrial: {
@@ -54,6 +64,15 @@ export function buildLandingCampaignChatMetadata(input: {
       repo: input.repo,
       state: input.state,
       inputLocked: input.inputLocked,
+      ...(input.awaitingUserKind ? { awaitingUserKind: input.awaitingUserKind } : {}),
+      maxAgentTurns: input.maxAgentTurns,
+      completedAgentTurns: input.completedAgentTurns ?? 0,
+      completedAgentTurnIds: input.completedAgentTurnIds ?? [],
+      maxEstimatedTokens: input.maxEstimatedTokens ?? null,
+      estimatedTokensUsed: input.estimatedTokensUsed ?? 0,
+      lastObservedEstimatedTokens: input.lastObservedEstimatedTokens ?? 0,
+      lastObservedTokenUsageEventId: input.lastObservedTokenUsageEventId ?? null,
+      ...(input.limitReason ? { limitReason: input.limitReason } : {}),
     },
   };
 }
@@ -62,15 +81,34 @@ export function withLandingCampaignChatState(
   metadata: Record<string, unknown>,
   state: LandingCampaignTrialChatState,
   inputLocked: boolean,
+  updates: {
+    awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
+    completedAgentTurns?: number;
+    completedAgentTurnIds?: string[];
+    maxAgentTurns?: number;
+    maxEstimatedTokens?: number | null;
+    estimatedTokensUsed?: number;
+    lastObservedEstimatedTokens?: number;
+    lastObservedTokenUsageEventId?: string | null;
+    limitReason?: LandingCampaignTrialLimitReason;
+  } = {},
 ): Record<string, unknown> {
   const current = parseLandingCampaignTrialChatMetadata(metadata);
   if (!current) return metadata;
+  const nextTrial = {
+    ...current,
+    state,
+    inputLocked,
+    ...updates,
+  };
+  if (state !== "awaiting_user") {
+    delete nextTrial.awaitingUserKind;
+  }
+  if (state !== "completed") {
+    delete nextTrial.limitReason;
+  }
   return {
     ...metadata,
-    landingCampaignTrial: {
-      ...current,
-      state,
-      inputLocked,
-    },
+    landingCampaignTrial: nextTrial,
   };
 }

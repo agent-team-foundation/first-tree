@@ -191,6 +191,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         completedAt: defaultRow?.onboardingCompletedAt ? defaultRow.onboardingCompletedAt.toISOString() : null,
       },
       inviteUrl,
+      // Deployment-level feature switches the web shell needs before it can
+      // decide what to render (e.g. the Context → Documents sub-tab). Server
+      // routes stay the enforcement point; this is presentation-only.
+      features: {
+        docs: app.config.docs.enabled,
+      },
     };
   });
 
@@ -496,18 +502,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /me/connect-tokens — short-lived connect token for the CLI.
-   * The token now carries only `sub = userId`; the CLI rejoins via
-   * `exchangeConnectToken` which probes `members` realtime.
+   * The public token is a short connect URL; the CLI rejoins via
+   * `exchangeConnectToken`, which consumes the code and probes `members`
+   * realtime before issuing user credentials.
    */
   app.post("/me/connect-tokens", async (request) => {
     const { userId } = requireUser(request);
     const issuer = resolvePublicUrl(app, request);
-    const { token, expiresIn } = await authService.generateConnectToken(
-      userId,
-      app.config.secrets.jwtSecret,
-      app.config.auth,
-      issuer,
-    );
+    const { token, expiresIn } = await authService.generateConnectToken(app.db, userId, app.config.auth, issuer);
     // Channel-aware npm spec + bin name. Web onboarding renders the
     // returned `bootstrapCommand` / `binName` directly so a fresh-machine
     // install lands on the right package without web needing to know
@@ -640,7 +642,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return list.map((c) => ({
       id: c.id,
       userId: c.userId,
-      status: c.status,
+      status: clientService.clientStatusForApi(c),
       authState: clientService.deriveAuthState(c, refreshExpirySeconds),
       binName,
       sdkVersion: c.sdkVersion,

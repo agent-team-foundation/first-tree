@@ -296,6 +296,8 @@ type SessionManagerConfig = {
   registryPath?: string;
   /** Step 4: optional config cache for refresh-before-dispatch on configVersion bump. */
   agentConfigCache?: AgentConfigCache;
+  /** Stable file path updated on every runtime-session rebind for long-lived child CLI calls. */
+  runtimeSessionTokenFile?: string;
   /**
    * Ack channel used by `dispatch` when an entry transitions out of `delivered`.
    * Wired to `clientConnection.sendInboxAck` so the entry is acked over the
@@ -473,6 +475,13 @@ export class SessionManager {
 
     // Load persisted sessions (all start as suspended)
     this.loadPersistedSessions();
+  }
+
+  updateTransport(sdk: FirstTreeHubSDK, agentConfigCache?: AgentConfigCache): void {
+    this.config.sdk = sdk;
+    if (agentConfigCache) {
+      this.config.agentConfigCache = agentConfigCache;
+    }
   }
 
   /**
@@ -2095,6 +2104,7 @@ export class SessionManager {
 
   private buildSessionContext(chatId: string): SessionContext {
     const sessionLog = this.config.log.child({ chatId });
+    const currentSdk = () => this.config.sdk;
     // Runtime-facing string log (handler + result-sink expect a simple
     // `(msg: string) => void` signature). The child pino logger still goes
     // to other places that want structured fields.
@@ -2105,7 +2115,7 @@ export class SessionManager {
     // calls hit memory. v1 §四 改造 4 removed result-sink's dependency on
     // this cache (the trigger-sender mention branch is gone), so the cache
     // now flows only into the inbound-formatter path.
-    const participants = createParticipantCache(this.config.sdk, chatId, log);
+    const participants = createParticipantCache(currentSdk, chatId, log);
 
     // Cross-agent doc preview: `workspaceRoot` is `<workspaces>/<agentSlug>`
     // (see agent-slot.ts), so the shared common root is its parent and this
@@ -2146,10 +2156,18 @@ export class SessionManager {
     });
 
     const envCtx = {
-      sdk: this.config.sdk,
+      sdk: {
+        get serverUrl() {
+          return currentSdk().serverUrl;
+        },
+        get runtimeSessionToken() {
+          return currentSdk().runtimeSessionToken;
+        },
+      },
       agent: this.config.agentIdentity,
       chatId,
       clientId: typeof this.config.handlerConfig.clientId === "string" ? this.config.handlerConfig.clientId : undefined,
+      runtimeSessionTokenFile: this.config.runtimeSessionTokenFile,
       provider:
         typeof this.config.handlerConfig.runtimeProvider === "string"
           ? this.config.handlerConfig.runtimeProvider
@@ -2166,7 +2184,9 @@ export class SessionManager {
 
     return {
       agent: this.config.agentIdentity,
-      sdk: this.config.sdk,
+      get sdk() {
+        return currentSdk();
+      },
       log,
       chatId,
       recordProviderActivity: () => {
@@ -2178,6 +2198,7 @@ export class SessionManager {
       emitEvent: (event) => {
         this.config.onSessionEvent?.(chatId, event);
       },
+      emitEventConfirmed: (event) => this.confirmSessionEventOrThrow(chatId, event),
       forwardResult,
       markMessagesConsumed: (messages) => {
         this.inboxDelivery.markProcessingStarted(chatId, messages);
@@ -2192,11 +2213,28 @@ export class SessionManager {
       failSessionForRecovery: (reason, sessionId) => {
         this.failSessionForRecovery(chatId, reason, sessionId);
       },
+      replaceSessionId: (sessionId, reason) => {
+        const entry = this.sessions.get(chatId);
+        if (!entry) return;
+        const previousSessionId = entry.claudeSessionId;
+        entry.claudeSessionId = sessionId;
+        entry.lastActivity = Date.now();
+        this.config.log.info({ chatId, previousSessionId, sessionId, reason }, "session id replaced by handler");
+        this.persistRegistry();
+      },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
       formatFromHeader: (message) => buildFromHeader(message, participants),
     };
+  }
+
+  private async confirmSessionEventOrThrow(chatId: string, event: SessionEvent): Promise<void> {
+    if (!this.config.confirmSessionEvent) {
+      this.config.onSessionEvent?.(chatId, event);
+      throw new Error("confirmed session event channel unavailable");
+    }
+    await this.config.confirmSessionEvent(chatId, event);
   }
 
   private async resolveSelfFence(log: (msg: string) => void, chatId: string): Promise<SelfFence> {

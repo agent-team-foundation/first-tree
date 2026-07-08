@@ -165,6 +165,62 @@ describe("shared setup hooks", () => {
     expect(eventMocks.reportOnboardingEvent).not.toHaveBeenCalled();
   });
 
+  it("keeps an empty capability snapshot in detecting state until a provider report arrives", async () => {
+    const latest = { current: null as ComputerConnection | null };
+    const client = {
+      id: "client-1",
+      userId: "user-self",
+      status: "connected",
+      authState: "ok",
+      binName: "first-tree-dev",
+      sdkVersion: "0.5.0",
+      hostname: "gandy-macbook",
+      os: "darwin",
+      agentCount: 0,
+      connectedAt: "2026-05-28T00:00:00.000Z",
+      lastSeenAt: "2026-05-28T12:00:00.000Z",
+      capabilities: {},
+    };
+    activityMocks.listClients.mockResolvedValue([client]);
+    activityMocks.getClientCapabilities.mockResolvedValueOnce({ ...client, capabilities: {} }).mockResolvedValueOnce({
+      ...client,
+      capabilities: {
+        codex: {
+          state: "ok",
+          available: true,
+          authenticated: true,
+          authMethod: "none",
+          detectedAt: "2026-05-28T12:00:05.000Z",
+        },
+      },
+    });
+
+    function Probe() {
+      latest.current = useComputerConnection(true);
+      return <div>{latest.current.selectedRuntime ?? "none"}</div>;
+    }
+
+    await renderProbe(<Probe />);
+    await flush();
+    await flush();
+
+    expect(expectHookValue(latest.current).connectedClient?.id).toBe("client-1");
+    expect(expectHookValue(latest.current).capabilitiesLoaded).toBe(false);
+    expect(expectHookValue(latest.current).okRuntimes).toEqual([]);
+    expect(expectHookValue(latest.current).selectedRuntime).toBeNull();
+
+    const tick = visibilityMocks.runVisibilityAwareInterval.mock.calls[0]?.[0];
+    if (!tick) throw new Error("visibility-aware interval was not registered");
+    await act(async () => {
+      await tick();
+    });
+    await flush();
+
+    expect(expectHookValue(latest.current).capabilitiesLoaded).toBe(true);
+    expect(expectHookValue(latest.current).okRuntimes).toEqual(["codex"]);
+    expect(expectHookValue(latest.current).selectedRuntime).toBe("codex");
+  });
+
   it("creates an agent and reports lifecycle through callbacks only", async () => {
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };
     const onOnline = vi.fn();

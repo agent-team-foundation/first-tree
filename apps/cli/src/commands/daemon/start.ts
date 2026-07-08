@@ -33,6 +33,7 @@ import {
   createExecuteUpdate,
   createLoggerRuntimeOutput,
   declineUpdate,
+  ensureActiveRootClientIdPersisted,
   ensureFreshAccessToken,
   getClientServiceStatus,
   getClientSwitchStartupBlock,
@@ -65,8 +66,8 @@ export function registerDaemonStartCommand(daemon: Command): void {
     .action(async (options: { interactive?: boolean; foreground?: boolean }) => {
       const binName = channelConfig.binName;
       const serviceMode = process.env.FIRST_TREE_SERVICE_MODE === "1";
-      const isSupervisorChild = options.interactive === false && serviceMode;
-      if (serviceMode) {
+      const isSupervisorChild = options.foreground !== true && options.interactive === false && serviceMode;
+      if (isSupervisorChild) {
         configureClientLoggerForService(join(defaultHome(), "logs"));
         // The CLI preAction defaults one-shot command logs to `warn`; the
         // daemon service is long-running and needs startup diagnostics in
@@ -74,7 +75,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // config-driven, so explicit operator levels still win.
         applyClientLoggerConfig({ level: "info" });
       }
-      const daemonOutput = serviceMode ? createLoggerRuntimeOutput(createLogger("daemon")) : null;
+      const daemonOutput = isSupervisorChild ? createLoggerRuntimeOutput(createLogger("daemon")) : null;
       const writeLine = (text: string) => (daemonOutput ? daemonOutput.line(text) : print.line(text));
       const writeStatus = (symbol: string, msg: string) =>
         daemonOutput ? daemonOutput.status(symbol, msg) : print.status(symbol, msg);
@@ -209,6 +210,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           schema: clientConfigSchema,
           role: "client",
         });
+        ensureActiveRootClientIdPersisted(config.client.id);
         unregisterRuntimeMarker = registerClientRuntimeMarker({
           clientId: config.client.id,
           mode: isSupervisorChild ? "service" : "foreground",

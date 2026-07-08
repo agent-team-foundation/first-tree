@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, RUNTIME_NOTICE_METADATA_KEY, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const SESSION_LIMIT_RESULT = "You've hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)";
@@ -115,6 +115,7 @@ describe("claude-code handler — session-limit success result", () => {
     expect(forwardResult).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0]?.[1].purpose).toBe("agent-final-text");
+    expect(sendMessage.mock.calls[0]?.[1].metadata).toMatchObject({ [RUNTIME_NOTICE_METADATA_KEY]: true });
     expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("capacity or usage limit");
     expect(logs.some((line) => line.includes("Claude SDK provider failure"))).toBe(true);
 

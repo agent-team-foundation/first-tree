@@ -7,14 +7,16 @@ import {
   type RuntimeProvider,
   type SendMessage,
 } from "@first-tree/shared";
-import { and, asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../db/connection.js";
+import { agentChatSessions } from "../../db/schema/agent-chat-sessions.js";
 import { agents } from "../../db/schema/agents.js";
 import { chats } from "../../db/schema/chats.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { messages } from "../../db/schema/messages.js";
+import { sessionEvents } from "../../db/schema/session-events.js";
 import { users } from "../../db/schema/users.js";
 import {
   BadRequestError,
@@ -24,18 +26,37 @@ import {
   ServiceUnavailableError,
 } from "../../errors.js";
 import { uuidv7 } from "../../uuid.js";
-import { createAgent, legacyWireAgentType } from "../agent.js";
+import { agentMetadataUpdateExpressionPreservingRuntimeState, createAgent, legacyWireAgentType } from "../agent.js";
+import { computeWorking } from "../agent-chat-status.js";
 import { pickDefaultMembership } from "../auth.js";
 import { createChat } from "../chat.js";
 import { sendToClient } from "../connection-manager.js";
 import { MEMBER_STATUSES, reactivateMembership } from "../membership.js";
 import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
-import { isLandingCampaignServiceOrg } from "./guards.js";
-import { buildLandingCampaignAgentMetadata, buildLandingCampaignChatMetadata } from "./metadata.js";
-import { buildLandingCampaignBootstrap, getLandingCampaignSkillSet } from "./skills/catalog.js";
+import { assertTrialQuota, isLandingCampaignServiceOrg } from "./guards.js";
+import {
+  buildLandingCampaignAgentMetadata,
+  buildLandingCampaignChatMetadata,
+  getLandingCampaignTrialChat,
+} from "./metadata.js";
+import {
+  buildLandingCampaignBootstrap,
+  buildLandingCampaignRetryBootstrap,
+  getLandingCampaignSkillSet,
+  type LandingCampaignSkillSet,
+} from "./skills/catalog.js";
 
 const SERVICE_MEMBER_AGENT_BASE_NAME = "first-tree-campaigns";
+
+/**
+ * How long a running trial may stay silent (no agent message, no session
+ * events, last message still the bootstrap) before a repeated start for the
+ * same repo re-sends the bootstrap instead of returning the chat untouched.
+ * Failed turns never consume trial budget, so the re-kick restores a dead run
+ * without any counter reset. Sized to outlast a slow skill-repo clone.
+ */
+const TRIAL_BOOTSTRAP_RETRY_AFTER_MS = 10 * 60 * 1000;
 
 type ActiveMembership = {
   id: string;
@@ -246,15 +267,13 @@ async function ensureTrialAgent(
     officialClientId: string;
     runtimeProvider: RuntimeProvider;
     campaign: string;
-    skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
-    repo: LandingCampaignRepoMetadata;
+    skillSet: LandingCampaignSkillSet;
   },
 ) {
   const metadata = buildLandingCampaignAgentMetadata({
     campaign: input.campaign,
     skillSetId: input.skillSet.id,
     skillSetVersion: input.skillSet.version,
-    repo: input.repo,
   });
 
   const [existing] = await db
@@ -286,7 +305,7 @@ async function ensureTrialAgent(
       .set({
         visibility: "organization",
         displayName: input.skillSet.agentDisplayName,
-        metadata,
+        metadata: agentMetadataUpdateExpressionPreservingRuntimeState(metadata),
         updatedAt: new Date(),
       })
       .where(eq(agents.uuid, existing.uuid))
@@ -317,8 +336,7 @@ async function provisionTrialAgent(
     officialClientId: string;
     runtimeProvider: RuntimeProvider;
     campaign: string;
-    skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
-    repo: LandingCampaignRepoMetadata;
+    skillSet: LandingCampaignSkillSet;
   },
 ): Promise<{
   serviceMember: typeof members.$inferSelect;
@@ -336,7 +354,6 @@ async function provisionTrialAgent(
       runtimeProvider: input.runtimeProvider,
       campaign: input.campaign,
       skillSet: input.skillSet,
-      repo: input.repo,
     });
     return { serviceMember, trialAgent };
   });
@@ -365,11 +382,12 @@ function notifyClientAgentPinned(app: FastifyInstance, agent: Awaited<ReturnType
 async function ensureTrialChatAndBootstrap(
   app: FastifyInstance,
   input: {
+    userId: string;
     humanAgentId: string;
     agentId: string;
     campaign: string;
     repo: LandingCampaignRepoMetadata;
-    skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
+    skillSet: LandingCampaignSkillSet;
   },
 ): Promise<{ chatId: string; sent?: { recipients: string[]; messageId: string } }> {
   const kickoffKey = [
@@ -387,19 +405,30 @@ async function ensureTrialChatAndBootstrap(
     skillSetVersion: input.skillSet.version,
     repo: input.repo,
     state: "running",
-    inputLocked: true,
+    inputLocked: false,
+    maxAgentTurns: app.config.growth.landingCampaignMaxAgentTurns,
+    completedAgentTurns: 0,
+    maxEstimatedTokens: app.config.growth.landingCampaignMaxEstimatedTokens ?? null,
+    estimatedTokensUsed: 0,
+    lastObservedEstimatedTokens: 0,
+    lastObservedTokenUsageEventId: null,
   });
 
-  let chatId: string;
-  const [existing] = await app.db
-    .select({ id: chats.id })
-    .from(chats)
-    .where(eq(chats.onboardingKickoffKey, kickoffKey))
-    .limit(1);
-  if (existing) {
-    chatId = existing.id;
-  } else {
-    const created = await createChat(app.db, {
+  const chatId = await app.db.transaction(async (tx) => {
+    const db = tx as unknown as Database;
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext('landing_campaign_trial_quota'), hashtext(${input.userId}))`,
+    );
+    const [existing] = await tx
+      .select({ id: chats.id })
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, kickoffKey))
+      .limit(1);
+    if (existing) return existing.id;
+
+    await assertTrialQuota(db, app.config, input.userId);
+    // Keep chat inserts and participant rows on the advisory-lock connection.
+    const created = await createChat(db, {
       mode: "legacy-empty-agent",
       creatorAgentId: input.humanAgentId,
       participantAgentIds: [input.agentId],
@@ -408,27 +437,83 @@ async function ensureTrialChatAndBootstrap(
       onboardingKickoffKey: kickoffKey,
       allowLandingCampaignTrial: true,
     });
-    chatId = created.id;
-  }
+    return created.id;
+  });
 
   let sent: { recipients: string[]; messageId: string } | undefined;
   await app.db.transaction(async (tx) => {
-    await tx.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).for("update");
-    const [firstMessage] = await tx
-      .select({ id: messages.id })
+    const [chatRow] = await tx
+      .select({ id: chats.id, metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, chatId))
+      .for("update")
+      .limit(1);
+    const [lastMessage] = await tx
+      .select({ senderId: messages.senderId, metadata: messages.metadata, createdAt: messages.createdAt })
       .from(messages)
       .where(eq(messages.chatId, chatId))
+      .orderBy(desc(messages.createdAt))
       .limit(1);
-    if (firstMessage) return;
+
+    let content: string;
+    let retryMetadata: Record<string, unknown> = {};
+    if (!lastMessage) {
+      content = buildLandingCampaignBootstrap(input.skillSet, input.repo.url);
+    } else {
+      // The chat already has messages: only re-kick a run that looks dead.
+      // A repeated start for a live or finished trial stays a pure no-op.
+      const trial = getLandingCampaignTrialChat({ metadata: chatRow?.metadata ?? null });
+      if (!trial || trial.state !== "running") return;
+      if (lastMessage.senderId === input.agentId) return;
+      if (lastMessage.metadata.systemSender !== "first_tree_onboarding") return;
+      if (Date.now() - lastMessage.createdAt.getTime() < TRIAL_BOOTSTRAP_RETRY_AFTER_MS) return;
+      const [agentMessage] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.chatId, chatId), eq(messages.senderId, input.agentId)))
+        .limit(1);
+      if (agentMessage) return;
+      // Authoritative in-flight signal: fresh per-chat runtime_state='working'
+      // covers the codex no-events case (a long turn that emits nothing until
+      // turn_end), which the session_events silence check below can never see.
+      // Old clients that never reported per-chat runtime (NULL stamp) fall
+      // through to the events check, which is their legacy working proxy.
+      const [runtimeSession] = await tx
+        .select({
+          state: agentChatSessions.state,
+          runtimeState: agentChatSessions.runtimeState,
+          runtimeStateAt: agentChatSessions.runtimeStateAt,
+        })
+        .from(agentChatSessions)
+        .where(and(eq(agentChatSessions.agentId, input.agentId), eq(agentChatSessions.chatId, chatId)))
+        .limit(1);
+      if (computeWorking(runtimeSession, null, Date.now())) return;
+      const [recentEvent] = await tx
+        .select({ id: sessionEvents.id })
+        .from(sessionEvents)
+        .where(
+          and(
+            eq(sessionEvents.agentId, input.agentId),
+            eq(sessionEvents.chatId, chatId),
+            gt(sessionEvents.createdAt, new Date(Date.now() - TRIAL_BOOTSTRAP_RETRY_AFTER_MS)),
+          ),
+        )
+        .limit(1);
+      if (recentEvent) return;
+      content = buildLandingCampaignRetryBootstrap(input.skillSet, input.repo.url);
+      retryMetadata = { bootstrapRetry: true };
+    }
+
     const message: SendMessage = {
       format: "text",
-      content: buildLandingCampaignBootstrap(input.skillSet, input.repo.url),
+      content,
       source: "api",
       metadata: {
         systemSender: "first_tree_onboarding",
         campaign: input.campaign,
         landingCampaignTrial: true,
         repo: input.repo,
+        ...retryMetadata,
       },
     };
     const result = await sendMessage(tx as unknown as Database, chatId, input.humanAgentId, message, {
@@ -445,7 +530,6 @@ export async function startLandingCampaignTrial(
   app: FastifyInstance,
   userId: string,
   body: LandingCampaignStartRequest,
-  setupUrl: string,
 ): Promise<LandingCampaignStartResponse> {
   const config = requireLandingCampaignConfig(app);
   assertLandingCampaignRuntimeProviderSupported(config.runtimeProvider);
@@ -468,12 +552,13 @@ export async function startLandingCampaignTrial(
     runtimeProvider: config.runtimeProvider,
     campaign: body.campaign,
     skillSet,
-    repo,
   });
-  await app.resourcesService.ensureAndBindCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id, setupUrl);
+  await app.resourcesService.unbindLegacyCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id);
+  await app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(trialAgent.uuid, serviceMember.id);
   notifyClientAgentPinned(app, trialAgent);
 
   const result = await ensureTrialChatAndBootstrap(app, {
+    userId,
     humanAgentId: caller.agentId,
     agentId: trialAgent.uuid,
     campaign: body.campaign,

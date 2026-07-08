@@ -3,6 +3,8 @@ import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
+  isLandingCampaignTrialAgentMetadata,
+  RUNTIME_NOTICE_METADATA_KEY,
   runtimeProviderSchema,
   type SessionEvent,
   type ToolFileRef,
@@ -65,6 +67,17 @@ import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/works
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
+import {
+  CodexStaleRolloutError,
+  extractCodexStaleRolloutThreadId,
+  isCodexStaleRolloutError,
+  staleRolloutRecoveryMessage,
+} from "./stale-rollout.js";
+import {
+  LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+  LandingTrialTurnCompletionConfirmError,
+  turnCompletionIdForMessages,
+} from "./turn-completion.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -75,6 +88,24 @@ type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexCo
 type CodexConfigObject = { [key: string]: CodexConfigValue };
 
 const RESULT_PREVIEW_LIMIT = 400;
+
+async function emitTurnEnd(
+  sessionCtx: SessionContext,
+  event: Extract<SessionEvent, { kind: "turn_end" }>,
+): Promise<void> {
+  if (event.payload.status === "success" && isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata)) {
+    if (!sessionCtx.emitEventConfirmed) {
+      throw new LandingTrialTurnCompletionConfirmError("confirmed session event channel unavailable");
+    }
+    try {
+      await sessionCtx.emitEventConfirmed(event);
+    } catch (err) {
+      throw new LandingTrialTurnCompletionConfirmError(err);
+    }
+    return;
+  }
+  sessionCtx.emitEvent(event);
+}
 
 /**
  * Chat-visible notice posted when a turn is detected as a usage-limit empty
@@ -206,11 +237,7 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
  * can lock the auth-mode-friendly defaults (notably `model` only set when
  * the operator chose one).
  */
-export function buildCodexThreadOptions(
-  payload: AgentRuntimeConfigPayload,
-  workspaceCwd: string,
-  options: { workspaceOnly?: boolean } = {},
-): ThreadOptions {
+export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, workspaceCwd: string): ThreadOptions {
   const additionalDirectories: string[] = [];
   for (const repo of payload.gitRepos) {
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
@@ -229,13 +256,13 @@ export function buildCodexThreadOptions(
   // `gpt-5-codex` family, while API-key auth accepts it). Hard-coding a
   // default here would force one auth mode and silently fail on the other.
   // Sandbox: ordinary codex agents remain `danger-full-access` because codex is
-  // their primary local-execution surface. Landing campaign trials run inside a
-  // process-level workspace-only sandbox; use codex's own workspace-write mode
-  // there as a second, scoped belt without changing the ordinary path.
+  // their primary local-execution surface. Landing campaign trials are forced
+  // through the app-server handler, which supplies a custom managed permissions
+  // profile instead of this SDK-only legacy sandbox field.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
-    sandboxMode: options.workspaceOnly ? "workspace-write" : "danger-full-access",
+    sandboxMode: "danger-full-access",
     approvalPolicy: "never",
     // Operator-configured reasoning effort. Defaults to "high" (the value this
     // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
@@ -395,6 +422,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider ?? "codex");
   const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
+  let activePayload: AgentRuntimeConfigPayload | null = null;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
@@ -932,6 +960,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
             }
           } catch (err) {
             if (abort.signal.aborted) return;
+            if (isCodexStaleRolloutError(err)) {
+              throw new CodexStaleRolloutError(err, threadId);
+            }
             const msg = err instanceof Error ? err.message : String(err);
             const classification = providerAttempt.recordSignal({
               kind: "local_error",
@@ -1074,6 +1105,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
           source: "api",
           format: "text",
           content: USAGE_LIMIT_NOTICE,
+          metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
           purpose: "agent-final-text",
         });
         consumedErrorReason = "usage_limit_notice_posted";
@@ -1190,14 +1222,32 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    sessionCtx.emitEvent({
-      kind: "turn_end",
-      payload: { status: settlement.status },
-    });
     const turnDelivered = settlement.action.kind === "complete";
     if (settlement.action.kind === "complete") {
+      const isLandingTrial = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
+      try {
+        await emitTurnEnd(sessionCtx, {
+          kind: "turn_end",
+          payload: {
+            status: settlement.status,
+            ...(settlement.status === "success" && isLandingTrial
+              ? { turnCompletionId: turnCompletionIdForMessages(messages) }
+              : {}),
+          },
+        });
+      } catch (err) {
+        if (!(err instanceof LandingTrialTurnCompletionConfirmError)) throw err;
+        sessionCtx.log(`landing trial turn completion confirmation failed after provider completion: ${err.message}`);
+        token.retry(messages, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+        await closeSdkSessionAfterUncommittablePrefix(sessionCtx, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+        return false;
+      }
       await token.complete(messages, settlement.action.outcome);
     } else {
+      sessionCtx.emitEvent({
+        kind: "turn_end",
+        payload: { status: settlement.status },
+      });
       token.retry(messages, settlement.action.reason);
     }
 
@@ -1220,6 +1270,45 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
     scheduleQueuedMessagesDrain();
     return turnDelivered;
+  }
+
+  async function runTurnWithStaleRolloutRecovery(
+    input: Input,
+    sessionCtx: SessionContext,
+    messages: readonly SessionMessage[],
+    token: DeliveryToken,
+    payload: AgentRuntimeConfigPayload,
+  ): Promise<boolean> {
+    const promptSnapshot = pendingChatContextPrompt;
+    const staleThreadIdBeforeTurn = threadId;
+    try {
+      return await runTurn(input, sessionCtx, messages, token);
+    } catch (err) {
+      if (!isCodexStaleRolloutError(err)) throw err;
+      const staleThreadId = extractCodexStaleRolloutThreadId(err) ?? staleThreadIdBeforeTurn ?? threadId ?? null;
+      if (!codex || !cwd) throw err;
+
+      pendingChatContextPrompt = promptSnapshot;
+      const recoveryMessage = staleRolloutRecoveryMessage(staleThreadId);
+      sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: recoveryMessage } });
+      sessionCtx.log(recoveryMessage);
+
+      thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
+      threadId = null;
+      prevCumulativeUsage = null;
+      threadIsFresh = true;
+
+      const delivered = await runTurn(input, sessionCtx, messages, token);
+      if (!threadId) threadId = thread?.id ?? null;
+      if (threadId) {
+        sessionCtx.replaceSessionId?.(threadId, "codex_stale_rollout_recovered");
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: staleRolloutRecoveryMessage(staleThreadId, threadId) },
+        });
+      }
+      return delivered;
+    }
   }
 
   function scheduleQueuedMessagesDrain(): void {
@@ -1326,7 +1415,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
       sessionCtx.log(`Active session briefing changed — prepending re-read notice (${threadId})`);
     }
-    const delivered = await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+    const payload = activePayload;
+    const delivered = payload
+      ? await runTurnWithStaleRolloutRecovery(inputs.join("\n\n"), sessionCtx, messages, token, payload)
+      : await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
     if (refreshed?.changed && delivered && cwd && threadId) {
       writeSessionBriefingFingerprint(cwd, threadId, refreshed.fingerprint);
     }
@@ -1337,6 +1429,19 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     for (const queued of drained) {
       queued.token.retry(queued.message, reason);
     }
+  }
+
+  async function closeSdkSessionAfterUncommittablePrefix(sessionCtx: SessionContext, reason: string): Promise<void> {
+    retryQueuedMessages(reason);
+    currentAbort?.abort();
+    currentAbort = null;
+    currentTurnPromise = null;
+    const resumeThreadId = threadId ?? undefined;
+    thread = null;
+    codex = null;
+    initialTurnPreparing = false;
+    pendingChatContextPrompt = null;
+    sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
   }
 
   function ensureCodexBootstrap(
@@ -1402,6 +1507,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       markWorkspaceInitComplete(cwd);
 
       codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
+      activePayload = payload;
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
       currentModel = payload.model || "";
       // Brand-new thread: the first `turn.completed` cumulative IS turn 1, so
@@ -1494,6 +1600,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       }
 
       codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
+      activePayload = payload;
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
       thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
@@ -1506,7 +1613,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         let turnDelivered = false;
         try {
           const input = await toCodexInput(message, sessionCtx);
-          turnDelivered = await runTurn(input, sessionCtx, [message], deliveryToken);
+          turnDelivered = await runTurnWithStaleRolloutRecovery(input, sessionCtx, [message], deliveryToken, payload);
           initialTurnCompleted = true;
         } finally {
           initialTurnPreparing = false;
@@ -1516,11 +1623,11 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         // delivered (settled complete). A pre-provider / retried turn consumed
         // the notice without the model seeing it, so leaving the baseline
         // unchanged lets the redelivery's resume re-surface it.
-        if (turnDelivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
+        if (turnDelivered && threadId) writeSessionBriefingFingerprint(cwd, threadId, briefingFingerprint);
       }
       return hasExplicitDeliveryToken
-        ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-        : sessionId;
+        ? { sessionId: threadId ?? sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+        : (threadId ?? sessionId);
     },
 
     inject(message, token) {
@@ -1548,6 +1655,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       currentTurnPromise = null;
       thread = null;
       codex = null;
+      activePayload = null;
       initialTurnPreparing = false;
       pendingChatContextPrompt = null;
     },
@@ -1567,6 +1675,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       currentTurnPromise = null;
       thread = null;
       codex = null;
+      activePayload = null;
 
       // Source repos, the Context Tree clone, and on-demand worktrees under
       // `<cwd>/worktrees/<name>/` are all agent-managed state — the agent

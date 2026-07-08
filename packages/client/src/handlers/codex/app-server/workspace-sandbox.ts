@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { getCliBinding } from "../../../runtime/cli-binding.js";
 import type { SpawnProcess } from "./client.js";
@@ -22,6 +23,27 @@ type WorkspaceOnlySpawnOptions = {
 type WorkspaceOnlyEnvironment = {
   env: NodeJS.ProcessEnv;
   readOnlyPaths: string[];
+};
+
+type WorkspaceOnlyAppServerEnvironment = {
+  env: NodeJS.ProcessEnv;
+  codexHome: string;
+  hostHome: string;
+};
+
+type LandingCodexPermissionProfileConfig = {
+  description: string;
+  workspace_roots: Record<string, true>;
+  filesystem: Record<string, "read" | "write" | "deny">;
+  network: {
+    enabled: true;
+  };
+};
+
+type TomlInlinePrimitive = string | number | boolean;
+type TomlInlineValue = TomlInlinePrimitive | TomlInlineObject;
+type TomlInlineObject = {
+  [key: string]: TomlInlineValue;
 };
 
 type WorkspaceOnlyCliResolution = {
@@ -51,6 +73,23 @@ const READ_ONLY_ETC_PATHS = [
   "/etc/protocols",
   "/etc/services",
 ] as const;
+const LANDING_CODEX_ROOT_READ_PATH = ":root";
+export const LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS = [
+  ".codex",
+  ".first-tree",
+  ".first-tree-staging",
+  ".first-tree-dev",
+  ".first-tree-local",
+  ".first-tree-test",
+] as const;
+// Landing trial hosts intentionally leave `.ssh` readable so public-repo
+// workflows can use the host trial key. These official hosts must keep
+// `~/.ssh` limited to the low-permission GitHub trial keypair only; personal,
+// employee, admin, private-repo, or organization-privileged SSH credentials do
+// not belong there. Git operations still go through the controlled
+// GIT_SSH_COMMAND below (`-F /dev/null`, this key, and workspace-local
+// known_hosts).
+const LANDING_CODEX_GIT_SSH_KEY_RELATIVE_PATH = join(".ssh", "id_ed25519");
 const WORKSPACE_ONLY_PATH_DIRS = ["/usr/local/bin", "/usr/bin", "/bin"] as const;
 const SAFE_PASS_ENV_KEYS = new Set([
   "FIRST_TREE_HOME",
@@ -68,6 +107,22 @@ const SAFE_PASS_ENV_KEYS = new Set([
   "TERM",
   "TZ",
 ]);
+const WORKSPACE_ONLY_APP_SERVER_PASS_ENV_KEYS = new Set([
+  "FIRST_TREE_SERVER_URL",
+  "FIRST_TREE_AGENT_ID",
+  "FIRST_TREE_INBOX_ID",
+  "FIRST_TREE_CHAT_ID",
+  "FIRST_TREE_CLIENT_ID",
+  "FIRST_TREE_PROVIDER",
+  "FIRST_TREE_SWITCH_DRAIN_VERSION",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  "TZ",
+]);
+
+export const LANDING_CODEX_PERMISSIONS_PROFILE = "first-tree-landing-trial";
 
 function pathIsWithin(parent: string, child: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`);
@@ -165,6 +220,120 @@ function validateChannelCliBin(binDir: string, source: string): void {
   } catch {
     throw new Error(`workspace-only sandbox ${source} must contain channel-local First Tree CLI at ${cliPath}`);
   }
+}
+
+function resolveHostHome(parentEnv: NodeJS.ProcessEnv, workspaceRoot: string): string {
+  const rawHome = parentEnv.HOME?.trim();
+  const hostHome = rawHome && rawHome !== workspaceRoot ? rawHome : homedir();
+  return isAbsolute(hostHome) ? hostHome : resolve(hostHome);
+}
+
+function resolveHostCodexHome(parentEnv: NodeJS.ProcessEnv, hostHome: string): string {
+  const rawCodexHome = parentEnv.CODEX_HOME?.trim();
+  if (rawCodexHome) {
+    return isAbsolute(rawCodexHome) ? rawCodexHome : resolve(hostHome, rawCodexHome);
+  }
+  return join(hostHome, ".codex");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function landingCodexGitSshCommand(hostHome: string, firstTreeHome: string): string | null {
+  const keyPath = join(hostHome, LANDING_CODEX_GIT_SSH_KEY_RELATIVE_PATH);
+  if (!existsSync(keyPath)) return null;
+
+  const sshStateDir = join(firstTreeHome, "ssh");
+  mkdirSync(sshStateDir, { recursive: true, mode: 0o700 });
+  const knownHostsPath = join(sshStateDir, "known_hosts");
+
+  return [
+    "ssh",
+    "-F",
+    "/dev/null",
+    "-i",
+    shellQuote(keyPath),
+    "-o",
+    "IdentitiesOnly=yes",
+    "-o",
+    `UserKnownHostsFile=${shellQuote(knownHostsPath)}`,
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+  ].join(" ");
+}
+
+function addDenyPath(paths: Set<string>, path: string): void {
+  paths.add(path);
+  if (existsSync(path)) {
+    try {
+      paths.add(realpathSync(path));
+    } catch {
+      // A lexical deny still blocks the configured path.
+    }
+  }
+}
+
+export function landingCodexDenyPaths(codexHome: string, hostHome: string): string[] {
+  const paths = new Set([codexHome]);
+  addDenyPath(paths, codexHome);
+  for (const relativePath of LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS) {
+    addDenyPath(paths, join(hostHome, relativePath));
+  }
+  return [...paths];
+}
+
+export function buildLandingCodexPermissionProfile(
+  workspacePath: string,
+  codexHome: string,
+  hostHome: string,
+): LandingCodexPermissionProfileConfig {
+  const filesystem: LandingCodexPermissionProfileConfig["filesystem"] = {
+    [LANDING_CODEX_ROOT_READ_PATH]: "read",
+    [workspacePath]: "write",
+  };
+  for (const path of landingCodexDenyPaths(codexHome, hostHome)) {
+    filesystem[path] = "deny";
+  }
+
+  return {
+    description: "First Tree landing trial root-read profile with selected host credential denies",
+    workspace_roots: {
+      [workspacePath]: true,
+    },
+    filesystem,
+    network: {
+      enabled: true,
+    },
+  };
+}
+
+function tomlInline(value: TomlInlineValue): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return `{ ${Object.entries(value)
+    .map(([key, child]) => `${JSON.stringify(key)} = ${tomlInline(child)}`)
+    .join(", ")} }`;
+}
+
+export function buildLandingCodexPermissionsConfigOverride(
+  workspacePath: string,
+  codexHome: string,
+  hostHome: string,
+): string {
+  return `permissions=${tomlInline({
+    [LANDING_CODEX_PERMISSIONS_PROFILE]: buildLandingCodexPermissionProfile(workspacePath, codexHome, hostHome),
+  })}`;
+}
+
+export function buildLandingCodexAppServerArgs(workspacePath: string, codexHome: string, hostHome: string): string[] {
+  return [
+    "-c",
+    buildLandingCodexPermissionsConfigOverride(workspacePath, codexHome, hostHome),
+    "-c",
+    `default_permissions=${JSON.stringify(LANDING_CODEX_PERMISSIONS_PROFILE)}`,
+  ];
 }
 
 function resolveWorkspaceOnlyCli(parentEnv: NodeJS.ProcessEnv): WorkspaceOnlyCliResolution {
@@ -267,6 +436,42 @@ export function buildWorkspaceOnlyEnvironment(
   env.PATH = cli.pathDirs.join(delimiter);
 
   return { env, readOnlyPaths: cli.readOnlyPaths };
+}
+
+export function buildWorkspaceOnlyAppServerEnvironment(
+  parentEnv: NodeJS.ProcessEnv,
+  workspaceRoot: string,
+): WorkspaceOnlyAppServerEnvironment {
+  const realWorkspace = realpathExisting(workspaceRoot, "workspaceRoot");
+  const firstTreeHome = parentEnv.FIRST_TREE_HOME;
+  if (!firstTreeHome) {
+    throw new Error("workspace-only app-server requires FIRST_TREE_HOME for sandbox-local First Tree config");
+  }
+  const resolvedFirstTreeHome = assertPathInsideWorkspace(firstTreeHome, realWorkspace, "FIRST_TREE_HOME");
+  const cli = resolveWorkspaceOnlyCli(parentEnv);
+  const hostHome = resolveHostHome(parentEnv, realWorkspace);
+  const codexHome = resolveHostCodexHome(parentEnv, hostHome);
+
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of WORKSPACE_ONLY_APP_SERVER_PASS_ENV_KEYS) {
+    const value = parentEnv[key];
+    if (typeof value === "string") env[key] = value;
+  }
+  env.FIRST_TREE_HOME = resolvedFirstTreeHome;
+  env.HOME = realWorkspace;
+  env.CODEX_HOME = codexHome;
+  env.TMPDIR = "/tmp";
+  env.FIRST_TREE_CLI_BIN_DIR = cli.cliBinDir;
+  env.PATH = cli.pathDirs.join(delimiter);
+  const hostGhConfigDir = join(hostHome, ".config", "gh");
+  if (existingDirectory(hostGhConfigDir)) {
+    env.GH_CONFIG_DIR = hostGhConfigDir;
+  }
+  const gitSshCommand = landingCodexGitSshCommand(hostHome, resolvedFirstTreeHome);
+  if (gitSshCommand) {
+    env.GIT_SSH_COMMAND = gitSshCommand;
+  }
+  return { env, codexHome, hostHome };
 }
 
 export function buildWorkspaceOnlyBubblewrapArgs(options: BuildBubblewrapArgsOptions): string[] {

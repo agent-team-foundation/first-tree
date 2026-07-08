@@ -36,6 +36,7 @@ export type CodexAppServerClientOptions = {
   binary: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  appServerArgs?: readonly string[];
   requestTimeoutMs?: number;
   spawnProcess?: SpawnProcess;
   onNotification?: (notification: CodexAppServerNotification) => void;
@@ -91,7 +92,7 @@ export class CodexAppServerClient {
 
   private constructor(options: Required<Pick<CodexAppServerClientOptions, "binary">> & CodexAppServerClientOptions) {
     const spawnProcess = options.spawnProcess ?? spawn;
-    this.child = spawnProcess(options.binary, ["app-server", "--stdio"], {
+    this.child = spawnProcess(options.binary, ["app-server", "--stdio", ...(options.appServerArgs ?? [])], {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],

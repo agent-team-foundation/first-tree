@@ -56,8 +56,16 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
  *   - `first-tree-write` rides along because seed's Required Reading loads it as
  *     a hard dependency; without its payload on disk, seed breaks on its first
  *     step.
+ *   - `first-tree-file-bug` lets any agent file a First Tree bug report as a
+ *     GitHub issue. It depends on nothing but the user's `gh` CLI, so it ships
+ *     to every agent regardless of Context Tree binding.
  */
-export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-write", "first-tree-seed"] as const;
+export const CORE_SKILL_NAMES = [
+  "first-tree-welcome",
+  "first-tree-write",
+  "first-tree-seed",
+  "first-tree-file-bug",
+] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
 
@@ -92,7 +100,7 @@ type SkillLayout = {
   sourceDir: string;
   /** Workspace-relative path of the installed payload. */
   agentsRelPath: string;
-  /** Workspace-relative path of the `.claude/skills/<name>` symlink. */
+  /** Workspace-relative path of the `.claude/skills/<name>` companion entry. */
   claudeRelPath: string;
   /** Symlink target for `.claude/skills/<name>` → `../../.agents/skills/<name>`. */
   claudeSymlinkTarget: string;
@@ -185,9 +193,33 @@ function inspectPath(p: string): SymlinkInspection {
   return { kind: "file" };
 }
 
+function isWindowsSymlinkPermissionError(err: unknown): boolean {
+  if (process.platform !== "win32") return false;
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPERM" || code === "EACCES";
+}
+
+function isMatchingSkillDirectory(candidateDir: string, sourceDir: string): boolean {
+  const candidateVersion = readVersionFile(candidateDir);
+  const sourceVersion = readVersionFile(sourceDir);
+  if (candidateVersion === null || sourceVersion === null || candidateVersion !== sourceVersion) return false;
+  const candidateSkill = readSkillMd(candidateDir);
+  const sourceSkill = readSkillMd(sourceDir);
+  return candidateSkill !== null && sourceSkill !== null && candidateSkill === sourceSkill;
+}
+
+function isClaudeCompanionCurrent(workspacePath: string, layout: SkillLayout, agentsFull: string): boolean {
+  const claudeFull = join(workspacePath, layout.claudeRelPath);
+  const claudeState = inspectPath(claudeFull);
+  if (claudeState.kind === "symlink" && claudeState.target === layout.claudeSymlinkTarget) return true;
+  return claudeState.kind === "directory" && isMatchingSkillDirectory(claudeFull, agentsFull);
+}
+
 /**
  * Make `<workspacePath>/.claude/skills/<name>` a relative symlink to the
- * matching `.agents/skills/<name>` directory.
+ * matching `.agents/skills/<name>` directory where symlink creation is
+ * available. Windows hosts without symlink privileges fall back to a regular
+ * directory copy so Claude Code still sees the shipped skill payload.
  *
  * Uses the same temp-path + rename atomic-swap pattern as
  * `ensureClaudeMdSymlink` in `bootstrap.ts` (PR #797 nit) so two
@@ -201,16 +233,28 @@ function inspectPath(p: string): SymlinkInspection {
  * Skips the swap entirely when the existing entry already points at
  * the correct target (the steady-state fast path on every session
  * start). Replaces anything else — a stale symlink, a clobbered
- * regular file, or even a directory that ended up there by mistake.
+ * regular file, or even a stale fallback directory.
  */
-function ensureClaudeSymlink(workspacePath: string, layout: SkillLayout): void {
+function ensureClaudeSymlink(workspacePath: string, layout: SkillLayout, agentsFull: string): void {
   const claudeFull = join(workspacePath, layout.claudeRelPath);
   mkdirSync(dirname(claudeFull), { recursive: true });
   const existing = inspectPath(claudeFull);
   if (existing.kind === "symlink" && existing.target === layout.claudeSymlinkTarget) return;
 
   const tempPath = `${claudeFull}.${randomBytes(6).toString("hex")}.tmp`;
-  symlinkSync(layout.claudeSymlinkTarget, tempPath);
+  try {
+    symlinkSync(layout.claudeSymlinkTarget, tempPath);
+  } catch (err) {
+    try {
+      rmSync(tempPath, { force: true, recursive: true });
+    } catch {
+      // Best-effort cleanup — surface the original symlink failure unless
+      // Windows can use the directory-copy fallback below.
+    }
+    if (!isWindowsSymlinkPermissionError(err)) throw err;
+    ensureClaudeDirectoryCopy(workspacePath, layout, agentsFull);
+    return;
+  }
   try {
     // `renameSync` overwrites a regular file or symlink in place atomically
     // on POSIX; on a directory it returns ENOTDIR / EISDIR depending on
@@ -225,6 +269,27 @@ function ensureClaudeSymlink(workspacePath: string, layout: SkillLayout): void {
       unlinkSync(tempPath);
     } catch {
       // Best-effort cleanup — surface the original rename failure.
+    }
+    throw err;
+  }
+}
+
+function ensureClaudeDirectoryCopy(workspacePath: string, layout: SkillLayout, agentsFull: string): void {
+  const claudeFull = join(workspacePath, layout.claudeRelPath);
+  mkdirSync(dirname(claudeFull), { recursive: true });
+  if (inspectPath(claudeFull).kind === "directory" && isMatchingSkillDirectory(claudeFull, agentsFull)) return;
+
+  const tempPath = `${claudeFull}.${randomBytes(6).toString("hex")}.tmp`;
+  rmSync(tempPath, { force: true, recursive: true });
+  try {
+    cpSync(agentsFull, tempPath, { recursive: true });
+    rmSync(claudeFull, { force: true, recursive: true });
+    renameSync(tempPath, claudeFull);
+  } catch (err) {
+    try {
+      rmSync(tempPath, { force: true, recursive: true });
+    } catch {
+      // Best-effort cleanup — surface the original copy/rename failure.
     }
     throw err;
   }
@@ -251,14 +316,14 @@ export function installOneSkill(workspacePath: string, layout: SkillLayout): "in
   const installedVersion = inspectPath(agentsFull).kind === "directory" ? readVersionFile(agentsFull) : null;
 
   // Fast path: same VERSION on both sides AND SKILL.md content matches
-  // AND the claude symlink looks right. Comparing SKILL.md content as
+  // AND the Claude companion entry looks right. Comparing SKILL.md content as
   // well as VERSION is a defense-in-depth against the human-forgot-to-
   // bump-VERSION failure mode (PR #844 review — yuezengwu): without it,
   // a developer who edits SKILL.md but leaves VERSION at the previous
   // value would silently serve stale skills to every running agent. The
   // SKILL.md read is a few KB per skill per session start — negligible.
-  // If only the claude symlink is wrong, fall through so we rewrite it
-  // without a full re-copy.
+  // If only the Claude companion entry is wrong, fall through so we rewrite
+  // it without a full re-copy.
   const fingerprintsAgree =
     bundledVersion !== null &&
     installedVersion !== null &&
@@ -269,19 +334,15 @@ export function installOneSkill(workspacePath: string, layout: SkillLayout): "in
       return bundledSkill !== null && installedSkill !== null && bundledSkill === installedSkill;
     })();
   if (fingerprintsAgree) {
-    const claudeFull = join(workspacePath, layout.claudeRelPath);
-    const claudeState = inspectPath(claudeFull);
-    if (claudeState.kind === "symlink" && claudeState.target === layout.claudeSymlinkTarget) {
-      return "skipped";
-    }
-    ensureClaudeSymlink(workspacePath, layout);
+    if (isClaudeCompanionCurrent(workspacePath, layout, agentsFull)) return "skipped";
+    ensureClaudeSymlink(workspacePath, layout, agentsFull);
     return "skipped";
   }
 
   mkdirSync(dirname(agentsFull), { recursive: true });
   rmSync(agentsFull, { force: true, recursive: true });
   cpSync(layout.sourceDir, agentsFull, { recursive: true });
-  ensureClaudeSymlink(workspacePath, layout);
+  ensureClaudeSymlink(workspacePath, layout, agentsFull);
   return "installed";
 }
 
@@ -398,7 +459,7 @@ function reconcileTreeSkillState(workspacePath: string): void {
 
 /**
  * Remove a previously-managed skill's on-disk payload AND its Claude Code
- * symlink. Either step is best-effort and only operates on entries that
+ * companion entry. Either step is best-effort and only operates on entries that
  * actually exist; anything the user added later (a custom skill payload
  * under `.agents/skills/<user-skill>/`) is never touched because we look
  * up by NAME, not by listing the directory.
@@ -409,15 +470,17 @@ function removeManagedSkill(workspacePath: string, name: string): void {
   try {
     rmSync(agentsFull, { recursive: true, force: true });
   } catch {
-    // Best-effort — the symlink-side cleanup below still runs.
+    // Best-effort — the Claude companion cleanup below still runs.
   }
-  // The Claude-side entry is a symlink; we don't care whether it currently
-  // resolves. `lstat`-then-unlink mirrors the pattern in
-  // `ensureClaudeSymlink` for atomic replacement.
   try {
-    lstatSync(claudeFull);
-    unlinkSync(claudeFull);
+    const claudeState = inspectPath(claudeFull);
+    if (claudeState.kind === "missing") return;
+    if (claudeState.kind === "directory") {
+      rmSync(claudeFull, { recursive: true, force: true });
+    } else {
+      unlinkSync(claudeFull);
+    }
   } catch {
-    // Either missing or unlink failed — both acceptable here.
+    // Either missing or remove failed — both acceptable here.
   }
 }

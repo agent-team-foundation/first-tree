@@ -5,9 +5,11 @@ import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { Button } from "../../../components/ui/button.js";
+import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../../../utils/onboarding-flags.js";
 import {
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
+  buildScanFixBootstrap,
   buildValueFirstBootstrap,
 } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
@@ -65,6 +67,11 @@ function AdminStartChat() {
   const [phase, setPhase] = useState<"form" | "starting">("form");
   const [error, setError] = useState<string | null>(null);
 
+  // Production-scan fix conversion captured by /quickstart (`action=fix`).
+  // Read straight off the session flag; cleared once the chat exists so
+  // `finishLater` keeps it for a resumed run.
+  const [scanFixHandoff] = useState(() => readScanFixHandoffFlag());
+
   // `selectedRepoUrls` is only populated by StepConnectCode, which the
   // value-first redesign removed from the onboarding sequence (see steps.ts).
   // So in the live flow `hasRepos` is currently always false and the repo-aware
@@ -102,11 +109,18 @@ function AdminStartChat() {
     try {
       if (!hasRepos) {
         await runStartChat({
-          bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
+          bootstrap: (agent) =>
+            scanFixHandoff
+              ? buildScanFixBootstrap(agent.displayName || "your agent", scanFixHandoff)
+              : buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
-          topic: "Get started with First Tree",
+          topic: scanFixHandoff ? "Fix production scan blockers" : "Get started with First Tree",
           treeBindingPlan: "none",
-          complete: completeAndEnterChat,
+          complete: async (chatId) => {
+            // The chat now exists with the fix bootstrap — the handoff is consumed.
+            writeScanFixHandoffFlag(null);
+            await completeAndEnterChat(chatId);
+          },
         });
         return;
       }
@@ -156,7 +170,13 @@ function AdminStartChat() {
           organizationId,
           topic: "Get started with First Tree",
           treeBindingPlan: "none",
-          complete: completeAndEnterChat,
+          complete: async (chatId) => {
+            // Scan-fix handoffs are consumed by the admin fix path only — drop
+            // any stale flag once a non-fix first chat exists, so a later
+            // onboarding run in this tab cannot consume someone else's scan.
+            writeScanFixHandoffFlag(null);
+            await completeAndEnterChat(chatId);
+          },
         });
         return;
       }
@@ -342,7 +362,13 @@ function InviteeReady() {
         topic: "Get settled on First Tree",
         treeBindingPlan: "useBoundTree",
         joinPath: "invite",
-        complete: completeAndEnterChat,
+        complete: async (chatId) => {
+          // Scan-fix handoffs are consumed by the admin fix path only — drop
+          // any stale flag once a non-fix first chat exists, so a later
+          // onboarding run in this tab cannot consume someone else's scan.
+          writeScanFixHandoffFlag(null);
+          await completeAndEnterChat(chatId);
+        },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
@@ -398,7 +424,13 @@ function InviteeNotReady() {
         topic: "Get settled on First Tree",
         treeBindingPlan: "none",
         joinPath: "invite",
-        complete: completeAndEnterChat,
+        complete: async (chatId) => {
+          // Scan-fix handoffs are consumed by the admin fix path only — drop
+          // any stale flag once a non-fix first chat exists, so a later
+          // onboarding run in this tab cannot consume someone else's scan.
+          writeScanFixHandoffFlag(null);
+          await completeAndEnterChat(chatId);
+        },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
