@@ -94,7 +94,9 @@ export const IDENTITY_JSON_REL = join(FIRST_TREE_RUNTIME_DIR, "identity.json");
 
 /**
  * Materialise the unified agent briefing at `<workspacePath>/AGENTS.md` and
- * keep `<workspacePath>/CLAUDE.md` as a relative symlink to it.
+ * keep `<workspacePath>/CLAUDE.md` as a relative symlink to it where the host
+ * permits symlink creation. Windows hosts without symlink privileges fall back
+ * to a regular `CLAUDE.md` copy so Claude Code can still read the briefing.
  *
  * One file, both providers: Codex's `project_root_markers` walk finds
  * `AGENTS.md` directly; Claude Code's `settingSources: ["project"]` follows
@@ -103,13 +105,15 @@ export const IDENTITY_JSON_REL = join(FIRST_TREE_RUNTIME_DIR, "identity.json");
  */
 export function writeAgentBriefing(workspacePath: string, content: string): void {
   writeFileSync(join(workspacePath, "AGENTS.md"), content, "utf-8");
-  ensureClaudeMdSymlink(workspacePath);
+  ensureClaudeMdSymlink(workspacePath, content);
 }
 
 /**
- * Make `<workspacePath>/CLAUDE.md` a relative symlink to `AGENTS.md`. Replaces
- * a stale regular file or broken/mis-targeted symlink left from earlier
- * bootstrap formats; a no-op when the symlink is already correct.
+ * Make `<workspacePath>/CLAUDE.md` a relative symlink to `AGENTS.md` where
+ * possible. Replaces a stale regular file or broken/mis-targeted symlink left
+ * from earlier bootstrap formats; a no-op when the symlink is already correct.
+ * On Windows symlink permission failures (`EPERM` / `EACCES`), falls back to a
+ * regular file copy carrying the same briefing content.
  *
  * Atomically swaps in the new symlink via `rename` so two concurrent
  * same-agent starts can't race the unlink/symlink pair into an `EEXIST`
@@ -130,7 +134,7 @@ export function writeAgentBriefing(workspacePath: string, content: string): void
  * double-load — re-run the manual probes documented in tree-context PR
  * #397 before upgrading the SDK major version.
  */
-export function ensureClaudeMdSymlink(workspacePath: string): void {
+export function ensureClaudeMdSymlink(workspacePath: string, fallbackContent?: string): void {
   const claudeMd = join(workspacePath, "CLAUDE.md");
   const targetRel = "AGENTS.md";
   try {
@@ -140,7 +144,19 @@ export function ensureClaudeMdSymlink(workspacePath: string): void {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   const tempPath = join(workspacePath, `.CLAUDE.md.${randomBytes(6).toString("hex")}.tmp`);
-  symlinkSync(targetRel, tempPath);
+  try {
+    symlinkSync(targetRel, tempPath);
+  } catch (err) {
+    try {
+      rmSync(tempPath, { force: true, recursive: true });
+    } catch {
+      // Best-effort cleanup — surface the original symlink failure unless
+      // Windows can use the regular-file fallback below.
+    }
+    if (!isWindowsSymlinkPermissionError(err)) throw err;
+    writeClaudeMdFallbackFile(workspacePath, fallbackContent);
+    return;
+  }
   try {
     renameSync(tempPath, claudeMd);
   } catch (err) {
@@ -151,6 +167,29 @@ export function ensureClaudeMdSymlink(workspacePath: string): void {
     }
     throw err;
   }
+}
+
+function writeClaudeMdFallbackFile(workspacePath: string, content?: string): void {
+  const claudeMd = join(workspacePath, "CLAUDE.md");
+  const nextContent = content ?? readFileSync(join(workspacePath, "AGENTS.md"), "utf8");
+  const tempPath = join(workspacePath, `.CLAUDE.md.${randomBytes(6).toString("hex")}.tmp`);
+  writeFileSync(tempPath, nextContent, "utf-8");
+  try {
+    renameSync(tempPath, claudeMd);
+  } catch (err) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // Best-effort cleanup — surface the original rename failure.
+    }
+    throw err;
+  }
+}
+
+function isWindowsSymlinkPermissionError(err: unknown): boolean {
+  if (process.platform !== "win32") return false;
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPERM" || code === "EACCES";
 }
 
 /**
