@@ -34,7 +34,8 @@ import { cn } from "../lib/utils.js";
  *                   to all members (read-only); only admins can edit.
  *   Resources     — org-scoped runtime resources (repo / prompt / skill / mcp).
  *                   Visible to all members (read-only); only admins can manage.
- *   GitHub        — admin-only platform integration
+ *   GitHub        — GitHub connection + source repos. Visible to all members
+ *                   (read-only); only admins can manage the connection/resources.
  *   Onboarding    — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
  */
@@ -42,34 +43,30 @@ import { cn } from "../lib/utils.js";
 type Item = {
   to: string;
   label: string;
-  adminOnly?: boolean;
 };
 
 const ITEMS: Item[] = [
   { to: "/settings/computers", label: "Computers" },
   { to: "/settings/context", label: "Context tree" },
   { to: "/settings/resources", label: "Resources" },
-  { to: "/settings/github", label: "GitHub", adminOnly: true },
+  { to: "/settings/github", label: "GitHub" },
   { to: "/settings/onboarding", label: "Onboarding" },
 ];
 
 export function SettingsLayout() {
-  const { role, onboardingCompletedAt, meLoaded } = useAuth();
+  const { onboardingCompletedAt, meLoaded } = useAuth();
   const viewport = useWorkspaceViewport();
-  // Wait for `/me` to resolve before rendering the nav — otherwise a fresh
-  // direct hit on /settings/github would briefly paint the member-view nav
-  // (no GitHub) before `role` flips to "admin".
+  // Wait for `/me` to resolve before rendering the nav so role-dependent
+  // entries such as Onboarding do not flicker during a fresh page load.
   if (!meLoaded) {
     return null;
   }
-  const isAdmin = role === "admin";
   // Once onboarding completes, the wizard is terminal and the entry is hidden.
   // Direct URL access to /settings/onboarding still redirects out via the page's
   // own guard.
   const hasCompletedOnboarding = onboardingCompletedAt !== null;
 
   const visible = ITEMS.filter((it) => {
-    if (it.adminOnly && !isAdmin) return false;
     if (it.to === "/settings/onboarding" && hasCompletedOnboarding) return false;
     return true;
   });

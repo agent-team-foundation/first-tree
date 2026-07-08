@@ -7,6 +7,9 @@ run_*.sh
 # Build outputs
 dist/
 *.tsbuildinfo
+.portable-release/
+.portable-smoke/
+.portable-smoke-bin/
 
 # Turborepo
 .turbo/

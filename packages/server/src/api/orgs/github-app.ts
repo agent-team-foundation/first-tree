@@ -67,8 +67,8 @@ export function resolvePostInstallNext(requested: string | undefined): string {
 /**
  * Class B — `/api/v1/orgs/:orgId/github-app-installation`.
  *
- * Read-only admin view of the GitHub App installation bound to this First Tree
- * team. Powers the Settings → Integrations panel. 404 when no install is
+ * Read-only member view of the GitHub App installation bound to this First Tree
+ * team. Powers the Settings → GitHub panel. 404 when no install is
  * bound (the panel renders the "Install on GitHub" prompt in that case).
  *
  * Distinct from `/orgs/:orgId/settings/:namespace` because installations
@@ -77,12 +77,13 @@ export function resolvePostInstallNext(requested: string | undefined): string {
  * OAuth callback. The Settings panel surfaces it for visibility but the
  * write path is upstream.
  *
- * Admin-only: the installation block exposes account-level metadata
- * (login, permissions, events) that a regular member doesn't need.
+ * Member-readable: Settings → GitHub is the source repo + connection status
+ * surface for the whole team. Mutations and installation catalog APIs below
+ * remain admin-only.
  */
 export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
-    const scope = await requireOrgAdmin(request, app.db);
+    const scope = await requireOrgMembership(request, app.db);
     const row = await findInstallationByOrg(app.db, scope.organizationId);
     if (!row) {
       throw new NotFoundError("No GitHub App installation is bound to this team");
@@ -117,10 +118,10 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * GET `/exists` — member-readable boolean "does this team have a GitHub
-   * App installation?". The full GET above is admin-only because it exposes
-   * installation-id / permissions / events that regular members shouldn't
-   * see; this endpoint redacts everything except the bare presence bit so
-   * the invitee onboarding path can authoritatively detect the
+   * App installation?". The full GET above is also member-readable for
+   * Settings → GitHub, while this endpoint keeps a narrower redacted shape
+   * for callers that only need a presence bit. It lets the invitee onboarding
+   * path authoritatively detect the
    * "admin set up the tree but never connected code" failure mode (without
    * which we either block every invitee of a working team — if 403 maps to
    * `missing` — or never trip the warning at all — if 403 maps to

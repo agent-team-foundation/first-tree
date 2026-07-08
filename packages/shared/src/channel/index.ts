@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getConfig } from "../config/singleton.js";
 
-export const DEFAULT_PORTABLE_DOWNLOAD_BASE_URL = "https://downloads.first-tree.ai";
+export const DEFAULT_PORTABLE_DOWNLOAD_BASE_URL = "https://download.first-tree.ai/releases";
 
 /**
  * Release channel identity. Single source of truth for which environment

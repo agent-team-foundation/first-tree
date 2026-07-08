@@ -18,7 +18,7 @@ everything online.
 - **The CLI**. Prefer the portable command shown in the web console's
   *Computers → New Connection* dialog; it bundles Node.js. For headless
   production installs, the portable installer has this shape:
-  `curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh`.
+  `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh`.
 - **Node.js** ≥ 22.13 only when you choose the npm fallback path
   (`npm install -g first-tree`).
 - **A connect code** — generated from the web console's *Computers → New

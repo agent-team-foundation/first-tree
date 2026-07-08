@@ -126,7 +126,7 @@ describe("core update helpers", () => {
         portable: {
           channelPrefix: "prod",
           publicInstallerPath: "prod/install.sh",
-          downloadBaseUrl: "https://downloads.first-tree.ai",
+          downloadBaseUrl: "https://download.first-tree.ai/releases",
         },
       },
     }));
@@ -146,7 +146,7 @@ describe("core update helpers", () => {
     });
     if (result.ok) throw new Error("expected engine mismatch");
     expect(result.reason).toContain("npm-mode updates cannot replace the system Node runtime");
-    expect(result.reason).toContain("https://downloads.first-tree.ai/prod/install.sh");
+    expect(result.reason).toContain("https://download.first-tree.ai/releases/prod/install.sh");
     expect(childRegistryMocks.getChildProcessRegistry().spawn).not.toHaveBeenCalled();
     expect(output).toHaveBeenCalledWith(expect.stringContaining("requires Node >=999.0.0"));
   });

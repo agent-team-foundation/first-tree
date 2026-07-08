@@ -184,6 +184,25 @@ describe("GithubAppInstallationPanel", () => {
     await act(async () => root.unmount());
   });
 
+  it("renders the summary read-only for members", async () => {
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const bound = await renderDom(<GithubAppInstallationPanel readOnly />);
+
+    await waitForText(bound.container, "Connected to");
+    expect(bound.container.textContent).toContain("github.com/acme");
+    expect(buttonByText(bound.container, "Manage connection")).toBeNull();
+    expect([...bound.container.querySelectorAll("a")].some((a) => a.textContent?.includes("Manage on GitHub"))).toBe(
+      false,
+    );
+    await act(async () => bound.root.unmount());
+
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    const unbound = await renderDom(<GithubAppInstallationPanel readOnly />);
+    await waitForText(unbound.container, "isn't connected to GitHub yet");
+    expect(buttonByText(unbound.container, "Connect GitHub")).toBeNull();
+    await act(async () => unbound.root.unmount());
+  });
+
   it("mints a fresh install URL into a new tab, then waits without leaving this tab", async () => {
     githubMocks.getGithubAppInstallation.mockResolvedValue(null);
     const fakeTab = { location: { href: "" }, close: vi.fn() };
@@ -262,7 +281,7 @@ describe("GithubAppInstallationPanel", () => {
     await act(async () => generic.root.unmount());
   });
 
-  it("lists panel installations by status and connects a connectable one", async () => {
+  it("lists all panel installations under one Available to connect section and connects a connectable one", async () => {
     githubMocks.getGithubAppInstallation.mockResolvedValue(null);
     githubMocks.getGithubAppConnectPanel.mockResolvedValue({
       installations: [
@@ -288,7 +307,7 @@ describe("GithubAppInstallationPanel", () => {
     expect(container.textContent).toContain("github.com/free-org");
     expect(container.textContent).toContain("Connected to this team");
     expect(container.textContent).toContain("github.com/mine-org");
-    expect(container.textContent).toContain("Connected to other teams");
+    expect(container.textContent).not.toContain("Connected to other teams");
     expect(container.textContent).toContain("Connected to Other Team");
 
     await click(buttonByText(container, "Connect"));

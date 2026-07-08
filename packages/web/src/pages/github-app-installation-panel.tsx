@@ -43,7 +43,7 @@ const CONNECT_PANEL_POLL_MS = 2000;
  *     holds them. Binding is always an explicit click here — installs
  *     never auto-connect.
  */
-export function GithubAppInstallationPanel() {
+export function GithubAppInstallationPanel({ readOnly = false }: { readOnly?: boolean }) {
   const { organizationId } = useAuth();
   const [panelOpen, setPanelOpen] = useState(false);
 
@@ -87,40 +87,52 @@ export function GithubAppInstallationPanel() {
   // organizationId hasn't loaded) both render the empty state; the loading
   // branch above already caught the in-flight case.
   if (installationQuery.data == null) {
-    return <NotConnectedSummary disabled={!organizationId} onOpenPanel={() => setPanelOpen(true)} />;
+    return (
+      <NotConnectedSummary disabled={!organizationId} readOnly={readOnly} onOpenPanel={() => setPanelOpen(true)} />
+    );
   }
-  return <InstalledState data={installationQuery.data} onOpenPanel={() => setPanelOpen(true)} />;
+  return <InstalledState data={installationQuery.data} readOnly={readOnly} onOpenPanel={() => setPanelOpen(true)} />;
 }
 
 /**
  * Unbound summary: the team has no GitHub connection yet, so the whole
  * surface is one prominent entry point into the connect panel.
  */
-function NotConnectedSummary({ disabled, onOpenPanel }: { disabled: boolean; onOpenPanel: () => void }) {
+function NotConnectedSummary({
+  disabled,
+  readOnly,
+  onOpenPanel,
+}: {
+  disabled: boolean;
+  readOnly: boolean;
+  onOpenPanel: () => void;
+}) {
   return (
     <div>
       <p className="text-body" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-3)" }}>
         This team isn't connected to GitHub yet. Connect a GitHub App installation to start receiving issues, pull
         requests, and reviews as routed messages.
       </p>
-      <button
-        type="button"
-        onClick={onOpenPanel}
-        disabled={disabled}
-        className="inline-flex items-center justify-center font-medium"
-        style={{
-          gap: "var(--sp-1)",
-          padding: "var(--sp-2) var(--sp-3)",
-          background: "var(--primary)",
-          color: "var(--primary-on)",
-          border: "none",
-          borderRadius: "var(--radius-input)",
-          cursor: disabled ? "default" : "pointer",
-          opacity: disabled ? 0.6 : 1,
-        }}
-      >
-        Connect GitHub
-      </button>
+      {!readOnly && (
+        <button
+          type="button"
+          onClick={onOpenPanel}
+          disabled={disabled}
+          className="inline-flex items-center justify-center font-medium"
+          style={{
+            gap: "var(--sp-1)",
+            padding: "var(--sp-2) var(--sp-3)",
+            background: "var(--primary)",
+            color: "var(--primary-on)",
+            border: "none",
+            borderRadius: "var(--radius-input)",
+            cursor: disabled ? "default" : "pointer",
+            opacity: disabled ? 0.6 : 1,
+          }}
+        >
+          Connect GitHub
+        </button>
+      )}
     </div>
   );
 }
@@ -134,7 +146,15 @@ function githubAccountPath(login: string): string {
   return `github.com/${login}`;
 }
 
-function InstalledState({ data, onOpenPanel }: { data: GithubAppInstallationOutput; onOpenPanel: () => void }) {
+function InstalledState({
+  data,
+  readOnly,
+  onOpenPanel,
+}: {
+  data: GithubAppInstallationOutput;
+  readOnly: boolean;
+  onOpenPanel: () => void;
+}) {
   const AccountIcon = data.accountType === "Organization" ? Building2 : User;
   return (
     // No borderTop of its own: the page's Section frame already draws the
@@ -177,41 +197,43 @@ function InstalledState({ data, onOpenPanel }: { data: GithubAppInstallationOutp
         </div>
       </div>
 
-      <div className="flex items-center" style={{ gap: "var(--sp-2)", flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onClick={onOpenPanel}
-          className="inline-flex items-center text-body"
-          style={{
-            gap: "var(--sp-1)",
-            padding: "var(--sp-1_5) var(--sp-2_5)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-input)",
-            background: "transparent",
-            color: "var(--fg)",
-            cursor: "pointer",
-          }}
-        >
-          Manage connection
-        </button>
-        <a
-          href={data.manageUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center text-body"
-          style={{
-            gap: "var(--sp-1)",
-            padding: "var(--sp-1_5) var(--sp-2_5)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-input)",
-            color: "var(--fg)",
-            textDecoration: "none",
-          }}
-        >
-          Manage on GitHub
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      </div>
+      {!readOnly && (
+        <div className="flex items-center" style={{ gap: "var(--sp-2)", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={onOpenPanel}
+            className="inline-flex items-center text-body"
+            style={{
+              gap: "var(--sp-1)",
+              padding: "var(--sp-1_5) var(--sp-2_5)",
+              border: "var(--hairline) solid var(--border)",
+              borderRadius: "var(--radius-input)",
+              background: "transparent",
+              color: "var(--fg)",
+              cursor: "pointer",
+            }}
+          >
+            Manage connection
+          </button>
+          <a
+            href={data.manageUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center text-body"
+            style={{
+              gap: "var(--sp-1)",
+              padding: "var(--sp-1_5) var(--sp-2_5)",
+              border: "var(--hairline) solid var(--border)",
+              borderRadius: "var(--radius-input)",
+              color: "var(--fg)",
+              textDecoration: "none",
+            }}
+          >
+            Manage on GitHub
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      )}
     </div>
   );
 }
@@ -249,8 +271,6 @@ function ConnectPanel({
 
   const installations = panelQuery.data?.installations ?? [];
   const connectable = installations.filter((i) => i.status === "connectable");
-  const connectedHere = installations.filter((i) => i.status === "connected-here");
-  const connectedElsewhere = installations.filter((i) => i.status === "connected-elsewhere");
 
   // Install-attempt marker: locks the install CTA and shows the waiting
   // affordance until something connectable appears (the thing to click next).
@@ -492,77 +512,24 @@ function ConnectPanel({
         </p>
       )}
 
-      {connectedHere.length > 0 && (
-        <InstallationGroup label="Connected to this team">
-          {connectedHere.map((installation) => (
+      <InstallationGroup label="Available to connect">
+        {!panelQuery.isLoading && installations.length === 0 ? (
+          <p className="text-body" style={{ color: "var(--fg-3)", margin: 0 }}>
+            No installations are linked to your GitHub account yet. Install the App above, or ask the teammate who
+            installed it to connect it from their panel.
+          </p>
+        ) : (
+          installations.map((installation) => (
             <InstallationRow key={installation.installationId} installation={installation}>
-              <button
-                type="button"
-                onClick={() => disconnectMutation.mutate()}
-                disabled={disconnectMutation.isPending}
-                className="text-body"
-                style={{
-                  padding: "var(--sp-1) var(--sp-2)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: "var(--radius-input)",
-                  background: "transparent",
-                  color: "var(--state-error)",
-                  cursor: disconnectMutation.isPending ? "default" : "pointer",
-                }}
-              >
-                {disconnectMutation.isPending ? "Disconnecting…" : "Disconnect"}
-              </button>
+              <InstallationAction
+                installation={installation}
+                connectMutation={connectMutation}
+                disconnectMutation={disconnectMutation}
+              />
             </InstallationRow>
-          ))}
-        </InstallationGroup>
-      )}
-
-      {connectable.length > 0 && (
-        <InstallationGroup label="Available to connect">
-          {connectable.map((installation) => (
-            <InstallationRow key={installation.installationId} installation={installation}>
-              <button
-                type="button"
-                onClick={() => connectMutation.mutate(installation.installationId)}
-                disabled={connectMutation.isPending}
-                className="text-body font-medium"
-                style={{
-                  padding: "var(--sp-1) var(--sp-2)",
-                  border: "none",
-                  borderRadius: "var(--radius-input)",
-                  background: "var(--primary)",
-                  color: "var(--primary-on)",
-                  cursor: connectMutation.isPending ? "default" : "pointer",
-                  opacity: connectMutation.isPending ? 0.6 : 1,
-                }}
-              >
-                {connectMutation.isPending && connectMutation.variables === installation.installationId
-                  ? "Connecting…"
-                  : "Connect"}
-              </button>
-            </InstallationRow>
-          ))}
-        </InstallationGroup>
-      )}
-
-      {connectedElsewhere.length > 0 && (
-        <InstallationGroup label="Connected to other teams">
-          {connectedElsewhere.map((installation) => (
-            <InstallationRow key={installation.installationId} installation={installation}>
-              <span className="text-label" style={{ color: "var(--fg-3)" }}>
-                Connected to {installation.connectedTeamName ?? "another team"}
-              </span>
-            </InstallationRow>
-          ))}
-        </InstallationGroup>
-      )}
-
-      {!panelQuery.isLoading && installations.length === 0 && (
-        <p className="text-body" style={{ color: "var(--fg-3)", margin: 0 }}>
-          No installations are linked to your GitHub account yet. Install the App above, or ask the teammate who
-          installed it to connect it from their panel.
-        </p>
-      )}
+          ))
+        )}
+      </InstallationGroup>
     </div>
   );
 }
@@ -582,6 +549,72 @@ function InstallationGroup({ label, children }: { label: string; children: React
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>{children}</div>
     </div>
+  );
+}
+
+function InstallationAction({
+  installation,
+  connectMutation,
+  disconnectMutation,
+}: {
+  installation: GithubAppConnectPanelInstallation;
+  connectMutation: ReturnType<typeof useMutation<void, Error, number>>;
+  disconnectMutation: ReturnType<typeof useMutation<void, Error, void>>;
+}) {
+  if (installation.status === "connectable") {
+    return (
+      <button
+        type="button"
+        onClick={() => connectMutation.mutate(installation.installationId)}
+        disabled={connectMutation.isPending}
+        className="text-body font-medium"
+        style={{
+          padding: "var(--sp-1) var(--sp-2)",
+          border: "none",
+          borderRadius: "var(--radius-input)",
+          background: "var(--primary)",
+          color: "var(--primary-on)",
+          cursor: connectMutation.isPending ? "default" : "pointer",
+          opacity: connectMutation.isPending ? 0.6 : 1,
+        }}
+      >
+        {connectMutation.isPending && connectMutation.variables === installation.installationId
+          ? "Connecting…"
+          : "Connect"}
+      </button>
+    );
+  }
+
+  if (installation.status === "connected-here") {
+    return (
+      <div className="flex items-center" style={{ gap: "var(--sp-2)", justifyContent: "flex-end" }}>
+        <span className="text-label" style={{ color: "var(--fg-3)" }}>
+          Connected to this team
+        </span>
+        <button
+          type="button"
+          onClick={() => disconnectMutation.mutate()}
+          disabled={disconnectMutation.isPending}
+          className="text-body"
+          style={{
+            padding: "var(--sp-1) var(--sp-2)",
+            border: "var(--hairline) solid var(--border)",
+            borderRadius: "var(--radius-input)",
+            background: "transparent",
+            color: "var(--state-error)",
+            cursor: disconnectMutation.isPending ? "default" : "pointer",
+          }}
+        >
+          {disconnectMutation.isPending ? "Disconnecting…" : "Disconnect"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <span className="text-label" style={{ color: "var(--fg-3)" }}>
+      Connected to {installation.connectedTeamName ?? "another team"}
+    </span>
   );
 }
 
