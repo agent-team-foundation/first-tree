@@ -427,7 +427,8 @@ async function ensureTrialChatAndBootstrap(
     if (existing) return existing.id;
 
     await assertTrialQuota(db, app.config, input.userId);
-    const created = await createChat(app.db, {
+    // Keep chat inserts and participant rows on the advisory-lock connection.
+    const created = await createChat(db, {
       mode: "legacy-empty-agent",
       creatorAgentId: input.humanAgentId,
       participantAgentIds: [input.agentId],
