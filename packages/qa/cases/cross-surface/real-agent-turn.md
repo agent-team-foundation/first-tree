@@ -11,8 +11,12 @@ surfaces: [server, client, cli]
 
 Verify the complete cross-process product loop end-to-end: an authenticated client daemon receives an agent-targeted
 message over WebSocket, runs a **real provider-authenticated model turn**, and posts a correct reply back to the chat.
-This closes the release-verification loop that `system/cloud/release/verification.md` marks as unguarded — it is the one
-case that proves the model turn itself, not just delivery.
+This documents a **manual** model-turn QA slice — the deepest cross-process behavior, the model turn itself, not just
+delivery. Scope note: `@first-tree/qa` cases are non-executable, agent-run prompts, not an automated runner or CI gate.
+`system/cloud/release/verification.md` defines the gap as *missing automated cross-process verification*, so this case
+**reduces risk via a repeatable manual check but does not close that gap** — release and review decisions must still
+treat automated cross-process coverage as unguarded until a CI-gated (or scheduled-run) replacement lands and the
+release node is updated.
 
 This case extends `authenticated-ws-inbox-delivery` (which stops at delivery + session start). Use it when a release
 candidate must prove a real agent can actually answer over the real runtime path.
