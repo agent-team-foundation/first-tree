@@ -24,7 +24,19 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { currentSpanId, currentTraceId, withSpan } from "../otel-helpers.js";
+import { createLogger } from "../logger.js";
+import {
+  addSpanEvent,
+  currentSpanId,
+  currentTraceId,
+  endSpan,
+  installPinoErrorBridge,
+  reportError,
+  SpanKind,
+  startTrackedSpan,
+  uninstallPinoErrorBridge,
+  withSpan,
+} from "../otel-helpers.js";
 import {
   attachRequestContext,
   bodyCaptureOnSendHook,
@@ -119,6 +131,71 @@ describe("withSpan exception recording", () => {
     expect(exceptionEvents[0]?.attributes?.["exception.type"]).toBe("Error");
     expect(exceptionEvents[0]?.attributes?.["exception.message"]).toBe("kaboom");
     expect(span.status.code).toBe(2 /* SpanStatusCode.ERROR */);
+  });
+});
+
+describe("manual span helpers", () => {
+  it("records events, attributes, and errors on manually tracked spans", () => {
+    const span = startTrackedSpan("manual-span", { password: "secret", count: 1 }, { kind: SpanKind.INTERNAL });
+    const traceId = span.spanContext().traceId;
+
+    addSpanEvent(span, "checkpoint", { token: "abc", labels: ["a", "b"], payload: { ok: true } });
+    endSpan(span, { apiKey: "key", done: true }, new Error("manual failure"));
+    expect(() => addSpanEvent(null, "ignored")).not.toThrow();
+    expect(() => endSpan(undefined)).not.toThrow();
+
+    const finished = findFinishedSpan(traceId);
+    expect(finished.name).toBe("manual-span");
+    expect(finished.kind).toBe(SpanKind.INTERNAL);
+    expect(finished.attributes.password).toBe("***");
+    expect(finished.attributes.count).toBe(1);
+    expect(finished.attributes.apiKey).toBe("***");
+    expect(finished.attributes.done).toBe(true);
+    expect(finished.events.some((event) => event.name === "checkpoint")).toBe(true);
+    expect(finished.events.some((event) => event.name === "exception")).toBe(true);
+    expect(finished.status.message).toBe("manual failure");
+  });
+
+  it("reports non-Error values onto the active span", async () => {
+    expect(() => reportError("outside", undefined)).not.toThrow();
+
+    let traceId = "";
+    await withSpan("report-error", undefined, async () => {
+      const active = trace.getActiveSpan();
+      if (!active) throw new Error("expected active span");
+      traceId = active.spanContext().traceId;
+      reportError("fallback message", "string failure", { refreshToken: "secret", operation: "test" });
+    });
+
+    const finished = findFinishedSpan(traceId);
+    expect(finished.status.message).toBe("string failure");
+    expect(finished.attributes.refreshToken).toBe("***");
+    expect(finished.attributes.operation).toBe("test");
+    expect(finished.events.some((event) => event.attributes?.["exception.message"] === "string failure")).toBe(true);
+  });
+
+  it("bridges pino error logs onto the active span", async () => {
+    const logger = createLogger("OtelBridgeTest");
+    let traceId = "";
+    installPinoErrorBridge();
+    try {
+      logger.error({ requestId: "outside" }, "outside active span");
+      await withSpan("pino-error-bridge", undefined, async () => {
+        const active = trace.getActiveSpan();
+        if (!active) throw new Error("expected active span");
+        traceId = active.spanContext().traceId;
+        logger.error({ err: "logged failure", password: "secret", requestId: "req-1" }, "bridge failure");
+      });
+    } finally {
+      uninstallPinoErrorBridge();
+    }
+
+    const finished = findFinishedSpan(traceId);
+    expect(finished.status.message).toBe("logged failure");
+    expect(finished.attributes.password).toBe("***");
+    expect(finished.attributes.requestId).toBe("req-1");
+    expect(finished.attributes.module).toBe("OtelBridgeTest");
+    expect(finished.events.some((event) => event.attributes?.["exception.message"] === "logged failure")).toBe(true);
   });
 });
 
