@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.2.2
+version: 0.2.3
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Bootstrap a team's Context Tree from its connected source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Reads the sources, proposes an initial top-level + second-level domain structure for the user to approve, then drafts initial leaf content — each as a reviewable PR. Refuses a tree that already has domain structure: send incremental, source-driven writes to `first-tree-write`, and broad maintenance / drift-audit to a focused task.
@@ -60,11 +60,13 @@ first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/<manif
 ```
 
 `tree init` creates the repo under the team's GitHub App installation
-account, seeds a minimal valid tree (root `NODE.md`, a `members/` index,
-and the creator's member node), pushes, and binds the org's
-`context_tree` setting. It is **admin-only** and needs an authenticated
-`gh`; if the caller is not an org admin, or `gh` is unauthenticated,
-surface that exact gap and stop (binding a team tree is an admin action).
+account (or, when the App is not installed yet, under your own `gh`
+account — see **Surface App coverage** below), seeds a minimal valid tree
+(root `NODE.md`, a `members/` index, and the creator's member node),
+pushes, and binds the org's `context_tree` setting. It is **admin-only**
+and needs an authenticated `gh`; if the caller is not an org admin, or
+`gh` is unauthenticated, surface that exact gap and stop (binding a team
+tree is an admin action).
 Take the team display name from the chat context / `first-tree agent
 status`. After it succeeds the tree is bound and in state **B** — proceed.
 
@@ -74,7 +76,7 @@ action" note in your briefing does **not** apply to this task) — running it IS
 the task the user asked for, so binding needs no separate go-ahead. You do not
 need to independently "confirm admin" first: `tree init` enforces it
 server-side (it fails closed for a non-admin or unauthenticated `gh`). So run
-it; only if it fails on that installation/permission check do you surface the
+it; only if it fails on that admin/authentication check do you surface the
 exact gap (not an admin / `gh` not authenticated) and stop.
 
 **Pin the local checkout with `--dir` — this is load-bearing.** `tree
@@ -87,6 +89,39 @@ Passing `--dir "<workspaceRoot>/<manifest.tree>"` puts the freshly created
 clone exactly where Phase 1 (and the runtime) expect it. If the manifest
 carries no tree name yet (a fully unbound workspace), use the conventional
 `<workspaceRoot>/context-tree`.
+
+**Surface App coverage after creating the tree — recommend, never block.**
+A newly created tree is only visible to the team's web view and the
+Context Tree reviewer once the First Tree GitHub App can read its repo.
+`tree init` creates and binds the tree either way and prints a coverage
+line; make that outcome loud, never gate on it — the tree is built and
+bound, so proceed to Phase 1 regardless of coverage.
+
+**When `tree init` reports the repo is not covered**, leave a prominent
+message for the admin (a `chat send` to them, not a line buried in tool
+output) stating the consequence — "your Context Tree is built and bound, but
+the web view and PR reviewer won't see it until the First Tree App can read
+its repo" — plus the next step for the case it reports:
+
+- **A selected-repositories install that excludes the new repo:** `tree init`
+  prints a GitHub installation-settings URL — an absolute `https://` link, so
+  it renders clickable in chat. Relay it and say to add the tree repo there.
+- **No App installed at all:** give the admin a clickable link to the web
+  console's GitHub settings, built from the server URL the agent knows — take
+  the `Server:` value from `first-tree agent status` and append
+  `/settings/github` (an absolute `https://…/settings/github` renders
+  clickable; a bare `/settings/github` path does **not** — the chat link guard
+  drops relative paths). Tell them to open it and click **Install on GitHub**.
+  This assumes the web console shares the server's origin (the standard
+  deployment); if it does not, the link may not resolve — then just name the
+  destination in words: **Settings → GitHub** in the web app. Do **not**
+  fabricate a raw GitHub App install URL yourself — the install must run
+  through the web console so it binds back to your org. Add the **placement
+  caveat**: the repo was created under your own account (the `<owner>` in
+  `tree init`'s output), so install the App on **that same account**;
+  installing it on a different org later will not cover this repo.
+- **A suspended install:** `tree init` prints the installation-settings URL —
+  relay it and say to reactivate the First Tree App installation there.
 
 **B — Bound but unseeded.** The tree is bound and holds at most the
 bootstrap set — a root `NODE.md`, a `members/` index, and creator member
