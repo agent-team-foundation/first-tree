@@ -69,6 +69,7 @@ export async function installCodexRuntime(spec = "latest"): Promise<InstallCodex
       label: `npm install -g ${CODEX_RUNTIME_PACKAGE}@${spec}`,
       timeoutMs: CODEX_INSTALL_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
     });
 
     const stdoutChunks: Buffer[] = [];
