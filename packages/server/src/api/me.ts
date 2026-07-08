@@ -531,7 +531,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * The public token is a bare short code; the CLI picks the channel/default
    * server URL and rejoins via `exchangeConnectToken`, which consumes the code
    * and probes `members` realtime before issuing user credentials.
+   *
+   * Rate limiting is the global actor-aware `@fastify/rate-limit` guard
+   * registered in `app.ts`; this user-authenticated route should not introduce
+   * a separate low per-route cap.
    */
+  // codeql[js/missing-rate-limiting]
   app.post("/me/connect-tokens", async (request) => {
     const { userId } = requireUser(request);
     const issuer = resolvePublicUrl(app, request);
