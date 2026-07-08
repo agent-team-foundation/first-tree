@@ -317,23 +317,51 @@ export async function writeDeterministicTarGz({ sourceDir, tarballPath, generate
   }
 }
 
-async function rewriteBundleChannel(appDir, channel) {
+export function readSourceTreeChannel(source = readFileSync(join(CLI_ROOT, "src", "build-info.ts"), "utf8")) {
+  const match = source.match(/export const CHANNEL(?::\s*ChannelName)?\s*=\s*["'](dev|staging|prod)["'];/);
+  return match?.[1] ?? null;
+}
+
+export function rewriteBundleChannelText(source, channel) {
+  const rewrites = [
+    {
+      re: /\b(const\s+channelConfig\s*=\s*getChannelConfig\()\s*["'](?:dev|staging|prod)["'](\s*\)\s*;)/g,
+      replace: (_match, prefix, suffix) => `${prefix}"${channel}"${suffix}`,
+    },
+    {
+      re: /\b((?:const|let|var)\s+CHANNEL\s*=\s*)["'](?:dev|staging|prod)["'](\s*;)/g,
+      replace: (_match, prefix, suffix) => `${prefix}"${channel}"${suffix}`,
+    },
+  ];
+
+  let content = source;
+  let replacements = 0;
+  for (const rewrite of rewrites) {
+    content = content.replace(rewrite.re, (...args) => {
+      replacements += 1;
+      return rewrite.replace(...args);
+    });
+  }
+
+  return { content, replacements };
+}
+
+export async function rewriteBundleChannel(appDir, channel, options = {}) {
   const files = (await listFiles(appDir)).filter((path) => path.endsWith(".mjs"));
-  const re = /const channelConfig = getChannelConfig\("(dev|staging|prod)"\);/g;
   let replacements = 0;
   for (const file of files) {
     const before = await readFile(file, "utf8");
-    const matches = [...before.matchAll(re)];
-    if (matches.length === 0) continue;
-    const after = before.replace(re, () => {
-      replacements += 1;
-      return `const channelConfig = getChannelConfig("${channel}");`;
-    });
-    await writeFile(file, after, "utf8");
+    const rewritten = rewriteBundleChannelText(before, channel);
+    replacements += rewritten.replacements;
+    if (rewritten.replacements > 0) await writeFile(file, rewritten.content, "utf8");
   }
-  if (replacements !== 1) {
-    fail(`expected to rewrite exactly one bundled channel constant, rewrote ${replacements}`);
+  if (replacements === 1) return;
+
+  const sourceChannel = options.sourceChannel ?? readSourceTreeChannel();
+  if (replacements === 0 && sourceChannel === channel) {
+    return;
   }
+  fail(`expected to rewrite exactly one bundled channel constant, rewrote ${replacements}`);
 }
 
 function copyPruneScripts(appDir) {
