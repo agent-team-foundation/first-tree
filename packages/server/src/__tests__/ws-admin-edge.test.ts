@@ -234,4 +234,30 @@ describe("Admin WS route edge paths", () => {
       "session:state",
     ]);
   });
+
+  it("swallows socket send failures while dispatching chat and session frames", async () => {
+    const handlers: CapturedHandlers = {};
+    const db = makeDb({
+      audienceRows: [[{ agent_id: "human-1" }], [{ agent_id: "human-1" }], [{ agent_id: "human-1" }]],
+    });
+    const { app, getRoute } = makeApp(db);
+    await orgWsRoutes(makeNotifier(handlers), JWT_SECRET)(app as never);
+    const route = getRoute();
+    const token = await signToken({ sub: "user-1", type: "access" });
+    const active = makeSocket();
+
+    await route(active.socket, request(token));
+    active.send.mockImplementation(() => {
+      throw new Error("socket send failed");
+    });
+
+    handlers.chatMessage?.({ chatId: "chat-message-send-fail", messageId: "msg-1" });
+    await waitForAsyncDispatch();
+    handlers.chatUpdated?.({ chatId: "chat-updated-send-fail" });
+    await waitForAsyncDispatch();
+    handlers.sessionRuntime?.({ agentId: "agent-1", chatId: "chat-runtime-send-fail", organizationId: "org-1" });
+    await waitForAsyncDispatch();
+
+    expect(active.send).toHaveBeenCalledTimes(4);
+  });
 });

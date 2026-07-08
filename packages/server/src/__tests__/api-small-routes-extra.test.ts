@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type RouteHandler = (...args: unknown[]) => unknown;
 
 type RegisteredRoute = {
-  method: "GET" | "PATCH" | "POST";
+  method: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
   path: string;
   options?: unknown;
   handler: RouteHandler;
@@ -23,7 +23,9 @@ const routeMocks = {
   getMeDocPreview: vi.fn(),
   getOrganization: vi.fn(),
   getOrgContextTree: vi.fn(),
+  generateConnectToken: vi.fn(),
   listAgentTurns: vi.fn(),
+  recoverAgentRuntimeSwitch: vi.fn(),
   requireAgent: vi.fn(),
   requireAgentAccess: vi.fn(),
   requireChatAccess: vi.fn(),
@@ -36,11 +38,18 @@ const routeMocks = {
 };
 
 const mockedModules = [
+  "@first-tree/shared/channel",
   "../middleware/require-identity.js",
   "../scope/require-org.js",
   "../scope/require-resource.js",
   "../services/activity.js",
+  "../services/agent.js",
+  "../services/auth.js",
   "../services/agent-runtime-switch.js",
+  "../services/chat.js",
+  "../services/connection-manager.js",
+  "../services/github-entity-chat.js",
+  "../services/github-entity-follow.js",
   "../services/landing-campaigns/guards.js",
   "../services/me-doc.js",
   "../services/org-settings.js",
@@ -57,16 +66,24 @@ function mockRouteDependencies(): void {
     requireOrgMembership: routeMocks.requireOrgMembership,
   }));
   vi.doMock("../scope/require-resource.js", () => ({
+    assertAllAgentsVisibleInOrg: vi.fn(),
     requireAgentAccess: routeMocks.requireAgentAccess,
     requireChatAccess: routeMocks.requireChatAccess,
   }));
   vi.doMock("../services/activity.js", () => ({
     resetActivity: routeMocks.resetActivity,
   }));
+  vi.doMock("../services/auth.js", () => ({
+    generateConnectToken: routeMocks.generateConnectToken,
+    pickDefaultMembership: vi.fn(),
+  }));
   vi.doMock("../services/agent-runtime-switch.js", () => ({
+    RUNTIME_SWITCH_FAULTS: ["after_claim", "after_commit"],
     assertNoRuntimeSwitchInProgress: routeMocks.assertNoRuntimeSwitchInProgress,
+    recoverAgentRuntimeSwitch: routeMocks.recoverAgentRuntimeSwitch,
   }));
   vi.doMock("../services/landing-campaigns/guards.js", () => ({
+    assertMetadataDoesNotClaimLandingCampaignTrial: vi.fn(),
     assertMutableAgentIsNotLandingCampaignTrial: routeMocks.assertMutableAgentIsNotLandingCampaignTrial,
   }));
   vi.doMock("../services/me-doc.js", () => ({
@@ -122,6 +139,10 @@ function makeApp(extra: Record<string, unknown> = {}): { app: unknown; routes: R
   const routes: RegisteredRoute[] = [];
   const app = {
     db: { name: "db" },
+    addContentTypeParser: vi.fn(),
+    delete(path: string, optionsOrHandler: unknown, maybeHandler?: unknown): void {
+      addRoute(routes, "DELETE", path, optionsOrHandler, maybeHandler);
+    },
     get(path: string, optionsOrHandler: unknown, maybeHandler?: unknown): void {
       addRoute(routes, "GET", path, optionsOrHandler, maybeHandler);
     },
@@ -130,6 +151,9 @@ function makeApp(extra: Record<string, unknown> = {}): { app: unknown; routes: R
     },
     post(path: string, optionsOrHandler: unknown, maybeHandler?: unknown): void {
       addRoute(routes, "POST", path, optionsOrHandler, maybeHandler);
+    },
+    put(path: string, optionsOrHandler: unknown, maybeHandler?: unknown): void {
+      addRoute(routes, "PUT", path, optionsOrHandler, maybeHandler);
     },
     ...extra,
   };
@@ -299,6 +323,242 @@ describe("small API route handlers", () => {
       branch: null,
       repo: "owner/tree",
     });
+  });
+
+  it("returns a source bootstrap when portable mode has no public installer for the channel", async () => {
+    vi.doMock("@first-tree/shared/channel", () => ({
+      getChannelConfig: vi.fn(() => ({
+        binName: "first-tree-test",
+        defaultServerUrl: "https://first-tree.example",
+        packageName: "first-tree-test",
+        portable: { publicInstallerPath: null },
+      })),
+    }));
+    routeMocks.generateConnectToken.mockResolvedValue({ token: "code_123", expiresIn: 600 });
+    const { meRoutes } = await import("../api/me.js");
+    const { app, routes } = makeApp({
+      config: {
+        auth: { connectTokenExpiry: "10m" },
+        channel: "staging",
+        connectBootstrap: { method: "portable", portableDownloadBaseUrl: "https://download.example/releases" },
+        server: { publicUrl: "https://first-tree.example/app/" },
+      },
+    });
+
+    await meRoutes(app as never);
+
+    await expect(
+      route(routes, "POST", "/me/connect-tokens").handler({
+        headers: {},
+        hostname: "ignored.local",
+        protocol: "https",
+        user: { userId: "user_1" },
+      }),
+    ).resolves.toMatchObject({
+      binName: "first-tree-test",
+      bootstrapCommand: "first-tree-test login code_123",
+      command: "first-tree-test login code_123",
+      expiresIn: 600,
+      installMethod: "source",
+      installerUrl: null,
+      npmSpec: "first-tree-test",
+      token: "code_123",
+    });
+    expect(routeMocks.generateConnectToken).toHaveBeenCalledWith(
+      { name: "db" },
+      "user_1",
+      { connectTokenExpiry: "10m" },
+      "https://first-tree.example/app",
+    );
+  });
+
+  it("rejects avatar uploads whose parsed body is not a Buffer", async () => {
+    const { agentRoutes } = await import("../api/agents.js");
+    const { app, routes } = makeApp({
+      config: { runtime: { runtimeSwitchFaultInjection: false } },
+      log: { warn: vi.fn() },
+      notifier: { notifyAgentRouteChange: vi.fn() },
+    });
+
+    await agentRoutes(app as never);
+
+    await expect(
+      route(routes, "PUT", "/:uuid/avatar").handler({
+        body: { not: "bytes" },
+        headers: { "content-type": "image/png" },
+        params: { uuid: "agent_1" },
+      }),
+    ).rejects.toThrow("Avatar upload body must be raw image bytes.");
+  });
+
+  it("recovers a runtime switch and skips malformed immediate pinned frames", async () => {
+    const sendToAgent = vi.fn();
+    const sendToClient = vi.fn();
+    vi.doMock("../services/connection-manager.js", () => ({
+      forceDisconnect: vi.fn(),
+      getAgentClientId: vi.fn(),
+      hasActiveConnection: vi.fn(),
+      sendToAgent,
+      sendToClient,
+    }));
+    vi.doMock("../services/agent.js", () => ({
+      MAX_AVATAR_IMAGE_BYTES: 5 * 1024 * 1024,
+      SUPPORTED_AVATAR_IMAGE_MIMES: ["image/png"],
+      agentAvatarImageUrl: vi.fn(() => "/avatar.png"),
+      clearAgentAvatarImage: vi.fn(),
+      fetchUserAvatarForHumanAgent: vi.fn().mockResolvedValue(null),
+      getAgentAvatarImage: vi.fn(),
+      legacyWireAgentType: vi.fn(() => "personal_assistant"),
+      resolveAvatarImageUrl: vi.fn(() => null),
+      setAgentAvatarImage: vi.fn(),
+      stripReservedAgentMetadata: vi.fn((metadata: unknown) => metadata ?? {}),
+    }));
+    const recoveredAt = new Date("2026-07-08T00:00:00.000Z");
+    routeMocks.recoverAgentRuntimeSwitch.mockResolvedValue({
+      agent: {
+        uuid: "agent_1",
+        name: "runtime-recovered",
+        displayName: "Runtime Recovered",
+        type: "agent",
+        clientId: "client_new",
+        runtimeProvider: "not-a-runtime",
+        metadata: {},
+        createdAt: recoveredAt,
+        updatedAt: recoveredAt,
+      },
+      oldClientId: "client_old",
+      targetClientId: "client_new",
+      terminatedChatIds: ["chat_1"],
+      recoveryAction: "forwarded",
+    });
+    const warn = vi.fn();
+    const notifyAgentRouteChange = vi.fn().mockResolvedValue(undefined);
+    const { agentRoutes } = await import("../api/agents.js");
+    const { app, routes } = makeApp({
+      config: { runtime: { agentHttpTokenEnforcement: true, runtimeSwitchFaultInjection: true } },
+      log: { warn },
+      notifier: { notifyAgentRouteChange },
+    });
+
+    await agentRoutes(app as never);
+
+    await expect(
+      route(routes, "POST", "/:uuid/switch-runtime/recover").handler({
+        headers: {},
+        params: { uuid: "agent_1" },
+      }),
+    ).resolves.toMatchObject({
+      uuid: "agent_1",
+      runtimeProvider: "not-a-runtime",
+      avatarImageUrl: null,
+    });
+    expect(routeMocks.recoverAgentRuntimeSwitch).toHaveBeenCalledWith(
+      { name: "db" },
+      "agent_1",
+      expect.objectContaining({ runtimeHttpTokenEnforced: true }),
+    );
+    expect(notifyAgentRouteChange).toHaveBeenCalledWith(expect.objectContaining({ targetClientId: "client_new" }));
+    expect(warn).toHaveBeenCalledWith(expect.any(Object), "agent:pinned frame failed schema validation — not sending");
+    expect(sendToClient).not.toHaveBeenCalled();
+    expect(sendToAgent).toHaveBeenCalledWith("agent_1", { type: "session:terminate", chatId: "chat_1" });
+  });
+
+  it("skips malformed org agent pinned frames after create", async () => {
+    const sendToClient = vi.fn();
+    const createdAt = new Date("2026-07-08T00:00:00.000Z");
+    vi.doMock("../services/connection-manager.js", () => ({ sendToClient }));
+    vi.doMock("../services/agent.js", () => ({
+      createAgent: vi.fn().mockResolvedValue({
+        uuid: "agent_bad_runtime",
+        name: "bad-runtime",
+        displayName: "Bad Runtime",
+        type: "agent",
+        clientId: "client_1",
+        runtimeProvider: "not-a-runtime",
+        metadata: {},
+        createdAt,
+        updatedAt: createdAt,
+      }),
+      legacyWireAgentType: vi.fn(() => "personal_assistant"),
+      resolveAvatarImageUrl: vi.fn(() => null),
+      stripReservedAgentMetadata: vi.fn((metadata: unknown) => metadata ?? {}),
+    }));
+    const warn = vi.fn();
+    const { orgAgentRoutes } = await import("../api/orgs/agents.js");
+    const { app, routes } = makeApp({ log: { warn } });
+
+    await orgAgentRoutes(app as never);
+
+    const reply = makeReply();
+    await route(routes, "POST", "/").handler(
+      {
+        body: { type: "agent", name: "bad-runtime", displayName: "Bad Runtime", clientId: "client_1" },
+      },
+      reply,
+    );
+
+    expect(reply.code).toBe(201);
+    expect(sendToClient).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.any(Object), "agent:pinned frame failed schema validation — not sending");
+  });
+
+  it("rejects agent GitHub entity follow without a binding pair and unfollow without an entity", async () => {
+    const assertParticipant = vi.fn().mockResolvedValue(undefined);
+    const declareEntityFollow = vi.fn().mockResolvedValue({
+      entity: { key: "acme/api#42" },
+      outcome: "already_following",
+    });
+    const resolveBindingPair = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ delegateAgentId: "agent_1", humanAgentId: "human_1", organizationId: "org_1" });
+    vi.doMock("../services/chat.js", () => ({ assertParticipant }));
+    vi.doMock("../services/github-entity-chat.js", () => ({ resolveBindingPair }));
+    vi.doMock("../services/github-entity-follow.js", () => ({
+      declareEntityFollow,
+      listChatGithubEntities: vi.fn(),
+      removeEntityFollow: vi.fn(),
+    }));
+    const { agentChatRoutes } = await import("../api/agent/chats.js");
+    const { app, routes } = makeApp({ config: { oauth: { githubApp: {} } } });
+
+    await agentChatRoutes(app as never);
+
+    await expect(
+      route(routes, "POST", "/:chatId/github-entities").handler({
+        body: { entity: "https://github.com/acme/api/pull/42" },
+        params: { chatId: "chat_1" },
+      }),
+    ).rejects.toThrow("No eligible (human, delegate) binding pair");
+    expect(resolveBindingPair).toHaveBeenCalledWith({ name: "db" }, "chat_1", "agent_1");
+
+    const followReply = makeReply();
+    await route(routes, "POST", "/:chatId/github-entities").handler(
+      {
+        body: { entity: "https://github.com/acme/api/pull/42" },
+        params: { chatId: "chat_1" },
+      },
+      followReply,
+    );
+    expect(followReply).toMatchObject({ body: { entity: { key: "acme/api#42" }, status: "already_following" } });
+    expect(declareEntityFollow).toHaveBeenCalledWith(
+      { name: "db" },
+      { appCredentials: {} },
+      expect.objectContaining({
+        boundVia: "agent_declared",
+        chatId: "chat_1",
+        delegateAgentId: "agent_1",
+        humanAgentId: "human_1",
+        organizationId: "org_1",
+      }),
+    );
+
+    await expect(
+      route(routes, "DELETE", "/:chatId/github-entities").handler({
+        params: { chatId: "chat_1" },
+        query: {},
+      }),
+    ).rejects.toThrow("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
   });
 
   it("serializes organization identity reads and updates", async () => {

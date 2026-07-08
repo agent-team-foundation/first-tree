@@ -2,6 +2,7 @@ import { ATTACHMENT_FILENAME_HEADER, ATTACHMENT_MIME_HEADER, MAX_ATTACHMENT_BYTE
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { organizations } from "../db/schema/organizations.js";
+import { createAttachment } from "../services/attachment.js";
 import { ensureMembership } from "../services/membership.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
@@ -134,6 +135,42 @@ describe("attachments route — upload + capability download", () => {
     const admin = await createTestAdmin(app, { username: `eb-${crypto.randomUUID().slice(0, 6)}` });
     const reply = await postAttachment(app, admin, Buffer.alloc(0));
     expect(reply.statusCode).toBe(400);
+  });
+
+  it("rejects blank attachment mime type and filename", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `blank-attachment-${crypto.randomUUID().slice(0, 6)}` });
+
+    const blankMime = await postAttachment(app, admin, Buffer.from("mime"), { mime: " " });
+    expect(blankMime.statusCode).toBe(400);
+
+    await expect(
+      createAttachment(app.db, {
+        mimeType: "image/png",
+        filename: " ",
+        data: Buffer.from("filename"),
+        uploadedBy: admin.humanAgentUuid,
+      }),
+    ).rejects.toThrow("Attachment filename is required");
+  });
+
+  it("surfaces an empty insert-returning result from the attachment store", async () => {
+    const fakeDb = {
+      insert: () => ({
+        values: () => ({
+          returning: async () => [],
+        }),
+      }),
+    };
+
+    await expect(
+      createAttachment(fakeDb as never, {
+        mimeType: "image/png",
+        filename: "x.png",
+        data: Buffer.from("bytes"),
+        uploadedBy: "agent_1",
+      }),
+    ).rejects.toThrow("Attachment insert returned no row");
   });
 
   it("rejects oversize at bodyLimit (413) or service cap (400)", async () => {

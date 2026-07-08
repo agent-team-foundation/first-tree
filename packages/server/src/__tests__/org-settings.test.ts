@@ -423,6 +423,25 @@ describe("org-settings service", () => {
     ).rejects.toThrow(/agentUuid is required/);
   });
 
+  it("context_tree_features rejects enabled reviewer assignment without active member context", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, {
+      clientId: admin.clientId,
+      managerId: admin.memberId,
+    });
+
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow(/active member/);
+  });
+
   it("context_tree_features rejects human, suspended, and side-org reviewers", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);

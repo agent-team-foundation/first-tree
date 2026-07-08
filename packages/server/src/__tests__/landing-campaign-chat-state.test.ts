@@ -118,6 +118,25 @@ describe("landing campaign chat state service edges", () => {
     });
   });
 
+  it("classifies exhausted running trials without advancing metadata", async () => {
+    const exhausted = await setupTrialChat({
+      state: "running",
+      inputLocked: true,
+      completedAgentTurns: 2,
+      maxAgentTurns: 2,
+    });
+
+    await expect(
+      completeLandingCampaignTrialAgentTurn(exhausted.app.db, exhausted.chatId, exhausted.agent.uuid, "turn-new"),
+    ).resolves.toEqual({
+      advanced: false,
+      reachedTurnLimit: true,
+      reachedLimit: true,
+      limitReason: "turns",
+      duplicate: false,
+    });
+  });
+
   it("unlocks running trial metadata on read only when budget remains", () => {
     const locked = trialMetadata("agent-1", { inputLocked: true, completedAgentTurns: 0, maxAgentTurns: 2 });
 

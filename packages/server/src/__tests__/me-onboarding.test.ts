@@ -5,6 +5,7 @@ import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
 import { encryptValue } from "../services/crypto.js";
+import * as githubUserToken from "../services/github-user-token.js";
 import { createMember } from "../services/member.js";
 import { ensureMembership } from "../services/membership.js";
 import { createOrganization } from "../services/organization.js";
@@ -357,6 +358,26 @@ describe("GET /me/github/repos", () => {
       expect(body.error).toMatch(/reconnect/i);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("lets unexpected GitHub token errors flow to the generic error handler", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const token = vi
+      .spyOn(githubUserToken, "getFreshGithubUserToken")
+      .mockRejectedValueOnce(new Error("unexpected token store failure"));
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/me/github/repos",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json<{ error: string }>().error).toBe("Internal server error");
+    } finally {
+      token.mockRestore();
     }
   });
 

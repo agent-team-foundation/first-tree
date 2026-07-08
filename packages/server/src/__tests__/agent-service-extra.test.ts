@@ -214,6 +214,22 @@ describe("agent service extra coverage", () => {
     expect(unusual.visibility).toBe("private");
   });
 
+  it("rejects system-created agents when the target organization has no active admin", async () => {
+    const app = getApp();
+    const emptyOrg = await createOrganization(app.db, {
+      name: `agent-empty-org-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Agent Empty Org",
+    });
+
+    await expect(
+      createAgent(app.db, {
+        name: `no-fallback-admin-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        organizationId: emptyOrg.id,
+      }),
+    ).rejects.toThrow(/no admin member exists/);
+  });
+
   it("validates updateAgent client, type, manager, and delegate mutation guards", async () => {
     const app = getApp();
     const admin = await createAdminContext(app, { username: `agent-update-${crypto.randomUUID().slice(0, 8)}` });
@@ -260,6 +276,33 @@ describe("agent service extra coverage", () => {
     await expect(updateAgent(app.db, unbound.uuid, { clientId: admin.clientId })).rejects.toThrow(
       /Suspended agents without a runtime route/,
     );
+  });
+
+  it("updates public metadata while preserving runtime state and recomputes watcher rows on manager reassignment", async () => {
+    const app = getApp();
+    const first = await createAdminContext(app, { username: `agent-reassign-a-${crypto.randomUUID().slice(0, 8)}` });
+    const second = await createAdminContext(app, { username: `agent-reassign-b-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createAgent(app.db, {
+      name: `agent-reassign-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: first.memberId,
+      metadata: { publicKey: "old" },
+    });
+    await app.db
+      .update(agents)
+      .set({ metadata: { publicKey: "old", runtimeSession: { tokenHash: "kept" } } })
+      .where(eq(agents.uuid, agent.uuid));
+
+    const updated = await updateAgent(app.db, agent.uuid, {
+      managerId: second.memberId,
+      metadata: { publicKey: "new" },
+    });
+
+    expect(updated.managerId).toBe(second.memberId);
+    expect(updated.metadata).toMatchObject({
+      publicKey: "new",
+      runtimeSession: { tokenHash: "kept" },
+    });
   });
 
   it("paginates admin agent listings and skips deleted rows", async () => {

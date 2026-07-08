@@ -116,7 +116,10 @@ describe("Admin Auth", () => {
 
     it("rejects invalid password", async () => {
       const app = getApp();
-      await createTestAdmin(app);
+      const admin = await createTestAdmin(app);
+      await expect(login(app.db, admin.username, "wrong", TEST_JWT_SECRET, EXPIRIES)).rejects.toThrow(
+        /invalid username or password/i,
+      );
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/auth/login",

@@ -24,6 +24,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { WebSocket } from "ws";
 import { applyLoggerConfig, createLogger } from "../logger.js";
 import {
   addSpanEvent,
@@ -43,6 +44,7 @@ import {
   stampAgentResource,
   stampClientResource,
 } from "../request-context.js";
+import { endWsConnectionSpan, startWsConnectionSpan, withWsMessageSpan } from "../ws-tracing.js";
 
 const exporter = new InMemorySpanExporter();
 const provider = new BasicTracerProvider({
@@ -202,6 +204,23 @@ describe("manual span helpers", () => {
 });
 
 describe("request context span attributes", () => {
+  it("no-ops when the autotelic accessor throws", async () => {
+    const tracer = trace.getTracer("test");
+    const span = tracer.startSpan("http-autotelic-throws");
+    const traceId = span.spanContext().traceId;
+    const request = {
+      user: { userId: "user-throw" },
+      openTelemetry: () => {
+        throw new Error("decorator failed");
+      },
+    } as unknown as FastifyRequest;
+
+    await attachRequestContext(request, {} as FastifyReply);
+    span.end();
+
+    expect(findFinishedSpan(traceId).attributes[FIRST_TREE_ATTR.USER_ID]).toBeUndefined();
+  });
+
   it("stamps client id from the selected agent identity", async () => {
     const tracer = trace.getTracer("test");
     const span = tracer.startSpan("http-agent");
@@ -345,5 +364,44 @@ describe("bodyCaptureOnSendHook", () => {
     expect(raw.length).toBeGreaterThan(4096);
     expect(raw.length).toBeLessThan(4096 + 64); // 4 KiB + a small "[truncated …]" marker
     expect(raw).toMatch(/\[truncated \d+ chars\]$/);
+  });
+
+  it("stamps redacted query attributes on opted-in failures", async () => {
+    const tracer = trace.getTracer("test");
+    const span = tracer.startSpan("t");
+    const traceId = span.spanContext().traceId;
+
+    const req = makeRequestWith(span, { otelRecordBody: true }, null, {
+      token: "secret",
+      page: 2,
+      active: true,
+    });
+    await bodyCaptureOnSendHook(req, makeReply(400), "payload");
+    span.end();
+
+    const attrs = findFinished(traceId).attributes;
+    expect(attrs["http.query.token"]).toBe("***");
+    expect(attrs["http.query.page"]).toBe(2);
+    expect(attrs["http.query.active"]).toBe(true);
+  });
+});
+
+describe("ws-tracing with spans enabled", () => {
+  it("records handler errors on the message span and rethrows", async () => {
+    const socket = {} as WebSocket;
+
+    startWsConnectionSpan(socket, { clientId: "client-1", organizationId: "org-1" });
+    await expect(
+      withWsMessageSpan(socket, "session:event", { chatId: "chat-1" }, async () => {
+        throw new Error("ws handler failed");
+      }),
+    ).rejects.toThrow("ws handler failed");
+    endWsConnectionSpan(socket, 1000);
+
+    const spans = exporter.getFinishedSpans();
+    const messageSpan = spans.find((span) => span.name === "ws.message session:event");
+    expect(messageSpan?.status.message).toBe("ws handler failed");
+    expect(messageSpan?.events.some((event) => event.name === "exception")).toBe(true);
+    expect(spans.find((span) => span.name === "ws.connection")?.attributes[FIRST_TREE_ATTR.WS_CLOSE_CODE]).toBe(1000);
   });
 });

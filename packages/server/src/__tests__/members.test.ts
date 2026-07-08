@@ -449,6 +449,40 @@ describe("Members API", () => {
       ).rejects.toThrow(/last admin/i);
     });
 
+    it("updateMember rejects inactive rows and allows demoting a non-final admin", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `member-demote-admin-${randomUUID().slice(0, 8)}` });
+      const secondAdmin = await memberService.createMember(app.db, admin.organizationId, {
+        username: `member-demote-second-${randomUUID().slice(0, 8)}`,
+        displayName: "Second Admin",
+        role: "admin",
+      });
+      const inactive = await memberService.createMember(app.db, admin.organizationId, {
+        username: `member-inactive-update-${randomUUID().slice(0, 8)}`,
+        displayName: "Inactive Update",
+        role: "member",
+      });
+      await app.db.update(membersTable).set({ status: "removed" }).where(eq(membersTable.id, inactive.id));
+
+      await expect(
+        memberService.updateMember(app.db, inactive.id, { displayName: "Should Not Update" }, admin.organizationId),
+      ).rejects.toThrow(/not found/i);
+
+      const demoted = await memberService.updateMember(
+        app.db,
+        secondAdmin.id,
+        { role: "member" },
+        admin.organizationId,
+      );
+      expect(demoted.role).toBe("member");
+      const [row] = await app.db
+        .select({ role: membersTable.role })
+        .from(membersTable)
+        .where(eq(membersTable.id, secondAdmin.id))
+        .limit(1);
+      expect(row?.role).toBe("member");
+    });
+
     it("createMember rejects an existing row with an unsupported lifecycle status", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app, { username: `unsupported-admin-${randomUUID().slice(0, 8)}` });
@@ -481,6 +515,15 @@ describe("Members API", () => {
       });
 
       await expect(memberService.deleteMember(app.db, target.id, org.id)).rejects.toThrow(/another admin/i);
+    });
+
+    it("deleteMember rejects removing the only active admin", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `delete-only-admin-${randomUUID().slice(0, 8)}` });
+
+      await expect(memberService.deleteMember(app.db, admin.memberId, admin.organizationId)).rejects.toThrow(
+        /last admin/i,
+      );
     });
 
     it("restores a left member whose human mirror name was cleared with a collision-safe slug", async () => {

@@ -188,6 +188,22 @@ describe("chat service edge coverage", () => {
     ).rejects.toBeInstanceOf(RollbackFixture);
   });
 
+  it("loads the manager human mirror for non-human self-target task chats", async () => {
+    const seed = await createAdminContext(app, { username: `chat-self-ok-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createManagedAgent({ ...seed, suffix: "self-ok" });
+
+    const chat = await createChat(
+      app.db,
+      taskInput({
+        initiatorAgentId: agent.uuid,
+        organizationId: seed.organizationId,
+        initialRecipientAgentIds: [agent.uuid],
+      }),
+    );
+
+    expect(chat.participants.map((p) => p.agentId).sort()).toEqual([agent.uuid, seed.humanAgentUuid].sort());
+  });
+
   it("rejects task chats with inactive participants", async () => {
     const seed = await createAdminContext(app, { username: `chat-inactive-${crypto.randomUUID().slice(0, 8)}` });
     const agent = await createManagedAgent({ ...seed, suffix: "inactive" });
@@ -203,6 +219,58 @@ describe("chat service edge coverage", () => {
         }),
       ),
     ).rejects.toThrow(/Cannot create task chat with inactive participant/);
+  });
+
+  it("rejects task chats with cross-organization participants", async () => {
+    const seed = await createAdminContext(app, { username: `chat-task-org-a-${crypto.randomUUID().slice(0, 8)}` });
+    const otherOrg = await createOrganization(app.db, {
+      name: `chat-task-org-b-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Chat Task Org B",
+    });
+    const otherMember = await createMember(app.db, otherOrg.id, {
+      username: `chat-task-other-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Chat Task Other",
+      role: "member",
+    });
+
+    await expect(
+      createChat(
+        app.db,
+        taskInput({
+          initiatorAgentId: seed.humanAgentUuid,
+          organizationId: seed.organizationId,
+          initialRecipientAgentIds: [otherMember.agentId],
+        }),
+      ),
+    ).rejects.toThrow("Cross-organization chat not allowed");
+  });
+
+  it("rejects task chats targeting another member's private agent", async () => {
+    const seed = await createAdminContext(app, { username: `chat-private-target-${crypto.randomUUID().slice(0, 8)}` });
+    const privateOwner = await createMember(app.db, seed.organizationId, {
+      username: `chat-private-owner-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Private Owner",
+      role: "member",
+    });
+    const privateAgent = await createAgent(app.db, {
+      name: `chat-private-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Private Target",
+      managerId: privateOwner.id,
+      organizationId: seed.organizationId,
+      visibility: "private",
+    });
+
+    await expect(
+      createChat(
+        app.db,
+        taskInput({
+          initiatorAgentId: seed.humanAgentUuid,
+          organizationId: seed.organizationId,
+          initialRecipientAgentIds: [privateAgent.uuid],
+        }),
+      ),
+    ).rejects.toThrow(/private agent/);
   });
 
   it("rejects legacy web chat creation for creator org mismatch and cross-org participants", async () => {

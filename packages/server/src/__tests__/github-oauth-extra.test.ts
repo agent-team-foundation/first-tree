@@ -10,6 +10,23 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe("github-oauth helpers", () => {
+  it("normalizes an overridden GitHub API base URL at module load", async () => {
+    const previous = process.env.FIRST_TREE_GITHUB_API_BASE_URL;
+    try {
+      process.env.FIRST_TREE_GITHUB_API_BASE_URL = "https://github-api.example///";
+      vi.resetModules();
+      const module = await import("../services/github-api-base.js");
+      expect(module.GITHUB_API_BASE).toBe("https://github-api.example");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FIRST_TREE_GITHUB_API_BASE_URL;
+      } else {
+        process.env.FIRST_TREE_GITHUB_API_BASE_URL = previous;
+      }
+      vi.resetModules();
+    }
+  });
+
   it("lists user repos across pages and normalizes nullable fields", async () => {
     const fetcher = vi
       .fn()

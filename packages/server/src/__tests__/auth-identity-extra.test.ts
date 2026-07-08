@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
+import { requireAgent } from "../middleware/require-identity.js";
+import { requireUser } from "../scope/require-user.js";
 import { findOrCreateUserFromGithub, getStoredGithubAccessToken } from "../services/auth-identity.js";
 import { encryptValue } from "../services/crypto.js";
 import { uuidv7 } from "../uuid.js";
@@ -11,6 +13,11 @@ const ENCRYPTION_KEY = "0".repeat(64);
 
 describe("auth identity extra coverage", () => {
   const getApp = useTestApp();
+
+  it("throws clean authentication errors when required identities are missing", () => {
+    expect(() => requireAgent({} as never)).toThrow("Agent authentication required");
+    expect(() => requireUser({} as never)).toThrow("User authentication required");
+  });
 
   it("creates GitHub identities with username retry and refreshes stored token metadata", async () => {
     const app = getApp();
@@ -80,5 +87,48 @@ describe("auth identity extra coverage", () => {
       .where(eq(authIdentities.userId, created.userId));
     await expect(getStoredGithubAccessToken(app.db, created.userId, ENCRYPTION_KEY)).resolves.toBeNull();
     await expect(getStoredGithubAccessToken(app.db, "missing-user", ENCRYPTION_KEY)).resolves.toBeNull();
+  });
+
+  it("falls back to a uuid-based username suffix after repeated unique violations", async () => {
+    let transactionAttempts = 0;
+    const insertedUsernames: string[] = [];
+    const fakeDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [],
+          }),
+        }),
+      }),
+      transaction: async (callback: (tx: unknown) => Promise<void>) => {
+        transactionAttempts += 1;
+        if (transactionAttempts <= 4) {
+          const err = new Error("duplicate username") as Error & { code: string };
+          err.code = "23505";
+          throw err;
+        }
+        await callback({
+          insert: () => ({
+            values: async (value: Record<string, unknown>) => {
+              if (typeof value.username === "string") insertedUsernames.push(value.username);
+            },
+          }),
+        });
+      },
+    };
+
+    await expect(
+      findOrCreateUserFromGithub(fakeDb as never, {
+        githubId: "gh-retry",
+        login: "retry",
+        email: null,
+        displayName: null,
+        avatarUrl: null,
+      }),
+    ).resolves.toEqual({ userId: expect.any(String) });
+
+    expect(transactionAttempts).toBe(5);
+    expect(insertedUsernames).toHaveLength(1);
+    expect(insertedUsernames[0]).toMatch(/^retry-[0-9a-f-]{12}$/);
   });
 });

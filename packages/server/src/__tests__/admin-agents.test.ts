@@ -416,6 +416,17 @@ describe("Admin Agents API", () => {
     expect(badUpload.statusCode).toBe(400);
     expect(badUpload.json<{ error: string }>().error).toContain("image/* Content-Type");
 
+    const emptyImageUpload = await app.inject({
+      method: "PUT",
+      url: `/api/v1/agents/${agent.uuid}/avatar`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "content-type": "image/png",
+      },
+    });
+    expect(emptyImageUpload.statusCode).toBe(400);
+    expect(emptyImageUpload.json<{ error: string }>().error).toContain("Avatar image payload is empty");
+
     const bytes = Buffer.from("avatar-png");
     const upload = await app.inject({
       method: "PUT",

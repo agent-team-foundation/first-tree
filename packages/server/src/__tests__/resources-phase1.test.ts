@@ -1215,6 +1215,25 @@ describe("Resources Phase 1", () => {
     expect(retired?.status).toBe("retired");
   });
 
+  it("rejects promoting resources that are not active agent-scoped repos", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const teamPrompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Not promotable",
+        defaultEnabled: "available",
+        payload: { body: "Prompt" },
+      },
+      owner.memberId,
+    );
+
+    await expect(app.resourcesService.promoteResource(teamPrompt.id, owner.memberId)).rejects.toThrow(
+      /agent-scoped repo resources/,
+    );
+  });
+
   it("previews organization impact defaults without a simulated payload", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");

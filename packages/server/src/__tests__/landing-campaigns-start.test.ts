@@ -147,6 +147,20 @@ async function startCampaignInOrg(
   });
 }
 
+async function startCampaignWithoutOrganization(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  campaign = "production-scan",
+  repoUrl = "https://github.com/acme/backend",
+) {
+  return app.inject({
+    method: "POST",
+    url: START_URL,
+    headers: { authorization: `Bearer ${admin.accessToken}` },
+    payload: { campaign, repoUrl },
+  });
+}
+
 async function createRunnableOrgAgent(
   app: ReturnType<ReturnType<typeof useTestApp>>,
   admin: Awaited<ReturnType<typeof createTestAdmin>>,
@@ -588,6 +602,24 @@ describe("POST /me/landing-campaigns/start", () => {
       campaign: "production-scan",
       landingCampaignTrial: true,
     });
+  });
+
+  it("uses the caller's default active membership when no organization is supplied", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const res = await startCampaignWithoutOrganization(app, admin);
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ agentUuid: string; repoCanonicalKey: string }>();
+    expect(body.repoCanonicalKey).toBe("github.com/acme/backend");
+    const [trialAgent] = await app.db
+      .select({ organizationId: agents.organizationId })
+      .from(agents)
+      .where(eq(agents.uuid, body.agentUuid))
+      .limit(1);
+    expect(trialAgent?.organizationId).toBe(admin.organizationId);
   });
 
   it("falls back from colliding service and trial agent names and repairs the service member", async () => {

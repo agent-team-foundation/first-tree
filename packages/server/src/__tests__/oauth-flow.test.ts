@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { invitationRedemptions } from "../db/schema/invitations.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
+import * as githubAppInstallations from "../services/github-app-installations.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 function stubGithubAppOauth(opts: {
@@ -174,6 +175,41 @@ describe("GitHub OAuth onboarding flow", () => {
         process.env.DEV_GITHUB_PAT = original;
       }
     }
+  });
+
+  it("continues dev sign-in when installation stub upsert and direct bind fail", async () => {
+    const app = getApp();
+    const upsert = vi
+      .spyOn(githubAppInstallations, "upsertInstallationFromMetadata")
+      .mockRejectedValueOnce(new Error("stub failed"));
+    const bind = vi.spyOn(githubAppInstallations, "bindInstallationToOrg");
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/github/dev-callback?githubId=46&login=stubfail&installationId=987654",
+      });
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("/auth/github/complete#");
+      expect(res.headers.location).toContain("access=");
+      expect(upsert).toHaveBeenCalledTimes(1);
+      expect(bind).toHaveBeenCalledTimes(1);
+    } finally {
+      upsert.mockRestore();
+      bind.mockRestore();
+    }
+  });
+
+  it("returns JSON 404 for invalid invite tokens on dev-callback", async () => {
+    const app = getApp();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/dev-callback?githubId=47&login=missinginvite&next=${encodeURIComponent("/invite/not-real")}`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Invitation not found or no longer valid" });
   });
 
   it("still sends first-time solo signup with ordinary protected next to onboarding entry", async () => {

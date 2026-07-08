@@ -1,11 +1,15 @@
 import crypto from "node:crypto";
 import type { PublishDocResponse } from "@first-tree/shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { docDocuments } from "../db/schema/index.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
+import { docAuthorForAgentUuid } from "../services/doc-author.js";
+import { createComment } from "../services/document.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAgent, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
@@ -341,6 +345,9 @@ describe("documents API", () => {
       );
       expect(page2.json().items).toHaveLength(1);
       expect(page2.json().items[0].id).not.toBe(page1.json().items[0].id);
+
+      const invalidCursor = await req("GET", `/api/v1/orgs/${ctx.organizationId}/documents?cursor=not-a-cursor`);
+      expect(invalidCursor.statusCode).toBe(400);
     });
   });
 
@@ -384,6 +391,11 @@ describe("documents API", () => {
       expect(reply.statusCode).toBe(200);
       expect(reply.json()).toMatchObject({ parentId: comment.json().id, versionNumber: 1, anchor: null });
 
+      const missingParentReply = await req("POST", `/api/v1/document-comments/${uuidv7()}/replies`, {
+        body: "missing parent",
+      });
+      expect(missingParentReply.statusCode).toBe(404);
+
       // Threads are one level deep — replying to a reply is a 400.
       const replyToReply = await req("POST", `/api/v1/document-comments/${reply.json().id}/replies`, {
         body: "nope",
@@ -415,6 +427,51 @@ describe("documents API", () => {
       // Document-level open-comment count reflects thread status.
       const summary = await req("GET", `/api/v1/documents/${doc.id}`);
       expect(summary.json().openCommentCount).toBe(0);
+    });
+
+    it("rejects anchored replies and missing parent comments in the document service", async () => {
+      const app = getApp();
+      const ctx = await createAdminContext(app);
+      const doc = await publishDoc(app, ctx, { slug: slug("service-replies"), title: "S", content: "alpha beta" });
+      const [document] = await app.db.select().from(docDocuments).where(eq(docDocuments.id, doc.id)).limit(1);
+      if (!document) throw new Error("published document row was not found");
+      const author = { kind: "human" as const, id: ctx.humanAgentUuid, name: "Test Admin" };
+      const parent = await createComment(app.db, {
+        document,
+        author,
+        body: "root comment",
+        anchor: { exact: "beta" },
+      });
+
+      await expect(
+        createComment(app.db, {
+          document,
+          author,
+          body: "anchored reply",
+          parentId: parent.id,
+          anchor: { exact: "beta" },
+        }),
+      ).rejects.toThrow("Replies cannot carry an anchor");
+
+      await expect(
+        createComment(app.db, {
+          document,
+          author,
+          body: "missing parent",
+          parentId: uuidv7(),
+        }),
+      ).rejects.toThrow("Parent comment not found on this document");
+    });
+
+    it("rejects missing document author identities", async () => {
+      const chain = {
+        from: () => chain,
+        limit: async () => [],
+        where: () => chain,
+      };
+      await expect(docAuthorForAgentUuid({ select: () => chain } as never, "missing-agent")).rejects.toThrow(
+        "Caller identity not found",
+      );
     });
 
     it("marks anchored comments outdated when their quote disappears from the latest version", async () => {
