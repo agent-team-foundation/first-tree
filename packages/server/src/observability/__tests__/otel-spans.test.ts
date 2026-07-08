@@ -24,7 +24,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createLogger } from "../logger.js";
+import { applyLoggerConfig, createLogger } from "../logger.js";
 import {
   addSpanEvent,
   currentSpanId,
@@ -177,6 +177,7 @@ describe("manual span helpers", () => {
   it("bridges pino error logs onto the active span", async () => {
     const logger = createLogger("OtelBridgeTest");
     let traceId = "";
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     installPinoErrorBridge();
     try {
       logger.error({ requestId: "outside" }, "outside active span");
@@ -185,6 +186,7 @@ describe("manual span helpers", () => {
         if (!active) throw new Error("expected active span");
         traceId = active.spanContext().traceId;
         logger.error({ err: "logged failure", password: "secret", requestId: "req-1" }, "bridge failure");
+        await new Promise((resolve) => setImmediate(resolve));
       });
     } finally {
       uninstallPinoErrorBridge();
