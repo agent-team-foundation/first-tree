@@ -74,7 +74,13 @@ export function GithubAppInstallationPanel() {
   }
 
   if (panelOpen) {
-    return <ConnectPanel organizationId={organizationId} onBack={() => setPanelOpen(false)} />;
+    return (
+      <ConnectPanel
+        organizationId={organizationId}
+        bound={installationQuery.data ?? null}
+        onBack={() => setPanelOpen(false)}
+      />
+    );
   }
 
   // `null` (404 — no install bound) and `undefined` (query disabled because
@@ -119,13 +125,23 @@ function NotConnectedSummary({ disabled, onOpenPanel }: { disabled: boolean; onO
   );
 }
 
+/**
+ * Render a GitHub account as `github.com/<login>` — the full-path form
+ * disambiguates GitHub orgs from First Tree team names (both are otherwise
+ * bare words like "agent-team-foundation").
+ */
+function githubAccountPath(login: string): string {
+  return `github.com/${login}`;
+}
+
 function InstalledState({ data, onOpenPanel }: { data: GithubAppInstallationOutput; onOpenPanel: () => void }) {
   const AccountIcon = data.accountType === "Organization" ? Building2 : User;
   return (
+    // No borderTop of its own: the page's Section frame already draws the
+    // rule above this block.
     <div
       style={{
-        borderTop: "var(--hairline) solid var(--border)",
-        paddingTop: "var(--sp-4)",
+        paddingTop: "var(--sp-1)",
         display: "flex",
         flexDirection: "column",
         gap: "var(--sp-4)",
@@ -135,12 +151,12 @@ function InstalledState({ data, onOpenPanel }: { data: GithubAppInstallationOutp
 
       <div>
         <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-          Connected as
+          Connected to
         </div>
         <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
           <AccountIcon className="h-4 w-4" style={{ color: "var(--fg-2)" }} />
           <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-            {data.accountLogin}
+            {githubAccountPath(data.accountLogin)}
           </span>
           <span
             className="text-label"
@@ -153,6 +169,11 @@ function InstalledState({ data, onOpenPanel }: { data: GithubAppInstallationOutp
           >
             {data.accountType}
           </span>
+        </div>
+        {/* Expandable details sit directly under the connected account they
+            describe, not below the action buttons. */}
+        <div style={{ marginTop: "var(--sp-3)" }}>
+          <ConnectionDetails data={data} />
         </div>
       </div>
 
@@ -191,22 +212,32 @@ function InstalledState({ data, onOpenPanel }: { data: GithubAppInstallationOutp
           <ExternalLink className="h-3 w-3" />
         </a>
       </div>
-
-      <ConnectionDetails data={data} />
     </div>
   );
 }
 
 /**
- * The connect panel: install CTA + the caller's associated installations,
- * polled every 2s while the panel is open (paused while the tab is
- * unfocused, courtesy of react-query's default
+ * The connect panel, presented as the two steps of the real-world flow:
+ * Step 1 installs the App on GitHub (or, once this team is connected,
+ * offers Reinstall + Manage on GitHub), Step 2 connects a recorded
+ * installation to this team. The installation list is polled every 2s
+ * while the panel is open (paused while the tab is unfocused, courtesy
+ * of react-query's default
  * `refetchIntervalInBackground: false`). Polling deliberately continues
  * after a successful connect — new installations can still arrive (another
  * org's owner approving, an install made directly on GitHub), and the
  * panel should surface them the moment they exist.
  */
-function ConnectPanel({ organizationId, onBack }: { organizationId: string | null; onBack: () => void }) {
+function ConnectPanel({
+  organizationId,
+  bound,
+  onBack,
+}: {
+  organizationId: string | null;
+  /** The installation currently connected to this team (summary query), or null. */
+  bound: GithubAppInstallationOutput | null;
+  onBack: () => void;
+}) {
   const queryClient = useQueryClient();
 
   const panelQuery = useQuery({
@@ -323,21 +354,65 @@ function ConnectPanel({ organizationId, onBack }: { organizationId: string | nul
         </button>
       </div>
 
-      <p className="text-body" style={{ color: "var(--fg-2)", margin: 0 }}>
-        Install the GitHub App on an account you manage, then connect the installation to this team. Installations you
-        started on other accounts appear here as soon as an owner approves them.
-      </p>
-
-      {slugMissing ? (
-        <p className="text-body" style={{ color: "var(--state-error)", margin: 0 }}>
-          The GitHub App slug isn't configured on this First Tree deployment. Ask your operator to set{" "}
-          <code className="mono">FIRST_TREE_GITHUB_APP_SLUG</code>.
-        </p>
-      ) : (
-        <div>
-          {/* Button (not anchor) because the install URL is minted on click,
-              then a synchronously-opened new tab is navigated to it — keeps the
-              state JWT + nonce cookie fresh and the popup unblocked. */}
+      {/* ── Step 1: get the App installed on GitHub ──────────────────── */}
+      <div>
+        <div className="text-body font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-2)" }}>
+          Step 1: Install the First Tree App on your GitHub
+        </div>
+        {slugMissing ? (
+          <p className="text-body" style={{ color: "var(--state-error)", margin: 0 }}>
+            The GitHub App slug isn't configured on this First Tree deployment. Ask your operator to set{" "}
+            <code className="mono">FIRST_TREE_GITHUB_APP_SLUG</code>.
+          </p>
+        ) : bound ? (
+          // This team already has a connected installation, so Step 1 is done —
+          // surface that state instead of a primary CTA. Reinstall kicks off a
+          // fresh install (e.g. on another GitHub account); Manage on GitHub
+          // opens the installed App's own settings page.
+          <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
+            <span className="text-body" style={{ color: "var(--fg-2)" }}>
+              GitHub App installed.
+            </span>
+            <button
+              type="button"
+              onClick={handleInstall}
+              disabled={installDisabled}
+              className="inline-flex items-center text-body"
+              style={{
+                gap: "var(--sp-1)",
+                padding: "var(--sp-1) var(--sp-2)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
+                background: "transparent",
+                color: "var(--fg)",
+                cursor: installDisabled ? "default" : "pointer",
+                opacity: installDisabled ? 0.6 : 1,
+              }}
+            >
+              {installUrlMutation.isPending ? "Opening GitHub…" : "Reinstall"}
+            </button>
+            <a
+              href={bound.manageUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center text-body"
+              style={{
+                gap: "var(--sp-1)",
+                padding: "var(--sp-1) var(--sp-2)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
+                color: "var(--fg)",
+                textDecoration: "none",
+              }}
+            >
+              Manage on GitHub
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        ) : (
+          // Button (not anchor) because the install URL is minted on click,
+          // then a synchronously-opened new tab is navigated to it — keeps the
+          // state JWT + nonce cookie fresh and the popup unblocked.
           <button
             type="button"
             onClick={handleInstall}
@@ -357,42 +432,49 @@ function ConnectPanel({ organizationId, onBack }: { organizationId: string | nul
             {installUrlMutation.isPending ? "Opening GitHub…" : "Install on GitHub"}
             <ExternalLink className="h-3 w-3" />
           </button>
-          {installUrlMutation.error && !slugMissing && (
-            <p className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
-              {installUrlMutation.error instanceof Error
-                ? installUrlMutation.error.message
-                : "Failed to build the install URL"}
-            </p>
-          )}
-          {/* After the tab opens, this panel's poll picks the installation up as
-              connectable. If the GitHub tab didn't work, "Start over" re-mints
-              (the only safe retry — see handleStartOver). */}
-          {attempted && !installUrlMutation.isPending && (
-            <div
-              className="flex items-center"
-              style={{ gap: "var(--sp-2_5)", marginTop: "var(--sp-3)", flexWrap: "wrap" }}
-            >
-              <span className="text-label" style={{ color: "var(--fg-3)" }}>
-                Waiting for GitHub… approvals can take a while; this list updates on its own.
-              </span>
-              <button
-                type="button"
-                onClick={handleStartOver}
-                className="text-label underline underline-offset-2"
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  padding: 0,
-                  color: "var(--fg-3)",
-                  cursor: "pointer",
-                }}
-              >
-                Didn't work? Start over
-              </button>
-            </div>
-          )}
+        )}
+        {installUrlMutation.error && !slugMissing && (
+          <p className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
+            {installUrlMutation.error instanceof Error
+              ? installUrlMutation.error.message
+              : "Failed to build the install URL"}
+          </p>
+        )}
+      </div>
+
+      {/* ── Step 2: connect a recorded installation to this team ─────── */}
+      <div>
+        <div className="text-body font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-2)" }}>
+          Step 2: Connect to your GitHub
         </div>
-      )}
+        {/* After the install tab opens, this panel's poll picks the
+            installation up as connectable. If the GitHub tab didn't work,
+            "Start over" re-mints (the only safe retry — see handleStartOver). */}
+        {attempted && !installUrlMutation.isPending && (
+          <div
+            className="flex items-center"
+            style={{ gap: "var(--sp-2_5)", marginBottom: "var(--sp-2)", flexWrap: "wrap" }}
+          >
+            <span className="text-label" style={{ color: "var(--fg-3)" }}>
+              Waiting for GitHub… You may need a GitHub org admin to approve.
+            </span>
+            <button
+              type="button"
+              onClick={handleStartOver}
+              className="text-label underline underline-offset-2"
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                color: "var(--fg-3)",
+                cursor: "pointer",
+              }}
+            >
+              Didn't work? Start over
+            </button>
+          </div>
+        )}
+      </div>
 
       {panelQuery.error && (
         <p className="text-body" style={{ color: "var(--state-error)", margin: 0 }}>
@@ -516,7 +598,7 @@ function InstallationRow({
       <div className="flex items-center" style={{ gap: "var(--sp-2)", minWidth: 0 }}>
         <AccountIcon className="h-4 w-4 shrink-0" style={{ color: "var(--fg-2)" }} />
         <span className="text-body font-medium" style={{ color: "var(--fg)", overflowWrap: "anywhere" }}>
-          {installation.accountLogin}
+          {githubAccountPath(installation.accountLogin)}
         </span>
         <span
           className="text-label"

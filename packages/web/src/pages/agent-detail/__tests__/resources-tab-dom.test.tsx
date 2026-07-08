@@ -399,8 +399,11 @@ describe("ResourcesTab", () => {
     expect(buttonByText(document.body, "Opt-in repo")).toBeNull();
     expect(document.body.textContent).not.toContain("Enable from team");
     // …but the menu stays actionable: add a private repo or jump to Settings.
+    // Team repos manage on Settings → GitHub (Source Repos live there);
+    // skill/MCP/prompt menus keep the Resources destination.
     expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
-    expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeTruthy();
+    expect(buttonByText(document.body, "Manage in Settings → GitHub")).toBeTruthy();
+    expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeNull();
   });
 
   it("agent repo dialog aligns with Settings: no Name field; normalizes URL + derives the name", async () => {
