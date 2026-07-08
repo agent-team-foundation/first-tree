@@ -159,6 +159,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - `packages/server/` — Fastify API server (`@first-tree/server`)
 - `packages/client/` — Agent SDK + Runtime (`@first-tree/client`)
 - `packages/web/` — React web workspace (`@first-tree/web`)
+- `packages/qa/` — internal QA workflow assets for agent-run validation (`@first-tree/qa`)
 - `skills/` — repo-local skill payloads for First Tree agents
 
 ## Documentation
