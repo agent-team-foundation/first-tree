@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.2.1
+version: 0.2.2
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Bootstrap a team's Context Tree from its connected source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Reads the sources, proposes an initial top-level + second-level domain structure for the user to approve, then drafts initial leaf content — each as a reviewable PR. Refuses a tree that already has domain structure: send incremental, source-driven writes to `first-tree-write`, and broad maintenance / drift-audit to a focused task.
@@ -67,6 +67,15 @@ and the creator's member node), pushes, and binds the org's
 surface that exact gap and stop (binding a team tree is an admin action).
 Take the team display name from the chat context / `first-tree agent
 status`. After it succeeds the tree is bound and in state **B** — proceed.
+
+**Run it directly — do not ask the human "who runs the bind?".** This create +
+bind is the sanctioned agent path (a general "tree binding is an operator
+action" note in your briefing does **not** apply to this task) — running it IS
+the task the user asked for, so binding needs no separate go-ahead. You do not
+need to independently "confirm admin" first: `tree init` enforces it
+server-side (it fails closed for a non-admin or unauthenticated `gh`). So run
+it; only if it fails on that installation/permission check do you surface the
+exact gap (not an admin / `gh` not authenticated) and stop.
 
 **Pin the local checkout with `--dir` — this is load-bearing.** `tree
 init` defaults its local clone to `<cwd>/<repo-name>`, but a managed
