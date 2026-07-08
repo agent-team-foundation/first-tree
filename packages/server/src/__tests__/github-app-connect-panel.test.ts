@@ -112,7 +112,7 @@ describe("GET/POST /api/v1/orgs/:orgId/github-app-installation connect panel", (
     expect(byId.has(504)).toBe(false);
   });
 
-  it("returns an empty list (not an error) when the caller has no GitHub identity on file", async () => {
+  it("returns an empty list (not an error) when the caller has no GitHub identity and nothing is bound here", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `noident-${uuidv7().slice(0, 8)}` });
     await seedInstallation({ installationId: 511, accountLogin: "some-org", installerGithubId: 42 });
@@ -124,6 +124,35 @@ describe("GET/POST /api/v1/orgs/:orgId/github-app-installation connect panel", (
     });
     expect(res.statusCode).toBe(200);
     expect(res.json<GithubAppConnectPanelOutput>().installations).toEqual([]);
+  });
+
+  it("always includes the team-bound installation, even for admins with no requester/installer association", async () => {
+    // The binding is the team's resource: an admin whose GitHub id matches
+    // neither anchor (or who has no GitHub identity at all) must still see
+    // the connected row — it carries the panel's Disconnect action.
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `unrelated-${uuidv7().slice(0, 8)}` });
+    await seedInstallation({
+      installationId: 512,
+      accountLogin: "team-org",
+      orgId: admin.organizationId,
+      installerGithubId: 42,
+      requesterGithubId: 43,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/connect-panel`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<GithubAppConnectPanelOutput>();
+    expect(body.installations).toHaveLength(1);
+    expect(body.installations[0]).toMatchObject({
+      installationId: 512,
+      status: "connected-here",
+      connectedTeamName: null,
+    });
   });
 
   it("403s the panel for a non-admin member", async () => {

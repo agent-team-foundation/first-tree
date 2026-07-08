@@ -143,12 +143,15 @@ export const githubAppConnectPanelInstallationSchema = z.object({
 export type GithubAppConnectPanelInstallation = z.infer<typeof githubAppConnectPanelInstallationSchema>;
 
 /**
- * Response of `GET /orgs/:orgId/github-app-installation/connect-panel`.
- * `installations` is empty when the caller has no GitHub identity on file
- * or no installation names their GitHub id as requester/installer. The
- * panel polls this while open — installations arrive asynchronously
- * (owner approval, installs on additional accounts), so the list is a
- * moving snapshot, not a one-shot answer.
+ * Response of `GET /orgs/:orgId/github-app-installation/connect-panel` —
+ * the installations associated with the caller's GitHub id, plus the
+ * team's own bound installation regardless of association (the binding is
+ * the team's resource; every team admin must reach its Disconnect).
+ * Empty when nothing is bound here and nothing names the caller's GitHub
+ * id (or they have none on file). The panel polls this while open —
+ * installations arrive asynchronously (owner approval, installs on
+ * additional accounts), so the list is a moving snapshot, not a one-shot
+ * answer.
  */
 export const githubAppConnectPanelOutputSchema = z.object({
   installations: z.array(githubAppConnectPanelInstallationSchema),

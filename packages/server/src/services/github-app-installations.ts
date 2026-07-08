@@ -398,25 +398,39 @@ export type AssociatedInstallation = InstallationRow & {
 };
 
 /**
- * All installations associated with a GitHub user — rows whose trusted
- * requester or installer id equals `githubUserId`. Powers the connect
- * panel's list; the caller annotates each row's status relative to the
- * panel's own team. Newest install first, so a just-approved installation
- * surfaces at the top while the panel polls.
+ * The connect panel's row set for one (caller, team) pair — the union of:
+ *
+ *   - installations associated with the caller (their trusted requester
+ *     or installer id equals `githubUserId`), and
+ *   - the installation bound to `hubOrganizationId` itself, REGARDLESS of
+ *     association. The binding is the team's resource: any team admin
+ *     must see it (and reach its Disconnect) even when the original
+ *     requester/installer left the team or the caller has no GitHub
+ *     identity at all — otherwise the summary says "connected" while the
+ *     management panel shows nothing.
+ *
+ * `githubUserId` is null when the caller has no GitHub identity on file;
+ * only the team-bound row (if any) is returned then. Newest install
+ * first, so a just-approved installation surfaces at the top while the
+ * panel polls.
  */
-export async function listInstallationsForGithubUser(
+export async function listConnectPanelInstallations(
   db: Database,
-  githubUserId: number,
+  input: { githubUserId: number | null; hubOrganizationId: string },
 ): Promise<AssociatedInstallation[]> {
+  const boundHere = eq(githubAppInstallations.hubOrganizationId, input.hubOrganizationId);
   const rows = await db
     .select({ installation: githubAppInstallations, connectedTeamName: organizations.displayName })
     .from(githubAppInstallations)
     .leftJoin(organizations, eq(githubAppInstallations.hubOrganizationId, organizations.id))
     .where(
-      or(
-        eq(githubAppInstallations.requesterGithubId, githubUserId),
-        eq(githubAppInstallations.installerGithubId, githubUserId),
-      ),
+      input.githubUserId === null
+        ? boundHere
+        : or(
+            boundHere,
+            eq(githubAppInstallations.requesterGithubId, input.githubUserId),
+            eq(githubAppInstallations.installerGithubId, input.githubUserId),
+          ),
     )
     .orderBy(desc(githubAppInstallations.createdAt));
   return rows.map((r) => ({ ...r.installation, connectedTeamName: r.connectedTeamName ?? null }));

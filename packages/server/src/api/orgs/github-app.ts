@@ -16,7 +16,7 @@ import {
   connectInstallationToOrg,
   disconnectInstallationFromOrg,
   findInstallationByOrg,
-  listInstallationsForGithubUser,
+  listConnectPanelInstallations,
 } from "../../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../../services/oauth-state.js";
@@ -282,26 +282,29 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // endpoints make no GitHub API call and need no GitHub permission.
 
   /**
-   * GET `/connect-panel` — the caller's connectable-installations view:
+   * GET `/connect-panel` — the panel's row set for this caller + team:
    * every installation whose webhook-verified requester or installer is
-   * the caller's GitHub id, annotated relative to THIS team as
-   * `connectable` / `connected-here` / `connected-elsewhere` (the latter
-   * carrying the holding team's display name). Installations arrive
-   * asynchronously (owner approval, installs made directly on GitHub), so
-   * the panel polls this endpoint while open; a caller with no GitHub
-   * identity on file simply gets an empty list.
+   * the caller's GitHub id, PLUS the installation bound to this team
+   * regardless of association (the binding is the team's resource — any
+   * team admin must see it and reach its Disconnect, even when the
+   * original requester/installer left or the caller has no GitHub
+   * identity). Rows are annotated relative to THIS team as `connectable`
+   * / `connected-here` / `connected-elsewhere` (the latter carrying the
+   * holding team's display name). Installations arrive asynchronously
+   * (owner approval, installs made directly on GitHub), so the panel
+   * polls this endpoint while open.
    *
    * Admin-gated like the other panel actions — the list exposes
-   * account-level install metadata and exists only to drive connect.
+   * account-level install metadata and exists only to drive
+   * connect/disconnect.
    */
   app.get<{ Params: { orgId: string } }>("/connect-panel", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
     const callerGithubId = await resolveCallerGithubId(app.db, scope.userId);
-    if (callerGithubId === null) {
-      const empty: GithubAppConnectPanelOutput = { installations: [] };
-      return empty;
-    }
-    const rows = await listInstallationsForGithubUser(app.db, callerGithubId);
+    const rows = await listConnectPanelInstallations(app.db, {
+      githubUserId: callerGithubId,
+      hubOrganizationId: scope.organizationId,
+    });
     const installations: GithubAppConnectPanelInstallation[] = rows.map((row) => ({
       installationId: row.installationId,
       accountType: row.accountType as GithubAccountType,
