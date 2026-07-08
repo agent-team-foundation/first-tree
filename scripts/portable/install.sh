@@ -2,13 +2,14 @@
 set -eu
 
 PORTABLE_CHANNEL="${FIRST_TREE_PORTABLE_CHANNEL:-prod}"
-DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://downloads.first-tree.ai}"
+DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://download.first-tree.ai/releases}"
 DEFAULT_PREFIX="${HOME}/.local/share/first-tree/${PORTABLE_CHANNEL}"
 DEFAULT_BIN_DIR="${HOME}/.local/bin"
 PATH_MODE="auto"
 REQUESTED_VERSION=""
 PREFIX="$DEFAULT_PREFIX"
 BIN_DIR="$DEFAULT_BIN_DIR"
+PATH_UPDATED_PROFILE=""
 ORIGINAL_PATH="${PATH:-}"
 
 START_MARKER="# >>> first-tree portable >>>"
@@ -111,6 +112,16 @@ sha256_file() {
     shasum -a 256 "$file" | awk '{print $1}'
   else
     die "sha256sum or shasum is required"
+  fi
+}
+
+extract_tarball() {
+  tarball="$1"
+  dest="$2"
+  if tar --version 2>/dev/null | grep -qi "GNU tar"; then
+    tar --warning=no-unknown-keyword -xzf "$tarball" -C "$dest"
+  else
+    tar -xzf "$tarball" -C "$dest"
   fi
 }
 
@@ -256,14 +267,13 @@ maybe_edit_path() {
   fi
 
   if ! profile="$(profile_for_shell)"; then
-    log "Installed successfully, but this shell is not recognized for automatic PATH setup."
-    log "Add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\""
+    log "Automatic PATH setup skipped: this shell is not recognized."
     return 0
   fi
 
   if [ "$PATH_MODE" = "prompt" ]; then
     if [ ! -t 0 ]; then
-      log "Installed successfully. Add this to $profile: export PATH=\"$BIN_DIR:\$PATH\""
+      log "Automatic PATH setup skipped because prompt mode requires an interactive shell."
       return 0
     fi
     printf 'Add %s to PATH in %s? [Y/n] ' "$BIN_DIR" "$profile"
@@ -271,17 +281,29 @@ maybe_edit_path() {
     case "$answer" in
       ""|y|Y|yes|YES) ;;
       *)
-        log "Skipped PATH setup. Add this manually: export PATH=\"$BIN_DIR:\$PATH\""
+        log "Skipped PATH setup."
         return 0
         ;;
     esac
   fi
 
   if rewrite_path_block "$profile"; then
+    PATH_UPDATED_PROFILE="$profile"
     log "Updated PATH block in $profile"
   else
-    log "Installed successfully, but PATH setup failed for $profile."
-    log "Add this manually: export PATH=\"$BIN_DIR:\$PATH\""
+    log "PATH setup failed for $profile."
+  fi
+}
+
+print_path_guidance() {
+  if [ -n "$PATH_UPDATED_PROFILE" ]; then
+    log "Restart your shell, or run: . \"$PATH_UPDATED_PROFILE\""
+  elif path_contains_bin_dir "$ORIGINAL_PATH"; then
+    # Judge against the user's incoming PATH: the installer prepends BIN_DIR
+    # to its own PATH for recovery, which says nothing about the user's shell.
+    log "$BIN_NAME should be available now."
+  else
+    log "Add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\""
   fi
 }
 
@@ -366,7 +388,7 @@ FINAL_VERSION_DIR="$PREFIX/versions/$VERSION"
 TEMP_VERSION_DIR="$PREFIX/.tmp/${VERSION}.$$"
 rm -rf "$TEMP_VERSION_DIR"
 mkdir -p "$TEMP_VERSION_DIR"
-tar -xzf "$TARBALL" -C "$TEMP_VERSION_DIR"
+extract_tarball "$TARBALL" "$TEMP_VERSION_DIR"
 
 if [ -e "$FINAL_VERSION_DIR" ]; then
   rm -rf "$TEMP_VERSION_DIR"
@@ -394,3 +416,4 @@ ensure_daemon_service "$BIN_NAME"
 
 log "First Tree ${VERSION} installed at $FINAL_VERSION_DIR"
 log "Command: $BIN_DIR/$BIN_NAME"
+print_path_guidance

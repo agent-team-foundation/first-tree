@@ -171,22 +171,46 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: "scripts/portable/node-version.txt"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @first-tree/shared build
-      - run: pnpm --filter @first-tree/client build
-      - run: pnpm --filter first-tree-dev build
       - name: Build linux-x64 portable artifact
         run: |
-          node scripts/portable/build-portable.mjs \
+          ./scripts/portable/build-release.sh \
             --channel prod \
             --version 0.0.0 \
-            --git-sha "$GITHUB_SHA" \
-            --node-version latest-v24.x \
-            --download-base-url "https://downloads.first-tree.ai" \
+            --download-base-url "https://download.first-tree.ai/releases" \
             --out-dir .portable-smoke \
             --platform linux-x64
+      # A release-resume rerun must reproduce the exact bytes already uploaded,
+      # or upload-s3.sh fails closed on its immutable-object check. Run the
+      # whole pipeline again — including the workspace build, which a real
+      # publish rerun re-executes — and require identical artifacts.
+      - name: Rebuild and verify byte-identical artifacts
+        run: |
+          FIRST_TREE_PORTABLE_NODE_TARBALL_DIR="$PWD/.portable-smoke/.cache/node" \
+          ./scripts/portable/build-release.sh \
+            --channel prod \
+            --version 0.0.0 \
+            --download-base-url "https://download.first-tree.ai/releases" \
+            --out-dir .portable-smoke-rebuild \
+            --platform linux-x64
+          cmp .portable-smoke/prod/0.0.0/SHA256SUMS .portable-smoke-rebuild/prod/0.0.0/SHA256SUMS
+          diff .portable-smoke/prod/0.0.0/manifest.json .portable-smoke-rebuild/prod/0.0.0/manifest.json
+      - name: Dry-run portable S3 upload
+        run: |
+          mkdir -p .portable-smoke-bin
+          printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > .portable-smoke-bin/aws
+          chmod +x .portable-smoke-bin/aws
+          PATH="$PWD/.portable-smoke-bin:$PATH" ./scripts/portable/upload-s3.sh \
+            --channel prod \
+            --out-dir .portable-smoke \
+            --bucket first-tree-portable-smoke \
+            --prefix releases \
+            --endpoint-url https://s3.example.test \
+            --region us-east-1 \
+            --download-base-url "https://download.first-tree.ai/releases" \
+            --dry-run
       - name: Verify linux-x64 portable artifact
         run: |
           node scripts/portable/verify-portable-artifact.mjs \

@@ -49,7 +49,7 @@ const baseServerConfig: ServerConfig = {
   trustProxy: false,
   connectBootstrap: {
     method: "npm",
-    portableDownloadBaseUrl: "https://downloads.first-tree.ai",
+    portableDownloadBaseUrl: "https://download.first-tree.ai/releases",
   },
   observability: { logging: { level: "error", format: "json", bridgeToSpanLevel: "off" } },
   runtime: {

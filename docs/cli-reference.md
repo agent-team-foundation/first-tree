@@ -15,7 +15,7 @@ human-friendly index over them.
 ## Install
 
 ```bash
-curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ~/.local/bin/first-tree --version
 ```
 

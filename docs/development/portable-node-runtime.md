@@ -26,22 +26,23 @@ users.
 
 ## Pin Location
 
-The release-default bundled Node.js line is:
+The bundled Node.js runtime is pinned to an exact version in a single file:
 
-```js
-// scripts/portable/build-portable.mjs
-export const DEFAULT_NODE_VERSION = "latest-v24.x";
+```text
+scripts/portable/node-version.txt   # e.g. v24.18.0
 ```
 
-The portable smoke job also passes an explicit `--node-version latest-v24.x` in
-`.github/workflows/ci.yml`. A major bump PR must update both locations in the
-same change so CI exercises the candidate line before release.
+`scripts/portable/build-portable.mjs` and `scripts/portable/build-release.sh`
+read this file as their default `--node-version`, and the portable smoke job in
+`.github/workflows/ci.yml` uses it via `node-version-file` so CI exercises the
+pinned runtime before release. A bump PR only needs to change this one file.
 
-`latest-v<major>.x` is resolved against `https://nodejs.org/dist/index.json` at
-portable artifact build time. That means each published First Tree artifact
-contains the newest patch in the configured major line at the time the release
-was built. Pass an exact `--node-version` only for one-off validation or release
-rehearsal.
+Floating specs such as `latest-v<major>.x` are rejected by design: portable
+release publication treats versioned S3 artifacts as immutable, and a resumed
+or re-run release must rebuild byte-identical tarballs. A floating Node spec
+would make the same channel/version resolve to different runtime bytes over
+time. The pinned version's tarball is checksum-verified against the official
+`SHASUMS256.txt` at build time.
 
 ## Bump Triggers
 
@@ -54,11 +55,12 @@ Bump the bundled Node.js major when any of these is true:
 - A Node.js security advisory makes staying on the current major an unacceptable
   risk, or the fixed line requires moving majors.
 
-Patch-level security fixes are coupled to First Tree releases. Because
-`latest-v<major>.x` resolves during artifact build, portable users receive a
-new Node.js patch only when a new First Tree portable release is cut. For a
-high-impact Node.js advisory that affects the bundled major, cut a First Tree
-release even if the app code did not otherwise need one.
+Patch-level security fixes are coupled to First Tree releases. Because the
+bundled runtime is pinned in `scripts/portable/node-version.txt`, portable
+users receive a new Node.js patch only when the pin is bumped and a new First
+Tree portable release is cut. For a high-impact Node.js advisory that affects
+the bundled major, bump the pin and cut a First Tree release even if the app
+code did not otherwise need one.
 
 ## Cross-Major Verification
 
