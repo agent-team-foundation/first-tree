@@ -211,6 +211,117 @@ describe("doc command actions", () => {
     expect(outputMocks.success).toHaveBeenCalled();
   });
 
+  it("routes document SDK failures through the shared error handler", async () => {
+    const { registerDocCommentCommand } = await import("../commands/doc/comment.js");
+    const { registerDocGetCommand } = await import("../commands/doc/get.js");
+    const { registerDocListCommand } = await import("../commands/doc/list.js");
+    const { registerDocPublishCommand } = await import("../commands/doc/publish.js");
+    const { registerDocReplyCommand } = await import("../commands/doc/reply.js");
+    const { registerDocResolveCommand } = await import("../commands/doc/resolve.js");
+    const { registerDocStatusCommand } = await import("../commands/doc/status.js");
+    const sdk = {
+      createDocComment: vi.fn(),
+      getDoc: vi.fn(),
+      listDocs: vi.fn().mockRejectedValue(new Error("docs offline")),
+      publishDoc: vi.fn().mockRejectedValue(new Error("publish offline")),
+      replyDocComment: vi.fn().mockRejectedValue(new Error("reply offline")),
+      setDocCommentStatus: vi.fn().mockRejectedValue(new Error("resolve offline")),
+      setDocStatus: vi.fn(),
+    };
+    localAgentMocks.createSdk.mockReturnValue(sdk);
+
+    const listRoot = new Command();
+    registerDocListCommand(listRoot);
+    await expect(subcommand(listRoot, "list").parseAsync([], { from: "user" })).rejects.toThrow("docs offline");
+
+    const getRoot = new Command();
+    registerDocGetCommand(getRoot);
+    await expect(subcommand(getRoot, "get").parseAsync(["design-doc"], { from: "user" })).rejects.toThrow(
+      "docs offline",
+    );
+
+    const statusRoot = new Command();
+    registerDocStatusCommand(statusRoot);
+    await expect(
+      subcommand(statusRoot, "status").parseAsync(["design-doc", "--set", "approved"], { from: "user" }),
+    ).rejects.toThrow("docs offline");
+
+    const commentRoot = new Command();
+    registerDocCommentCommand(commentRoot);
+    await expect(
+      subcommand(commentRoot, "comment").parseAsync(["design-doc", "Body"], { from: "user" }),
+    ).rejects.toThrow("docs offline");
+
+    const replyRoot = new Command();
+    registerDocReplyCommand(replyRoot);
+    await expect(subcommand(replyRoot, "reply").parseAsync(["comment_1", "Done"], { from: "user" })).rejects.toThrow(
+      "reply offline",
+    );
+
+    const resolveRoot = new Command();
+    registerDocResolveCommand(resolveRoot);
+    await expect(subcommand(resolveRoot, "resolve").parseAsync(["comment_1"], { from: "user" })).rejects.toThrow(
+      "resolve offline",
+    );
+
+    const base = await mkdtemp(join(tmpdir(), "cli-doc-publish-error-"));
+    const file = join(base, "source.md");
+    await writeFile(file, "# Source Title\n\nBody\n", "utf8");
+    const publishRoot = new Command();
+    registerDocPublishCommand(publishRoot);
+    try {
+      await expect(subcommand(publishRoot, "publish").parseAsync([file], { from: "user" })).rejects.toThrow(
+        "publish offline",
+      );
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it("streams new watched doc comments and reports poll errors as NDJSON", async () => {
+    const { registerDocCommentsCommand } = await import("../commands/doc/comments.js");
+    const stdoutWrite = vi.spyOn(process.stdout, "write");
+    const stderrWrite = vi.spyOn(process.stderr, "write");
+    vi.useFakeTimers();
+    const sdk = {
+      listDocs: vi.fn().mockResolvedValue({ items: [docSummary()] }),
+      listDocComments: vi
+        .fn()
+        .mockResolvedValueOnce({ items: [{ id: "comment_1", body: "existing" }] })
+        .mockResolvedValueOnce({
+          items: [
+            { id: "comment_1", body: "existing" },
+            { id: "comment_2", body: "new" },
+          ],
+        }),
+    };
+    localAgentMocks.createSdk.mockReturnValue(sdk);
+    stdoutWrite.mockImplementationOnce(() => {
+      throw new Error("stdout closed");
+    });
+    stderrWrite.mockImplementationOnce(() => {
+      throw new Error("watch stopped");
+    });
+    const root = new Command();
+    registerDocCommentsCommand(root);
+
+    try {
+      const watching = subcommand(root, "comments").parseAsync(["design-doc", "--watch", "5"], { from: "user" });
+      const expectedStop = expect(watching).rejects.toThrow("watch stopped");
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expectedStop;
+      expect(sdk.listDocComments).toHaveBeenCalledTimes(2);
+      expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("comment_2"));
+      expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("WATCH_POLL_FAILED"));
+    } finally {
+      vi.useRealTimers();
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
+  });
+
   it("publishes markdown, reports unchanged content, and rejects unreadable or invalid input", async () => {
     const { registerDocPublishCommand } = await import("../commands/doc/publish.js");
     const base = await mkdtemp(join(tmpdir(), "cli-doc-publish-"));
@@ -366,6 +477,18 @@ describe("doc command actions", () => {
       await expect(readFile(join(outDir, "two.md"), "utf8")).resolves.toBe("# Two\n");
       await expect(readFile(join(outDir, "manifest.json"), "utf8")).resolves.toContain('"slug": "one"');
       expect(outputMocks.success.mock.calls.at(-1)?.[0]).toEqual({ exported: 2, dir: outDir });
+
+      const blocked = join(base, "blocked-file");
+      await writeFile(blocked, "not a directory", "utf8");
+      await expect(subcommand(root, "export").parseAsync([join(blocked, "out")], { from: "user" })).rejects.toThrow(
+        "DIR_UNWRITABLE",
+      );
+
+      sdk.getDoc.mockRejectedValueOnce(new Error("download failed"));
+      sdk.listDocs.mockResolvedValueOnce({ items: [first], nextCursor: null });
+      await expect(subcommand(root, "export").parseAsync([join(base, "sdk-fails")], { from: "user" })).rejects.toThrow(
+        "download failed",
+      );
     } finally {
       await rm(base, { recursive: true, force: true });
     }
@@ -454,5 +577,29 @@ describe("github command helpers and actions", () => {
     await subcommand(unfollowRoot, "unfollow").parseAsync(["owner/repo#1", "--chat", "chat_1"], { from: "user" });
     expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("Severed 2 lines");
     expect(sdk.unfollowGithubEntity).toHaveBeenCalledWith("chat_1", "owner/repo#1");
+  });
+
+  it("routes GitHub list and unfollow failures through the GitHub SDK error mapper", async () => {
+    const { registerGithubFollowingCommand } = await import("../commands/github/following.js");
+    const { registerGithubUnfollowCommand } = await import("../commands/github/unfollow.js");
+    const sdk = {
+      listChatGithubEntities: vi.fn().mockRejectedValue(new Error("github list offline")),
+      unfollowGithubEntity: vi.fn().mockRejectedValue(new Error("github unfollow offline")),
+    };
+    localAgentMocks.createSdk.mockReturnValue(sdk);
+
+    const followingRoot = new Command();
+    registerGithubFollowingCommand(followingRoot);
+    await expect(
+      subcommand(followingRoot, "following").parseAsync(["--chat", "chat_1"], { from: "user" }),
+    ).rejects.toThrow("github list offline");
+
+    const unfollowRoot = new Command();
+    registerGithubUnfollowCommand(unfollowRoot);
+    await expect(
+      subcommand(unfollowRoot, "unfollow").parseAsync(["owner/repo#1", "--chat", "chat_1"], { from: "user" }),
+    ).rejects.toThrow("github unfollow offline");
+
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith(expect.any(Error));
   });
 });

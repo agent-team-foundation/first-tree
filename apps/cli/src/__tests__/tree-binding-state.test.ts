@@ -8,6 +8,7 @@ import {
   buildTreeId,
   deriveDefaultEntrypoint,
   determineScope,
+  isLegacyBindingMode,
   listTreeBindings,
   readSourceState,
   readTreeBinding,
@@ -113,6 +114,15 @@ describe("tree binding state helpers", () => {
     expect(readSourceState(root)).toBeNull();
     expect(readTreeState(root)).toBeNull();
     expect(readTreeBinding(root, "bad")).toBeNull();
+
+    writeFileSync(sourceStatePath(root), JSON.stringify({ ...sourceState(), tree: [] }));
+    expect(readSourceState(root)).toBeNull();
+
+    writeFileSync(sourceStatePath(root), JSON.stringify({ ...sourceState(), tree: { treeMode: "shared" } }));
+    expect(readSourceState(root)).toBeNull();
+
+    writeFileSync(sourceStatePath(root), JSON.stringify({ ...sourceState(), bindingMode: "future-mode" }));
+    expect(readSourceState(root)).toBeNull();
   });
 
   it("round-trips and sorts tree bindings while ignoring invalid files", () => {
@@ -229,6 +239,7 @@ describe("tree binding state helpers", () => {
       JSON.stringify({
         ...sourceState(),
         members: [
+          null,
           { sourceId: "bad" },
           {
             bindingMode: "workspace-member",
@@ -257,6 +268,10 @@ describe("tree binding state helpers", () => {
   });
 
   it("writes deterministic JSON documents", () => {
+    expect(isLegacyBindingMode("standalone-source")).toBe(true);
+    expect(isLegacyBindingMode("shared-source")).toBe(true);
+    expect(isLegacyBindingMode("workspace-root")).toBe(false);
+
     writeTreeBinding(root, "api", {
       bindingMode: "workspace-member",
       entrypoint: "/workspaces/first-tree/repos/api",

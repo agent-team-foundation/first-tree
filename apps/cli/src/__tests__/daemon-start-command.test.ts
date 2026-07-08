@@ -31,7 +31,7 @@ const coreMocks = vi.hoisted(() => ({
   isServiceSupported: vi.fn(),
   listPinnedAgents: vi.fn(),
   loadCredentials: vi.fn(),
-  loadDaemonEnv: vi.fn(() => []),
+  loadDaemonEnv: vi.fn<() => string[]>(() => []),
   migrateLocalAgentDirs: vi.fn(),
   promptMissingFields: vi.fn(),
   promptUpdate: vi.fn(),
@@ -39,6 +39,7 @@ const coreMocks = vi.hoisted(() => ({
   reconcileLocalRuntimeProviders: vi.fn(),
   refreshServerUpdateTarget: vi.fn(),
   resolveClientRuntimeStopReason: vi.fn(),
+  runRuntimeAuthLogin: vi.fn(),
   startClientService: vi.fn(),
   uploadAgentSkills: vi.fn(),
   uploadClientCapabilities: vi.fn(),
@@ -82,7 +83,7 @@ const originalHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
 const originalServiceMode = process.env.FIRST_TREE_SERVICE_MODE;
 const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-vi.spyOn(process, "exit").mockImplementation((code?: string | number | null | undefined) => {
+const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null | undefined) => {
   throw Object.assign(new Error(`process.exit ${code}`), { exitCode: code });
 });
 
@@ -90,14 +91,22 @@ let home: string;
 let runtimeInstance: {
   addAgent: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  unwatchAgentsDir: ReturnType<typeof vi.fn>;
   watchAgentsDir: ReturnType<typeof vi.fn>;
   onReconnect: ReturnType<typeof vi.fn>;
   onRuntimeAuthStart: ReturnType<typeof vi.fn>;
+  emitConnectionResilienceEvent: ReturnType<typeof vi.fn>;
 };
 let refresherInstance: {
   start: ReturnType<typeof vi.fn>;
   onReconnect: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  isInteractive: ReturnType<typeof vi.fn>;
+  beginInteractive: ReturnType<typeof vi.fn>;
+  endInteractive: ReturnType<typeof vi.fn>;
+  currentEntry: ReturnType<typeof vi.fn>;
+  setProviderEntry: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -116,6 +125,10 @@ beforeEach(() => {
   for (const mock of Object.values(coreMocks)) mock.mockReset();
   failMock.mockClear();
   stderrSpy.mockClear();
+  exitSpy.mockClear();
+  exitSpy.mockImplementation((code?: string | number | null | undefined) => {
+    throw Object.assign(new Error(`process.exit ${code}`), { exitCode: code });
+  });
 
   clientMocks.probeCapabilities.mockResolvedValue({ "claude-code": { state: "ok" } });
   clientMocks.createLogger.mockReturnValue({
@@ -171,17 +184,21 @@ beforeEach(() => {
   );
   coreMocks.migrateLocalAgentDirs.mockResolvedValue(undefined);
   coreMocks.reconcileLocalRuntimeProviders.mockResolvedValue(undefined);
+  coreMocks.runRuntimeAuthLogin.mockResolvedValue(undefined);
   coreMocks.uploadClientCapabilities.mockResolvedValue(undefined);
   coreMocks.uploadAgentSkills.mockResolvedValue(undefined);
 
   runtimeInstance = {
     addAgent: vi.fn(),
     start: vi.fn(async () => undefined),
+    stop: vi.fn(async () => undefined),
+    unwatchAgentsDir: vi.fn(),
     watchAgentsDir: vi.fn(() => {
       throw new Error("stop after watch");
     }),
     onReconnect: vi.fn(),
     onRuntimeAuthStart: vi.fn(),
+    emitConnectionResilienceEvent: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
 
@@ -189,6 +206,11 @@ beforeEach(() => {
     start: vi.fn(async () => undefined),
     onReconnect: vi.fn(),
     stop: vi.fn(),
+    isInteractive: vi.fn(() => false),
+    beginInteractive: vi.fn(),
+    endInteractive: vi.fn(),
+    currentEntry: vi.fn(() => undefined),
+    setProviderEntry: vi.fn(),
   };
   coreMocks.CapabilityRefresher.mockImplementation(() => refresherInstance);
 });
@@ -218,6 +240,13 @@ async function runStart(args: string[] = []): Promise<unknown> {
 
 function output(): string {
   return stderrSpy.mock.calls.map((call) => String(call[0])).join("");
+}
+
+async function waitForAsyncWork(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 describe("daemon start command", () => {
@@ -286,6 +315,24 @@ describe("daemon start command", () => {
     expect(output()).toContain("Started systemd service");
     expect(output()).toContain("Logs:  /logs/client.log");
     expect(output()).toContain("Supervisor fallback: `journalctl --user -u first-tree`");
+  });
+
+  it("starts an inactive launchd service and prints stdout/stderr fallback logs", async () => {
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({ platform: "launchd", state: "inactive", label: "first-tree", logDir: "/logs" })
+      .mockReturnValueOnce({
+        platform: "launchd",
+        state: "active",
+        label: "first-tree",
+        detail: "pid 123",
+        logDir: "/logs",
+      });
+
+    await expect(runStart()).resolves.toBeTruthy();
+
+    expect(output()).toContain("Started launchd service");
+    expect(output()).toContain("/logs/client.stdout.log / /logs/client.stderr.log");
   });
 
   it("prints WSL repair guidance when service startup fails", async () => {
@@ -363,6 +410,70 @@ describe("daemon start command", () => {
     expect(output()).toContain("Error: stop after watch");
   });
 
+  it("stops the inline daemon runtime cleanly when SIGINT is received", async () => {
+    const signalHandlers = new Map<string, () => void>();
+    const onSpy = vi.spyOn(process, "on").mockImplementation((event, listener) => {
+      if (event === "SIGINT" || event === "SIGTERM") {
+        signalHandlers.set(event, listener as () => void);
+      }
+      return process;
+    });
+    exitSpy.mockImplementation((() => undefined) as never);
+    runtimeInstance.watchAgentsDir.mockImplementation(() => undefined);
+
+    try {
+      void runStart(["--foreground"]).catch(() => undefined);
+      await waitForAsyncWork(() => signalHandlers.has("SIGINT"));
+
+      const shutdown = signalHandlers.get("SIGINT");
+      expect(shutdown).toBeTypeOf("function");
+      shutdown?.();
+      await waitForAsyncWork(() => exitSpy.mock.calls.length > 0);
+
+      expect(output()).toContain("Shutting down");
+      expect(refresherInstance.stop).toHaveBeenCalled();
+      expect(runtimeInstance.unwatchAgentsDir).toHaveBeenCalled();
+      expect(runtimeInstance.stop).toHaveBeenCalledWith(undefined);
+      expect(coreMocks.registerClientRuntimeMarker.mock.results[0]?.value).toHaveBeenCalled();
+      expect(clientMocks.flushClientSentry).toHaveBeenCalled();
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      onSpy.mockRestore();
+    }
+  });
+
+  it("reports loaded daemon.env variables before inline startup", async () => {
+    coreMocks.loadDaemonEnv.mockReturnValueOnce(["HTTPS_PROXY", "NO_PROXY"]);
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(output()).toContain("loaded 2 var(s) from daemon.env (HTTPS_PROXY, NO_PROXY)");
+  });
+
+  it("wires update failure and capability upload callbacks", async () => {
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    const executeUpdateOptions = coreMocks.createExecuteUpdate.mock.calls[0]?.[0] as
+      | { onUpdateFailed?: (payload: unknown) => void }
+      | undefined;
+    executeUpdateOptions?.onUpdateFailed?.({ reasonCode: "npm_timeout" });
+    expect(runtimeInstance.emitConnectionResilienceEvent).toHaveBeenCalledWith("resilience.update.failed", {
+      reasonCode: "npm_timeout",
+    });
+
+    const refresherOptions = coreMocks.CapabilityRefresher.mock.calls[0]?.[0] as
+      | { upload?: (capabilities: unknown) => Promise<void> }
+      | undefined;
+    await refresherOptions?.upload?.({ "claude-code": { state: "ok" } });
+
+    expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledWith({
+      serverUrl: "https://first-tree.example",
+      accessToken: "access-token",
+      clientId: "client_1234abcd",
+      capabilities: { "claude-code": { state: "ok" } },
+    });
+  });
+
   it("routes the runtime's reconnect callback into the capability refresher", async () => {
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
 
@@ -375,6 +486,36 @@ describe("daemon start command", () => {
     expect(refresherInstance.onReconnect).not.toHaveBeenCalled();
     reconnect();
     expect(refresherInstance.onReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes runtime-auth login requests per provider", async () => {
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    const runtimeAuthStart = runtimeInstance.onRuntimeAuthStart.mock.calls[0]?.[0] as
+      | ((command: { provider: string; ref: string }) => void)
+      | undefined;
+    if (typeof runtimeAuthStart !== "function") throw new Error("runtime-auth callback was not registered");
+
+    refresherInstance.isInteractive.mockReturnValueOnce(true);
+    runtimeAuthStart({ provider: "codex", ref: "dup" });
+    expect(output()).toContain("runtime-auth: codex login already in progress");
+    expect(coreMocks.runRuntimeAuthLogin).not.toHaveBeenCalled();
+
+    refresherInstance.isInteractive.mockReturnValueOnce(false);
+    runtimeAuthStart({ provider: "codex", ref: "fresh" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(refresherInstance.beginInteractive).toHaveBeenCalledWith("codex");
+    expect(coreMocks.runRuntimeAuthLogin).toHaveBeenCalledWith(
+      { provider: "codex", ref: "fresh" },
+      expect.objectContaining({
+        currentEntry: expect.any(Function),
+        setProviderEntry: expect.any(Function),
+        log: expect.any(Function),
+      }),
+    );
+    expect(refresherInstance.endInteractive).toHaveBeenCalledWith("codex");
   });
 
   it("skips skill upload for stale local aliases that are not pinned to this client", async () => {
@@ -394,6 +535,17 @@ describe("daemon start command", () => {
     expect(coreMocks.uploadAgentSkills).toHaveBeenCalledWith(expect.objectContaining({ agentId: "agent-1" }));
     expect(output()).toContain("skills upload for developer skipped");
     expect(output()).toContain("agent prune --dry-run");
+  });
+
+  it("skips skill upload for agents pinned to another client", async () => {
+    coreMocks.listPinnedAgents.mockResolvedValueOnce([
+      { agentId: "agent-1", clientId: "client_other123", runtimeProvider: "claude-code", status: "active" },
+    ]);
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(coreMocks.uploadAgentSkills).not.toHaveBeenCalled();
+    expect(output()).toContain("pinned to another client (client_other123)");
   });
 
   it("keeps best-effort skill upload when pinned-agent filtering is unavailable", async () => {

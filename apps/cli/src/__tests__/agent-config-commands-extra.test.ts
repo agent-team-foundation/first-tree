@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
 import {
   type AgentRuntimeConfig,
@@ -421,6 +422,38 @@ describe("agent config command behavior", () => {
       },
     );
     expect(outputMocks.success).toHaveBeenLastCalledWith({ agentId: "agent-uuid", version: 2, append_length: 19 });
+  });
+
+  it("`prompt set` reads the fragment from piped stdin when no file is provided", async () => {
+    const stdin = new PassThrough();
+    Object.defineProperty(stdin, "isTTY", { value: false });
+    const stdinSpy = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin as unknown as typeof process.stdin);
+
+    try {
+      const pending = runConfig(["prompt", "set", "nova"]);
+      stdin.end("Prefer stdin fragments.");
+      await pending;
+    } finally {
+      stdinSpy.mockRestore();
+    }
+
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 1,
+        bindings: [
+          {
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: "Prefer stdin fragments.",
+            order: 1,
+          },
+        ],
+      },
+    );
   });
 
   it("`prompt set` hard-rejects a body carrying the generated-briefing marker (no --force escape)", async () => {

@@ -84,6 +84,13 @@ describe("prompt core", () => {
         url: { _tag: "field", options: { prompt: { message: "Server URL" }, env: "FIRST_TREE_SERVER_URL" } },
       },
       token: { _tag: "field", options: { prompt: { message: "Token", type: "password" }, env: "TOKEN" } },
+      nested: {
+        _tag: "optional",
+        shape: {
+          value: { _tag: "field", options: { prompt: { message: "Nested" }, env: "NESTED_VALUE" } },
+        },
+      },
+      unlabeled: { _tag: "field", options: { prompt: { message: "No Env" } } },
     };
 
     await expect(
@@ -93,7 +100,7 @@ describe("prompt core", () => {
         configDir: join(home, "config"),
         noInteractive: true,
       }),
-    ).rejects.toThrow("server.url  (env: FIRST_TREE_SERVER_URL)");
+    ).rejects.toThrow("unlabeled");
   });
 
   it("writes prompted input, password, select, and follow-up input values", async () => {
@@ -126,22 +133,34 @@ describe("prompt core", () => {
           },
         },
       },
+      provider: {
+        _tag: "field",
+        options: {
+          prompt: {
+            message: "Provider",
+            type: "select",
+            choices: [{ name: "Codex", value: "codex" }],
+          },
+        },
+      },
     };
     setTty(true);
     inputMock.mockResolvedValueOnce("http://first-tree.test").mockResolvedValueOnce("custom-runtime");
     passwordMock.mockResolvedValueOnce("secret-value");
-    selectMock.mockResolvedValueOnce("__input__").mockResolvedValueOnce("__auto__");
+    selectMock.mockResolvedValueOnce("__input__").mockResolvedValueOnce("__auto__").mockResolvedValueOnce("codex");
 
     await expect(promptMissingFields({ schema, role: "client", configDir: join(home, "config") })).resolves.toEqual({
       server: { url: "http://first-tree.test" },
       secret: "secret-value",
       runtime: "custom-runtime",
+      provider: "codex",
     });
 
     const yaml = readFileSync(join(home, "config", "client.yaml"), "utf8");
     expect(yaml).toContain("url: http://first-tree.test");
     expect(yaml).toContain("secret: secret-value");
     expect(yaml).toContain("runtime: custom-runtime");
+    expect(yaml).toContain("provider: codex");
     expect(yaml).not.toContain("skip:");
   });
 
@@ -166,6 +185,20 @@ describe("prompt core", () => {
 
     cliFetchMock.mockResolvedValueOnce(response(200, { name: null }));
     await expect(promptAddAgent({ agentId: "tombstone" })).rejects.toThrow("has no server-side name");
+  });
+
+  it("adds login guidance when server URL resolution fails during add-agent", async () => {
+    vi.doMock("../core/bootstrap.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../core/bootstrap.js")>()),
+      ensureFreshAccessToken: ensureFreshAccessTokenMock,
+      loadCredentials: vi.fn(() => ({ accessToken: "access", refreshToken: "refresh", serverUrl: "https://old.test" })),
+      resolveServerUrl: vi.fn(() => {
+        throw new Error("invalid server URL");
+      }),
+    }));
+    const { promptAddAgent } = await import("../core/prompt.js");
+
+    await expect(promptAddAgent({ agentId: "bad-url" })).rejects.toThrow("Run `first-tree-dev login <code>`");
   });
 
   it("prompts for an agent id when omitted", async () => {

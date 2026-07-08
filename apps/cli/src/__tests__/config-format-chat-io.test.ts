@@ -1,6 +1,16 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseLimit, readStdin } from "../commands/chat/_shared/io.js";
+import {
+  guardInlineDescription,
+  guardInlineShellResidue,
+  looksLikeEscapedNewlineBody,
+  parseLimit,
+  readMessageBody,
+  readStdin,
+} from "../commands/chat/_shared/io.js";
 import { isSecretField, printFlat } from "../commands/config/_shared/format.js";
 
 const outputMocks = vi.hoisted(() => ({
@@ -21,6 +31,7 @@ vi.mock("../cli/output.js", () => ({
 }));
 
 const originalStdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+const tempDirs: string[] = [];
 
 class MockStdin extends EventEmitter {
   isTTY = false;
@@ -42,6 +53,10 @@ beforeEach(() => {
 afterEach(() => {
   if (originalStdinDescriptor) {
     Object.defineProperty(process, "stdin", originalStdinDescriptor);
+  }
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -145,5 +160,44 @@ describe("chat io helpers", () => {
     expect(() => parseLimit("101", 100)).toThrow("INVALID_LIMIT:Limit must be between 1 and 100.:2");
     expect(() => parseLimit("nope", 100)).toThrow("INVALID_LIMIT:Limit must be between 1 and 100.:2");
     expect(outputMocks.fail).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads message files and maps invalid file specs to fail envelopes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ft-chat-io-"));
+    tempDirs.push(dir);
+    const filePath = join(dir, "body.md");
+    writeFileSync(filePath, "line 1\nline 2");
+
+    await expect(readMessageBody(filePath)).resolves.toBe("line 1\nline 2");
+    await expect(readMessageBody(join(dir, "missing.md"))).rejects.toThrow("MESSAGE_FILE_NOT_FOUND");
+    await expect(readMessageBody(dir)).rejects.toThrow("MESSAGE_FILE_NOT_FILE");
+
+    const hugePath = join(dir, "huge.md");
+    writeFileSync(hugePath, Buffer.alloc(5 * 1024 * 1024 + 1));
+    await expect(readMessageBody(hugePath)).rejects.toThrow("MESSAGE_FILE_TOO_LARGE");
+  });
+
+  it("detects escaped newline bodies and fails inline shell residue guards with copyable hints", () => {
+    expect(looksLikeEscapedNewlineBody("line1\\n\\nline2")).toBe(true);
+    expect(looksLikeEscapedNewlineBody("line1\nline2")).toBe(false);
+    expect(looksLikeEscapedNewlineBody("mentions \\n once")).toBe(false);
+
+    expect(() => guardInlineShellResidue("@EOF", { command: "send" })).toThrow("HEREDOC_RESIDUE");
+    expect(outputMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("chat send");
+
+    expect(() => guardInlineShellResidue('"line1\\nline2"', { command: "ask" })).toThrow("JSON_WRAPPED_BODY");
+    expect(outputMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("chat ask");
+  });
+
+  it("guards escaped newline descriptions with update and create hints", () => {
+    guardInlineDescription("single \\n mention", { supportsStdin: true });
+    expect(outputMocks.fail).not.toHaveBeenCalled();
+
+    expect(() => guardInlineDescription("line1\\n\\nline2", { supportsStdin: true })).toThrow("ESCAPED_NEWLINES");
+    expect(outputMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("chat update");
+
+    outputMocks.fail.mockClear();
+    expect(() => guardInlineDescription("line1\\n\\nline2", { supportsStdin: false })).toThrow("ESCAPED_NEWLINES");
+    expect(outputMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("chat create");
   });
 });

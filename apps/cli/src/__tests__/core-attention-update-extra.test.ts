@@ -151,6 +151,50 @@ describe("core update helpers", () => {
     expect(output).toHaveBeenCalledWith(expect.stringContaining("requires Node >=999.0.0"));
   });
 
+  it("parses nested npm engine metadata and omits installer URLs when portable metadata is not configured", async () => {
+    vi.resetModules();
+    vi.doMock("../core/channel.js", () => ({
+      channelConfig: {
+        channel: "prod",
+        binName: "first-tree",
+        aliasName: "ft",
+        packageName: "first-tree",
+        defaultHome: "/tmp/home",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        serviceUnitFile: "first-tree.service",
+        launchdLabel: "first-tree",
+        launchdPlistFile: "first-tree.plist",
+        displayName: "First Tree",
+        portable: {
+          channelPrefix: "prod",
+          publicInstallerPath: "prod/install.sh",
+          downloadBaseUrl: null,
+        },
+      },
+    }));
+    spawnSyncMock.mockReturnValueOnce({
+      status: 0,
+      stdout: JSON.stringify({ engines: { node: ">=999.0.0" } }),
+      stderr: "",
+    });
+    const child = new MockChild();
+    installSpawn(child);
+
+    const { installGlobalSpec } = await import("../core/update.js");
+    const result = await installGlobalSpec("0.6.0");
+
+    expect(result).toMatchObject({
+      ok: false,
+      mode: "global",
+      retryable: false,
+      reasonCode: "npm_ebadengine",
+    });
+    if (result.ok) throw new Error("expected engine mismatch");
+    expect(result.reason).toContain("or migrate to the portable install path from the web console.");
+    expect(result.reason).not.toContain("installer: https://");
+    expect(childRegistryMocks.getChildProcessRegistry().spawn).not.toHaveBeenCalled();
+  });
+
   it("classifies child errors, non-zero exits, and timeouts", async () => {
     vi.resetModules();
     vi.doMock("../core/channel.js", () => ({

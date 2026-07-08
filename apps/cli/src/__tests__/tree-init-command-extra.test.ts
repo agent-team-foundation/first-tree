@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -225,6 +225,44 @@ describe("tree init command action", () => {
     expect(summary.coverage).toMatchObject({ appSettingsUrl: null, status: "no_installation" });
   });
 
+  it("prints the human summary for a single-org bind with no GitHub App installation", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) {
+          return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+          return response({ repo: null });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+          return response("missing", { status: 404 });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+          return response("ok");
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, title: "Solo Human" }), false));
+
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(process.exitCode).toBeUndefined();
+    expect(output).toContain("Context Tree Init");
+    expect(output).toContain("Repository:   octocat/solo-human-context-tree");
+    expect(output).toContain("GitHub App coverage:");
+    expect(output).toContain("No GitHub App installation is connected");
+    expect(output).toContain("Context Tree created and bound.");
+  });
+
   it("fails before remote writes when binding preconditions are not satisfied", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const cases: Array<{
@@ -258,6 +296,21 @@ describe("tree init command action", () => {
         message: "already bound to a Context Tree",
       },
       {
+        name: "binding read failure",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Binding Read" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+            return response("server down", { status: 503 });
+          }
+          return response("not found", { status: 404 });
+        },
+        message: "Could not read the team's current Context Tree binding",
+      },
+      {
         name: "installation lookup failure",
         command: commandWithOptions({ bind: true, org: "org_1", title: "Lookup" }),
         fetch: async (input) => {
@@ -270,6 +323,42 @@ describe("tree init command action", () => {
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
             return response("server down", { status: 500 });
+          }
+          return response("not found", { status: 404 });
+        },
+        message: "Could not read the team's GitHub App installation",
+      },
+      {
+        name: "installation network failure",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Lookup Network" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+            return response({ repo: null });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+            throw new Error("network down");
+          }
+          return response("not found", { status: 404 });
+        },
+        message: "Could not read the team's GitHub App installation",
+      },
+      {
+        name: "installation invalid body",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Lookup Invalid" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+            return response({ repo: null });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+            return response({ installationId: "not-a-number" });
           }
           return response("not found", { status: 404 });
         },
@@ -322,6 +411,184 @@ describe("tree init command action", () => {
       ).toBe(false);
       vi.unstubAllGlobals();
     }
+  });
+
+  it("fails early for missing tools, unauthenticated gh, missing login, and non-empty targets", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const cases: Array<{
+      name: string;
+      command?: Command;
+      runCommand: (tool: string, args: string[]) => string;
+      message: string;
+      setup?: (base: string) => void;
+    }> = [
+      {
+        name: "missing git",
+        runCommand: (tool, args) => {
+          if (tool === "git" && args[0] === "--version") throw new Error("missing git");
+          return "";
+        },
+        message: "`git` is required",
+      },
+      {
+        name: "gh auth",
+        runCommand: (tool, args) => {
+          if (args[0] === "--version") return "";
+          if (tool === "gh" && args[0] === "auth") throw new Error("not logged in");
+          return "";
+        },
+        message: "GitHub CLI is not authenticated",
+      },
+      {
+        name: "missing login",
+        runCommand: (tool, args) => {
+          if (args[0] === "--version" || (tool === "gh" && args[0] === "auth")) return "";
+          if (tool === "gh" && args[0] === "api" && args[1] === "user") return "";
+          return "";
+        },
+        message: "Could not resolve your GitHub login",
+      },
+      {
+        name: "non-empty dir",
+        command: commandWithOptions({ bind: false, dir: "already-here", title: "Busy" }),
+        setup: (base) => {
+          const dir = join(base, "already-here");
+          rmSync(dir, { recursive: true, force: true });
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, "README.md"), "busy\n");
+        },
+        runCommand: (tool, args) => {
+          if (args[0] === "--version" || (tool === "gh" && args[0] === "auth")) return "";
+          if (tool === "gh" && args[0] === "api" && args[1] === "user") return "octocat";
+          return "";
+        },
+        message: "Target directory is not empty",
+      },
+    ];
+
+    for (const testCase of cases) {
+      vi.clearAllMocks();
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      process.exitCode = undefined;
+      const base = makeTempDir();
+      process.chdir(base);
+      testCase.setup?.(base);
+      treeSharedMocks.runCommand.mockImplementation(testCase.runCommand);
+
+      await initCommand.action(
+        context(testCase.command ?? commandWithOptions({ bind: false, title: "Broken" }), false),
+      );
+
+      expect(process.exitCode, testCase.name).toBe(1);
+      expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0]), testCase.name).toContain(testCase.message);
+    }
+  });
+
+  it("fails org resolution before GitHub writes when /me is unusable or ambiguous", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const cases: Array<{ name: string; me: unknown; status?: number; message: string }> = [
+      { name: "me 500", me: "down", status: 500, message: "server returned 500 on /me" },
+      { name: "no orgs", me: { memberships: [] }, message: "don't belong to any organization" },
+      {
+        name: "multiple orgs",
+        me: { memberships: [{ organizationId: "org_1" }, { organizationId: "org_2" }] },
+        message: "Multiple organizations",
+      },
+    ];
+
+    for (const testCase of cases) {
+      vi.clearAllMocks();
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      mockGithubApi();
+      process.exitCode = undefined;
+      const base = makeTempDir();
+      process.chdir(base);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: FetchInput) =>
+          String(input).endsWith("/api/v1/me")
+            ? response(testCase.me, { status: testCase.status ?? 200 })
+            : response("not found", { status: 404 }),
+        ),
+      );
+
+      await initCommand.action(context(commandWithOptions({ bind: true, title: testCase.name }), false));
+
+      expect(process.exitCode, testCase.name).toBe(1);
+      expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0]), testCase.name).toContain(testCase.message);
+      expect(
+        treeSharedMocks.runCommand.mock.calls.some(
+          ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "repo" && args[1] === "create",
+        ),
+      ).toBe(false);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("surfaces repo URL lookup and org binding failures after remote create", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    treeSharedMocks.runCommand.mockImplementation((tool: string, args: string[]) => {
+      if (args[0] === "--version" || (tool === "gh" && args[0] === "auth" && args[1] === "status")) return "";
+      if (tool === "gh" && args[0] === "api" && args[1] === "user") return "octocat";
+      if (tool === "gh" && args[0] === "api" && typeof args[1] === "string" && args[1].startsWith("repos/")) {
+        return "{}";
+      }
+      return "";
+    });
+
+    await initCommand.action(context(commandWithOptions({ bind: false, title: "Missing Repo Url" }), false));
+    expect(process.exitCode).toBe(1);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("could not read its URL");
+
+    vi.clearAllMocks();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockGithubApi();
+    process.exitCode = undefined;
+    process.chdir(makeTempDir());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+          return response({ repo: null });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) return response("missing", { status: 404 });
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+          return response("server refused binding", { status: 500 });
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Bind Fails" }), false));
+    expect(process.exitCode).toBe(1);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("binding failed");
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("server refused binding");
+  });
+
+  it("surfaces unexpected GitHub API response shapes after remote create", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    treeSharedMocks.runCommand.mockImplementation((tool: string, args: string[]) => {
+      if (args[0] === "--version" || (tool === "gh" && args[0] === "auth" && args[1] === "status")) return "";
+      if (tool === "gh" && args[0] === "api" && args[1] === "user") return "octocat";
+      if (tool === "gh" && args[0] === "api" && typeof args[1] === "string" && args[1].startsWith("repos/")) {
+        return "null";
+      }
+      return "";
+    });
+
+    await initCommand.action(context(commandWithOptions({ bind: false, title: "Bad Api" }), false));
+
+    expect(process.exitCode).toBe(1);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("Unexpected GitHub API response");
   });
 
   it("surfaces suspended installation guidance in the final summary", async () => {

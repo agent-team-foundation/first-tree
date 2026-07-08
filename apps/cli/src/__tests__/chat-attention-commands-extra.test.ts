@@ -144,6 +144,12 @@ describe("chat command behavior", () => {
     await expect(runChat(["send", "nova", "hello"])).rejects.toMatchObject({ code: "NO_CHAT_CONTEXT", exitCode: 2 });
 
     process.env.FIRST_TREE_CHAT_ID = "chat-env";
+    await expect(runChat(["send"])).rejects.toMatchObject({ code: "NO_TARGET", exitCode: 2 });
+    await expect(runChat(["send", "nova", "hello", "--message-file", "-"])).rejects.toMatchObject({
+      code: "CONFLICTING_ARGS",
+      exitCode: 2,
+    });
+
     await expect(runChat(["send", "nova", "hello", "--metadata", "{bad"])).rejects.toMatchObject({
       code: "INVALID_METADATA",
       exitCode: 2,
@@ -267,6 +273,46 @@ describe("chat command behavior", () => {
       code: "MULTISELECT_NEEDS_OPTIONS",
       exitCode: 2,
     });
+  });
+
+  it("chat ask validates context, target, body source, escaped newlines, metadata, and doc capture metadata", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    delete process.env.FIRST_TREE_CHAT_ID;
+    await expect(runChat(["ask", "nova", "body"])).rejects.toMatchObject({ code: "NO_CHAT_CONTEXT", exitCode: 2 });
+
+    process.env.FIRST_TREE_CHAT_ID = "chat-env";
+    await expect(runChat(["ask"])).rejects.toMatchObject({ code: "NO_TARGET", exitCode: 2 });
+    await expect(runChat(["ask", "nova", "inline", "--message-file", "body.md"])).rejects.toMatchObject({
+      code: "CONFLICTING_ARGS",
+      exitCode: 2,
+    });
+    await expect(runChat(["ask", "nova", "line1\\n\\nline2"])).rejects.toMatchObject({
+      code: "ESCAPED_NEWLINES",
+      exitCode: 2,
+    });
+    await expect(runChat(["ask", "nova", "body", "--metadata", "{bad"])).rejects.toMatchObject({
+      code: "INVALID_METADATA",
+      exitCode: 2,
+    });
+
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "body with docs",
+      attachments: [{ kind: "doc", id: "doc-1" }],
+      documentContext: [{ path: "docs/plan.md", content: "Plan" }],
+    });
+    await runChat(["ask", "nova", "body with docs", "--metadata", '{"priority":1}']);
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        content: "body with docs",
+        metadata: expect.objectContaining({
+          priority: 1,
+          attachments: [{ kind: "doc", id: "doc-1" }],
+          documentContext: [{ path: "docs/plan.md", content: "Plan" }],
+        }),
+      }),
+    );
   });
 
   it("chat ask is ask-only: it accepts neither --answer nor --reply-to", async () => {
@@ -414,6 +460,28 @@ describe("chat command behavior", () => {
       exitCode: 6,
     });
     expect(sdk.createTaskChat).toHaveBeenCalledTimes(1);
+
+    const nestedNetworkError = new TypeError("fetch failed");
+    Object.assign(nestedNetworkError, { cause: { cause: { code: "ECONNRESET" } } });
+    sdk.createTaskChat.mockRejectedValueOnce(nestedNetworkError);
+    await expect(runChat(["create", "body", "--to", "nova"])).rejects.toMatchObject({
+      code: "CREATE_RESULT_UNKNOWN",
+      exitCode: 6,
+    });
+
+    const nestedPlainError = new Error("socket failed");
+    Object.assign(nestedPlainError, { cause: { name: "Wrapper", cause: { code: "UND_ERR_SOCKET" } } });
+    sdk.createTaskChat.mockRejectedValueOnce(nestedPlainError);
+    await expect(runChat(["create", "body", "--to", "nova"])).rejects.toMatchObject({
+      code: "CREATE_RESULT_UNKNOWN",
+      exitCode: 6,
+    });
+
+    const certainError = new Error("validation failed");
+    Object.assign(certainError, { cause: { code: "EINVAL" } });
+    sdk.createTaskChat.mockRejectedValueOnce(certainError);
+    await expect(runChat(["create", "body", "--to", "nova"])).rejects.toThrow("validation failed");
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith(certainError);
   });
 
   it("sets, clears, and validates chat topics", async () => {
@@ -455,11 +523,28 @@ describe("chat command behavior", () => {
       code: "CONFLICTING_ARGS",
       exitCode: 2,
     });
+    ioMocks.readStdin.mockResolvedValueOnce(null);
+    await expect(runChat(["set-topic", "--description", "-"])).rejects.toMatchObject({
+      code: "NO_STDIN",
+      exitCode: 2,
+    });
     await expect(runChat(["set-topic", "--description", "   "])).rejects.toMatchObject({
       code: "EMPTY_DESCRIPTION",
       exitCode: 2,
     });
     await expect(runChat(["set-topic"])).rejects.toMatchObject({ code: "NOTHING_TO_UPDATE", exitCode: 2 });
+  });
+
+  it("delegates chat history SDK failures to the shared handler", async () => {
+    const error = new Error("history failed");
+    localAgentMocks.createSdk.mockReturnValueOnce({
+      listMessages: vi.fn(async () => {
+        throw error;
+      }),
+    });
+
+    await expect(runChat(["history", "chat-1"])).rejects.toBe(error);
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith(error);
   });
 
   it("updates topic and description independently via `chat update`", async () => {
@@ -596,5 +681,59 @@ describe("chat command behavior", () => {
     emitter.emit("line", "   ");
     expect(() => emitter.emit("close")).toThrow("process.exit");
     expect(globalThis.clearInterval).toHaveBeenCalledWith(42);
+  });
+
+  it("chat open handles DM creation failures, polling updates, and send exceptions", async () => {
+    cliFetchMock.mockResolvedValueOnce(jsonResponse("denied", false, 403));
+    await expect(runChat(["open", "nova"])).rejects.toMatchObject({ code: "CHAT_ERROR" });
+
+    const emitter = new EventEmitter() as EventEmitter & { prompt: () => void };
+    emitter.prompt = vi.fn();
+    readlineMocks.createInterface.mockReturnValue(emitter);
+    let intervalCallback: (() => void) | undefined;
+    globalThis.setInterval = vi.fn((callback: () => void) => {
+      intervalCallback = callback;
+      return 99 as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setInterval;
+    globalThis.clearInterval = vi.fn() as unknown as typeof clearInterval;
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ id: "dm-2" })).mockResolvedValueOnce(
+      jsonResponse({
+        items: [{ id: "old", senderId: "agent-1", content: "old", createdAt: "2026-06-01T00:00:00.000Z" }],
+      }),
+    );
+
+    await runChat(["open", "nova"]);
+    cliFetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        items: [
+          {
+            id: "new",
+            senderId: "agent-1",
+            content: { card: "x".repeat(520) },
+            createdAt: "2026-06-01T00:00:02.000Z",
+          },
+          { id: "other", senderId: "member-1", content: "ignore", createdAt: "2026-06-01T00:00:01.000Z" },
+        ],
+      }),
+    );
+    intervalCallback?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("[Nova]");
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("...");
+
+    cliFetchMock.mockRejectedValueOnce(new Error("poll down"));
+    intervalCallback?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    cliFetchMock.mockRejectedValueOnce(new Error("network down"));
+    emitter.emit("line", "hello");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("network down");
+
+    expect(() => emitter.emit("close")).toThrow("process.exit");
+    expect(globalThis.clearInterval).toHaveBeenCalledWith(99);
   });
 });

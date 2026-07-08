@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CapabilityRefresher,
   type CapabilityRefresherDeps,
+  stableCapabilitiesJson,
   stableCapabilitySyncJson,
 } from "../core/capability-refresh.js";
 
@@ -79,6 +80,10 @@ const BASE = 100;
 const MAX = 400;
 
 describe("stableCapabilitySyncJson", () => {
+  it("sorts object keys while preserving array order in stable JSON", () => {
+    expect(stableCapabilitiesJson({ z: [{ b: 2, a: 1 }], a: true })).toBe('{"a":true,"z":[{"a":1,"b":2}]}');
+  });
+
   it("ignores volatile probe metadata", () => {
     expect(
       stableCapabilitySyncJson({
@@ -162,6 +167,18 @@ describe("CapabilityRefresher", () => {
     expect(refresher.currentEntry("codex")?.pendingAuth).toBeDefined();
     // …and the unchanged snapshot is NOT re-uploaded (no panel flicker).
     expect(upload).toHaveBeenCalledTimes(1);
+    refresher.stop();
+  });
+
+  it("logs setProviderEntry upload failures and keeps polling", async () => {
+    const { refresher, upload, log, revalidate } = makeRefresher({ initial: codexMissing() });
+    upload.mockRejectedValueOnce(new Error("PATCH failed"));
+
+    await refresher.setProviderEntry("codex", codexPending());
+
+    expect(log).toHaveBeenCalledWith("⚠️", expect.stringContaining("capabilities upload skipped"));
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(1);
     refresher.stop();
   });
 
@@ -326,6 +343,19 @@ describe("CapabilityRefresher", () => {
 
     await vi.advanceTimersByTimeAsync(MAX * 4);
     expect(revalidate).toHaveBeenCalledTimes(2); // healthy + synced → no more polls
+    refresher.stop();
+  });
+
+  it("logs transient probe failures and retries the background poll", async () => {
+    const { refresher, log, revalidate } = makeRefresher({ initial: codexMissing() });
+    revalidate.mockRejectedValueOnce(new Error("provider crashed")).mockResolvedValueOnce(codexMissing());
+
+    await refresher.start();
+    await vi.advanceTimersByTimeAsync(BASE);
+
+    expect(log).toHaveBeenCalledWith("⚠️", expect.stringContaining("poll capability re-probe skipped"));
+    await vi.advanceTimersByTimeAsync(BASE * 2);
+    expect(revalidate).toHaveBeenCalledTimes(2);
     refresher.stop();
   });
 

@@ -110,6 +110,27 @@ describe("native runtime installers", () => {
     );
   });
 
+  it("spawns Claude npm installs and extracts package versions from successful output", async () => {
+    const { installClaudeRuntime } = await import("../core/install-claude-runtime.js");
+    const { child, spawn } = prepareSpawn();
+
+    const result = installClaudeRuntime("2.1.84");
+    child.stdout.emit("data", Buffer.from("+ @anthropic-ai/claude-code@2.1.84\n"));
+    child.emit("exit", 0, null);
+
+    await expect(result).resolves.toEqual({ ok: true, installedVersion: "2.1.84" });
+    expect(spawn).toHaveBeenCalledWith(
+      expect.stringMatching(/npm(?:\.cmd)?$/),
+      ["install", "-g", "@anthropic-ai/claude-code@2.1.84"],
+      expect.objectContaining({
+        category: "npm-install",
+        label: "npm install -g @anthropic-ai/claude-code@2.1.84",
+        timeoutMs: 480_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+  });
+
   it("returns null installedVersion when npm success output does not include a package version", async () => {
     const { installClaudeRuntime } = await import("../core/install-claude-runtime.js");
     const { child } = prepareSpawn();
@@ -158,6 +179,42 @@ describe("native runtime installers", () => {
       reasonCode: "npm_timeout",
     });
   });
+
+  it("classifies Claude spawn errors, npm failures, and timeout exits", async () => {
+    const { installClaudeRuntime } = await import("../core/install-claude-runtime.js");
+
+    const spawnError = prepareSpawn().child;
+    const spawnResult = installClaudeRuntime("latest");
+    spawnError.emit("error", "spawn denied");
+    await expect(spawnResult).resolves.toEqual({
+      ok: false,
+      reason: "spawn denied",
+      retryable: true,
+      reasonCode: "classified_transient",
+    });
+
+    const npmFailure = prepareSpawn().child;
+    const failedResult = installClaudeRuntime("latest");
+    npmFailure.stderr.emit("data", Buffer.from("one\ntwo\nthree\nfour\n"));
+    npmFailure.emit("exit", 1, null);
+    await expect(failedResult).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("two | three | four"),
+      retryable: true,
+      reasonCode: "classified_transient",
+    });
+    expect(outputMocks.line).toHaveBeenCalledWith("one\ntwo\nthree\nfour\n");
+
+    const timeout = prepareSpawn().child;
+    const timeoutResult = installClaudeRuntime("latest");
+    timeout.emit("exit", null, "SIGTERM");
+    await expect(timeoutResult).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("killed by signal SIGTERM (timeout)"),
+      retryable: true,
+      reasonCode: "npm_timeout",
+    });
+  });
 });
 
 describe("daemon native runtime install commands", () => {
@@ -174,6 +231,20 @@ describe("daemon native runtime install commands", () => {
     expect(coreIndexMocks.runtimeProviderChecks).toHaveBeenCalledWith({ providers: [] });
     expect(coreIndexMocks.printResults).toHaveBeenCalledWith([{ detail: "installed", label: "Runtime", ok: true }]);
     expect(outputMocks.status).toHaveBeenCalledWith("✓", "Installed @openai/codex@0.140.0");
+
+    const codexFailureRoot = new Command();
+    registerDaemonInstallCodexCommand(codexFailureRoot);
+    coreIndexMocks.installCodexRuntime.mockResolvedValueOnce({
+      ok: false,
+      reason: "npm registry timeout",
+      retryable: true,
+      reasonCode: "classified_transient",
+    });
+    await subcommand(codexFailureRoot, "install-codex").parseAsync([], { from: "user" });
+    expect(outputMocks.status).toHaveBeenLastCalledWith("✖", "Codex install failed: npm registry timeout");
+    expect(outputMocks.line).toHaveBeenCalledWith("  This looks transient — retry in a moment.\n\n");
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
 
     const claudeRoot = new Command();
     registerDaemonInstallClaudeCommand(claudeRoot);
@@ -211,5 +282,27 @@ describe("daemon native runtime install commands", () => {
     await expect(subcommand(claudeRoot, "install-claude").parseAsync(["--json"], { from: "user" })).rejects.toThrow(
       "CLAUDE_INSTALL_FAILED:bad spec:1",
     );
+  });
+
+  it("prints Claude text and JSON success flows", async () => {
+    const { registerDaemonInstallClaudeCommand } = await import("../commands/daemon/install-claude.js");
+
+    const textRoot = new Command();
+    registerDaemonInstallClaudeCommand(textRoot);
+    coreIndexMocks.installClaudeRuntime.mockResolvedValueOnce({ ok: true, installedVersion: "2.1.84" });
+    await subcommand(textRoot, "install-claude").parseAsync(["--spec", "2.1.84"], { from: "user" });
+    expect(coreIndexMocks.installClaudeRuntime).toHaveBeenCalledWith("2.1.84");
+    expect(outputMocks.status).toHaveBeenCalledWith("✓", "Installed @anthropic-ai/claude-code@2.1.84");
+    expect(coreIndexMocks.printResults).toHaveBeenCalledWith([{ detail: "installed", label: "Runtime", ok: true }]);
+    expect(outputMocks.line).toHaveBeenCalledWith(expect.stringContaining("claude-code now reports `ok`"));
+
+    vi.clearAllMocks();
+    clientMocks.probeCapabilities.mockResolvedValue({ providers: [{ provider: "claude-code", state: "ok" }] });
+    const jsonRoot = new Command();
+    registerDaemonInstallClaudeCommand(jsonRoot);
+    coreIndexMocks.installClaudeRuntime.mockResolvedValueOnce({ ok: true, installedVersion: null });
+    await subcommand(jsonRoot, "install-claude").parseAsync(["--json"], { from: "user" });
+    expect(outputMocks.result).toHaveBeenCalledWith({ providers: [{ provider: "claude-code", state: "ok" }] });
+    expect(coreIndexMocks.printResults).not.toHaveBeenCalled();
   });
 });

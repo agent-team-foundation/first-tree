@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,6 +55,60 @@ describe("runValidateMembers — top-level requirements", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.errors).toEqual([]);
+  });
+
+  it("reports every required member frontmatter field and enum violation", () => {
+    const root = makeTempDir("validate-members-");
+    write(root, "members/no-frontmatter/NODE.md", "# no metadata\n");
+    write(root, "members/broken/NODE.md", `---\nowners: []\ntype: robot\nstatus: active\ndomains: []\n---\n`);
+    write(
+      root,
+      "members/missing-owners/NODE.md",
+      `---\ntitle: Missing Owners\ntype: human\nrole: Engineer\ndomains: [system design]\n---\n`,
+    );
+
+    const result = runValidateMembers(root);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        "members/no-frontmatter/NODE.md: no frontmatter found",
+        "members/broken/NODE.md: missing or empty 'title' field",
+        "members/broken/NODE.md: invalid type 'robot' — must be one of: agent, human",
+        "members/broken/NODE.md: invalid status 'active' — must be one of: invited",
+        "members/broken/NODE.md: missing or empty 'role' field",
+        "members/broken/NODE.md: 'domains' must contain at least one entry",
+        "members/missing-owners/NODE.md: missing 'owners' field",
+      ]),
+    );
+  });
+
+  it("ignores member entries that disappear before stat", (ctx) => {
+    const root = makeTempDir("validate-members-");
+    mkdir(root, "members");
+    try {
+      symlinkSync(join(root, "missing"), join(root, "members", "broken-link"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const result = runValidateMembers(root);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.errors).toContain("members/: no member nodes were found");
+  });
+
+  it("accepts block-list owners and quoted inline domains", () => {
+    const root = makeTempDir("validate-members-");
+    write(
+      root,
+      "members/alice/NODE.md",
+      `---\ntitle: "alice"\nowners:\n  - "alice"\ntype: human\nrole: Engineer\ndomains: ["system design"]\n---\n`,
+    );
+
+    const result = runValidateMembers(root);
+
+    expect(result).toEqual({ exitCode: 0, errors: [] });
   });
 });
 

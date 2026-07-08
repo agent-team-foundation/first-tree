@@ -168,6 +168,20 @@ describe("org bind-tree CLI", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects non-http URL schemes with INVALID_URL and exits 2", async () => {
+    const program = await buildProgram();
+    let caught: unknown;
+    try {
+      await program.parseAsync(["node", "first-tree", "org", "bind-tree", "ssh://github.com/acme/tree.git"]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ProcessExit);
+    expect(firstExitCode()).toBe(2);
+    expect(firstErrorEnvelope()?.error.message).toContain("URL scheme must be http or https");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("with --org, PUTs to /orgs/:orgId/settings/context_tree without consulting /me", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
 
@@ -266,6 +280,38 @@ describe("org bind-tree CLI", () => {
     expect(caught).toBeInstanceOf(ProcessExit);
     expect(firstErrorEnvelope()?.error.code).toBe("AMBIGUOUS_ORG");
     // /me only — no PUT attempted.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("without --org, surfaces /me failures and empty memberships", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("down", { status: 503 }));
+    const meFailProgram = await buildProgram();
+    let caught: unknown;
+    try {
+      await meFailProgram.parseAsync(["node", "first-tree", "org", "bind-tree", "https://github.com/acme/tree"]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ProcessExit);
+    expect(firstErrorEnvelope()?.error.code).toBe("ME_FAILED");
+
+    fetchMock.mockReset();
+    stderr = "";
+    exitCalls = [];
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ memberships: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const noOrgProgram = await buildProgram();
+    try {
+      await noOrgProgram.parseAsync(["node", "first-tree", "org", "bind-tree", "https://github.com/acme/tree"]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ProcessExit);
+    expect(firstErrorEnvelope()?.error.code).toBe("NO_ORG");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

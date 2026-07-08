@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,8 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NameResolver } from "../core/migrate-agent-dirs.js";
 
 const cliFetchMock = vi.hoisted(() => vi.fn());
+const clientMocks = vi.hoisted(() => ({
+  migrateLegacyRuntimeLayout: vi.fn(),
+}));
 const printMock = vi.hoisted(() => ({ status: vi.fn() }));
 
+vi.mock("@first-tree/client", () => clientMocks);
 vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../core/output.js", () => ({ print: printMock }));
 
@@ -54,6 +58,7 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  clientMocks.migrateLegacyRuntimeLayout.mockReturnValue(undefined);
   root = makeTempDir("ft-migrate-extra-");
 });
 
@@ -144,6 +149,83 @@ describe("migrateLocalAgentDirs extra failure branches", () => {
 
     expect(result).toMatchObject({ scanned: 1, renamed: 1, errors: 1 });
     expect(readdirSync(join(root, "config", "agents")).sort()).toEqual(["empty", "new", "plain-file"]);
+  });
+
+  it("skips broken symlinks while enumerating local agent dirs", async (ctx) => {
+    const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
+    mkdirSync(join(root, "config", "agents"), { recursive: true });
+    try {
+      symlinkSync(join(root, "missing-agent"), join(root, "config", "agents", "broken"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+    writeAgentYaml("old", "agent-1");
+
+    const result = await migrateLocalAgentDirs({
+      ...dirs(),
+      resolver: { resolveName: vi.fn(async () => "new") },
+    });
+
+    expect(result).toMatchObject({ scanned: 1, renamed: 1, errors: 0 });
+    expect(readdirSync(join(root, "config", "agents")).sort()).toEqual(["broken", "new"]);
+  });
+
+  it("logs runtime-layout migration failures after a successful agent rename", async () => {
+    const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
+    clientMocks.migrateLegacyRuntimeLayout.mockImplementationOnce(() => {
+      throw new Error("runtime layout broken");
+    });
+    writeAgentYaml("old", "agent-1");
+    writeWorkspace("old");
+
+    const result = await migrateLocalAgentDirs({
+      ...dirs(),
+      resolver: { resolveName: vi.fn(async () => "new") },
+    });
+
+    expect(result).toMatchObject({ scanned: 1, renamed: 1, errors: 1 });
+    expect(clientMocks.migrateLegacyRuntimeLayout).toHaveBeenCalledWith(join(root, "data", "workspaces", "old"));
+    expect(printMock.status).toHaveBeenCalledWith(
+      "⚠️",
+      expect.stringContaining('runtime-dir migration failed for "old"'),
+    );
+  });
+
+  it("continues when workspace and session renames fail", async () => {
+    const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
+    writeAgentYaml("old", "agent-1");
+    writeWorkspace("old");
+    writeSession("old");
+    chmodSync(join(root, "data", "workspaces"), 0o500);
+    chmodSync(join(root, "data", "sessions"), 0o500);
+
+    try {
+      const result = await migrateLocalAgentDirs({
+        ...dirs(),
+        resolver: { resolveName: vi.fn(async () => "new") },
+      });
+
+      expect(result).toMatchObject({ scanned: 1, renamed: 1, errors: 2 });
+      expect(printMock.status).toHaveBeenCalledWith("⚠️", expect.stringContaining('workspace rename failed for "old"'));
+      expect(printMock.status).toHaveBeenCalledWith("⚠️", expect.stringContaining('sessions rename failed for "old"'));
+    } finally {
+      chmodSync(join(root, "data", "workspaces"), 0o700);
+      chmodSync(join(root, "data", "sessions"), 0o700);
+    }
+  });
+
+  it("treats orphan detection as best-effort when local state cannot be listed", async () => {
+    const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
+    writeAgentYaml("old", "agent-1");
+    mkdirSync(join(root, "data"), { recursive: true });
+    writeFileSync(join(root, "data", "workspaces"), "not a directory\n");
+
+    const result = await migrateLocalAgentDirs({
+      ...dirs(),
+      resolver: { resolveName: vi.fn(async () => null) },
+    });
+
+    expect(result).toMatchObject({ scanned: 1, renamed: 0, errors: 0 });
   });
 
   it("continues after config, workspace, and session rename edge cases", async () => {

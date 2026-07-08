@@ -27,6 +27,8 @@ function harness(opts: {
   fireAuthUrl?: string;
   probeResult?: CapabilityEntry;
   current?: CapabilityEntry;
+  throwLogin?: unknown;
+  probeThrows?: unknown;
 }) {
   const calls: Recorded[] = [];
   const logs: string[] = [];
@@ -51,10 +53,14 @@ function harness(opts: {
           } as const),
     runBrowserLogin: async (o: CodexBrowserLoginOptions): Promise<LoginOutcome> => {
       if (opts.fireAuthUrl) o.onAuthUrl?.(opts.fireAuthUrl);
+      if (opts.throwLogin !== undefined) throw opts.throwLogin;
       await new Promise((r) => setTimeout(r, 0));
       return opts.outcome ?? ({ ok: true } as const);
     },
-    probeCodex: async (): Promise<CapabilityEntry> => opts.probeResult ?? installedEntry(),
+    probeCodex: async (): Promise<CapabilityEntry> => {
+      if (opts.probeThrows !== undefined) throw opts.probeThrows;
+      return opts.probeResult ?? installedEntry();
+    },
   };
   return { calls, logs, deps };
 }
@@ -143,10 +149,32 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
     expect(h.calls.at(-1)?.entry.state).toBe("missing");
     expect(h.calls.at(-1)?.entry.lastAuthError).toMatchObject({ reason: "spawn-error" });
   });
+
+  it("logs thrown browser login errors and re-probe failures without throwing", async () => {
+    const loginThrows = harness({ throwLogin: "browser crashed", probeResult: installedEntry() });
+    await runRuntimeAuthLogin({ provider: "codex", ref: "throw-login" }, loginThrows.deps);
+    expect(loginThrows.logs.some((l) => l.includes("codex login threw: browser crashed"))).toBe(true);
+    expect(loginThrows.calls.at(-1)?.entry.lastAuthError).toMatchObject({
+      reason: "spawn-error",
+      message: "browser crashed",
+    });
+
+    const probeThrows = harness({ resolveOk: false, probeThrows: "probe crashed" });
+    await runRuntimeAuthLogin({ provider: "codex", ref: "throw-probe" }, probeThrows.deps);
+    expect(
+      probeThrows.logs.some((l) => l.includes("codex re-probe after unresolved binary failed: probe crashed")),
+    ).toBe(true);
+  });
 });
 
 describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", () => {
-  function claudeHarness(opts: { resolveOk?: boolean; outcome?: LoginOutcome; probeResult?: CapabilityEntry }) {
+  function claudeHarness(opts: {
+    resolveOk?: boolean;
+    outcome?: LoginOutcome;
+    probeResult?: CapabilityEntry;
+    throwLogin?: unknown;
+    probeThrows?: unknown;
+  }) {
     const calls: Recorded[] = [];
     const logs: string[] = [];
     // Spy so a test can assert the TUI probe is NOT spawned while claude-code-tui
@@ -166,8 +194,14 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
         opts.resolveOk === false
           ? ({ ok: false, error: "no claude CLI" } as const)
           : ({ ok: true, command: "/usr/local/bin/claude", baseArgs: [] as string[] } as const),
-      runClaudeBrowser: async (): Promise<LoginOutcome> => opts.outcome ?? ({ ok: true } as const),
-      probeClaude: async (): Promise<CapabilityEntry> => opts.probeResult ?? installedEntry(),
+      runClaudeBrowser: async (): Promise<LoginOutcome> => {
+        if (opts.throwLogin !== undefined) throw opts.throwLogin;
+        return opts.outcome ?? ({ ok: true } as const);
+      },
+      probeClaude: async (): Promise<CapabilityEntry> => {
+        if (opts.probeThrows !== undefined) throw opts.probeThrows;
+        return opts.probeResult ?? installedEntry();
+      },
       probeClaudeTui,
     };
     return { calls, logs, deps, probeClaudeTui };
@@ -216,5 +250,21 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
     expect(cc?.lastAuthError).toMatchObject({ reason: "timeout", message: "claude auth login timed out" });
     expect(h.calls.some((c) => c.provider === "claude-code-tui")).toBe(false);
     expect(h.probeClaudeTui).not.toHaveBeenCalled();
+  });
+
+  it("logs thrown Claude login errors and re-probe failures without throwing", async () => {
+    const loginThrows = claudeHarness({ throwLogin: "browser crashed" });
+    await runRuntimeAuthLogin({ provider: "claude-code", ref: "c4" }, loginThrows.deps);
+    expect(loginThrows.logs.some((l) => l.includes("claude auth login threw: browser crashed"))).toBe(true);
+    expect(loginThrows.calls.at(-1)?.entry.lastAuthError).toMatchObject({
+      reason: "spawn-error",
+      message: "browser crashed",
+    });
+
+    const probeThrows = claudeHarness({ resolveOk: false, probeThrows: "probe crashed" });
+    await runRuntimeAuthLogin({ provider: "claude-code", ref: "c5" }, probeThrows.deps);
+    expect(probeThrows.logs.some((l) => l.includes("claude re-probe after unresolved CLI failed: probe crashed"))).toBe(
+      true,
+    );
   });
 });

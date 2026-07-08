@@ -9,6 +9,10 @@ const clientSdkMocks = vi.hoisted(() => ({
   FirstTreeHubSDK: vi.fn(),
 }));
 
+const promptMocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+}));
+
 const configMocks = vi.hoisted(() => ({
   agentConfigSchema: {},
   clientConfigSchema: {},
@@ -68,6 +72,7 @@ const outputMocks = vi.hoisted(() => ({
 
 const printLineMock = vi.hoisted(() => vi.fn());
 
+vi.mock("@inquirer/prompts", () => promptMocks);
 vi.mock("@first-tree/client", () => clientSdkMocks);
 vi.mock("@first-tree/shared/config", () => configMocks);
 vi.mock("../core/bootstrap.js", () => bootstrapMocks);
@@ -135,6 +140,7 @@ beforeEach(() => {
   coreMocks.readActiveRootClientId.mockReturnValue(null);
   coreMocks.stopClientRuntimeProcess.mockResolvedValue({ ok: true });
   cliFetchMock.mockReset();
+  promptMocks.confirm.mockResolvedValue(true);
   coreMocks.promptAddAgent.mockResolvedValue({ name: "nova", agentId: "agent-1" });
   coreMocks.findStaleAliases.mockResolvedValue([
     { name: "old", agentId: "agent-old", reason: "unpinned" },
@@ -226,6 +232,44 @@ describe("agent lifecycle CLI commands", () => {
     await expect(
       runAgent(["create", "bot", "--type", "agent", "--client-id", "client-1", "--org", "missing"]),
     ).rejects.toMatchObject({ code: "CREATE_ERROR", exitCode: 1 });
+
+    cliFetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          memberships: [
+            { organizationId: "org-1", organizationName: "Acme", role: "admin" },
+            { organizationId: "org-2", organizationName: "Beta", role: "member" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ uuid: "agent-created", name: "scoped" }));
+    await runAgent(["create", "scoped", "--type", "agent", "--client-id", "client-1", "--org", "org-2"]);
+    expect(cliFetchMock).toHaveBeenLastCalledWith(
+      "https://hub.example/api/v1/orgs/org-2/agents",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ memberships: [] }));
+    await expect(runAgent(["create", "none", "--type", "agent", "--client-id", "client-1"])).rejects.toMatchObject({
+      code: "CREATE_ERROR",
+      exitCode: 1,
+    });
+
+    cliFetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ memberships: [{ organizationId: "org-1", organizationName: "Acme", role: "admin" }] }),
+      )
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: vi.fn(async () => {
+          throw new Error("not json");
+        }),
+        text: vi.fn(async () => "bad gateway"),
+      } as unknown as Response);
+    await expect(
+      runAgent(["create", "fail-create", "--type", "agent", "--client-id", "client-1"]),
+    ).rejects.toMatchObject({ code: "CREATE_ERROR", exitCode: 1 });
   });
 
   it("lists local and remote agents, including empty and error paths", async () => {
@@ -269,6 +313,20 @@ describe("agent lifecycle CLI commands", () => {
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse("nope", false, 503));
     await expect(runAgent(["list", "--remote"])).rejects.toMatchObject({ code: "LIST_ERROR", exitCode: 1 });
+
+    configMocks.loadAgents.mockReturnValueOnce(new Map());
+    await runAgent(["list"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No agents configured");
+
+    configMocks.loadAgents.mockImplementationOnce(() => {
+      throw new Error("bad local config");
+    });
+    await runAgent(["list"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No agents configured");
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse([]));
+    await runAgent(["list", "--remote"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No agents found");
   });
 
   it("prunes stale aliases with dry-run, confirmation skip, removal failures, and missing client id", async () => {
@@ -293,6 +351,17 @@ describe("agent lifecycle CLI commands", () => {
 
     configMocks.resolveConfigReadonly.mockReturnValueOnce({ client: {} });
     await expect(runAgent(["prune", "--yes"])).rejects.toMatchObject({ code: "PRUNE_ERROR", exitCode: 1 });
+  });
+
+  it("cancels interactive prune when the confirmation is rejected or interrupted", async () => {
+    promptMocks.confirm.mockResolvedValueOnce(false);
+    await runAgent(["prune"]);
+    expect(coreMocks.removeLocalAgent).not.toHaveBeenCalled();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Cancelled.");
+
+    promptMocks.confirm.mockRejectedValueOnce(new Error("prompt closed"));
+    await runAgent(["prune"]);
+    expect(coreMocks.removeLocalAgent).not.toHaveBeenCalled();
   });
 });
 
@@ -453,6 +522,56 @@ describe("logout and upgrade commands", () => {
     expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
     const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("Stopped foreground daemon pid 4321");
+  });
+
+  it("logout without purge warns but continues when foreground daemon marker inspection fails", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.listLiveClientRuntimeMarkers.mockImplementationOnce(() => {
+      throw new Error("marker dir unreadable");
+    });
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await runTopLevel(registerLogoutCommand, ["logout"]);
+
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Warning: could not inspect foreground daemon runtime markers: marker dir unreadable",
+    );
+    expect(existsSync(credentials)).toBe(false);
+  });
+
+  it("logout without purge warns on untrusted or unstoppable foreground markers and still removes credentials", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.listLiveClientRuntimeMarkers.mockReturnValue([
+      { pid: 1111, clientId: "client-1", mode: "foreground", command: "" },
+      { pid: 2222, clientId: "client-1", mode: "foreground", command: "first-tree-dev daemon start --foreground" },
+    ]);
+    coreMocks.stopClientRuntimeProcess.mockResolvedValueOnce({ ok: false, reason: "still running" });
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await runTopLevel(registerLogoutCommand, ["logout"]);
+
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("could not read command for pid 1111");
+    expect(output).toContain("Warning: could not stop foreground daemon pid 2222: still running");
+    expect(existsSync(credentials)).toBe(false);
   });
 
   it("computer reset uses the same guarded local-state removal without server retire", async () => {
@@ -642,6 +761,71 @@ describe("logout and upgrade commands", () => {
     expect(output).toContain("sleep 1000");
   });
 
+  it("refuses logout purge when marker inspection fails before deleting local state", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.listLiveClientRuntimeMarkers.mockImplementationOnce(() => {
+      throw new Error("marker dir unreadable");
+    });
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_FOREGROUND_DAEMON_STOP_FAILED",
+      exitCode: 1,
+    });
+
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+    expect(readFileSync(clientYaml, "utf8")).toContain("client-1");
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Could not inspect");
+  });
+
+  it("refuses logout purge when credentials or client id are unavailable for server retire", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue(null);
+    coreMocks.readActiveRootClientId.mockReturnValue(null);
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_CLIENT_RETIRE_UNAVAILABLE",
+      exitCode: 1,
+    });
+
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+  });
+
+  it("refuses logout purge when refreshing credentials for server retire fails", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.ensureFreshAccessToken.mockRejectedValueOnce(new Error("refresh denied"));
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_CLIENT_RETIRE_FAILED",
+      exitCode: 1,
+    });
+
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("refresh denied");
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+  });
+
   it("refuses logout purge before deleting local state when server retire fails", async () => {
     const credentials = join(tempDir, "credentials.json");
     const clientYaml = join(tempDir, "client.yaml");
@@ -674,6 +858,42 @@ describe("logout and upgrade commands", () => {
     expect(output).toContain("delete pinned agents first");
   });
 
+  it("prints server retire message or text error bodies when logout purge fails", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    cliFetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "message body wins" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_CLIENT_RETIRE_FAILED",
+      exitCode: 1,
+    });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("message body wins");
+
+    printLineMock.mockClear();
+    cliFetchMock.mockResolvedValueOnce(new Response("plain failure", { status: 502 }));
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_CLIENT_RETIRE_FAILED",
+      exitCode: 1,
+    });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("plain failure");
+  });
+
   it("upgrade covers source, npx, check-only, install failure, no service, inactive service, and restart failure paths", async () => {
     process.exit = vi.fn(((code?: number) => {
       throw Object.assign(new Error("process.exit"), { code });
@@ -694,6 +914,24 @@ describe("logout and upgrade commands", () => {
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
       "first-tree-dev upgrade --latest",
     );
+
+    coreMocks.fetchLatestVersion.mockReturnValueOnce({ ok: false, reason: "npm down" });
+    await expect(runTopLevel(registerUpgradeCommand, ["upgrade", "--latest"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Could not fetch latest version",
+    );
+
+    coreMocks.detectInstallMode.mockReturnValue("portable");
+    coreMocks.fetchPortableLatestVersion.mockResolvedValueOnce({ ok: false, reason: "metadata down" });
+    await expect(runTopLevel(registerUpgradeCommand, ["upgrade", "--latest"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Could not fetch portable update target",
+    );
+
+    coreMocks.detectInstallMode.mockReturnValue("global");
+    coreMocks.fetchServerCommandVersion.mockResolvedValueOnce({ ok: true, version: "0.4.0" });
+    await runTopLevel(registerUpgradeCommand, ["upgrade"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Already on 0.5.0");
 
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--check"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Upgrade available");

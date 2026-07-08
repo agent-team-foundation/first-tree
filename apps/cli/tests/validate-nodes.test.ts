@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,6 +65,54 @@ describe("runValidateNodes — non-personal files", () => {
     expect(result.exitCode).toBe(1);
     expect(result.errors).toContain("members/NODE.md: missing frontmatter");
   });
+
+  it("skips generated and managed framework paths while continuing past symlinks", (ctx) => {
+    const root = makeTempDir("validate-nodes-");
+    write(root, "NODE.md", ROOT_FRONTMATTER);
+    write(root, ".agents/skills/hidden.md", "# ignored\n");
+    write(root, "node_modules/pkg/ignored.md", "# ignored\n");
+    write(root, "AGENTS.md", "# ignored\n");
+    const managedTarget = join(root, "target-whitepaper.md");
+    writeFileSync(managedTarget, "---\ntitle: Target\nowners: [alice]\n---\n");
+    try {
+      symlinkSync(managedTarget, join(root, "WHITEPAPER.md"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const result = runValidateNodes(root);
+
+    expect(result).toEqual({ exitCode: 0, errors: [] });
+  });
+
+  it("ignores directories that cannot be read while collecting markdown files", () => {
+    const root = makeTempDir("validate-nodes-");
+    write(root, "NODE.md", ROOT_FRONTMATTER);
+    const unreadable = join(root, "unreadable");
+    mkdirSync(unreadable, { recursive: true });
+    chmodSync(unreadable, 0o300);
+
+    try {
+      const result = runValidateNodes(root);
+      expect(result).toEqual({ exitCode: 0, errors: [] });
+    } finally {
+      chmodSync(unreadable, 0o700);
+    }
+  });
+
+  it("ignores entries that disappear before stat", (ctx) => {
+    const root = makeTempDir("validate-nodes-");
+    write(root, "NODE.md", ROOT_FRONTMATTER);
+    try {
+      symlinkSync(join(root, "missing.md"), join(root, "broken.md"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const result = runValidateNodes(root);
+
+    expect(result).toEqual({ exitCode: 0, errors: [] });
+  });
 });
 
 describe("runValidateNodes — personal-path relaxation", () => {
@@ -102,6 +150,18 @@ describe("runValidateNodes — personal-path relaxation", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.errors).toContain("members/alice/notes.md: broken soft_links target '/does/not/exist.md'");
+  });
+
+  it("accepts inline soft_links pointing at markdown files or node directories", () => {
+    const root = makeTempDir("validate-nodes-");
+    write(root, "NODE.md", ROOT_FRONTMATTER);
+    write(root, "domain/NODE.md", "---\ntitle: Domain\nowners: [alice]\n---\n");
+    write(root, "domain/reference.md", "---\ntitle: Reference\nowners: [alice]\n---\n");
+    write(root, "members/alice/links.md", "---\nsoft_links: [domain, /domain/reference.md]\n---\n# links\n");
+
+    const result = runValidateNodes(root);
+
+    expect(result).toEqual({ exitCode: 0, errors: [] });
   });
 
   it("relaxes nested personal subtrees too (members/<me>/sub/path.md)", () => {

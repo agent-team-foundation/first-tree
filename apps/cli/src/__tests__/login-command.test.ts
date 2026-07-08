@@ -92,6 +92,13 @@ async function runLogin(args: string[]): Promise<void> {
   await program.parseAsync(args, { from: "user" });
 }
 
+async function waitForAsyncWork(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function credentialsPath(): string {
   return join(home, "config", "credentials.json");
 }
@@ -257,6 +264,9 @@ beforeEach(() => {
   promptUpdateMock.mockReset();
   stderrMock.mockClear();
   exitMock.mockClear();
+  exitMock.mockImplementation((() => {
+    throw new Error("process.exit");
+  }) as never);
   process.exitCode = undefined;
   cliFetchMock.mockImplementation(async () =>
     response(200, { accessToken: jwt({ sub: "user-new" }), refreshToken: "r1" }),
@@ -353,6 +363,28 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
       "Connect code must be the short code only",
     );
+  });
+
+  it("reports unexpected connect-token URL derivation failures", async () => {
+    vi.doMock("../commands/_shared/connect-token.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../commands/_shared/connect-token.js")>();
+      return {
+        ...actual,
+        deriveHubUrlFromToken: vi.fn(() => {
+          throw new Error("derive exploded");
+        }),
+      };
+    });
+
+    try {
+      await expect(runLogin(["login", jwt({ iss: "http://first-tree.test/" }), "--no-start"])).rejects.toThrow(
+        "process.exit",
+      );
+      expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("derive exploded");
+    } finally {
+      vi.doUnmock("../commands/_shared/connect-token.js");
+      vi.resetModules();
+    }
   });
 
   it("requires explicit confirmation for cross-account login with a short connect code", async () => {
@@ -644,6 +676,59 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("expired token");
   });
 
+  it("rejects exchanged access tokens without an owner subject", async () => {
+    cliFetchMock.mockResolvedValueOnce(response(200, { accessToken: jwt({}), refreshToken: "r1" }));
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"])).rejects.toThrow(
+      "process.exit",
+    );
+
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Server access token is missing the required `sub` claim",
+    );
+  });
+
+  it("refuses existing credentials whose owner cannot be decoded", async () => {
+    mkdirSync(join(home, "config"), { recursive: true });
+    writeFileSync(
+      credentialsPath(),
+      JSON.stringify({ accessToken: "not-a-jwt", refreshToken: "old-refresh", serverUrl: "http://first-tree.test" }),
+    );
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"])).rejects.toThrow(
+      "process.exit",
+    );
+
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Existing credentials do not expose an owner user id",
+    );
+  });
+
+  it("installs the background service when supported", async () => {
+    isServiceSupportedMock.mockReturnValue(true);
+    installClientServiceMock.mockReturnValue({
+      platform: "launchd",
+      logDir: join(home, "logs"),
+    });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" })]);
+
+    expect(installClientServiceMock).toHaveBeenCalled();
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Background service installed (launchd)");
+    expect(output).toContain(join(home, "logs"));
+    expect(clientRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("prints cancellation when inline runtime start is interrupted by the prompt layer", async () => {
+    runtimeInstance.start.mockRejectedValueOnce(Object.assign(new Error("cancel"), { name: "ExitPromptError" }));
+
+    await runLogin(["login", jwt({ iss: "http://hub.test" })]);
+
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Cancelled.");
+    expect(exitMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to inline runtime when service install is unsupported", async () => {
     writeCredentials("member-new", "http://hub.test", "user-new");
     mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
@@ -674,6 +759,34 @@ describe("login command", { timeout: 60_000 }, () => {
     const text = stderrMock.mock.calls.map((call) => String(call[0])).join("");
     expect(text).toContain("Background service not supported");
     expect(text).toContain("Error: stop after watch");
+  });
+
+  it("stops the inline runtime cleanly when the login fallback receives SIGTERM", async () => {
+    const signalHandlers = new Map<string, () => void>();
+    const onSpy = vi.spyOn(process, "on").mockImplementation((event, listener) => {
+      if (event === "SIGINT" || event === "SIGTERM") {
+        signalHandlers.set(event, listener as () => void);
+      }
+      return process;
+    });
+    exitMock.mockImplementation((() => undefined) as never);
+    runtimeInstance.watchAgentsDir.mockImplementation(() => undefined);
+
+    try {
+      void runLogin(["login", jwt({ iss: "http://hub.test" })]).catch(() => undefined);
+      await waitForAsyncWork(() => signalHandlers.has("SIGTERM"));
+
+      const shutdown = signalHandlers.get("SIGTERM");
+      expect(shutdown).toBeTypeOf("function");
+      shutdown?.();
+      await waitForAsyncWork(() => runtimeInstance.stop.mock.calls.length > 0);
+
+      expect(runtimeInstance.unwatchAgentsDir).toHaveBeenCalled();
+      expect(runtimeInstance.stop).toHaveBeenCalledWith(undefined);
+      expect(exitMock).toHaveBeenCalledWith(0);
+    } finally {
+      onSpy.mockRestore();
+    }
   });
 
   it("continues inline fallback when migration fails and handles prompt/org errors", async () => {
