@@ -1,0 +1,235 @@
+import { describe, expect, it, vi } from "vitest";
+import { createNotifier, notifyRecipients } from "../services/notifier.js";
+
+type ListenHandler = (payload?: string) => void;
+
+type FakeListenClient = {
+  calls: unknown[][];
+  client: unknown;
+  listeners: Map<string, ListenHandler>;
+  unlisteners: Array<ReturnType<typeof vi.fn>>;
+};
+
+function makeListenClient(shouldRejectNotify = false): FakeListenClient {
+  const calls: unknown[][] = [];
+  const listeners = new Map<string, ListenHandler>();
+  const unlisteners: Array<ReturnType<typeof vi.fn>> = [];
+  const client = vi.fn(async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+    calls.push(values);
+    if (shouldRejectNotify) throw new Error("notify failed");
+  }) as unknown as {
+    listen: (channel: string, handler: ListenHandler) => Promise<{ unlisten: () => Promise<void> }>;
+  };
+  client.listen = vi.fn(async (channel: string, handler: ListenHandler) => {
+    listeners.set(channel, handler);
+    const unlisten = vi.fn(async () => undefined);
+    unlisteners.push(unlisten);
+    return { unlisten };
+  });
+  return { calls, client, listeners, unlisteners };
+}
+
+function makeSocket(sendError?: Error): {
+  OPEN: number;
+  readyState: number;
+  send: ReturnType<typeof vi.fn>;
+} {
+  return {
+    OPEN: 1,
+    readyState: 1,
+    send: vi.fn((_frame: string, callback?: (err?: Error) => void) => {
+      callback?.(sendError);
+    }),
+  };
+}
+
+describe("createNotifier", () => {
+  it("fans inbox notifications only to open subscribed sockets and supports direct frame push", async () => {
+    const { client, listeners } = makeListenClient();
+    const notifier = createNotifier(client as never);
+    const openSocket = makeSocket();
+    const failingSocket = makeSocket(new Error("backpressure"));
+    const closedSocket = { ...makeSocket(), readyState: 3 };
+    const pushHandler = vi.fn(async () => undefined);
+    const rejectingPushHandler = vi.fn(async () => {
+      throw new Error("handler failed");
+    });
+
+    notifier.subscribe("inbox_1", openSocket as never, pushHandler);
+    notifier.subscribe("inbox_1", failingSocket as never, rejectingPushHandler);
+    notifier.subscribe("inbox_1", closedSocket as never, vi.fn());
+    await notifier.start();
+
+    listeners.get("inbox_notifications")?.("malformed");
+    listeners.get("inbox_notifications")?.("unknown:msg_1");
+    listeners.get("inbox_notifications")?.("inbox_1:msg_1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(pushHandler).toHaveBeenCalledWith("msg_1");
+    expect(rejectingPushHandler).toHaveBeenCalledWith("msg_1");
+    expect(await notifier.pushFrameToInbox("missing", "{}")).toBe(0);
+    expect(await notifier.pushFrameToInbox("inbox_1", '{"type":"ping"}')).toBe(1);
+    expect(openSocket.send).toHaveBeenCalledWith('{"type":"ping"}', expect.any(Function));
+    expect(failingSocket.send).toHaveBeenCalledWith('{"type":"ping"}', expect.any(Function));
+
+    notifier.unsubscribe("inbox_1", openSocket as never);
+    notifier.unsubscribe("inbox_1", failingSocket as never);
+    notifier.unsubscribe("inbox_1", closedSocket as never);
+    expect(await notifier.pushFrameToInbox("inbox_1", "{}")).toBe(0);
+  });
+
+  it("publishes every notification channel and swallows notify failures", async () => {
+    const ok = makeListenClient();
+    const notifier = createNotifier(ok.client as never);
+    const payload = {
+      agentId: "agent_1",
+      agentType: "codex",
+      displayName: "Agent",
+      name: null,
+      oldClientId: null,
+      reason: "switch",
+      runtimeProvider: "codex",
+      targetClientId: "client_1",
+    };
+
+    await notifier.notify("inbox_1", "msg_1");
+    await notifier.notifyConfigChange("agent");
+    await notifier.notifySessionStateChange("agent_1", "chat_1", "active", "org_1");
+    await notifier.notifySessionEvent("agent_1", "chat_1", "tool_call", "org_1");
+    await notifier.notifyRuntimeStateChange("agent_1", "working", "org_1");
+    await notifier.notifySessionRuntime("agent_1", "chat_1", "working", "org_1");
+    await notifier.notifyChatMessage("chat_1", "msg_1");
+    await notifier.notifyChatAudience("chat_1");
+    await notifier.notifyChatUpdated("chat_1");
+    await notifier.notifyAgentRouteChange(payload);
+
+    expect(ok.calls).toHaveLength(10);
+    expect(ok.calls.map((values) => values[0])).toEqual([
+      "inbox_notifications",
+      "config_changes",
+      "session_state_changes",
+      "session_event_changes",
+      "runtime_state_changes",
+      "session_runtime_changes",
+      "chat_message_events",
+      "chat_audience_events",
+      "chat_updated_events",
+      "agent_route_events",
+    ]);
+
+    const failing = createNotifier(makeListenClient(true).client as never);
+    await expect(failing.notify("inbox_1", "msg_1")).resolves.toBeUndefined();
+    await expect(failing.notifyAgentRouteChange(payload)).resolves.toBeUndefined();
+  });
+
+  it("parses LISTEN payloads, ignores malformed data, swallows handler errors, and stops idempotently", async () => {
+    const { client, listeners, unlisteners } = makeListenClient();
+    const notifier = createNotifier(client as never);
+    const config = vi.fn();
+    const sessionState = vi.fn();
+    const sessionEvent = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const sessionEventSecond = vi.fn();
+    const runtimeState = vi.fn();
+    const sessionRuntime = vi.fn();
+    const chatMessage = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const chatAudience = vi.fn();
+    const chatUpdated = vi.fn();
+    const agentRoute = vi.fn();
+
+    notifier.onConfigChange(config);
+    notifier.onSessionStateChange(sessionState);
+    notifier.onSessionEvent(sessionEvent);
+    notifier.onSessionEvent(sessionEventSecond);
+    notifier.onRuntimeStateChange(runtimeState);
+    notifier.onSessionRuntime(sessionRuntime);
+    notifier.onChatMessage(chatMessage);
+    notifier.onChatAudience(chatAudience);
+    notifier.onChatUpdated(chatUpdated);
+    notifier.onAgentRouteChange(agentRoute);
+    await notifier.start();
+
+    listeners.get("config_changes")?.("agent");
+    listeners.get("config_changes")?.("");
+    listeners.get("session_state_changes")?.("agent_1:chat_1:active:org_1");
+    listeners.get("session_state_changes")?.("bad");
+    listeners.get("session_event_changes")?.("agent_1:chat_1:tool_call:org_1");
+    listeners.get("session_runtime_changes")?.("agent_1:chat_1:working:org_1");
+    listeners.get("runtime_state_changes")?.("agent_1:idle:org_1");
+    listeners.get("runtime_state_changes")?.("bad");
+    listeners.get("chat_message_events")?.("chat_1:msg_1");
+    listeners.get("chat_message_events")?.("bad");
+    listeners.get("chat_audience_events")?.("chat_1");
+    listeners.get("chat_updated_events")?.("chat_1");
+    listeners.get("agent_route_events")?.(
+      JSON.stringify({
+        agentId: "agent_1",
+        agentType: "codex",
+        displayName: "Agent",
+        name: "agent",
+        oldClientId: null,
+        reason: "switch",
+        runtimeProvider: "codex",
+        targetClientId: "client_1",
+      }),
+    );
+    listeners.get("agent_route_events")?.("{not json");
+    listeners.get("agent_route_events")?.(JSON.stringify({ agentId: "agent_1" }));
+
+    expect(config).toHaveBeenCalledWith("agent");
+    expect(sessionState).toHaveBeenCalledWith({
+      agentId: "agent_1",
+      chatId: "chat_1",
+      organizationId: "org_1",
+      state: "active",
+    });
+    expect(sessionEventSecond).toHaveBeenCalledWith({
+      agentId: "agent_1",
+      chatId: "chat_1",
+      kind: "tool_call",
+      organizationId: "org_1",
+    });
+    expect(sessionRuntime).toHaveBeenCalledWith({
+      agentId: "agent_1",
+      chatId: "chat_1",
+      organizationId: "org_1",
+      state: "working",
+    });
+    expect(runtimeState).toHaveBeenCalledWith({ agentId: "agent_1", organizationId: "org_1", state: "idle" });
+    expect(chatMessage).toHaveBeenCalledWith({ chatId: "chat_1", messageId: "msg_1" });
+    expect(chatAudience).toHaveBeenCalledWith({ chatId: "chat_1" });
+    expect(chatUpdated).toHaveBeenCalledWith({ chatId: "chat_1" });
+    expect(agentRoute).toHaveBeenCalledWith({
+      agentId: "agent_1",
+      agentType: "codex",
+      displayName: "Agent",
+      name: "agent",
+      oldClientId: null,
+      reason: "switch",
+      runtimeProvider: "codex",
+      targetClientId: "client_1",
+    });
+
+    await notifier.stop();
+    await notifier.stop();
+    expect(unlisteners).toHaveLength(10);
+    for (const unlisten of unlisteners) {
+      expect(unlisten).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("notifies recipient inboxes without awaiting individual failures", async () => {
+    const notifier = {
+      notify: vi.fn((inboxId: string) => (inboxId === "bad" ? Promise.reject(new Error("boom")) : Promise.resolve())),
+    };
+
+    notifyRecipients(notifier as never, ["ok", "bad"], "msg_1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notifier.notify).toHaveBeenCalledWith("ok", "msg_1");
+    expect(notifier.notify).toHaveBeenCalledWith("bad", "msg_1");
+  });
+});
