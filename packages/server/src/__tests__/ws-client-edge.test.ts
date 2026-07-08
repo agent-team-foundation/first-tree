@@ -11,6 +11,7 @@ import * as activityService from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import * as agentRuntimeSessionService from "../services/agent-runtime-session.js";
 import * as clientService from "../services/client.js";
+import * as connectionManager from "../services/connection-manager.js";
 import * as inboxService from "../services/inbox.js";
 import * as notificationService from "../services/notification.js";
 import * as presenceService from "../services/presence.js";
@@ -503,6 +504,80 @@ describe("Agent client WS edge protocol coverage", () => {
     }
   }, 15000);
 
+  it("rejects bind when the active client socket changes during binding", async () => {
+    const seed = await createAdminContext(app, {
+      username: `ws-bind-active-drift-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const agent = await createPinnedAgent({ ...seed, suffix: "active-drift" });
+    const ws = await openRegisteredSocket(seed);
+    const activeSpy = vi.spyOn(connectionManager, "isActiveClientConnection");
+
+    try {
+      activeSpy.mockReturnValueOnce(false);
+      await expect(bindAgent(ws, agent.uuid, "bind-active-drift-before-session")).resolves.toMatchObject({
+        type: "agent:bind:rejected",
+        ref: "bind-active-drift-before-session",
+        reason: AGENT_BIND_REJECT_REASONS.WRONG_CLIENT,
+      });
+
+      activeSpy.mockReturnValueOnce(true).mockReturnValueOnce(false);
+      await expect(bindAgent(ws, agent.uuid, "bind-active-drift-after-presence")).resolves.toMatchObject({
+        type: "agent:bind:rejected",
+        ref: "bind-active-drift-after-presence",
+        reason: AGENT_BIND_REJECT_REASONS.WRONG_CLIENT,
+      });
+    } finally {
+      await closeSocket(ws);
+      activeSpy.mockRestore();
+    }
+  }, 15000);
+
+  it("logs bind recovery reset outcomes and ignores stale unbinds after route drift", async () => {
+    const seed = await createAdminContext(app, { username: `ws-bind-reset-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createPinnedAgent({ ...seed, suffix: "reset" });
+    const ws = await openRegisteredSocket(seed);
+    const resetSpy = vi.spyOn(inboxService, "resetDeliveredForInboxes").mockResolvedValueOnce(1);
+
+    try {
+      await expect(bindAgent(ws, agent.uuid, "bind-reset-count")).resolves.toMatchObject({
+        type: "agent:bound",
+        ref: "bind-reset-count",
+        agentId: agent.uuid,
+      });
+      expect(resetSpy).toHaveBeenCalledWith(app.db, [agent.inboxId]);
+
+      const otherClientId = await seedClient(app, seed.userId, seed.organizationId);
+      await app.db.update(agents).set({ clientId: otherClientId }).where(eq(agents.uuid, agent.uuid));
+      ws.send(JSON.stringify({ type: "agent:unbind", agentId: agent.uuid }));
+      await expect(
+        waitForFrame(ws, (message) => (message as { type?: string }).type === "agent:unbound"),
+      ).resolves.toMatchObject({ type: "agent:unbound", agentId: agent.uuid });
+    } finally {
+      await closeSocket(ws);
+      resetSpy.mockRestore();
+    }
+
+    const errorSeed = await createAdminContext(app, {
+      username: `ws-bind-reset-error-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const errorAgent = await createPinnedAgent({ ...errorSeed, suffix: "reset-error" });
+    const errorWs = await openRegisteredSocket(errorSeed);
+    const resetErrorSpy = vi
+      .spyOn(inboxService, "resetDeliveredForInboxes")
+      .mockRejectedValueOnce(new Error("reset failed"));
+    try {
+      await expect(bindAgent(errorWs, errorAgent.uuid, "bind-reset-error")).resolves.toMatchObject({
+        type: "agent:bound",
+        ref: "bind-reset-error",
+        agentId: errorAgent.uuid,
+      });
+      expect(resetErrorSpy).toHaveBeenCalledWith(app.db, [errorAgent.inboxId]);
+    } finally {
+      await closeSocket(errorWs);
+      resetErrorSpy.mockRestore();
+    }
+  }, 20000);
+
   it("handles bound session, runtime, inbox, recover, and heartbeat edge frames", async () => {
     const seed = await createAdminContext(app, { username: `ws-bound-edges-${crypto.randomUUID().slice(0, 8)}` });
     const agent = await createPinnedAgent({ ...seed, suffix: "bound-edges" });
@@ -572,6 +647,18 @@ describe("Agent client WS edge protocol coverage", () => {
       });
       expect(runtimeSpy).toHaveBeenCalled();
 
+      ws.send(
+        JSON.stringify({
+          type: "session:runtime",
+          agentId: uuidv7(),
+          chatId: "chat-runtime-unbound",
+          runtimeState: "working",
+        }),
+      );
+      await expect(
+        waitForFrame(ws, (message) => (message as { message?: string }).message === "Agent not bound"),
+      ).resolves.toMatchObject({ type: "error", message: "Agent not bound" });
+
       ws.send(JSON.stringify({ type: "session:reconcile", agentId: agent.uuid }));
       await expect(
         waitForFrame(
@@ -589,6 +676,11 @@ describe("Agent client WS edge protocol coverage", () => {
         staleChatIds: [],
       });
 
+      ws.send(JSON.stringify({ type: "session:reconcile", agentId: uuidv7(), chatIds: ["chat-reconcile-unbound"] }));
+      await expect(
+        waitForFrame(ws, (message) => (message as { message?: string }).message === "Agent not bound"),
+      ).resolves.toMatchObject({ type: "error", message: "Agent not bound" });
+
       const notifySpy = vi.spyOn(notificationService, "notifyAgentEvent").mockResolvedValue(undefined);
       const resolvedSpy = vi.spyOn(notificationService, "markAgentFaultsResolved").mockResolvedValue(undefined);
       ws.send(JSON.stringify({ type: "runtime:state", agentId: agent.uuid, runtimeState: "error" }));
@@ -603,6 +695,11 @@ describe("Agent client WS edge protocol coverage", () => {
       expect(notifySpy).toHaveBeenCalledWith(app.db, agent.uuid, "agent_error", "high");
       expect(notifySpy).toHaveBeenCalledWith(app.db, agent.uuid, "agent_blocked", "medium");
       expect(resolvedSpy).toHaveBeenCalledWith(app.db, agent.uuid);
+
+      ws.send(JSON.stringify({ type: "runtime:state", agentId: uuidv7(), runtimeState: "idle" }));
+      await expect(
+        waitForFrame(ws, (message) => (message as { message?: string }).message === "Agent not bound"),
+      ).resolves.toMatchObject({ type: "error", message: "Agent not bound" });
 
       ws.send(
         JSON.stringify({
@@ -645,6 +742,30 @@ describe("Agent client WS edge protocol coverage", () => {
         chatId: "chat-event",
         reason: "malformed",
       });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: agent.uuid,
+          chatId: "chat-event",
+          event: { kind: "unknown", payload: {} },
+        }),
+      );
+      await expect(
+        waitForFrame(ws, (message) => (message as { message?: string }).message === "Malformed session:event frame"),
+      ).resolves.toMatchObject({ type: "error", message: "Malformed session:event frame" });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: uuidv7(),
+          chatId: "chat-event",
+          event: { kind: "thinking", payload: {} },
+        }),
+      );
+      await expect(
+        waitForFrame(ws, (message) => (message as { message?: string }).message === "Agent not bound"),
+      ).resolves.toMatchObject({ type: "error", message: "Agent not bound" });
 
       const eventSpy = vi
         .spyOn(sessionEventService, "appendEvent")
