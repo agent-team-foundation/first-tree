@@ -1,7 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentRuntimeConfig, SessionEvent } from "@first-tree/shared";
+import {
+  type AgentRuntimeConfig,
+  encodeProviderRetryEventMessage,
+  RUNTIME_NOTICE_METADATA_KEY,
+  type SessionEvent,
+} from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
@@ -92,6 +97,53 @@ async function finishEntry(
     },
     { status: "success", terminal: true },
   );
+}
+
+function emitCodexTerminalProviderFailure(ctx: SessionContext, messagePreview: string): void {
+  ctx.emitEvent({
+    kind: "error",
+    payload: {
+      source: "runtime",
+      message: encodeProviderRetryEventMessage({
+        event: "provider_failure_terminal",
+        provider: "codex",
+        scope: "provider_turn",
+        category: "credential",
+        reasonCode: "provider_credential_required",
+        replaySafety: "provider_entered",
+        userSeverity: "error",
+        messagePreview,
+      }),
+    },
+  });
+}
+
+function emitClaudeProviderFailure(
+  ctx: SessionContext,
+  input: {
+    event?: "provider_failure_terminal" | "provider_retry_exhausted";
+    category: "credential" | "provider_capacity" | "transient_transport";
+    reasonCode: string;
+    messagePreview: string;
+    userSeverity?: "info" | "warning" | "error";
+  },
+): void {
+  ctx.emitEvent({
+    kind: "error",
+    payload: {
+      source: "runtime",
+      message: encodeProviderRetryEventMessage({
+        event: input.event ?? "provider_failure_terminal",
+        provider: "claude-code",
+        scope: "provider_turn",
+        category: input.category,
+        reasonCode: input.reasonCode,
+        replaySafety: "provider_entered",
+        userSeverity: input.userSeverity ?? "error",
+        messagePreview: input.messagePreview,
+      }),
+    },
+  });
 }
 
 function createSessionManager(opts: {
@@ -1854,6 +1906,347 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     expect(ackEntry).toHaveBeenCalledTimes(1);
     expect(ackEntry).toHaveBeenCalledWith(19);
     expect(recoverChat).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("posts a durable runtime notice before ACKing a terminal provider failure", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ id: "runtime-notice" });
+    const sdk = {
+      register: vi.fn(),
+      sendMessage,
+      sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    } as unknown as FirstTreeHubSDK;
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      sdk,
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
+    });
+
+    await sm.dispatch(mockEntry({ id: 21, chatId: "chat-provider-terminal", messageId: "msg-provider-terminal" }));
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery was not captured");
+
+    emitCodexTerminalProviderFailure(
+      capturedCtx,
+      "Your access token could not be refreshed because your refresh token was revoked.",
+    );
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_credential_required",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "chat-provider-terminal",
+      expect.objectContaining({
+        source: "api",
+        format: "text",
+        metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
+        purpose: "agent-final-text",
+      }),
+    );
+    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(notice).toContain("Codex could not run this turn");
+    expect(notice).toContain("credentials need attention");
+    expect(notice).toContain("refresh token was revoked");
+    expect(ackEntry).toHaveBeenCalledWith(21);
+    const [noticeOrder] = sendMessage.mock.invocationCallOrder;
+    const [ackOrder] = ackEntry.mock.invocationCallOrder;
+    if (noticeOrder === undefined || ackOrder === undefined) throw new Error("expected notice and ack order");
+    expect(noticeOrder).toBeLessThan(ackOrder);
+
+    await sm.shutdown();
+  });
+
+  it("posts a durable runtime notice for Claude provider-turn terminal failures", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ id: "runtime-notice" });
+    const sdk = {
+      register: vi.fn(),
+      sendMessage,
+      sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    } as unknown as FirstTreeHubSDK;
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      sdk,
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "claude-code" },
+    });
+
+    await sm.dispatch(mockEntry({ id: 24, chatId: "chat-claude-terminal", messageId: "msg-claude-terminal" }));
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery was not captured");
+
+    emitClaudeProviderFailure(capturedCtx, {
+      category: "credential",
+      reasonCode: "provider_credential_required",
+      messagePreview: "Failed to authenticate. API Error: 403 Request not allowed",
+    });
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_credential_required",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(notice).toContain("Claude Code could not run this turn");
+    expect(notice).toContain("before authentication");
+    expect(notice).toContain("daemon.env");
+    expect(notice).not.toContain("rejected the local Claude authentication");
+    expect(ackEntry).toHaveBeenCalledWith(24);
+    const [noticeOrder] = sendMessage.mock.invocationCallOrder;
+    const [ackOrder] = ackEntry.mock.invocationCallOrder;
+    if (noticeOrder === undefined || ackOrder === undefined) throw new Error("expected notice and ack order");
+    expect(noticeOrder).toBeLessThan(ackOrder);
+
+    await sm.shutdown();
+  });
+
+  it("posts a durable runtime notice for Claude retry-exhausted provider-turn failures", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ id: "runtime-notice" });
+    const sdk = {
+      register: vi.fn(),
+      sendMessage,
+      sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    } as unknown as FirstTreeHubSDK;
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      sdk,
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "claude-code" },
+    });
+
+    await sm.dispatch(
+      mockEntry({ id: 25, chatId: "chat-claude-retry-exhausted", messageId: "msg-claude-retry-exhausted" }),
+    );
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery was not captured");
+
+    emitClaudeProviderFailure(capturedCtx, {
+      event: "provider_retry_exhausted",
+      category: "transient_transport",
+      reasonCode: "claude_sdk_error_exhausted",
+      messagePreview: "socket connection was closed unexpectedly",
+    });
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "retry_exhausted_notice_posted",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(notice).toContain("Anthropic connection failed after retry handling");
+    expect(notice).toContain("socket connection was closed unexpectedly");
+    expect(ackEntry).toHaveBeenCalledWith(25);
+
+    await sm.shutdown();
+  });
+
+  it("posts a durable runtime notice before ACKing Claude auto-resume failures", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ id: "runtime-notice" });
+    const sdk = {
+      register: vi.fn(),
+      sendMessage,
+      sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    } as unknown as FirstTreeHubSDK;
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      sdk,
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "claude-code" },
+    });
+
+    await sm.dispatch(
+      mockEntry({ id: 26, chatId: "chat-claude-auto-resume-failed", messageId: "msg-claude-auto-resume-failed" }),
+    );
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery was not captured");
+
+    emitClaudeProviderFailure(capturedCtx, {
+      category: "transient_transport",
+      reasonCode: "claude_auto_resume_failed",
+      messagePreview: "initial sdk transport crash\nAuto-resume failed: respawn build failed: sdk module unavailable",
+    });
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "auto_resume_failed_notice_posted",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(notice).toContain("Anthropic connection failed after retry handling");
+    expect(notice).toContain("initial sdk transport crash");
+    expect(notice).toContain("respawn build failed");
+    expect(ackEntry).toHaveBeenCalledWith(26);
+    const [noticeOrder] = sendMessage.mock.invocationCallOrder;
+    const [ackOrder] = ackEntry.mock.invocationCallOrder;
+    if (noticeOrder === undefined || ackOrder === undefined) throw new Error("expected notice and ack order");
+    expect(noticeOrder).toBeLessThan(ackOrder);
+
+    await sm.shutdown();
+  });
+
+  it("does not ACK a terminal provider failure when the durable runtime notice cannot be posted", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockRejectedValue(new Error("send failed"));
+    const sdk = {
+      register: vi.fn(),
+      sendMessage,
+      sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    } as unknown as FirstTreeHubSDK;
+    const emitted: SessionEvent[] = [];
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      recoverChat,
+      sdk,
+      onSessionEvent: (_chatId, event) => emitted.push(event),
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
+    });
+
+    await sm.dispatch(
+      mockEntry({ id: 22, chatId: "chat-provider-notice-fail", messageId: "msg-provider-notice-fail" }),
+    );
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery was not captured");
+
+    emitCodexTerminalProviderFailure(capturedCtx, "revoked refresh token");
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_credential_required",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(recoverChat).toHaveBeenCalledWith("chat-provider-notice-fail");
+    expect(
+      emitted.some(
+        (event) =>
+          event.kind === "error" &&
+          event.payload.source === "runtime" &&
+          event.payload.message.includes("runtime failure notice delivery failed"),
+      ),
+    ).toBe(true);
+    sendMessage.mockReset();
+    sendMessage.mockResolvedValue({ id: "later-runtime-notice" });
+    await capturedCtx.finishTurn(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "forward_failed",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("clears stale terminal provider notices when the delivery is retried instead of consumed", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ id: "runtime-notice" });
+    const sdk = {
+      register: vi.fn(),
+      sendMessage,
+      sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    } as unknown as FirstTreeHubSDK;
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      sdk,
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
+    });
+
+    await sm.dispatch(mockEntry({ id: 23, chatId: "chat-provider-retry", messageId: "msg-provider-retry" }));
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery was not captured");
+
+    emitCodexTerminalProviderFailure(capturedCtx, "pre-provider retry exhausted");
+    capturedToken.retry(capturedMessage, "provider_retry_exhausted_pre_provider");
+
+    await capturedCtx.finishTurn(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "forward_failed",
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(ackEntry).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });

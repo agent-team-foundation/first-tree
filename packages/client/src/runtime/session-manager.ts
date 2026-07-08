@@ -4,6 +4,7 @@ import type {
   AgentRuntimeConfigPayload,
   GitRepo,
   InboxEntryWithMessage,
+  ProviderRetryEventPayload,
   RuntimeProvider,
   RuntimeState,
   SessionEvent,
@@ -14,6 +15,7 @@ import {
   encodeProviderRetryEventMessage,
   isImageBatchRefContent,
   isImageRefContent,
+  parseProviderRetryEventMessage,
   runtimeProviderSchema,
   SOURCE_REPOS_DIRNAME,
 } from "@first-tree/shared";
@@ -56,6 +58,7 @@ import {
 } from "./provider-retry-policy.js";
 import { redactErrorPreview } from "./redact-error-preview.js";
 import { createResultSink, type Trigger } from "./result-sink.js";
+import { postProviderFailureRuntimeNotice, shouldPostProviderFailureRuntimeNotice } from "./runtime-notice.js";
 import { SessionRegistry } from "./session-registry.js";
 
 type SessionEntry = {
@@ -101,6 +104,16 @@ type SessionEntry = {
    * injects these only after the handler is live again.
    */
   retryQueuedMessages: SessionMessage[];
+  /**
+   * Latest terminal, user-actionable provider failure observed on the session
+   * event channel. Posting the durable chat notice at the delivery-settlement
+   * boundary keeps the policy centralized: handlers classify and emit
+   * `provider.retry`, while SessionManager decides whether ACK may consume the
+   * user's inbox entry. Non-consuming delivery paths clear this cache so a
+   * provider failure from one delivery cannot be posted as evidence for a later
+   * delivery on the same session.
+   */
+  pendingRuntimeFailureNotice: ProviderRetryEventPayload | null;
   /**
    * When we entered transient-retry mode this is set to the evicted mapping
    * captured at startNewSession time. Lets a retry re-use the same resume
@@ -590,14 +603,14 @@ export class SessionManager {
         const deliveryKind: SlotDeliveryKind = isRecoveryRedelivery ? "recovery" : "fresh";
         routePromise = this.routeMessage(chatId, message, deliveryKind).catch((err) => {
           if (this.inboxDelivery.hasEntry(work)) {
-            this.inboxDelivery.retryTurn(chatId, message, "route_message_failed");
+            this.retryDeliveryTurn(chatId, message, "route_message_failed");
           }
           throw err;
         });
       });
     } catch (err) {
       if (this.inboxDelivery.hasEntry(work)) {
-        this.inboxDelivery.retryTurn(chatId, message, "admission_failed");
+        this.retryDeliveryTurn(chatId, message, "admission_failed");
       }
       throw err;
     }
@@ -893,6 +906,60 @@ export class SessionManager {
     return parsed.success ? parsed.data : "claude-code";
   }
 
+  private captureRuntimeFailureNotice(chatId: string, event: SessionEvent): void {
+    if (event.kind !== "error") return;
+    const payload = parseProviderRetryEventMessage(event.payload.message);
+    if (!payload || !shouldPostProviderFailureRuntimeNotice(payload)) return;
+
+    const entry = this.sessions.get(chatId);
+    if (!entry) return;
+    entry.pendingRuntimeFailureNotice = payload;
+  }
+
+  private clearPendingRuntimeFailureNotice(chatId: string): void {
+    const entry = this.sessions.get(chatId);
+    if (entry) entry.pendingRuntimeFailureNotice = null;
+  }
+
+  private retryDeliveryTurn(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    reason: string,
+  ): void {
+    this.clearPendingRuntimeFailureNotice(chatId);
+    this.inboxDelivery.retryTurn(chatId, messages, reason);
+  }
+
+  private emitRuntimeFailureNoticeDeliveryFailure(chatId: string, err: unknown): void {
+    try {
+      this.config.onSessionEvent?.(chatId, {
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message: `runtime failure notice delivery failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      });
+    } catch (emitErr) {
+      this.config.log.warn({ chatId, emitErr }, "runtime failure notice delivery error event emit failed");
+    }
+  }
+
+  private async postPendingRuntimeFailureNotice(chatId: string): Promise<boolean> {
+    const entry = this.sessions.get(chatId);
+    const payload = entry?.pendingRuntimeFailureNotice;
+    if (!entry || !payload) return true;
+
+    try {
+      await postProviderFailureRuntimeNotice(this.config.sdk, chatId, payload);
+      entry.pendingRuntimeFailureNotice = null;
+      return true;
+    } catch (err) {
+      this.config.log.warn({ chatId, err, reasonCode: payload.reasonCode }, "runtime failure notice delivery failed");
+      this.emitRuntimeFailureNoticeDeliveryFailure(chatId, err);
+      return false;
+    }
+  }
+
   private retryClassificationForEntry(entry: SessionEntry): ProviderFailureClassification {
     return {
       category: entry.lastRetryCategory ?? "unknown",
@@ -983,9 +1050,19 @@ export class SessionManager {
     const retryReason = this.errorCompletionRetryReason(outcome);
     if (retryReason) {
       this.warnRejectedErrorCompletion(chatId, outcome, retryReason);
-      this.inboxDelivery.retryTurn(chatId, messages, retryReason);
+      this.retryDeliveryTurn(chatId, messages, retryReason);
       this.projectSessionRuntime(chatId);
       return;
+    }
+    if (outcome.status === "success") {
+      this.clearPendingRuntimeFailureNotice(chatId);
+    } else if (outcome.completion === "consumed") {
+      const noticePosted = await this.postPendingRuntimeFailureNotice(chatId);
+      if (!noticePosted) {
+        this.retryDeliveryTurn(chatId, messages, "runtime_failure_notice_delivery_failed");
+        this.projectSessionRuntime(chatId);
+        return;
+      }
     }
     await this.inboxDelivery.finishTurn(chatId, messages, outcome);
     this.projectSessionRuntime(chatId);
@@ -1013,11 +1090,17 @@ export class SessionManager {
       },
       retry: (messages, reason) => {
         if (!claimTerminal("retry")) return;
-        this.inboxDelivery.retryTurn(chatId, messages, reason);
+        this.retryDeliveryTurn(chatId, messages, reason);
         this.projectSessionRuntime(chatId);
       },
       terminalRejected: async (messages, reason, evidence) => {
         if (!claimTerminal("terminalRejected")) return;
+        const noticePosted = await this.postPendingRuntimeFailureNotice(chatId);
+        if (!noticePosted) {
+          this.retryDeliveryTurn(chatId, messages, "runtime_failure_notice_delivery_failed");
+          this.projectSessionRuntime(chatId);
+          return;
+        }
         await this.inboxDelivery.terminalRejected(chatId, messages, reason, evidence);
         this.projectSessionRuntime(chatId);
       },
@@ -1034,7 +1117,7 @@ export class SessionManager {
         { chatId, messageId: message.id, entryId: message.inboxEntryId, reason: receipt.reason },
         "handler rejected inbox delivery before custody",
       );
-      this.inboxDelivery.retryTurn(chatId, message, `handler_rejected:${receipt.reason}`);
+      this.retryDeliveryTurn(chatId, message, `handler_rejected:${receipt.reason}`);
       return "lost";
     }
     if (message.inboxEntryId === undefined) return "owned";
@@ -1174,6 +1257,7 @@ export class SessionManager {
       lastRetryRawError: null,
       startMessage: message,
       retryQueuedMessages: [],
+      pendingRuntimeFailureNotice: null,
       retryFromEvicted: evicted ?? null,
     };
 
@@ -1453,6 +1537,7 @@ export class SessionManager {
     if (this.config.confirmSessionEvent) {
       try {
         await this.config.confirmSessionEvent(chatId, event);
+        this.captureRuntimeFailureNotice(chatId, event);
         return true;
       } catch (emitErr) {
         this.config.log.warn({ chatId, emitErr }, "confirmed session event emit failed");
@@ -1461,6 +1546,7 @@ export class SessionManager {
     }
     try {
       this.config.onSessionEvent?.(chatId, event);
+      this.captureRuntimeFailureNotice(chatId, event);
     } catch (emitErr) {
       this.config.log.warn({ chatId, emitErr }, "session error event emit failed");
     }
@@ -1479,7 +1565,7 @@ export class SessionManager {
         status: "error",
         terminal: true,
         completion: "consumed",
-        reason: `session_failure_notice_posted:${handling.reasonCode}`,
+        reason: `session_failure_terminal:${handling.reasonCode}`,
       });
     } else {
       await this.inboxDelivery.drainForTerminate(chatId);
@@ -1698,7 +1784,7 @@ export class SessionManager {
         entry.lastActivity = Date.now();
       } catch (err) {
         this.config.log.warn({ chatId: entry.chatId, messageId: message.id, err }, "retry queued inject failed");
-        this.inboxDelivery.retryTurn(entry.chatId, message, "retry_queued_inject_failed");
+        this.retryDeliveryTurn(entry.chatId, message, "retry_queued_inject_failed");
         break;
       }
     }
@@ -1902,7 +1988,7 @@ export class SessionManager {
         const hasInboxEntryId = next.message?.inboxEntryId !== undefined;
         this.config.log.warn({ chatId: next.chatId, hasInboxEntryId, err }, "pending drain error");
         if (next.message && hasInboxEntryId) {
-          this.inboxDelivery.retryTurn(next.chatId, next.message, "pending_drain_failed");
+          this.retryDeliveryTurn(next.chatId, next.message, "pending_drain_failed");
         } else {
           this.pendingQueue.unshift(next);
         }
@@ -1936,7 +2022,7 @@ export class SessionManager {
       const hasInboxEntryId = message.inboxEntryId !== undefined;
       this.config.log.warn({ chatId: next.chatId, hasInboxEntryId, err }, "pending drain error");
       if (hasInboxEntryId) {
-        this.inboxDelivery.retryTurn(next.chatId, message, "pending_drain_failed");
+        this.retryDeliveryTurn(next.chatId, message, "pending_drain_failed");
       } else {
         this.pendingQueue.unshift(next);
       }
@@ -2197,6 +2283,7 @@ export class SessionManager {
       },
       emitEvent: (event) => {
         this.config.onSessionEvent?.(chatId, event);
+        this.captureRuntimeFailureNotice(chatId, event);
       },
       emitEventConfirmed: (event) => this.confirmSessionEventOrThrow(chatId, event),
       forwardResult,
@@ -2207,7 +2294,7 @@ export class SessionManager {
         return this.completeDeliveryTurn(chatId, messages, outcome);
       },
       retryTurn: (messages, reason) => {
-        this.inboxDelivery.retryTurn(chatId, messages, reason);
+        this.retryDeliveryTurn(chatId, messages, reason);
         this.projectSessionRuntime(chatId);
       },
       failSessionForRecovery: (reason, sessionId) => {
@@ -2235,6 +2322,7 @@ export class SessionManager {
       throw new Error("confirmed session event channel unavailable");
     }
     await this.config.confirmSessionEvent(chatId, event);
+    this.captureRuntimeFailureNotice(chatId, event);
   }
 
   private async resolveSelfFence(log: (msg: string) => void, chatId: string): Promise<SelfFence> {

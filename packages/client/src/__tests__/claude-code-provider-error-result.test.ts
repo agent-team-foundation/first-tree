@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderRetryEventMessage, RUNTIME_NOTICE_METADATA_KEY, type SessionEvent } from "@first-tree/shared";
+import { type ProviderRetryEventPayload, parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const BILLING_RESULT = "Failed to authenticate. API Error: 403 Insufficient account balance.";
@@ -56,6 +56,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext, TurnOutcome } from "../runtime/handler.js";
+import { formatProviderFailureRuntimeNotice } from "../runtime/runtime-notice.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019ef431-0000-7000-9000-000000000002";
@@ -81,6 +82,19 @@ function buildCache() {
     }),
   } as unknown as Parameters<typeof createAgentConfigCache>[0]["sdk"];
   return createAgentConfigCache({ sdk: stubSdk });
+}
+
+function providerRetryPayloads(emitted: readonly SessionEvent[]): ProviderRetryEventPayload[] {
+  return emitted
+    .filter((event) => event.kind === "error")
+    .map((event) => parseProviderRetryEventMessage(event.payload.message))
+    .filter((payload): payload is ProviderRetryEventPayload => payload !== null);
+}
+
+function firstProviderPayload(payloads: readonly ProviderRetryEventPayload[]): ProviderRetryEventPayload {
+  const payload = payloads[0];
+  if (!payload) throw new Error("expected provider retry event");
+  return payload;
 }
 
 async function runSingleResultTurn() {
@@ -136,7 +150,7 @@ async function runSingleResultTurn() {
 }
 
 describe("claude-code handler — structured provider error result", () => {
-  it("posts a runtime notice and consumes a billing failure instead of forwarding final text", async () => {
+  it("emits a provider failure and consumes a billing failure instead of forwarding final text", async () => {
     mockState.nextMessages = [
       {
         type: "result",
@@ -149,20 +163,10 @@ describe("claude-code handler — structured provider error result", () => {
     const { sendMessage, forwardResult, emitted, completed, logs } = await runSingleResultTurn();
 
     expect(forwardResult).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
-      source: "api",
-      format: "text",
-      metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
-      purpose: "agent-final-text",
-    });
-    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("insufficient account balance");
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(logs.some((line) => line.includes("Claude SDK provider failure"))).toBe(true);
 
-    const providerPayloads = emitted
-      .filter((event) => event.kind === "error")
-      .map((event) => parseProviderRetryEventMessage(event.payload.message))
-      .filter((payload) => payload !== null);
+    const providerPayloads = providerRetryPayloads(emitted);
     expect(providerPayloads).toHaveLength(1);
     expect(providerPayloads[0]).toMatchObject({
       event: "provider_failure_terminal",
@@ -172,6 +176,9 @@ describe("claude-code handler — structured provider error result", () => {
       reasonCode: "provider_billing_limit",
       userSeverity: "error",
     });
+    expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain(
+      "insufficient account balance",
+    );
 
     expect(
       emitted.some(
@@ -208,13 +215,9 @@ describe("claude-code handler — structured provider error result", () => {
     const { sendMessage, forwardResult, emitted, completed } = await runSingleResultTurn();
 
     expect(forwardResult).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("`claude auth login`");
+    expect(sendMessage).not.toHaveBeenCalled();
 
-    const providerPayloads = emitted
-      .filter((event) => event.kind === "error")
-      .map((event) => parseProviderRetryEventMessage(event.payload.message))
-      .filter((payload) => payload !== null);
+    const providerPayloads = providerRetryPayloads(emitted);
     expect(providerPayloads[0]).toMatchObject({
       event: "provider_failure_terminal",
       provider: "claude-code",
@@ -223,6 +226,7 @@ describe("claude-code handler — structured provider error result", () => {
       reasonCode: "provider_credential_required",
       userSeverity: "error",
     });
+    expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain("`claude auth login`");
     expect(completed[0]?.outcome).toMatchObject({
       status: "error",
       terminal: true,
@@ -251,13 +255,10 @@ describe("claude-code handler — structured provider error result", () => {
 
     expect(mockState.queryCalls).toBe(1);
     expect(forwardResult).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(emitted.some((event) => event.kind === "assistant_text")).toBe(true);
 
-    const providerPayloads = emitted
-      .filter((event) => event.kind === "error")
-      .map((event) => parseProviderRetryEventMessage(event.payload.message))
-      .filter((payload) => payload !== null);
+    const providerPayloads = providerRetryPayloads(emitted);
     expect(providerPayloads[0]).toMatchObject({
       event: "provider_failure_terminal",
       provider: "claude-code",
@@ -266,6 +267,9 @@ describe("claude-code handler — structured provider error result", () => {
       reasonCode: "unsafe_replay",
       replaySafety: "user_visible",
     });
+    expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain(
+      "Anthropic connection failed after retry handling",
+    );
     expect(completed[0]?.outcome).toMatchObject({
       status: "error",
       terminal: true,
@@ -291,15 +295,12 @@ describe("claude-code handler — structured provider error result", () => {
     const { sendMessage, forwardResult, emitted, completed } = await runSingleResultTurn();
 
     expect(forwardResult).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    const providerPayloads = providerRetryPayloads(emitted);
+    const notice = formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads));
     expect(notice).toContain("insufficient account balance");
     expect(notice).not.toContain("`claude auth login`");
-
-    const providerPayloads = emitted
-      .filter((event) => event.kind === "error")
-      .map((event) => parseProviderRetryEventMessage(event.payload.message))
-      .filter((payload) => payload !== null);
     expect(providerPayloads[0]).toMatchObject({
       event: "provider_failure_terminal",
       provider: "claude-code",
@@ -333,7 +334,9 @@ describe("claude-code handler — structured provider error result", () => {
     ];
     const { sendMessage, emitted } = await runSingleResultTurn();
 
-    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(sendMessage).not.toHaveBeenCalled();
+    const providerPayloads = providerRetryPayloads(emitted);
+    const notice = formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads));
     expect(notice).toContain("before authentication");
     expect(notice).toContain("daemon.env");
     expect(notice).not.toContain("rejected the local Claude authentication");
@@ -361,9 +364,11 @@ describe("claude-code handler — structured provider error result", () => {
         result: "Failed to authenticate. API Error: 403 Request not allowed",
       },
     ];
-    const { sendMessage } = await runSingleResultTurn();
+    const { sendMessage, emitted } = await runSingleResultTurn();
 
-    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(sendMessage).not.toHaveBeenCalled();
+    const providerPayloads = providerRetryPayloads(emitted);
+    const notice = formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads));
     expect(notice).toContain("before authentication");
     expect(notice).not.toContain("rejected the local Claude authentication");
   });

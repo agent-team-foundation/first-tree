@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
+import { type ProviderRetryEventPayload, parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -23,13 +23,20 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // into its retry-catch). respawnQuery's next query() call throws
 // SYNCHRONOUSLY, triggering the auto-resume-failed branch.
 const SECOND_PROMPT = "tail prompt";
+const DEFAULT_INITIAL_CRASH_MESSAGE = "initial sdk transport crash";
+const DEFAULT_RESPAWN_FAILURE_MESSAGE = "respawn build failed: sdk module unavailable";
+const RAW_TOKEN = "sk-ant-abcdefghijklmnopqrstuvwxyz1234567890";
 let queryCallCount = 0;
+let initialCrashMessage = DEFAULT_INITIAL_CRASH_MESSAGE;
+let respawnFailureMessage = DEFAULT_RESPAWN_FAILURE_MESSAGE;
 const observedInputMessages: Array<{ attempt: number; content: string }> = [];
 const requiredInputsBeforeThrowByAttempt = new Map<number, number>();
 const throwReleaseGates = new Map<number, Promise<void>>();
 
 function resetSdkMockState(): void {
   queryCallCount = 0;
+  initialCrashMessage = DEFAULT_INITIAL_CRASH_MESSAGE;
+  respawnFailureMessage = DEFAULT_RESPAWN_FAILURE_MESSAGE;
   observedInputMessages.length = 0;
   requiredInputsBeforeThrowByAttempt.clear();
   throwReleaseGates.clear();
@@ -73,7 +80,7 @@ function makeFailingQuery(promptIterable: AsyncIterable<{ message: { content: un
         next: async () => {
           await waitForObservedInputs(attempt, requiredInputsForAttempt(attempt));
           await throwReleaseGates.get(attempt);
-          throw new Error("initial sdk transport crash");
+          throw new Error(initialCrashMessage);
         },
       };
     },
@@ -90,7 +97,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
         // Synchronous throw — buildQuery has no try/catch around the `query()`
         // call, so this surfaces as a throw out of respawnQuery and lands in
         // the auto-resume-failed catch.
-        throw new Error("respawn build failed: sdk module unavailable");
+        throw new Error(respawnFailureMessage);
       }
       return makeFailingQuery(args.prompt, queryCallCount);
     },
@@ -125,6 +132,13 @@ function buildCache() {
     }),
   } as unknown as Parameters<typeof createAgentConfigCache>[0]["sdk"];
   return createAgentConfigCache({ sdk: stubSdk });
+}
+
+function providerRetryPayloads(emitted: readonly SessionEvent[]): ProviderRetryEventPayload[] {
+  return emitted
+    .filter((event) => event.kind === "error")
+    .map((event) => parseProviderRetryEventMessage(event.payload.message))
+    .filter((payload): payload is ProviderRetryEventPayload => payload !== null);
 }
 
 describe("claude-code handler — auto-resume failure surfacing", () => {
@@ -177,6 +191,21 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     expect(err.payload.message).toContain("Auto-resume failed");
     expect(err.payload.message).toContain("respawn build failed");
 
+    const providerPayloads = providerRetryPayloads(emitted);
+    expect(providerPayloads.map((payload) => payload.event)).toEqual([
+      "provider_retry_scheduled",
+      "provider_failure_terminal",
+    ]);
+    expect(providerPayloads[1]).toMatchObject({
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "provider_turn",
+      reasonCode: "claude_auto_resume_failed",
+      userSeverity: "error",
+    });
+    expect(providerPayloads[1]?.messagePreview).toContain("initial sdk transport crash");
+    expect(providerPayloads[1]?.messagePreview).toContain("respawn build failed");
+
     const turnEnds = emitted.filter((e) => e.kind === "turn_end");
     expect(turnEnds).toHaveLength(1);
     const te = turnEnds[0];
@@ -194,6 +223,66 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     // and the in-process Deduplicator collapses every bind-reset replay
     // (entry → server → push → dispatch dedup skip → never re-acked).
     expect(finishTurnCalled).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts and truncates auto-resume terminal provider previews", async () => {
+    resetSdkMockState();
+    initialCrashMessage = `initial sdk transport crash Authorization: Bearer ${RAW_TOKEN} ${"x".repeat(1200)}`;
+    respawnFailureMessage = `respawn build failed: sdk module unavailable api_key=${RAW_TOKEN} ${"y".repeat(1200)}`;
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const emitted: SessionEvent[] = [];
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx: SessionContext = {
+      agent: {
+        agentId: AGENT_ID,
+        inboxId: "inbox-test",
+        displayName: "test",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+      chatId: "chat-resume-fail",
+      log: () => {},
+      recordProviderActivity: () => {},
+      emitEvent: (e) => emitted.push(e),
+      ...mockCtxPlumbing({ sendMessage }, "chat-resume-fail"),
+      finishTurn: async () => {},
+    };
+
+    await handler.start(
+      { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
+      ctx,
+    );
+    await handler.suspend();
+    await new Promise((r) => setImmediate(r));
+
+    const errorMessages = emitted.filter((event) => event.kind === "error").map((event) => event.payload.message);
+    expect(errorMessages.every((message) => !message.includes(RAW_TOKEN))).toBe(true);
+    expect(errorMessages.some((message) => message.includes("[REDACTED"))).toBe(true);
+
+    const terminalPayload = providerRetryPayloads(emitted).find(
+      (payload) => payload.event === "provider_failure_terminal",
+    );
+    expect(terminalPayload).toMatchObject({
+      event: "provider_failure_terminal",
+      reasonCode: "claude_auto_resume_failed",
+      userSeverity: "error",
+    });
+    const preview = terminalPayload?.messagePreview;
+    if (!preview) throw new Error("expected terminal provider message preview");
+    // `buildProviderRetryEvent` truncates to the 256-char preview budget, then
+    // appends an ellipsis marker. The schema budget is 800, so this must parse.
+    expect(preview.length).toBeLessThanOrEqual(257);
+    expect(preview).toContain("respawn build failed");
+    expect(preview).toContain("[REDACTED");
+    expect(preview).not.toContain(RAW_TOKEN);
   });
 
   it("retries an unentered tail after auto-resume failure settles the provider-entered prefix", async () => {
@@ -276,6 +365,11 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     await new Promise((r) => setImmediate(r));
 
     expect(logs.some((l) => l.includes("Auto-resume failed: respawn build failed"))).toBe(true);
+    const providerPayloads = providerRetryPayloads(emitted);
+    expect(providerPayloads.at(-1)).toMatchObject({
+      event: "provider_failure_terminal",
+      reasonCode: "claude_auto_resume_failed",
+    });
 
     const attempt1Inputs = observedInputMessages.filter((message) => message.attempt === 1);
     expect(attempt1Inputs.map((message) => message.content)).toEqual([expect.stringContaining("hi")]);
