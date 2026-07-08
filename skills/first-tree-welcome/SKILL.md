@@ -95,13 +95,16 @@ The onboarding greeting is role-distinct, and it is your **primary role signal**
 before deciding whether to offer any admin-only setup:
 
 - **Admin** — "Please help me get started with First Tree" (a team owner
-  starting their own team). A **production-scan fix** handoff (below) is
-  likewise the repo's own owner acting on their own project → treat as admin for
-  setup-gating.
+  starting their own team). A **production-scan fix** handoff that arrives **with
+  the onboarding greeting** ("welcome aboard" + the scan-fix ask) is likewise the
+  owner onboarding their own project → treat as admin for setup-gating.
 - **Invitee / member** — "Please help me get settled into this team on First
   Tree" (joining a team someone else owns).
-- **Unclear** — anything else (free text, an unusual entry point): do not assume
-  admin; treat admin-only setup as owned by an organization admin.
+- **Unclear** — anything else: do not assume admin; treat admin-only setup as
+  owned by an organization admin. This includes a **greeting-free** production-scan
+  fix handoff (the direct quickstart fix path, which an already-onboarded
+  invitee/member can reach) — do NOT offer admin-only setup (tree build, GitHub
+  App install) there unless an actual admin signal is present.
 
 This distinction is what gates admin-only setup (building the Context Tree,
 installing the GitHub App, selecting team repos). It is deliberately the
