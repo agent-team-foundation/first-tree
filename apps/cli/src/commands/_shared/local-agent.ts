@@ -102,12 +102,25 @@ export function createSdk(agentName?: string): FirstTreeHubSDK {
 function resolveRuntimeSessionToken(): string | undefined {
   const tokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
   if (tokenFile) {
+    let token: string;
     try {
-      return readFileSync(tokenFile, "utf8").trim() || undefined;
+      token = readFileSync(tokenFile, "utf8").trim();
     } catch (err) {
-      void err;
-      return undefined;
+      const detail = err instanceof Error ? err.message : String(err);
+      fail(
+        "RUNTIME_SESSION_TOKEN_FILE_UNREADABLE",
+        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file could not be read: ${detail}`,
+        2,
+      );
     }
+    if (!token) {
+      fail(
+        "RUNTIME_SESSION_TOKEN_FILE_EMPTY",
+        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file is empty.`,
+        2,
+      );
+    }
+    return token;
   }
   return process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN?.trim() || undefined;
 }
