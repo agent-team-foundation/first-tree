@@ -8,6 +8,7 @@ import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -40,12 +41,15 @@ export type ContextReviewerPrTemplateInput = {
   htmlUrl: string;
   baseRef: string | null;
   headRef: string | null;
+  authorLogin: string;
   senderLogin: string;
   triggerEvent: string;
   isDraft: boolean | null;
   commentUrl: string | null;
   commentAuthorLogin: string | null;
   organizationId: string;
+  reviewerManagerGithubLogin: string | null;
+  reviewerManagerIsPrAuthor: boolean;
 };
 
 export type ContextReviewerPrResult =
@@ -61,7 +65,12 @@ export type ContextReviewerPrSkipReason =
   | "reviewer_agent_missing"
   | "reviewer_agent_invalid";
 
-type PullRequestPayloadInfo = ContextReviewerPrTemplateInput & {
+type ContextReviewerPrPayloadInput = Omit<
+  ContextReviewerPrTemplateInput,
+  "reviewerManagerGithubLogin" | "reviewerManagerIsPrAuthor"
+>;
+
+type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
   action: "opened" | "synchronize" | "ready_for_review" | "created" | "edited";
   entityKey: string;
@@ -77,6 +86,7 @@ type ContextReviewerPrTrigger =
 type ReviewerAgent = {
   uuid: string;
   managerHumanAgentId: string;
+  managerGithubLogin: string | null;
 };
 
 let templateCache: Promise<string> | null = null;
@@ -278,7 +288,7 @@ export async function handleContextReviewerPrEvent(
       };
     }
 
-    const prompt = await renderContextReviewerPrPrompt(info);
+    const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer));
     const { message, recipients } = await sendMessage(
       app.db,
       existingChatId,
@@ -305,7 +315,7 @@ export async function handleContextReviewerPrEvent(
     return { handled: true, chatId: existingChatId, messageId: message.id, reused: true };
   }
 
-  const prompt = await renderContextReviewerPrPrompt(info);
+  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer));
   const created = await createChat(app.db, {
     mode: "task",
     initiatorAgentId: reviewer.managerHumanAgentId,
@@ -403,6 +413,7 @@ function extractPullRequestPayloadInfo(
       prNumber,
       title,
       htmlUrl,
+      authorLogin: readUserLogin(pr) ?? senderLogin,
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       isDraft: readDraftStatus(pr),
@@ -427,6 +438,7 @@ function extractPullRequestPayloadInfo(
       prNumber,
       title,
       htmlUrl,
+      authorLogin: readUserLogin(issue) ?? senderLogin,
       baseRef: null,
       headRef: null,
       isDraft: null,
@@ -450,6 +462,7 @@ function extractPullRequestPayloadInfo(
       prNumber,
       title,
       htmlUrl,
+      authorLogin: readUserLogin(pr) ?? senderLogin,
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       isDraft: readDraftStatus(pr),
@@ -468,9 +481,22 @@ function readDraftStatus(pr: Record<string, unknown> | null): boolean | null {
   return pr.draft;
 }
 
+function readUserLogin(record: Record<string, unknown> | null): string | null {
+  const user = isRecord(record?.user) ? record.user : null;
+  return readString(user?.login);
+}
+
 function readCommentAuthor(comment: Record<string, unknown> | null): { login: string | null; type: string | null } {
   const user = isRecord(comment?.user) ? comment.user : null;
   return { login: readString(user?.login), type: readString(user?.type) };
+}
+
+function buildTemplateInput(info: PullRequestPayloadInfo, reviewer: ReviewerAgent): ContextReviewerPrTemplateInput {
+  return {
+    ...info,
+    reviewerManagerGithubLogin: reviewer.managerGithubLogin,
+    reviewerManagerIsPrAuthor: sameGithubLogin(reviewer.managerGithubLogin, info.authorLogin),
+  };
 }
 
 function contextReviewerMessageMetadata(
@@ -486,7 +512,12 @@ function contextReviewerMessageMetadata(
     entityKey: info.entityKey,
     contextTreeReviewer: true,
     mentions: [reviewer.uuid],
+    pullRequestAuthorLogin: info.authorLogin,
   };
+  if (reviewer.managerGithubLogin) {
+    metadata.reviewerManagerGithubLogin = reviewer.managerGithubLogin;
+    metadata.reviewerManagerIsPrAuthor = sameGithubLogin(reviewer.managerGithubLogin, info.authorLogin);
+  }
   if (info.commentAuthorLogin) {
     metadata.commentAuthorLogin = info.commentAuthorLogin;
   }
@@ -507,9 +538,11 @@ async function loadValidReviewerAgent(
     .select({
       uuid: agents.uuid,
       managerHumanAgentId: members.agentId,
+      managerGithubLogin: sql<string | null>`${authIdentities.metadata}->>'login'`,
     })
     .from(agents)
     .innerJoin(members, eq(members.id, agents.managerId))
+    .leftJoin(authIdentities, and(eq(authIdentities.userId, members.userId), eq(authIdentities.provider, "github")))
     .where(
       and(
         eq(agents.uuid, input.reviewerAgentUuid),
@@ -522,6 +555,17 @@ async function loadValidReviewerAgent(
     )
     .limit(1);
   return agent ?? null;
+}
+
+function sameGithubLogin(left: string | null, right: string | null): boolean {
+  const normalizedLeft = normalizeGithubLogin(left);
+  const normalizedRight = normalizeGithubLogin(right);
+  return normalizedLeft !== null && normalizedRight !== null && normalizedLeft === normalizedRight;
+}
+
+function normalizeGithubLogin(value: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.toLowerCase() : null;
 }
 
 async function findExistingReviewerChat(
