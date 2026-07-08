@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://cloud.first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=nav-app"><strong>Open App</strong></a> &middot;
+  <a href="https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=nav-app"><strong>Open App</strong></a> &middot;
   <a href="#get-started"><strong>Get Started</strong></a> &middot;
   <a href="#how-it-works"><strong>How It Works</strong></a> &middot;
   <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &middot;
@@ -25,7 +25,7 @@
   English | <a href="README_zh-CN.md">中文</a>
 </p>
 
-> Try [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) **free** — the fastest way to give every agent your team's shared context. [Open the app](https://cloud.first-tree.ai/login?utm_source=github&utm_medium=readme&utm_campaign=top-cta-app).
+> Try [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) **free** — the fastest way to give every agent your team's shared context.
 
 # First-Tree
 
@@ -116,11 +116,10 @@ during, and after execution.
 
 ## Get Started
 
-Open the app at **[cloud.first-tree.ai](https://cloud.first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-app)**
-(or your own deployment) and sign in. Learn more at
-[first-tree.ai](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-home).
-The guided setup walks you through the first run: name your team, connect a
-computer, create your first agent, connect code, and start work.
+Open the app at **[first-tree.ai](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=getstarted-app)**
+(or your own deployment) and sign in. The guided setup walks you through the
+first run: name your team, connect a computer, create your first agent, and
+start work.
 
 See the [Quickstart](docs/quickstart.md) for the full walkthrough.
 
