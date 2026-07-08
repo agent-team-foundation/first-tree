@@ -129,7 +129,7 @@ CLI and link the machine:
 ```bash
 # Use the exact command shown in the web console; production portable installs
 # have this shape:
-curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ~/.local/bin/first-tree login <connect-token>
 ```
 

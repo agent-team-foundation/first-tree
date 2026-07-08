@@ -179,7 +179,7 @@ jobs:
           ./scripts/portable/build-release.sh \
             --channel prod \
             --version 0.0.0 \
-            --download-base-url "https://downloads.first-tree.ai" \
+            --download-base-url "https://download.first-tree.ai/releases" \
             --out-dir .portable-smoke \
             --platform linux-x64
       # A release-resume rerun must reproduce the exact bytes already uploaded,
@@ -192,7 +192,7 @@ jobs:
           ./scripts/portable/build-release.sh \
             --channel prod \
             --version 0.0.0 \
-            --download-base-url "https://downloads.first-tree.ai" \
+            --download-base-url "https://download.first-tree.ai/releases" \
             --out-dir .portable-smoke-rebuild \
             --platform linux-x64
           cmp .portable-smoke/prod/0.0.0/SHA256SUMS .portable-smoke-rebuild/prod/0.0.0/SHA256SUMS
@@ -209,7 +209,7 @@ jobs:
             --prefix releases \
             --endpoint-url https://s3.example.test \
             --region us-east-1 \
-            --download-base-url "https://downloads.first-tree.ai" \
+            --download-base-url "https://download.first-tree.ai/releases" \
             --dry-run
       - name: Verify linux-x64 portable artifact
         run: |
