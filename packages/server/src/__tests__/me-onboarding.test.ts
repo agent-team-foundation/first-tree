@@ -359,6 +359,51 @@ describe("GET /me/github/repos", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("returns a stable 502 when GitHub repo listing fails for a non-auth upstream error", async () => {
+    const app = getApp();
+    const dev = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=9003&login=tokentest500",
+    });
+    const fragment = dev.headers.location?.split("#")[1] ?? "";
+    const access = new URLSearchParams(fragment).get("access");
+    expect(access).toBeTruthy();
+
+    const [identity] = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "9003")).limit(1);
+    if (!identity) throw new Error("expected auth identity");
+    const encrypted = encryptValue("any_token_we_will_intercept", app.config.secrets.encryptionKey);
+    await app.db
+      .update(authIdentities)
+      .set({ metadata: { ...(identity.metadata ?? {}), accessToken: encrypted } })
+      .where(eq(authIdentities.id, identity.id));
+
+    const originalFetch = globalThis.fetch;
+    type FetchInput = Parameters<typeof globalThis.fetch>[0];
+    type FetchInit = Parameters<typeof globalThis.fetch>[1];
+    const fetchSpy = vi.fn(async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("api.github.com")) {
+        return new Response("Server exploded", { status: 500 });
+      }
+      return originalFetch(input, init);
+    });
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/me/github/repos",
+        headers: { authorization: `Bearer ${access}` },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json<{ error: string }>().error).toBe(
+        "Couldn't reach GitHub. Try again, or reconnect your GitHub account.",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("POST /me/onboarding/events", () => {

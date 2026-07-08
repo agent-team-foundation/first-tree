@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
@@ -10,6 +10,9 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
+import * as eventDedupService from "../services/event-dedup.js";
+import * as githubAudienceService from "../services/github-audience.js";
+import * as githubEntityStateService from "../services/github-entity-state.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -34,6 +37,28 @@ async function postWebhook(
     "x-github-event": eventType,
     "x-github-delivery": opts.deliveryId ?? randomUUID(),
   };
+  if (!opts.skipSignature) {
+    headers["x-hub-signature-256"] = signBody(opts.secret ?? APP_WEBHOOK_SECRET, body);
+  }
+  return app.inject({
+    method: "POST",
+    url: "/api/v1/webhooks/github-app",
+    headers,
+    payload: body,
+  });
+}
+
+async function postRawWebhook(
+  app: App,
+  eventType: string | null,
+  body: string,
+  opts: { secret?: string; deliveryId?: string; skipSignature?: boolean } = {},
+) {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "x-github-delivery": opts.deliveryId ?? randomUUID(),
+  };
+  if (eventType !== null) headers["x-github-event"] = eventType;
   if (!opts.skipSignature) {
     headers["x-hub-signature-256"] = signBody(opts.secret ?? APP_WEBHOOK_SECRET, body);
   }
@@ -197,6 +222,18 @@ describe("POST /webhooks/github-app", () => {
     expect(res.json()).toEqual({ ok: true, event: "ping" });
   });
 
+  it("rejects malformed raw JSON and requests missing the GitHub event header", async () => {
+    const app = getApp();
+
+    const malformed = await postRawWebhook(app, "ping", "{");
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json<{ error: string }>().error).toBe("Invalid JSON payload");
+
+    const missingEvent = await postRawWebhook(app, null, JSON.stringify({ zen: "x" }));
+    expect(missingEvent.statusCode).toBe(400);
+    expect(missingEvent.json<{ error: string }>().error).toBe("Missing x-github-event header");
+  });
+
   it("installation.created → records the row unbound with the installer (direct install: no requester)", async () => {
     const app = getApp();
     const installationId = 100001;
@@ -228,6 +265,38 @@ describe("POST /webhooks/github-app", () => {
     expect(row?.installerGithubId).toBe(777);
     expect(row?.requesterGithubId).toBeNull();
     expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("installation.created accepts missing events arrays and installation unknown actions are no-ops", async () => {
+    const app = getApp();
+    const installationId = 100013;
+    const created = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4245, login: "acme4", type: "Organization" },
+        permissions: { contents: "read" },
+        events: "pull_request",
+        suspended_at: null,
+      },
+      sender: { id: 90213, login: "owner", type: "User" },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().lifecycle).toBe("created:recorded");
+
+    const [row] = await app.db
+      .select({ events: githubAppInstallations.events })
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.events).toEqual([]);
+
+    const unknown = await postWebhook(app, "installation", {
+      action: "unknown_action",
+      installation: { id: installationId, account: { id: 4245, login: "acme4", type: "Organization" } },
+    });
+    expect(unknown.statusCode).toBe(200);
+    expect(unknown.json().lifecycle).toBe("ignored:unknown-action");
   });
 
   it("installation.created via the approval flow records BOTH the requester and the approving installer", async () => {
@@ -368,6 +437,29 @@ describe("POST /webhooks/github-app", () => {
     expect(row?.suspendedAt).toBeTruthy();
   });
 
+  it("installation.unsuspend clears suspended_at", async () => {
+    const app = getApp();
+    const installationId = 100014;
+    await seedInstallation(app, { installationId, orgId: null, suspended: true });
+
+    const res = await postWebhook(app, "installation", {
+      action: "unsuspend",
+      installation: {
+        id: installationId,
+        account: { id: 1, login: "x", type: "User" },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("unsuspended");
+
+    const [row] = await app.db
+      .select({ suspendedAt: githubAppInstallations.suspendedAt })
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.suspendedAt).toBeNull();
+  });
+
   it("returns ignored:no installation context when payload lacks an installation block", async () => {
     const app = getApp();
     const res = await postWebhook(app, "issues", {
@@ -423,6 +515,93 @@ describe("POST /webhooks/github-app", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().ignored).toBe("suspended");
+  });
+
+  it("returns handled=false for unsupported repository events after state seed resolution no-ops", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100015;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const res = await postWebhook(app, "star", {
+      action: "created",
+      repository: { full_name: "owner/repo" },
+      sender: { login: "stargazer", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, event: "star", handled: false });
+  });
+
+  it("continues delivery when entity state sync fails", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100016;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const stateSpy = vi
+      .spyOn(githubEntityStateService, "setEntityState")
+      .mockRejectedValueOnce(new Error("state sync down"));
+
+    try {
+      const res = await postWebhook(app, "issues", {
+        action: "closed",
+        issue: {
+          number: 912,
+          title: "Closed issue",
+          html_url: "https://github.com/owner/repo/issues/912",
+          body: "",
+          state: "closed",
+        },
+        repository: { full_name: "owner/repo" },
+        sender: { login: "closer", type: "User" },
+        installation: { id: installationId },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(stateSpy).toHaveBeenCalled();
+    } finally {
+      stateSpy.mockRestore();
+    }
+  });
+
+  it("unclaims a delivery when downstream handling fails and logs unclaim failures", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100017;
+    const deliveryId = randomUUID();
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const audienceSpy = vi
+      .spyOn(githubAudienceService, "resolveAudience")
+      .mockRejectedValueOnce(new Error("audience down"));
+    const unclaimSpy = vi.spyOn(eventDedupService, "unclaimEvent").mockRejectedValueOnce(new Error("unclaim down"));
+
+    try {
+      const res = await postWebhook(
+        app,
+        "issues",
+        {
+          action: "opened",
+          issue: {
+            number: 913,
+            title: "Issue",
+            html_url: "https://github.com/owner/repo/issues/913",
+            body: "",
+          },
+          repository: { full_name: "owner/repo" },
+          sender: { login: "author", type: "User" },
+          installation: { id: installationId },
+        },
+        { deliveryId },
+      );
+
+      expect(res.statusCode).toBe(500);
+      expect(audienceSpy).toHaveBeenCalled();
+      expect(unclaimSpy).toHaveBeenCalledWith(app.db, deliveryId, "github");
+    } finally {
+      audienceSpy.mockRestore();
+      unclaimSpy.mockRestore();
+    }
   });
 
   it("Bug 1 — pull_request.synchronize delivers to subscribed chat (was silenced before)", async () => {

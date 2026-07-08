@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
@@ -29,6 +29,48 @@ describe("client service: disconnectClient", () => {
     );
     await expect(clientService.assertClientOwner(app.db, owner.clientId, { userId: other.userId })).rejects.toThrow(
       /not found/i,
+    );
+    await expect(clientService.assertClientNotRetired(app.db, "missing-client")).rejects.toThrow(/not found/i);
+  });
+
+  it("classifies registerClient conflicts after a lost upsert race", async () => {
+    function makeRaceDb(current: { userId: string | null; retiredAt: Date | null } | undefined) {
+      const selectResults = [[], current ? [current] : []];
+      return {
+        select: vi.fn(() => {
+          const rows = selectResults.shift() ?? [];
+          return {
+            from: () => ({
+              where: () => ({
+                limit: async () => rows,
+              }),
+            }),
+          };
+        }),
+        insert: vi.fn(() => ({
+          values: () => ({
+            onConflictDoUpdate: () => ({
+              returning: async () => [],
+            }),
+          }),
+        })),
+      };
+    }
+    const data = {
+      clientId: "client-race",
+      userId: "user-a",
+      organizationId: "org-a",
+      instanceId: "instance-a",
+    };
+
+    await expect(
+      clientService.registerClient(makeRaceDb({ userId: "user-a", retiredAt: new Date() }) as never, data),
+    ).rejects.toMatchObject({ statusCode: 410 });
+    await expect(
+      clientService.registerClient(makeRaceDb({ userId: "user-b", retiredAt: null }) as never, data),
+    ).rejects.toMatchObject({ statusCode: 403, code: "CLIENT_USER_MISMATCH" });
+    await expect(clientService.registerClient(makeRaceDb(undefined) as never, data)).rejects.toThrow(
+      /changed concurrently/,
     );
   });
 

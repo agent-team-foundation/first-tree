@@ -160,6 +160,47 @@ describe("server bootstrap", () => {
     expect(shutdownTelemetryFn).not.toHaveBeenCalled();
   });
 
+  it("runs app and telemetry shutdown from registered process signal handlers", async () => {
+    const initTelemetryFn = vi.fn(async () => undefined);
+    const runMigrationsFn = vi.fn(async () => 0);
+    const listenFn = vi.fn(async () => "http://127.0.0.1:0");
+    const closeFn = vi.fn(async () => undefined);
+    const buildAppFn = vi.fn(async () => ({ listen: listenFn, close: closeFn }));
+    const markReadyFn = vi.fn();
+    const shutdownTelemetryFn = vi.fn(async () => undefined);
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    const processOn = vi.fn((event: string | symbol, handler: (...args: unknown[]) => void) => {
+      handlers.set(String(event), handler as (...args: unknown[]) => void);
+      return fakeProcess;
+    });
+    const processExit = vi.fn();
+    const fakeProcess = Object.assign(Object.create(process), {
+      on: processOn,
+      exit: processExit,
+    }) as NodeJS.Process;
+
+    try {
+      vi.stubGlobal("process", fakeProcess);
+      await startServer({
+        initServerConfig: async () => baseServerConfig,
+        randomUUID: () => "87654321-1234-4234-9234-123456789abc",
+        initTelemetry: initTelemetryFn,
+        runMigrations: runMigrationsFn,
+        buildApp: buildAppFn as never,
+        markReady: markReadyFn,
+        shutdownTelemetry: shutdownTelemetryFn,
+      });
+
+      handlers.get("SIGTERM")?.();
+
+      await vi.waitFor(() => expect(closeFn).toHaveBeenCalledTimes(1));
+      expect(shutdownTelemetryFn).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(processExit).toHaveBeenCalledWith(0));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   describe("boot config guards", () => {
     it("rejects missing required secrets", () => {
       expect(() =>

@@ -1,5 +1,5 @@
 import type { SendMessage } from "@first-tree/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -20,6 +20,7 @@ import { createAdminContext, createTestApp } from "./helpers.js";
 
 describe("chat service edge coverage", () => {
   let app: FastifyInstance;
+  class RollbackFixture extends Error {}
 
   const baseMessage = (overrides: Partial<SendMessage> = {}): SendMessage => ({
     format: "text",
@@ -127,6 +128,81 @@ describe("chat service edge coverage", () => {
         }),
       ),
     ).rejects.toThrow("beforeInitialMessage requires an onboardingKickoffKey");
+  });
+
+  it("returns the existing onboarding kickoff chat on idempotent legacy agent retries", async () => {
+    const seed = await createAdminContext(app, { username: `chat-kickoff-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createManagedAgent({ ...seed, suffix: "kickoff" });
+    const kickoffKey = `kickoff-${crypto.randomUUID()}`;
+
+    const first = await createChat(app.db, {
+      mode: "legacy-empty-agent",
+      creatorAgentId: seed.humanAgentUuid,
+      participantAgentIds: [agent.uuid],
+      topic: "Kickoff",
+      metadata: { source: "test" },
+      onboardingKickoffKey: kickoffKey,
+    });
+    const second = await createChat(app.db, {
+      mode: "legacy-empty-agent",
+      creatorAgentId: seed.humanAgentUuid,
+      participantAgentIds: [agent.uuid],
+      topic: "Duplicate kickoff",
+      onboardingKickoffKey: kickoffKey,
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(second.participants.map((p) => p.agentId).sort()).toEqual([seed.humanAgentUuid, agent.uuid].sort());
+  });
+
+  it("rejects self-target task chat creation when the manager human mirror is missing", async () => {
+    const seed = await createAdminContext(app, { username: `chat-self-target-${crypto.randomUUID().slice(0, 8)}` });
+    const orphanManagerId = uuidv7();
+    const orphanAgentId = uuidv7();
+    await expect(
+      app.db.transaction(async (tx) => {
+        await tx.execute(sql`SET CONSTRAINTS ALL DEFERRED`);
+        await tx.insert(agents).values({
+          uuid: orphanAgentId,
+          name: `orphan-manager-${crypto.randomUUID().slice(0, 6)}`,
+          organizationId: seed.organizationId,
+          type: "agent",
+          displayName: "Orphan Manager Agent",
+          inboxId: `inbox_${orphanAgentId}`,
+          managerId: orphanManagerId,
+          status: "active",
+        });
+
+        await expect(
+          createChat(
+            tx as unknown as typeof app.db,
+            taskInput({
+              initiatorAgentId: orphanAgentId,
+              organizationId: seed.organizationId,
+              initialRecipientAgentIds: [orphanAgentId],
+            }),
+          ),
+        ).rejects.toThrow(`Manager member "${orphanManagerId}" not found`);
+        throw new RollbackFixture();
+      }),
+    ).rejects.toBeInstanceOf(RollbackFixture);
+  });
+
+  it("rejects task chats with inactive participants", async () => {
+    const seed = await createAdminContext(app, { username: `chat-inactive-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createManagedAgent({ ...seed, suffix: "inactive" });
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, agent.uuid));
+
+    await expect(
+      createChat(
+        app.db,
+        taskInput({
+          initiatorAgentId: seed.humanAgentUuid,
+          organizationId: seed.organizationId,
+          initialRecipientAgentIds: [agent.uuid],
+        }),
+      ),
+    ).rejects.toThrow(/Cannot create task chat with inactive participant/);
   });
 
   it("rejects legacy web chat creation for creator org mismatch and cross-org participants", async () => {
