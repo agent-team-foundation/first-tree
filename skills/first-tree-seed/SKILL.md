@@ -61,11 +61,18 @@ first-tree tree init --title "<team display name>" --owner "<source-repo-owner>"
 
 **Home the tree beside its source — pass `--owner`.** Set
 `<source-repo-owner>` to the account that owns the team's **main bound
-source repo** — an **org or a personal account alike** — read from the
-`<owner>` segment of its clone URL (e.g. `acme` in `github.com/acme/app`,
-or `alice` in `github.com/alice/app`; take it from `manifest.sources` or
-`git -C <source-clone> remote get-url origin`). With one source that
-account is unambiguous; when several sources share one account, use it;
+source repo** — an **org or a personal account alike**. Derive it from the
+source clone's **remote URL, not its directory name**: resolve
+`<source-clone>` from the manifest
+(`<workspaceRoot>/<sourcesRoot>/<source>`, per *Materialize source read
+worktrees* below), run `git -C <source-clone> remote get-url origin` (or
+use the declared source repo URL from your briefing when present), and take
+the `<owner>` segment of that URL (e.g. `acme` in `github.com/acme/app`, or
+`alice` in `github.com/alice/app`). **`manifest.sources` holds directory
+names (e.g. `first-tree`), not owners** — passing a source *name* as
+`--owner` targets the wrong GitHub account, so always parse the owner from
+the clone's remote. With one source that account is unambiguous; when
+several sources share one account, use it;
 when sources span **different accounts**, pick the account that owns most
 of them, and if that is genuinely a tie, ask the admin which account should
 host the tree rather than guessing. Why: a team's Context Tree belongs in
