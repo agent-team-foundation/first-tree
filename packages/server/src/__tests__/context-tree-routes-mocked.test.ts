@@ -217,6 +217,21 @@ describe("org context tree routes with mocked service edges", () => {
     expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
   });
 
+  it("maps unexpected root node create failures to an upstream initialize error", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getRepoFileWithToken.mockRejectedValueOnce(new ctx.classes.GithubAppApiError(404));
+    ctx.mocks.createRepoFileWithToken.mockRejectedValueOnce(new Error("create root exploded"));
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "Couldn't initialize the Context Tree root node. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+  });
+
   it("maps workflow verification failures after root success", async () => {
     const ctx = await setupRoute();
     ctx.mocks.getRepoFileWithToken
@@ -228,6 +243,23 @@ describe("org context tree routes with mocked service edges", () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({
       error: "Couldn't verify the Context Tree validation workflow. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+  });
+
+  it("maps unexpected workflow create failures to an upstream initialize error", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getRepoFileWithToken
+      .mockResolvedValueOnce({ path: "NODE.md" })
+      .mockRejectedValueOnce(new ctx.classes.GithubAppApiError(404));
+    ctx.mocks.createRepoFileWithToken.mockRejectedValueOnce(new Error("create workflow exploded"));
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "Couldn't initialize the Context Tree validation workflow. Try again in a moment.",
       code: "upstream",
     });
     expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();

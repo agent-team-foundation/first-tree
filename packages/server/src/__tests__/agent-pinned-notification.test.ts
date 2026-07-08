@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
@@ -528,6 +528,34 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       await new Promise<void>((r) => ws.once("close", () => r()));
     }
   }, 15000);
+
+  it("drops route-change notifications that fail the agent:pinned wire schema", async () => {
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    try {
+      await app.notifier.notifyAgentRouteChange({
+        agentId: uuidv7(),
+        name: "invalid-runtime",
+        displayName: "Invalid Runtime",
+        agentType: "agent",
+        oldClientId: null,
+        targetClientId: `cli-invalid-${crypto.randomUUID().slice(0, 8)}`,
+        runtimeProvider: "not-a-runtime",
+        reason: "agent_runtime_switch",
+      });
+
+      await vi.waitFor(() =>
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            clientId: expect.stringMatching(/^cli-invalid-/),
+          }),
+          "agent route change frame failed schema validation — not sending",
+        ),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 
   it("replays agent:pinned on heartbeat when a missed route-change leaves the local runtime stale", async () => {
     const seed = await seedConnectedClient("heartbeat-route-change");

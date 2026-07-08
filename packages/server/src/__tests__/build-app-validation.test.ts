@@ -188,6 +188,14 @@ describe("buildApp — retired feedback route boundary", () => {
       expect(feedback.headers["content-type"]).toContain("application/json");
       expect(feedback.json()).toEqual({ error: "Feedback has been removed" });
       expect(feedback.body).not.toContain("App shell");
+
+      const apiMiss = await app.inject({ method: "GET", url: "/api/missing" });
+      expect(apiMiss.statusCode).toBe(404);
+      expect(apiMiss.json()).toEqual({ error: "Not found" });
+
+      const assetMiss = await app.inject({ method: "GET", url: "/assets/missing.js" });
+      expect(assetMiss.statusCode).toBe(404);
+      expect(assetMiss.json()).toEqual({ error: "Not found" });
     } finally {
       await safeClose(app);
       await rm(webRoot, { recursive: true, force: true });

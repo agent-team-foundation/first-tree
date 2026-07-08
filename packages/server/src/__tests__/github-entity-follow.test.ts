@@ -456,6 +456,53 @@ describe("github-entity-follow", () => {
     });
   });
 
+  it("allows commit payloads without a commit object and falls back to a null title", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const fullSha = "3f2a91c0aaaabbbbccccddddeeeeffff00001111";
+    const fetcher = makeFetcher({
+      "/repos/Acme/Api/commits/3f2a91c0": () =>
+        json({
+          sha: fullSha,
+          html_url: `https://github.com/Acme/Api/commit/${fullSha}`,
+          commit: null,
+        }),
+      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+    });
+
+    const result = await declareEntityFollow(
+      app.db,
+      deps(fetcher),
+      followParams(s, "https://github.com/acme/api/commit/3F2A91C0"),
+    );
+
+    expect(result.outcome).toBe("created");
+    if (result.outcome !== "created") throw new Error("unreachable");
+    expect(result.entity.title).toBeNull();
+  });
+
+  it("falls back to a null live state when GitHub returns an unexpected PR state", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const fetcher = prFetcher({
+      "/repos/acme/api/pulls/42": () =>
+        json({
+          number: 42,
+          state: "queued",
+          title: "Odd state",
+          html_url: "https://github.com/Acme/Api/pull/42",
+          merged: false,
+          draft: false,
+        }),
+    });
+
+    const result = await declareEntityFollow(app.db, deps(fetcher), followParams(s, "acme/api#42"));
+
+    expect(result.outcome).toBe("created");
+    if (result.outcome !== "created") throw new Error("unreachable");
+    expect(result.entity.state).toBeNull();
+  });
+
   it("an issue without a pull_request block resolves to entityType issue", async () => {
     const app = getApp();
     const s = await setup(app);

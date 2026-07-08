@@ -85,6 +85,15 @@ describe("Agent client WS edge protocol coverage", () => {
     return ws;
   }
 
+  async function openSocketAt(url: string): Promise<WebSocket> {
+    const ws = new WebSocket(url);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    return ws;
+  }
+
   async function closeSocket(ws: WebSocket): Promise<void> {
     if (ws.readyState === WebSocket.CLOSED) return;
     await new Promise<void>((resolve) => {
@@ -111,6 +120,23 @@ describe("Agent client WS edge protocol coverage", () => {
     clientId: string;
   }): Promise<WebSocket> {
     const ws = await openAuthenticatedSocket(await signAccess(seed.userId, seed.memberId, seed.organizationId));
+    ws.send(JSON.stringify({ type: "client:register", clientId: seed.clientId, hostname: "edge-host", os: "linux" }));
+    await waitForFrame(ws, (message) => (message as { type?: string }).type === "client:registered");
+    return ws;
+  }
+
+  async function openRegisteredSocketAt(
+    url: string,
+    seed: {
+      userId: string;
+      memberId: string;
+      organizationId: string;
+      clientId: string;
+    },
+  ): Promise<WebSocket> {
+    const ws = await openSocketAt(url);
+    ws.send(JSON.stringify({ type: "auth", token: await signAccess(seed.userId, seed.memberId, seed.organizationId) }));
+    await waitForFrame(ws, (message) => (message as { type?: string }).type === "auth:ok");
     ws.send(JSON.stringify({ type: "client:register", clientId: seed.clientId, hostname: "edge-host", os: "linux" }));
     await waitForFrame(ws, (message) => (message as { type?: string }).type === "client:registered");
     return ws;
@@ -161,6 +187,57 @@ describe("Agent client WS edge protocol coverage", () => {
       organizationId: seed.organizationId,
       runtimeProvider: "claude-code",
     });
+  }
+
+  async function createPinnedAgentFor(
+    targetApp: FastifyInstance,
+    seed: {
+      memberId: string;
+      organizationId: string;
+      clientId: string;
+      suffix: string;
+    },
+  ): Promise<Awaited<ReturnType<typeof createAgent>>> {
+    return createAgent(targetApp.db, {
+      name: `ws-edge-agent-${seed.suffix}-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "WS Edge Agent",
+      source: "admin-api",
+      managerId: seed.memberId,
+      clientId: seed.clientId,
+      organizationId: seed.organizationId,
+      runtimeProvider: "claude-code",
+    });
+  }
+
+  function inboxEntry(id: number, inboxId: string, chatId: string) {
+    return {
+      id,
+      inboxId,
+      messageId: `msg-${id}`,
+      chatId,
+      status: "delivered",
+      retryCount: 0,
+      createdAt: new Date().toISOString(),
+      deliveredAt: new Date().toISOString(),
+      ackedAt: null,
+      message: null,
+    };
+  }
+
+  async function withInboxCappedApp(
+    inbox: { maxInFlightPerAgent: number; maxInFlightPerAgentChat: number },
+    fn: (targetApp: FastifyInstance, targetWsUrl: string) => Promise<void>,
+  ): Promise<void> {
+    const targetApp = await createTestApp({ inbox });
+    await targetApp.listen({ port: 0, host: "127.0.0.1" });
+    const address = targetApp.server.address();
+    if (!address || typeof address === "string") throw new Error("test server has no address");
+    try {
+      await fn(targetApp, `ws://127.0.0.1:${address.port}/api/v1/agent/ws/client`);
+    } finally {
+      await targetApp.close();
+    }
   }
 
   beforeAll(async () => {
@@ -722,6 +799,117 @@ describe("Agent client WS edge protocol coverage", () => {
       claimSpy.mockRestore();
     }
   }, 15000);
+
+  it("leaves inbox backlog pending when the global in-flight cap is full", async () => {
+    await withInboxCappedApp({ maxInFlightPerAgent: 1, maxInFlightPerAgentChat: 1 }, async (targetApp, targetWsUrl) => {
+      const seed = await createAdminContext(targetApp, {
+        username: `ws-global-cap-${crypto.randomUUID().slice(0, 8)}`,
+      });
+      const agent = await createPinnedAgentFor(targetApp, { ...seed, suffix: "global-cap" });
+      const warnSpy = vi.spyOn(targetApp.log, "warn");
+      const claimSpy = vi
+        .spyOn(inboxService, "claimBacklogForPushFair")
+        .mockResolvedValueOnce([inboxEntry(555_000_001, agent.inboxId, "chat-global-cap")] as never)
+        .mockResolvedValue([]);
+      const ws = await openRegisteredSocketAt(targetWsUrl, seed);
+
+      try {
+        await expect(bindAgent(ws, agent.uuid, "bind-global-cap")).resolves.toMatchObject({
+          type: "agent:bound",
+          agentId: agent.uuid,
+        });
+        await expect(
+          waitForFrame(
+            ws,
+            (message) =>
+              (message as { type?: string; entryId?: number }).type === "inbox:deliver" &&
+              (message as { entryId?: number }).entryId === 555_000_001,
+          ),
+        ).resolves.toMatchObject({ type: "inbox:deliver", entryId: 555_000_001 });
+
+        await targetApp.notifier.notify(agent.inboxId, "msg-global-cap");
+        await vi.waitFor(() =>
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ agentId: agent.uuid, inboxId: agent.inboxId, globalCap: 1 }),
+            "inbox push: global in-flight fuse reached, leaving backlog pending",
+          ),
+        );
+        expect(claimSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        await closeSocket(ws);
+        warnSpy.mockRestore();
+        claimSpy.mockRestore();
+      }
+    });
+  }, 20000);
+
+  it("leaves recovery backlog pending when the requested chat is already at its per-chat cap", async () => {
+    await withInboxCappedApp({ maxInFlightPerAgent: 2, maxInFlightPerAgentChat: 1 }, async (targetApp, targetWsUrl) => {
+      const seed = await createAdminContext(targetApp, {
+        username: `ws-chat-cap-${crypto.randomUUID().slice(0, 8)}`,
+      });
+      const agent = await createPinnedAgentFor(targetApp, { ...seed, suffix: "chat-cap" });
+      const debugSpy = vi.spyOn(targetApp.log, "debug");
+      const claimSpy = vi
+        .spyOn(inboxService, "claimBacklogForPushFair")
+        .mockResolvedValueOnce([inboxEntry(555_000_002, agent.inboxId, "chat-per-cap")] as never)
+        .mockResolvedValue([]);
+      const recoverSpy = vi.spyOn(inboxService, "recoverUnackedForScope").mockResolvedValueOnce({
+        resetCount: 0,
+        resetEntryIds: [],
+      } as never);
+      const ws = await openRegisteredSocketAt(targetWsUrl, seed);
+
+      try {
+        await expect(bindAgent(ws, agent.uuid, "bind-chat-cap")).resolves.toMatchObject({
+          type: "agent:bound",
+          agentId: agent.uuid,
+        });
+        await waitForFrame(
+          ws,
+          (message) =>
+            (message as { type?: string; entryId?: number }).type === "inbox:deliver" &&
+            (message as { entryId?: number }).entryId === 555_000_002,
+        );
+
+        ws.send(
+          JSON.stringify({
+            type: "inbox:recover",
+            ref: "recover-chat-cap",
+            agentId: agent.uuid,
+            chatId: "chat-per-cap",
+          }),
+        );
+        await expect(
+          waitForFrame(
+            ws,
+            (message) =>
+              (message as { type?: string; ref?: string }).type === "inbox:recover:accepted" &&
+              (message as { ref?: string }).ref === "recover-chat-cap",
+          ),
+        ).resolves.toMatchObject({ type: "inbox:recover:accepted", ref: "recover-chat-cap", resetCount: 0 });
+
+        await vi.waitFor(() =>
+          expect(debugSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              agentId: agent.uuid,
+              inboxId: agent.inboxId,
+              chatId: "chat-per-cap",
+              chatCap: 1,
+            }),
+            "inbox push: recovery chat at per-chat cap, leaving backlog pending",
+          ),
+        );
+        expect(claimSpy).toHaveBeenCalledTimes(1);
+        expect(recoverSpy).toHaveBeenCalledWith(targetApp.db, { inboxId: agent.inboxId, chatId: "chat-per-cap" });
+      } finally {
+        await closeSocket(ws);
+        debugSpy.mockRestore();
+        claimSpy.mockRestore();
+        recoverSpy.mockRestore();
+      }
+    });
+  }, 20000);
 
   it("handles bound session, runtime, inbox, recover, and heartbeat edge frames", async () => {
     const seed = await createAdminContext(app, { username: `ws-bound-edges-${crypto.randomUUID().slice(0, 8)}` });

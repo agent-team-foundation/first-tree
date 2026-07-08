@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
+import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { clients } from "../db/schema/clients.js";
+import { createAgent } from "../services/agent.js";
 import { removeClientConnection, setClientConnection } from "../services/connection-manager.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -122,5 +125,45 @@ describe("POST /clients/:clientId/runtime-auth/start", () => {
     });
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
     expect(res.statusCode).toBeLessThan(500);
+  });
+
+  it("disconnects and retires caller-owned clients through the client routes", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `ra-client-${crypto.randomUUID().slice(0, 6)}` });
+    await createAgent(app.db, {
+      name: `ra-client-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Client Route Agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+      organizationId: admin.organizationId,
+    });
+    const ws = { readyState: 1, send: vi.fn(), close: vi.fn() };
+    setClientConnection(admin.clientId, ws as unknown as WebSocket);
+    try {
+      const disconnect = await app.inject({
+        method: "POST",
+        url: `/api/v1/clients/${admin.clientId}/disconnect`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(disconnect.statusCode).toBe(200);
+      expect(disconnect.json()).toEqual({ disconnected: true, agentIds: [] });
+
+      const deleted = await app.inject({
+        method: "DELETE",
+        url: `/api/v1/clients/${admin.clientId}`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(deleted.statusCode).toBe(204);
+
+      const [row] = await app.db
+        .select({ status: clients.status, retiredAt: clients.retiredAt })
+        .from(clients)
+        .where(eq(clients.id, admin.clientId));
+      expect(row?.status).toBe("disconnected");
+      expect(row?.retiredAt).toBeInstanceOf(Date);
+    } finally {
+      removeClientConnection(admin.clientId, ws as unknown as WebSocket);
+    }
   });
 });
