@@ -1,24 +1,22 @@
 import {
   type GithubAccountType,
+  type GithubAppConnectPanelInstallation,
+  type GithubAppConnectPanelOutput,
   type GithubAppInstallationOutput,
-  githubAppInstallationClaimBodySchema,
+  githubAppConnectBodySchema,
 } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import type { Database } from "../../db/connection.js";
 import { authIdentities } from "../../db/schema/auth-identities.js";
-import { ForbiddenError, NotFoundError } from "../../errors.js";
+import { NotFoundError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
-import { getStoredGithubAccessToken } from "../../services/auth-identity.js";
+import { buildAppInstallUrl, listInstallationRepos } from "../../services/github-app.js";
 import {
-  buildAppInstallUrl,
-  GithubAppApiError,
-  listInstallationRepos,
-  verifyUserCanAdministerInstallation,
-} from "../../services/github-app.js";
-import {
-  bindInstallationToOrg,
-  findInstallationByGithubId,
+  connectInstallationToOrg,
+  disconnectInstallationFromOrg,
   findInstallationByOrg,
+  listInstallationsForGithubUser,
 } from "../../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../../services/oauth-state.js";
@@ -211,16 +209,18 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   //   2. We need to set the `oauth_state_nonce` cookie alongside the
   //      JWT — same double-submit defense as `/auth/github/start`. A
   //      static `<a href>` can't do that.
-  //   3. The signed state encodes which org the install should bind to
-  //      (`targetOrganizationId`) — that decision is the admin caller's
+  //   3. The signed state encodes which org's panel kicked the install
+  //      off (`targetOrganizationId`) — that fact is the admin caller's
   //      identity, which only the server can authenticate.
   //
   // The SPA fetches this (with its bearer token), gets `{ installUrl }`
   // back plus a `Set-Cookie`, then does `window.location = installUrl`.
   // GitHub shows the install dialog, the user picks repos, GitHub
-  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`.
-  // The callback verifies the state cookie and records a per-install pending
-  // bind; the trusted `installation.created` webhook performs the actual bind.
+  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`
+  // (or without `code` when the install is parked for owner approval).
+  // The callback only lands the browser back on the kickoff org's panel;
+  // the trusted `installation.created` webhook records the installation
+  // unbound, and connecting it is an explicit panel action.
   app.get<{ Params: { orgId: string }; Querystring: { next?: string } }>("/install-url", async (request, reply) => {
     // Admin-gated: the resolved scope is the org the install binds to.
     const scope = await requireOrgAdmin(request, app.db);
@@ -235,14 +235,13 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_GITHUB_APP_SLUG is not configured." });
     }
 
-    // `targetOrganizationId` rides inside the signed state so the resulting
-    // installation binds to *this* org rather than the caller's primary org
-    // (codex P1-3) — an admin in org B installing the App must end up bound to
-    // org B. `kickoffUserId` rides alongside it so the
-    // callback can rest the bind on THIS admin's (re-checked) authority
-    // even when the browser's github.com session resolves to a different
-    // GitHub identity — the github.com session and the First Tree session
-    // are independent, and a mismatch must not strand the install unbound.
+    // `targetOrganizationId` rides inside the signed state so the callback
+    // can land the browser back on *this* org's panel rather than the
+    // caller's primary org (codex P1-3). `kickoffUserId` rides alongside it
+    // so the callback can detect the browser's github.com session resolving
+    // to a DIFFERENT identity than the kickoff admin — the github.com
+    // session and the First Tree session are independent, and a mismatch
+    // must not silently swap the signed-in user.
     const { token, nonce } = await signOAuthState(
       app.config.secrets.jwtSecret,
       resolvePostInstallNext(request.query.next),
@@ -262,89 +261,115 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
     );
 
     // No DB write here: `installation_id` doesn't exist until the user
-    // completes the install. The signed state carries `targetOrganizationId`
-    // + `kickoffUserId` to the callback, which records the per-install pending
-    // bind (keyed by the concrete `installation_id`) that the trusted
-    // `installation.created` webhook then completes.
+    // completes the install, and even then the webhook records it unbound —
+    // the signed state only routes the browser back to this org's panel,
+    // where connecting the recorded installation is an explicit action.
     return { installUrl: buildAppInstallUrl({ appSlug: appCfg.slug, state: token }) };
   });
 
-  // ── Manual install claim ────────────────────────────────────────────
+  // ── Connect panel ────────────────────────────────────────────────────
   //
-  // Recovery hatch for an installation row that ended up unbound (e.g. the
-  // `installation.created` webhook arrived without a matching pending bind, or
-  // the kickoff callback never completed). Normal binding is webhook-driven;
-  // this is the manual fallback.
+  // The unified connect model: the `installation.created` webhook records
+  // every installation UNBOUND (with the GitHub-verified requester and
+  // installer ids), and a team admin explicitly connects one from this
+  // panel. The target team is the team whose panel the caller is on —
+  // that click is what decides the binding, so there is no server-side
+  // install intent and no auto-bind.
   //
-  // ⚠ This endpoint is **API-only** — there is no Settings UI that calls
-  // it yet. The orphan-list endpoint and a per-install `Claim install` button
-  // are tracked in #318; until then, recovery requires POSTing here directly.
-  //
-  // Authorization: First Tree org-admin is not sufficient. Because `/claim` is
-  // a *delayed* recovery path, it keeps a LIVE current-GitHub-admin check
-  // (`verifyUserCanAdministerInstallation`) — the historical
-  // `installer_github_id` recorded at install time can be stale by claim time
-  // (the installer may have since lost GitHub admin/membership while the App
-  // installation lingers unbound). Fail-closed: User-type → caller's GitHub id
-  // must equal the install account's; Org-type → `/user/memberships/orgs`
-  // must return role=admin. 404 here means there's nothing to claim.
-  app.post<{ Params: { orgId: string }; Body: unknown }>("/claim", async (request) => {
+  // Authorization for connect = First Tree admin of this team (route) +
+  // the caller's GitHub id equals the installation's requester or
+  // installer (service). Both facts are already in our DB — the panel
+  // endpoints make no GitHub API call and need no GitHub permission.
+
+  /**
+   * GET `/connect-panel` — the caller's connectable-installations view:
+   * every installation whose webhook-verified requester or installer is
+   * the caller's GitHub id, annotated relative to THIS team as
+   * `connectable` / `connected-here` / `connected-elsewhere` (the latter
+   * carrying the holding team's display name). Installations arrive
+   * asynchronously (owner approval, installs made directly on GitHub), so
+   * the panel polls this endpoint while open; a caller with no GitHub
+   * identity on file simply gets an empty list.
+   *
+   * Admin-gated like the other panel actions — the list exposes
+   * account-level install metadata and exists only to drive connect.
+   */
+  app.get<{ Params: { orgId: string } }>("/connect-panel", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
-    const { installationId } = githubAppInstallationClaimBodySchema.parse(request.body);
-
-    const installRow = await findInstallationByGithubId(app.db, installationId);
-    if (!installRow) {
-      throw new NotFoundError(`Installation ${installationId} not found`);
+    const callerGithubId = await resolveCallerGithubId(app.db, scope.userId);
+    if (callerGithubId === null) {
+      const empty: GithubAppConnectPanelOutput = { installations: [] };
+      return empty;
     }
-
-    const githubToken = await getStoredGithubAccessToken(app.db, scope.userId, app.config.secrets.encryptionKey);
-    if (!githubToken) {
-      throw new ForbiddenError("No GitHub access token on file — sign in with GitHub again before claiming an install");
-    }
-
-    // Caller's numeric GitHub id off `auth_identities.identifier` (written by
-    // the OAuth callback as `String(profile.githubId)`) for the User-type
-    // owner comparison.
-    const [identity] = await app.db
-      .select({ identifier: authIdentities.identifier })
-      .from(authIdentities)
-      .where(and(eq(authIdentities.userId, scope.userId), eq(authIdentities.provider, "github")))
-      .limit(1);
-    const userGithubId = Number(identity?.identifier);
-
-    // LIVE current-GitHub-admin check (fail-closed). `/claim` is the *delayed*
-    // recovery path: unlike the normal webhook bind (which fires when the
-    // installer is provably the current admin), an orphaned install may be
-    // claimed long after install time, when the recorded `installer_github_id`
-    // is stale. So this endpoint verifies CURRENT authority — User-type:
-    // caller's GitHub id equals the install account's; Org-type:
-    // `GET /user/memberships/orgs/{login}` returns role=admin, state=active
-    // (plain membership is not enough). This is why the probe +
-    // `Members:read` remain here (and for the Context-Tree repo provisioner)
-    // until the server-side build is retired.
-    let canAdminister: boolean;
-    try {
-      canAdminister = await verifyUserCanAdministerInstallation(githubToken, userGithubId, {
-        accountType: installRow.accountType as "User" | "Organization",
-        accountLogin: installRow.accountLogin,
-        accountGithubId: installRow.accountGithubId,
-      });
-    } catch (err) {
-      const status = err instanceof GithubAppApiError ? err.status : 0;
-      if (status === 401) {
-        throw new ForbiddenError("Your GitHub session has expired — sign in with GitHub again, then retry the claim");
-      }
-      app.log.warn({ err, installationId, userId: scope.userId }, "claim: admin proof check failed");
-      throw new ForbiddenError("Couldn't verify GitHub access for this installation — try again in a moment");
-    }
-    if (!canAdminister) {
-      throw new ForbiddenError("You don't currently administer this installation on GitHub");
-    }
-
-    // bindInstallationToOrg throws NotFoundError (no such install row) →
-    // 404, ConflictError (install already bound elsewhere, or this org
-    // already has a different install) → 409.
-    await bindInstallationToOrg(app.db, installationId, scope.organizationId);
-    return { installationId, organizationId: scope.organizationId, bound: true };
+    const rows = await listInstallationsForGithubUser(app.db, callerGithubId);
+    const installations: GithubAppConnectPanelInstallation[] = rows.map((row) => ({
+      installationId: row.installationId,
+      accountType: row.accountType as GithubAccountType,
+      accountLogin: row.accountLogin,
+      accountGithubId: row.accountGithubId,
+      suspended: row.suspendedAt !== null,
+      status:
+        row.hubOrganizationId === null
+          ? "connectable"
+          : row.hubOrganizationId === scope.organizationId
+            ? "connected-here"
+            : "connected-elsewhere",
+      connectedTeamName:
+        row.hubOrganizationId !== null && row.hubOrganizationId !== scope.organizationId ? row.connectedTeamName : null,
+      createdAt: row.createdAt.toISOString(),
+    }));
+    const out: GithubAppConnectPanelOutput = { installations };
+    return out;
   });
+
+  /**
+   * POST `/connect` — bind an installation to this team. Service-layer
+   * errors map to the panel's affordances: 404 unknown installation, 403
+   * not the caller's installation (or no GitHub identity on file), 409
+   * 1:1 conflict (installation already connected to another team, or this
+   * team already holds a different installation).
+   */
+  app.post<{ Params: { orgId: string }; Body: unknown }>("/connect", async (request) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const { installationId } = githubAppConnectBodySchema.parse(request.body);
+    const callerGithubId = await resolveCallerGithubId(app.db, scope.userId);
+    await connectInstallationToOrg(app.db, {
+      installationId,
+      hubOrganizationId: scope.organizationId,
+      callerGithubId,
+    });
+    return { installationId, organizationId: scope.organizationId, connected: true };
+  });
+
+  /**
+   * POST `/disconnect` — clear this team's binding. The GitHub-side
+   * installation is untouched (no uninstall), so the row survives and can
+   * be reconnected from any panel later. No body: the 1:1 rule means "the
+   * team's binding" is unambiguous. 404 when nothing is bound. Plain team
+   * admin suffices — the binding is the team's own resource, so no
+   * requester/installer match is required to release it.
+   */
+  app.post<{ Params: { orgId: string } }>("/disconnect", async (request) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const row = await disconnectInstallationFromOrg(app.db, scope.organizationId);
+    return { installationId: row.installationId, organizationId: scope.organizationId, disconnected: true };
+  });
+}
+
+/**
+ * The caller's numeric GitHub id off `auth_identities.identifier` (written
+ * by the OAuth callback as `String(profile.githubId)`), or null when the
+ * user has no GitHub identity on file. This is the login-authenticated
+ * half of the connect authorization; the webhook-recorded
+ * requester/installer ids are the other half.
+ */
+async function resolveCallerGithubId(db: Database, userId: string): Promise<number | null> {
+  const [identity] = await db
+    .select({ identifier: authIdentities.identifier })
+    .from(authIdentities)
+    .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, "github")))
+    .limit(1);
+  if (!identity) return null;
+  const githubId = Number(identity.identifier);
+  return Number.isFinite(githubId) ? githubId : null;
 }

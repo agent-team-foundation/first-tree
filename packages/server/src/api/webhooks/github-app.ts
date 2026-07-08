@@ -6,7 +6,6 @@ import { createLogger } from "../../observability/index.js";
 import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
 import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
-import { completeInstallBind, deleteExpiredPendingBinds } from "../../services/github-app-install-intents.js";
 import {
   deleteInstallationByGithubId,
   findInstallationByGithubId,
@@ -47,6 +46,19 @@ function readInstallationId(payload: unknown): number | null {
 function readSenderGithubId(payload: Record<string, unknown>): number | null {
   const sender = isRecord(payload.sender) ? payload.sender : null;
   const id = sender?.id;
+  return typeof id === "number" && Number.isFinite(id) ? id : null;
+}
+
+/**
+ * The user who *requested* the install when it went through GitHub's
+ * owner-approval flow — the top-level `requester` block on
+ * `installation.created`. In that flow the `sender` is the approving
+ * owner, so this is the only GitHub-authenticated link back to the
+ * initiator. Absent (null) on direct installs.
+ */
+function readRequesterGithubId(payload: Record<string, unknown>): number | null {
+  const requester = isRecord(payload.requester) ? payload.requester : null;
+  const id = requester?.id;
   return typeof id === "number" && Number.isFinite(id) ? id : null;
 }
 
@@ -206,31 +218,22 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
     case "created": {
       const metadata = parseInstallationMetadata(installation);
       if (!metadata) return "ignored:malformed";
-      // Record the GitHub-authenticated installer (`sender`) on the row — the
-      // trusted anti-forgery anchor `completeInstallBind` compares against the
-      // kickoff admin. GitHub only lets a user install on an account they
-      // administer, so this id proves "installer administers the installed
-      // account" (it replaces the old `verifyUserCanAdministerInstallation`
-      // probe on the binding path).
+      // Record-only: the row is created UNBOUND, carrying the two
+      // GitHub-authenticated anchors the connect panel matches against —
+      // the installer (`sender`; GitHub only lets a user install on an
+      // account they administer) and, for owner-approval installs, the
+      // original `requester`. Binding is never inferred here: a team admin
+      // explicitly connects the installation from the Settings panel of
+      // the team it should bind to. That panel action is what decides the
+      // target team — the webhook cannot know it.
       const installerGithubId = readSenderGithubId(payload);
+      const requesterGithubId = readRequesterGithubId(payload);
       await upsertInstallationFromMetadata(app.db, {
         installation: metadata,
         ...(installerGithubId !== null ? { installerGithubId } : {}),
+        ...(requesterGithubId !== null ? { requesterGithubId } : {}),
       });
-      // Opportunistic sweep of stale pending binds (keeps the table + index
-      // honest; not required for correctness — completeInstallBind filters by
-      // freshness anyway).
-      await deleteExpiredPendingBinds(app.db).catch((err) =>
-        log.warn({ err }, "install-intent expiry sweep failed (non-fatal)"),
-      );
-      if (installerGithubId === null) return "created:no-sender";
-      // Bind iff the callback already recorded a pending bind for THIS
-      // installation whose kickoff admin == this installer (and is still an
-      // active admin). If the callback hasn't arrived yet this no-ops and the
-      // callback completes the bind when it does. A transient bind error
-      // rethrows → 500 → GitHub redelivers (pending bind is preserved).
-      const result = await completeInstallBind(app.db, installationId);
-      return `created:${result.reason}`;
+      return "created:recorded";
     }
     case "new_permissions_accepted": {
       const metadata = parseInstallationMetadata(installation);

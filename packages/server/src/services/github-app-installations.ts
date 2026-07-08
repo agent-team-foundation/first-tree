@@ -1,7 +1,8 @@
-import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
-import { ConflictError, NotFoundError } from "../errors.js";
+import { organizations } from "../db/schema/organizations.js";
+import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import type { AppInstallation } from "./github-app.js";
 
@@ -35,12 +36,13 @@ function isUniqueViolation(err: unknown): boolean {
  * arrive first without producing duplicate rows; the column UNIQUE index
  * is the dedup mechanism.
  *
- * `bindInstallationToOrg` is the second-half of the OAuth-callback flow —
- * it links a freshly-inserted-or-rebound installation to the user's First Tree
- * team. Idempotent: subsequent sign-ins by the same user re-bind to the
- * same org via the UNIQUE(hub_organization_id) constraint (a different
- * user signing in with the same installation_id MUST NOT rebind to their
- * org, per D2 1:1).
+ * `bindInstallationToOrg` is the row-level bind primitive. Its production
+ * caller is `connectInstallationToOrg` (the explicit connect-panel action);
+ * the dev-callback QA stub also calls it directly. Idempotent: re-binding
+ * the same installation to the same org is a no-op, and the
+ * UNIQUE(hub_organization_id) constraint enforces D2 1:1 (a different
+ * user connecting the same installation_id MUST NOT rebind it to their
+ * org).
  */
 
 export type UpsertInstallationInput = {
@@ -61,6 +63,13 @@ export type UpsertInstallationInput = {
    * anchor for binding (see the column jsdoc).
    */
   installerGithubId?: number;
+  /**
+   * GitHub numeric id of the user who requested the install through the
+   * owner-approval flow — the top-level `requester` block on the
+   * `installation.created` webhook. Same COALESCE-preserve semantics as
+   * `installerGithubId`. Absent on direct installs.
+   */
+  requesterGithubId?: number;
 };
 
 export type InstallationRow = typeof githubAppInstallations.$inferSelect;
@@ -87,6 +96,7 @@ export async function upsertInstallationFromMetadata(
     accountLogin: input.installation.accountLogin,
     accountGithubId: input.installation.accountGithubId,
     installerGithubId: input.installerGithubId ?? null,
+    requesterGithubId: input.requesterGithubId ?? null,
     hubOrganizationId: input.hubOrganizationId ?? null,
     permissions: input.installation.permissions,
     events: input.installation.events,
@@ -109,6 +119,8 @@ export async function upsertInstallationFromMetadata(
         // a subsequent event's `sender` (which may be a different admin
         // accepting new permissions).
         installerGithubId: sql`coalesce(${githubAppInstallations.installerGithubId}, ${values.installerGithubId})`,
+        // Same preserve semantics for the approval-flow requester.
+        requesterGithubId: sql`coalesce(${githubAppInstallations.requesterGithubId}, ${values.requesterGithubId})`,
         permissions: values.permissions,
         events: values.events,
         suspendedAt: values.suspendedAt,
@@ -366,4 +378,103 @@ export async function countInstallationsForOrg(db: Database, hubOrganizationId: 
     .from(githubAppInstallations)
     .where(eq(githubAppInstallations.hubOrganizationId, hubOrganizationId));
   return row?.c ?? 0;
+}
+
+// ── Connect panel ─────────────────────────────────────────────────────
+//
+// Binding is an explicit user action under the unified connect model: the
+// `installation.created` webhook records every installation unbound, and a
+// team admin connects one from the Settings panel of the team it should
+// bind to. The target team is therefore always "the team whose panel the
+// caller is on" — no server-side install intent, no auto-bind. Authorization
+// rests entirely on data we already hold: the caller must be an admin of the
+// target team (route layer) and their GitHub id must equal the installation's
+// webhook-verified requester or installer (here). No GitHub API call, no
+// GitHub permission is involved.
+
+export type AssociatedInstallation = InstallationRow & {
+  /** Display name of the bound team; null while unbound. */
+  connectedTeamName: string | null;
+};
+
+/**
+ * All installations associated with a GitHub user — rows whose trusted
+ * requester or installer id equals `githubUserId`. Powers the connect
+ * panel's list; the caller annotates each row's status relative to the
+ * panel's own team. Newest install first, so a just-approved installation
+ * surfaces at the top while the panel polls.
+ */
+export async function listInstallationsForGithubUser(
+  db: Database,
+  githubUserId: number,
+): Promise<AssociatedInstallation[]> {
+  const rows = await db
+    .select({ installation: githubAppInstallations, connectedTeamName: organizations.displayName })
+    .from(githubAppInstallations)
+    .leftJoin(organizations, eq(githubAppInstallations.hubOrganizationId, organizations.id))
+    .where(
+      or(
+        eq(githubAppInstallations.requesterGithubId, githubUserId),
+        eq(githubAppInstallations.installerGithubId, githubUserId),
+      ),
+    )
+    .orderBy(desc(githubAppInstallations.createdAt));
+  return rows.map((r) => ({ ...r.installation, connectedTeamName: r.connectedTeamName ?? null }));
+}
+
+/**
+ * Connect an installation to a First Tree team from the panel.
+ *
+ * Authorization (the route already verified team admin): the caller's
+ * GitHub id must equal the installation's webhook-verified requester or
+ * installer — the two GitHub-authenticated links between a person and an
+ * installation. `callerGithubId` is null when the caller has no GitHub
+ * identity on file; that fails the same check (they can't be associated
+ * with any installation).
+ *
+ * Throws:
+ *   - NotFoundError — no row with this installation id.
+ *   - ForbiddenError — caller is neither requester nor installer.
+ *   - ConflictError — 1:1 violation, via `bindInstallationToOrg` (this
+ *     installation is bound to another team, or this team already holds a
+ *     different installation).
+ */
+export async function connectInstallationToOrg(
+  db: Database,
+  input: { installationId: number; hubOrganizationId: string; callerGithubId: number | null },
+): Promise<InstallationRow> {
+  const row = await findInstallationByGithubId(db, input.installationId);
+  if (!row) {
+    throw new NotFoundError(`No installation row for installation_id=${input.installationId}`);
+  }
+  const associated =
+    input.callerGithubId !== null &&
+    (row.requesterGithubId === input.callerGithubId || row.installerGithubId === input.callerGithubId);
+  if (!associated) {
+    throw new ForbiddenError("This installation is not associated with your GitHub account");
+  }
+  await bindInstallationToOrg(db, input.installationId, input.hubOrganizationId);
+  return row;
+}
+
+/**
+ * Disconnect whatever installation is bound to this team. Clears only the
+ * First Tree-side binding — the GitHub-side installation is untouched, so
+ * the row survives (with its requester/installer anchors) and can be
+ * reconnected from any panel later. Team admins may disconnect their own
+ * team's binding regardless of who originally installed it: the binding is
+ * the team's resource.
+ *
+ * Throws NotFoundError when the team has no bound installation.
+ */
+export async function disconnectInstallationFromOrg(db: Database, hubOrganizationId: string): Promise<InstallationRow> {
+  const [row] = await db
+    .update(githubAppInstallations)
+    .set({ hubOrganizationId: null, updatedAt: new Date() })
+    .where(eq(githubAppInstallations.hubOrganizationId, hubOrganizationId))
+    .returning();
+  if (!row) {
+    throw new NotFoundError("No GitHub App installation is bound to this team");
+  }
+  return row;
 }

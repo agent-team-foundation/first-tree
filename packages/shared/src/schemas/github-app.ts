@@ -100,16 +100,60 @@ export type GithubAppUserTokenMetadata = z.infer<typeof githubAppUserTokenMetada
  * first ship.
  */
 /**
- * Body for `POST /orgs/:orgId/github-app-installation/claim` — manual
- * recovery for an installation row that ended up unbound (codex P1-5 + H1).
- * The orphan-reclaim sweep at sign-in auto-claims the single-orphan case;
- * this endpoint backs the Settings "Claim install" buttons when there's
- * more than one (or the account is an org, where auto-claim is too risky).
+ * Body for `POST /orgs/:orgId/github-app-installation/connect` — bind an
+ * existing (recorded, unbound) installation to the calling team. Binding is
+ * always an explicit panel action under the unified connect model: the
+ * `installation.created` webhook records rows unbound, and a team admin who
+ * is the installation's GitHub-verified requester or installer connects it
+ * from the panel of the team it should bind to.
  */
-export const githubAppInstallationClaimBodySchema = z.object({
+export const githubAppConnectBodySchema = z.object({
   installationId: z.number().int().positive(),
 });
-export type GithubAppInstallationClaimBody = z.infer<typeof githubAppInstallationClaimBodySchema>;
+export type GithubAppConnectBody = z.infer<typeof githubAppConnectBodySchema>;
+
+/**
+ * Connection status of one installation relative to the panel's team:
+ *   - "connectable"         — unbound; the caller can connect it here.
+ *   - "connected-here"      — bound to the panel's own team.
+ *   - "connected-elsewhere" — bound to a different First Tree team
+ *                             (`connectedTeamName` says which).
+ */
+export const GITHUB_APP_CONNECT_STATUSES = ["connectable", "connected-here", "connected-elsewhere"] as const;
+export const githubAppConnectStatusSchema = z.enum(GITHUB_APP_CONNECT_STATUSES);
+export type GithubAppConnectStatus = z.infer<typeof githubAppConnectStatusSchema>;
+
+/**
+ * One row of `GET /orgs/:orgId/github-app-installation/connect-panel` — an
+ * installation associated with the calling user (their GitHub id is the
+ * row's webhook-verified requester or installer), annotated with its
+ * connection status relative to the panel's team.
+ */
+export const githubAppConnectPanelInstallationSchema = z.object({
+  installationId: z.number().int().positive(),
+  accountType: githubAccountTypeSchema,
+  accountLogin: z.string(),
+  accountGithubId: z.number().int().positive(),
+  suspended: z.boolean(),
+  status: githubAppConnectStatusSchema,
+  /** Display name of the team holding the binding; only on "connected-elsewhere". */
+  connectedTeamName: z.string().nullable(),
+  createdAt: z.string().datetime({ offset: true }),
+});
+export type GithubAppConnectPanelInstallation = z.infer<typeof githubAppConnectPanelInstallationSchema>;
+
+/**
+ * Response of `GET /orgs/:orgId/github-app-installation/connect-panel`.
+ * `installations` is empty when the caller has no GitHub identity on file
+ * or no installation names their GitHub id as requester/installer. The
+ * panel polls this while open — installations arrive asynchronously
+ * (owner approval, installs on additional accounts), so the list is a
+ * moving snapshot, not a one-shot answer.
+ */
+export const githubAppConnectPanelOutputSchema = z.object({
+  installations: z.array(githubAppConnectPanelInstallationSchema),
+});
+export type GithubAppConnectPanelOutput = z.infer<typeof githubAppConnectPanelOutputSchema>;
 
 export const githubAppInstallationOutputSchema = z.object({
   installationId: z.number().int().positive(),
