@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -18,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   artifactDownloadUrl,
   artifactFileName,
+  assertNoBuildRootReferences,
   buildPortableReleaseMetadata,
   copyPortableAppTemplate,
   DEFAULT_DOWNLOAD_BASE_URL,
@@ -27,13 +29,19 @@ import {
   normalizeDownloadBaseUrl,
   normalizeGeneratedAt,
   normalizeNodeVersion,
+  PORTABLE_LOCKFILE_INSTALL_ARGS,
+  PORTABLE_NODE_MODULES_INSTALL_ARGS,
   packageJsonForApp,
   parsePlatform,
+  portableBuildRoots,
   portableTarCreateArgs,
+  readWorkspacePackageManager,
   relativizeInternalSymlinks,
   renderInstallerForChannel,
   resolveNodeVersion,
   resolvePinnedDependenciesFromPnpmList,
+  rewriteBinShimBuildRoots,
+  sanitizePortableBinShims,
   validateChannelVersion,
   writeDeterministicTarGz,
 } from "../../../scripts/portable/build-portable.mjs";
@@ -156,10 +164,42 @@ describe("portable builder helpers", () => {
     );
   });
 
-  it("builds portable archives from a deterministic file list without platform xattrs", () => {
+  it("builds portable archives from a deterministic file list without xattrs or build-user ownership", () => {
     expect(
       portableTarCreateArgs({ tarballPath: "payload.tar", sourceDir: "payload", fileListPath: "files.txt" }),
-    ).toEqual(["--no-recursion", "--no-xattrs", "-cf", "payload.tar", "-C", "payload", "-T", "files.txt"]);
+    ).toEqual([
+      "--no-recursion",
+      "--no-xattrs",
+      "--owner=0",
+      "--group=0",
+      "--numeric-owner",
+      "-cf",
+      "payload.tar",
+      "-C",
+      "payload",
+      "-T",
+      "files.txt",
+    ]);
+    expect(portableTarCreateArgs({ tarballPath: "payload.tar", sourceDir: "payload", tarFlavor: "bsd" })).toEqual([
+      "--no-recursion",
+      "--no-xattrs",
+      "--uid",
+      "0",
+      "--gid",
+      "0",
+      "--uname",
+      "",
+      "--gname",
+      "",
+      "-cf",
+      "payload.tar",
+      "-C",
+      "payload",
+      ".",
+    ]);
+    expect(() => portableTarCreateArgs({ tarballPath: "p.tar", sourceDir: "p", tarFlavor: "zip" })).toThrow(
+      /tar flavor/,
+    );
   });
 
   it("normalizes generatedAt timestamps for release metadata", () => {
@@ -210,12 +250,21 @@ describe("portable builder helpers", () => {
       version: "1.2.3",
       dependencies,
       sourcePackage,
+      packageManager: "pnpm@10.12.1",
     });
 
     expect(appPackage.dependencies).toEqual({ commander: "13.1.0", zod: "4.3.6" });
     expect(
       Object.values(appPackage.dependencies).every((version) => !version.startsWith("^") && !version.startsWith("~")),
     ).toBe(true);
+    expect(appPackage.packageManager).toBe("pnpm@10.12.1");
+  });
+
+  it("pins the temp-dir install to the workspace pnpm version", () => {
+    expect(readWorkspacePackageManager({ packageManager: "pnpm@10.12.1" })).toBe("pnpm@10.12.1");
+    expect(() => readWorkspacePackageManager({ packageManager: "pnpm@^10" })).toThrow(/exact pnpm version/);
+    expect(() => readWorkspacePackageManager({})).toThrow(/exact pnpm version/);
+    expect(readWorkspacePackageManager()).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
   });
 
   it("fails when a portable dependency is missing from locked pnpm output", () => {
@@ -251,6 +300,81 @@ describe("portable builder helpers", () => {
 
     expect(readlinkSync(link)).toBe(".pnpm/zod@4.3.6/node_modules/zod");
     expect(readFileSync(join(link, "index.js"), "utf8")).toBe("export {};\n");
+  });
+
+  it("generates the portable lockfile without requiring an offline pnpm metadata mirror", () => {
+    expect(PORTABLE_LOCKFILE_INSTALL_ARGS).toContain("--lockfile-only");
+    expect(PORTABLE_LOCKFILE_INSTALL_ARGS).toContain("--prefer-offline");
+    expect(PORTABLE_LOCKFILE_INSTALL_ARGS).not.toContain("--offline");
+    expect(PORTABLE_NODE_MODULES_INSTALL_ARGS).toContain("--frozen-lockfile");
+    expect(PORTABLE_NODE_MODULES_INSTALL_ARGS).not.toContain("--offline");
+  });
+
+  it("orders build roots longest-first and includes the realpath variant", () => {
+    const dir = tempDir("first-tree-portable-roots-");
+    const roots = portableBuildRoots(dir);
+    expect(roots).toContain(realpathSync(dir));
+    for (let i = 1; i < roots.length; i += 1) {
+      expect(roots[i - 1].length).toBeGreaterThanOrEqual(roots[i].length);
+    }
+  });
+
+  it("replaces overlapping build root variants without leaving a path prefix behind", () => {
+    const rewritten = rewriteBinShimBuildRoots({
+      content: 'export NODE_PATH="/private/var/tmp/build/app/node_modules/.pnpm/node_modules"\n',
+      shimDir: "/var/tmp/build/app/node_modules/.bin",
+      appDir: "/var/tmp/build/app",
+      buildRoots: ["/private/var/tmp/build/app", "/var/tmp/build/app"],
+    });
+    expect(rewritten).toBe('export NODE_PATH="$basedir/../../node_modules/.pnpm/node_modules"\n');
+  });
+
+  it("rewrites bin shim build paths to basedir-relative form for reproducible artifacts", async () => {
+    const root = tempDir("first-tree-portable-shim-");
+    const appDir = join(root, "app");
+    const topBin = join(appDir, "node_modules", ".bin");
+    const nestedBin = join(
+      appDir,
+      "node_modules",
+      ".pnpm",
+      "gray-matter@4.0.3",
+      "node_modules",
+      "gray-matter",
+      "node_modules",
+      ".bin",
+    );
+    await mkdir(topBin, { recursive: true });
+    await mkdir(nestedBin, { recursive: true });
+    const buildRoot = realpathSync(appDir);
+    const shim = (target: string) =>
+      `#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
+export NODE_PATH="${buildRoot}/node_modules/.pnpm/node_modules"
+exec node "$basedir/../${target}" "$@"
+# cmd-shim-target=${buildRoot}/node_modules/${target}
+`;
+    writeFileSync(join(topBin, "semver"), shim("semver/bin/semver.js"), { mode: 0o755 });
+    writeFileSync(join(nestedBin, "js-yaml"), shim("js-yaml/bin/js-yaml.js"), { mode: 0o755 });
+
+    const rewritten = sanitizePortableBinShims(appDir);
+
+    expect(rewritten).toHaveLength(2);
+    const topContent = readFileSync(join(topBin, "semver"), "utf8");
+    expect(topContent).toContain('NODE_PATH="$basedir/../../node_modules/.pnpm/node_modules"');
+    expect(topContent).not.toContain(buildRoot);
+    const nestedContent = readFileSync(join(nestedBin, "js-yaml"), "utf8");
+    expect(nestedContent).toContain('NODE_PATH="$basedir/../../../../../../../node_modules/.pnpm/node_modules"');
+    expect(nestedContent).not.toContain(buildRoot);
+    expect(statSync(join(topBin, "semver")).mode & 0o755).toBe(0o755);
+    expect(() => assertNoBuildRootReferences(appDir)).not.toThrow();
+  });
+
+  it("fails closed when a portable app file still references its build directory", async () => {
+    const root = tempDir("first-tree-portable-leak-");
+    const appDir = join(root, "app");
+    await mkdir(appDir, { recursive: true });
+    await writeFile(join(appDir, "leak.txt"), `${realpathSync(appDir)}/node_modules\n`);
+    expect(() => assertNoBuildRootReferences(appDir)).toThrow(/build directory/);
   });
 
   it("copies portable app templates without rewriting relative symlinks to the source temp dir", async () => {

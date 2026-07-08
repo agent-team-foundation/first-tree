@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -99,8 +100,22 @@ export function artifactFileName(options) {
   return `${options.packageName}-${options.version}-${options.platform}.tar.gz`;
 }
 
-export function portableTarCreateArgs({ tarballPath, sourceDir, fileListPath = null }) {
-  const args = ["--no-recursion", "--no-xattrs", "-cf", tarballPath, "-C", sourceDir];
+// Tar headers must not record the build machine's uid/gid/user names: they
+// would make byte-reproducibility depend on which user ran the build, and the
+// flag spelling differs between GNU tar (CI runners) and bsdtar (macOS).
+export function tarOwnershipArgs(tarFlavor) {
+  if (tarFlavor === "gnu") return ["--owner=0", "--group=0", "--numeric-owner"];
+  if (tarFlavor === "bsd") return ["--uid", "0", "--gid", "0", "--uname", "", "--gname", ""];
+  fail(`unsupported tar flavor: ${tarFlavor}`);
+}
+
+export function detectTarFlavor() {
+  const res = run("tar", ["--version"], { stdio: "pipe" });
+  return res.stdout.includes("GNU tar") ? "gnu" : "bsd";
+}
+
+export function portableTarCreateArgs({ tarballPath, sourceDir, fileListPath = null, tarFlavor = "gnu" }) {
+  const args = ["--no-recursion", "--no-xattrs", ...tarOwnershipArgs(tarFlavor), "-cf", tarballPath, "-C", sourceDir];
   if (fileListPath) args.push("-T", fileListPath);
   else args.push(".");
   return args;
@@ -293,7 +308,7 @@ export async function writeDeterministicTarGz({ sourceDir, tarballPath, generate
     const tarPath = join(tempDir, "payload.tar");
     const entries = [".", ...(await listArchiveEntries(sourceDir))];
     writeFileSync(fileListPath, `${entries.join("\n")}\n`);
-    run("tar", portableTarCreateArgs({ tarballPath: tarPath, sourceDir, fileListPath }), {
+    run("tar", portableTarCreateArgs({ tarballPath: tarPath, sourceDir, fileListPath, tarFlavor: detectTarFlavor() }), {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
     writeFileSync(tarballPath, gzipSync(readFileSync(tarPath), { mtime: 0 }));
@@ -378,11 +393,25 @@ export function resolvePinnedAppDependencies(sourcePackage = readJson(join(CLI_R
   });
 }
 
+// The portable app is installed in a temp dir outside the workspace, where the
+// root package.json's packageManager pin does not apply, so a bare `pnpm` on
+// PATH could be any version. pnpm generations differ in node_modules layout and
+// cmd-shim output, which would change shipped bytes between environments, so
+// the release build must run under the workspace-pinned pnpm everywhere.
+export function readWorkspacePackageManager(rootPackage = readJson(join(REPO_ROOT, "package.json"))) {
+  const value = rootPackage.packageManager;
+  if (typeof value !== "string" || !/^pnpm@\d+\.\d+\.\d+$/.test(value)) {
+    fail("root package.json must pin packageManager to an exact pnpm version for reproducible portable builds");
+  }
+  return value;
+}
+
 export function packageJsonForApp({
   channelConfig,
   version,
   dependencies,
   sourcePackage = readJson(join(CLI_ROOT, "package.json")),
+  packageManager = null,
 }) {
   return {
     name: channelConfig.packageName,
@@ -392,6 +421,7 @@ export function packageJsonForApp({
     license: sourcePackage.license,
     repository: sourcePackage.repository,
     engines: sourcePackage.engines,
+    ...(packageManager ? { packageManager } : {}),
     bin: {
       [channelConfig.binName]: "./cli/index.mjs",
       [channelConfig.aliasName]: "./cli/index.mjs",
@@ -404,6 +434,7 @@ function cleanupPnpmInstallMetadata(appDir) {
   for (const path of [
     join(appDir, "pnpm-lock.yaml"),
     join(appDir, "node_modules", ".modules.yaml"),
+    join(appDir, "node_modules", ".pnpm-workspace-state.json"),
     join(appDir, "node_modules", ".pnpm-workspace-state-v1.json"),
     join(appDir, "node_modules", ".pnpm", "lock.yaml"),
   ]) {
@@ -440,30 +471,147 @@ export function copyPortableAppTemplate(sourceDir, destDir) {
   cpSync(sourceDir, destDir, { recursive: true, verbatimSymlinks: true });
 }
 
+// The portable app is assembled in a fresh mkdtemp directory, and pnpm's
+// cmd-shim bin scripts embed that absolute directory (NODE_PATH exports and
+// the cmd-shim-target trailer). Shipping those bytes makes every build of the
+// same channel/version differ, which breaks the immutable-object retry
+// contract in upload-s3.sh: a release-resume rerun would produce different
+// tarball bytes and fail closed. The shims already define `basedir` (their own
+// directory) for the exec lines, so the embedded absolute build paths are
+// rewritten to $basedir-relative equivalents, which are also the only form
+// that is correct on the machine the artifact is finally installed on.
+export function portableBuildRoots(appDir) {
+  // Longest first: on macOS the raw mkdtemp path (/var/...) is a substring of
+  // its realpath (/private/var/...), and replacing the shorter one first would
+  // leave a stray "/private" prefix behind.
+  return [...new Set([appDir, realpathSync(appDir)])].sort((a, b) => b.length - a.length);
+}
+
+function collectBinShimFiles(dir, results = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (!entry.isDirectory()) continue;
+    if (entry.name === ".bin") {
+      for (const shim of readdirSync(path, { withFileTypes: true })) {
+        if (shim.isFile()) results.push(join(path, shim.name));
+      }
+    } else {
+      collectBinShimFiles(path, results);
+    }
+  }
+  return results;
+}
+
+export function rewriteBinShimBuildRoots({ content, shimDir, appDir, buildRoots }) {
+  const rel = relative(shimDir, appDir);
+  const replacement = rel === "" ? "$basedir" : `$basedir/${rel}`;
+  let result = content;
+  for (const root of buildRoots) {
+    result = result.split(root).join(replacement);
+  }
+  return result;
+}
+
+export function sanitizePortableBinShims(appDir, buildRoots = portableBuildRoots(appDir)) {
+  const rewritten = [];
+  for (const shim of collectBinShimFiles(appDir)) {
+    const original = readFileSync(shim, "utf8");
+    const updated = rewriteBinShimBuildRoots({ content: original, shimDir: dirname(shim), appDir, buildRoots });
+    if (updated === original) continue;
+    const { mode } = statSync(shim);
+    // Recreate instead of writing in place so a hardlinked shim can never
+    // mutate a shared pnpm store entry.
+    unlinkSync(shim);
+    writeFileSync(shim, updated, { mode });
+    rewritten.push(shim);
+  }
+  return rewritten;
+}
+
+export function assertNoBuildRootReferences(appDir, buildRoots = portableBuildRoots(appDir)) {
+  const rootBuffers = buildRoots.map((root) => Buffer.from(root));
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (entry.isSymbolicLink()) {
+        const target = readlinkSync(path);
+        if (buildRoots.some((root) => target.includes(root))) offenders.push(relative(appDir, path));
+      } else if (entry.isFile()) {
+        const content = readFileSync(path);
+        if (rootBuffers.some((root) => content.includes(root))) offenders.push(relative(appDir, path));
+      }
+    }
+  };
+  walk(appDir);
+  if (offenders.length > 0) {
+    fail(
+      `portable app still references its build directory, which breaks byte-reproducible release retries:\n${offenders.join("\n")}`,
+    );
+  }
+}
+
+// Step 1: regenerate a single-package lockfile for the synthetic portable app.
+//
+// The portable app's package.json pins every dependency to the exact version
+// already resolved in the workspace (see resolvePinnedAppDependencies), and we
+// copy the workspace pnpm-lock.yaml so pnpm reuses those locked resolutions
+// instead of re-resolving semver ranges.
+//
+// We intentionally use `--prefer-offline` rather than a bare `--offline`. A
+// release/publish runner only ever ran `pnpm install --frozen-lockfile`, which
+// populates the content-addressable store but NOT the metadata mirror. A bare
+// `--offline` therefore fails closed with ERR_PNPM_NO_OFFLINE_META even though
+// every needed version is already pinned, which strands portable publication on
+// a fresh CI runner (the release-resume path). `--prefer-offline` reuses the
+// metadata mirror when present and otherwise fetches the (immutable) metadata of
+// the already-pinned exact versions from the registry. Because the resolution is
+// fully determined by the pinned versions and the copied workspace lockfile, the
+// generated lockfile — and thus the shipped bytes — is identical regardless of
+// whether the metadata came from the mirror or the network.
+export const PORTABLE_LOCKFILE_INSTALL_ARGS = [
+  "install",
+  "--lockfile-only",
+  "--prod",
+  "--ignore-scripts",
+  "--no-optional",
+  "--prefer-offline",
+  "--no-frozen-lockfile",
+];
+
+// Step 2: materialize node_modules strictly from the lockfile generated above.
+// This is the step that determines the shipped bytes, and `--frozen-lockfile`
+// guarantees it matches that lockfile exactly with no further resolution.
+export const PORTABLE_NODE_MODULES_INSTALL_ARGS = [
+  "install",
+  "--prod",
+  "--ignore-scripts",
+  "--no-optional",
+  "--frozen-lockfile",
+];
+
 async function prepareAppTemplate({ channel, channelConfig, version }) {
   const root = await mkdtemp(join(tmpdir(), "first-tree-portable-app-"));
   const appDir = join(root, "app");
   const sourcePackage = readJson(join(CLI_ROOT, "package.json"));
   const dependencies = resolvePinnedAppDependencies(sourcePackage);
+  const packageManager = readWorkspacePackageManager();
   cpSync(join(CLI_ROOT, "dist"), appDir, { recursive: true });
   await rewriteBundleChannel(appDir, channel);
   cpSync(join(REPO_ROOT, "skills"), join(appDir, "skills"), { recursive: true });
   cpSync(join(CLI_ROOT, "README.md"), join(appDir, "README.md"));
   cpSync(join(CLI_ROOT, "LICENSE"), join(appDir, "LICENSE"));
   copyPruneScripts(appDir);
-  writeJson(join(appDir, "package.json"), packageJsonForApp({ channelConfig, version, dependencies, sourcePackage }));
+  writeJson(
+    join(appDir, "package.json"),
+    packageJsonForApp({ channelConfig, version, dependencies, sourcePackage, packageManager }),
+  );
   cpSync(join(REPO_ROOT, "pnpm-lock.yaml"), join(appDir, "pnpm-lock.yaml"));
 
-  run(
-    "pnpm",
-    ["install", "--lockfile-only", "--prod", "--ignore-scripts", "--no-optional", "--offline", "--no-frozen-lockfile"],
-    {
-      cwd: appDir,
-    },
-  );
-  run("pnpm", ["install", "--prod", "--ignore-scripts", "--no-optional", "--frozen-lockfile"], {
-    cwd: appDir,
-  });
+  run("pnpm", PORTABLE_LOCKFILE_INSTALL_ARGS, { cwd: appDir });
+  run("pnpm", PORTABLE_NODE_MODULES_INSTALL_ARGS, { cwd: appDir });
   for (const script of [
     "scripts/prune-codex-runtime-binary.mjs",
     "scripts/prune-claude-runtime-binary.mjs",
@@ -476,6 +624,9 @@ async function prepareAppTemplate({ channel, channelConfig, version }) {
   }
   relativizeInternalSymlinks(appDir);
   cleanupPnpmInstallMetadata(appDir);
+  const buildRoots = portableBuildRoots(appDir);
+  sanitizePortableBinShims(appDir, buildRoots);
+  assertNoBuildRootReferences(appDir, buildRoots);
   return { root, appDir };
 }
 
