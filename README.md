@@ -130,7 +130,7 @@ CLI and link the machine:
 # Use the exact command shown in the web console; production portable installs
 # have this shape:
 curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
-~/.local/bin/first-tree login <connect-token>
+~/.local/bin/first-tree login <connect-code>
 ```
 
 The portable installer bundles Node.js, so new users do not need to install
@@ -142,7 +142,7 @@ Node runtime.
 
 ```text
 first-tree
-├── login <token>           Sign this computer in
+├── login <code>            Sign this computer in
 ├── logout                  Stop the daemon and clear credentials
 ├── status                  CLI / daemon / server / auth overview
 ├── doctor                  Cross-subsystem readiness check

@@ -45,7 +45,7 @@ npm mode uses your system Node.js runtime and requires Node.js ≥ 22.13.
 
 ```
 first-tree
-├── login <token>            Sign this computer in or switch local clients
+├── login <code>             Sign this computer in or switch local clients
 ├── logout                   Stop the daemon and clear credentials
 ├── computer ...             Computer-level local state recovery
 ├── status                   CLI + daemon + server + auth + agent overview
@@ -65,13 +65,15 @@ first-tree
 ## login
 
 ```
-first-tree login <token> [--no-start] [--force-switch]
+first-tree login <code> [--no-start] [--force-switch]
 ```
 
-Sign this computer in using a connect token from the web console. New tokens
-are short connect URLs whose origin carries the server URL; legacy JWT tokens
-with an `iss` claim are still accepted during rollout. No `--server` flag is
-needed, and switching to a different deployment only requires a fresh token.
+Sign this computer in using a short connect code from the web console. New
+codes are exchanged against this CLI channel's default server URL
+(`first-tree` → production, `first-tree-staging` → staging, `first-tree-dev` →
+local dev), with `FIRST_TREE_SERVER_URL` as an explicit override for custom
+deployments. Legacy short connect URLs and JWT tokens with an `iss` claim are
+still accepted during rollout.
 If this machine already has credentials for another user, `login` asks for
 explicit confirmation and switches the active local client after stopping and
 draining the old runtime. In non-TTY automation, `--force-switch` is the only
@@ -94,7 +96,7 @@ Stop the daemon and clear credentials. `--purge` additionally removes active
 root client state, parked clients under `$FIRST_TREE_HOME/parked-clients/`, and
 switch lock/journal files. This is a destructive local reset path, not the
 normal account-switch path. To switch this computer to another First Tree user,
-run `first-tree login <token>` with the new user's connect token and confirm
+run `first-tree login <code>` with the new user's connect code and confirm
 the switch. Before deleting local state, `--purge` retires the current server
 client so it disappears from default Computers views and cannot be reactivated
 with the same client id. Retiring is destructive for runtime routing on that
@@ -128,7 +130,7 @@ credentials. Use this when local identity state is damaged or when you
 intentionally want to discard every local First Tree client stored in this
 installation. This is local-only and does not retire server client rows. Normal
 different-user switching should use
-`first-tree login <token>` instead, which parks inactive clients.
+`first-tree login <code>` instead, which parks inactive clients.
 
 ## status
 
@@ -752,7 +754,7 @@ Most environment variables use the `FIRST_TREE_` prefix.
 | Variable | Purpose | Default |
 |---|---|---|
 | `FIRST_TREE_HOME` | Override the CLI home directory for config, data, and agent workspaces. | Channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev). |
-| `FIRST_TREE_SERVER_URL` | Server URL fallback for non-login commands. `login` derives the URL from the connect token. | — |
+| `FIRST_TREE_SERVER_URL` | Server URL override for `login <code>` and fallback for other commands; otherwise `login` uses the CLI channel default. | — |
 | `FIRST_TREE_LOG_LEVEL` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`). | `info` |
 | `FIRST_TREE_JSON` | JSON output mode (equivalent to `--json`). | — |
 
@@ -835,7 +837,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_DATABASE_URL` | PostgreSQL connection URL. | — (required) |
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
-| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used as the origin for short connect URLs and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
+| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used to stamp the issuer on short connect codes and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |
@@ -960,7 +962,7 @@ Priority from high to low:
 
 ## Verification after upgrade
 
-After `first-tree upgrade` or after running `logout` + `login <token>` on a deployment-bump cycle:
+After `first-tree upgrade` or after running `logout` + `login <code>` on a deployment-bump cycle:
 
 ```bash
 first-tree status          # CLI version + service + server + auth + agents

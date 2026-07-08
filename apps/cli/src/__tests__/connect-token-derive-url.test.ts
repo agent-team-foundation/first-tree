@@ -11,6 +11,12 @@ function fakeJwt(payload: Record<string, unknown>): string {
 }
 
 describe("deriveHubUrlFromToken", () => {
+  it("returns the fallback URL for a bare short connect code", () => {
+    expect(deriveHubUrlFromToken("abc_DEF-1234567890xyz", "https://first-tree.example.com/")).toBe(
+      "https://first-tree.example.com",
+    );
+  });
+
   it("returns the origin from a short connect URL", () => {
     expect(deriveHubUrlFromToken("https://first-tree.example.com/connect/abc_DEF-123")).toBe(
       "https://first-tree.example.com",
@@ -66,7 +72,7 @@ describe("deriveHubUrlFromToken", () => {
   it("hard-fails when token is not a valid JWT", () => {
     expect(() => deriveHubUrlFromToken("not.a.jwt-at-all")).toThrow(HubUrlDerivationError);
     try {
-      deriveHubUrlFromToken("garbage");
+      deriveHubUrlFromToken("garbage", "https://first-tree.example.com");
     } catch (err) {
       expect((err as HubUrlDerivationError).code).toBe("INVALID_TOKEN");
     }

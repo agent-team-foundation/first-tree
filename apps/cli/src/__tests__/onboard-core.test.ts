@@ -89,7 +89,7 @@ describe("onboard core", () => {
       ["id", "missing_required"],
       ["type", "ok"],
     ]);
-    expect(formatCheckReport(missing)).toContain("Run `first-tree-dev login <token>` first");
+    expect(formatCheckReport(missing)).toContain("Run `first-tree-dev login <code>` first");
 
     loadCredentialsMock.mockReturnValueOnce(null);
     process.env.FIRST_TREE_SERVER_URL = "http://hub.test";

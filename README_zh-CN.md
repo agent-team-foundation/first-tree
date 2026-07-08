@@ -83,7 +83,7 @@ First Tree 围绕 Context Tree 连接五个部分：
 
 ```bash
 npm install -g first-tree
-first-tree login <connect-token>
+first-tree login <connect-code>
 ```
 
 二进制名为 `first-tree`；同时安装短别名 `ft`。
@@ -92,7 +92,7 @@ first-tree login <connect-token>
 
 ```text
 first-tree
-├── login <token>           把当前机器登入服务端
+├── login <code>           把当前机器登入服务端
 ├── logout                  停止 daemon 并清除凭证
 ├── status                  CLI / daemon / 服务端 / auth 一屏概览
 ├── doctor                  跨子系统就绪检查

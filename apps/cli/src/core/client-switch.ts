@@ -349,7 +349,7 @@ export async function confirmLocalClientSwitch(opts: {
   if (process.stdin.isTTY !== true) {
     fail(
       "ACCOUNT_SWITCH_REQUIRES_CONFIRMATION",
-      "This connect token belongs to a different First Tree user. Re-run with `--force-switch` in non-interactive mode to confirm account switching. Safety checks still run and cannot be skipped.",
+      "This connect code belongs to a different First Tree user. Re-run with `--force-switch` in non-interactive mode to confirm account switching. Safety checks still run and cannot be skipped.",
       1,
     );
   }
@@ -499,7 +499,7 @@ function formatSwitchConfirmationMessage(opts: {
   return [
     `Switch this computer from ${current} to ${target}?`,
     "This will stop the current daemon and interrupt running agent work before local state is moved.",
-    "Inactive First Tree refresh tokens are not kept; switching back requires a fresh `login <token>`.",
+    "Inactive First Tree refresh tokens are not kept; switching back requires a fresh `login <code>`.",
     "Provider auth is not isolated by First Tree and remains whatever this OS user is signed into.",
     "If runtime, provider, filesystem, or journal safety gates fail, the switch aborts without changing users.",
   ].join(" ");

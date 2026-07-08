@@ -81,7 +81,7 @@ function createInstallOutputLog(log: UpdateLogger | undefined): ((chunk: string)
  * relaunch picks up the new binary.
  *
  * `managed=false` means the process is running standalone (e.g. manual
- * `client start`, `connect <token> --no-start`, CI without a supervisor).
+ * `client start`, `login <code> --no-start`, CI without a supervisor).
  * Exiting in that mode would leave the client offline until an operator
  * noticed — so the callback instead prints a restart hint, returns
  * `{ installed: true }`, and the UpdateManager stops retrying until the
@@ -125,7 +125,7 @@ export function createExecuteUpdate({
     // re-pointed, etc.), running it again would re-trigger the same
     // exit(75) → restart → drift → install loop until systemd's
     // StartLimit kills the service. Refuse instead, and surface the
-    // reason so the operator knows what to do (run `connect <token>`
+    // reason so the operator knows what to do (run `login <code>`
     // again, or `npm i -g …@latest` manually). Returning
     // `{ installed: true }` is the right shape here — it puts the
     // UpdateManager into `pendingRestart=true`, blocking further attempts
@@ -302,7 +302,7 @@ function refreshServiceUnit(log: (level: "info" | "warn", message: string) => vo
   // silently rewrite the wrong service unit with the wrong channel's
   // templates.
   const bin = channelConfig.binName;
-  const recovery = `\`${bin} logout && ${bin} login <token>\``;
+  const recovery = `\`${bin} logout && ${bin} login <code>\``;
   try {
     const res = spawnSync(bin, ["daemon", "refresh-unit"], {
       encoding: "utf-8",

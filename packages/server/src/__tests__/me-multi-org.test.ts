@@ -116,16 +116,20 @@ describe("Multi-org self-service", () => {
   });
 });
 
-describe("Connect token URL carries issuer origin", () => {
+describe("Connect code bootstrap", () => {
   const getApp = useTestApp();
 
-  it("POST /me/connect-tokens returns a short URL derived from request host", async () => {
+  it("POST /me/connect-tokens returns a short connect code", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/me/connect-tokens",
-      headers: { authorization: `Bearer ${admin.accessToken}` },
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        host: "127.0.0.1:8000",
+        "x-forwarded-proto": "http",
+      },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json<{
@@ -138,9 +142,8 @@ describe("Connect token URL carries issuer origin", () => {
       binName: string;
     }>();
 
-    const tokenUrl = new URL(body.token);
-    expect(tokenUrl.origin).toMatch(/^https?:\/\//);
-    expect(tokenUrl.pathname).toMatch(/^\/connect\/[A-Za-z0-9_-]+$/);
+    expect(body.token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    expect(body.token).not.toContain("/");
 
     // Default test config runs channel=dev (server default) — dev has no
     // published package, so npmSpec is null and bootstrapCommand collapses

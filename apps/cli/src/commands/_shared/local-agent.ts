@@ -141,7 +141,7 @@ export function handleSdkError(error: unknown): never {
 /**
  * Read the persisted `client.id` from `client.yaml`. Required by `agent prune`
  * to filter `listMyAgents` down to "what binds on THIS machine". `fail()`
- * instead of throwing so the "no client.yaml — run login <token> first" path
+ * instead of throwing so the "no client.yaml — run login <code> first" path
  * renders as a clean CLI error rather than a stack trace.
  */
 export function readClientId(): string {
@@ -152,7 +152,7 @@ export function readClientId(): string {
   if (typeof id !== "string" || id.length === 0) {
     fail(
       "MISSING_CLIENT_ID",
-      `No client.id found in client.yaml. Run \`${channelConfig.binName} login <token>\` first.`,
+      `No client.id found in client.yaml. Run \`${channelConfig.binName} login <code>\` first.`,
       2,
     );
   }

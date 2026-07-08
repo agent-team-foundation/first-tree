@@ -154,11 +154,11 @@ the retired `client start` verb (now an `unknown command`).
 
 ```bash
 first-tree logout
-first-tree login <token>
+first-tree login <code>
 ```
 
 `logout` stops the running daemon and clears credentials.
-`login <token>` re-exchanges the connect token, rewrites the unit file
+`login <code>` re-exchanges the connect token, rewrites the unit file
 with the new ExecStart, and starts the daemon. Pass `--no-start` if you
 want to skip the auto-install (for containers / CI).
 
@@ -177,8 +177,8 @@ that changed.
 
 | Old | New | Notes |
 | --- | --- | --- |
-| `first-tree connect <token>` | `first-tree login <token>` | `--no-service` renamed to `--no-start`. |
-| `first-tree client claim --confirm` | (removed) | There is no longer a client ownership transfer command. To switch this machine to another account, run `first-tree login <token>` with the new account and confirm the local-client switch. `logout --purge` retires the current server client before deleting local state and is not the normal account-switch path. |
+| `first-tree connect <token>` | `first-tree login <code>` | `--no-service` renamed to `--no-start`. |
+| `first-tree client claim --confirm` | (removed) | There is no longer a client ownership transfer command. To switch this machine to another account, run `first-tree login <code>` with the new account and confirm the local-client switch. `logout --purge` retires the current server client before deleting local state and is not the normal account-switch path. |
 | `first-tree update [--check] [--no-restart]` | `first-tree upgrade [--check] [--no-restart]` | Flags unchanged. |
 | `first-tree client start` | `first-tree daemon start` | `daemon start` is **fail-closed** when no credentials exist — it exits 1 with a `NO_CREDENTIALS` error pointing at `login` instead of dropping into the interactive prompt path the old `client start` had. |
 | `first-tree client stop` | `first-tree daemon stop` | — |
@@ -295,7 +295,7 @@ another package.
 ## Verification after migration
 
 After updating the server deployment + CLI users running `logout`
-followed by `login <token>`:
+followed by `login <code>`:
 
 ```bash
 # CLI side — should all be green:
@@ -311,5 +311,5 @@ If `daemon doctor` reports "service installed, inactive" persistently
 after `login`, run `journalctl --user -u first-tree-client -n 50`
 (Linux) or `cat ~/.first-tree/hub/logs/client.stderr.log` (macOS) — a
 stale unit file from before the upgrade may still be on disk. Re-run
-`first-tree logout && first-tree login <token>` to force a
+`first-tree logout && first-tree login <code>` to force a
 clean rewrite.

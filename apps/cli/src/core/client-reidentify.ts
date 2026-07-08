@@ -30,12 +30,12 @@ export async function handleClientOrgMismatch(
   },
 ): Promise<never> {
   const output = opts.output ?? printClientReidentifyOutput;
-  const loginCommand = `${channelConfig.binName} login <token>`;
+  const loginCommand = `${channelConfig.binName} login <code>`;
   const resetCommand = `${channelConfig.binName} computer reset`;
   if (opts.managed && opts.output?.status) {
     output.status?.(
       "✗",
-      `client identity is not accepted for this account (${err.message}); back up local workspaces, run \`${resetCommand}\`, then run \`${loginCommand}\` with the intended account's connect token.`,
+      `client identity is not accepted for this account (${err.message}); back up local workspaces, run \`${resetCommand}\`, then run \`${loginCommand}\` with the intended account's connect code.`,
     );
     process.exit(1);
   }
@@ -45,7 +45,7 @@ export async function handleClientOrgMismatch(
   output.blank();
   output.line("  The active client id and current credentials do not form a valid server-side owner pair.\n");
   output.line(
-    `  Back up local workspaces, run \`${resetCommand}\`, then run \`${loginCommand}\` with the intended account's connect token.\n\n`,
+    `  Back up local workspaces, run \`${resetCommand}\`, then run \`${loginCommand}\` with the intended account's connect code.\n\n`,
   );
   process.exit(1);
 }

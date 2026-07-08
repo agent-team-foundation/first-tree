@@ -4,11 +4,11 @@ import { users } from "./users.js";
 /**
  * Short-lived login codes surfaced by `POST /me/connect-tokens`.
  *
- * The public token is `<issuer>/connect/<code>`, where the URL origin keeps the
- * CLI's prod/staging/dev routing property. Only a hash of the opaque code is
- * stored here, then consumed atomically on exchange. Rows are retained after
- * consumption/expiry for short-term audit; a future cleanup task can delete old
- * consumed/expired rows.
+ * The public token is the bare short code. The minting issuer is stored so the
+ * exchange route can reject codes presented to a different deployment. Only a
+ * hash of the opaque code is stored here, then consumed atomically on exchange.
+ * Rows are retained after consumption/expiry for short-term audit; a future
+ * cleanup task can delete old consumed/expired rows.
  */
 export const connectCodes = pgTable(
   "connect_codes",

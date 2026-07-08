@@ -205,7 +205,7 @@ type ClientConnectionEvents = {
    * Unrecoverable auth failure — the credential provider rejected with an
    * `AuthRefreshFailedError` (refresh token expired/revoked). The connection
    * has stopped trying to reconnect; the consumer should surface a recovery
-   * prompt to the operator (re-run `<binName> login <token>`) and
+   * prompt to the operator (re-run `<binName> login <code>`) and
    * usually exit so a supervisor can back off instead of looping at 1 Hz.
    *
    * Bug 2 fix (client-resilience design §5.2): consumers should NO LONGER

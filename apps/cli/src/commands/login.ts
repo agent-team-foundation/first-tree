@@ -65,10 +65,10 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 }
 
 /**
- * `login <token>` — single entry point. Short connect URLs carry the server URL
- * in their origin; legacy JWT connect tokens keep carrying it in `iss`, so prod
- * / staging / local environments stay tagged at issuance and the operator can
- * never accidentally cross-target.
+ * `login <code>` — single entry point. Short connect codes route through the
+ * current CLI channel's default server URL, unless FIRST_TREE_SERVER_URL is set.
+ * Legacy connect URLs and JWT connect tokens keep carrying their own server URL
+ * so already-issued rollout tokens remain accepted.
  *
  * Account switches are explicit local-client switches. The stored access token
  * owner is compared with the new server-issued access token's `sub` claim; a
@@ -77,15 +77,17 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
  */
 export function registerLoginCommand(program: Command): void {
   program
-    .command("login <token>")
-    .description("Sign this computer into First Tree using a token from the web console")
+    .command("login <code>")
+    .description("Sign this computer into First Tree using a short code from the web console")
     .option("--no-start", "Skip background daemon install/start (writes credentials and exits)")
     .option("--force-switch", "Confirm switching this computer to a different First Tree user in non-TTY mode")
     .action(async (token: string, options: { start?: boolean; forceSwitch?: boolean }) => {
       try {
+        const connectToken = token.trim();
+        const fallbackServerUrl = process.env.FIRST_TREE_SERVER_URL?.trim() || channelConfig.defaultServerUrl;
         let url: string;
         try {
-          url = deriveHubUrlFromToken(token);
+          url = deriveHubUrlFromToken(connectToken, fallbackServerUrl);
         } catch (err) {
           if (err instanceof HubUrlDerivationError) {
             fail(err.code, err.message, 1);
@@ -98,7 +100,7 @@ export function registerLoginCommand(program: Command): void {
         const previousOwnerSub = readOwnerSub(existingCredentials?.accessToken);
         const rememberedOwner = readActiveClientOwner();
 
-        const tokens = await exchangeToken(url, token);
+        const tokens = await exchangeToken(url, connectToken);
         const newOwnerSub = readOwnerSub(tokens.accessToken);
         if (!newOwnerSub) {
           fail("AUTH_ERROR", "Server access token is missing the required `sub` claim.", 1);
@@ -238,7 +240,7 @@ export function registerLoginCommand(program: Command): void {
           await handleClientOrgMismatch(error, {
             managed: false,
             configDir: defaultConfigDir(),
-            rerunCommand: `${channelConfig.binName} login <token>`,
+            rerunCommand: `${channelConfig.binName} login <code>`,
           });
         }
         const msg = error instanceof Error ? error.message : String(error);

@@ -58,18 +58,44 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function normalizeCommandServerUrl(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/+$/, "");
+  }
+}
+
+function buildLoginCommand(options: {
+  executable: string;
+  tokenArg: string;
+  serverUrl: string;
+  defaultServerUrl: string;
+}): string {
+  const serverUrl = normalizeCommandServerUrl(options.serverUrl);
+  const prefix = serverUrl === options.defaultServerUrl ? "" : `FIRST_TREE_SERVER_URL=${shellQuote(serverUrl)} `;
+  return `${prefix}${options.executable} login ${options.tokenArg}`;
+}
+
 function buildPortableBootstrapCommand(options: {
   installerUrl: string;
   portableDownloadBaseUrl: string;
   binName: string;
   token: string;
+  serverUrl: string;
+  defaultServerUrl: string;
 }): string {
   return [
     `tmp="$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX")"`,
     `trap 'rm -f "$tmp"' EXIT HUP INT TERM`,
     `curl -fsSL ${shellQuote(options.installerUrl)} -o "$tmp"`,
     `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} sh "$tmp"`,
-    `"$HOME/.local/bin/${options.binName}" login ${shellQuote(options.token)}`,
+    buildLoginCommand({
+      executable: `"$HOME/.local/bin/${options.binName}"`,
+      tokenArg: shellQuote(options.token),
+      serverUrl: options.serverUrl,
+      defaultServerUrl: options.defaultServerUrl,
+    }),
   ].join(" && \\\n");
 }
 
@@ -502,9 +528,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /me/connect-tokens — short-lived connect token for the CLI.
-   * The public token is a short connect URL; the CLI rejoins via
-   * `exchangeConnectToken`, which consumes the code and probes `members`
-   * realtime before issuing user credentials.
+   * The public token is a bare short code; the CLI picks the channel/default
+   * server URL and rejoins via `exchangeConnectToken`, which consumes the code
+   * and probes `members` realtime before issuing user credentials.
    */
   app.post("/me/connect-tokens", async (request) => {
     const { userId } = requireUser(request);
@@ -521,7 +547,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     // `packageName=null`: the bootstrap line skips the `npm install -g`
     // step entirely because the operator builds from source.
     const ch = getChannelConfig(app.config.channel);
-    const command = `${ch.binName} login ${token}`;
+    const command = buildLoginCommand({
+      executable: ch.binName,
+      tokenArg: token,
+      serverUrl: issuer,
+      defaultServerUrl: ch.defaultServerUrl,
+    });
     if (ch.packageName === null) {
       return {
         token,
@@ -556,6 +587,8 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         portableDownloadBaseUrl,
         binName: ch.binName,
         token,
+        serverUrl: issuer,
+        defaultServerUrl: ch.defaultServerUrl,
       });
       return {
         token,

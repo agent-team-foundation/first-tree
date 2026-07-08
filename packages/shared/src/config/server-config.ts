@@ -154,8 +154,8 @@ export const serverConfigSchema = defineConfig({
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
     /**
      * Public-facing URL of this First Tree server. Required in production — used to:
-     *   1. Build short connect URLs so `<binName> login` can derive the server
-     *      URL from the URL origin with no extra arg.
+     *   1. Stamp the issuer on short connect codes so exchange can reject codes
+     *      presented to the wrong deployment.
      *   2. Build invite-link URLs surfaced to admins.
      *   3. Construct the OAuth callback URL the GitHub app redirects back to.
      * Dev environments may omit it — we fall back to the request's host header

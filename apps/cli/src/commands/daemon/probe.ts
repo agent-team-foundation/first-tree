@@ -60,7 +60,7 @@ export function registerDaemonProbeCommand(daemon: Command): void {
 
       // Upload requires a logged-in client + its config.
       if (!loadCredentials()) {
-        fail("NO_CREDENTIALS", `no credentials — run \`${binName} login <token>\` first, or use --no-upload.`, 1);
+        fail("NO_CREDENTIALS", `no credentials — run \`${binName} login <code>\` first, or use --no-upload.`, 1);
       }
       try {
         const config = await initConfig({ schema: clientConfigSchema, role: "client" });

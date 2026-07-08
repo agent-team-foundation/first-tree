@@ -84,7 +84,7 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
   //   2. `<bin> agent add`      — pure local file write, no auth/network;
   //                                the resulting `agent.yaml` is what the
   //                                runtime picks up on first load.
-  //   3. `<bin> login <token>`  — computer-level auth + launchd/systemd
+  //   3. `<bin> login <code>`  — computer-level auth + launchd/systemd
   //                                service; runtime's first `loadAgents`
   //                                already sees the agent written in step
   //                                2, no watcher race.
