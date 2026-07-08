@@ -74,6 +74,7 @@ vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 let tempDir = "";
 const originalExit = process.exit;
 const originalStdoutWrite = process.stdout.write;
+const originalPlatform = process.platform;
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -112,6 +113,10 @@ async function runChat(args: string[]): Promise<void> {
   await runRegistered(registerChatCommands, ["chat", ...args]);
 }
 
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+}
+
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "ft-cli-matrix-"));
   vi.clearAllMocks();
@@ -146,6 +151,7 @@ afterEach(() => {
   rmSync(tempDir, { force: true, recursive: true });
   process.exit = originalExit;
   process.stdout.write = originalStdoutWrite;
+  setPlatform(originalPlatform);
   delete process.env.FIRST_TREE_CHAT_ID;
 });
 
@@ -251,6 +257,21 @@ describe("daemon utility commands", () => {
       configDir: join(tempDir, "config"),
       dataDir: join(tempDir, "data"),
     });
+  });
+
+  it("gives actionable Windows inline-daemon guidance when restart service control is unsupported", async () => {
+    setPlatform("win32");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+
+    await runDaemon(["restart"]);
+
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Service control is not supported on Windows");
+    expect(output).toContain("First Tree runs inline");
+    expect(output).toContain("daemon probe");
+    expect(output).toContain("PowerShell");
+    expect(output).toContain("Ctrl+C");
+    expect(output).toContain("daemon start");
   });
 });
 

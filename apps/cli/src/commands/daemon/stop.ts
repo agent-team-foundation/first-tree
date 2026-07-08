@@ -9,8 +9,14 @@ export function registerDaemonStopCommand(daemon: Command): void {
     .description("Stop the background service (preserves auto-start; use `daemon start` to bring it back)")
     .action(() => {
       if (!isServiceSupported()) {
-        print.line(`\n  Service control not supported on ${process.platform}.\n`);
-        print.line("  If running inline, use Ctrl+C or kill the process.\n\n");
+        if (process.platform === "win32") {
+          print.line("\n  Service control is not supported on Windows.\n");
+          print.line("  First Tree runs inline on this platform.\n");
+          print.line(`  Stop the PowerShell running \`${channelConfig.binName} daemon start\` with Ctrl+C.\n\n`);
+        } else {
+          print.line(`\n  Service control is not supported on ${process.platform}.\n`);
+          print.line(`  Stop the terminal running \`${channelConfig.binName} daemon start\` with Ctrl+C.\n\n`);
+        }
         return;
       }
       const svc = getClientServiceStatus();

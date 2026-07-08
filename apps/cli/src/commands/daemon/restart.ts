@@ -9,8 +9,23 @@ export function registerDaemonRestartCommand(daemon: Command): void {
     .description("Restart the background service")
     .action(() => {
       if (!isServiceSupported()) {
-        print.line(`\n  Service control not supported on ${process.platform}.\n`);
-        print.line("  Restart your inline `daemon start` process manually.\n\n");
+        if (process.platform === "win32") {
+          print.line("\n  Service control is not supported on Windows.\n");
+          print.line("  First Tree runs inline on this platform.\n\n");
+          print.line("  If you are onboarding and need to refresh detected agents:\n");
+          print.line(`    ${channelConfig.binName} daemon probe\n\n`);
+          print.line("  If you need to restart the inline daemon:\n");
+          print.line(`    stop the PowerShell running \`${channelConfig.binName} daemon start\` with Ctrl+C,\n`);
+          print.line(`    then run \`${channelConfig.binName} daemon start\` again.\n\n`);
+        } else {
+          print.line(`\n  Service control is not supported on ${process.platform}.\n`);
+          print.line("  First Tree runs inline on this platform.\n\n");
+          print.line("  If you are onboarding and need to refresh detected agents:\n");
+          print.line(`    ${channelConfig.binName} daemon probe\n\n`);
+          print.line("  If you need to restart the inline daemon:\n");
+          print.line(`    stop the terminal running \`${channelConfig.binName} daemon start\` with Ctrl+C,\n`);
+          print.line(`    then run \`${channelConfig.binName} daemon start\` again.\n\n`);
+        }
         return;
       }
       const svc = getClientServiceStatus();
