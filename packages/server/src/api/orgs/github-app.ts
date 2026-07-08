@@ -118,10 +118,10 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * GET `/exists` — member-readable boolean "does this team have a GitHub
-   * App installation?". The full GET above is admin-only because it exposes
-   * installation-id / permissions / events that regular members shouldn't
-   * see; this endpoint redacts everything except the bare presence bit so
-   * the invitee onboarding path can authoritatively detect the
+   * App installation?". The full GET above is also member-readable for
+   * Settings → GitHub, while this endpoint keeps a narrower redacted shape
+   * for callers that only need a presence bit. It lets the invitee onboarding
+   * path authoritatively detect the
    * "admin set up the tree but never connected code" failure mode (without
    * which we either block every invitee of a working team — if 403 maps to
    * `missing` — or never trip the warning at all — if 403 maps to
