@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ContextTreeChange, ContextTreeNode } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { contextTreeSnapshotTestInternals, getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
+import {
+  contextTreeSnapshotTestInternals,
+  getContextTreeSnapshot,
+  isGithubRemoteBinding,
+} from "../services/context-tree-snapshot.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -54,6 +58,19 @@ async function commitAllAt(cwd: string, message: string): Promise<string> {
   return gitOutput(cwd, ["rev-parse", "HEAD"]);
 }
 
+async function commitAllAtDate(cwd: string, message: string, isoDate: string): Promise<string> {
+  await git(cwd, ["add", "."]);
+  await execFileAsync("git", ["commit", "-m", message], {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: isoDate,
+      GIT_COMMITTER_DATE: isoDate,
+    },
+  });
+  return gitOutput(cwd, ["rev-parse", "HEAD"]);
+}
+
 describe("Context Tree snapshot service", () => {
   it("parses fallback frontmatter lists", () => {
     const parsed = contextTreeSnapshotTestInternals.parseMarkdownFallback(`---
@@ -69,6 +86,30 @@ Body`);
       title: "Client Runtime",
       owners: ["alice", "bob"],
       soft_links: ["../roadmap.md", "/agent-hub#runtime"],
+    });
+  });
+
+  it("handles fallback frontmatter without valid YAML fields", () => {
+    expect(contextTreeSnapshotTestInternals.parseMarkdownFallback("Plain body")).toEqual({
+      content: "Plain body",
+      data: {},
+    });
+
+    const parsed = contextTreeSnapshotTestInternals.parseMarkdownFallback(`---
+title: 'Broken Lists'
+owners: alice
+ignored
+soft_links: []
+---
+Body`);
+
+    expect(parsed).toEqual({
+      content: "Body",
+      data: {
+        title: "Broken Lists",
+        owners: [],
+        soft_links: [],
+      },
     });
   });
 
@@ -96,6 +137,46 @@ Body`);
       target: "file:product-direction.md",
       kind: "markdown_link",
     });
+  });
+
+  it("builds directory metadata, deduplicates related edges, and skips unresolved links", () => {
+    const longPreview = "x".repeat(260);
+    const tree = contextTreeSnapshotTestInternals.buildTreeFromRawFiles([
+      { relativePath: "NODE.md", raw: "---\ntitle: Context Tree\nowners: [root-owner]\n---\n# Heading\nRoot body" },
+      {
+        relativePath: "product-area/NODE.md",
+        raw: '---\ntitle: Product Area\nowners: [alice]\nsoft_links: ["../shared.md", "../shared.md", "../missing.md"]\n---\nDomain body',
+      },
+      {
+        relativePath: "product-area/runtime/NODE.md",
+        raw: "---\ntitle: Runtime\n---\nSubdomain body",
+      },
+      {
+        relativePath: "product-area/runtime/details.md",
+        raw: `---\ntitle: Details\nowners: [bob, ""]\n---\n${longPreview}\n[shared](../../shared.md)\n[shared again](../../shared.md#section)\n[external](https://example.test)\n[anchor](#local)`,
+      },
+      { relativePath: "shared.md", raw: "---\ntitle: Shared\n---\nShared body" },
+    ]);
+
+    expect(tree.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "root", title: "Context Tree", owners: ["root-owner"], preview: "Root body" }),
+        expect.objectContaining({ id: "dir:product-area", kind: "domain", owners: ["alice"] }),
+        expect.objectContaining({ id: "dir:product-area/runtime", kind: "subdomain" }),
+        expect.objectContaining({
+          id: "file:product-area/runtime/details.md",
+          owners: ["bob"],
+          preview: `${"x".repeat(237)}...`,
+          affectedContextArea: "product area / runtime / details",
+        }),
+      ]),
+    );
+    expect(tree.edges.filter((edge) => edge.kind === "soft_link")).toEqual([
+      { source: "dir:product-area", target: "file:shared.md", kind: "soft_link" },
+    ]);
+    expect(tree.edges.filter((edge) => edge.kind === "markdown_link")).toEqual([
+      { source: "file:product-area/runtime/details.md", target: "file:shared.md", kind: "markdown_link" },
+    ]);
   });
 
   it("mounts removed ghost nodes at root when their parent no longer exists", () => {
@@ -140,6 +221,61 @@ Body`);
     );
   });
 
+  it("resolves local roots and reports missing bindings", async () => {
+    await mkdir(join(testDir, "local-tree"), { recursive: true });
+
+    await expect(contextTreeSnapshotTestInternals.resolveContextTreeRoot(null, null, null)).resolves.toEqual({
+      root: null,
+      reason: "Context Tree is not configured.",
+      staleReason: null,
+    });
+    await expect(
+      contextTreeSnapshotTestInternals.resolveContextTreeRoot(null, `file://${join(testDir, "local-tree")}`, null),
+    ).resolves.toEqual({
+      root: join(testDir, "local-tree"),
+      reason: "ok",
+      staleReason: null,
+    });
+
+    const missingLocal = join(testDir, "missing-local");
+    await expect(contextTreeSnapshotTestInternals.resolveContextTreeRoot(null, missingLocal, null)).resolves.toEqual({
+      root: null,
+      reason: `Context Tree checkout not found at ${missingLocal}.`,
+      staleReason: null,
+    });
+
+    await expect(
+      contextTreeSnapshotTestInternals.resolveContextTreeRoot(join(testDir, "local-tree"), null, null),
+    ).resolves.toEqual({
+      root: join(testDir, "local-tree"),
+      reason: "ok",
+      staleReason: null,
+    });
+  });
+
+  it("classifies GitHub remote bindings without treating local bindings as remote", () => {
+    expect(isGithubRemoteBinding({ localPath: testDir, repo: "owner/repo" })).toBe(false);
+    expect(isGithubRemoteBinding({ localPath: "  ", repo: "owner/repo" })).toBe(true);
+    expect(isGithubRemoteBinding({})).toBe(false);
+    expect(isGithubRemoteBinding({ repo: "owner/repo" })).toBe(true);
+    expect(isGithubRemoteBinding({ repo: "owner/repo.git" })).toBe(true);
+    expect(isGithubRemoteBinding({ repo: "https://github.com/owner/repo" })).toBe(true);
+    expect(isGithubRemoteBinding({ repo: "file:///tmp/repo" })).toBe(false);
+    expect(isGithubRemoteBinding({ repo: "https://example.test/owner/repo" })).toBe(false);
+    expect(isGithubRemoteBinding({ repo: "not a repo url" })).toBe(false);
+  });
+
+  it("reports remote root sync failures through resolveContextTreeRoot", async () => {
+    const missingRemote = `file://${join(testDir, "missing-remote")}`;
+
+    const resolved = await contextTreeSnapshotTestInternals.resolveContextTreeRoot(missingRemote, null, "main");
+
+    expect(resolved.root).toBeNull();
+    expect(resolved.staleReason).toBeNull();
+    expect(resolved.reason).toContain("First Tree could not sync the configured Context Tree repo.");
+    expect(resolved.reason).toContain('branch "main"');
+  });
+
   it("splits renames and keeps real commit metadata", async () => {
     await initRepo();
     await writeFile(join(testDir, "old.md"), "---\ntitle: Old\n---\nOld guidance\n");
@@ -173,6 +309,28 @@ Body`);
     expect(diff.entries.every((entry) => entry.changedAt !== null)).toBe(true);
   });
 
+  it("uses null summaries for terse commit subjects while preserving git metadata", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Tree\n---\nRoot\n");
+    const baseCommit = await commitAll("docs: add root node");
+    await writeFile(join(testDir, "new.md"), "---\ntitle: New\n---\nNew\n");
+    const headCommit = await commitAll("x");
+
+    const diff = await contextTreeSnapshotTestInternals.readDiffEntries(testDir, baseCommit, headCommit);
+
+    expect(diff.entries).toEqual([
+      expect.objectContaining({
+        type: "added",
+        path: "new.md",
+        commit: headCommit,
+        changedBy: "Context Reviewer",
+        summary: null,
+        prNumber: null,
+      }),
+    ]);
+    expect(diff.entries[0]?.changedAt).not.toBeNull();
+  });
+
   it("rejects unsafe comparison bases before invoking git diff", async () => {
     await initRepo();
     await writeFile(join(testDir, "node.md"), "---\ntitle: Node\n---\nGuidance\n");
@@ -184,6 +342,16 @@ Body`);
     expect(diff.entries).toEqual([]);
     expect(existsSync(payloadPath)).toBe(false);
     expect(existsSync(`${payloadPath}..HEAD`)).toBe(false);
+  });
+
+  it("returns an empty diff when git diff fails", async () => {
+    const safeBase = "a".repeat(40);
+    const safeHead = "b".repeat(40);
+
+    await expect(contextTreeSnapshotTestInternals.readDiffEntries(testDir, safeBase, safeHead)).resolves.toEqual({
+      entries: [],
+      truncated: false,
+    });
   });
 
   it("materializes a remote repo into a managed checkout", async () => {
@@ -205,6 +373,37 @@ Body`);
     await expect(readFile(join(managedRoot, "NODE.md"), "utf8")).resolves.toContain("Remote Context");
   });
 
+  it("reuses recent managed checkouts and waits on in-flight syncs", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    const cacheRoot = join(testDir, "managed-cache");
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Concurrent Context\n---\nGuidance\n");
+    await commitAllAt(remoteDir, "docs: add remote context");
+    const timings: string[] = [];
+
+    const [first, second] = await Promise.all([
+      contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot, null, (name) =>
+        timings.push(name),
+      ),
+      contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot, null, (name) =>
+        timings.push(name),
+      ),
+    ]);
+
+    expect(second.root).toBe(first.root);
+    expect(timings).toContain("remote_sync_wait_existing");
+
+    const cached = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(
+      remoteDir,
+      "main",
+      cacheRoot,
+      null,
+      (name) => timings.push(name),
+    );
+    expect(cached.root).toBe(first.root);
+    expect(timings).toContain("remote_sync_skip_ttl");
+  });
+
   it("uses a full sha256 digest for managed checkout paths", () => {
     const managedPath = contextTreeSnapshotTestInternals.managedContextTreePath(
       "https://github.com/example/tree",
@@ -214,6 +413,49 @@ Body`);
     const hash = managedPath.split("/").at(-1) ?? "";
 
     expect(hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("builds unavailable snapshots for branch mismatches and invalid checkouts", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Local Context\n---\nGuidance\n");
+    await commitAll("docs: add local context");
+
+    const mismatch = await getContextTreeSnapshot({ localPath: testDir, branch: "feature" }, "7d");
+    expect(mismatch.snapshotStatus).toBe("unavailable");
+    expect(mismatch.branch).toBe("main");
+    expect(mismatch.contextStatus.detail).toContain('configured Context Tree branch is "feature"');
+
+    const notGitDir = await mkdtemp(join(tmpdir(), "context-tree-not-git-"));
+    try {
+      const invalid = await getContextTreeSnapshot({ localPath: notGitDir }, "7d");
+      expect(invalid.snapshotStatus).toBe("unavailable");
+      expect(invalid.contextStatus.detail).toMatch(/not a git repository|not a git repo|fatal/i);
+    } finally {
+      await rm(notGitDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serves cached snapshots with a refreshed syncedAt timestamp", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Cached Context\n---\nGuidance\n");
+    await commitAll("docs: add cached context");
+    const timings: Array<{ name: string; hit?: boolean }> = [];
+    const recordTiming = (name: string, _duration: number, metadata?: Record<string, unknown>): void => {
+      timings.push({ name, hit: typeof metadata?.hit === "boolean" ? metadata.hit : undefined });
+    };
+
+    const first = await getContextTreeSnapshot({ localPath: testDir, branch: "main" }, "7d", {
+      timing: recordTiming,
+    });
+    const second = await getContextTreeSnapshot({ localPath: testDir, branch: "main" }, "7d", {
+      timing: recordTiming,
+    });
+
+    expect(first.snapshotStatus).toBe("active");
+    expect(second.snapshotStatus).toBe("active");
+    expect(second.headCommit).toBe(first.headCommit);
+    expect(second.nodes).toEqual(first.nodes);
+    expect(timings).toEqual(expect.arrayContaining([{ name: "snapshot_cache_lookup", hit: true }]));
   });
 
   it("builds a snapshot from an organization remote repo binding", async () => {
@@ -252,6 +494,64 @@ Body`);
     expect(snapshot.snapshotStatus).toBe("unavailable");
     expect(snapshot.contextStatus.detail).toContain("branch");
     expect(snapshot.contextStatus.detail).toContain("invalid");
+  });
+
+  it("summarizes added, edited, and removed nodes inside the requested window", async () => {
+    await initRepo();
+    await mkdir(join(testDir, "system"), { recursive: true });
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Root Context\n---\nRoot\n");
+    await writeFile(join(testDir, "system", "NODE.md"), "---\ntitle: System\nowners: [alice]\n---\nSystem guidance\n");
+    await writeFile(join(testDir, "system", "old.md"), "---\ntitle: Old Decision\n---\nOld\n");
+    await writeFile(join(testDir, "system", "edit.md"), "---\ntitle: Edit Decision\n---\nEdit\n");
+    await commitAllAtDate(testDir, "docs: initial context", "2026-01-01T00:00:00Z");
+
+    await writeFile(
+      join(testDir, "system", "NODE.md"),
+      "---\ntitle: System\nowners: [alice]\n---\nUpdated system guidance\n",
+    );
+    await writeFile(join(testDir, "system", "new.md"), "---\ntitle: New Decision\n---\nNew\n");
+    await rm(join(testDir, "system", "old.md"));
+    await commitAll("docs: update system context (#777)");
+
+    const snapshot = await getContextTreeSnapshot({ localPath: testDir, branch: "main" }, "7d");
+
+    expect(snapshot.summary).toEqual({
+      addedCount: 1,
+      editedCount: 1,
+      removedCount: 1,
+      changedNodeCount: 3,
+    });
+    expect(snapshot.updates.map((update) => `${update.changeType}:${update.path}`)).toEqual([
+      "removed:system/old",
+      "added:system/new",
+      "edited:system",
+    ]);
+    expect(snapshot.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          changeType: "removed",
+          title: "Old",
+          summary: "update system context (#777)",
+          reason: "Agents should stop using the old team knowledge for system / old.",
+          riskLevel: "high",
+        }),
+        expect.objectContaining({
+          changeType: "added",
+          title: "New Decision",
+          reason: "Agents can use new team knowledge when working on system / new.",
+          riskLevel: "low",
+        }),
+        expect.objectContaining({
+          changeType: "edited",
+          title: "System",
+          owners: ["alice"],
+          relatedNodeIds: [],
+          reason: "Agents can use updated team knowledge when working on system.",
+          riskLevel: "medium",
+        }),
+      ]),
+    );
+    expect(snapshot.io.writes.map((event) => event.prNumber)).toEqual([777, 777, 777]);
   });
 
   it("uses an existing managed checkout when remote refresh fails", async () => {
@@ -324,6 +624,30 @@ Body`);
     expect(env?.GIT_ASKPASS).toContain(join("managed-cache", ".tools", "git-askpass.sh"));
     const askpass = await readFile(env?.GIT_ASKPASS ?? "", "utf8");
     expect(askpass).not.toContain("ghp_secret");
+
+    await expect(
+      contextTreeSnapshotTestInternals.gitAuthEnv(
+        "https://github.com/agent-team-foundation/first-tree-context",
+        cacheRoot,
+        "ghp_secret",
+      ),
+    ).resolves.toMatchObject({
+      GIT_ASKPASS: env?.GIT_ASKPASS,
+    });
+    await expect(
+      contextTreeSnapshotTestInternals.gitAuthEnv(
+        "https://example.test/agent-team-foundation/first-tree-context",
+        cacheRoot,
+        "ghp_secret",
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      contextTreeSnapshotTestInternals.gitAuthEnv(
+        "https://github.com/agent-team-foundation/first-tree-context",
+        cacheRoot,
+        null,
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("redacts URL-embedded credentials from surfaced git errors", () => {
