@@ -32,7 +32,13 @@ export async function recordClientHeartbeat(db: Database, data: ClientHeartbeatR
       instanceId: data.instanceId,
       lastSeenAt: now,
     })
-    .where(and(eq(clients.id, data.clientId), or(isNull(clients.instanceId), eq(clients.instanceId, data.instanceId))))
+    .where(
+      and(
+        eq(clients.id, data.clientId),
+        isNull(clients.retiredAt),
+        or(isNull(clients.instanceId), eq(clients.instanceId, data.instanceId)),
+      ),
+    )
     .returning({ id: clients.id });
 
   const routedAgentIds = [...new Set(data.routedAgentIds)];

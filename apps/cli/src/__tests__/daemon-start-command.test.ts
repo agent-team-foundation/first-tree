@@ -23,6 +23,7 @@ const coreMocks = vi.hoisted(() => ({
   createExecuteUpdate: vi.fn(),
   createLoggerRuntimeOutput: vi.fn(),
   declineUpdate: vi.fn(),
+  ensureActiveRootClientIdPersisted: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
   getClientSwitchStartupBlock: vi.fn(),
   getClientServiceStatus: vi.fn(),
@@ -335,6 +336,7 @@ describe("daemon start command", () => {
       "client_1234abcd",
       expect.objectContaining({ currentVersion: "0.0.0-test" }),
     );
+    expect(coreMocks.ensureActiveRootClientIdPersisted).toHaveBeenCalledWith("client_1234abcd");
     expect(coreMocks.registerClientRuntimeMarker).toHaveBeenCalledWith({
       clientId: "client_1234abcd",
       mode: "foreground",
@@ -423,6 +425,19 @@ describe("daemon start command", () => {
       }),
     );
     expect(output()).toBe("");
+  });
+
+  it("treats explicit foreground as foreground even when service-mode env is inherited", async () => {
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+
+    await expect(runStart(["--foreground", "--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(coreMocks.registerClientRuntimeMarker).toHaveBeenCalledWith({
+      clientId: "client_1234abcd",
+      mode: "foreground",
+    });
+    expect(clientMocks.configureClientLoggerForService).not.toHaveBeenCalled();
+    expect(coreMocks.createLoggerRuntimeOutput).not.toHaveBeenCalled();
   });
 
   it("logs early service-mode startup failures before config logLevel is applied", async () => {

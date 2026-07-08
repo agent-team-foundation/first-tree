@@ -142,7 +142,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         name: result.agent.name,
         displayName: result.agent.displayName,
         agentType: agentService.legacyWireAgentType(result.agent.type),
-        oldClientId: result.recoveryAction === "aborted" ? null : result.oldClientId,
+        oldClientId: result.recoveryAction === "aborted" || !result.oldClientId ? null : result.oldClientId,
         targetClientId: result.agent.clientId,
         runtimeProvider: result.agent.runtimeProvider,
         reason: "agent_runtime_switch",

@@ -276,6 +276,49 @@ describe("runtime liveness: recordClientHeartbeat", () => {
     expect(presence?.instanceId).toBeNull();
   });
 
+  it("does not revive a retired client or routed agent", async () => {
+    const app = getApp();
+    const { agent, userId, organizationId, clientId } = await createTestAgent(app, {
+      name: `cs-hb-retired-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const retiredAt = new Date();
+    const lastSeenAt = new Date(retiredAt.getTime() - 1_000);
+
+    await clientService.registerClient(app.db, { clientId, userId, organizationId, instanceId: "old-instance" });
+    await presenceService.bindAgent(app.db, agent.uuid, {
+      clientId,
+      instanceId: "old-instance",
+      runtimeType: "test",
+    });
+    await app.db
+      .update(clients)
+      .set({ status: "disconnected", instanceId: null, retiredAt, lastSeenAt })
+      .where(eq(clients.id, clientId));
+    await app.db
+      .update(agentPresence)
+      .set({ status: "offline", clientId: null, instanceId: null })
+      .where(eq(agentPresence.agentId, agent.uuid));
+
+    const result = await recordClientHeartbeat(app.db, {
+      clientId,
+      instanceId: "old-instance",
+      routedAgentIds: [agent.uuid],
+    });
+
+    expect(result).toEqual({ clientUpdated: false, restoredAgentIds: [] });
+
+    const [client] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+    expect(client?.status).toBe("disconnected");
+    expect(client?.instanceId).toBeNull();
+    expect(client?.retiredAt?.toISOString()).toBe(retiredAt.toISOString());
+    expect(client?.lastSeenAt.toISOString()).toBe(lastSeenAt.toISOString());
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agent.uuid));
+    expect(presence?.status).toBe("offline");
+    expect(presence?.clientId).toBeNull();
+    expect(presence?.instanceId).toBeNull();
+  });
+
   it("does not restore a routed agent that is no longer active", async () => {
     const app = getApp();
     const { agent, userId, organizationId, clientId } = await createTestAgent(app, {

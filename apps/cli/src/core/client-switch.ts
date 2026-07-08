@@ -131,11 +131,14 @@ type RuntimeMarker = {
   createdAt: string;
 };
 
-type LiveRuntimeMarker = {
+export type LiveRuntimeMarker = {
   pid: number;
+  clientId: string;
   mode: RuntimeMarker["mode"];
   command?: string;
 };
+
+export type StopClientRuntimeProcessResult = { ok: true; alreadyStopped?: boolean } | { ok: false; reason: string };
 
 type DrainSnapshot =
   | { ok: true; providers: MarkedProviderProcess[] }
@@ -192,6 +195,73 @@ export function registerClientRuntimeMarker(opts: {
   };
 }
 
+export function listLiveClientRuntimeMarkers(home = defaultHome(), clientId?: string): LiveRuntimeMarker[] {
+  const markerDir = dirname(clientRuntimeMarkerPath(home, 0));
+  if (!existsSync(markerDir)) return [];
+  const live: LiveRuntimeMarker[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(markerDir);
+  } catch (err) {
+    throwSwitchFailure(
+      "CLIENT_SWITCH_RUNTIME_MARKER_UNTRUSTED",
+      `Unable to inspect runtime markers: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const markerPath = join(markerDir, entry);
+    let marker: RuntimeMarker;
+    try {
+      marker = JSON.parse(readFileSync(markerPath, "utf8")) as RuntimeMarker;
+    } catch (err) {
+      throwSwitchFailure(
+        "CLIENT_SWITCH_RUNTIME_MARKER_UNTRUSTED",
+        `Unable to read runtime marker ${markerPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (marker.version !== 1 || marker.home !== home || (clientId && marker.clientId !== clientId)) continue;
+    if (!isPidAlive(marker.pid)) {
+      rmSync(markerPath, { force: true });
+      continue;
+    }
+    live.push({
+      pid: marker.pid,
+      clientId: marker.clientId,
+      mode: marker.mode,
+      command: readPidCommand(marker.pid) ?? undefined,
+    });
+  }
+  return live;
+}
+
+export async function stopClientRuntimeProcess(
+  pid: number,
+  opts: { signal?: NodeJS.Signals; timeoutMs?: number; intervalMs?: number } = {},
+): Promise<StopClientRuntimeProcessResult> {
+  if (!Number.isInteger(pid) || pid <= 0) return { ok: true, alreadyStopped: true };
+  if (pid === process.pid) return { ok: false, reason: "refusing to stop the current CLI process" };
+  if (!isPidAlive(pid)) return { ok: true, alreadyStopped: true };
+
+  try {
+    process.kill(pid, opts.signal ?? "SIGTERM");
+  } catch (err) {
+    const code = typeof err === "object" && err !== null && "code" in err ? (err as { code?: unknown }).code : null;
+    if (code === "ESRCH") return { ok: true, alreadyStopped: true };
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+
+  const timeoutMs = opts.timeoutMs ?? 5_000;
+  const intervalMs = opts.intervalMs ?? 100;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return { ok: true };
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  if (!isPidAlive(pid)) return { ok: true };
+  return { ok: false, reason: `timed out waiting for pid ${pid} to stop after ${timeoutMs}ms` };
+}
+
 export function getClientSwitchStartupBlock(home = defaultHome()): { lockPath: string; journalPath: string } | null {
   const lockPath = clientSwitchLockPath(home);
   const journalPath = clientSwitchJournalPath(home);
@@ -205,6 +275,22 @@ export function resolveClientRuntimeStopReason(home = defaultHome()): string | u
 
 export function readActiveRootClientId(configDir = defaultConfigDir()): string | null {
   return readRootClientId(configDir);
+}
+
+export function readActiveClientIdFromIndex(home = defaultHome()): string | null {
+  const index = readSwitchIndex(home);
+  const clientId = index.activeClientId;
+  if (!clientId || !/^client_[a-f0-9]{8}$/.test(clientId)) return null;
+  const entry = index.clients[clientId];
+  return entry?.clientId === clientId && entry.storage === "active-root" ? clientId : null;
+}
+
+export function ensureActiveRootClientIdPersisted(clientId: string, configDir = defaultConfigDir()): void {
+  if (!/^client_[a-f0-9]{8}$/.test(clientId)) return;
+  const current = readRootClientId(configDir);
+  if (current === clientId) return;
+  if (current) return;
+  setConfigValue(join(configDir, "client.yaml"), "client.id", clientId);
 }
 
 export function readActiveClientOwner(home = defaultHome(), configDir = defaultConfigDir()): LocalClientOwner | null {
@@ -763,37 +849,7 @@ function stopServiceForSwitch(): void {
 }
 
 function assertNoLiveRuntimeMarkers(home: string, clientId: string): void {
-  const markerDir = dirname(clientRuntimeMarkerPath(home, 0));
-  if (!existsSync(markerDir)) return;
-  const live: LiveRuntimeMarker[] = [];
-  let entries: string[];
-  try {
-    entries = readdirSync(markerDir);
-  } catch (err) {
-    throwSwitchFailure(
-      "CLIENT_SWITCH_RUNTIME_MARKER_UNTRUSTED",
-      `Unable to inspect runtime markers before switch: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
-    const markerPath = join(markerDir, entry);
-    let marker: RuntimeMarker;
-    try {
-      marker = JSON.parse(readFileSync(markerPath, "utf8")) as RuntimeMarker;
-    } catch (err) {
-      throwSwitchFailure(
-        "CLIENT_SWITCH_RUNTIME_MARKER_UNTRUSTED",
-        `Unable to read runtime marker ${markerPath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    if (marker.version !== 1 || marker.home !== home || marker.clientId !== clientId) continue;
-    if (!isPidAlive(marker.pid)) {
-      rmSync(markerPath, { force: true });
-      continue;
-    }
-    live.push({ pid: marker.pid, mode: marker.mode, command: readPidCommand(marker.pid) ?? undefined });
-  }
+  const live = listLiveClientRuntimeMarkers(home, clientId);
   if (live.length > 0) {
     throwSwitchFailure("CLIENT_SWITCH_RUNTIME_ACTIVE", formatLiveRuntimes(live));
   }

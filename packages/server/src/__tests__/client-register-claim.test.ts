@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { clients } from "../db/schema/clients.js";
-import { ClientUserMismatchError } from "../errors.js";
+import { ClientRetiredError, ClientUserMismatchError } from "../errors.js";
 import { registerClient } from "../services/client.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -98,5 +98,32 @@ describe("registerClient — legacy user_id NULL claim + conflict rejection", ()
     expect(row?.userId).toBe(admin.userId);
     expect(row?.hostname).toBe("h2");
     expect(row?.instanceId).toBe("i2");
+  });
+
+  it("rejects re-registering a retired client id", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `retired-${crypto.randomUUID().slice(0, 8)}` });
+
+    const clientId = `retired-${crypto.randomUUID().slice(0, 8)}`;
+    await registerClient(app.db, {
+      clientId,
+      userId: admin.userId,
+      organizationId: admin.organizationId,
+      instanceId: "i1",
+    });
+    await app.db.update(clients).set({ retiredAt: new Date(), status: "disconnected" }).where(eq(clients.id, clientId));
+
+    await expect(
+      registerClient(app.db, {
+        clientId,
+        userId: admin.userId,
+        organizationId: admin.organizationId,
+        instanceId: "i2",
+      }),
+    ).rejects.toBeInstanceOf(ClientRetiredError);
+
+    const [row] = await app.db.select().from(clients).where(eq(clients.id, clientId)).limit(1);
+    expect(row?.instanceId).toBe("i1");
+    expect(row?.retiredAt).toBeInstanceOf(Date);
   });
 });

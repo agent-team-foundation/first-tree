@@ -9,6 +9,10 @@ export function registerComputerCommands(program: Command): void {
     .command("reset")
     .description("Stop the daemon and remove this computer's local client state")
     .action(() => {
-      runLogout({ purge: true, retryCommand: `${channelConfig.binName} computer reset` });
+      return runLogout({
+        purge: true,
+        retryCommand: `${channelConfig.binName} computer reset`,
+        retireServerClient: false,
+      });
     });
 }

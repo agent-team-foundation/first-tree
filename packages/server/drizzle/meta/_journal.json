@@ -512,6 +512,13 @@
       "when": 1783176353108,
       "tag": "0072_oval_frank_castle",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1783428000000,
+      "tag": "0073_client_retired_at",
+      "breakpoints": true
     }
   ]
 }

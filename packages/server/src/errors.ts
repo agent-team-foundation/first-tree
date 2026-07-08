@@ -127,3 +127,11 @@ export class ClientUserMismatchError extends AppError {
     this.name = "ClientUserMismatchError";
   }
 }
+
+export class ClientRetiredError extends GoneError {
+  readonly code = "CLIENT_RETIRED";
+  constructor(message = "Client has been retired", attrs?: AppErrorAttrs) {
+    super(message, attrs);
+    this.name = "ClientRetiredError";
+  }
+}

@@ -62,6 +62,7 @@ vi.mock("../core/update-glue.js", async (importOriginal) => ({
 
 const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
+const originalClientId = process.env.FIRST_TREE_CLIENT_ID;
 
 let home: string;
 let runtimeInstance: {
@@ -241,6 +242,7 @@ beforeEach(() => {
   mkdirSync(join(home, "config"), { recursive: true });
   process.env.FIRST_TREE_HOME = home;
   delete process.env.FIRST_TREE_SERVER_URL;
+  delete process.env.FIRST_TREE_CLIENT_ID;
   cliFetchMock.mockReset();
   getClientServiceStatusMock.mockReset();
   installClientServiceMock.mockReset();
@@ -289,6 +291,8 @@ afterEach(() => {
   else process.env.FIRST_TREE_HOME = originalFirstTreeHome;
   if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
   else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
+  if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
+  else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
   process.exitCode = undefined;
 });
 
@@ -313,6 +317,14 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: http://first-tree.test");
     expect(installClientServiceMock).not.toHaveBeenCalled();
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("--no-start");
+  });
+
+  it("persists an env-provided client id during --no-start login", async () => {
+    process.env.FIRST_TREE_CLIENT_ID = "client_c0ffee00";
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test/" }), "--no-start"]);
+
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("id: client_c0ffee00");
   });
 
   it("requires explicit confirmation for cross-account login before overwriting local credentials", async () => {

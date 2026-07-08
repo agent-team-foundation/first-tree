@@ -29,7 +29,7 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ClientRetiredError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
 import {
@@ -263,11 +263,14 @@ export async function ensureClientSupportsRuntimeProvider(
   if (options.force) return;
 
   const [client] = await db
-    .select({ metadata: clients.metadata })
+    .select({ metadata: clients.metadata, retiredAt: clients.retiredAt })
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
   if (!client) return; // resolveAgentClient validates existence elsewhere
+  if (client.retiredAt) {
+    throw new ClientRetiredError(`Client "${clientId}" has been retired`);
+  }
 
   // Best-effort: if the client never reported capabilities, allow and let
   // the runtime path catch real mismatches at bind time.
@@ -307,9 +310,10 @@ async function resolveAgentClient(
   }
 
   const [client] = await db
-    .select({ id: clients.id, userId: clients.userId })
+    .select({ id: clients.id, userId: clients.userId, retiredAt: clients.retiredAt })
     .from(clients)
     .where(eq(clients.id, data.clientId))
+    .for("update")
     .limit(1);
   if (!client) {
     throw new BadRequestError(`Client "${data.clientId}" not found`);
@@ -325,6 +329,9 @@ async function resolveAgentClient(
     throw new ForbiddenError(
       `Client "${data.clientId}" is not owned by the manager's user — pick a client belonging to that user.`,
     );
+  }
+  if (client.retiredAt) {
+    throw new ClientRetiredError(`Client "${data.clientId}" has been retired`);
   }
 
   return client.id;
@@ -554,13 +561,30 @@ export async function createAgent(
       // is nothing to lock and the deferred FK validates them at commit.
       if (data.type !== AGENT_TYPES.HUMAN) {
         const [stillActive] = await tx
-          .select({ id: members.id })
+          .select({ id: members.id, userId: members.userId })
           .from(members)
           .where(and(eq(members.id, managerId), eq(members.status, "active")))
           .for("update")
           .limit(1);
         if (!stillActive) {
           throw new BadRequestError(`Manager "${managerId}" not found`);
+        }
+        if (clientId) {
+          const [runtimeClient] = await tx
+            .select({ userId: clients.userId, retiredAt: clients.retiredAt })
+            .from(clients)
+            .where(eq(clients.id, clientId))
+            .for("update")
+            .limit(1);
+          if (!runtimeClient) {
+            throw new BadRequestError(`Client "${clientId}" not found`);
+          }
+          if (runtimeClient.userId !== stillActive.userId) {
+            throw new ForbiddenError(`Client "${clientId}" is not owned by the manager's user`);
+          }
+          if (runtimeClient.retiredAt) {
+            throw new ClientRetiredError(`Client "${clientId}" has been retired`);
+          }
         }
       }
 
@@ -1045,6 +1069,9 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
     if (data.clientId === null) {
       throw new BadRequestError("clientId cannot be cleared — once bound, an agent stays bound to its client");
     }
+    if (agent.clientId === null && agent.status === AGENT_STATUSES.SUSPENDED) {
+      throw new BadRequestError("Suspended agents without a runtime route must be recovered through runtime switch.");
+    }
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
         "clientId cannot be changed through PATCH once set — use the managed runtime switch flow instead.",
@@ -1175,7 +1202,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
  */
 export async function reactivateAgent(db: Database, uuid: string) {
   const [existing] = await db
-    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type, clientId: agents.clientId })
     .from(agents)
     .where(eq(agents.uuid, uuid))
     .limit(1);
@@ -1185,6 +1212,9 @@ export async function reactivateAgent(db: Database, uuid: string) {
   assertNonHumanLifecycleTarget(existing);
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
     throw new BadRequestError("Only suspended agents can be reactivated.");
+  }
+  if (existing.clientId === null) {
+    throw new BadRequestError("Suspended agents without a runtime route must be recovered through runtime switch.");
   }
 
   const [agent] = await db

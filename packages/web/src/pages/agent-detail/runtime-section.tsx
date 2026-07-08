@@ -157,7 +157,7 @@ function ComputerRow(props: {
     value = <span style={{ color: "var(--state-error)" }}>Could not verify computer binding: {props.statusError}</span>;
   } else if (!bound) {
     value = "No computer bound";
-    description = "Bind a connected computer before this agent can run.";
+    description = "Choose a connected computer before this agent can run.";
   }
   // Bound: the computer name only. Its live online/offline state is intentionally
   // not repeated here — the page header already carries presence (and the two

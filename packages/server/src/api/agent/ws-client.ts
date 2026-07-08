@@ -21,7 +21,7 @@ import {
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
@@ -31,7 +31,7 @@ import { agents } from "../../db/schema/agents.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { users } from "../../db/schema/users.js";
-import { ClientOrgMismatchError, ClientUserMismatchError } from "../../errors.js";
+import { ClientOrgMismatchError, ClientRetiredError, ClientUserMismatchError } from "../../errors.js";
 import {
   classifyJoseError,
   decodeJwtForTrace,
@@ -1009,7 +1009,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 const code =
                   err instanceof ClientUserMismatchError
                     ? err.code
-                    : err instanceof ClientOrgMismatchError
+                    : err instanceof ClientOrgMismatchError || err instanceof ClientRetiredError
                       ? err.code
                       : undefined;
                 setAuthWsAttrs(socket, {
@@ -1057,6 +1057,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const bindRequest = agentBindRequestSchema.parse(msg);
+              const [bindingClient] = await app.db
+                .select({ userId: clients.userId, retiredAt: clients.retiredAt })
+                .from(clients)
+                .where(eq(clients.id, clientId))
+                .limit(1);
+              if (!bindingClient || bindingClient.userId !== session.userId) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
+                return;
+              }
+              if (bindingClient.retiredAt) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
 
               const [agent] = await app.db
                 .select({
@@ -1131,7 +1144,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 const claim = await app.db
                   .update(agents)
                   .set({ clientId, updatedAt: new Date() })
-                  .where(and(eq(agents.uuid, agent.id), isNull(agents.clientId), eq(agents.managerId, agent.managerId)))
+                  .where(
+                    and(
+                      eq(agents.uuid, agent.id),
+                      isNull(agents.clientId),
+                      eq(agents.managerId, agent.managerId),
+                      sql`EXISTS (
+                        SELECT 1 FROM ${clients}
+                        WHERE ${clients.id} = ${clientId}
+                          AND ${clients.userId} = ${session.userId}
+                          AND ${clients.retiredAt} IS NULL
+                      )`,
+                    ),
+                  )
                   .returning({ uuid: agents.uuid });
                 if (claim.length === 0) {
                   sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
@@ -1142,6 +1167,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
+                return;
+              }
+
+              if (!connectionManager.isActiveClientConnection(clientId, socket)) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
                 return;
               }
 
@@ -1158,12 +1188,30 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
-              await presenceService.bindAgent(app.db, agent.id, {
+              const published = await presenceService.bindAgentIfActiveClient(app.db, agent.id, {
                 clientId,
                 instanceId,
                 runtimeType: bindRequest.runtimeType,
                 runtimeVersion: bindRequest.runtimeVersion,
               });
+              if (!published) {
+                await agentRuntimeSessionService
+                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                  .catch(() => {});
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
+
+              if (!connectionManager.isActiveClientConnection(clientId, socket)) {
+                const revoked = await agentRuntimeSessionService
+                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                  .catch(() => false);
+                if (revoked && connectionManager.getAgentClientId(agent.id) !== clientId) {
+                  await presenceService.unbindAgent(app.db, agent.id, { expectedClientId: clientId }).catch(() => {});
+                }
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
 
               // An agent that just rebound has, by definition, recovered from
               // whatever fault (stale / error / blocked) was last reported —

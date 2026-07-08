@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { clients } from "../db/schema/clients.js";
 
 export const AGENT_RUNTIME_SESSION_METADATA_KEY = "runtimeSession";
 
@@ -53,7 +54,18 @@ export async function bindAgentRuntimeSession(db: Database, agentId: string, cli
       metadata: sql`jsonb_set(${agents.metadata}, '{runtimeSession}', ${JSON.stringify(binding)}::jsonb, true)`,
       updatedAt: new Date(),
     })
-    .where(and(eq(agents.uuid, agentId), eq(agents.clientId, clientId), eq(agents.status, "active")))
+    .where(
+      and(
+        eq(agents.uuid, agentId),
+        eq(agents.clientId, clientId),
+        eq(agents.status, "active"),
+        sql`EXISTS (
+          SELECT 1 FROM ${clients}
+          WHERE ${clients.id} = ${clientId}
+            AND ${clients.retiredAt} IS NULL
+        )`,
+      ),
+    )
     .returning({ uuid: agents.uuid });
   if (!row) {
     throw new Error(`Agent "${agentId}" is no longer active on client "${clientId}"`);
@@ -81,6 +93,31 @@ export async function revokeAgentRuntimeSession(
   return row !== undefined;
 }
 
+export async function revokeAgentRuntimeSessionIfTokenMatches(
+  db: Database,
+  agentId: string,
+  clientId: string,
+  token: string,
+): Promise<boolean> {
+  const tokenHash = hashRuntimeSessionToken(token);
+  const [row] = await db
+    .update(agents)
+    .set({
+      metadata: sql`${agents.metadata} - ${AGENT_RUNTIME_SESSION_METADATA_KEY}`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(agents.uuid, agentId),
+        eq(agents.clientId, clientId),
+        sql`${agents.metadata}->'runtimeSession'->>'clientId' = ${clientId}`,
+        sql`${agents.metadata}->'runtimeSession'->>'tokenHash' = ${tokenHash}`,
+      ),
+    )
+    .returning({ uuid: agents.uuid });
+  return row !== undefined;
+}
+
 export async function validateAgentRuntimeSession(
   db: Database,
   agentId: string,
@@ -90,7 +127,18 @@ export async function validateAgentRuntimeSession(
   const [row] = await db
     .select({ metadata: agents.metadata })
     .from(agents)
-    .where(and(eq(agents.uuid, agentId), eq(agents.clientId, clientId), eq(agents.status, "active")))
+    .where(
+      and(
+        eq(agents.uuid, agentId),
+        eq(agents.clientId, clientId),
+        eq(agents.status, "active"),
+        sql`EXISTS (
+          SELECT 1 FROM ${clients}
+          WHERE ${clients.id} = ${clientId}
+            AND ${clients.retiredAt} IS NULL
+        )`,
+      ),
+    )
     .limit(1);
   const binding = getAgentRuntimeSessionMetadata(row?.metadata);
   if (!binding || binding.clientId !== clientId) return false;

@@ -14,8 +14,8 @@ import { seedClient, useTestApp } from "./helpers.js";
 /**
  * Issue #1353: self-service leave must align with admin member removal for the
  * non-human agents the leaving member manages — otherwise those agents stay
- * `active` and pinned to the user's client, and `retireClient`'s guard
- * deadlocks the user out of retiring their own computer.
+ * `active` and pinned to the user's client. Client retirement now repairs that
+ * dirty state, but leave should still converge managed agents proactively.
  */
 describe("self-service leave: managed non-human agents", () => {
   const getApp = useTestApp();
@@ -49,9 +49,6 @@ describe("self-service leave: managed non-human agents", () => {
       managerId: leaver.id,
       clientId,
     });
-
-    // Precondition: while the agent is active and pinned, retire is blocked.
-    await expect(retireClient(app.db, clientId)).rejects.toThrow(/still pinned/i);
 
     await leaveOrganization(app.db, leaver.id);
 
