@@ -84,15 +84,7 @@ function hashConnectCode(code: string): string {
 function parseConnectCodeToken(token: string): { issuer: string | null; code: string } | null {
   const trimmed = token.trim();
   if (/^[A-Za-z0-9_-]{20,}$/.test(trimmed)) return { issuer: null, code: trimmed };
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    const match = /^\/connect\/([A-Za-z0-9_-]+)\/?$/.exec(url.pathname);
-    if (!match?.[1]) return null;
-    return { issuer: url.origin, code: match[1] };
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /**

@@ -48,10 +48,16 @@ export class HubUrlDerivationError extends Error {
 }
 
 function normalizeHubUrl(url: string): string {
-  if (!/^https?:\/\//i.test(url)) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new HubUrlDerivationError("TOKEN_BAD_ISS", `Connect token server URL "${url}" is not an http(s) URL.`);
+    }
+    return parsed.origin;
+  } catch (err) {
+    if (err instanceof HubUrlDerivationError) throw err;
     throw new HubUrlDerivationError("TOKEN_BAD_ISS", `Connect token server URL "${url}" is not an http(s) URL.`);
   }
-  return url.replace(/\/+$/, "");
 }
 
 export function isShortConnectCode(token: string): boolean {
@@ -61,9 +67,9 @@ export function isShortConnectCode(token: string): boolean {
 /**
  * Derive the server URL from a connect token. New connect tokens are short
  * codes whose server URL comes from the current CLI channel (or an explicit
- * caller fallback). Legacy short URLs (`https://hub/connect/<code>`) and JWT
- * connect tokens still carry the server URL themselves. Throws
- * `HubUrlDerivationError` when no safe routing source is available.
+ * caller fallback). Legacy JWT connect tokens still carry the server URL
+ * themselves. Throws `HubUrlDerivationError` when no safe routing source is
+ * available.
  *
  * The action handler maps the thrown error to a `fail()` exit so this
  * function stays unit-testable without spawning a subprocess.
@@ -72,19 +78,12 @@ export function deriveHubUrlFromToken(token: string, fallbackUrl?: string): stri
   const trimmed = token.trim();
   try {
     const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
+    if (url.protocol) {
       throw new HubUrlDerivationError(
         "TOKEN_BAD_URL",
-        "Connect token URL must use http(s). Generate a new token from the First Tree web console.",
+        "Connect code must be the short code only, not a URL. Generate a fresh code from the First Tree web console.",
       );
     }
-    if (!/^\/connect\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) {
-      throw new HubUrlDerivationError(
-        "TOKEN_BAD_URL",
-        "Connect token URL must look like https://<server>/connect/<code>. Generate a new token from the First Tree web console.",
-      );
-    }
-    return url.origin;
   } catch (err) {
     if (err instanceof HubUrlDerivationError) throw err;
   }
@@ -94,7 +93,7 @@ export function deriveHubUrlFromToken(token: string, fallbackUrl?: string): stri
     if (fallbackUrl && isShortConnectCode(trimmed)) {
       return normalizeHubUrl(fallbackUrl);
     }
-    const expected = fallbackUrl ? "short code, connect URL, or JWT" : "connect URL or JWT";
+    const expected = fallbackUrl ? "short code or JWT" : "JWT";
     throw new HubUrlDerivationError(
       "INVALID_TOKEN",
       `Connect token is not a valid ${expected}. Generate a new one from the First Tree web console.`,

@@ -275,7 +275,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       }
     });
 
-    it("keeps accepting a legacy short connect URL when the issuer matches", async () => {
+    it("rejects a short connect URL even when it wraps a valid code", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({
@@ -295,27 +295,6 @@ describe("POST /me/connect-tokens bootstrap method", () => {
         method: "POST",
         url: "/api/v1/auth/connect-token",
         payload: { token: `${row.issuer}/connect/${code}` },
-      });
-
-      expect(res.statusCode).toBe(200);
-    });
-
-    it("rejects a short connect URL when the issuer is changed", async () => {
-      const app = getApp();
-      const admin = await createTestAdmin(app);
-      const minted = await app.inject({
-        method: "POST",
-        url: "/api/v1/me/connect-tokens",
-        headers: { authorization: `Bearer ${admin.accessToken}` },
-      });
-      const body = minted.json<{ token: string }>();
-      const code = expectShortConnectCode(body.token);
-      const retargeted = `https://staging.example.test/connect/${code}`;
-
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/v1/auth/connect-token",
-        payload: { token: retargeted },
       });
 
       expect(res.statusCode).toBe(401);

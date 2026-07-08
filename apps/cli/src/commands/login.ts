@@ -67,8 +67,8 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 /**
  * `login <code>` — single entry point. Short connect codes route through the
  * current CLI channel's default server URL, unless FIRST_TREE_SERVER_URL is set.
- * Legacy connect URLs and JWT connect tokens keep carrying their own server URL
- * so already-issued rollout tokens remain accepted.
+ * Legacy JWT connect tokens still carry their own server URL, so already-issued
+ * rollout JWTs remain accepted.
  *
  * Account switches are explicit local-client switches. The stored access token
  * owner is compared with the new server-issued access token's `sub` claim; a

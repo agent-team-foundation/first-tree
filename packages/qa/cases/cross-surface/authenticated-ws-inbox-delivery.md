@@ -23,13 +23,14 @@ before and independent of the turn.
 
 - Isolated run cell with the server running. To bootstrap a real login without external GitHub, run the server in a
   non-production mode with the dev auth bypass enabled (`NODE_ENV` != production and `FIRST_TREE_DEV_CALLBACK_ENABLED=1`),
-  and set `FIRST_TREE_PUBLIC_URL` to a host the CLI run cell can reach (e.g. the compose service name) so connect URLs
-  resolve inside the network.
+  and set `FIRST_TREE_PUBLIC_URL` to a host the CLI run cell can reach (e.g. the compose service name). If that public URL
+  is not the CLI channel default, run the server-supplied login command or set `FIRST_TREE_SERVER_URL` so the bare connect
+  code exchanges against the minting server.
 - A built dist CLI in a container on the run-cell network.
 - Auth bootstrap, all inside the run cell, no host credentials:
   1. dev-login (`GET /api/v1/auth/github/dev-callback?githubId=...&login=...`) → access token (an org is auto-created);
-  2. `POST /api/v1/me/connect-tokens` (Bearer access) → connect URL;
-  3. CLI `login <connect-url> --no-start` → client registered (clear any stale local config first);
+  2. `POST /api/v1/me/connect-tokens` (Bearer access) → connect code plus server-supplied command;
+  3. CLI `login <connect-code> --no-start` (or the returned command plus `--no-start`) → client registered (clear any stale local config first);
   4. `daemon start --foreground --no-interactive` → client connects and registers over WebSocket.
 - An agent bound to the client: `agent create <name> --type agent --runtime claude-code --client-id <clientId>` (note:
   `--type` is `human|agent`; the runtime is `--runtime`). The running daemon auto-binds it via a server push.
@@ -70,4 +71,4 @@ binds after creation, or a message to a bound agent is never delivered (no sessi
 ## Evidence
 
 Keep the create-chat response, the daemon WS log lines showing session start for the chat, and (if reached) the
-provider-turn failure that marks the `one-turn-ready` gap. Redact tokens and connect URLs before sharing.
+provider-turn failure that marks the `one-turn-ready` gap. Redact bearer tokens and connect codes before sharing.

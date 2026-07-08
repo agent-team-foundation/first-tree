@@ -23,8 +23,8 @@ everything online.
   (`npm install -g first-tree`).
 - **A connect code** — generated from the web console's *Computers → New
   Connection* dialog. New codes are short, single-use strings. The CLI uses
-  its channel default server URL unless `FIRST_TREE_SERVER_URL` is set; legacy
-  short URLs and JWT tokens remain accepted during rollout.
+  its channel default server URL unless `FIRST_TREE_SERVER_URL` is set; connect
+  URLs are not accepted. Legacy JWT tokens remain accepted during rollout.
 - **A server you can reach** — either the hosted SaaS or a locally
   running server.
 
@@ -54,8 +54,8 @@ because an agent is permanently bound to exactly one client machine.
 
 - `$FIRST_TREE_HOME/config/credentials.json` (mode `0600`) —
   `accessToken`, `refreshToken`, and the server URL resolved from the CLI
-  channel default or `FIRST_TREE_SERVER_URL`. Legacy short URLs and JWT tokens
-  are still accepted during rollout.
+  channel default or `FIRST_TREE_SERVER_URL`. Legacy JWT tokens are still
+  accepted during rollout.
 - `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
 - On macOS / Linux, the background daemon is installed as a user-level

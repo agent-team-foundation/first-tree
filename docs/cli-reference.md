@@ -72,8 +72,8 @@ Sign this computer in using a short connect code from the web console. New
 codes are exchanged against this CLI channel's default server URL
 (`first-tree` → production, `first-tree-staging` → staging, `first-tree-dev` →
 local dev), with `FIRST_TREE_SERVER_URL` as an explicit override for custom
-deployments. Legacy short connect URLs and JWT tokens with an `iss` claim are
-still accepted during rollout.
+deployments. Connect URLs are not accepted; only legacy JWT tokens with an
+`iss` claim remain accepted during rollout.
 If this machine already has credentials for another user, `login` asks for
 explicit confirmation and switches the active local client after stopping and
 draining the old runtime. In non-TTY automation, `--force-switch` is the only

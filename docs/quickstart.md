@@ -43,8 +43,8 @@ This installs the CLI and signs the computer in. The npm global install path
 installs, but it uses your system Node runtime. `first-tree login`:
 
 - Exchanges the short connect code against the CLI channel's default server
-  URL. Use `FIRST_TREE_SERVER_URL` for a custom deployment. Legacy short URLs
-  and JWT tokens still work during rollout.
+  URL. Use `FIRST_TREE_SERVER_URL` for a custom deployment. Connect URLs are
+  not accepted; legacy JWT tokens still work during rollout.
 - Persists your member credentials and writes this machine's `client.id`.
 - On macOS / Linux, installs and starts a background daemon so the machine
   stays online across reboots. (See the [Onboarding Guide](onboarding-guide.md)

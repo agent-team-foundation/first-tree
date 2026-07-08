@@ -345,21 +345,14 @@ describe("login command", { timeout: 60_000 }, () => {
     });
   });
 
-  it("keeps accepting a legacy short connect URL token", async () => {
+  it("rejects a connect URL instead of accepting it as a short code", async () => {
     const token = "http://first-tree.test/connect/short_code-123";
-    await runLogin(["login", token, "--no-start"]);
+    await expect(runLogin(["login", token, "--no-start"])).rejects.toThrow("process.exit");
 
-    expect(cliFetchMock).toHaveBeenCalledWith(
-      "http://first-tree.test/api/v1/auth/connect-token",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ token }),
-      }),
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Connect code must be the short code only",
     );
-    expect(JSON.parse(readFileSync(credentialsPath(), "utf8"))).toMatchObject({
-      refreshToken: "r1",
-      serverUrl: "http://first-tree.test",
-    });
   });
 
   it("requires explicit confirmation for cross-account login with a short connect code", async () => {

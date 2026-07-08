@@ -25,8 +25,8 @@ export type ConnectTokenExchange = z.infer<typeof connectTokenExchangeSchema>;
 export const connectTokenResponseSchema = z.object({
   /**
    * Opaque connect token accepted by `<binName> login <code>`. New servers
-   * return a bare short code; legacy short URLs and JWT connect tokens remain
-   * accepted by the exchange endpoint during rollout.
+   * return a bare short code; legacy JWT connect tokens remain accepted by the
+   * exchange endpoint during rollout.
    */
   token: z.string(),
   expiresIn: z.number(),
