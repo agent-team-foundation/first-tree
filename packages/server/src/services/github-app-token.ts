@@ -157,15 +157,18 @@ function parseGithubOwnerRepo(repo: string | undefined): { owner: string; repo: 
  * it to the installation."
  *
  * This is DEFINITIVE, not a heuristic: it probes the repo with the minted
- * installation token and only returns the action on a 404 — GitHub's signal
- * that this installation token can't see the repo (outside a selected-repos
- * installation, or the repo is gone), which is exactly what adding the repo to
- * the installation fixes. It returns null — leaving the generic sync-unavailable
+ * installation token and only returns the action on a 404 from a
+ * SELECTED-repositories installation — GitHub's signal that a selected-repos
+ * token can't see the repo, which is exactly what adding the repo to the
+ * installation fixes. It returns null — leaving the generic sync-unavailable
  * copy in place — for every other case, so the UI never sends users to GitHub
  * for a failure that adding a repo can't fix:
  *  - snapshot not unavailable (nothing to recover)
  *  - non-GitHub / local binding (`isGithubRemoteBinding` false)
  *  - no minted token (no installation / suspended / mint failed — different fixes)
+ *  - an all-repositories installation: it already covers every repo in the
+ *    account, so a 404 means the repo is gone / renamed / wrong-owner, not a
+ *    coverage gap — adding a repo can't fix it (we skip the probe entirely)
  *  - the App CAN read the repo (so the failure is a bad branch, transient clone
  *    error, or other cause) → readable, no action
  *  - a 403 (ambiguous: rate limit, SAML enforcement, a missing permission — none
@@ -181,6 +184,11 @@ export async function resolveContextTreeRecoveryAction(
   if (snapshot.snapshotStatus !== "unavailable") return null;
   if (!isGithubRemoteBinding(binding)) return null;
   if (!mintResult.ok) return null;
+  // Only a selected-repositories installation can have the coverage gap this
+  // action fixes. An all-repositories install already covers every repo in the
+  // account, so a 404 there is gone/renamed/wrong-owner — not addable. Skip the
+  // probe entirely.
+  if (mintResult.repositorySelection !== "selected") return null;
   const parsed = parseGithubOwnerRepo(binding.repo);
   if (!parsed) return null;
   try {

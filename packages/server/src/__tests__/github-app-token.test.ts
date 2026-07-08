@@ -218,6 +218,19 @@ describe("services/github-app-token", () => {
       expect(action).toBeNull();
     });
 
+    it("does not probe or act for an all-repositories installation (404 there is gone/renamed, not a gap)", async () => {
+      let probed = false;
+      const fetcher: typeof fetch = async () => {
+        probed = true;
+        return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      };
+      const mintOkAllRepos: ContextTreeInstallationTokenResult = { ...mintOk, repositorySelection: "all" };
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
+      const action = await resolveContextTreeRecoveryAction(snapshot, githubBinding, mintOkAllRepos, { fetcher });
+      expect(action).toBeNull();
+      expect(probed).toBe(false);
+    });
+
     it("returns null when the App can read the repo (some other unavailable cause, e.g. bad branch)", async () => {
       const fetcher: typeof fetch = async () =>
         new Response(readableRepoBody, { status: 200, headers: { "content-type": "application/json" } });
