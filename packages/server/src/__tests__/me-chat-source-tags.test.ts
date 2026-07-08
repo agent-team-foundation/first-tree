@@ -159,6 +159,14 @@ describe("conversation-list source tags", () => {
     expect(agentOnly.rows.map((r) => r.chatId)).toEqual([agentChatId]);
     expect(agentOnly.rows[0]?.source).toBe("agent");
     expect(agentOnly.rows[0]?.entityType).toBeNull();
+
+    const manualAndGithub = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "active",
+      origin: ["manual", "github", "github"],
+    });
+    expect(manualAndGithub.rows.map((r) => r.chatId).sort()).toEqual([manualChatId, issueChatId, prChatId].sort());
   });
 
   it("projects createdByMe from the caller's chat membership role", async () => {

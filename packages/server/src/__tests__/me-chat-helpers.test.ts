@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { decodeCursor, encodeCursor, resolveChatTitle } from "../services/me-chat.js";
 
 describe("me-chat encodeCursor / decodeCursor", () => {
@@ -26,6 +26,17 @@ describe("me-chat encodeCursor / decodeCursor", () => {
     expect(decodeCursor(Buffer.from("ts|", "utf8").toString("base64url"))).toBeNull();
     // bad timestamp
     expect(decodeCursor(Buffer.from("not-a-date|chat", "utf8").toString("base64url"))).toBeNull();
+  });
+
+  it("returns null when base64 decoding throws", () => {
+    const spy = vi.spyOn(Buffer, "from").mockImplementationOnce(() => {
+      throw new Error("decode failed");
+    });
+    try {
+      expect(decodeCursor("bad-base64")).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

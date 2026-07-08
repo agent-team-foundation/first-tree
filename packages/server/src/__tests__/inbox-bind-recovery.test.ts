@@ -324,4 +324,89 @@ describe("inbox same-socket chat recovery", () => {
     expect(secondDelivery.id).toBe(firstDelivery.id);
     expect(secondDelivery.message.precedingMessages.map((p) => p.content)).toEqual(firstPreceding);
   });
+
+  it("resets delivered rows across an inbox when no chat scope is supplied", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `recoverall-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `recoverall-a2-${uid}` });
+
+    const chat1 = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
+    });
+    const chat2 = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
+    });
+    const msg1 = await a1.request("POST", `/api/v1/agent/chats/${chat1.json().id}/messages`, {
+      format: "text",
+      content: "recover all one",
+      receiverNames: [a2.agent.name],
+    });
+    const msg2 = await a1.request("POST", `/api/v1/agent/chats/${chat2.json().id}/messages`, {
+      format: "text",
+      content: "recover all two",
+      receiverNames: [a2.agent.name],
+    });
+
+    const first = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, msg1.json().id);
+    const second = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, msg2.json().id);
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+
+    const recovered = await inboxService.recoverUnackedForScope(app.db, { inboxId: a2.agent.inboxId });
+    expect(recovered.resetEntryIds.sort((a, b) => a - b)).toEqual(
+      [first[0]?.id, second[0]?.id].filter((id): id is number => typeof id === "number").sort((a, b) => a - b),
+    );
+  });
+
+  it("prunes acked silent rows and stale pending silent rows", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { type: "human", name: `prunesilent-h-${uid}` });
+    const observer = await createTestAgent(app, { type: "agent", name: `prunesilent-a-${uid}` });
+    const chat = await createChat(app.db, human.agent.uuid, {
+      type: "group",
+      participantIds: [observer.agent.uuid],
+    });
+
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "acked silent" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.agent.uuid,
+      { source: "api", format: "text", content: "stale pending silent" },
+      { allowRecipientlessSend: true },
+    );
+
+    const silentRows = await app.db
+      .select({ id: inboxEntries.id })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, observer.agent.inboxId), eq(inboxEntries.notify, false)));
+    expect(silentRows).toHaveLength(2);
+    const [acked, stale] = silentRows;
+    if (!acked || !stale) throw new Error("expected two silent rows");
+    await app.db.update(inboxEntries).set({ status: "acked" }).where(eq(inboxEntries.id, acked.id));
+    await app.db
+      .update(inboxEntries)
+      .set({ createdAt: new Date(Date.now() - 120_000) })
+      .where(eq(inboxEntries.id, stale.id));
+
+    await expect(inboxService.pruneStaleSilentEntries(app.db, 60)).resolves.toEqual({
+      ackedDeleted: 1,
+      stalePendingDeleted: 1,
+    });
+  });
+
+  it("assertInboxOwner rejects cross-inbox access", async () => {
+    await expect(inboxService.assertInboxOwner("inbox-a", "inbox-b")).rejects.toThrow(/another agent/i);
+    await expect(inboxService.assertInboxOwner("inbox-a", "inbox-a")).resolves.toBeUndefined();
+  });
 });

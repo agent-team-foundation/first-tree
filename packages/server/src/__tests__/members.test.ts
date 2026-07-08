@@ -4,10 +4,11 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agents as agentsTable } from "../db/schema/agents.js";
 import { members as membersTable } from "../db/schema/members.js";
+import { organizations as organizationsTable } from "../db/schema/organizations.js";
 import { users as usersTable } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import * as memberService from "../services/member.js";
-import { repairMembershipHumanMirrors } from "../services/membership.js";
+import { repairMembershipHumanMirrors, selfCreateOrganization } from "../services/membership.js";
 import { createOrganization } from "../services/organization.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -431,6 +432,118 @@ describe("Members API", () => {
         payload: { username: "another", displayName: "Another", role: "member" },
       });
       expect(res.statusCode).toBe(403);
+    });
+  });
+
+  describe("service-layer edge cases", () => {
+    it("updateMember returns the current row for an empty patch and blocks demoting the last admin", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `member-edge-admin-${randomUUID().slice(0, 8)}` });
+
+      const unchanged = await memberService.updateMember(app.db, admin.memberId, {}, admin.organizationId);
+      expect(unchanged.id).toBe(admin.memberId);
+      expect(unchanged.role).toBe("admin");
+
+      await expect(
+        memberService.updateMember(app.db, admin.memberId, { role: "member" }, admin.organizationId),
+      ).rejects.toThrow(/last admin/i);
+    });
+
+    it("createMember rejects an existing row with an unsupported lifecycle status", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `unsupported-admin-${randomUUID().slice(0, 8)}` });
+      const created = await memberService.createMember(app.db, admin.organizationId, {
+        username: `unsupported-${randomUUID().slice(0, 8)}`,
+        displayName: "Unsupported Member",
+        role: "member",
+      });
+      await app.db.update(membersTable).set({ status: "paused" }).where(eq(membersTable.id, created.id));
+
+      await expect(
+        memberService.createMember(app.db, admin.organizationId, {
+          username: created.username,
+          displayName: "Unsupported Again",
+          role: "member",
+        }),
+      ).rejects.toThrow(/unsupported membership status/i);
+    });
+
+    it("deleteMember requires another active admin even for a non-admin target", async () => {
+      const app = getApp();
+      const org = await createOrganization(app.db, {
+        name: `delete-no-fallback-${randomUUID().slice(0, 8)}`,
+        displayName: "No Fallback Org",
+      });
+      const target = await memberService.createMember(app.db, org.id, {
+        username: `delete-no-fallback-${randomUUID().slice(0, 8)}`,
+        displayName: "Only Member",
+        role: "member",
+      });
+
+      await expect(memberService.deleteMember(app.db, target.id, org.id)).rejects.toThrow(/another admin/i);
+    });
+
+    it("restores a left member whose human mirror name was cleared with a collision-safe slug", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `restore-null-admin-${randomUUID().slice(0, 8)}` });
+      const username = `restore-null-${randomUUID().slice(0, 8)}`;
+      const created = await memberService.createMember(app.db, admin.organizationId, {
+        username,
+        displayName: "Restore Null",
+        role: "member",
+      });
+      await app.db.update(membersTable).set({ status: "left" }).where(eq(membersTable.id, created.id));
+      await app.db
+        .update(agentsTable)
+        .set({ status: "suspended", name: null })
+        .where(eq(agentsTable.uuid, created.agentId));
+      await createAgent(app.db, {
+        name: username,
+        type: "agent",
+        displayName: "Slug Collision",
+        managerId: admin.memberId,
+        organizationId: admin.organizationId,
+      });
+
+      const restored = await memberService.createMember(app.db, admin.organizationId, {
+        username,
+        displayName: "Restored Null",
+        role: "admin",
+      });
+
+      expect(restored.id).toBe(created.id);
+      const [mirror] = await app.db
+        .select({ name: agentsTable.name, status: agentsTable.status })
+        .from(agentsTable)
+        .where(eq(agentsTable.uuid, created.agentId))
+        .limit(1);
+      expect(mirror?.status).toBe("active");
+      expect(mirror?.name).toContain(created.agentId.slice(0, 8));
+    });
+
+    it("selfCreateOrganization rejects duplicate and reserved slugs", async () => {
+      const app = getApp();
+
+      await expect(
+        selfCreateOrganization(app.db, {
+          userId: `user-${randomUUID()}`,
+          userDisplayName: "Self Org Admin",
+          username: "self-org-admin",
+          name: "default",
+          displayName: "Default Again",
+        }),
+      ).rejects.toThrow(/already exists/i);
+
+      await app.db.delete(organizationsTable).where(eq(organizationsTable.name, "default"));
+      await expect(
+        selfCreateOrganization(app.db, {
+          userId: `user-${randomUUID()}`,
+          userDisplayName: "Self Org Admin",
+          username: "self-org-admin",
+          name: "default",
+          displayName: "Reserved Default",
+        }),
+      ).rejects.toThrow(/reserved organization name/i);
     });
   });
 });
