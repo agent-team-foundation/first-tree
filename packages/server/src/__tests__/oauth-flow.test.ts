@@ -7,6 +7,57 @@ import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
+function stubGithubAppOauth(opts: {
+  tokenStatus?: number;
+  githubId?: number;
+  login?: string;
+  email?: string | null;
+}): () => void {
+  const original = globalThis.fetch;
+  type FetchInput = Parameters<typeof globalThis.fetch>[0];
+  type FetchInit = Parameters<typeof globalThis.fetch>[1];
+  globalThis.fetch = (async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://github.com/login/oauth/access_token") {
+      const status = opts.tokenStatus ?? 200;
+      if (status !== 200) {
+        return new Response(JSON.stringify({ error: "bad_verification_code" }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          access_token: "gho_test_access",
+          expires_in: 28_800,
+          refresh_token: "ghr_test_refresh",
+          refresh_token_expires_in: 15_811_200,
+          scope: "",
+          token_type: "bearer",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url === "https://api.github.com/user") {
+      const login = opts.login ?? `callback-${randomUUID().slice(0, 8)}`;
+      return new Response(
+        JSON.stringify({
+          id: opts.githubId ?? 77_000_001,
+          login,
+          name: login,
+          email: opts.email ?? `${login}@example.com`,
+          avatar_url: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return original(input, init);
+  }) as typeof fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
 /**
  * End-to-end tests for the public GitHub-OAuth onboarding surface.
  * Uses `/auth/github/dev-callback` to skip the github.com round-trip —
@@ -15,6 +66,24 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
  */
 describe("GitHub OAuth onboarding flow", () => {
   const getApp = useTestApp();
+
+  it("start signs a state cookie and redirects to the GitHub App authorize URL", async () => {
+    const app = getApp();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/start?next=${encodeURIComponent("/settings/github")}`,
+    });
+
+    expect(res.statusCode).toBe(302);
+    expect(res.headers["set-cookie"]).toContain("oauth_state_nonce=");
+    const location = res.headers.location ?? "";
+    const authorizeUrl = new URL(location);
+    expect(`${authorizeUrl.origin}${authorizeUrl.pathname}`).toBe("https://github.com/login/oauth/authorize");
+    expect(authorizeUrl.searchParams.get("client_id")).toBe("test-app-client-id");
+    expect(authorizeUrl.searchParams.get("redirect_uri")).toContain("/api/v1/auth/github/callback");
+    expect(authorizeUrl.searchParams.get("state")).toBeTruthy();
+  });
 
   it("dev-callback creates user + auth_identity + personal team for first sign-in", async () => {
     const app = getApp();
@@ -76,6 +145,35 @@ describe("GitHub OAuth onboarding flow", () => {
     const params = new URLSearchParams(fragment);
     expect(params.get("next")).toBe(next);
     expect(params.get("joinPath")).toBe("solo");
+  });
+
+  it("dev-callback persists DEV_GITHUB_PAT as the stored GitHub access token", async () => {
+    const app = getApp();
+    const original = process.env.DEV_GITHUB_PAT;
+    process.env.DEV_GITHUB_PAT = "ghp_devpat123";
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/github/dev-callback?githubId=45&login=patuser",
+      });
+      expect(res.statusCode).toBe(302);
+
+      const [identity] = await app.db
+        .select({ userId: authIdentities.userId, metadata: authIdentities.metadata })
+        .from(authIdentities)
+        .where(eq(authIdentities.identifier, "45"));
+      expect(identity?.metadata).toMatchObject({ login: "patuser" });
+      const { getStoredGithubAccessToken } = await import("../services/auth-identity.js");
+      await expect(
+        getStoredGithubAccessToken(app.db, identity?.userId ?? "", app.config.secrets.encryptionKey),
+      ).resolves.toBe("ghp_devpat123");
+    } finally {
+      if (original === undefined) {
+        delete process.env.DEV_GITHUB_PAT;
+      } else {
+        process.env.DEV_GITHUB_PAT = original;
+      }
+    }
   });
 
   it("still sends first-time solo signup with ordinary protected next to onboarding entry", async () => {
@@ -410,6 +508,51 @@ describe("OAuth callback rejects malformed state", () => {
       headers: { cookie: "oauth_state_nonce=wrong" },
     });
     expectStateRejectedRedirect(res);
+  });
+
+  it("redirects to the SPA error surface when GitHub code exchange fails", async () => {
+    const app = getApp();
+    const { signOAuthState } = await import("../services/oauth-state.js");
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/onboarding/connected");
+    const restore = stubGithubAppOauth({ tokenStatus: 500 });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=bad-code&state=${token}`,
+        headers: { cookie: `oauth_state_nonce=${nonce}` },
+      });
+
+      expect(res.statusCode).toBe(302);
+      const location = res.headers.location ?? "";
+      expect(location).toContain("/auth/github/complete#");
+      expect(location).toContain("error=github-exchange-failed");
+      expect(location).toContain("next=%2Fonboarding");
+      expect(location).not.toContain("access=");
+    } finally {
+      restore();
+    }
+  });
+
+  it("redirects live callback invalid invites to the SPA error surface", async () => {
+    const app = getApp();
+    const { signOAuthState } = await import("../services/oauth-state.js");
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/invite/missing-token");
+    const restore = stubGithubAppOauth({ githubId: 77_123_001, login: "missinginvite" });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=ok-code&state=${token}`,
+        headers: { cookie: `oauth_state_nonce=${nonce}` },
+      });
+
+      expect(res.statusCode).toBe(302);
+      const location = res.headers.location ?? "";
+      expect(location).toContain("/auth/github/complete#");
+      expect(location).toContain("error=invite-invalid");
+      expect(location).not.toContain("access=");
+    } finally {
+      restore();
+    }
   });
 
   it("dev-callback ignores open-redirect bypasses in `next`", async () => {
