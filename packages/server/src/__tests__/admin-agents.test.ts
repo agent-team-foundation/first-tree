@@ -148,6 +148,62 @@ describe("Admin Agents API", () => {
     expect(agent.presenceStatus).toBe("offline");
   });
 
+  it("GET /orgs/:orgId/agents/all lists every agent for admins", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+    const created = await createAgent(app.db, {
+      name: `all-list-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "All List Agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      metadata: { publicRole: "admin-all" },
+    });
+
+    const res = await req("GET", `/api/v1/orgs/${ctx.organizationId}/agents/all?limit=50`);
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ items: Array<Record<string, unknown>>; nextCursor: string | null }>();
+    const agent = body.items.find((item) => item.uuid === created.uuid);
+    expect(agent).toMatchObject({
+      uuid: created.uuid,
+      name: created.name,
+      displayName: "All List Agent",
+      managerId: ctx.memberId,
+      presenceStatus: "offline",
+      clientId: ctx.clientId,
+      runtimeType: null,
+      runtimeState: null,
+      activeSessions: null,
+      lastSeenAt: null,
+      avatarImageUrl: null,
+      metadata: { publicRole: "admin-all" },
+    });
+    expect(typeof agent?.createdAt).toBe("string");
+    expect(typeof agent?.updatedAt).toBe("string");
+  });
+
+  it("GET /orgs/:orgId/agents/names/:name/availability reports route-level availability", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+    const takenName = `taken-${crypto.randomUUID().slice(0, 6)}`;
+    await createAgent(app.db, {
+      name: takenName,
+      type: "agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+
+    const taken = await req("GET", `/api/v1/orgs/${ctx.organizationId}/agents/names/${takenName}/availability`);
+    expect(taken.statusCode).toBe(200);
+    expect(taken.json()).toMatchObject({ available: false, reason: "taken" });
+
+    const availableName = `free-${crypto.randomUUID().slice(0, 6)}`;
+    const available = await req("GET", `/api/v1/orgs/${ctx.organizationId}/agents/names/${availableName}/availability`);
+    expect(available.statusCode).toBe(200);
+    expect(available.json()).toMatchObject({ available: true });
+  });
+
   it("creates an agent via POST", async () => {
     const app = getApp();
     const { req, ctx } = await authedRequest(app);
