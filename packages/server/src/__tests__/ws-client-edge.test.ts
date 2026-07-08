@@ -10,6 +10,7 @@ import { users } from "../db/schema/users.js";
 import * as activityService from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import * as agentRuntimeSessionService from "../services/agent-runtime-session.js";
+import * as clientService from "../services/client.js";
 import * as inboxService from "../services/inbox.js";
 import * as notificationService from "../services/notification.js";
 import * as presenceService from "../services/presence.js";
@@ -321,6 +322,25 @@ describe("Agent client WS edge protocol coverage", () => {
     expect(await waitForClose(retiredWs)).toBe(4403);
   }, 15000);
 
+  it("keeps client registration accepted when pinned-agent backfill fails", async () => {
+    const seed = await createAdminContext(app, { username: `ws-reg-backfill-${crypto.randomUUID().slice(0, 8)}` });
+    const backfillSpy = vi
+      .spyOn(clientService, "listActiveAgentsPinnedToClient")
+      .mockRejectedValueOnce(new Error("backfill failed"));
+    const ws = await openAuthenticatedSocket(await signAccess(seed.userId, seed.memberId, seed.organizationId));
+
+    try {
+      ws.send(JSON.stringify({ type: "client:register", clientId: seed.clientId }));
+      await expect(
+        waitForFrame(ws, (message) => (message as { type?: string }).type === "client:registered"),
+      ).resolves.toMatchObject({ type: "client:registered", clientId: seed.clientId });
+      await vi.waitFor(() => expect(backfillSpy).toHaveBeenCalledWith(app.db, seed.clientId));
+    } finally {
+      await closeSocket(ws);
+      backfillSpy.mockRestore();
+    }
+  });
+
   it("covers agent bind rejection paths", async () => {
     const seed = await createAdminContext(app, { username: `ws-bind-${crypto.randomUUID().slice(0, 8)}` });
     const other = await createAdminContext(app, { username: `ws-bind-other-${crypto.randomUUID().slice(0, 8)}` });
@@ -381,6 +401,24 @@ describe("Agent client WS edge protocol coverage", () => {
       await closeSocket(retiredWs);
     }
   }, 20000);
+
+  it("rejects agent bind when the registered client ownership drifts before bind", async () => {
+    const seed = await createAdminContext(app, { username: `ws-bind-drift-${crypto.randomUUID().slice(0, 8)}` });
+    const other = await createAdminContext(app, { username: `ws-bind-drift-other-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createPinnedAgent({ ...seed, suffix: "ownership-drift" });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      await app.db.update(clients).set({ userId: other.userId }).where(eq(clients.id, seed.clientId));
+      await expect(bindAgent(ws, agent.uuid, "bind-client-owner-drift")).resolves.toMatchObject({
+        type: "agent:bind:rejected",
+        ref: "bind-client-owner-drift",
+        reason: AGENT_BIND_REJECT_REASONS.NOT_OWNED,
+      });
+    } finally {
+      await closeSocket(ws);
+    }
+  });
 
   it("claims an unbound agent, rejects malformed bind payloads, and unbinds cleanly", async () => {
     const seed = await createAdminContext(app, { username: `ws-bind-ok-${crypto.randomUUID().slice(0, 8)}` });
@@ -634,10 +672,40 @@ describe("Agent client WS edge protocol coverage", () => {
       });
       expect(eventSpy).toHaveBeenCalled();
 
+      const eventNoRefSpy = vi
+        .spyOn(sessionEventService, "appendEvent")
+        .mockRejectedValueOnce(new Error("event persist failed without ref"));
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: agent.uuid,
+          chatId: "chat-event",
+          event: { kind: "error", payload: { source: "runtime", message: "boom" } },
+        }),
+      );
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            typeof (message as { message?: unknown }).message === "string" &&
+            (message as { message: string }).message.includes("event persist failed without ref"),
+        ),
+      ).resolves.toMatchObject({
+        type: "error",
+        message: "Failed to persist session event: event persist failed without ref",
+      });
+      expect(eventNoRefSpy).toHaveBeenCalled();
+
       ws.send(JSON.stringify({ type: "inbox:ack", entryId: -1, ref: "ack-malformed" }));
       await expect(
         waitForFrame(ws, (message) => (message as { message?: string }).message === "Malformed inbox:ack frame"),
       ).resolves.toMatchObject({ type: "error", message: "Malformed inbox:ack frame" });
+
+      const ackThrowSpy = vi
+        .spyOn(inboxService, "ackEntryByIdForBoundAgents")
+        .mockRejectedValueOnce(new Error("ack db failed"));
+      ws.send(JSON.stringify({ type: "inbox:ack", entryId: 888_888_888, ref: "ack-throws" }));
+      await vi.waitFor(() => expect(ackThrowSpy).toHaveBeenCalledWith(app.db, 888_888_888, [agent.inboxId]));
 
       ws.send(JSON.stringify({ type: "inbox:ack", entryId: 999_999_999, ref: "ack-missing" }));
       await expect(
