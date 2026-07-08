@@ -7,13 +7,15 @@ import type {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
-import { AlertTriangle, Network, RefreshCw } from "lucide-react";
+import { AlertTriangle, ExternalLink, Network, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
+import { getGithubAppInstallation } from "../api/github-app.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
 import { Identicon } from "../components/identicon.js";
+import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
 import { ContextTreeBuildEntry } from "./context-tree-build-entry.js";
@@ -77,6 +79,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
               snapshot={snapshot}
               isAdmin={isAdmin}
               canInitialize={!preview && isAdmin && !snapshot.repo}
+              canManageInstall={!preview && isAdmin && !!snapshot.repo}
             />
           ) : (
             <>
@@ -639,18 +642,46 @@ function UnavailableState({
   snapshot,
   isAdmin,
   canInitialize,
+  canManageInstall,
 }: {
   snapshot: ContextTreeSnapshot;
   isAdmin: boolean;
   canInitialize: boolean;
+  // A tree repo is bound but the App can't read it — the admin can fix it by
+  // adding the repo to the App installation. Gated to `!preview && isAdmin &&
+  // repo bound` by the caller so the manage-URL fetch (admin-only endpoint)
+  // never fires for members or in the preview gallery.
+  canManageInstall: boolean;
 }) {
+  const { organizationId } = useAuth();
+  // The bound-but-unreadable case is almost always a "selected repositories"
+  // installation that doesn't include the tree repo. The App can't add itself
+  // (no self-add API) and the user's token can't either, so the fix is a
+  // manual admin action on GitHub. `manageUrl` deep-links straight to that
+  // installation's settings page. Only admins can reach this endpoint.
+  const installQuery = useQuery({
+    queryKey: ["github-app-installation", organizationId],
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getGithubAppInstallation(organizationId);
+    },
+    enabled: canManageInstall && !!organizationId,
+  });
+  const manageUrl = installQuery.data?.manageUrl ?? null;
+
   const title = snapshot.repo
     ? "Context Tree sync unavailable"
     : isAdmin
       ? "Your team doesn't have a Context Tree yet"
       : "Connect Context Tree";
   const detail = snapshot.repo
-    ? "First Tree cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
+    ? isAdmin
+      ? // The problem statement only; the recovery action lives on the button
+        // below when an installation exists. Keeping the imperative off the
+        // copy avoids a dangling "add it" instruction when there's no App
+        // installation (manageUrl null) and no button to act on.
+        "First Tree can't read this repo yet."
+      : "First Tree can't read this repo yet. Ask an admin to add it to the GitHub App."
     : isAdmin
       ? "Connect your code and your agent will build your team's shared memory with you in a chat."
       : "Ask an admin to set up your team's Context Tree.";
@@ -669,6 +700,19 @@ function UnavailableState({
             {syncDetail ? (
               <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
                 {syncDetail}
+              </div>
+            ) : null}
+            {/* Admin recovery for a bound-but-unreadable repo: deep-link to the
+                App installation settings so the repo can be added. Rendered only
+                once `manageUrl` resolves so we never show a dead button. */}
+            {canManageInstall && manageUrl ? (
+              <div style={{ marginTop: "var(--sp-3)" }}>
+                <Button asChild variant="default" size="sm">
+                  <a href={manageUrl} target="_blank" rel="noreferrer">
+                    Add repo to the GitHub App
+                    <ExternalLink size={14} aria-hidden="true" />
+                  </a>
+                </Button>
               </div>
             ) : null}
             {/* The team's single setup entry — admin + recoverable tree setup.
