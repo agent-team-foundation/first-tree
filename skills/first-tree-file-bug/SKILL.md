@@ -11,7 +11,8 @@ Turn a user's informal bug report about **First Tree itself** into a
 well-formed GitHub issue on `agent-team-foundation/first-tree`, filed with
 the user's authenticated `gh` CLI. The value is that the user only has to
 say "First Tree has a bug" — this skill does the collection, drafting, and
-filing, and reports the issue URL back.
+filing, opens a dedicated chat that follows the issue for tracking, and
+reports the issue URL back.
 
 The target repo is **public**. Filing publishes whatever you include, so
 gather deliberately, confirm with the user before creating, and never post
@@ -143,15 +144,44 @@ gh issue create \
 `gh` uses the user's own authentication on this host — that is the intended
 "file with the user's gh CLI" path.
 
-### 7. Follow up
+### 7. Open a tracking chat and follow the issue
 
-After creation, wire the issue into this chat and report the URL:
+Do **not** follow the issue into the current chat. Instead, open a
+dedicated chat for this bug and route the issue's webhook events there, so
+its lifecycle (comments, labels, close) is tracked in its own thread
+instead of cluttering the chat where the bug was reported.
+
+Create the chat with the reporting user as the recipient, capture the new
+chat's ID from the JSON response, then follow the issue **into that chat**:
 
 ```bash
-first-tree github follow <issue-url>
+# 1. Open the tracking chat; capture its id from {"ok":true,"data":{"chatId":…}}
+new_chat=$(first-tree chat create \
+  --to <reporting-user-handle> \
+  --description "Tracking First Tree bug: <concise summary> — <issue-url>" \
+  -f markdown \
+  "Filed a First Tree bug issue: <issue-url>. This chat tracks its progress." \
+  | jq -r '.data.chatId')
+
+# 2. Route the issue's events into the NEW chat (not the current one)
+first-tree github follow <issue-url> --chat "$new_chat"
 ```
 
-Then send the user the issue URL so they can track it.
+- `--to <reporting-user-handle>` is the human who reported the bug (the
+  handle you captured in step 2), so they get the tracking chat and are
+  woken on it.
+- Parse the chat ID from the `data.chatId` field of the create response —
+  do not hard-code it. `chat create` is **not idempotent**, so create the
+  chat exactly once; if the result is uncertain, check `chat list` before
+  retrying rather than re-running blindly.
+- Once the follow lands, First Tree auto-manages the tracking chat's topic
+  from the issue entity (e.g. `Issue agent-team-foundation/first-tree#123`)
+  — leave that topic alone.
+- Write the first message and description in the session's working language
+  (the examples above are English).
+
+Finally, in the **current** chat, report the issue URL back to the user and
+mention that a dedicated tracking chat has been opened to follow it.
 
 ## Guardrails
 
