@@ -59,6 +59,11 @@ describe("deriveHubUrlFromToken", () => {
     }
   });
 
+  it("hard-fails when iss is not a parseable URL", () => {
+    const token = fakeJwt({ iss: "https://%" });
+    expect(() => deriveHubUrlFromToken(token)).toThrow(HubUrlDerivationError);
+  });
+
   it("hard-fails when token is not a valid JWT", () => {
     expect(() => deriveHubUrlFromToken("not.a.jwt-at-all")).toThrow(HubUrlDerivationError);
     try {
@@ -88,5 +93,11 @@ describe("decodeJwtPayload", () => {
   it("returns null on garbage", () => {
     expect(decodeJwtPayload("garbage")).toBeNull();
     expect(decodeJwtPayload("a.b")).toBeNull();
+    const nonObjectPayload = [
+      Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
+      Buffer.from("null").toString("base64url"),
+      "signature",
+    ].join(".");
+    expect(decodeJwtPayload(nonObjectPayload)).toBeNull();
   });
 });

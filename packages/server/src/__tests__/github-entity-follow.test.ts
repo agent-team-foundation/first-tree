@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
+import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { BadRequestError, NotFoundError, ServiceUnavailableError, UnprocessableError } from "../errors.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
@@ -62,12 +63,20 @@ describe("github-entity-follow", () => {
   }
 
   async function seedInstallation(app: App, orgId: string): Promise<void> {
+    const [existing] = await app.db
+      .select({ installationId: githubAppInstallations.installationId })
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.hubOrganizationId, orgId))
+      .limit(1);
+    if (existing) return;
+
+    const githubAccountId = Math.floor(Math.random() * 1_000_000_000) + 1;
     const row = await upsertInstallationFromMetadata(app.db, {
       installation: {
         id: Math.floor(Math.random() * 1_000_000) + 1,
         accountType: "Organization",
-        accountLogin: "acme",
-        accountGithubId: 1001,
+        accountLogin: `acme-${githubAccountId}`,
+        accountGithubId: githubAccountId,
         permissions: { contents: "read" },
         events: ["pull_request", "issues"],
         suspendedAt: null,
@@ -1085,5 +1094,235 @@ describe("github-entity-follow", () => {
     await expect(removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/api@3f2a91c0" })).resolves.toEqual({
       removed: 1,
     });
+  });
+
+  it("uses commit resolver fallbacks for repo name, sha, html URL, and blank first-line title", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const fetcher = makeFetcher({
+      "/repos/acme/api/commits/3f2a91c0": () => json({ commit: { message: "\nbody" } }),
+      "/repos/acme/api": () => json({}),
+    });
+
+    const result = await declareEntityFollow(app.db, deps(fetcher), followParams(s, "acme/api@3f2a91c0"));
+
+    expect(result.outcome).toBe("created");
+    if (result.outcome !== "created") throw new Error("expected created");
+    expect(result.entity).toMatchObject({
+      entityType: "commit",
+      entityKey: "acme/api@3f2a91c0",
+      htmlUrl: "https://github.com/acme/api/commit/3f2a91c0",
+      title: "",
+      state: null,
+      number: null,
+    });
+  });
+
+  it("maps commit GitHub failures after repo resolution", async () => {
+    const app = getApp();
+    const unavailable = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          makeFetcher({
+            "/repos/acme/api/commits/3f2a91c0": () => json({ message: "server error" }, 502),
+            "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+          }),
+        ),
+        followParams(unavailable, "acme/api@3f2a91c0"),
+      ),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+
+    const missing = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          makeFetcher({
+            "/repos/acme/api/commits/3f2a91c0": () => json({ message: "Not Found" }, 404),
+            "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+          }),
+        ),
+        followParams(missing, "acme/api@3f2a91c0"),
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("maps PR second-hop failures without writing a follow row", async () => {
+    const app = getApp();
+    const unavailable = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          prFetcher({
+            "/repos/acme/api/pulls/42": () => json({ message: "server error" }, 502),
+          }),
+        ),
+        followParams(unavailable, "acme/api#42"),
+      ),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+
+    const forbidden = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          prFetcher({
+            "/repos/acme/api/pulls/42": () => json({ message: "Forbidden" }, 403),
+          }),
+        ),
+        followParams(forbidden, "acme/api#42"),
+      ),
+    ).rejects.toBeInstanceOf(UnprocessableError);
+
+    const missing = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          prFetcher({
+            "/repos/acme/api/pulls/42": () => json({ message: "Gone" }, 410),
+          }),
+        ),
+        followParams(missing, "acme/api#42"),
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("uses PR and issue payload fallbacks for URL, title, number, and state", async () => {
+    const app = getApp();
+    const prSetup = await setup(app);
+    const prResult = await declareEntityFollow(
+      app.db,
+      deps(
+        prFetcher({
+          "/repos/acme/api/issues/42": () =>
+            json({
+              state: "closed",
+              title: "Issue title fallback",
+              pull_request: { merged_at: null },
+            }),
+          "/repos/acme/api/pulls/42": () =>
+            json({
+              state: "closed",
+              merged: false,
+              draft: false,
+            }),
+        }),
+      ),
+      followParams(prSetup, "acme/api#42"),
+    );
+    expect(prResult.outcome).toBe("created");
+    if (prResult.outcome !== "created") throw new Error("expected created");
+    expect(prResult.entity).toMatchObject({
+      htmlUrl: "https://github.com/Acme/Api/pull/42",
+      title: "Issue title fallback",
+      state: "closed",
+      number: 42,
+    });
+
+    const issueSetup = await setup(app);
+    const issueResult = await declareEntityFollow(
+      app.db,
+      deps(
+        prFetcher({
+          "/repos/acme/api/issues/42": () =>
+            json({
+              state: "queued",
+            }),
+        }),
+      ),
+      followParams(issueSetup, "acme/api#42"),
+    );
+    expect(issueResult.outcome).toBe("created");
+    if (issueResult.outcome !== "created") throw new Error("expected created");
+    expect(issueResult.entity).toMatchObject({
+      entityType: "issue",
+      htmlUrl: "https://github.com/Acme/Api/issues/42",
+      title: null,
+      state: null,
+      number: 42,
+    });
+  });
+
+  it("maps discussion resolver fallbacks and unavailable responses", async () => {
+    const app = getApp();
+    const unavailable = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          makeFetcher({
+            "/repos/Acme/Api/discussions/42": () => json({ message: "server error" }, 502),
+            "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+          }),
+        ),
+        followParams(unavailable, "https://github.com/acme/api/discussions/42"),
+      ),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+
+    const ok = await setup(app);
+    const result = await declareEntityFollow(
+      app.db,
+      deps(
+        makeFetcher({
+          "/repos/Acme/Api/discussions/42": () => json({ state: "queued" }),
+          "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+        }),
+      ),
+      followParams(ok, "https://github.com/acme/api/discussions/42"),
+    );
+    expect(result.outcome).toBe("created");
+    if (result.outcome !== "created") throw new Error("expected created");
+    expect(result.entity).toMatchObject({
+      entityType: "discussion",
+      htmlUrl: "https://github.com/Acme/Api/discussions/42",
+      title: null,
+      state: null,
+      number: 42,
+    });
+  });
+
+  it("treats non-object GitHub JSON, retry-after limits, and 401s as resolver errors", async () => {
+    const app = getApp();
+    const nonObject = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          makeFetcher({
+            "/repos/acme/api": () => json("not an object"),
+          }),
+        ),
+        followParams(nonObject, "acme/api#42"),
+      ),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+
+    const retryAfter = await setup(app);
+    const retryAfterFetcher = makeFetcher({
+      "/repos/acme/api": () =>
+        new Response(JSON.stringify({ message: "secondary limit" }), {
+          status: 403,
+          headers: { "content-type": "application/json", "retry-after": "1" },
+        }),
+    });
+    await expect(
+      declareEntityFollow(app.db, deps(retryAfterFetcher), followParams(retryAfter, "acme/api#42")),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+
+    const forbidden = await setup(app);
+    await expect(
+      declareEntityFollow(
+        app.db,
+        deps(
+          makeFetcher({
+            "/repos/acme/api": () => json({ message: "Bad credentials" }, 401),
+          }),
+        ),
+        followParams(forbidden, "acme/api#42"),
+      ),
+    ).rejects.toBeInstanceOf(UnprocessableError);
   });
 });

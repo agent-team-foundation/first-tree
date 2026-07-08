@@ -8,6 +8,7 @@ import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
+import { createChat } from "../services/chat.js";
 import {
   contextReviewerPrTestInternals,
   handleContextReviewerPrEvent,
@@ -296,6 +297,23 @@ describe("normalizeGithubRepo", () => {
     expect(normalizeGithubRepo("owner/repo/extra")).toBeNull();
     expect(normalizeGithubRepo("not-a-repo")).toBeNull();
   });
+
+  it("covers parser guard branches for malformed owner and path segments", () => {
+    const { parseBareRepo, parseScpLikeRepo, parseUrlRepo } = contextReviewerPrTestInternals;
+
+    expect(parseBareRepo("owner//")).toBeNull();
+    expect(parseBareRepo("//repo")).toBeNull();
+    expect(parseBareRepo("owner/repo/extra")).toBeNull();
+
+    expect(parseScpLikeRepo("git@gitlab.com:Owner/Repo")).toBeNull();
+    expect(parseScpLikeRepo("git@github.com:")).toBeNull();
+    expect(parseScpLikeRepo("git@github.com:Owner")).toBeNull();
+    expect(parseScpLikeRepo("git@github.com:Owner//")).toBeNull();
+
+    expect(parseUrlRepo("ftp://github.com/owner/repo")).toBeNull();
+    expect(parseUrlRepo("https://github.com/owner")).toBeNull();
+    expect(parseUrlRepo("https://github.com/owner//")).toBeNull();
+  });
 });
 
 describe("handleContextReviewerPrEvent", () => {
@@ -361,6 +379,32 @@ describe("handleContextReviewerPrEvent", () => {
         organizationId: admin.organizationId,
       }),
     ).resolves.toEqual({ handled: false, reason: "unsupported_event" });
+  });
+
+  it("skips before DB work when the payload is not an object", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: null,
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "unsupported_event" });
+  });
+
+  it("skips when the context tree repo is missing", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "context_tree_repo_unset" });
   });
 
   it("creates a reviewer chat, membership, task message, and inbox notification for an opened context repo PR", async () => {
@@ -867,5 +911,127 @@ describe("handleContextReviewerPrEvent", () => {
       triggerEvent: "pull_request.ready_for_review",
       isDraft: false,
     });
+  });
+
+  it("rejects malformed payload shapes defensively", () => {
+    const { extractPullRequestPayloadInfo } = contextReviewerPrTestInternals;
+
+    expect(extractPullRequestPayloadInfo("pull_request", null, "org-1")).toBeNull();
+    expect(extractPullRequestPayloadInfo("pull_request", pullRequestPayload({ action: "closed" }), "org-1")).toBeNull();
+    expect(
+      extractPullRequestPayloadInfo(
+        "pull_request",
+        pullRequestPayload({ repository: null, sender: null }),
+        "org-1",
+      ),
+    ).toBeNull();
+    expect(
+      extractPullRequestPayloadInfo(
+        "pull_request",
+        pullRequestPayload({ repository: { full_name: "not-a-repo" }, pull_request: null }),
+        "org-1",
+      ),
+    ).toBeNull();
+    expect(
+      extractPullRequestPayloadInfo(
+        "issue_comment",
+        issueCommentPayload({ issue: null, comment: null }),
+        "org-1",
+      ),
+    ).toBeNull();
+    expect(
+      extractPullRequestPayloadInfo(
+        "pull_request_review_comment",
+        reviewCommentPayload({ pull_request: { number: 123 }, comment: null }),
+        "org-1",
+      ),
+    ).toBeNull();
+  });
+
+  it("extracts review comment payload fallbacks", () => {
+    expect(
+      contextReviewerPrTestInternals.extractPullRequestPayloadInfo(
+        "pull_request_review_comment",
+        reviewCommentPayload({
+          action: "edited",
+          pull_request: {
+            number: 123,
+            title: "Clarify agent routing context",
+            html_url: "https://github.com/owner/context-tree/pull/123",
+            base: null,
+            head: null,
+            draft: "unknown",
+          },
+          comment: {},
+        }),
+        "org-1",
+      ),
+    ).toMatchObject({
+      triggerEvent: "pull_request_review_comment.edited",
+      baseRef: null,
+      headRef: null,
+      isDraft: null,
+      commentUrl: null,
+      commentAuthorLogin: "reviewer-user",
+      commentAuthorType: "User",
+    });
+  });
+
+  it("returns null when an app-bot echo has no recent opened task to suppress", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    const created = await createChat(app.db, {
+      mode: "task",
+      initiatorAgentId: admin.humanAgentUuid,
+      organizationId: admin.organizationId,
+      initialRecipientAgentIds: [reviewer.uuid],
+      contextParticipantAgentIds: [],
+      topic: "Context review",
+      initialMessage: {
+        source: "api",
+        format: "markdown",
+        content: "seed",
+        metadata: {},
+      },
+      source: "manual",
+    });
+    const info = contextReviewerPrTestInternals.extractPullRequestPayloadInfo(
+      "issue_comment",
+      issueCommentPayload({
+        comment: {
+          html_url: "https://github.com/owner/context-tree/pull/123#issuecomment-9",
+          user: { login: "test-app[bot]", type: "Bot" },
+        },
+        sender: { login: "test-app[bot]", type: "Bot" },
+      }),
+      admin.organizationId,
+    );
+    if (!info) throw new Error("expected issue comment payload info");
+
+    await expect(
+      contextReviewerPrTestInternals.findSuppressibleReviewerEchoMessageId(app.db, {
+        chatId: created.chat.id,
+        info,
+        reviewer: {
+          uuid: reviewer.uuid,
+          managerHumanAgentId: admin.humanAgentUuid,
+          managerGithubLogin: null,
+        },
+        appSlug: null,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      contextReviewerPrTestInternals.findSuppressibleReviewerEchoMessageId(app.db, {
+        chatId: created.chat.id,
+        info,
+        reviewer: {
+          uuid: reviewer.uuid,
+          managerHumanAgentId: admin.humanAgentUuid,
+          managerGithubLogin: null,
+        },
+        appSlug: "test-app",
+      }),
+    ).resolves.toBeNull();
   });
 });

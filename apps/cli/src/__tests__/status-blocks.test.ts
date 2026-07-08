@@ -75,6 +75,35 @@ describe("status block renderers", () => {
       expect(output()).toContain(expected);
     }
     expect(output()).toContain("logs: /logs/client.log");
+
+    stderrSpy.mockClear();
+    serviceStatusMock
+      .mockReturnValueOnce({
+        platform: "systemd",
+        label: "first-tree-dev.service",
+        state: "active",
+        logDir: "/logs",
+      })
+      .mockReturnValueOnce({
+        platform: "systemd",
+        label: "first-tree-dev.service",
+        state: "inactive",
+        detail: "loaded",
+        logDir: "/logs",
+      })
+      .mockReturnValueOnce({
+        platform: "systemd",
+        label: "first-tree-dev.service",
+        state: "unknown",
+        detail: "denied",
+        logDir: "/logs",
+      });
+    renderServiceBlock();
+    renderServiceBlock();
+    renderServiceBlock();
+    expect(output()).toContain("running (systemd)");
+    expect(output()).toContain("stopped (systemd, loaded)");
+    expect(output()).toContain("unknown (systemd, denied)");
   });
 
   it("renders server configuration states", async () => {
@@ -93,6 +122,12 @@ describe("status block renderers", () => {
     expect(output()).toContain("client-1");
 
     stderrSpy.mockClear();
+    writeFileSync(join(home, "config", "client.yaml"), "server: disabled\nclient:\n  id: 123\n");
+    renderHubBlock();
+    expect(output()).toContain("Server:   (not configured)");
+    expect(output()).toContain("Client:   (not configured)");
+
+    stderrSpy.mockClear();
     writeFileSync(join(home, "config", "client.yaml"), "server: [");
     renderHubBlock();
     expect(output()).toContain("could not read");
@@ -108,6 +143,16 @@ describe("status block renderers", () => {
 
     stderrSpy.mockClear();
     credentialsMock.mockReturnValueOnce({ refreshToken: "bad-token" });
+    renderAuthBlock();
+    expect(output()).toContain("could not parse refresh token");
+
+    stderrSpy.mockClear();
+    credentialsMock.mockReturnValueOnce({ refreshToken: "header.e30.signature" });
+    renderAuthBlock();
+    expect(output()).toContain("could not parse refresh token");
+
+    stderrSpy.mockClear();
+    credentialsMock.mockReturnValueOnce({ refreshToken: "header.not-json.signature" });
     renderAuthBlock();
     expect(output()).toContain("could not parse refresh token");
 
@@ -141,5 +186,10 @@ describe("status block renderers", () => {
     expect(output()).toContain("1 configured");
     expect(output()).toContain("nova");
     expect(output()).toContain("agent-1");
+
+    stderrSpy.mockClear();
+    writeFileSync(join(agentDir, "agent.yaml"), "agentId: [not-valid\n");
+    renderAgentsBlock();
+    expect(output()).toContain("no agents directory");
   });
 });

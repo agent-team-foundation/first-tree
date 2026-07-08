@@ -216,6 +216,14 @@ describe("local agent shared helpers", () => {
       expect.stringContaining("Use --agent."),
       2,
     );
+    process.env.FIRST_TREE_AGENT_ID = "missing";
+    configMocks.loadAgents.mockReturnValueOnce(new Map([["nova", { agentId: "agent-1" }]]));
+    expect(() => resolveLocalAgent()).toThrow();
+    expect(outputMocks.fail).toHaveBeenLastCalledWith(
+      "ENV_AGENT_NOT_LOCAL",
+      expect.stringContaining("Pick one explicitly with `--agent <senderName>`."),
+      2,
+    );
 
     delete process.env.FIRST_TREE_AGENT_ID;
     configMocks.loadAgents.mockReturnValueOnce(
@@ -226,6 +234,26 @@ describe("local agent shared helpers", () => {
     );
     expect(() => resolveLocalAgent(undefined, { ambiguous: "Pick one." })).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith("AMBIGUOUS_AGENT", expect.stringContaining("Pick one."), 2);
+    configMocks.loadAgents.mockReturnValueOnce(
+      new Map([
+        ["nova", { agentId: "agent-1" }],
+        ["mira", { agentId: "agent-2" }],
+      ]),
+    );
+    expect(() => resolveLocalAgent()).toThrow();
+    expect(outputMocks.fail).toHaveBeenLastCalledWith(
+      "AMBIGUOUS_AGENT",
+      expect.stringContaining("Specify it explicitly with `--agent <senderName>`."),
+      2,
+    );
+
+    configMocks.loadAgents.mockReturnValueOnce(new Map([["nova", { agentId: "agent-1" }]]));
+    expect(() => resolveLocalAgent("missing")).toThrow();
+    expect(outputMocks.fail).toHaveBeenLastCalledWith(
+      "UNKNOWN_AGENT",
+      'Agent "missing" not found in /tmp/first-tree-config/agents',
+      2,
+    );
 
     configMocks.loadAgents.mockReturnValueOnce(new Map([["nova", { agentId: "agent-1" }]]));
     bootstrapMocks.resolveServerUrl.mockImplementationOnce(() => {
@@ -233,6 +261,13 @@ describe("local agent shared helpers", () => {
     });
     expect(() => resolveLocalAgent()).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith("MISSING_SERVER_URL", "missing server", 2);
+
+    configMocks.loadAgents.mockReturnValueOnce(new Map([["nova", { agentId: "agent-1" }]]));
+    bootstrapMocks.resolveServerUrl.mockImplementationOnce(() => {
+      throw "missing server string";
+    });
+    expect(() => resolveLocalAgent()).toThrow();
+    expect(outputMocks.fail).toHaveBeenLastCalledWith("MISSING_SERVER_URL", "missing server string", 2);
 
     configMocks.resolveConfigReadonly.mockReturnValueOnce({ client: {} });
     expect(() => readClientId()).toThrow();
@@ -257,5 +292,8 @@ describe("local agent shared helpers", () => {
 
     expect(() => handleSdkError("boom")).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith("UNKNOWN_ERROR", "boom", 1);
+
+    expect(() => handleSdkError(new Error("plain error"))).toThrow();
+    expect(outputMocks.fail).toHaveBeenLastCalledWith("UNKNOWN_ERROR", "plain error", 1);
   });
 });

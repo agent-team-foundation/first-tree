@@ -1,6 +1,7 @@
 import type { ContextTreeWriteEvent } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
@@ -526,6 +527,210 @@ describe("context-tree IO service", () => {
     ).toEqual({ recordable: true });
   });
 
+  it("explains IO decision edge cases for paths, bindings, statuses, and shell args", () => {
+    const readEvent = (repoRelativePath: unknown, extra: Record<string, unknown> = {}) => ({
+      kind: "tool_call",
+      payload: {
+        toolUseId: `tu-${crypto.randomUUID()}`,
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoRelativePath,
+            ...extra,
+          },
+        ],
+      },
+    });
+
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: readEvent("NODE.md"),
+        bindingRepo: null,
+      }),
+    ).toEqual({ recordable: false, reason: "no_org_context_tree_binding" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: { kind: "tool_call", payload: { name: "Read", status: "ok" } },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "event_kind_not_io" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: { toolUseId: "tu-status", name: "Read", args: {}, status: "error" },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "status_not_ok" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: { toolUseId: "tu-kind", name: "Read", args: {}, status: "ok", toolFileRefs: [] },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "no_tool_file_refs" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: { toolUseId: "tu-shell-no-args", name: "command", args: null, status: "ok" },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "unsupported_shell_command" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: { toolUseId: "tu-shell-non-string", name: "command", args: { command: 1 }, status: "ok" },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "unsupported_shell_command" });
+
+    for (const repoRelativePath of ["/absolute.md", ".", "..", "../escape.md"]) {
+      expect(
+        explainContextTreeIoDecision({
+          runtimeProvider: "claude-code",
+          sessionEvent: readEvent(repoRelativePath),
+          bindingRepo: TREE_REPO,
+        }),
+      ).toEqual({ recordable: false, reason: "ref_path_invalid" });
+    }
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: readEvent(""),
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "event_kind_not_io" });
+    for (const repoRelativePath of ["   ", "members/\0alice.md"]) {
+      expect(
+        explainContextTreeIoDecision({
+          runtimeProvider: "claude-code",
+          sessionEvent: readEvent(repoRelativePath),
+          bindingRepo: TREE_REPO,
+        }),
+      ).toEqual({ recordable: false, reason: "ref_path_invalid" });
+    }
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: readEvent(123),
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "event_kind_not_io" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "codex",
+        sessionEvent: { kind: "assistant_text", payload: { text: "not IO" } },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "event_kind_not_io" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "custom-runtime",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu-mixed-git-delta",
+            name: "UnknownTool",
+            args: {},
+            status: "ok",
+            toolFileRefs: [
+              {
+                origin: "tool_arg",
+                repoUrl: TREE_REPO,
+                repoRelativePath: "ignored.md",
+              },
+              {
+                origin: "git_status_delta",
+                repoUrl: TREE_REPO,
+                repoRelativePath: "NODE.md",
+              },
+            ],
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: true });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: readEvent("/", { pathKind: "repo" }),
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: true });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: readEvent(".", { pathKind: "repo" }),
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: true });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: readEvent("NODE.md"),
+        bindingRepo: TREE_REPO,
+        chatInOrg: false,
+      }),
+    ).toEqual({ recordable: false, reason: "chat_not_in_org" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: readEvent("NODE.md", { repoBranch: undefined, metadata: { toolName: "Read" } }),
+        bindingRepo: TREE_REPO,
+        bindingBranch: "develop",
+      }),
+    ).toEqual({ recordable: true });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "claude-code",
+        sessionEvent: {
+          kind: "context_tree_usage",
+          payload: { purpose: "design_decision", treeRepoUrl: TREE_REPO, nodePath: null },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: true });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "custom-runtime",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu-git-delta",
+            name: "UnknownTool",
+            args: {},
+            status: "ok",
+            toolFileRefs: [
+              {
+                origin: "git_status_delta",
+                repoUrl: TREE_REPO,
+                repoRelativePath: "NODE.md",
+              },
+            ],
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: true });
+  });
+
   it("derives Claude search and notebook IO at the granularity the refs carry", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
@@ -995,6 +1200,70 @@ describe("context-tree IO service", () => {
     });
   });
 
+  it("classifies fake skipped-diagnostics rows that are awkward to produce through SQL", async () => {
+    const selectResults = [
+      [{ agentId: "agent-known", runtimeProvider: "codex" }],
+      [
+        {
+          id: "ev-array-payload",
+          agentId: "agent-known",
+          chatId: "chat-1",
+          kind: "tool_call",
+          payload: [],
+          chatOrganizationId: "org-1",
+        },
+        {
+          id: "ev-status-error",
+          agentId: "agent-known",
+          chatId: "chat-1",
+          kind: "tool_call",
+          payload: { toolUseId: "tu-error", name: "command", args: {}, status: "error" },
+          chatOrganizationId: "org-1",
+        },
+        {
+          id: "ev-missing-agent",
+          agentId: "agent-missing",
+          chatId: "chat-1",
+          kind: "tool_call",
+          payload: { toolUseId: "tu-no-refs", name: "command", args: { command: "cat NODE.md" }, status: "ok" },
+          chatOrganizationId: "org-1",
+        },
+        {
+          id: "ev-bad-refs",
+          agentId: "agent-known",
+          chatId: "chat-1",
+          kind: "tool_call",
+          payload: { toolUseId: "tu-bad-refs", name: "command", args: {}, status: "ok", toolFileRefs: "bad" },
+          chatOrganizationId: "org-1",
+        },
+      ],
+    ];
+    const db = {
+      select: vi.fn(() => {
+        const result = selectResults.shift() ?? [];
+        const builder = {
+          from: vi.fn(() => builder),
+          leftJoin: vi.fn(() => builder),
+          where: vi.fn(async () => result),
+        };
+        return builder;
+      }),
+    } as unknown as Database;
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(db, "org-1", 7, {
+      contextTreeBinding: { repo: TREE_REPO },
+    });
+
+    expect(skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "event_kind_not_io", eventCount: 2 },
+      { reason: "status_not_ok", eventCount: 1 },
+      { reason: "unsupported_tool", eventCount: 1 },
+    ]);
+    expect(skipped.reasons.find((row) => row.reason === "unsupported_tool")?.runtimeProviders).toEqual([
+      { runtimeProvider: "unknown", eventCount: 1 },
+    ]);
+  });
+
   it("ignores malformed toolFileRefs while filtering skipped diagnostics candidates", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
@@ -1043,6 +1312,73 @@ describe("context-tree IO service", () => {
     expect(summary.skipped).toEqual({ windowDays: 7, totalEventCount: 0, reasons: [] });
     expect(timings.find((timing) => timing.name === "io_backfill_rows")?.fields).toMatchObject({ rowCount: 0 });
     expect(timings.find((timing) => timing.name === "io_skipped_rows")?.fields).toMatchObject({ rowCount: 0 });
+  });
+
+  it("maps summary fallback rows from a fake database", async () => {
+    const executeResults = [
+      [
+        { action: "read", agent_count: "2", event_count: null, target_count: undefined },
+        { action: "other", agent_count: 99, event_count: 99, target_count: 99 },
+      ],
+      [
+        {
+          agent_id: "agent-1",
+          agent_name: "Agent One",
+          agent_avatar_color_token: null,
+          runtime_provider: "codex",
+          read_count: "3",
+          write_count: undefined,
+          last_read_at: null,
+          last_write_at: "2026-01-02T00:00:00.000Z",
+          last_event_at: "2026-01-02T00:00:00.000Z",
+        },
+      ],
+      [
+        {
+          id: "io-1",
+          agent_id: "agent-1",
+          agent_name: "Agent One",
+          agent_avatar_color_token: null,
+          runtime_provider: "codex",
+          action: "unexpected",
+          source: "shell_command",
+          target_kind: "unknown",
+          target_path: "NODE.md",
+          raw_chat_id: "chat-outside",
+          joined_chat_id: null,
+          chat_topic: null,
+          created_at: null,
+        },
+      ],
+    ];
+    const db = {
+      execute: vi.fn(async () => executeResults.shift() ?? []),
+      select: vi.fn(() => {
+        const builder = {
+          from: vi.fn(() => builder),
+          where: vi.fn(async () => []),
+        };
+        return builder;
+      }),
+    } as unknown as Database;
+
+    const summary = await summarizeContextTreeIo(db, "org-1", 7, undefined, {
+      backfillSessionEvents: false,
+      contextTreeBinding: { repo: TREE_REPO },
+    });
+
+    expect(summary.summary).toEqual({
+      read: { agentCount: 2, eventCount: 0, targetCount: 0 },
+      write: { agentCount: 0, eventCount: 0, targetCount: 0 },
+    });
+    expect(summary.agents[0]).toMatchObject({ readCount: 3, writeCount: 0, lastReadAt: null });
+    expect(summary.recentEvents[0]).toMatchObject({
+      action: "read",
+      targetKind: "file",
+      chatId: null,
+      chatTitle: null,
+      viewerCanAccess: false,
+    });
   });
 
   it("skips recordable IO events when the chat no longer belongs to the organization", async () => {
@@ -1404,5 +1740,64 @@ describe("context-tree IO service", () => {
     // Sorted newest-first by time.
     const times = writes.map((w) => (w.createdAt ? Date.parse(w.createdAt) : 0));
     expect(times).toEqual([...times].sort((a, b) => b - a));
+  });
+
+  it("reconciles write telemetry with null, invalid, and root-ish timestamps", async () => {
+    const db = {
+      execute: vi.fn(async () => [
+        {
+          agent_id: "agent-1",
+          agent_name: "Agent One",
+          agent_avatar_color_token: null,
+          target_path: "system/null.md",
+          created_at: null,
+        },
+        {
+          agent_id: "agent-2",
+          agent_name: "Agent Two",
+          agent_avatar_color_token: "blue",
+          target_path: "system/bad.md",
+          created_at: null,
+        },
+        {
+          agent_id: "agent-3",
+          agent_name: "Agent Three",
+          agent_avatar_color_token: "green",
+          target_path: "/",
+          created_at: "2026-01-03T00:00:00.000Z",
+        },
+      ]),
+    } as unknown as Database;
+    const base = {
+      nodeId: null,
+      title: "",
+      summary: null,
+      riskLevel: "low" as const,
+      authorName: "git-author",
+      agentId: null,
+      agentName: null,
+      agentAvatarColorToken: null,
+      commit: null,
+      prNumber: null,
+    };
+
+    const writes = await reconcileContextTreeWrites(
+      db,
+      "org-1",
+      7,
+      [
+        { ...base, id: "git-null", nodePath: "system/null", changeType: "edited", createdAt: null },
+        { ...base, id: "git-bad", nodePath: "system/bad", changeType: "edited", createdAt: "not-a-date" },
+      ],
+      { backfillSessionEvents: false },
+    );
+
+    expect(writes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "git-null", agentId: "agent-1" }),
+        expect.objectContaining({ id: "git-bad", agentId: "agent-2" }),
+        expect.objectContaining({ nodePath: "", title: "Context Tree", agentId: "agent-3" }),
+      ]),
+    );
   });
 });

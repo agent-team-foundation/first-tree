@@ -1,13 +1,17 @@
 import type { SendMessage } from "@first-tree/shared";
 import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { members } from "../db/schema/members.js";
 import { createAgent } from "../services/agent.js";
 import {
+  addParticipant,
   type CreateTaskChatInput,
   createChat,
   getChat,
+  getChatDetail,
   isParticipant,
   listChats,
   listChatsForMember,
@@ -204,6 +208,70 @@ describe("chat service edge coverage", () => {
     expect(chat.participants.map((p) => p.agentId).sort()).toEqual([agent.uuid, seed.humanAgentUuid].sort());
   });
 
+  it("creates task chats with non-empty metadata and runs the kickoff hook once", async () => {
+    const seed = await createAdminContext(app, { username: `chat-task-meta-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createManagedAgent({ ...seed, suffix: "task-meta" });
+    const beforeInitialMessage = vi.fn(async () => {});
+    const kickoffKey = `task-kickoff-${crypto.randomUUID()}`;
+
+    const first = await createChat(
+      app.db,
+      taskInput({
+        initiatorAgentId: seed.humanAgentUuid,
+        organizationId: seed.organizationId,
+        initialRecipientAgentIds: [agent.uuid],
+        topic: "Kickoff topic",
+        description: "Kickoff description",
+        onboardingKickoffKey: kickoffKey,
+        beforeInitialMessage,
+      }),
+    );
+    const second = await createChat(
+      app.db,
+      taskInput({
+        initiatorAgentId: seed.humanAgentUuid,
+        organizationId: seed.organizationId,
+        initialRecipientAgentIds: [agent.uuid],
+        topic: "Ignored duplicate topic",
+        description: "Ignored duplicate description",
+        onboardingKickoffKey: kickoffKey,
+        beforeInitialMessage,
+      }),
+    );
+
+    expect(first.chat).toMatchObject({
+      topic: "Kickoff topic",
+      description: "Kickoff description",
+    });
+    expect(first.chat.descriptionUpdatedAt).toBeInstanceOf(Date);
+    expect(first.initialMessageCreated).toBe(true);
+    expect(second.chat.id).toBe(first.chat.id);
+    expect(second.initialMessageCreated).toBe(false);
+    expect(beforeInitialMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes empty task chat topic and description to null", async () => {
+    const seed = await createAdminContext(app, { username: `chat-task-empty-meta-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createManagedAgent({ ...seed, suffix: "task-empty-meta" });
+
+    const created = await createChat(
+      app.db,
+      taskInput({
+        initiatorAgentId: seed.humanAgentUuid,
+        organizationId: seed.organizationId,
+        initialRecipientAgentIds: [agent.uuid],
+        topic: "",
+        description: "",
+      }),
+    );
+
+    expect(created.chat).toMatchObject({
+      topic: null,
+      description: null,
+      descriptionUpdatedAt: null,
+    });
+  });
+
   it("rejects task chats with inactive participants", async () => {
     const seed = await createAdminContext(app, { username: `chat-inactive-${crypto.randomUUID().slice(0, 8)}` });
     const agent = await createManagedAgent({ ...seed, suffix: "inactive" });
@@ -216,6 +284,27 @@ describe("chat service edge coverage", () => {
           initiatorAgentId: seed.humanAgentUuid,
           organizationId: seed.organizationId,
           initialRecipientAgentIds: [agent.uuid],
+        }),
+      ),
+    ).rejects.toThrow(/Cannot create task chat with inactive participant/);
+  });
+
+  it("rejects task chats with inactive human member participants", async () => {
+    const seed = await createAdminContext(app, { username: `chat-inactive-human-${crypto.randomUUID().slice(0, 8)}` });
+    const inactiveMember = await createMember(app.db, seed.organizationId, {
+      username: `chat-inactive-human-target-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Inactive Human Target",
+      role: "member",
+    });
+    await app.db.update(members).set({ status: "removed" }).where(eq(members.id, inactiveMember.id));
+
+    await expect(
+      createChat(
+        app.db,
+        taskInput({
+          initiatorAgentId: seed.humanAgentUuid,
+          organizationId: seed.organizationId,
+          initialRecipientAgentIds: [inactiveMember.agentId],
         }),
       ),
     ).rejects.toThrow(/Cannot create task chat with inactive participant/);
@@ -316,6 +405,7 @@ describe("chat service edge coverage", () => {
     await expect(resolveAgentIdsByNameInOrg(app.db, seed.organizationId, ["missing-agent"])).rejects.toThrow(
       "Agents not found by name",
     );
+    await expect(resolveAgentIdsByNameInOrg(app.db, seed.organizationId, [])).resolves.toEqual([]);
     await expect(listChats(app.db, agent.uuid, 10)).resolves.toEqual({ items: [], nextCursor: null });
 
     const chat = await createChat(app.db, seed.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
@@ -324,6 +414,50 @@ describe("chat service edge coverage", () => {
 
     const resolved = await resolveAgentIdsByNameInOrg(app.db, seed.organizationId, [agent.name ?? ""]);
     expect(resolved).toEqual([agent.uuid]);
+  });
+
+  it("resolves detail viewer membership kind for admin, missing, participant, and watcher views", async () => {
+    const seed = await createAdminContext(app, { username: `chat-detail-kind-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createManagedAgent({ ...seed, suffix: "detail-kind" });
+    const chat = await createChat(app.db, seed.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
+    const watcherId = uuidv7();
+    await app.db.insert(agents).values({
+      uuid: watcherId,
+      name: `chat-detail-watcher-${crypto.randomUUID().slice(0, 6)}`,
+      organizationId: seed.organizationId,
+      type: "agent",
+      displayName: "Detail Watcher",
+      inboxId: `inbox_${watcherId}`,
+      managerId: seed.memberId,
+      status: "active",
+    });
+    await app.db.insert(chatMembership).values({
+      chatId: chat.id,
+      agentId: watcherId,
+      role: "member",
+      accessMode: "watcher",
+    });
+
+    await expect(getChatDetail(app.db, chat.id, null)).resolves.toMatchObject({ viewerMembershipKind: null });
+    await expect(getChatDetail(app.db, chat.id, uuidv7())).resolves.toMatchObject({ viewerMembershipKind: null });
+    await expect(getChatDetail(app.db, chat.id, seed.humanAgentUuid)).resolves.toMatchObject({
+      viewerMembershipKind: "participant",
+    });
+    await expect(getChatDetail(app.db, chat.id, watcherId)).resolves.toMatchObject({ viewerMembershipKind: "watching" });
+  });
+
+  it("adds participants by agent name and formats missing addParticipant selectors", async () => {
+    const seed = await createAdminContext(app, { username: `chat-add-name-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createManagedAgent({ ...seed, suffix: "add-name" });
+    const newcomer = await createManagedAgent({ ...seed, suffix: "add-name-target" });
+    const chat = await createChat(app.db, seed.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
+
+    await expect(addParticipant(app.db, chat.id, seed.humanAgentUuid, { agentName: newcomer.name ?? "" })).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ agentId: newcomer.uuid })]),
+    );
+    await expect(addParticipant(app.db, chat.id, seed.humanAgentUuid, {} as never)).rejects.toThrow(
+      'Agent "(unknown)" not found',
+    );
   });
 
   it("loads a fallback human agent in listChatsForMember when it is not managed by the member", async () => {

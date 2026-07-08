@@ -7,8 +7,15 @@ const fsState = vi.hoisted(() => ({
   mode: "normal" as
     | "normal"
     | "proc-readdir-error"
+    | "proc-readdir-string-error"
+    | "proc-readdir-error-second"
     | "proc-cmdline-error"
+    | "proc-cmdline-disappeared"
+    | "proc-cmdline-string-error"
     | "proc-environ-error"
+    | "proc-environ-string-error"
+    | "proc-status-no-uid"
+    | "proc-many-providers"
     | "proc-untrusted"
     | "marker-readdir-error"
     | "exdev"
@@ -18,10 +25,18 @@ const fsState = vi.hoisted(() => ({
     | "write-json-cleanup-error",
   home: "",
   uid: typeof process.getuid === "function" ? process.getuid() : 0,
+  procReaddirCount: 0,
 }));
 
 const execState = vi.hoisted(() => ({
-  mode: "ok" as "ok" | "throw" | "daemon-untrusted" | "pid-throw",
+  mode: "ok" as
+    | "ok"
+    | "throw"
+    | "throw-string"
+    | "daemon-untrusted"
+    | "daemon-active"
+    | "many-daemon-untrusted"
+    | "pid-throw",
   home: "",
 }));
 
@@ -43,14 +58,24 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual,
     existsSync: (path: Parameters<typeof actual.existsSync>[0]) => {
       const text = String(path);
+      if (fsState.mode === "proc-cmdline-disappeared" && text.startsWith("/proc/100")) return false;
       if (text.startsWith("/proc/100")) return true;
       return actual.existsSync(path);
     },
     readdirSync: ((path: Parameters<typeof actual.readdirSync>[0], options?: unknown) => {
       const text = String(path);
       if (text === "/proc") {
+        fsState.procReaddirCount += 1;
         if (fsState.mode === "exdev") return [];
         if (fsState.mode === "proc-readdir-error") throw new Error("proc unavailable");
+        if (fsState.mode === "proc-readdir-string-error") throw "proc unavailable as string";
+        if (fsState.mode === "proc-readdir-error-second" && fsState.procReaddirCount > 1) {
+          throw new Error("proc unavailable after first scan");
+        }
+        if (fsState.mode === "proc-readdir-error-second") return [];
+        if (fsState.mode === "proc-many-providers") {
+          return Array.from({ length: 9 }, (_value, index) => String(100 + index));
+        }
         return ["100", "self", "not-a-pid"];
       }
       if (text.endsWith("/state/client-runtimes") && fsState.mode === "marker-readdir-error") {
@@ -60,13 +85,18 @@ vi.mock("node:fs", async (importOriginal) => {
     }) as typeof actual.readdirSync,
     readFileSync: ((path: Parameters<typeof actual.readFileSync>[0], options?: unknown) => {
       const text = String(path);
-      if (text === "/proc/100/status")
+      if (/^\/proc\/\d+\/status$/u.test(text)) {
+        if (fsState.mode === "proc-status-no-uid") return "Name:\tnode\n";
         return `Name:\tnode\nUid:\t${fsState.uid}\t${fsState.uid}\t${fsState.uid}\t${fsState.uid}\n`;
-      if (text === "/proc/100/cmdline") {
+      }
+      if (/^\/proc\/\d+\/cmdline$/u.test(text)) {
+        if (fsState.mode === "proc-cmdline-disappeared") throw new Error("process disappeared");
+        if (fsState.mode === "proc-cmdline-string-error") throw "cmdline denied as string";
         if (fsState.mode === "proc-cmdline-error") throw new Error("cmdline denied");
         return "codex exec";
       }
-      if (text === "/proc/100/environ") {
+      if (/^\/proc\/\d+\/environ$/u.test(text)) {
+        if (fsState.mode === "proc-environ-string-error") throw "environ denied as string";
         if (fsState.mode === "proc-environ-error") throw new Error("environ denied");
         if (fsState.mode === "proc-untrusted") {
           return [`FIRST_TREE_HOME=${fsState.home}`, "FIRST_TREE_PROVIDER=codex", ""].join("\0");
@@ -130,6 +160,16 @@ vi.mock("node:child_process", async (importOriginal) => {
     execFileSync: vi.fn((program: string, args: string[]) => {
       if (program === "ps" && args.includes("-Eww")) {
         if (execState.mode === "throw") throw new Error("ps denied");
+        if (execState.mode === "throw-string") throw "ps denied as string";
+        if (execState.mode === "many-daemon-untrusted") {
+          return Array.from(
+            { length: 9 },
+            (_value, index) => `  ${200 + index} first-tree daemon start --foreground FIRST_TREE_HOME=${execState.home}`,
+          ).join("\n");
+        }
+        if (execState.mode === "daemon-active") {
+          return `  200 first-tree daemon start --foreground FIRST_TREE_HOME=${execState.home} FIRST_TREE_CLIENT_ID=client_aabbccdd\n`;
+        }
         if (execState.mode === "daemon-untrusted") {
           return `  200 first-tree daemon start --foreground FIRST_TREE_HOME=${execState.home}\n`;
         }
@@ -183,6 +223,7 @@ beforeEach(() => {
   fsState.home = home;
   execState.mode = "ok";
   execState.home = home;
+  fsState.procReaddirCount = 0;
   serviceMocks.getClientServiceStatus.mockReturnValue({ state: "inactive", platform: "test" });
   writeClientYaml();
 });
@@ -206,6 +247,22 @@ describe("client switch platform drain scanning", () => {
     fsState.mode = "proc-readdir-error";
 
     await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED" });
+
+    writeClientYaml();
+    fsState.mode = "proc-readdir-string-error";
+    fsState.procReaddirCount = 0;
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("proc unavailable as string"),
+    });
+
+    writeClientYaml();
+    fsState.mode = "proc-readdir-error-second";
+    fsState.procReaddirCount = 0;
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("after first scan"),
+    });
   });
 
   it("fails closed when Linux command or environment files are unreadable", async () => {
@@ -214,8 +271,51 @@ describe("client switch platform drain scanning", () => {
     await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED" });
 
     writeClientYaml();
+    fsState.mode = "proc-cmdline-string-error";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("cmdline denied as string"),
+    });
+
+    writeClientYaml();
+    fsState.mode = "proc-cmdline-disappeared";
+    await expect(runSwitch()).resolves.toBeUndefined();
+
+    writeClientYaml();
     fsState.mode = "proc-environ-error";
     await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED" });
+
+    writeClientYaml();
+    fsState.mode = "proc-environ-string-error";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("environ denied as string"),
+    });
+  });
+
+  it("ignores Linux processes without a readable uid and summarizes many provider markers", async () => {
+    setPlatform("linux");
+    fsState.mode = "proc-status-no-uid";
+
+    await expect(runSwitch()).resolves.toBeUndefined();
+
+    writeClientYaml();
+    fsState.mode = "proc-many-providers";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_TIMEOUT",
+      message: expect.stringContaining("...and 1 more"),
+    });
+  });
+
+  it("scans Linux processes when process.getuid is unavailable", async () => {
+    setPlatform("linux");
+    const originalGetuid = process.getuid;
+    Object.defineProperty(process, "getuid", { configurable: true, value: undefined });
+    try {
+      await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_TIMEOUT" });
+    } finally {
+      Object.defineProperty(process, "getuid", { configurable: true, value: originalGetuid });
+    }
   });
 
   it("fails closed on untrusted Linux provider-like processes", async () => {
@@ -232,6 +332,20 @@ describe("client switch platform drain scanning", () => {
     writeClientYaml();
     execState.mode = "daemon-untrusted";
     await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED" });
+
+    writeClientYaml();
+    execState.mode = "daemon-active";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("daemon runtime is still active"),
+    });
+
+    writeClientYaml();
+    execState.mode = "many-daemon-untrusted";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("...and 1 more"),
+    });
   });
 
   it("fails closed when Darwin ps inspection fails or platform is unsupported", async () => {
@@ -240,8 +354,36 @@ describe("client switch platform drain scanning", () => {
     await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED" });
 
     writeClientYaml();
+    execState.mode = "throw-string";
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("ps denied as string"),
+    });
+
+    writeClientYaml();
     setPlatform("win32");
     await expect(runSwitch()).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED" });
+  });
+
+  it("fails closed when the service state is unknown before or after stopping", async () => {
+    serviceMocks.getClientServiceStatus.mockReturnValueOnce({ state: "unknown", platform: "test" });
+
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_SUPERVISOR_UNSAFE",
+      message: "Background service state could not be determined (test).",
+    });
+
+    writeClientYaml();
+    serviceMocks.getClientServiceStatus
+      .mockReset()
+      .mockReturnValueOnce({ state: "active", platform: "test" })
+      .mockReturnValueOnce({ state: "unknown", platform: "test" });
+    serviceMocks.stopClientService.mockReturnValueOnce({ ok: true });
+
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_SUPERVISOR_UNSAFE",
+      message: "Background service did not reach a safe stopped state (test).",
+    });
   });
 
   it("surfaces runtime marker directory inspection failures", async () => {

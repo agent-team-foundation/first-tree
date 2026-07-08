@@ -34,6 +34,11 @@ describe("Agent client WS edge protocol coverage", () => {
       .sign(secret);
   }
 
+  async function signJwtWithoutExpiry(payload: Record<string, unknown>): Promise<string> {
+    const secret = new TextEncoder().encode(jwtSecret);
+    return new SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().sign(secret);
+  }
+
   async function signAccess(userId: string, memberId: string, organizationId?: string): Promise<string> {
     return signJwt({
       sub: userId,
@@ -274,6 +279,7 @@ describe("Agent client WS edge protocol coverage", () => {
 
   it.each([
     { name: "wrong token type", payload: { sub: "placeholder", type: "refresh" }, code: "wrong_token_type" },
+    { name: "missing token type", payload: { sub: "placeholder" }, code: "invalid_claims" },
     { name: "missing subject", payload: { type: "access" }, code: "invalid_claims" },
   ])("rejects $name claims", async ({ payload, code }) => {
     const admin = await createTestAdmin(app, { username: `ws-claims-${crypto.randomUUID().slice(0, 8)}` });
@@ -285,6 +291,23 @@ describe("Agent client WS edge protocol coverage", () => {
     const closeCode = await waitForClose(ws);
 
     expect(frame).toMatchObject({ type: "auth:rejected", code });
+    expect(closeCode).toBe(4401);
+  });
+
+  it("reports expired access tokens with an auth:expired frame", async () => {
+    const admin = await createTestAdmin(app, { username: `ws-expired-${crypto.randomUUID().slice(0, 8)}` });
+    const token = await new SignJWT({ sub: admin.userId, type: "access" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt(Math.floor(Date.now() / 1000) - 120)
+      .setExpirationTime(Math.floor(Date.now() / 1000) - 60)
+      .sign(new TextEncoder().encode(jwtSecret));
+    const ws = await openSocket();
+    ws.send(JSON.stringify({ type: "auth", token }));
+
+    const frame = await waitForFrame(ws, (message) => (message as { type?: string }).type === "auth:expired");
+    const closeCode = await waitForClose(ws);
+
+    expect(frame).toMatchObject({ type: "auth:expired" });
     expect(closeCode).toBe(4401);
   });
 
@@ -305,6 +328,34 @@ describe("Agent client WS edge protocol coverage", () => {
     expect(frame).toMatchObject({ type: "auth:rejected", code: "invalid_claims" });
     expect(closeCode).toBe(4401);
   });
+
+  it("accepts access tokens without exp and rejects inactive or missing users", async () => {
+    const active = await createTestAdmin(app, { username: `ws-no-exp-${crypto.randomUUID().slice(0, 8)}` });
+    const activeWs = await openSocket();
+    activeWs.send(
+      JSON.stringify({ type: "auth", token: await signJwtWithoutExpiry({ sub: active.userId, type: "access" }) }),
+    );
+    await expect(
+      waitForFrame(activeWs, (message) => (message as { type?: string }).type === "auth:ok"),
+    ).resolves.toMatchObject({ type: "auth:ok" });
+    await closeSocket(activeWs);
+
+    const missingWs = await openSocket();
+    missingWs.send(JSON.stringify({ type: "auth", token: await signJwt({ sub: uuidv7(), type: "access" }) }));
+    await expect(
+      waitForFrame(missingWs, (message) => (message as { type?: string }).type === "auth:rejected"),
+    ).resolves.toMatchObject({ type: "auth:rejected", code: "user_not_found" });
+    expect(await waitForClose(missingWs)).toBe(4401);
+
+    const suspended = await createTestAdmin(app, { username: `ws-suspended-${crypto.randomUUID().slice(0, 8)}` });
+    await app.db.update(users).set({ status: "suspended" }).where(eq(users.id, suspended.userId));
+    const suspendedWs = await openSocket();
+    suspendedWs.send(JSON.stringify({ type: "auth", token: await signJwt({ sub: suspended.userId, type: "access" }) }));
+    await expect(
+      waitForFrame(suspendedWs, (message) => (message as { type?: string }).type === "auth:rejected"),
+    ).resolves.toMatchObject({ type: "auth:rejected", code: "user_suspended" });
+    expect(await waitForClose(suspendedWs)).toBe(4401);
+  }, 15000);
 
   it("reports malformed post-auth frames and acknowledges heartbeat before registration", async () => {
     const seed = await createAdminContext(app, { username: `ws-post-auth-${crypto.randomUUID().slice(0, 8)}` });
@@ -952,6 +1003,26 @@ describe("Agent client WS edge protocol coverage", () => {
       });
       expect(stateSpy).toHaveBeenCalled();
 
+      stateSpy.mockRejectedValueOnce("state string failure" as never);
+      ws.send(
+        JSON.stringify({
+          type: "session:state",
+          agentId: agent.uuid,
+          chatId: "chat-state-string-fail",
+          state: "active",
+        }),
+      );
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            (message as { message?: string }).message === "Failed to persist session state: state string failure",
+        ),
+      ).resolves.toMatchObject({
+        type: "error",
+        message: "Failed to persist session state: state string failure",
+      });
+
       ws.send(JSON.stringify({ type: "session:runtime", agentId: agent.uuid, runtimeState: "working" }));
       await expect(
         waitForFrame(ws, (message) => (message as { message?: string }).message === "Malformed session:runtime frame"),
@@ -979,6 +1050,26 @@ describe("Agent client WS edge protocol coverage", () => {
         message: "Failed to persist session runtime: runtime persist failed",
       });
       expect(runtimeSpy).toHaveBeenCalled();
+
+      runtimeSpy.mockRejectedValueOnce("runtime string failure" as never);
+      ws.send(
+        JSON.stringify({
+          type: "session:runtime",
+          agentId: agent.uuid,
+          chatId: "chat-runtime-string-fail",
+          runtimeState: "working",
+        }),
+      );
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            (message as { message?: string }).message === "Failed to persist session runtime: runtime string failure",
+        ),
+      ).resolves.toMatchObject({
+        type: "error",
+        message: "Failed to persist session runtime: runtime string failure",
+      });
 
       ws.send(
         JSON.stringify({
@@ -1019,6 +1110,7 @@ describe("Agent client WS edge protocol coverage", () => {
       ws.send(JSON.stringify({ type: "runtime:state", agentId: agent.uuid, runtimeState: "error" }));
       ws.send(JSON.stringify({ type: "runtime:state", agentId: agent.uuid, runtimeState: "blocked" }));
       ws.send(JSON.stringify({ type: "runtime:state", agentId: agent.uuid, runtimeState: "idle" }));
+      ws.send(JSON.stringify({ type: "runtime:state", agentId: agent.uuid, runtimeState: "working" }));
       ws.send(JSON.stringify({ type: "heartbeat" }));
       await expect(
         waitForFrame(ws, (message) => (message as { type?: string }).type === "heartbeat:ack"),
@@ -1028,6 +1120,15 @@ describe("Agent client WS edge protocol coverage", () => {
       expect(notifySpy).toHaveBeenCalledWith(app.db, agent.uuid, "agent_error", "high");
       expect(notifySpy).toHaveBeenCalledWith(app.db, agent.uuid, "agent_blocked", "medium");
       expect(resolvedSpy).toHaveBeenCalledWith(app.db, agent.uuid);
+
+      const runtimeStateSpy = vi
+        .spyOn(presenceService, "setRuntimeState")
+        .mockRejectedValueOnce("runtime state failed" as never);
+      ws.send(JSON.stringify({ type: "runtime:state", agentId: agent.uuid, runtimeState: "idle" }));
+      await expect(
+        waitForFrame(ws, (message) => (message as { message?: string }).message === "Internal error"),
+      ).resolves.toMatchObject({ type: "error", message: "Internal error" });
+      expect(runtimeStateSpy).toHaveBeenCalled();
 
       ws.send(JSON.stringify({ type: "runtime:state", agentId: uuidv7(), runtimeState: "idle" }));
       await expect(
@@ -1073,6 +1174,29 @@ describe("Agent client WS edge protocol coverage", () => {
         ref: "event-malformed",
         agentId: agent.uuid,
         chatId: "chat-event",
+        reason: "malformed",
+      });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          ref: "event-malformed-no-chat",
+          agentId: agent.uuid,
+          chatId: 123,
+          event: { kind: "unknown", payload: {} },
+        }),
+      );
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            (message as { type?: string; ref?: string }).type === "session:event:rejected" &&
+            (message as { ref?: string }).ref === "event-malformed-no-chat",
+        ),
+      ).resolves.toMatchObject({
+        type: "session:event:rejected",
+        ref: "event-malformed-no-chat",
+        agentId: agent.uuid,
         reason: "malformed",
       });
 
@@ -1150,6 +1274,26 @@ describe("Agent client WS edge protocol coverage", () => {
       });
       expect(eventNoRefSpy).toHaveBeenCalled();
 
+      eventNoRefSpy.mockRejectedValueOnce("event string failure" as never);
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: agent.uuid,
+          chatId: "chat-event",
+          event: { kind: "error", payload: { source: "runtime", message: "boom" } },
+        }),
+      );
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            (message as { message?: string }).message === "Failed to persist session event: event string failure",
+        ),
+      ).resolves.toMatchObject({
+        type: "error",
+        message: "Failed to persist session event: event string failure",
+      });
+
       ws.send(JSON.stringify({ type: "inbox:ack", entryId: -1, ref: "ack-malformed" }));
       await expect(
         waitForFrame(ws, (message) => (message as { message?: string }).message === "Malformed inbox:ack frame"),
@@ -1160,6 +1304,29 @@ describe("Agent client WS edge protocol coverage", () => {
         .mockRejectedValueOnce(new Error("ack db failed"));
       ws.send(JSON.stringify({ type: "inbox:ack", entryId: 888_888_888, ref: "ack-throws" }));
       await vi.waitFor(() => expect(ackThrowSpy).toHaveBeenCalledWith(app.db, 888_888_888, [agent.inboxId]));
+
+      const ackOwnerFallbackSpy = vi.spyOn(inboxService, "ackEntryByIdForBoundAgents").mockResolvedValueOnce({
+        ok: true,
+        throughEntry: { id: 777_777_777, inboxId: "foreign-inbox", chatId: "foreign-chat" },
+        disposition: "acked",
+        ackedCount: 1,
+        ackedEntryIds: [777_777_777],
+      } as never);
+      ws.send(JSON.stringify({ type: "inbox:ack", entryId: 777_777_777, ref: "ack-owner-fallback" }));
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            (message as { type?: string; ref?: string }).type === "inbox:ack:accepted" &&
+            (message as { ref?: string }).ref === "ack-owner-fallback",
+        ),
+      ).resolves.toMatchObject({
+        type: "inbox:ack:accepted",
+        entryId: 777_777_777,
+        ref: "ack-owner-fallback",
+        disposition: "acked",
+      });
+      expect(ackOwnerFallbackSpy).toHaveBeenCalledWith(app.db, 777_777_777, [agent.inboxId]);
 
       ws.send(JSON.stringify({ type: "inbox:ack", entryId: 999_999_999, ref: "ack-missing" }));
       await expect(

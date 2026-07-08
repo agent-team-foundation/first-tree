@@ -43,6 +43,15 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
 }
 
+function daemonStartCommand(): string {
+  const escapedNode = process.execPath.replace(/'/g, "'\\''");
+  return `exec -a 'first-tree daemon start' '${escapedNode}' -e 'setInterval(() => {}, 1000)'`;
+}
+
+async function waitForChildVisible(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 75));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   originalHome = process.env.FIRST_TREE_HOME;
@@ -476,6 +485,40 @@ describe("client switch transaction recovery", () => {
     ).rejects.toMatchObject({ code: "CLIENT_SWITCH_RUNTIME_ACTIVE" });
   });
 
+  it("summarizes many live runtime markers before switching", async () => {
+    const { switchLocalClientForLogin, clientRuntimeMarkerPath } = await import("../core/client-switch.js");
+    writeClientYaml("client_aabbccdd", "https://old.example");
+    const markerDir = join(home, "state", "client-runtimes");
+    mkdirSync(markerDir, { recursive: true });
+    for (let index = 0; index < 9; index += 1) {
+      const pid = 70_000 + index;
+      writeJson(clientRuntimeMarkerPath(home, pid), {
+        version: 1,
+        pid,
+        clientId: "client_aabbccdd",
+        home,
+        mode: index % 2 === 0 ? "foreground" : "service",
+        createdAt: new Date().toISOString(),
+      });
+    }
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      await expect(
+        switchLocalClientForLogin({
+          existingCredentials: { accessToken: "old", refreshToken: "refresh", serverUrl: "https://old.example" },
+          previousOwnerSub: "user-old",
+          targetTokens: { accessToken: "new", refreshToken: "refresh", serverUrl: "https://new.example" },
+          targetOwnerSub: "user-new",
+        }),
+      ).rejects.toMatchObject({
+        code: "CLIENT_SWITCH_RUNTIME_ACTIVE",
+        message: expect.stringContaining("...and 1 more"),
+      });
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
   it("fails when marked provider work is still running for the active client", async () => {
     const { switchLocalClientForLogin } = await import("../core/client-switch.js");
     writeClientYaml("client_aabbccdd", "https://old.example");
@@ -500,6 +543,81 @@ describe("client switch transaction recovery", () => {
     ).rejects.toMatchObject({ code: "CLIENT_SWITCH_DRAIN_TIMEOUT" });
   });
 
+  it("fails when provider work appears during the second switch drain scan", async () => {
+    const { switchLocalClientForLogin } = await import("../core/client-switch.js");
+    writeClientYaml("client_aabbccdd", "https://old.example");
+    setTimeout(() => {
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
+        env: {
+          ...process.env,
+          FIRST_TREE_HOME: home,
+          FIRST_TREE_CLIENT_ID: "client_aabbccdd",
+          FIRST_TREE_SWITCH_DRAIN_VERSION: "1",
+          FIRST_TREE_PROVIDER: "codex",
+          FIRST_TREE_AGENT_ID: "agent-late",
+          FIRST_TREE_CHAT_ID: "chat-late",
+        },
+      });
+      children.push(child);
+    }, 100);
+
+    await expect(
+      switchLocalClientForLogin({
+        existingCredentials: { accessToken: "old", refreshToken: "refresh", serverUrl: "https://old.example" },
+        previousOwnerSub: "user-old",
+        targetTokens: { accessToken: "new", refreshToken: "refresh", serverUrl: "https://new.example" },
+        targetOwnerSub: "user-new",
+      }),
+    ).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_TIMEOUT",
+      message: expect.stringContaining("agent=agent-late"),
+    });
+  });
+
+  it("fails closed when a daemon process lacks trusted drain markers", async () => {
+    const { switchLocalClientForLogin } = await import("../core/client-switch.js");
+    writeClientYaml("client_aabbccdd", "https://old.example");
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.FIRST_TREE_HOME;
+    delete env.FIRST_TREE_CLIENT_ID;
+    delete env.FIRST_TREE_SWITCH_DRAIN_VERSION;
+    const child = spawn("bash", ["-c", daemonStartCommand()], { env });
+    children.push(child);
+    await waitForChildVisible();
+
+    await expect(
+      switchLocalClientForLogin({
+        existingCredentials: { accessToken: "old", refreshToken: "refresh", serverUrl: "https://old.example" },
+        previousOwnerSub: "user-old",
+        targetTokens: { accessToken: "new", refreshToken: "refresh", serverUrl: "https://new.example" },
+        targetOwnerSub: "user-new",
+      }),
+    ).rejects.toMatchObject({
+      code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
+      message: expect.stringContaining("daemon runtime lacks trusted switch drain markers"),
+    });
+  });
+
+  it("ignores daemon processes that belong to another client", async () => {
+    const { switchLocalClientForLogin } = await import("../core/client-switch.js");
+    writeClientYaml("client_aabbccdd", "https://old.example");
+    const env: NodeJS.ProcessEnv = { ...process.env, FIRST_TREE_CLIENT_ID: "client_11223344" };
+    delete env.FIRST_TREE_HOME;
+    delete env.FIRST_TREE_SWITCH_DRAIN_VERSION;
+    const child = spawn("bash", ["-c", daemonStartCommand()], { env });
+    children.push(child);
+    await waitForChildVisible();
+
+    const config = await switchLocalClientForLogin({
+      existingCredentials: { accessToken: "old", refreshToken: "refresh", serverUrl: "https://old.example" },
+      previousOwnerSub: "user-old",
+      targetTokens: { accessToken: "new", refreshToken: "refresh", serverUrl: "https://new.example" },
+      targetOwnerSub: "user-new",
+    });
+
+    expect(config.server.url).toBe("https://new.example");
+  });
+
   it("confirms interactive switches and records cross-server confirmation output", async () => {
     const { confirmLocalClientSwitch } = await import("../core/client-switch.js");
     const originalTty = process.stdin.isTTY;
@@ -522,6 +640,29 @@ describe("client switch transaction recovery", () => {
     expect(outputMocks.line).toHaveBeenCalledWith(
       expect.stringContaining("https://old.example -> https://new.example"),
     );
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: originalTty });
+  });
+
+  it("formats interactive confirmation defaults when user and client ids are unknown", async () => {
+    const { confirmLocalClientSwitch } = await import("../core/client-switch.js");
+    const originalTty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    promptMocks.confirm.mockResolvedValueOnce(true);
+
+    await confirmLocalClientSwitch({
+      existingServerUrl: "https://same.example",
+      targetServerUrl: "https://same.example",
+    });
+
+    expect(promptMocks.confirm).toHaveBeenCalledWith({
+      message: expect.stringContaining("the current user"),
+      default: false,
+    });
+    expect(promptMocks.confirm).toHaveBeenCalledWith({
+      message: expect.stringContaining("create or restore a separate local client"),
+      default: false,
+    });
+    expect(outputMocks.line).not.toHaveBeenCalledWith(expect.stringContaining("Switching server:"));
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: originalTty });
   });
 

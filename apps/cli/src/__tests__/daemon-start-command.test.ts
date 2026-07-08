@@ -296,6 +296,17 @@ describe("daemon start command", () => {
     await expect(runStart()).resolves.toBeTruthy();
     expect(output()).toContain("Service is already running");
     expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
+
+    stderrSpy.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({
+      platform: "systemd",
+      state: "active",
+      label: "first-tree.service",
+      logDir: "/logs",
+    });
+
+    await expect(runStart()).resolves.toBeTruthy();
+    expect(output()).toContain("Service is already running (systemd).");
   });
 
   it("starts an inactive service and prints log hints", async () => {
@@ -325,13 +336,12 @@ describe("daemon start command", () => {
         platform: "launchd",
         state: "active",
         label: "first-tree",
-        detail: "pid 123",
         logDir: "/logs",
       });
 
     await expect(runStart()).resolves.toBeTruthy();
 
-    expect(output()).toContain("Started launchd service");
+    expect(output()).toContain("Started launchd service.");
     expect(output()).toContain("/logs/client.stdout.log / /logs/client.stderr.log");
   });
 
@@ -368,6 +378,17 @@ describe("daemon start command", () => {
 
     await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
     expect(output()).toContain("Service state could not be determined");
+
+    stderrSpy.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({
+      platform: "launchd",
+      state: "unknown",
+      label: "dev.first-tree",
+      logDir: "/logs",
+    });
+
+    await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
+    expect(output()).toContain("Service state could not be determined (launchd).");
   });
 
   it("runs inline, reconciles local state, uploads capabilities and skills", async () => {
@@ -407,7 +428,28 @@ describe("daemon start command", () => {
       expect.objectContaining({ agentId: "agent-1", skills: [{ name: "review", description: "Review code." }] }),
     );
     expect(runtimeInstance.watchAgentsDir).toHaveBeenCalledWith(join(home, "config", "agents"));
+
+    const reconcileOptions = coreMocks.reconcileLocalRuntimeProviders.mock.calls[0]?.[0] as
+      | { log?: (level: "info" | "warn", message: string) => void }
+      | undefined;
+    reconcileOptions?.log?.("warn", "runtime changed");
+    reconcileOptions?.log?.("info", "runtime checked");
+
+    const refresherOptions = coreMocks.CapabilityRefresher.mock.calls[0]?.[0] as
+      | { log?: (symbol: string, message: string) => void }
+      | undefined;
+    refresherOptions?.log?.("•", "capability refreshed");
+
+    const skillScanOptions = clientMocks.discoverClaudeCodeSkills.mock.calls[0]?.[0] as
+      | { warn?: (message: string) => void }
+      | undefined;
+    skillScanOptions?.warn?.("slow scan");
+
     expect(output()).toContain("Error: stop after watch");
+    expect(output()).toContain("runtime changed");
+    expect(output()).toContain("runtime checked");
+    expect(output()).toContain("capability refreshed");
+    expect(output()).toContain("skill scan: slow scan");
   });
 
   it("stops the inline daemon runtime cleanly when SIGINT is received", async () => {
@@ -462,7 +504,7 @@ describe("daemon start command", () => {
     });
 
     const refresherOptions = coreMocks.CapabilityRefresher.mock.calls[0]?.[0] as
-      | { upload?: (capabilities: unknown) => Promise<void> }
+      | { upload?: (capabilities: unknown) => Promise<void>; log?: (symbol: string, message: string) => void }
       | undefined;
     await refresherOptions?.upload?.({ "claude-code": { state: "ok" } });
 
@@ -472,6 +514,9 @@ describe("daemon start command", () => {
       clientId: "client_1234abcd",
       capabilities: { "claude-code": { state: "ok" } },
     });
+
+    refresherOptions?.log?.("✓", "manual log check");
+    expect(output()).toContain("manual log check");
   });
 
   it("routes the runtime's reconnect callback into the capability refresher", async () => {
@@ -515,7 +560,20 @@ describe("daemon start command", () => {
         log: expect.any(Function),
       }),
     );
+    const deps = coreMocks.runRuntimeAuthLogin.mock.calls[0]?.[1] as
+      | {
+          currentEntry: (provider: string) => unknown;
+          setProviderEntry: (provider: string, entry: unknown) => Promise<void>;
+          log: (symbol: string, message: string) => void;
+        }
+      | undefined;
+    deps?.currentEntry("codex");
+    await deps?.setProviderEntry("codex", { state: "ok" });
+    deps?.log("•", "runtime auth progress");
     expect(refresherInstance.endInteractive).toHaveBeenCalledWith("codex");
+    expect(refresherInstance.currentEntry).toHaveBeenCalledWith("codex");
+    expect(refresherInstance.setProviderEntry).toHaveBeenCalledWith("codex", { state: "ok" });
+    expect(output()).toContain("runtime auth progress");
   });
 
   it("skips skill upload for stale local aliases that are not pinned to this client", async () => {
@@ -565,6 +623,11 @@ describe("daemon start command", () => {
     expect(coreMocks.createExecuteUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ log: expect.any(Function), managed: true }),
     );
+    const updateOptions = coreMocks.createExecuteUpdate.mock.calls[0]?.[0] as
+      | { log?: (level: "info" | "warn" | "error" | "debug", message: string) => void }
+      | undefined;
+    updateOptions?.log?.("warn", "managed warning");
+    expect(clientMocks.createLogger.mock.results.at(-1)?.value.warn).toHaveBeenCalledWith("managed warning");
     expect(clientMocks.configureClientLoggerForService).toHaveBeenCalledWith(join(home, "logs"));
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "info" });
     expect(coreMocks.createLoggerRuntimeOutput).toHaveBeenCalledWith(expect.any(Object));
@@ -681,16 +744,16 @@ describe("daemon start command", () => {
   });
 
   it("continues when best-effort reconciliation and uploads fail", async () => {
-    coreMocks.migrateLocalAgentDirs.mockRejectedValueOnce(new Error("rename failed"));
-    coreMocks.reconcileLocalRuntimeProviders.mockRejectedValueOnce(new Error("runtime probe failed"));
-    clientMocks.discoverClaudeCodeSkills.mockRejectedValueOnce(new Error("skill scan failed"));
+    coreMocks.migrateLocalAgentDirs.mockRejectedValueOnce("rename failed as string");
+    coreMocks.reconcileLocalRuntimeProviders.mockRejectedValueOnce("runtime probe failed as string");
+    clientMocks.discoverClaudeCodeSkills.mockRejectedValueOnce("skill scan failed as string");
 
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
 
     const text = output();
-    expect(text).toContain("agent-dir migration skipped: rename failed");
-    expect(text).toContain("runtime-provider reconcile skipped: runtime probe failed");
-    expect(text).toContain("skills upload skipped: skill scan failed");
+    expect(text).toContain("agent-dir migration skipped: rename failed as string");
+    expect(text).toContain("runtime-provider reconcile skipped: runtime probe failed as string");
+    expect(text).toContain("skills upload skipped: skill scan failed as string");
   });
 
   it("handles user and org mismatch errors from inline runtime startup", async () => {
@@ -718,10 +781,22 @@ describe("daemon start command", () => {
   });
 
   it("continues when per-agent skill upload fails", async () => {
-    coreMocks.uploadAgentSkills.mockRejectedValueOnce(new Error("agent skill upload failed"));
+    coreMocks.listPinnedAgents.mockRejectedValueOnce("pin check failed as string");
+    coreMocks.uploadAgentSkills.mockRejectedValueOnce("agent skill upload failed as string");
 
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
 
-    expect(output()).toContain("skills upload for nova skipped: agent skill upload failed");
+    expect(output()).toContain("skills upload pin check skipped: pin check failed as string");
+    expect(output()).toContain("skills upload for nova skipped: agent skill upload failed as string");
+  });
+
+  it("stringifies non-Error inline startup failures", async () => {
+    runtimeInstance.watchAgentsDir.mockImplementationOnce(() => {
+      throw "watch failed as string";
+    });
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(output()).toContain("Error: watch failed as string");
   });
 });

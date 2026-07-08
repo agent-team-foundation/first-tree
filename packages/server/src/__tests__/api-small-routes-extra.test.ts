@@ -24,8 +24,13 @@ const routeMocks = {
   getOrganization: vi.fn(),
   getOrgContextTree: vi.fn(),
   generateConnectToken: vi.fn(),
+  ensureMembership: vi.fn(),
+  findActiveByToken: vi.fn(),
   listAgentTurns: vi.fn(),
+  listActiveMemberships: vi.fn(),
+  leaveOrganization: vi.fn(),
   recoverAgentRuntimeSwitch: vi.fn(),
+  recordRedemption: vi.fn(),
   requireAgent: vi.fn(),
   requireAgentAccess: vi.fn(),
   requireChatAccess: vi.fn(),
@@ -33,6 +38,7 @@ const routeMocks = {
   requireOrgMembership: vi.fn(),
   resetActivity: vi.fn(),
   resolveUsageWindow: vi.fn(),
+  selfCreateOrganization: vi.fn(),
   summarizeAgent: vi.fn(),
   updateOrganization: vi.fn(),
 };
@@ -50,8 +56,11 @@ const mockedModules = [
   "../services/connection-manager.js",
   "../services/github-entity-chat.js",
   "../services/github-entity-follow.js",
+  "../services/invitation.js",
   "../services/landing-campaigns/guards.js",
   "../services/me-doc.js",
+  "../services/membership.js",
+  "../services/onboarding-kickoff.js",
   "../services/org-settings.js",
   "../services/organization.js",
   "../services/usage.js",
@@ -77,6 +86,12 @@ function mockRouteDependencies(): void {
     generateConnectToken: routeMocks.generateConnectToken,
     pickDefaultMembership: vi.fn(),
   }));
+  vi.doMock("../services/invitation.js", () => ({
+    buildInviteUrl: vi.fn((_base: string, token: string) => `https://invite.example/${token}`),
+    findActiveByToken: routeMocks.findActiveByToken,
+    getActiveInvitation: vi.fn(),
+    recordRedemption: routeMocks.recordRedemption,
+  }));
   vi.doMock("../services/agent-runtime-switch.js", () => ({
     RUNTIME_SWITCH_FAULTS: ["after_claim", "after_commit"],
     assertNoRuntimeSwitchInProgress: routeMocks.assertNoRuntimeSwitchInProgress,
@@ -88,6 +103,17 @@ function mockRouteDependencies(): void {
   }));
   vi.doMock("../services/me-doc.js", () => ({
     getMeDocPreview: routeMocks.getMeDocPreview,
+  }));
+  vi.doMock("../services/membership.js", () => ({
+    countActiveMembersByOrgs: vi.fn(async () => new Map()),
+    ensureMembership: routeMocks.ensureMembership,
+    leaveOrganization: routeMocks.leaveOrganization,
+    listActiveMemberships: routeMocks.listActiveMemberships,
+    selfCreateOrganization: routeMocks.selfCreateOrganization,
+  }));
+  vi.doMock("../services/onboarding-kickoff.js", () => ({
+    hasTreeSetupKickoffMessage: vi.fn(async () => false),
+    kickoffOnboarding: vi.fn(async () => ({ chatId: "chat_1", sent: null })),
   }));
   vi.doMock("../services/org-settings.js", () => ({
     getOrgContextTree: routeMocks.getOrgContextTree,
@@ -195,6 +221,16 @@ beforeEach(() => {
     memberId: "member_1",
     organizationId: "org_1",
     role: "admin",
+  });
+  routeMocks.ensureMembership.mockResolvedValue({ id: "member_joined", organizationId: "org_join", role: "member" });
+  routeMocks.findActiveByToken.mockResolvedValue(null);
+  routeMocks.listActiveMemberships.mockResolvedValue([]);
+  routeMocks.leaveOrganization.mockResolvedValue(undefined);
+  routeMocks.recordRedemption.mockResolvedValue(undefined);
+  routeMocks.selfCreateOrganization.mockResolvedValue({
+    organizationId: "org_created",
+    name: "new-org",
+    displayName: "New Org",
   });
   routeMocks.resolveUsageWindow.mockReturnValue({
     from: new Date("2026-07-01T00:00:00.000Z"),
@@ -370,6 +406,161 @@ describe("small API route handlers", () => {
       { connectTokenExpiry: "10m" },
       "https://first-tree.example/app",
     );
+  });
+
+  it("covers /me organization create, join, leave, and onboarding membership edge routes", async () => {
+    const { meRoutes } = await import("../api/me.js");
+    const appBase = {
+      config: {
+        auth: { connectTokenExpiry: "10m" },
+        channel: "dev",
+        connectBootstrap: { method: "npm", portableDownloadBaseUrl: "https://download.example/releases" },
+        docs: { enabled: true },
+        growth: {},
+        server: { publicUrl: "https://first-tree.example" },
+      },
+      log: { info: vi.fn(), warn: vi.fn() },
+      notifier: {},
+    };
+
+    const created = makeApp({
+      ...appBase,
+      db: makeQueuedSelectDb([[{ username: "alice", displayName: "Alice" }]]),
+    });
+    await meRoutes(created.app as never);
+    const createReply = makeReply();
+    await route(created.routes, "POST", "/me/organizations").handler(
+      { body: { name: "new-org", displayName: "New Org" }, user: { userId: "user_1" } },
+      createReply,
+    );
+    expect(createReply).toMatchObject({
+      code: 201,
+      body: { organization: { id: "org_created", name: "new-org", displayName: "New Org", role: "admin" } },
+    });
+    expect(routeMocks.selfCreateOrganization).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userDisplayName: "Alice", username: "alice" }),
+    );
+
+    const missingUser = makeApp({ ...appBase, db: makeQueuedSelectDb([[]]) });
+    await meRoutes(missingUser.app as never);
+    await expect(
+      route(missingUser.routes, "POST", "/me/organizations").handler(
+        { body: { name: "new-org", displayName: "New Org" }, user: { userId: "user_missing" } },
+        makeReply(),
+      ),
+    ).rejects.toThrow("User not found");
+
+    const joinMissingInvite = makeApp({ ...appBase, db: makeQueuedSelectDb([]) });
+    await meRoutes(joinMissingInvite.app as never);
+    const missingInviteReply = makeReply();
+    await route(joinMissingInvite.routes, "POST", "/me/organizations/join").handler(
+      { body: { token: "invite_missing" }, headers: {}, ip: "127.0.0.1", user: { userId: "user_1" } },
+      missingInviteReply,
+    );
+    expect(missingInviteReply).toMatchObject({
+      code: 404,
+      body: { error: "Invitation not found or no longer valid" },
+    });
+
+    routeMocks.findActiveByToken.mockResolvedValueOnce({
+      id: "inv_1",
+      organizationId: "org_join",
+      role: "admin",
+      token: "invite_admin",
+    });
+    routeMocks.ensureMembership.mockResolvedValueOnce({ id: "member_admin", organizationId: "org_join", role: "admin" });
+    const joinAdmin = makeApp({
+      ...appBase,
+      db: makeQueuedSelectDb([[{ username: "alice", displayName: "Alice" }]]),
+    });
+    await meRoutes(joinAdmin.app as never);
+    const joinReply = makeReply();
+    await route(joinAdmin.routes, "POST", "/me/organizations/join").handler(
+      { body: { token: "invite_admin" }, headers: {}, ip: "127.0.0.1", user: { userId: "user_1" } },
+      joinReply,
+    );
+    expect(joinReply).toMatchObject({
+      code: 200,
+      body: { organizationId: "org_join", memberId: "member_admin", role: "admin" },
+    });
+    expect(routeMocks.recordRedemption).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userAgent: null }),
+    );
+
+    routeMocks.findActiveByToken.mockResolvedValueOnce({
+      id: "inv_2",
+      organizationId: "org_join",
+      role: "member",
+      token: "invite_member",
+    });
+    const joinNoUser = makeApp({ ...appBase, db: makeQueuedSelectDb([[]]) });
+    await meRoutes(joinNoUser.app as never);
+    await expect(
+      route(joinNoUser.routes, "POST", "/me/organizations/join").handler(
+        { body: { token: "invite_member" }, headers: {}, ip: "127.0.0.1", user: { userId: "user_missing" } },
+        makeReply(),
+      ),
+    ).rejects.toThrow("User not found");
+
+    const leave = makeApp({
+      ...appBase,
+      db: makeQueuedSelectDb([[{ id: "member_leave", userId: "user_1" }], [{ id: "member_other", userId: "user_2" }], []]),
+    });
+    await meRoutes(leave.app as never);
+    const leaveReply = makeReply();
+    await route(leave.routes, "POST", "/me/memberships/:memberId/leave").handler(
+      { params: { memberId: "member_leave" }, user: { userId: "user_1" } },
+      leaveReply,
+    );
+    expect(leaveReply.code).toBe(204);
+    expect(routeMocks.leaveOrganization).toHaveBeenCalledWith(expect.anything(), "member_leave");
+    await expect(
+      route(leave.routes, "POST", "/me/memberships/:memberId/leave").handler(
+        { params: { memberId: "member_other" }, user: { userId: "user_1" } },
+        makeReply(),
+      ),
+    ).rejects.toThrow('Membership "member_other" not found');
+    await expect(
+      route(leave.routes, "POST", "/me/memberships/:memberId/leave").handler(
+        { params: { memberId: "member_missing" }, user: { userId: "user_1" } },
+        makeReply(),
+      ),
+    ).rejects.toThrow('Membership "member_missing" not found');
+
+    const onboardingOrgMissing = makeApp({ ...appBase, db: makeQueuedSelectDb([[]]) });
+    await meRoutes(onboardingOrgMissing.app as never);
+    await expect(
+      route(onboardingOrgMissing.routes, "PATCH", "/me/onboarding").handler(
+        { body: { dismissed: true, organizationId: "org_missing" }, user: { userId: "user_1" } },
+        makeReply(),
+      ),
+    ).rejects.toThrow('Membership for organization "org_missing" not found');
+
+    const onboardingDefaultMissing = makeApp({ ...appBase, db: makeQueuedSelectDb([]) });
+    await meRoutes(onboardingDefaultMissing.app as never);
+    await expect(
+      route(onboardingDefaultMissing.routes, "PATCH", "/me/onboarding").handler(
+        { body: { dismissed: true }, user: { userId: "user_1" } },
+        makeReply(),
+      ),
+    ).rejects.toThrow("No active membership found");
+
+    const kickoffMissingMember = makeApp({
+      ...appBase,
+      db: makeQueuedSelectDb([[{ id: "member_1" }], []]),
+    });
+    await meRoutes(kickoffMissingMember.app as never);
+    await expect(
+      route(kickoffMissingMember.routes, "POST", "/me/onboarding/kickoff").handler(
+        {
+          body: { organizationId: "org_1", agentUuid: "agent_1", bootstrap: "Hello" },
+          user: { userId: "user_1" },
+        },
+        makeReply(),
+      ),
+    ).rejects.toThrow("Membership not found");
   });
 
   it("rejects avatar uploads whose parsed body is not a Buffer", async () => {

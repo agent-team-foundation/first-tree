@@ -82,6 +82,7 @@ const MAX = 400;
 describe("stableCapabilitySyncJson", () => {
   it("sorts object keys while preserving array order in stable JSON", () => {
     expect(stableCapabilitiesJson({ z: [{ b: 2, a: 1 }], a: true })).toBe('{"a":true,"z":[{"a":1,"b":2}]}');
+    expect(stableCapabilitiesJson(undefined)).toBe("null");
   });
 
   it("ignores volatile probe metadata", () => {
@@ -393,6 +394,19 @@ describe("CapabilityRefresher", () => {
     expect(revalidate).not.toHaveBeenCalled();
   });
 
+  it("ignores reconnects and later provider updates after stop", async () => {
+    const { refresher, revalidate, reprobe } = makeRefresher({ initial: codexMissing() });
+    await refresher.start();
+    refresher.stop();
+
+    refresher.onReconnect();
+    await refresher.setProviderEntry("codex", missing({ error: "still missing" }));
+    await vi.advanceTimersByTimeAsync(MAX * 4);
+
+    expect(reprobe).not.toHaveBeenCalled();
+    expect(revalidate).not.toHaveBeenCalled();
+  });
+
   it("starts an immediate background full probe when no startup snapshot exists", async () => {
     const gate = deferred<{ capabilities: ClientCapabilities; mode: "full" | "revalidate" }>();
     const { refresher, upload, log, reprobe, revalidate } = makeRefresher({ initial: null });
@@ -408,6 +422,24 @@ describe("CapabilityRefresher", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(upload).toHaveBeenCalledWith(allOk());
     expect(log).toHaveBeenCalledWith("•", expect.stringContaining("runtime capabilities re-probed (startup, full)"));
+    refresher.stop();
+  });
+
+  it("keeps polling after a startup probe fails before any snapshot exists", async () => {
+    const { refresher, log, reprobe, revalidate } = makeRefresher({ initial: null });
+    reprobe.mockRejectedValueOnce("provider crashed");
+    revalidate.mockResolvedValueOnce(allOk());
+
+    await refresher.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log).toHaveBeenCalledWith(
+      "⚠️",
+      expect.stringContaining("startup capability re-probe skipped after"),
+    );
+    expect(log.mock.calls.map((call) => String(call[1])).join("\n")).toContain("provider crashed");
+
+    await vi.advanceTimersByTimeAsync(BASE * 2);
+    expect(revalidate).toHaveBeenCalledTimes(1);
     refresher.stop();
   });
 

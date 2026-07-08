@@ -111,4 +111,36 @@ describe("tree init verify failure", () => {
       ),
     ).toBe(false);
   });
+
+  it("stringifies non-Error failures from the init action", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    verifyMocks.verifyTreeRoot.mockImplementation(() => {
+      throw "verify exploded";
+    });
+
+    await initCommand.action(context(commandWithOptions({ bind: false, title: "String Failure" })));
+
+    expect(process.exitCode).toBe(1);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toBe("verify exploded");
+  });
+
+  it("collects verify failures even when a check omits its error list", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    verifyMocks.verifyTreeRoot.mockReturnValue({
+      ok: false,
+      checks: {
+        nodes: { ok: false },
+        members: { ok: false, errors: ["members missing"] },
+      },
+    } as unknown as ReturnType<typeof import("../commands/tree/verify.js").verifyTreeRoot>);
+
+    await initCommand.action(context(commandWithOptions({ bind: false, title: "Partial Errors" })));
+
+    expect(process.exitCode).toBe(1);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("members missing");
+  });
 });

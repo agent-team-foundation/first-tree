@@ -263,6 +263,24 @@ describe("tree init command action", () => {
     expect(output).toContain("Context Tree created and bound.");
   });
 
+  it("prints the human summary for an unbound tree using default title and repo name", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+
+    await initCommand.action(context(commandWithOptions({ bind: false, withWorkflow: false }), false));
+
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(process.exitCode).toBeUndefined();
+    expect(output).toContain("Repository:   octocat/octocat-context-tree");
+    expect(output).toContain("Validate CI:  not seeded");
+    expect(output).toContain("Bound to org: no (--no-bind)");
+    expect(output).toContain("Context Tree created.");
+  });
+
   it("fails before remote writes when binding preconditions are not satisfied", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const cases: Array<{
@@ -489,6 +507,7 @@ describe("tree init command action", () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const cases: Array<{ name: string; me: unknown; status?: number; message: string }> = [
       { name: "me 500", me: "down", status: 500, message: "server returned 500 on /me" },
+      { name: "missing memberships", me: {}, message: "don't belong to any organization" },
       { name: "no orgs", me: { memberships: [] }, message: "don't belong to any organization" },
       {
         name: "multiple orgs",

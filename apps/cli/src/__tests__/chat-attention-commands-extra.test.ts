@@ -159,6 +159,51 @@ describe("chat command behavior", () => {
     await expect(runChat(["send", "nova"])).rejects.toMatchObject({ code: "NO_MESSAGE", exitCode: 2 });
   });
 
+  it("chat send merges captured metadata without caller metadata and continues through defensive fail fallbacks", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "attachment only",
+      attachments: [{ kind: "doc", id: "doc-attachment" }],
+    });
+    await runChat(["send", "nova", "attachment only"]);
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        metadata: { attachments: [{ kind: "doc", id: "doc-attachment" }] },
+      }),
+    );
+
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "context only",
+      documentContext: [{ path: "docs/context.md", content: "Context" }],
+    });
+    await runChat(["send", "nova", "context only"]);
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        metadata: { documentContext: [{ path: "docs/context.md", content: "Context" }] },
+      }),
+    );
+
+    outputMocks.fail.mockImplementationOnce(() => undefined as never);
+    await runChat(["send"]);
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({ content: "stdin message", source: "cli" }),
+    );
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.not.objectContaining({ receiverNames: expect.any(Array) }),
+    );
+
+    outputMocks.fail.mockImplementationOnce(() => undefined as never);
+    ioMocks.readStdin.mockResolvedValueOnce(null);
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({ content: "" });
+    await runChat(["send", "nova"]);
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith("", expect.objectContaining({ chatId: "chat-env" }));
+  });
+
   it("chat ask sends an open question with the body as the ask and JSON --options", async () => {
     const sdk = localAgentMocks.createSdk();
     await runChat([
@@ -315,6 +360,58 @@ describe("chat command behavior", () => {
     );
   });
 
+  it("chat ask merges attachment and document capture metadata without caller metadata", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "attachment only",
+      attachments: [{ kind: "doc", id: "doc-attachment" }],
+    });
+    await runChat(["ask", "nova", "attachment only"]);
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        metadata: { request: {}, attachments: [{ kind: "doc", id: "doc-attachment" }] },
+      }),
+    );
+
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "context only",
+      documentContext: [{ path: "docs/context.md", content: "Context" }],
+    });
+    await runChat(["ask", "nova", "context only"]);
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        metadata: { request: {}, documentContext: [{ path: "docs/context.md", content: "Context" }] },
+      }),
+    );
+  });
+
+  it("chat ask continues through defensive non-throwing fail fallbacks", async () => {
+    const sdk = localAgentMocks.createSdk();
+    outputMocks.fail.mockImplementationOnce(() => undefined as never);
+
+    await runChat(["ask"]);
+
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({ content: "stdin message", source: "cli" }),
+    );
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.not.objectContaining({ receiverNames: expect.any(Array) }),
+    );
+
+    outputMocks.fail.mockImplementationOnce(() => undefined as never);
+    ioMocks.readStdin.mockResolvedValueOnce(null);
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({ content: "" });
+
+    await runChat(["ask", "nova"]);
+
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith("", expect.objectContaining({ chatId: "chat-env" }));
+  });
+
   it("chat ask is ask-only: it accepts neither --answer nor --reply-to", async () => {
     // The agent can only ASK; the human resolves in the web UI. `--answer`
     // (resolve) and `--reply-to` (thread) were both removed, so each is an
@@ -439,6 +536,25 @@ describe("chat command behavior", () => {
     });
   });
 
+  it("creates task chats with attachment-only doc capture metadata", async () => {
+    docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
+      content: "see attached notes",
+      attachments: [{ id: "att-1", kind: "document" }],
+    });
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat(["create", "see attached notes", "--to", "nova"]);
+
+    expect(sdk.createTaskChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextParticipantNames: [],
+        initialMessage: expect.objectContaining({
+          metadata: { attachments: [{ id: "att-1", kind: "document" }] },
+        }),
+      }),
+    );
+  });
+
   it("validates chat create input and treats uncertain create outcomes as non-retryable", async () => {
     const sdk = localAgentMocks.createSdk();
 
@@ -476,6 +592,26 @@ describe("chat command behavior", () => {
       code: "CREATE_RESULT_UNKNOWN",
       exitCode: 6,
     });
+
+    const abortError = new Error("request aborted");
+    abortError.name = "AbortError";
+    sdk.createTaskChat.mockRejectedValueOnce(abortError);
+    await expect(runChat(["create", "body", "--to", "nova"])).rejects.toMatchObject({
+      code: "CREATE_RESULT_UNKNOWN",
+      exitCode: 6,
+    });
+
+    const nestedTimeout = new Error("wrapped timeout");
+    Object.assign(nestedTimeout, { cause: { name: "TimeoutError" } });
+    sdk.createTaskChat.mockRejectedValueOnce(nestedTimeout);
+    await expect(runChat(["create", "body", "--to", "nova"])).rejects.toMatchObject({
+      code: "CREATE_RESULT_UNKNOWN",
+      exitCode: 6,
+    });
+
+    sdk.createTaskChat.mockRejectedValueOnce("plain sdk failure");
+    await expect(runChat(["create", "body", "--to", "nova"])).rejects.toBe("plain sdk failure");
+    expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith("plain sdk failure");
 
     const certainError = new Error("validation failed");
     Object.assign(certainError, { cause: { code: "EINVAL" } });
@@ -735,5 +871,109 @@ describe("chat command behavior", () => {
 
     expect(() => emitter.emit("close")).toThrow("process.exit");
     expect(globalThis.clearInterval).toHaveBeenCalledWith(99);
+  });
+
+  it("chat open uses agent id fallbacks and ignores failed polling responses", async () => {
+    resolveAgentMock.mockResolvedValueOnce({ uuid: "agent-fallback" });
+    const emitter = new EventEmitter() as EventEmitter & { prompt: () => void };
+    emitter.prompt = vi.fn();
+    readlineMocks.createInterface.mockReturnValue(emitter);
+    let intervalCallback: (() => void) | undefined;
+    globalThis.setInterval = vi.fn((callback: () => void) => {
+      intervalCallback = callback;
+      return 100 as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setInterval;
+    globalThis.clearInterval = vi.fn() as unknown as typeof clearInterval;
+    cliFetchMock
+      .mockResolvedValueOnce(jsonResponse({ id: "dm-fallback" }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ id: "old", senderId: "agent-fallback", content: "old", createdAt: "1" }] }))
+      .mockResolvedValueOnce(jsonResponse("poll failed", false, 502));
+
+    await runChat(["open", "fallback"]);
+    intervalCallback?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Chat with agent-fallback");
+
+    cliFetchMock.mockRejectedValueOnce("send string failure");
+    emitter.emit("line", "hello");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("send string failure");
+
+    expect(() => emitter.emit("close")).toThrow("process.exit");
+    expect(globalThis.clearInterval).toHaveBeenCalledWith(100);
+  });
+
+  it("chat open prints short string previews with name and generic sender fallbacks", async () => {
+    const namedEmitter = new EventEmitter() as EventEmitter & { prompt: () => void };
+    namedEmitter.prompt = vi.fn();
+    readlineMocks.createInterface.mockReturnValueOnce(namedEmitter);
+    let namedInterval: (() => void) | undefined;
+    globalThis.setInterval = vi.fn((callback: () => void) => {
+      namedInterval = callback;
+      return 101 as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setInterval;
+    globalThis.clearInterval = vi.fn() as unknown as typeof clearInterval;
+    resolveAgentMock.mockResolvedValueOnce({ uuid: "agent-named", name: "NamedOnly" });
+    cliFetchMock
+      .mockResolvedValueOnce(jsonResponse({ id: "dm-named" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ id: "old", senderId: "agent-named", content: "old", createdAt: "2026-06-01T00:00:00.000Z" }],
+        }),
+      );
+
+    await runChat(["open", "named"]);
+    cliFetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        items: [{ id: "new", senderId: "agent-named", content: "short reply", createdAt: "2026-06-01T00:00:02.000Z" }],
+      }),
+    );
+    namedInterval?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("[NamedOnly] short reply");
+    expect(() => namedEmitter.emit("close")).toThrow("process.exit");
+
+    const genericEmitter = new EventEmitter() as EventEmitter & { prompt: () => void };
+    genericEmitter.prompt = vi.fn();
+    readlineMocks.createInterface.mockReturnValueOnce(genericEmitter);
+    let genericInterval: (() => void) | undefined;
+    globalThis.setInterval = vi.fn((callback: () => void) => {
+      genericInterval = callback;
+      return 102 as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setInterval;
+    resolveAgentMock.mockResolvedValueOnce({ uuid: "agent-generic" });
+    cliFetchMock
+      .mockResolvedValueOnce(jsonResponse({ id: "dm-generic" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ id: "old", senderId: "agent-generic", content: "old", createdAt: "2026-06-01T00:00:00.000Z" }],
+        }),
+      );
+
+    await runChat(["open", "generic"]);
+    cliFetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        items: [
+          { id: "new", senderId: "agent-generic", content: { text: "short object" }, createdAt: "2026-06-01T00:00:02.000Z" },
+        ],
+      }),
+    );
+    genericInterval?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain('[agent] {"text":"short object"}');
+    expect(() => genericEmitter.emit("close")).toThrow("process.exit");
+  });
+
+  it("chat open reports non-Error top-level failures", async () => {
+    resolveAgentMock.mockRejectedValueOnce("agent lookup failed");
+
+    await expect(runChat(["open", "nova"])).rejects.toMatchObject({ code: "CHAT_ERROR" });
+    expect(outputMocks.fail).toHaveBeenCalledWith("CHAT_ERROR", "agent lookup failed");
   });
 });

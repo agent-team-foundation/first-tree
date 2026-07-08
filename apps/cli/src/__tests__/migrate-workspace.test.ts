@@ -679,6 +679,20 @@ describe("migrateWorkspaceToW1 (Case A)", () => {
     expect(readFileSync(join(fixture.sourceRoots[0], "AGENTS.md"), "utf8")).toBe("# Project\n\nNo managed block.\n");
   });
 
+  it("adds a trailing newline when stripping a terminal framework block", () => {
+    const fixture = makeCaseAWorkspace();
+    writeFile(join(fixture.sourceRoots[0], "AGENTS.md"), `# Project\n\n${FRAMEWORK_BLOCK}`);
+    const detection = detectMigrationState(fixture.workspaceRoot);
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace detection");
+    }
+
+    const result = migrateWorkspaceToW1(detection);
+
+    expect(result.modified).toContainEqual({ path: "api/AGENTS.md", kind: "source-framework-block" });
+    expect(readFileSync(join(fixture.sourceRoots[0], "AGENTS.md"), "utf8")).toBe("# Project\n\n");
+  });
+
   it("falls back to manifest.tree when bindings/ are already gone (resume case)", () => {
     const fixture = makeCaseAWorkspace();
     // Pre-state: manifest + marker + source.json survive; bindings/ already
@@ -696,6 +710,37 @@ describe("migrateWorkspaceToW1 (Case A)", () => {
       throw new Error("expected workspace");
     }
     expect(detection.treeRoot).toBe(fixture.treeRoot);
+  });
+
+  it("does not invent a tree root from malformed resume manifests", () => {
+    writeFile(join(tmpRoot, ".first-tree-workspace"), "");
+    writeJson(join(tmpRoot, ".first-tree", "workspace.json"), {
+      tree: 42,
+      sources: ["api"],
+    });
+
+    const detection = detectMigrationState(tmpRoot);
+
+    expect(detection.kind).toBe("not-applicable");
+    if (detection.kind === "not-applicable") {
+      expect(detection.reason).toContain("no child directory contains a tree binding");
+    }
+  });
+
+  it("ignores malformed manifest source lists during resume detection", () => {
+    const fixture = makeCaseAWorkspace();
+    writeJson(join(fixture.workspaceRoot, ".first-tree", "workspace.json"), {
+      tree: "context",
+      sources: "api",
+    });
+
+    const detection = detectMigrationState(fixture.workspaceRoot);
+
+    expect(detection.kind).toBe("workspace");
+    if (detection.kind !== "workspace") {
+      throw new Error("expected workspace detection");
+    }
+    expect(detection.sourceRoots.map((sourceRoot) => sourceRoot.split("/").pop()).sort()).toEqual(["api", "web"]);
   });
 
   it("preserves the workspace marker when manifest write fails so re-detection still finds the workspace", () => {

@@ -47,6 +47,15 @@ describe("tree binding contract helpers", () => {
 
     expect(parseManagedSourceBindingText("no managed block")).toBeUndefined();
     expect(parseManagedSourceBindingText(managedBlock(["FIRST-TREE-TREE-REPO-URL: pending publish"]))).toBeUndefined();
+    expect(parseManagedSourceBindingText(managedBlock(["FIRST-TREE-TREE-REPO: context"]))).toEqual({
+      bindingContract: "managed-block-v1",
+      treeRepoName: "context",
+    });
+    expect(parseManagedSourceBindingText(managedBlock(["FIRST-TREE-BINDING-MODE: workspace-root"]))).toEqual({
+      bindingContract: "managed-block-v1",
+      bindingMode: "workspace-root",
+      scope: "workspace",
+    });
 
     expect(
       parseManagedSourceBindingText(
@@ -94,6 +103,7 @@ describe("tree binding contract helpers", () => {
       file: "CLAUDE.md",
       treeRepoSlug: "acme/context",
     });
+    expect(findUpwardsManagedSourceBinding(makeTempDir())).toBeUndefined();
 
     const legacyRoot = makeTempDir();
     mkdirSync(join(legacyRoot, ".first-tree"), { recursive: true });
@@ -128,6 +138,36 @@ describe("tree binding contract helpers", () => {
       treeRepoSlug: "acme/context",
       treeRepoUrl: "git@github.com:acme/context.git",
       workspaceId: "workspace-legacy",
+    });
+
+    const minimalLegacyRoot = makeTempDir();
+    mkdirSync(join(minimalLegacyRoot, ".first-tree"), { recursive: true });
+    writeFileSync(
+      join(minimalLegacyRoot, ".first-tree", "source.json"),
+      JSON.stringify({
+        bindingMode: "workspace-root",
+        rootKind: "folder",
+        schemaVersion: 1,
+        scope: "workspace",
+        sourceName: "workspace",
+        sourceId: "source-minimal",
+        tree: {
+          treeId: "tree-minimal",
+          treeMode: "dedicated",
+          treeRepoName: "context",
+          entrypoint: ".",
+        },
+      }),
+    );
+
+    expect(readSourceBindingContract(minimalLegacyRoot)).toEqual({
+      bindingContract: "legacy-source-state",
+      bindingMode: "workspace-root",
+      entrypoint: ".",
+      scope: "workspace",
+      sourceStatePath: ".first-tree/source.json",
+      treeMode: "dedicated",
+      treeRepoName: "context",
     });
   });
 });

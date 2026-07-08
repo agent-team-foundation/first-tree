@@ -152,6 +152,8 @@ describe("doc command actions", () => {
     registerDocGetCommand(getRoot);
     await subcommand(getRoot, "get").parseAsync(["design-doc", "--version", "2"], { from: "user" });
     expect(sdk.getDoc).toHaveBeenCalledWith("doc_1", { version: 2 });
+    await subcommand(getRoot, "get").parseAsync(["design-doc"], { from: "user" });
+    expect(sdk.getDoc).toHaveBeenLastCalledWith("doc_1", undefined);
 
     const statusRoot = new Command();
     registerDocStatusCommand(statusRoot);
@@ -180,6 +182,12 @@ describe("doc command actions", () => {
       body: "Please clarify",
       versionNumber: 3,
       anchor: { exact: "target", prefix: "before", suffix: "after" },
+    });
+    await subcommand(commentRoot, "comment").parseAsync(["design-doc", "Document-level"], { from: "user" });
+    expect(sdk.createDocComment).toHaveBeenLastCalledWith("doc_1", {
+      body: "Document-level",
+      versionNumber: undefined,
+      anchor: undefined,
     });
     await expect(
       subcommand(commentRoot, "comment").parseAsync(["design-doc", "Bad anchor", "--prefix", "orphan"], {
@@ -322,6 +330,42 @@ describe("doc command actions", () => {
     }
   });
 
+  it("uses the default watch interval and stringifies non-Error watch failures", async () => {
+    const { registerDocCommentsCommand } = await import("../commands/doc/comments.js");
+    const stdoutWrite = vi.spyOn(process.stdout, "write");
+    const stderrWrite = vi.spyOn(process.stderr, "write");
+    vi.useFakeTimers();
+    const sdk = {
+      listDocs: vi.fn().mockResolvedValue({ items: [docSummary()] }),
+      listDocComments: vi
+        .fn()
+        .mockResolvedValueOnce({ items: [] })
+        .mockResolvedValueOnce({ items: [{ id: "comment_default", body: "new default interval comment" }] })
+        .mockRejectedValueOnce("watch string failure"),
+    };
+    localAgentMocks.createSdk.mockReturnValue(sdk);
+    stdoutWrite.mockImplementation(() => true);
+    stderrWrite.mockImplementationOnce(() => {
+      throw new Error("stop default watch");
+    });
+    const root = new Command();
+    registerDocCommentsCommand(root);
+
+    try {
+      const watching = subcommand(root, "comments").parseAsync(["design-doc", "--watch"], { from: "user" });
+      const expectedStop = expect(watching).rejects.toThrow("stop default watch");
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("comment_default"));
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expectedStop;
+      expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("watch string failure"));
+    } finally {
+      vi.useRealTimers();
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
+  });
+
   it("publishes markdown, reports unchanged content, and rejects unreadable or invalid input", async () => {
     const { registerDocPublishCommand } = await import("../commands/doc/publish.js");
     const base = await mkdtemp(join(tmpdir(), "cli-doc-publish-"));
@@ -381,6 +425,24 @@ describe("doc command actions", () => {
       await subcommand(root, "publish").parseAsync([file, "--slug", "custom-doc"], { from: "user" });
       expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("Content unchanged");
 
+      const noHeading = join(base, "no-heading.md");
+      await writeFile(noHeading, "Body without heading\n", "utf8");
+      sdk.publishDoc.mockResolvedValueOnce({
+        slug: "no-heading",
+        version: 1,
+        createdDocument: true,
+        createdVersion: true,
+      });
+      await subcommand(root, "publish").parseAsync([noHeading], { from: "user" });
+      expect(sdk.publishDoc).toHaveBeenLastCalledWith(
+        expect.objectContaining({ slug: "no-heading", title: undefined, content: "Body without heading\n" }),
+      );
+
+      const invalidDerivedSlug = join(base, "---.md");
+      await writeFile(invalidDerivedSlug, "# Title\n", "utf8");
+      await expect(subcommand(root, "publish").parseAsync([invalidDerivedSlug], { from: "user" })).rejects.toThrow(
+        "INVALID_SLUG",
+      );
       await expect(
         subcommand(root, "publish").parseAsync([join(base, "missing.md")], { from: "user" }),
       ).rejects.toThrow("FILE_UNREADABLE");
@@ -428,6 +490,16 @@ describe("doc command actions", () => {
 
       sdk.publishDoc.mockRejectedValueOnce(new Error("network down"));
       await expect(subcommand(root, "import").parseAsync([base], { from: "user" })).rejects.toThrow("IMPORT_PARTIAL");
+
+      const emptyProgressBase = await mkdtemp(join(tmpdir(), "cli-doc-import-empty-progress-"));
+      await writeFile(join(emptyProgressBase, "first.md"), "# First\n", "utf8");
+      sdk.publishDoc.mockRejectedValueOnce("string publish failure");
+      await expect(subcommand(root, "import").parseAsync([emptyProgressBase], { from: "user" })).rejects.toThrow(
+        "IMPORT_PARTIAL",
+      );
+      expect(outputMocks.fail.mock.calls.at(-1)?.[1]).toContain("Imported before the failure: none");
+      await rm(emptyProgressBase, { recursive: true, force: true });
+
       await expect(subcommand(root, "import").parseAsync([join(base, "missing")], { from: "user" })).rejects.toThrow(
         "DIR_UNREADABLE",
       );

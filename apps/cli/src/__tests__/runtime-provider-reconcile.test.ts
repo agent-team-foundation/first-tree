@@ -176,6 +176,50 @@ describe("reconcileLocalRuntimeProviders", () => {
     expect(after.runtime).toBe("codex");
     expect(logs.some(([level, msg]) => level === "warn" && /broken/.test(msg))).toBe(true);
   });
+
+  it("returns quietly when the agents directory is missing", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([{ agentId: "agent-1", clientId: "cli-1", runtimeProvider: "codex" }]), {
+        status: 200,
+      }),
+    );
+
+    await expect(
+      reconcileLocalRuntimeProviders({
+        serverUrl: "http://first-tree.test",
+        accessToken: "tok",
+        agentsDir: join(agentsDir, "missing"),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("skips directories without agent.yaml and empty yaml files", async () => {
+    const missingYamlDir = join(agentsDir, "missing-yaml");
+    mkdirSync(missingYamlDir, { recursive: true });
+    const emptyPath = seedAgentDir("empty", {});
+    writeFileSync(emptyPath, "");
+    const goodPath = seedAgentDir("unset-runtime", { agentId: "agent-unset" });
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([{ agentId: "agent-unset", clientId: "cli-1", runtimeProvider: "codex" }]), {
+        status: 200,
+      }),
+    );
+    const logs: Array<[string, string]> = [];
+
+    await reconcileLocalRuntimeProviders({
+      serverUrl: "http://first-tree.test",
+      accessToken: "tok",
+      agentsDir,
+      log: (level, msg) => logs.push([level, msg]),
+    });
+
+    const after = parseYaml(readFileSync(goodPath, "utf-8")) as { runtime?: string };
+    expect(after.runtime).toBe("codex");
+    expect(logs).toContainEqual([
+      "info",
+      'agent agent-unset: yaml runtime "(unset)" → "codex" (server authoritative)',
+    ]);
+  });
 });
 
 describe("uploadClientCapabilities", () => {

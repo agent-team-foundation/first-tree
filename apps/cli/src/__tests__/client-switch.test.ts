@@ -66,6 +66,7 @@ describe("client switch drain markers", () => {
     expect(parseSwitchProcessEnvValue("FIRST_TREE_HOME= FIRST_TREE_CLIENT_ID=client_aabbccdd", "FIRST_TREE_HOME")).toBe(
       "",
     );
+    expect(parseSwitchProcessEnvValue("FIRST_TREE_HOME=", "FIRST_TREE_HOME")).toBe("");
     expect(parseSwitchProcessEnvValue("FIRST_TREE_HOME=/tmp/ft", "FIRST_TREE_CLIENT_ID")).toBeNull();
     expect(parseSwitchProcessEnvValue("FIRST_TREE_HOME=/tmp/ft", "FIRST.TREE")).toBeNull();
   });
@@ -217,6 +218,47 @@ describe("client switch drain markers", () => {
     ]);
   });
 
+  it("falls back to unknown-provider for known provider commands without provider markers", () => {
+    const providers: Array<{ pid: number; provider: string; agentId?: string; chatId?: string; command: string }> = [];
+    const issues: Array<{ pid: number; command: string; reason: string }> = [];
+
+    collectSwitchDrainProcessFromEnvText({
+      pid: 127,
+      command: "/usr/local/bin/codex",
+      envText: [
+        "FIRST_TREE_HOME=/Users/alice/.first-tree",
+        "FIRST_TREE_CLIENT_ID=client_aabbccdd",
+        "FIRST_TREE_SWITCH_DRAIN_VERSION=1",
+        "",
+      ].join("\0"),
+      home: "/Users/alice/.first-tree",
+      clientId: "client_aabbccdd",
+      providers,
+      issues,
+    });
+
+    expect(issues).toEqual([]);
+    expect(providers).toEqual([expect.objectContaining({ pid: 127, provider: "unknown-provider" })]);
+  });
+
+  it("fails closed on known provider commands that lack trusted markers", () => {
+    const providers: Array<{ pid: number; provider: string; command: string }> = [];
+    const issues: Array<{ pid: number; command: string; reason: string }> = [];
+
+    collectSwitchDrainProcessFromEnvText({
+      pid: 128,
+      command: "/usr/local/bin/codex",
+      envText: "FIRST_TREE_HOME=/Users/alice/.first-tree",
+      home: "/Users/alice/.first-tree",
+      clientId: "client_aabbccdd",
+      providers,
+      issues,
+    });
+
+    expect(providers).toEqual([]);
+    expect(issues).toEqual([expect.objectContaining({ pid: 128, reason: "missing trusted switch drain markers" })]);
+  });
+
   it("requires readable env only for known switch-drain process commands", () => {
     expect(isSwitchDrainEnvRequired("/usr/bin/codex exec")).toBe(true);
     expect(isSwitchDrainEnvRequired("node /app/node_modules/@openai/codex/bin.js")).toBe(true);
@@ -245,6 +287,27 @@ describe("client runtime markers", () => {
     clear();
     clear();
     expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it("uses default home and pid when registering runtime markers", () => {
+    const home = mkdtempSync(join(tmpdir(), "ft-client-runtime-defaults-"));
+    tempHomes.push(home);
+    const previousHome = process.env.FIRST_TREE_HOME;
+    process.env.FIRST_TREE_HOME = home;
+    try {
+      const clear = registerClientRuntimeMarker({
+        clientId: "client_aabbccdd",
+        mode: "service",
+      });
+      const markerPath = clientRuntimeMarkerPath(home, process.pid);
+
+      expect(readFileSync(markerPath, "utf8")).toContain('"mode": "service"');
+      clear();
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.FIRST_TREE_HOME;
+      else process.env.FIRST_TREE_HOME = previousHome;
+    }
   });
 
   it("lists a live runtime marker and includes the process command when available", () => {
@@ -373,6 +436,31 @@ describe("client runtime markers", () => {
     kill.mockRestore();
   });
 
+  it("uses default stop timing options and stringifies non-Error kill failures", async () => {
+    let alive = true;
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        if (alive) return true;
+        const err = Object.assign(new Error("gone"), { code: "ESRCH" });
+        throw err;
+      }
+      alive = false;
+      return true;
+    });
+
+    await expect(stopClientRuntimeProcess(12348)).resolves.toEqual({ ok: true });
+
+    kill.mockImplementation((_pid, signal) => {
+      if (signal === 0) return true;
+      throw "kill failed as string";
+    });
+    await expect(stopClientRuntimeProcess(12349)).resolves.toEqual({
+      ok: false,
+      reason: "kill failed as string",
+    });
+    kill.mockRestore();
+  });
+
   it("times out when a runtime process does not stop after the signal", async () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
 
@@ -382,6 +470,31 @@ describe("client runtime markers", () => {
       ok: false,
       reason: expect.stringContaining("timed out waiting for pid"),
     });
+    kill.mockRestore();
+  });
+
+  it("handles runtime stop races after the wait deadline", async () => {
+    let probes = 0;
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        probes += 1;
+        if (probes === 1) return true;
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    });
+
+    await expect(stopClientRuntimeProcess(12350, { timeoutMs: 0, intervalMs: 1 })).resolves.toEqual({ ok: true });
+    kill.mockRestore();
+  });
+
+  it("treats non-Error liveness probe failures as live before surfacing signal failures", async () => {
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) throw "probe failed";
+      throw "signal failed";
+    });
+
+    await expect(stopClientRuntimeProcess(12351)).resolves.toEqual({ ok: false, reason: "signal failed" });
     kill.mockRestore();
   });
 });
@@ -456,6 +569,18 @@ describe("active client identity recovery", () => {
     );
 
     expect(readActiveClientIdFromIndex(home)).toBeNull();
+
+    writeFileSync(
+      join(home, "parked-clients", "index.json"),
+      JSON.stringify({
+        version: 1,
+        activeClientId: "not-a-client-id",
+        accountDefaults: {},
+        clients: {},
+      }),
+    );
+
+    expect(readActiveClientIdFromIndex(home)).toBeNull();
   });
 
   it("recovers active client owner and remembered defaults from the switch index", () => {
@@ -491,6 +616,9 @@ describe("active client identity recovery", () => {
       serverUrl: "https://first-tree.example",
     });
     expect(readRememberedLocalClientIdForAccount("https://first-tree.example", "user-1", home)).toBe("client_aabbccdd");
+
+    writeFileSync(join(configDir, "client.yaml"), "client:\n  id: client_11223344\n");
+    expect(readActiveClientOwner(home, configDir)).toBeNull();
   });
 
   it("parks any prior active-root entry when recording a new active owner", () => {
@@ -537,6 +665,9 @@ describe("active client identity recovery", () => {
     tempHomes.push(configDir);
     const configPath = join(configDir, "client.yaml");
     writeFileSync(configPath, "server:\n  url: https://first-tree.example\n");
+
+    ensureActiveRootClientIdPersisted("client_aabbccdd", configDir);
+    expect(readFileSync(configPath, "utf8")).toContain("id: client_aabbccdd");
 
     ensureActiveRootClientIdPersisted("client_aabbccdd", configDir);
     expect(readFileSync(configPath, "utf8")).toContain("id: client_aabbccdd");

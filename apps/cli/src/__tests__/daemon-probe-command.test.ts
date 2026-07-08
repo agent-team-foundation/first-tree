@@ -119,6 +119,19 @@ describe("daemon probe", () => {
     expect(outputMocks.print.result).not.toHaveBeenCalled();
   });
 
+  it("stringifies non-Error upload failures in JSON and human modes", async () => {
+    coreMocks.uploadClientCapabilities.mockRejectedValueOnce("upload string failure");
+    await expect(runProbe(["--json"])).rejects.toMatchObject({ code: "UPLOAD_FAILED" });
+    expect(failMock).toHaveBeenLastCalledWith("UPLOAD_FAILED", "upload string failure", 1);
+
+    coreMocks.uploadClientCapabilities.mockRejectedValueOnce("soft upload string failure");
+    await runProbe([]);
+    expect(outputMocks.print.status).toHaveBeenLastCalledWith(
+      "⚠️",
+      "capabilities upload skipped: soft upload string failure",
+    );
+  });
+
   it("--json success envelope is emitted only after a successful upload", async () => {
     await runProbe(["--json"]);
     expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledTimes(1);

@@ -171,6 +171,7 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
   function claudeHarness(opts: {
     resolveOk?: boolean;
     outcome?: LoginOutcome;
+    fireAuthUrl?: string;
     probeResult?: CapabilityEntry;
     throwLogin?: unknown;
     probeThrows?: unknown;
@@ -194,7 +195,8 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
         opts.resolveOk === false
           ? ({ ok: false, error: "no claude CLI" } as const)
           : ({ ok: true, command: "/usr/local/bin/claude", baseArgs: [] as string[] } as const),
-      runClaudeBrowser: async (): Promise<LoginOutcome> => {
+      runClaudeBrowser: async (options: { onAuthUrl?: (url: string) => void }): Promise<LoginOutcome> => {
+        if (opts.fireAuthUrl) options.onAuthUrl?.(opts.fireAuthUrl);
         if (opts.throwLogin !== undefined) throw opts.throwLogin;
         return opts.outcome ?? ({ ok: true } as const);
       },
@@ -227,6 +229,14 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
     expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
     expect(h.calls.some((c) => c.provider === "claude-code-tui")).toBe(false);
     expect(h.probeClaudeTui).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the Claude browser auth URL into pendingAuth", async () => {
+    const h = claudeHarness({ outcome: { ok: true }, probeResult: okEntry(), fireAuthUrl: "https://claude.ai/login" });
+    await runRuntimeAuthLogin({ provider: "claude-code", ref: "c-url" }, h.deps);
+
+    const withUrl = h.calls.find((c) => c.entry.pendingAuth?.authUrl);
+    expect(withUrl?.entry.pendingAuth).toMatchObject({ method: "browser", authUrl: "https://claude.ai/login" });
   });
 
   it("on unresolved CLI, reflects claude-code real state and never logs in (TUI untouched)", async () => {

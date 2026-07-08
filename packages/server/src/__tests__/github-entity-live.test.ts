@@ -37,6 +37,30 @@ describe("github entity live helpers", () => {
     expect(__testing.parseEntityKey("pull_request", "owner/repo#not-a-number")).toBeNull();
   });
 
+  it("keeps defensive parser guards for malformed regex captures", () => {
+    const originalExec = RegExp.prototype.exec;
+    try {
+      RegExp.prototype.exec = function exec(this: RegExp, input: string): RegExpExecArray | null {
+        if (input === "owner/repo@abcdef1") {
+          return ["owner/repo@abcdef1", "owner", "repo", undefined] as unknown as RegExpExecArray;
+        }
+        if (input === "owner/repo#discussion-9") {
+          return ["owner/repo#discussion-9", "owner", undefined, "9"] as unknown as RegExpExecArray;
+        }
+        if (input === "owner/repo#42") {
+          return ["owner/repo#42", undefined, "repo", "42"] as unknown as RegExpExecArray;
+        }
+        return originalExec.call(this, input);
+      };
+
+      expect(__testing.parseEntityKey("commit", "owner/repo@abcdef1")).toBeNull();
+      expect(__testing.parseEntityKey("discussion", "owner/repo#discussion-9")).toBeNull();
+      expect(__testing.parseEntityKey("issue", "owner/repo#42")).toBeNull();
+    } finally {
+      RegExp.prototype.exec = originalExec;
+    }
+  });
+
   it("builds canonical GitHub URLs", () => {
     expect(__testing.buildHtmlUrl("pull_request", { kind: "numeric", owner: "o", repo: "r", number: 1 })).toBe(
       "https://github.com/o/r/pull/1",
@@ -50,6 +74,9 @@ describe("github entity live helpers", () => {
     expect(__testing.buildHtmlUrl("commit", { kind: "sha", owner: "o", repo: "r", sha: "abcdef1" })).toBe(
       "https://github.com/o/r/commit/abcdef1",
     );
+    expect(
+      __testing.buildHtmlUrl("commit", { kind: "numeric", owner: "o", repo: "r", number: 4 } as never),
+    ).toBe("https://github.com/o/r");
   });
 });
 
@@ -83,6 +110,36 @@ describe("fetchEntityLiveFields", () => {
     );
   });
 
+  it("handles pull request non-ok responses and fallback live fields", async () => {
+    const parsed = { kind: "numeric" as const, owner: "owner", repo: "repo", number: 42 };
+    await expect(
+      __testing.fetchEntityLiveFields(
+        "pull_request",
+        parsed,
+        "token",
+        vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("nope", { status: 404 })),
+      ),
+    ).resolves.toEqual({ title: null, state: null });
+
+    await expect(
+      __testing.fetchEntityLiveFields(
+        "pull_request",
+        parsed,
+        "token",
+        vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ state: "queued" })),
+      ),
+    ).resolves.toEqual({ title: null, state: null });
+
+    await expect(
+      __testing.fetchEntityLiveFields(
+        "pull_request",
+        parsed,
+        "token",
+        vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ state: "closed", title: "" })),
+      ),
+    ).resolves.toEqual({ title: "", state: "closed" });
+  });
+
   it("fetches issue state and commit title", async () => {
     const issueFetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ title: "Bug", state: "closed" }));
     await expect(
@@ -105,6 +162,35 @@ describe("fetchEntityLiveFields", () => {
         commitFetcher,
       ),
     ).resolves.toEqual({ title: "Fix startup", state: null });
+  });
+
+  it("normalizes issue and commit live field fallbacks", async () => {
+    await expect(
+      __testing.fetchEntityLiveFields(
+        "issue",
+        { kind: "numeric", owner: "owner", repo: "repo", number: 9 },
+        "token",
+        vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ state: "triaged" })),
+      ),
+    ).resolves.toEqual({ title: null, state: null });
+
+    await expect(
+      __testing.fetchEntityLiveFields(
+        "commit",
+        { kind: "sha", owner: "owner", repo: "repo", sha: "abcdef1" },
+        "token",
+        vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("nope", { status: 500 })),
+      ),
+    ).resolves.toEqual({ title: null, state: null });
+
+    await expect(
+      __testing.fetchEntityLiveFields(
+        "commit",
+        { kind: "sha", owner: "owner", repo: "repo", sha: "abcdef1" },
+        "token",
+        vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ commit: {} })),
+      ),
+    ).resolves.toEqual({ title: null, state: null });
   });
 
   it("returns empty live fields when fetch fails or entity type has no live endpoint", async () => {
@@ -170,6 +256,13 @@ describe("resolveChatGithubEntity", () => {
       state: null,
       number: 13,
     });
+    expect(__testing.stateFromPersistedEntityState("pull_request", "open")).toBe("open");
+    expect(__testing.stateFromPersistedEntityState("pull_request", "closed")).toBe("closed");
+    expect(__testing.stateFromPersistedEntityState("pull_request", "merged")).toBe("merged");
+    expect(__testing.stateFromPersistedEntityState("pull_request", "unknown")).toBeNull();
+    expect(__testing.stateFromPersistedEntityState("issue", "open")).toBe("open");
+    expect(__testing.stateFromPersistedEntityState("issue", "queued")).toBeNull();
+    expect(__testing.stateFromPersistedEntityState("commit", "open")).toBeNull();
   });
 
   it("materializes wire entities with optional live fields", async () => {
@@ -211,6 +304,37 @@ describe("resolveChatGithubEntity", () => {
       number: null,
     });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps persisted rows when live resolution cannot reparse the original key", async () => {
+    const originalExec = RegExp.prototype.exec;
+    const fetcher = vi.fn<typeof fetch>();
+    let numericExecCount = 0;
+    try {
+      RegExp.prototype.exec = function exec(this: RegExp, input: string): RegExpExecArray | null {
+        if (input === "owner/repo#12") {
+          numericExecCount += 1;
+          if (numericExecCount > 1) {
+            return ["owner/repo#12", undefined, "repo", "12"] as unknown as RegExpExecArray;
+          }
+        }
+        return originalExec.call(this, input);
+      };
+
+      await expect(
+        resolveChatGithubEntity(
+          { entityType: "issue", entityKey: "owner/repo#12", boundVia: "direct", title: "Persisted" },
+          "token",
+          fetcher,
+        ),
+      ).resolves.toMatchObject({
+        title: "Persisted",
+        state: null,
+      });
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      RegExp.prototype.exec = originalExec;
+    }
   });
 
   it("materializes legacy discussion rows as canonical numeric keys", async () => {

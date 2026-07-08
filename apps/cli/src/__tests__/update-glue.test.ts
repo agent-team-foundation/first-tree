@@ -231,6 +231,13 @@ describe("update glue", () => {
     expect(output()).toContain("warning: 'daemon refresh-unit' exited with status 7");
 
     printLineMock.mockClear();
+    spawnSyncMock.mockReturnValueOnce({ status: undefined, signal: undefined });
+    await expect(
+      createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
+    expect(output()).toContain("status unknown (signal=none)");
+
+    printLineMock.mockClear();
     spawnSyncMock.mockImplementationOnce(() => {
       throw new Error("spawn denied");
     });
@@ -238,6 +245,15 @@ describe("update glue", () => {
       createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
     ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
     expect(output()).toContain("warning: could not spawn 'daemon refresh-unit': spawn denied");
+
+    printLineMock.mockClear();
+    spawnSyncMock.mockImplementationOnce(() => {
+      throw "spawn string denied";
+    });
+    await expect(
+      createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
+    expect(output()).toContain("warning: could not spawn 'daemon refresh-unit': spawn string denied");
   });
 
   it("routes managed update output through the injected logger and captures refresh-unit output", async () => {

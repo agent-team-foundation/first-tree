@@ -400,6 +400,130 @@ describe("agent config command behavior", () => {
     );
   });
 
+  it("matches repo resources from payload fallback and preserves unrelated bindings", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 6,
+      bindings: [
+        {
+          id: "prompt-binding",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          inlinePromptBody: "Keep me.",
+          order: 1,
+        },
+        {
+          id: "team-binding",
+          type: "repo",
+          mode: "include",
+          resourceId: "payload-team-repo",
+          order: 4,
+        },
+      ],
+      effective: {
+        version: 6,
+        repos: [
+          {
+            id: "binding:team-binding:enabled",
+            bindingId: "team-binding",
+            resourceId: "payload-team-repo",
+            replacesResourceId: null,
+            type: "repo",
+            name: "web",
+            scope: "team",
+            source: "team_available",
+            mode: "enabled",
+            defaultEnabled: "available",
+            payload: { url: "git@github.com:Acme/Web.git" },
+            repo: null,
+            promptBody: null,
+            unavailableReason: null,
+            order: 4,
+          },
+        ],
+        prompts: [],
+        skills: [],
+        mcp: [],
+        unavailable: [],
+      },
+      availableTeamResources: [],
+    });
+
+    await runConfig(["add-repo", "nova", "https://github.com/acme/web.git"]);
+
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 6,
+        bindings: [
+          {
+            id: "prompt-binding",
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: "Keep me.",
+            order: 1,
+          },
+          {
+            type: "repo",
+            mode: "include",
+            resourceId: "payload-team-repo",
+            repoRef: undefined,
+            repoLocalPath: undefined,
+            order: 4,
+          },
+        ],
+      },
+    );
+  });
+
+  it("adds invalid repo URLs as agent extras without canonical matching", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 7,
+      bindings: [
+        {
+          id: "keep-repo",
+          type: "repo",
+          mode: "include",
+          agentExtraRepo: { url: "not a canonical url either" },
+          order: 1,
+        },
+      ],
+      effective: { version: 7, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+      availableTeamResources: [],
+    });
+
+    await runConfig(["add-repo", "nova", "not a repo url"]);
+
+    expect(fetcherMocks.patchAgentResources).toHaveBeenLastCalledWith(
+      "https://hub.example",
+      "admin-token",
+      "agent-uuid",
+      {
+        expectedVersion: 7,
+        bindings: [
+          {
+            id: "keep-repo",
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: { url: "not a canonical url either" },
+            order: 1,
+          },
+          {
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: { url: "not a repo url" },
+            repoRef: undefined,
+            repoLocalPath: undefined,
+            order: 2,
+          },
+        ],
+      },
+    );
+  });
+
   it("`prompt set` replaces the inline fragment exactly like append-prompt", async () => {
     const promptFile = join(tempDir, "fragment.md");
     writeFileSync(promptFile, "Prefer small diffs.");
@@ -626,6 +750,81 @@ describe("agent config command behavior", () => {
     expect(out).toContain("prompt show <agent> --raw");
     expect(out).toContain("prompt set <agent> -f");
     expect(out).toContain("team prompts are managed in Cloud");
+  });
+
+  it("`prompt show` renders empty effective and fragment states", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 8,
+      bindings: [],
+      effective: {
+        version: 8,
+        repos: [],
+        prompts: [],
+        skills: [],
+        mcp: [],
+        unavailable: [],
+      },
+      availableTeamResources: [],
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runConfig(["prompt", "show", "nova"]);
+    const out = stdout.mock.calls.map((call) => String(call[0])).join("");
+    stdout.mockRestore();
+
+    expect(out).toContain("  (none)");
+    expect(out).toContain("Per-agent fragment: (empty)");
+  });
+
+  it("`prompt show` describes empty and disabled prompt rows", async () => {
+    fetcherMocks.getAgentResources.mockResolvedValueOnce({
+      version: 9,
+      bindings: [],
+      effective: {
+        version: 9,
+        repos: [],
+        prompts: [
+          {
+            id: "team-disabled",
+            bindingId: null,
+            resourceId: "team-disabled",
+            replacesResourceId: null,
+            type: "prompt",
+            name: "Dormant guide",
+            scope: "team",
+            source: "team_available",
+            mode: "disabled",
+            defaultEnabled: "available",
+            payload: { body: "" },
+            repo: null,
+            promptBody: "",
+            unavailableReason: null,
+            order: 1,
+          },
+        ],
+        skills: [],
+        mcp: [],
+        unavailable: [],
+      },
+      availableTeamResources: [],
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runConfig(["prompt", "show", "nova"]);
+    const out = stdout.mock.calls.map((call) => String(call[0])).join("");
+    stdout.mockRestore();
+
+    expect(out).toContain("[team] Dormant guide (disabled)");
+  });
+
+  it("`prompt set` fails when no file is provided and stdin is interactive", async () => {
+    const stdinSpy = vi.spyOn(process, "stdin", "get").mockReturnValue({ isTTY: true } as typeof process.stdin);
+    try {
+      await expect(runConfig(["prompt", "set", "nova"])).rejects.toMatchObject({
+        code: "MISSING_INPUT",
+        exitCode: 2,
+      });
+    } finally {
+      stdinSpy.mockRestore();
+    }
   });
 
   it("shows config and prints dry-run diffs", async () => {

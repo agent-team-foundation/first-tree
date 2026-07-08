@@ -191,6 +191,62 @@ describe("migrateLocalAgentDirs extra failure branches", () => {
     );
   });
 
+  it("stringifies non-Error runtime-layout migration failures", async () => {
+    const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
+    clientMocks.migrateLegacyRuntimeLayout.mockImplementationOnce(() => {
+      throw "runtime layout string failure";
+    });
+    writeAgentYaml("old", "agent-1");
+    writeWorkspace("old");
+
+    const result = await migrateLocalAgentDirs({
+      ...dirs(),
+      resolver: { resolveName: vi.fn(async () => "old") },
+    });
+
+    expect(result).toMatchObject({ scanned: 1, renamed: 0, errors: 1 });
+    expect(printMock.status).toHaveBeenCalledWith(
+      "⚠️",
+      expect.stringContaining('runtime-dir migration failed for "old": runtime layout string failure'),
+    );
+  });
+
+  it("adds resolver failure hints for 403 responses and stringifies non-Error failures", async () => {
+    const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
+    writeAgentYaml("forbidden", "agent-forbidden");
+    const forbidden = await migrateLocalAgentDirs({
+      ...dirs(),
+      resolver: {
+        async resolveName() {
+          throw new Error("/me/managed-agents returned HTTP 403");
+        },
+      },
+    });
+    expect(forbidden).toMatchObject({ scanned: 1, errors: 1 });
+    expect(printMock.status).toHaveBeenLastCalledWith(
+      "⚠️",
+      expect.stringContaining("likely a non-admin account"),
+    );
+
+    vi.clearAllMocks();
+    rmSync(root, { recursive: true, force: true });
+    root = makeTempDir("ft-migrate-extra-");
+    writeAgentYaml("string-failure", "agent-string");
+    const stringFailure = await migrateLocalAgentDirs({
+      ...dirs(),
+      resolver: {
+        async resolveName() {
+          throw "resolver string failure";
+        },
+      },
+    });
+    expect(stringFailure).toMatchObject({ scanned: 1, errors: 1 });
+    expect(printMock.status).toHaveBeenLastCalledWith(
+      "⚠️",
+      expect.stringContaining('failed to resolve "string-failure" (agent-string): resolver string failure'),
+    );
+  });
+
   it("continues when workspace and session renames fail", async () => {
     const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
     writeAgentYaml("old", "agent-1");

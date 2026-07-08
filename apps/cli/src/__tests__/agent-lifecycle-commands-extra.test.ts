@@ -329,6 +329,45 @@ describe("agent lifecycle CLI commands", () => {
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No agents found");
   });
 
+  it("stringifies non-Error failures across agent command catch paths", async () => {
+    process.exit = vi.fn(((code?: number) => {
+      throw Object.assign(new Error("process.exit"), { code });
+    }) as never);
+
+    coreMocks.promptAddAgent.mockRejectedValueOnce("prompt string failure");
+    await expect(runAgent(["add"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("prompt string failure");
+
+    bootstrapMocks.ensureFreshAccessToken.mockRejectedValueOnce("create token string");
+    await expect(runAgent(["create", "nova", "--type", "agent", "--client-id", "client-1"])).rejects.toMatchObject({
+      code: "CREATE_ERROR",
+      exitCode: 1,
+    });
+    expect(outputMocks.fail).toHaveBeenLastCalledWith("CREATE_ERROR", "create token string");
+
+    bootstrapMocks.ensureFreshAccessToken.mockRejectedValueOnce("list token string");
+    await expect(runAgent(["list", "--remote"])).rejects.toMatchObject({ code: "LIST_ERROR", exitCode: 1 });
+    expect(outputMocks.fail).toHaveBeenLastCalledWith("LIST_ERROR", "list token string");
+
+    bootstrapMocks.ensureFreshAccessToken.mockRejectedValueOnce("reset token string");
+    await expect(runAgent(["reset", "nova"])).rejects.toMatchObject({ code: "RESET_ERROR", exitCode: 1 });
+    expect(outputMocks.fail).toHaveBeenLastCalledWith("RESET_ERROR", "reset token string");
+
+    bootstrapMocks.ensureFreshAccessToken.mockRejectedValueOnce("session list token string");
+    await expect(runAgent(["session", "list", "nova"])).rejects.toMatchObject({
+      code: "SESSIONS_ERROR",
+      exitCode: 1,
+    });
+    expect(outputMocks.fail).toHaveBeenLastCalledWith("SESSIONS_ERROR", "session list token string");
+
+    bootstrapMocks.ensureFreshAccessToken.mockRejectedValueOnce("session command token string");
+    await expect(runAgent(["session", "suspend", "nova", "chat-1"])).rejects.toMatchObject({
+      code: "SESSION_CMD_ERROR",
+      exitCode: 1,
+    });
+    expect(outputMocks.fail).toHaveBeenLastCalledWith("SESSION_CMD_ERROR", "session command token string");
+  });
+
   it("prunes stale aliases with dry-run, confirmation skip, removal failures, and missing client id", async () => {
     await runAgent(["prune", "--dry-run"]);
     expect(coreMocks.removeLocalAgent).not.toHaveBeenCalled();
@@ -572,6 +611,124 @@ describe("logout and upgrade commands", () => {
     expect(output).toContain("could not read command for pid 1111");
     expect(output).toContain("Warning: could not stop foreground daemon pid 2222: still running");
     expect(existsSync(credentials)).toBe(false);
+  });
+
+  it("logout skips owner recording when the token is missing or lacks a string subject", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.loadCredentials.mockReturnValueOnce({
+      accessToken: "",
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+
+    const { runLogout } = await import("../commands/logout.js");
+    await runLogout({ purge: false });
+
+    expect(coreMocks.recordActiveClientOwner).not.toHaveBeenCalled();
+
+    writeFileSync(credentials, "{}");
+    coreMocks.loadCredentials.mockReturnValueOnce({
+      accessToken: jwt({ sub: 42 }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+
+    await runLogout({ purge: false });
+
+    expect(coreMocks.recordActiveClientOwner).not.toHaveBeenCalled();
+    expect(existsSync(credentials)).toBe(false);
+  });
+
+  it("logout handles non-Error foreground inspection failures and already-stopped runtime markers", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.listLiveClientRuntimeMarkers.mockImplementationOnce(() => {
+      throw "marker string failure";
+    });
+
+    const { runLogout } = await import("../commands/logout.js");
+    await runLogout({ purge: false });
+
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("marker string failure");
+
+    printLineMock.mockClear();
+    writeFileSync(credentials, "{}");
+    coreMocks.listLiveClientRuntimeMarkers.mockReturnValueOnce([
+      {
+        pid: 3333,
+        clientId: "client-1",
+        mode: "foreground",
+        command: "/usr/local/bin/first-tree-dev daemon start --foreground",
+      },
+    ]);
+    coreMocks.stopClientRuntimeProcess.mockResolvedValueOnce({ ok: true, alreadyStopped: true });
+
+    await runLogout({ purge: false });
+
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Stopped foreground daemon pid 3333 (already stopped)",
+    );
+  });
+
+  it("logout purge reports default retry guidance, service warnings, and empty retire bodies", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active", platform: "launchd" });
+    coreMocks.stopClientService.mockReturnValueOnce({ ok: false, reason: "best effort failed" });
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+
+    const { runLogout } = await import("../commands/logout.js");
+    await runLogout({ purge: false });
+
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Stopped launchd service (warning: best effort failed)",
+    );
+
+    printLineMock.mockClear();
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "unknown", platform: "launchd" });
+    await expect(runLogout({ purge: true, retireServerClient: true })).rejects.toMatchObject({
+      code: "PURGE_DAEMON_STATE_UNKNOWN",
+      exitCode: 1,
+    });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("first-tree-dev logout --purge");
+
+    printLineMock.mockClear();
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    cliFetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: vi.fn(async () => ""),
+    } as unknown as Response);
+    await expect(runLogout({ purge: true, retireServerClient: true })).rejects.toMatchObject({
+      code: "PURGE_CLIENT_RETIRE_FAILED",
+      exitCode: 1,
+    });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "server-side client retire failed (HTTP 500)",
+    );
   });
 
   it("computer reset uses the same guarded local-state removal without server retire", async () => {

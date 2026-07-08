@@ -29,14 +29,14 @@ async function postWebhook(
   app: App,
   eventType: string,
   payload: object,
-  opts: { secret?: string; deliveryId?: string; skipSignature?: boolean } = {},
+  opts: { secret?: string; deliveryId?: string; skipDelivery?: boolean; skipSignature?: boolean } = {},
 ) {
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "x-github-event": eventType,
-    "x-github-delivery": opts.deliveryId ?? randomUUID(),
   };
+  if (!opts.skipDelivery) headers["x-github-delivery"] = opts.deliveryId ?? randomUUID();
   if (!opts.skipSignature) {
     headers["x-hub-signature-256"] = signBody(opts.secret ?? APP_WEBHOOK_SECRET, body);
   }
@@ -52,12 +52,12 @@ async function postRawWebhook(
   app: App,
   eventType: string | null,
   body: string,
-  opts: { secret?: string; deliveryId?: string; skipSignature?: boolean } = {},
+  opts: { secret?: string; deliveryId?: string; skipDelivery?: boolean; skipSignature?: boolean } = {},
 ) {
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    "x-github-delivery": opts.deliveryId ?? randomUUID(),
   };
+  if (!opts.skipDelivery) headers["x-github-delivery"] = opts.deliveryId ?? randomUUID();
   if (eventType !== null) headers["x-github-event"] = eventType;
   if (!opts.skipSignature) {
     headers["x-hub-signature-256"] = signBody(opts.secret ?? APP_WEBHOOK_SECRET, body);
@@ -234,6 +234,23 @@ describe("POST /webhooks/github-app", () => {
     expect(missingEvent.json<{ error: string }>().error).toBe("Missing x-github-event header");
   });
 
+  it("rejects non-buffer webhook bodies before signature parsing", async () => {
+    const app = getApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/webhooks/github-app",
+      headers: {
+        "content-type": "text/plain",
+        "x-github-event": "ping",
+        "x-hub-signature-256": "sha256=ignored",
+      },
+      payload: "plain text",
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toBe("Expected raw body buffer");
+  });
+
   it("installation.created → records the row unbound with the installer (direct install: no requester)", async () => {
     const app = getApp();
     const installationId = 100001;
@@ -297,6 +314,64 @@ describe("POST /webhooks/github-app", () => {
     });
     expect(unknown.statusCode).toBe(200);
     expect(unknown.json().lifecycle).toBe("ignored:unknown-action");
+  });
+
+  it("installation lifecycle rejects malformed metadata defensively", async () => {
+    const app = getApp();
+
+    const notObject = await postRawWebhook(app, "installation", "null");
+    expect(notObject.statusCode).toBe(200);
+    expect(notObject.json().lifecycle).toBe("ignored:malformed");
+
+    const repos = await postWebhook(app, "installation_repositories", {
+      action: "added",
+      installation: { id: 100099 },
+    });
+    expect(repos.statusCode).toBe(200);
+    expect(repos.json().lifecycle).toBe("noop");
+
+    const missingInstallation = await postWebhook(app, "installation", { action: "created" });
+    expect(missingInstallation.statusCode).toBe(200);
+    expect(missingInstallation.json().lifecycle).toBe("ignored:malformed");
+
+    const invalidMetadataCases = [
+      { id: Number.NaN, account: { id: 1, login: "x", type: "Organization" } },
+      { id: 100101 },
+      { id: 100102, account: { id: "1", login: "x", type: "Organization" } },
+      { id: 100103, account: { id: 1, login: "x", type: "Bot" } },
+    ];
+    for (const installation of invalidMetadataCases) {
+      const res = await postWebhook(app, "installation", { action: "created", installation });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().lifecycle).toBe("ignored:malformed");
+    }
+
+    const invalidPermissions = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: 100104,
+        account: { id: 1, login: "fallback-permissions", type: "Organization" },
+        permissions: { contents: 123 },
+        events: ["pull_request", 42, "issues"],
+        suspended_at: "2026-05-13T00:00:00Z",
+      },
+      sender: { id: "not-a-number" },
+      requester: null,
+    });
+    expect(invalidPermissions.statusCode).toBe(200);
+    expect(invalidPermissions.json().lifecycle).toBe("created:recorded");
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, 100104))
+      .limit(1);
+    expect(row).toMatchObject({
+      permissions: {},
+      events: ["pull_request", "issues"],
+      installerGithubId: null,
+      requesterGithubId: null,
+    });
+    expect(row?.suspendedAt).toBeTruthy();
   });
 
   it("installation.created via the approval flow records BOTH the requester and the approving installer", async () => {
@@ -532,6 +607,104 @@ describe("POST /webhooks/github-app", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, event: "star", handled: false });
+  });
+
+  it("handles repository events without a delivery header", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100018;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const res = await postWebhook(
+      app,
+      "star",
+      {
+        action: "created",
+        repository: { full_name: "owner/repo" },
+        sender: { login: "stargazer", type: "User" },
+        installation: { id: installationId },
+      },
+      { skipDelivery: true },
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, event: "star", handled: false });
+  });
+
+  it("derives PR state seeds from issue comment payload fallbacks", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100019;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const closedMerged = await postWebhook(app, "issue_comment", {
+      action: "edited",
+      issue: {
+        number: 77,
+        title: "PR issue comment",
+        html_url: "https://github.com/owner/repo/issues/77",
+        state: "closed",
+        pull_request: { html_url: "https://github.com/owner/repo/pull/77", merged_at: "2026-01-01T00:00:00Z" },
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "commenter", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(closedMerged.statusCode).toBe(200);
+    expect(closedMerged.json()).toMatchObject({ handled: false });
+
+    const draftOpen = await postWebhook(app, "issue_comment", {
+      action: "edited",
+      issue: {
+        number: 78,
+        title: "Draft PR issue comment",
+        html_url: "https://github.com/owner/repo/issues/78",
+        draft: true,
+        pull_request: { html_url: "https://github.com/owner/repo/pull/78" },
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "commenter", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(draftOpen.statusCode).toBe(200);
+    expect(draftOpen.json()).toMatchObject({ handled: false });
+  });
+
+  it("tolerates malformed entity state seed payloads", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100022;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const malformedReviewComment = await postWebhook(app, "pull_request_review_comment", {
+      action: "dismissed",
+      pull_request: null,
+      repository: { full_name: "owner/repo" },
+      sender: { login: "reviewer", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(malformedReviewComment.statusCode).toBe(200);
+    expect(malformedReviewComment.json()).toMatchObject({ handled: false });
+
+    const malformedClosedPr = await postWebhook(app, "pull_request", {
+      action: "closed",
+      pull_request: null,
+      repository: { full_name: "owner/repo" },
+      sender: { login: "closer", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(malformedClosedPr.statusCode).toBe(200);
+    expect(malformedClosedPr.json()).toMatchObject({ handled: false });
+
+    const malformedIssue = await postWebhook(app, "issues", {
+      action: "closed",
+      issue: null,
+      repository: { full_name: "owner/repo" },
+      sender: { login: "closer", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(malformedIssue.statusCode).toBe(200);
+    expect(malformedIssue.json()).toMatchObject({ handled: false });
   });
 
   it("continues delivery when entity state sync fails", async () => {

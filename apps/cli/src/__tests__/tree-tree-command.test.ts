@@ -219,6 +219,15 @@ describe("tree tree renderer", () => {
     );
   });
 
+  it("rejects a target that resolves outside the repository through a symlink", () => {
+    const root = makeTreeFixture();
+    const outside = makeTempDir("ft-tree-outside-");
+    mkdirSync(join(outside, "escape"), { recursive: true });
+    symlinkSync(join(outside, "escape"), join(root, "linked-outside"), "dir");
+
+    expect(() => readContextTreeSnapshot(root, { target: "linked-outside" })).toThrow("outside the git repository");
+  });
+
   it("matches patterns against relative path, filename, title, and description while preserving ancestors", () => {
     const root = makeTreeFixture();
 
@@ -269,6 +278,19 @@ describe("tree tree renderer", () => {
     expect(output).not.toContain("build/");
     expect(output).not.toContain(".next");
     expect(output).not.toContain(".turbo");
+  });
+
+  it("treats blank optional metadata as absent", () => {
+    const root = makeTreeFixture();
+    const blank = join(root, "blank-description");
+    mkdirSync(blank, { recursive: true });
+    writeFileSync(
+      join(blank, "NODE.md"),
+      `${frontmatter("title: Blank Description\nowners: [alice]\ndescription: '   '\n")}# Blank\n`,
+    );
+
+    expect(renderContextTree(root)).toContain("blank-description/ [Blank Description]\n");
+    expect(renderContextTree(root)).not.toContain("Blank Description] ->");
   });
 
   it("rejects roots and targets that are not valid Context Tree directories", () => {
@@ -737,6 +759,32 @@ describe("tree tree command action", () => {
       error: {
         code: "TREE_TREE_FAILED",
         message: "No valid Context Tree root node found at NODE.md.",
+      },
+    });
+  });
+
+  it("stringifies non-Error command failures", () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    const command = {
+      opts: () => {
+        throw "option parser failed";
+      },
+      args: [],
+    } as unknown as Command;
+
+    expect(() => runTreeTreeCommand(context(command))).toThrow(ProcessExit);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
+      ok: false,
+      error: {
+        code: "TREE_TREE_FAILED",
+        message: "option parser failed",
       },
     });
   });

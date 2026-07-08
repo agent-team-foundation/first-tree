@@ -11,6 +11,7 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
@@ -1513,6 +1514,267 @@ describe("Resources Phase 1", () => {
     );
   });
 
+  it("covers agent resource projection fallbacks for legacy malformed rows", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    const malformedRepoId = uuidv7();
+    const malformedPromptId = uuidv7();
+    const retiredRepoId = uuidv7();
+    const retiredPromptId = uuidv7();
+    await app.db.insert(resources).values([
+      {
+        id: malformedRepoId,
+        organizationId: owner.organizationId,
+        type: "repo",
+        scope: "team",
+        ownerAgentId: null,
+        name: "Malformed repo",
+        repoCanonicalKey: null,
+        defaultEnabled: "recommended",
+        status: "active",
+        payload: { defaultBranch: "main" } as (typeof resources.$inferInsert)["payload"],
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+      {
+        id: malformedPromptId,
+        organizationId: owner.organizationId,
+        type: "prompt",
+        scope: "team",
+        ownerAgentId: null,
+        name: "Malformed prompt",
+        repoCanonicalKey: null,
+        defaultEnabled: "recommended",
+        status: "active",
+        payload: { text: "missing body" } as unknown as (typeof resources.$inferInsert)["payload"],
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+      {
+        id: retiredRepoId,
+        organizationId: owner.organizationId,
+        type: "repo",
+        scope: "team",
+        ownerAgentId: null,
+        name: "Retired repo",
+        repoCanonicalKey: canonicalizeResourceRepoUrl("https://github.com/acme/retired-fallback.git"),
+        defaultEnabled: "available",
+        status: "retired",
+        payload: { url: "https://github.com/acme/retired-fallback.git" },
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+      {
+        id: retiredPromptId,
+        organizationId: owner.organizationId,
+        type: "prompt",
+        scope: "team",
+        ownerAgentId: null,
+        name: "Retired prompt",
+        repoCanonicalKey: null,
+        defaultEnabled: "available",
+        status: "retired",
+        payload: { body: "Retired prompt" },
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+    ]);
+    await app.db.insert(agentResourceBindings).values([
+      {
+        id: uuidv7(),
+        organizationId: owner.organizationId,
+        agentId: agent.uuid,
+        type: "repo",
+        mode: "disable",
+        resourceId: retiredRepoId,
+        replacesResourceId: null,
+        inlinePromptBody: null,
+        repoRef: null,
+        repoLocalPath: null,
+        order: 1,
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+      {
+        id: uuidv7(),
+        organizationId: owner.organizationId,
+        agentId: agent.uuid,
+        type: "prompt",
+        mode: "include",
+        resourceId: retiredPromptId,
+        replacesResourceId: null,
+        inlinePromptBody: null,
+        repoRef: null,
+        repoLocalPath: null,
+        order: 2,
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+    ]);
+
+    const effective = await app.resourcesService.resolveEffectiveResources(agent.uuid);
+
+    expect(effective.repos).toContainEqual(
+      expect.objectContaining({
+        resourceId: malformedRepoId,
+        mode: "enabled",
+        repo: null,
+      }),
+    );
+    expect(effective.prompts).toContainEqual(
+      expect.objectContaining({
+        resourceId: malformedPromptId,
+        mode: "enabled",
+        promptBody: null,
+      }),
+    );
+  });
+
+  it("reuses agent extra repos and preserves explicit resource names", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    const first = await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: 1,
+        bindings: [
+          {
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: {
+              name: "Named extra repo",
+              url: "https://github.com/acme/named-extra.git",
+              defaultBranch: "main",
+            },
+          },
+        ],
+      },
+      owner.memberId,
+    );
+    const second = await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: first.version,
+        bindings: [
+          {
+            type: "repo",
+            mode: "include",
+            agentExtraRepo: {
+              name: "Ignored second name",
+              url: "git@github.com:Acme/Named-Extra.git",
+              defaultBranch: "main",
+            },
+          },
+        ],
+      },
+      owner.memberId,
+    );
+
+    expect(second.effective.repos).toHaveLength(1);
+    expect(second.effective.repos[0]).toMatchObject({ name: "Named extra repo", source: "agent_extra" });
+    const agentRepos = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.scope, "agent"), eq(resources.type, "repo")));
+    expect(agentRepos).toHaveLength(1);
+    expect(agentRepos[0]).toMatchObject({ name: "Named extra repo" });
+  });
+
+  it("rejects duplicate input local paths", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+    await expect(
+      app.resourcesService.replaceAgentResources(
+        agent.uuid,
+        {
+          expectedVersion: current.version,
+          bindings: [
+            {
+              type: "repo",
+              mode: "include",
+              agentExtraRepo: { url: "https://github.com/acme/a.git" },
+              repoLocalPath: "same",
+            },
+            {
+              type: "repo",
+              mode: "include",
+              agentExtraRepo: { url: "https://github.com/acme/b.git" },
+              repoLocalPath: "same",
+            },
+          ],
+        },
+        owner.memberId,
+      ),
+    ).rejects.toThrow('Duplicate repo localPath "same"');
+  });
+
+  it("covers resource service not-found and update default branches", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    await expect(app.resourcesService.getResource(crypto.randomUUID())).rejects.toMatchObject({ statusCode: 404 });
+    await expect(app.resourcesService.getAgentResources(crypto.randomUUID())).rejects.toMatchObject({ statusCode: 404 });
+
+    await app.db.delete(agentConfigs).where(eq(agentConfigs.agentId, agent.uuid));
+    await expect(app.resourcesService.resolveEffectiveResources(agent.uuid)).rejects.toMatchObject({ statusCode: 404 });
+
+    const prompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Patch without payload",
+        defaultEnabled: "available",
+        payload: { body: "Original" },
+      },
+      owner.memberId,
+    );
+    const updated = await app.resourcesService.updateResource(prompt.id, { name: "Renamed only" }, owner.memberId);
+    expect(updated).toMatchObject({ name: "Renamed only", payload: { body: "Original" } });
+  });
+
+  it("marks oversized inline prompts unavailable with binding id fallback", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: 1,
+        bindings: [
+          {
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            inlinePromptBody: "x".repeat(PROMPT_APPEND_MAX_LENGTH + 1),
+          },
+        ],
+      },
+      owner.memberId,
+    );
+
+    const [binding] = await app.db
+      .select({ id: agentResourceBindings.id })
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, agent.uuid))
+      .limit(1);
+    const effective = await app.resourcesService.resolveEffectiveResources(agent.uuid);
+
+    expect(effective.unavailable).toContainEqual({
+      type: "prompt",
+      id: binding?.id,
+      reason: "prompt_budget_exceeded",
+    });
+  });
+
   it("refreshes landing campaign trial prompt content and removes stale inline guardrails", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");
@@ -1566,6 +1828,236 @@ describe("Resources Phase 1", () => {
     expect(staleInlineRows).toHaveLength(0);
     const after = await app.configService.get(agent.uuid);
     expect(after.version).toBe(before.version + 1);
+  });
+
+  it("covers resource impact and projection edge fallbacks", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const other = await createOrgUser(app, "admin");
+    const otherAgent = await createRuntimeAgent(app, other);
+
+    const orphanAgentResourceId = uuidv7();
+    await app.db.insert(resources).values({
+      id: orphanAgentResourceId,
+      organizationId: owner.organizationId,
+      type: "prompt",
+      scope: "agent",
+      ownerAgentId: null,
+      name: "Orphan agent prompt",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { body: "orphan" },
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await expect(app.resourcesService.getUsage(orphanAgentResourceId)).resolves.toEqual({
+      resourceId: orphanAgentResourceId,
+      agentCount: 0,
+      agents: [],
+    });
+
+    const repo = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "repo",
+        name: "Unsafe local path repo",
+        defaultEnabled: "available",
+        payload: { url: "https://github.com/acme/unsafe-local.git", defaultBranch: "main" },
+      },
+      owner.memberId,
+    );
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: 1,
+        bindings: [{ type: "repo", mode: "include", resourceId: repo.id, repoLocalPath: "safe-local" }],
+      },
+      owner.memberId,
+    );
+    await app.db
+      .update(agentResourceBindings)
+      .set({ repoLocalPath: ".." })
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.resourceId, repo.id)));
+    const resolved = await app.resourcesService.resolveRuntimeConfig(await app.configService.get(agent.uuid));
+    expect(resolved.payload.gitRepos).toEqual([{ url: "https://github.com/acme/unsafe-local.git", ref: "main" }]);
+
+    const [storedRepo] = await app.db.select().from(resources).where(eq(resources.id, repo.id)).limit(1);
+    expect(storedRepo).toBeDefined();
+    if (!storedRepo) throw new Error("Expected stored repo fixture");
+    type ResolveWithSimulation = (
+      agentId: string,
+      simulation: { resources: (typeof resources.$inferSelect)[] },
+    ) => ReturnType<typeof app.resourcesService.resolveEffectiveResources>;
+    const resolveWithSimulation = app.resourcesService.resolveEffectiveResources as ResolveWithSimulation;
+    const simulated = await resolveWithSimulation(agent.uuid, {
+      resources: [
+        { ...storedRepo, id: uuidv7(), organizationId: other.organizationId },
+        { ...storedRepo, id: uuidv7(), status: "retired" },
+        { ...storedRepo, id: uuidv7(), scope: "agent", ownerAgentId: otherAgent.uuid },
+        { ...storedRepo, id: uuidv7(), scope: "agent", ownerAgentId: agent.uuid, defaultEnabled: null },
+      ],
+    });
+    expect(simulated.repos.some((row) => row.resourceId === repo.id)).toBe(true);
+
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: owner.organizationId,
+      agentId: agent.uuid,
+      type: "repo",
+      mode: "disable",
+      resourceId: null,
+      replacesResourceId: null,
+      inlinePromptBody: null,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 99,
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await expect(app.resourcesService.resolveEffectiveResources(agent.uuid)).resolves.toMatchObject({
+      version: expect.any(Number),
+    });
+  });
+
+  it("covers disabled skill and mcp validation skips plus preview fallback inputs", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const skill = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "skill",
+        name: "Disable skill",
+        defaultEnabled: "recommended",
+        payload: { name: "disable-skill", description: "Disabled", body: "Disabled", metadata: {} },
+      },
+      owner.memberId,
+    );
+    const mcp = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "mcp",
+        name: "Disable MCP",
+        defaultEnabled: "recommended",
+        payload: { name: "disable-mcp", transport: "stdio", command: "disable-mcp" },
+      },
+      owner.memberId,
+    );
+    const prompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Preview fallback prompt",
+        defaultEnabled: "available",
+        payload: { body: "Preview fallback." },
+      },
+      owner.memberId,
+    );
+
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+    const updated = await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      {
+        expectedVersion: current.version,
+        bindings: [
+          { type: "skill", mode: "disable", resourceId: skill.id },
+          { type: "mcp", mode: "disable", resourceId: mcp.id },
+        ],
+      },
+      owner.memberId,
+    );
+    expect(updated.effective.skills).toContainEqual(
+      expect.objectContaining({ resourceId: skill.id, mode: "disabled" }),
+    );
+    expect(updated.effective.mcp).toContainEqual(expect.objectContaining({ resourceId: mcp.id, mode: "disabled" }));
+
+    const preview = await app.resourcesService.previewResourceImpact(prompt.id, {});
+    expect(preview).toMatchObject({ affectedAgentCount: 0, promptOverflowAgentCount: 0, agents: [] });
+
+    const stale = await app.resourcesService.updateResource(prompt.id, { status: "stale" }, owner.memberId);
+    expect(stale.status).toBe("stale");
+  });
+
+  it("covers missing config and trial resource authorization branches", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const intruder = await createOrgUser(app, "member");
+
+    await app.db.delete(agentConfigs).where(eq(agentConfigs.agentId, agent.uuid));
+    await expect(
+      app.resourcesService.replaceAgentResources(agent.uuid, { expectedVersion: 1, bindings: [] }, owner.memberId),
+    ).rejects.toThrow(/got missing/);
+
+    const blockedAgent = await createRuntimeAgent(app, owner);
+    await expect(
+      app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(blockedAgent.uuid, intruder.memberId),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(
+      app.resourcesService.unbindLegacyCampaignScanSkill(blockedAgent.uuid, "production-scan", intruder.memberId),
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    await app.db.update(agents).set({ status: "deleted" }).where(eq(agents.uuid, blockedAgent.uuid));
+    await expect(
+      app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(blockedAgent.uuid, owner.memberId),
+    ).resolves.toBeUndefined();
+    await expect(
+      app.resourcesService.unbindLegacyCampaignScanSkill(blockedAgent.uuid, "production-scan", owner.memberId),
+    ).resolves.toBeUndefined();
+  });
+
+  it("unbinds legacy campaign scan skills and leaves missing legacy rows unchanged", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    await app.resourcesService.unbindLegacyCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+
+    const skillId = uuidv7();
+    await app.db.insert(resources).values({
+      id: skillId,
+      organizationId: owner.organizationId,
+      type: "skill",
+      scope: "agent",
+      ownerAgentId: agent.uuid,
+      name: "production-scan",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { name: "production-scan", description: "legacy", body: "legacy", metadata: {} },
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: owner.organizationId,
+      agentId: agent.uuid,
+      type: "skill",
+      mode: "include",
+      resourceId: skillId,
+      replacesResourceId: null,
+      inlinePromptBody: null,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 1,
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    const before = await app.configService.get(agent.uuid);
+
+    await app.resourcesService.unbindLegacyCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+
+    const [after] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid))
+      .limit(1);
+    expect(after?.version).toBe(before.version + 1);
+    await expect(app.db.select().from(resources).where(eq(resources.id, skillId))).resolves.toHaveLength(0);
+    await expect(
+      app.db.select().from(agentResourceBindings).where(eq(agentResourceBindings.resourceId, skillId)),
+    ).resolves.toHaveLength(0);
   });
 });
 

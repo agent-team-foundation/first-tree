@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ContextTreeChange, ContextTreeNode } from "@first-tree/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   contextTreeSnapshotTestInternals,
   getContextTreeSnapshot,
@@ -195,6 +195,72 @@ Body`);
     ]);
   });
 
+  it("uses tree-building fallbacks when NODE metadata is absent or empty", () => {
+    const tree = contextTreeSnapshotTestInternals.buildTreeFromRawFiles([
+      {
+        relativePath: "domain/empty.md",
+        raw: "---\ntitle: \"\"\nowners: owner\nsoft_links: [\"/domain/\"]\n---\n# Heading only\n[missing](missing.md)",
+      },
+      {
+        relativePath: "domain/target.md",
+        raw: "---\ntitle: Target\n---\nTarget body",
+      },
+    ]);
+
+    expect(tree.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "root",
+          title: "Context Tree",
+          preview: null,
+          owners: [],
+          affectedContextArea: "root",
+        }),
+        expect.objectContaining({
+          id: "dir:domain",
+          sourcePath: null,
+          title: "Domain",
+          parentId: "root",
+          preview: null,
+        }),
+        expect.objectContaining({
+          id: "file:domain/empty.md",
+          title: "Empty",
+          owners: [],
+          preview: "[missing](missing.md)",
+          relatedNodeIds: ["dir:domain"],
+        }),
+      ]),
+    );
+    expect(tree.edges).toContainEqual({ source: "file:domain/empty.md", target: "dir:domain", kind: "soft_link" });
+  });
+
+  it("handles empty tree paths and anchor-only soft links without resolving them", () => {
+    const tree = contextTreeSnapshotTestInternals.buildTreeFromRawFiles([
+      {
+        relativePath: "",
+        raw: "---\nowners: []\nsoft_links: [\"#local\"]\n---\nEmpty path body",
+      },
+      {
+        relativePath: "target.md",
+        raw: "---\ntitle: Target\n---\nTarget body",
+      },
+    ]);
+
+    expect(tree.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "file:",
+          path: "",
+          title: "Context Tree",
+          affectedContextArea: "root",
+          relatedNodeIds: [],
+        }),
+      ]),
+    );
+    expect(tree.edges.some((edge) => edge.kind === "soft_link" && edge.source === "file:")).toBe(false);
+  });
+
   it("mounts removed ghost nodes at root when their parent no longer exists", () => {
     const nodes: ContextTreeNode[] = [
       {
@@ -233,6 +299,47 @@ Body`);
         parentId: "root",
         changeType: "removed",
         changedAtCommit: "1111111111111111111111111111111111111111",
+      }),
+    );
+  });
+
+  it("mounts root-level removed ghost nodes directly under root", () => {
+    const nodes: ContextTreeNode[] = [
+      {
+        id: "root",
+        path: "",
+        sourcePath: "NODE.md",
+        title: "Context Tree",
+        kind: "root",
+        owners: [],
+        parentId: null,
+        preview: null,
+        relatedNodeIds: [],
+        affectedContextArea: "root",
+        changeType: null,
+        changedAtCommit: null,
+      },
+    ];
+    const changes: ContextTreeChange[] = [
+      {
+        path: "old.md",
+        nodeId: "removed:old.md",
+        type: "removed",
+        commit: "2222222222222222222222222222222222222222",
+        changedAt: null,
+        changedBy: null,
+        summary: null,
+        prNumber: null,
+      },
+    ];
+
+    const withGhosts = contextTreeSnapshotTestInternals.addRemovedGhostNodes(nodes, changes);
+
+    expect(withGhosts).toContainEqual(
+      expect.objectContaining({
+        id: "removed:old.md",
+        parentId: "root",
+        affectedContextArea: "old",
       }),
     );
   });
@@ -276,6 +383,24 @@ Body`);
       reason: `Context Tree checkout not found at ${missingRepoPath}.`,
       staleReason: null,
     });
+  });
+
+  it("rejects each unsafe remote branch shape and defaults remote branches to main", async () => {
+    for (const branch of ["bad..name", "bad@{name", "bad\\name"]) {
+      await expect(
+        contextTreeSnapshotTestInternals.resolveContextTreeRoot("https://github.com/example/tree", null, branch),
+      ).resolves.toEqual({
+        root: null,
+        reason: `Configured Context Tree branch "${branch}" is invalid.`,
+        staleReason: null,
+      });
+    }
+
+    const missingRemote = `file://${join(testDir, "missing-remote")}`;
+    const resolved = await contextTreeSnapshotTestInternals.resolveContextTreeRoot(missingRemote, null, null);
+
+    expect(resolved.root).toBeNull();
+    expect(resolved.reason).toContain('branch "main"');
   });
 
   it("classifies GitHub remote bindings without treating local bindings as remote", () => {
@@ -368,6 +493,25 @@ Body`);
     expect(diff.entries[0]?.changedAt).not.toBeNull();
   });
 
+  it("truncates long commit subjects in diff metadata", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Tree\n---\nRoot\n");
+    const baseCommit = await commitAll("docs: add root node");
+    await writeFile(join(testDir, "long.md"), "---\ntitle: Long\n---\nLong\n");
+    const subject = `docs: ${"long summary ".repeat(20)}`;
+    const headCommit = await commitAll(subject);
+
+    const diff = await contextTreeSnapshotTestInternals.readDiffEntries(testDir, baseCommit, headCommit);
+
+    expect(diff.entries[0]).toMatchObject({
+      type: "added",
+      path: "long.md",
+      commit: headCommit,
+    });
+    expect(diff.entries[0]?.summary).toHaveLength(140);
+    expect(diff.entries[0]?.summary?.endsWith("...")).toBe(true);
+  });
+
   it("rejects unsafe comparison bases before invoking git diff", async () => {
     await initRepo();
     await writeFile(join(testDir, "node.md"), "---\ntitle: Node\n---\nGuidance\n");
@@ -386,6 +530,17 @@ Body`);
     const safeHead = "b".repeat(40);
 
     await expect(contextTreeSnapshotTestInternals.readDiffEntries(testDir, safeBase, safeHead)).resolves.toEqual({
+      entries: [],
+      truncated: false,
+    });
+  });
+
+  it("returns an empty diff when git reports no markdown changes", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Root\n---\nRoot\n");
+    const headCommit = await commitAll("docs: add root node");
+
+    await expect(contextTreeSnapshotTestInternals.readDiffEntries(testDir, headCommit, headCommit)).resolves.toEqual({
       entries: [],
       truncated: false,
     });
@@ -716,6 +871,48 @@ Body`);
     expect(cached.staleReason).toBe(second.staleReason);
   });
 
+  it("records stale remote timing and recovers a stale cached snapshot after refresh succeeds", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    const movedRemoteDir = join(testDir, "remote-source-moved");
+    const repoUrl = `file://${remoteDir}`;
+    const previousFirstTreeHome = process.env.FIRST_TREE_HOME;
+    process.env.FIRST_TREE_HOME = join(testDir, "home");
+    const timings: string[] = [];
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Recoverable Context\n---\nRoot\n");
+    await commitAllAtDate(remoteDir, "docs: initial context", "2026-01-01T00:00:00Z");
+    await writeFile(join(remoteDir, "next.md"), "---\ntitle: Next\n---\nNext\n");
+    await commitAllAt(remoteDir, "docs: add next context");
+
+    try {
+      const active = await getContextTreeSnapshot({ repo: repoUrl, branch: "main" }, "7d");
+      expect(active.snapshotStatus).toBe("active");
+
+      contextTreeSnapshotTestInternals.clearRemoteSyncState();
+      await rename(remoteDir, movedRemoteDir);
+      const stale = await getContextTreeSnapshot({ repo: repoUrl, branch: "main" }, "7d", {
+        timing: (name) => timings.push(name),
+      });
+      expect(stale.snapshotStatus).toBe("stale");
+      expect(timings).toContain("remote_sync_stale_fallback");
+
+      contextTreeSnapshotTestInternals.clearRemoteSyncState();
+      await rename(movedRemoteDir, remoteDir);
+      const recovered = await getContextTreeSnapshot({ repo: repoUrl, branch: "main" }, "7d");
+      expect(recovered.snapshotStatus).toBe("active");
+      expect(recovered.contextStatus.label).toBe("Context Tree is up to date");
+    } finally {
+      if (existsSync(movedRemoteDir)) {
+        await rename(movedRemoteDir, remoteDir).catch(() => undefined);
+      }
+      if (previousFirstTreeHome === undefined) {
+        delete process.env.FIRST_TREE_HOME;
+      } else {
+        process.env.FIRST_TREE_HOME = previousFirstTreeHome;
+      }
+    }
+  });
+
   it("caches first-clone failures briefly to avoid repeated clone attempts", async () => {
     const missingRemote = join(testDir, "missing-remote");
     const cacheRoot = join(testDir, "managed-cache");
@@ -815,6 +1012,7 @@ Body`);
     // A subject referencing several PRs takes the last `(#N)` — the merge ref.
     expect(parsePrNumber("revert: undo (#12), reapplied via (#999)")).toBe(999);
     expect(parsePrNumber("docs: no pull request reference here")).toBeNull();
+    expect(parsePrNumber("docs: impossible PR reference (#0)")).toBeNull();
     // A bare `#123` (not parenthesized) is an issue mention, not the PR ref.
     expect(parsePrNumber("fix: mentions #123 inline")).toBeNull();
     expect(parsePrNumber(null)).toBeNull();
@@ -882,5 +1080,140 @@ Body`);
     const removed = events.find((e) => e.changeType === "removed");
     expect(removed?.riskLevel).toBe("high");
     expect(removed?.authorName).toBe("alice");
+  });
+
+  it("derives git write rows for uncommitted and invalid timestamps", () => {
+    const changes = [
+      {
+        path: "loose-note.md",
+        nodeId: null,
+        type: "edited",
+        commit: null,
+        changedAt: "not-a-date",
+        changedBy: null,
+        summary: null,
+        prNumber: null,
+      },
+      {
+        path: "new-note.md",
+        nodeId: null,
+        type: "added",
+        commit: "c".repeat(40),
+        changedAt: null,
+        changedBy: null,
+        summary: "new note",
+        prNumber: 12,
+      },
+    ] as unknown as ContextTreeChange[];
+
+    const events = contextTreeSnapshotTestInternals.buildWriteEvents(changes, []);
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        id: "uncommitted:loose-note.md",
+        nodePath: "loose-note",
+        title: "Loose Note",
+        riskLevel: "low",
+        createdAt: "not-a-date",
+      }),
+      expect.objectContaining({
+        id: `${"c".repeat(40)}:new-note.md`,
+        title: "New Note",
+        createdAt: null,
+      }),
+    ]);
+  });
+
+  it("skips oversized markdown files while building a snapshot", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Root Context\n---\nRoot\n");
+    await writeFile(join(testDir, "huge.md"), `${"x".repeat(512 * 1024 + 1)}\n`);
+    await commitAll("docs: add root and huge file");
+
+    const snapshot = await getContextTreeSnapshot({ localPath: testDir, branch: "main" }, "7d");
+
+    expect(snapshot.nodes.map((node) => node.sourcePath)).not.toContain("huge.md");
+  });
+
+  it("summarizes edits to oversized markdown with missing tree node fallbacks", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Root Context\n---\nRoot\n");
+    await writeFile(join(testDir, "huge.md"), `${"x".repeat(512 * 1024 + 1)}\n`);
+    await commitAllAtDate(testDir, "docs: initial huge context", "2026-01-01T00:00:00Z");
+    await writeFile(join(testDir, "huge.md"), `${"y".repeat(512 * 1024 + 1)}\n`);
+    await commitAll("docs: update huge context");
+
+    const snapshot = await getContextTreeSnapshot({ localPath: testDir, branch: "main" }, "7d");
+
+    expect(snapshot.updates).toContainEqual(
+      expect.objectContaining({
+        changeType: "edited",
+        path: "huge",
+        title: "Huge",
+        summary: "update huge context",
+      }),
+    );
+  });
+
+  it("rebuilds a stale cached snapshot after remote refresh succeeds", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    const movedRemoteDir = join(testDir, "remote-source-moved");
+    const repoUrl = `file://${remoteDir}`;
+    const previousFirstTreeHome = process.env.FIRST_TREE_HOME;
+    process.env.FIRST_TREE_HOME = join(testDir, "home");
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Recover Cached Context\n---\nRoot\n");
+    await commitAllAtDate(remoteDir, "docs: initial context", "2026-01-01T00:00:00Z");
+
+    let nowSpy: ReturnType<typeof vi.spyOn> | null = null;
+    try {
+      await contextTreeSnapshotTestInternals.materializeRemoteContextTree(repoUrl, "main");
+      contextTreeSnapshotTestInternals.clearRemoteSyncState();
+      await rename(remoteDir, movedRemoteDir);
+
+      const nowValues = [0, 0, 100_000, 65_000, 65_000, 65_000, 65_000, 65_000, 65_000];
+      nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowValues.shift() ?? 65_000);
+      const stale = await getContextTreeSnapshot({ repo: repoUrl, branch: "main" }, "7d");
+      expect(stale.snapshotStatus).toBe("stale");
+
+      await rename(movedRemoteDir, remoteDir);
+      const recovered = await getContextTreeSnapshot({ repo: repoUrl, branch: "main" }, "7d");
+
+      expect(recovered.snapshotStatus).toBe("active");
+      expect(recovered.contextStatus.label).toBe("Context Tree is up to date");
+    } finally {
+      nowSpy?.mockRestore();
+      if (existsSync(movedRemoteDir)) {
+        await rename(movedRemoteDir, remoteDir).catch(() => undefined);
+      }
+      if (previousFirstTreeHome === undefined) {
+        delete process.env.FIRST_TREE_HOME;
+      } else {
+        process.env.FIRST_TREE_HOME = previousFirstTreeHome;
+      }
+    }
+  });
+
+  it("uses default edited summaries for terse commits with and without tree nodes", async () => {
+    await initRepo();
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Root Context\n---\nRoot\n");
+    await writeFile(join(testDir, "huge.md"), `${"x".repeat(512 * 1024 + 1)}\n`);
+    await commitAllAtDate(testDir, "docs: initial context", "2026-01-01T00:00:00Z");
+    await writeFile(join(testDir, "NODE.md"), "---\ntitle: Root Context\n---\nUpdated root\n");
+    await writeFile(join(testDir, "huge.md"), `${"y".repeat(512 * 1024 + 1)}\n`);
+    await commitAll("update");
+
+    const snapshot = await getContextTreeSnapshot({ localPath: testDir, branch: "main" }, "7d");
+    const rootUpdate = snapshot.updates.find((update) => update.title === "Root Context");
+    const hugeUpdate = snapshot.updates.find((update) => update.path === "huge");
+
+    expect(rootUpdate).toMatchObject({
+      changeType: "edited",
+      summary: "updated Root Context",
+    });
+    expect(hugeUpdate).toMatchObject({
+      changeType: "edited",
+      summary: "updated this team knowledge",
+    });
   });
 });
