@@ -158,6 +158,7 @@ chat's ID from the JSON response, then follow the issue **into that chat**:
 # 1. Open the tracking chat; capture its id from {"ok":true,"data":{"chatId":…}}
 new_chat=$(first-tree chat create \
   --to <reporting-user-handle> \
+  --topic "Bug: <concise summary>" \
   --description "Tracking First Tree bug: <concise summary> — <issue-url>" \
   -f markdown \
   "Filed a First Tree bug issue: <issue-url>. This chat tracks its progress." \
@@ -174,9 +175,11 @@ first-tree github follow <issue-url> --chat "$new_chat"
   do not hard-code it. `chat create` is **not idempotent**, so create the
   chat exactly once; if the result is uncertain, check `chat list` before
   retrying rather than re-running blindly.
-- Once the follow lands, First Tree auto-manages the tracking chat's topic
-  from the issue entity (e.g. `Issue agent-team-foundation/first-tree#123`)
-  — leave that topic alone.
+- Set a clear, stable `--topic` on the tracking chat yourself (as shown). An
+  agent-declared `github follow --chat` does **not** auto-rewrite the chat's
+  topic from the issue entity — that refresh only applies to the platform's
+  own first-touch (`direct`) GitHub-minted chats — so an omitted `--topic`
+  would leave a low-signal auto-derived label.
 - Write the first message and description in the session's working language
   (the examples above are English).
 
