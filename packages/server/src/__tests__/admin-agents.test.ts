@@ -16,7 +16,7 @@ describe("Admin Agents API", () => {
     const ctx = await createAdminContext(app);
     const req = (method: string, url: string, payload?: unknown) =>
       app.inject({
-        method: method as "GET" | "POST" | "PATCH" | "DELETE",
+        method: method as "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
         url,
         headers: { authorization: `Bearer ${ctx.accessToken}` },
         ...(payload ? { payload } : {}),
@@ -369,6 +369,64 @@ describe("Admin Agents API", () => {
     await req("POST", `/api/v1/agents/${agent.uuid}/suspend`);
     const okRes = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(okRes.statusCode).toBe(204);
+  });
+
+  it("serves uploaded agent avatars publicly and clears them through the manage route", async () => {
+    const app = getApp();
+    const { ctx } = await authedRequest(app);
+    const agent = await createAgent(app.db, {
+      name: `avatar-route-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+
+    const missing = await app.inject({ method: "GET", url: `/api/v1/agents/${agent.uuid}/avatar` });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ error: "Avatar not set" });
+
+    const badUpload = await app.inject({
+      method: "PUT",
+      url: `/api/v1/agents/${agent.uuid}/avatar`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "content-type": "application/octet-stream",
+      },
+      payload: Buffer.from("avatar"),
+    });
+    expect(badUpload.statusCode).toBe(400);
+    expect(badUpload.json<{ error: string }>().error).toContain("image/* Content-Type");
+
+    const bytes = Buffer.from("avatar-png");
+    const upload = await app.inject({
+      method: "PUT",
+      url: `/api/v1/agents/${agent.uuid}/avatar`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "content-type": "image/png",
+      },
+      payload: bytes,
+    });
+    expect(upload.statusCode).toBe(200);
+    const uploadBody = upload.json<{ avatarImageUrl: string }>();
+    expect(uploadBody.avatarImageUrl).toMatch(new RegExp(`^/api/v1/agents/${agent.uuid}/avatar\\?v=\\d+$`));
+
+    const download = await app.inject({ method: "GET", url: uploadBody.avatarImageUrl });
+    expect(download.statusCode).toBe(200);
+    expect(download.headers["content-type"]).toBe("image/png");
+    expect(download.headers["cache-control"]).toBe("public, max-age=2592000, immutable");
+    expect(String(download.headers.etag)).toMatch(/^"\d+"$/);
+    expect(download.rawPayload.equals(bytes)).toBe(true);
+
+    const clear = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/agents/${agent.uuid}/avatar`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(clear.statusCode).toBe(204);
+
+    const afterClear = await app.inject({ method: "GET", url: `/api/v1/agents/${agent.uuid}/avatar` });
+    expect(afterClear.statusCode).toBe(404);
   });
 
   it("rejects unauthenticated requests", async () => {
