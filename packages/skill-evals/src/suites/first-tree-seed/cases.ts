@@ -86,26 +86,28 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
   {
     briefingMode: "generated-fixture",
     expected: {
-      action: "create_tree_via_init",
-      requireSourceRead: false,
-      requireWorktree: false,
-      responseHints: ["tree init", "context-tree", "--dir"],
+      action: "propose_phase1_skeleton",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["Phase 1", "skeleton", "approval"],
+      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
     },
     fixture: {
       sourceRepoState: "bare-readable",
       treeState: "unbound",
     },
     forbidden: {
-      actions: ["direct_bare_source_read", "phase1_skeleton", "phase2_leaf_content_before_approval"],
+      actions: ["phase2_leaf_content_before_approval", "skip_user_confirmation"],
       sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
     },
-    id: "unbound-tree-inits-with-dir",
+    id: "unbound-tree-defers-init",
     prompt:
-      "Use first-tree-seed to bootstrap this team's Context Tree. The workspace is not bound to a Context Tree yet, so run the seed state check and take the correct first action to create and bind the tree before any Phase 1 skeleton.",
+      "Use first-tree-seed to bootstrap this team's Context Tree. The workspace is not bound to a Context Tree yet. Run the seed state check and take the correct first action: propose only the Phase 1 top + second-level skeleton for user approval — do NOT create or bind the repo yet (that is deferred until after approval and the team's GitHub App is connected).",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
-    tags: ["unbound-tree", "state-check", "tree-init-dir"],
+    tags: ["unbound-tree", "state-check", "defer-init"],
     tier: "gate",
   },
   {

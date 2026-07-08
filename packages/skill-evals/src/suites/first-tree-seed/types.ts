@@ -8,8 +8,7 @@ export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
   | "report_missing_source"
-  | "materialize_bare_worktree"
-  | "create_tree_via_init";
+  | "materialize_bare_worktree";
 
 export type FirstTreeSeedFixture = {
   sourceRepoState: SeedSourceRepoState;
@@ -86,8 +85,6 @@ export type EvalMetrics = {
   // a Phase-1 add/read/cleanup sequence cannot erase it.
   sourceWorktreeAccessObserved: boolean;
   sourceWorktreeCreated: boolean;
-  treeInitObserved: boolean;
-  treeInitWithContextTreeDirObserved: boolean;
   workspaceManifestReadObserved: boolean;
   writeSkillFileReadObserved: boolean;
 };

@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.2.2
+version: 0.3.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Bootstrap a team's Context Tree from its connected source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Reads the sources, proposes an initial top-level + second-level domain structure for the user to approve, then drafts initial leaf content — each as a reviewable PR. Refuses a tree that already has domain structure: send incremental, source-driven writes to `first-tree-write`, and broad maintenance / drift-audit to a focused task.
@@ -13,10 +13,11 @@ that has no domain structure yet. It owns the bootstrap from "the tree has
 no domain structure — either none exists, or a bound-but-empty one" to "the
 tree has real top + second level structure plus initial leaf nodes drawn
 from the bound source repos". It first resolves the tree's state, then — for
-a tree that needs building — creates the repo with `first-tree tree init`
-when none exists (see *Resolve the tree's state*). Every subsequent write —
-one PR at a time, one decision at a time — belongs to `first-tree-write`,
-not here.
+a tree that needs building — proposes the structure, and when no tree exists
+yet creates the repo with `first-tree tree init` in Phase 1, after the
+skeleton is approved and the team's GitHub App is connected (see *Create the
+tree*). Every subsequent write — one PR at a time, one decision at a time —
+belongs to `first-tree-write`, not here.
 
 ## When To Use This Skill
 
@@ -24,7 +25,7 @@ not here.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | The team has no tree yet, **or** a bound tree with no domain structure (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental source-driven write)       |
 | First content pass on the bound sources                               | Broad maintenance or drift-audit work on an existing tree                                            |
-| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
+| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin / `gh` unauthenticated → **still use seed**: Phase 1 proposes the skeleton treeless; only the later, deferred *Create the tree* landing needs admin + `gh` + the App — not a reason to skip seed |
 
 The skill is **single-shot per tree**: once the tree has domain structure,
 *Resolve the tree's state* (state C below) refuses and routes further work
@@ -46,53 +47,37 @@ rules, it observes the existing ones during a special lifecycle phase.
 This skill runs whenever a human or another agent invokes it — **the tree's
 state is the gate, not the prompt's origin.** Before reading any source,
 resolve which of three states the team's Context Tree is in and act
-accordingly: create it when none exists, fill it when it is bound but empty,
-and refuse when it already has domain structure (state C below), routing
+accordingly: open it when none exists (creating the repo is deferred to
+Phase 1), fill it when it is bound but empty, and refuse when it already has
+domain structure (state C below), routing
 that work to `first-tree-write` or a focused maintenance task.
 
 **A — No tree yet.** The workspace is not bound to a tree: either
 `<workspaceRoot>/.first-tree/workspace.json` has no non-empty `tree`
-field, or the team has no `context_tree` binding. This is the
-agent-driven creation path — create the tree with the user's local `gh`:
+field, or the team has no `context_tree` binding.
 
-```bash
-first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/<manifest.tree>"
-```
-
-`tree init` creates the repo under the team's GitHub App installation
-account, seeds a minimal valid tree (root `NODE.md`, a `members/` index,
-and the creator's member node), pushes, and binds the org's
-`context_tree` setting. It is **admin-only** and needs an authenticated
-`gh`; if the caller is not an org admin, or `gh` is unauthenticated,
-surface that exact gap and stop (binding a team tree is an admin action).
-Take the team display name from the chat context / `first-tree agent
-status`. After it succeeds the tree is bound and in state **B** — proceed.
-
-**Run it directly — do not ask the human "who runs the bind?".** This create +
-bind is the sanctioned agent path (a general "tree binding is an operator
-action" note in your briefing does **not** apply to this task) — running it IS
-the task the user asked for, so binding needs no separate go-ahead. You do not
-need to independently "confirm admin" first: `tree init` enforces it
-server-side (it fails closed for a non-admin or unauthenticated `gh`). So run
-it; only if it fails on that installation/permission check do you surface the
-exact gap (not an admin / `gh` not authenticated) and stop.
-
-**Pin the local checkout with `--dir` — this is load-bearing.** `tree
-init` defaults its local clone to `<cwd>/<repo-name>`, but a managed
-workspace reads and writes the tree at `<workspaceRoot>/<manifest.tree>`
-(usually `context-tree`), and seed does **not** rewrite `workspace.json`.
-Without `--dir`, state A would create + bind `<workspaceRoot>/<team>-context-tree`
-while Phase 1 then operates on a missing/stale `<workspaceRoot>/<manifest.tree>`.
-Passing `--dir "<workspaceRoot>/<manifest.tree>"` puts the freshly created
-clone exactly where Phase 1 (and the runtime) expect it. If the manifest
-carries no tree name yet (a fully unbound workspace), use the conventional
-`<workspaceRoot>/context-tree`.
+**Do NOT create the repo now — defer it.** Creating the tree repo needs to
+know the team's GitHub account, and that account is known only once the
+team's **GitHub App installation** is connected, which may not have happened
+yet. Running `tree init` before the App is connected lands the repo under
+the caller's **personal** account — invisible to web snapshots and the
+Context Tree reviewer, the exact trap to avoid. So create nothing here.
+Instead **proceed to Phase 1 and propose the structure first**: Phase 1
+reads the sources and proposes a skeleton with **no repo and no App**, so
+the user gets that value immediately. The repo is created later — in Phase
+1's *Create the tree* step — only after the user approves the skeleton
+**and** the team's App is connected, so it always lands under the team's
+account. (State A stays "unbound" through the skeleton proposal; Phase 1
+runs fine with no tree, since it only reads sources and talks in chat.)
+Carry the team display name (from the chat context / `first-tree agent
+status`) forward to that later step.
 
 **B — Bound but unseeded.** The tree is bound and holds at most the
 bootstrap set — a root `NODE.md`, a `members/` index, and creator member
 node(s) — with **no top-level domain directory** yet. This is the normal
-seed entry, whether the bootstrap came from state A's `tree init` above or
-from an earlier provision. Proceed to Phase 1. Phase 1 layers the domain
+seed entry, whether the bootstrap came from an earlier `tree init` (Phase
+1's *Create the tree* step) or an earlier provision. Proceed to Phase 1 —
+the tree already exists, so skip Phase 1's *Create the tree* step. Phase 1 layers the domain
 skeleton + `raw-context` **on top of** whatever bootstrap nodes already
 exist: **extend** the root `NODE.md` index and the `members/` tree rather
 than recreating them (a bootstrap root node / members index is expected,
@@ -155,6 +140,8 @@ Phase 1 — Structure  (~3–10 min, main agent only)
   └─ Tiered structural read of every bound source
   └─ Propose top + second-level domain skeleton
   └─ User approves checklist
+  └─ (state A only) Create the tree: connect the team's GitHub App, then
+     `tree init` — App-gated so the repo lands under the team account
   └─ Create NODE.md stubs + members/<owner> + raw-context
   └─ PR1 on chore/seed-phase1-structure
 
@@ -298,9 +285,71 @@ one who actually opens each one. Without an explicit "yes" from the
 user, do not create any top-level domain — even ones marked
 "recommended ON".
 
+### Create the tree (state A only — App-gated)
+
+**State B (already bound) skips this** — the repo exists; go straight to
+*What to write*. This step runs only in **state A** (no tree yet), and only
+**after** the user has approved the skeleton.
+
+The repo is created here, not at the start, so it lands under the team's
+GitHub account instead of a personal one. That account is known only once
+the team's **GitHub App is connected**, so this step is gated on it:
+
+1. **If you can positively confirm the App is already connected** for this
+   team (the user connected it in the web setup, or you can observe a
+   connected installation) — create directly (command below).
+2. **Otherwise, present the connect step and wait.** Ask the user, in plain
+   product terms, to connect the team's GitHub App — e.g. *"To save this as
+   your team's shared memory — so your teammates and the web app can all use
+   it — connect your team's GitHub App:
+   <link>. Once it's connected, tell me and I'll create the tree. (Or skip
+   it — I'll keep this structure as a draft, and you can connect anytime to
+   finish.)"* Give the most specific stable connect target you actually have
+   (the product's GitHub-connection / Context settings, or the App install
+   URL only when its slug is known) — do not guess a slug. Then **stop and
+   wait** for the user to connect and ping you; the skill is not running
+   between. If the user declines, keep the approved skeleton as a draft in
+   the chat, create nothing, and do not error — they can connect and resume
+   later.
+
+**Do NOT run `tree init` on the assumption the App is connected.** Without
+the App it silently creates the repo under a personal account — the trap
+this whole gate exists to prevent. Run it only on positive confirmation (the
+user connecting and pinging you is that signal).
+
+Once the App is confirmed connected, create + bind with the user's local
+`gh`:
+
+```bash
+first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/<manifest.tree>"
+```
+
+`tree init` creates the repo under the team's App installation account,
+seeds a minimal valid tree (root `NODE.md`, a `members/` index, and the
+creator's member node), pushes, and binds the org's `context_tree` setting.
+It is **admin-only** and enforces that server-side (it fails closed for a
+non-admin or unauthenticated `gh`) — so run it directly; do not ask the
+human "who runs the bind?". Only if it fails on that admin / auth check do
+you surface the exact gap (not an admin, or `gh` not authenticated) and
+stop. **`tree init` does NOT guard against a missing App**: with no
+installation it does not fail — it silently falls back to a personal account
+(the pit), which is exactly why the App must be confirmed connected *before*
+you run it (steps 1–2 above). After it succeeds the tree is bound (state B)
+— continue to *What to write*.
+
+**Pin the local checkout with `--dir` — load-bearing.** `tree init` defaults
+its clone to `<cwd>/<repo-name>`, but a managed workspace reads and writes
+the tree at `<workspaceRoot>/<manifest.tree>` (usually `context-tree`), and
+seed does **not** rewrite `workspace.json`. Without `--dir`, it would create
+`<workspaceRoot>/<team>-context-tree` while *What to write* then operates on
+a missing/stale `<workspaceRoot>/<manifest.tree>`. Pass
+`--dir "<workspaceRoot>/<manifest.tree>"`; if the manifest carries no tree
+name yet (a fully unbound workspace), use `<workspaceRoot>/context-tree`.
+
 ### What to write
 
-After the user confirms, create on the seed branch:
+After the user confirms (and, in state A, the tree has been created above),
+create on the seed branch:
 
 - `<tree>/NODE.md` — root index, with `## Active Domains`,
   `## Members`, `## Raw Context` sections enumerating what was opened.
@@ -676,6 +725,16 @@ After PR2 opens, the seed skill is done. Subsequent writes are owned
 by `first-tree-write`; subsequent maintenance uses focused tasks with
 explicit scope.
 
+### Recovery path: skeleton approved, App never connected
+
+In state A the user may approve the skeleton but never connect the App, so
+*Create the tree* never runs. Nothing was created — this is fine, not a
+failure. The approved skeleton lives in the chat as a draft. When the user
+returns and connects the App, resume from *Create the tree*: create + bind,
+then write the stubs and open PR1. This is **not** a re-seed condition — the
+tree still has no domain structure, so state resolution still sees an
+unbound/empty tree and proceeds normally.
+
 ### Recovery path: PR1 merged, Phase 2 abandoned
 
 A user may merge PR1 and then never come back for Phase 2 (life
@@ -726,9 +785,10 @@ make them visible at the seed-specific surface.
 ## What This Skill Does NOT Do
 
 - Run the Cloud one-click **server** bootstrap. When the team has no tree
-  (state A), seed creates and binds it with `first-tree tree init`
-  (the user's local `gh`), not the server `/initialize` path — the two
-  coexist. Seed does not write the workspace-root `workspace.json`; that
+  (state A), seed creates and binds it with `first-tree tree init` (the
+  user's local `gh`) in Phase 1's *Create the tree* step, App-gated so the
+  repo lands under the team account — not the server `/initialize` path; the
+  two coexist. Seed does not write the workspace-root `workspace.json`; that
   stays a runtime concern.
 - Install GitHub automation (validate workflows, rulesets,
   CODEOWNERS) — out of scope. If the team wants those, they are

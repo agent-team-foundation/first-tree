@@ -27,7 +27,7 @@ function workspaceAgentsMarkdown(
         : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`;
   const treeLine =
     evalCase.fixture.treeState === "unbound"
-      ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
+      ? "The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, do NOT create or bind the repo yet — propose the Phase 1 top + second-level skeleton for approval first; the tree is created later (via `tree init`), only after the skeleton is approved and the team GitHub App is connected."
       : evalCase.fixture.treeState === "empty"
         ? "The Context Tree at `./context-tree` is newly provisioned and empty."
         : "The Context Tree at `./context-tree` is already populated with durable domains.";
@@ -192,7 +192,9 @@ function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCas
   const contextTreePath = join(paths.workspacePath, "context-tree");
   if (evalCase.fixture.treeState === "unbound") {
     // State A: the workspace is genuinely unbound. Do NOT provision a
-    // context-tree; the state check must create + bind it with `tree init --dir`.
+    // context-tree; the state check must propose the Phase 1 skeleton and NOT
+    // create the tree yet (repo creation is deferred until after skeleton
+    // approval and the team GitHub App is connected).
     return contextTreePath;
   }
   mkdirSync(contextTreePath, { recursive: true });
