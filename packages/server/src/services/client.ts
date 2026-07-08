@@ -29,7 +29,7 @@ import { recordClientHeartbeat } from "./runtime-liveness.js";
  * one user; cross-user admin access is no longer supported by this code path
  * (see decouple-client-from-identity-design §4.10.5 option A). There is no
  * cross-user ownership transfer: machine handover is local-only via
- * `login <token>` on the target user, which parks the old local client and
+ * `login <code>` on the target user, which parks the old local client and
  * activates a separate client id.
  */
 export async function assertClientOwner(db: Database, clientId: string, scope: { userId: string }): Promise<void> {
@@ -102,14 +102,14 @@ export async function registerClient(
 
   if (existing?.retiredAt) {
     throw new ClientRetiredError(
-      `Client "${data.clientId}" has been retired. Run \`${getServerCliBinding().binName} computer reset\`, then run \`${getServerCliBinding().binName} login <token>\` to register a new client identity.`,
+      `Client "${data.clientId}" has been retired. Run \`${getServerCliBinding().binName} computer reset\`, then run \`${getServerCliBinding().binName} login <code>\` to register a new client identity.`,
     );
   }
 
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        `Run \`${getServerCliBinding().binName} login <token>\` with the intended account to switch local clients before daemon startup; if this mismatch persists, back up local workspaces and run \`${getServerCliBinding().binName} computer reset\`.`,
+        `Run \`${getServerCliBinding().binName} login <code>\` with the intended account to switch local clients before daemon startup; if this mismatch persists, back up local workspaces and run \`${getServerCliBinding().binName} computer reset\`.`,
     );
   }
 
@@ -166,13 +166,13 @@ export async function registerClient(
     .limit(1);
   if (current?.retiredAt) {
     throw new ClientRetiredError(
-      `Client "${data.clientId}" has been retired. Run \`${getServerCliBinding().binName} computer reset\`, then run \`${getServerCliBinding().binName} login <token>\` to register a new client identity.`,
+      `Client "${data.clientId}" has been retired. Run \`${getServerCliBinding().binName} computer reset\`, then run \`${getServerCliBinding().binName} login <code>\` to register a new client identity.`,
     );
   }
   if (current?.userId && current.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        `Run \`${getServerCliBinding().binName} login <token>\` with the intended account to switch local clients before daemon startup; if this mismatch persists, back up local workspaces and run \`${getServerCliBinding().binName} computer reset\`.`,
+        `Run \`${getServerCliBinding().binName} login <code>\` with the intended account to switch local clients before daemon startup; if this mismatch persists, back up local workspaces and run \`${getServerCliBinding().binName} computer reset\`.`,
     );
   }
   throw new ConflictError(`Client "${data.clientId}" could not be registered because it changed concurrently.`);

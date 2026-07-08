@@ -13,14 +13,11 @@ function hashConnectCode(code: string): string {
   return createHash("sha256").update(code).digest("hex");
 }
 
-function expectShortConnectUrl(token: string): { url: URL; code: string } {
-  const url = new URL(token);
-  expect(url.protocol).toMatch(/^https?:$/);
-  const match = /^\/connect\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
-  if (!match?.[1]) throw new Error(`expected short connect URL, got ${token}`);
-  expect(match[1].length).toBeGreaterThanOrEqual(20);
-  expect(match[1]).not.toContain(".");
-  return { url, code: match[1] };
+function expectShortConnectCode(token: string): string {
+  expect(token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+  expect(token).not.toContain(".");
+  expect(token).not.toContain("/");
+  return token;
 }
 
 async function signLegacyConnectJwt(userId: string): Promise<string> {
@@ -42,7 +39,11 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/me/connect-tokens",
-        headers: { authorization: `Bearer ${admin.accessToken}` },
+        headers: {
+          authorization: `Bearer ${admin.accessToken}`,
+          host: "cloud.first-tree.ai",
+          "x-forwarded-proto": "https",
+        },
       });
       expect(res.statusCode).toBe(200);
       const body = res.json<{
@@ -58,8 +59,27 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(body.npmSpec).toBe("first-tree");
       expect(body.installMethod).toBe("npm");
       expect(body.installerUrl).toBeNull();
-      expectShortConnectUrl(body.token);
+      expectShortConnectCode(body.token);
       expect(body.bootstrapCommand).toBe(`npm install -g first-tree\nfirst-tree login ${body.token}`);
+    });
+
+    it("adds an explicit server URL for non-default deployment hosts", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: {
+          authorization: `Bearer ${admin.accessToken}`,
+          host: "selfhost.example.test",
+          "x-forwarded-proto": "https",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ token: string; command: string; bootstrapCommand: string }>();
+      expectShortConnectCode(body.token);
+      expect(body.command).toBe(`FIRST_TREE_SERVER_URL='https://selfhost.example.test' first-tree login ${body.token}`);
+      expect(body.bootstrapCommand).toBe(`npm install -g first-tree\n${body.command}`);
     });
   });
 
@@ -78,7 +98,11 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/me/connect-tokens",
-        headers: { authorization: `Bearer ${admin.accessToken}` },
+        headers: {
+          authorization: `Bearer ${admin.accessToken}`,
+          host: "cloud.first-tree.ai",
+          "x-forwarded-proto": "https",
+        },
       });
       expect(res.statusCode).toBe(200);
       const body = res.json<{
@@ -92,7 +116,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       }>();
       expect(body.installMethod).toBe("portable");
       expect(body.npmSpec).toBe("first-tree");
-      expectShortConnectUrl(body.token);
+      expectShortConnectCode(body.token);
       expect(body.installerUrl).toBe("https://downloads.example.test/releases/prod/install.sh");
       expect(body.installerUrl).not.toContain(body.token);
       expect(body.bootstrapCommand).toContain('tmp="$(mktemp "$' + '{TMPDIR:-/tmp}/first-tree-install.XXXXXX")"');
@@ -123,7 +147,11 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/me/connect-tokens",
-        headers: { authorization: `Bearer ${admin.accessToken}` },
+        headers: {
+          authorization: `Bearer ${admin.accessToken}`,
+          host: "127.0.0.1:8000",
+          "x-forwarded-proto": "http",
+        },
       });
       expect(res.statusCode).toBe(200);
       const body = res.json<{
@@ -137,7 +165,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(body.installMethod).toBe("source");
       expect(body.npmSpec).toBeNull();
       expect(body.installerUrl).toBeNull();
-      expectShortConnectUrl(body.token);
+      expectShortConnectCode(body.token);
       expect(body.bootstrapCommand).toBe(`first-tree-dev login ${body.token}`);
     });
   });
@@ -145,7 +173,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
   describe("exchange", () => {
     const getApp = useTestApp();
 
-    it("exchanges a short connect URL once", async () => {
+    it("exchanges a short connect code once", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({
@@ -154,7 +182,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
         headers: { authorization: `Bearer ${admin.accessToken}` },
       });
       const body = minted.json<{ token: string }>();
-      expectShortConnectUrl(body.token);
+      expectShortConnectCode(body.token);
 
       const first = await app.inject({
         method: "POST",
@@ -185,7 +213,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
         headers: { authorization: `Bearer ${admin.accessToken}` },
       });
       const body = minted.json<{ token: string }>();
-      const { code } = expectShortConnectUrl(body.token);
+      const code = expectShortConnectCode(body.token);
       const [row] = await app.db
         .select()
         .from(connectCodes)
@@ -196,7 +224,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(row).not.toHaveProperty("code");
     });
 
-    it("allows exactly one concurrent exchange for a short connect URL", async () => {
+    it("allows exactly one concurrent exchange for a short connect code", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({
@@ -220,7 +248,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(results.filter((res) => res.statusCode === 401)).toHaveLength(3);
     });
 
-    it("exchanges a short connect URL after an app restart", async () => {
+    it("exchanges a short connect code after an app restart", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({
@@ -247,7 +275,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       }
     });
 
-    it("rejects a short connect URL when the issuer is changed", async () => {
+    it("rejects a short connect URL even when it wraps a valid code", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({
@@ -256,20 +284,24 @@ describe("POST /me/connect-tokens bootstrap method", () => {
         headers: { authorization: `Bearer ${admin.accessToken}` },
       });
       const body = minted.json<{ token: string }>();
-      const { code } = expectShortConnectUrl(body.token);
-      const retargeted = `https://staging.example.test/connect/${code}`;
+      const code = expectShortConnectCode(body.token);
+      const [row] = await app.db
+        .select()
+        .from(connectCodes)
+        .where(eq(connectCodes.codeHash, hashConnectCode(code)));
+      if (!row) throw new Error("expected connect code row");
 
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/auth/connect-token",
-        payload: { token: retargeted },
+        payload: { token: `${row.issuer}/connect/${code}` },
       });
 
       expect(res.statusCode).toBe(401);
       expect(res.json<{ error: string }>().error).toMatch(/Invalid or expired/);
     });
 
-    it("rejects expired short connect URLs", async () => {
+    it("rejects expired short connect codes", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({
@@ -278,7 +310,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
         headers: { authorization: `Bearer ${admin.accessToken}` },
       });
       const body = minted.json<{ token: string }>();
-      const { code } = expectShortConnectUrl(body.token);
+      const code = expectShortConnectCode(body.token);
       await app.db
         .update(connectCodes)
         .set({ expiresAt: new Date(Date.now() - 1000) })
@@ -293,7 +325,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(res.json<{ error: string }>().error).toMatch(/Invalid or expired/);
     });
 
-    it("rejects a short connect URL when the user was suspended after mint", async () => {
+    it("rejects a short connect code when the user was suspended after mint", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({
@@ -314,7 +346,7 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(res.json<{ error: string }>().error).toMatch(/suspended/);
     });
 
-    it("rejects a short connect URL when all memberships were removed after mint", async () => {
+    it("rejects a short connect code when all memberships were removed after mint", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const minted = await app.inject({

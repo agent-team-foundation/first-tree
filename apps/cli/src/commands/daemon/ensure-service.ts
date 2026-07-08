@@ -13,7 +13,7 @@ import { print } from "../../core/output.js";
 /**
  * Hidden recovery hook used by the portable installer after it has switched the
  * channel shim to the freshly installed version. It is intentionally narrower
- * than `login <token>`: credentials are never created or replaced here. If a
+ * than `login <code>`: credentials are never created or replaced here. If a
  * previous login left valid credentials behind, this refreshes the supervised
  * unit and starts it; if credentials are gone, the follow-up `login` owns that
  * recovery step.
@@ -30,7 +30,7 @@ export function registerDaemonEnsureServiceCommand(daemon: Command): void {
       }
 
       if (!loadCredentials()) {
-        print.line(`  ensure-service: no credentials found; run \`${binName} login <token>\` after install.\n`);
+        print.line(`  ensure-service: no credentials found; run \`${binName} login <code>\` after install.\n`);
         return;
       }
 

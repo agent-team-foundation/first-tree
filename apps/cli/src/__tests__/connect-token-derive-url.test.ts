@@ -11,14 +11,10 @@ function fakeJwt(payload: Record<string, unknown>): string {
 }
 
 describe("deriveHubUrlFromToken", () => {
-  it("returns the origin from a short connect URL", () => {
-    expect(deriveHubUrlFromToken("https://first-tree.example.com/connect/abc_DEF-123")).toBe(
+  it("returns the fallback URL for a bare short connect code", () => {
+    expect(deriveHubUrlFromToken("abc_DEF-1234567890xyz", "https://first-tree.example.com/")).toBe(
       "https://first-tree.example.com",
     );
-  });
-
-  it("supports http short connect URLs for local dev", () => {
-    expect(deriveHubUrlFromToken("http://localhost:8000/connect/dev-code")).toBe("http://localhost:8000");
   });
 
   it("returns the iss claim verbatim when present", () => {
@@ -66,15 +62,15 @@ describe("deriveHubUrlFromToken", () => {
   it("hard-fails when token is not a valid JWT", () => {
     expect(() => deriveHubUrlFromToken("not.a.jwt-at-all")).toThrow(HubUrlDerivationError);
     try {
-      deriveHubUrlFromToken("garbage");
+      deriveHubUrlFromToken("garbage", "https://first-tree.example.com");
     } catch (err) {
       expect((err as HubUrlDerivationError).code).toBe("INVALID_TOKEN");
     }
   });
 
-  it("hard-fails when a URL token is not a connect URL", () => {
+  it("hard-fails when given a connect URL instead of a short code", () => {
     try {
-      deriveHubUrlFromToken("https://first-tree.example.com/not-connect/abc");
+      deriveHubUrlFromToken("https://first-tree.example.com/connect/abc_DEF-123", "https://first-tree.example.com");
       throw new Error("expected throw");
     } catch (err) {
       expect(err).toBeInstanceOf(HubUrlDerivationError);

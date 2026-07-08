@@ -32,7 +32,7 @@ export function renderServiceBlock(): void {
   } else if (svc.state === "inactive") {
     print.line(`  Service:  ✗ stopped (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
   } else if (svc.state === "not-installed") {
-    print.line(`  Service:  not installed — run \`${channelConfig.binName} login <token>\`\n`);
+    print.line(`  Service:  not installed — run \`${channelConfig.binName} login <code>\`\n`);
   } else {
     print.line(`  Service:  unknown (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
   }
@@ -41,7 +41,7 @@ export function renderServiceBlock(): void {
 export function renderHubBlock(): void {
   const clientYaml = join(defaultConfigDir(), "client.yaml");
   if (!existsSync(clientYaml)) {
-    print.line(`  Server:   (not configured — run \`${channelConfig.binName} login <token>\`)\n`);
+    print.line(`  Server:   (not configured — run \`${channelConfig.binName} login <code>\`)\n`);
     return;
   }
   try {
@@ -64,7 +64,7 @@ export function renderAuthBlock(): void {
   // to keep this command < 1s and offline-safe.
   const creds = loadCredentials();
   if (!creds) {
-    print.line(`  Auth:     (no credentials — run \`${channelConfig.binName} login <token>\`)\n`);
+    print.line(`  Auth:     (no credentials — run \`${channelConfig.binName} login <code>\`)\n`);
     return;
   }
   const exp = decodeJwtExpSeconds(creds.refreshToken);
@@ -74,7 +74,7 @@ export function renderAuthBlock(): void {
   }
   const remainingSec = exp - Math.floor(Date.now() / 1000);
   if (remainingSec <= 0) {
-    print.line(`  Auth:     ✗ refresh token EXPIRED — re-run \`${channelConfig.binName} login <token>\`\n`);
+    print.line(`  Auth:     ✗ refresh token EXPIRED — re-run \`${channelConfig.binName} login <code>\`\n`);
     print.line("              (get a fresh token from the First Tree web console → Computers → New Connection)\n");
   } else if (remainingSec < 2 * 86400) {
     const hours = Math.floor(remainingSec / 3600);

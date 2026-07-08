@@ -333,7 +333,7 @@ ensure_daemon_service() {
     return 0
   fi
   log "Background service repair failed or is not available yet."
-  log "Run $BIN_DIR/$bin_name login <token> to refresh credentials and service state."
+  log "Run $BIN_DIR/$bin_name login <code> to refresh credentials and service state."
 }
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/first-tree-portable.XXXXXX")"

@@ -81,20 +81,10 @@ function hashConnectCode(code: string): string {
   return createHash("sha256").update(code).digest("hex");
 }
 
-function buildConnectCodeUrl(issuer: string, code: string): string {
-  return `${normalizeIssuer(issuer)}/connect/${code}`;
-}
-
-function parseConnectCodeToken(token: string): { issuer: string; code: string } | null {
-  try {
-    const url = new URL(token);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    const match = /^\/connect\/([A-Za-z0-9_-]+)\/?$/.exec(url.pathname);
-    if (!match?.[1]) return null;
-    return { issuer: url.origin, code: match[1] };
-  } catch {
-    return null;
-  }
+function parseConnectCodeToken(token: string): { issuer: string | null; code: string } | null {
+  const trimmed = token.trim();
+  if (/^[A-Za-z0-9_-]{20,}$/.test(trimmed)) return { issuer: null, code: trimmed };
+  return null;
 }
 
 /**
@@ -254,9 +244,11 @@ export async function refreshAccessToken(
 /**
  * Generate a short-lived connect token for CLI authentication.
  *
- * The public token is a short URL (`<issuer>/connect/<code>`), not a JWT.
- * The URL origin preserves the CLI's environment routing behavior while the
- * opaque code is hashed in PostgreSQL for restart-safe, single-use exchange.
+ * The public token is a short code, not a JWT. The CLI picks the server URL
+ * from its channel/default configuration while the opaque code is hashed in
+ * PostgreSQL for restart-safe, single-use exchange. We still store the minting
+ * issuer so the exchange route can reject a code presented to the wrong
+ * deployment.
  */
 export async function generateConnectToken(
   db: Database,
@@ -273,7 +265,7 @@ export async function generateConnectToken(
     issuer: normalizeIssuer(issuer),
     expiresAt: new Date(Date.now() + expiresIn * 1000),
   });
-  return { token: buildConnectCodeUrl(issuer, code), expiresIn };
+  return { token: code, expiresIn };
 }
 
 /**
@@ -284,9 +276,17 @@ export async function exchangeConnectToken(
   connectToken: string,
   jwtSecretKey: string,
   expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
+  expectedIssuer?: string,
 ): Promise<{ accessToken: string; refreshToken: string }> {
   const codeToken = parseConnectCodeToken(connectToken);
   if (codeToken) {
+    const requestIssuer = expectedIssuer ? normalizeIssuer(expectedIssuer) : null;
+    if (codeToken.issuer && requestIssuer && codeToken.issuer !== requestIssuer) {
+      throw new UnauthorizedError("Invalid or expired connect token", {
+        "auth.connect.reason": "code_issuer_mismatch",
+      });
+    }
+    const issuer = codeToken.issuer ?? requestIssuer;
     const now = new Date();
     const [row] = await db
       .update(connectCodes)
@@ -294,7 +294,7 @@ export async function exchangeConnectToken(
       .where(
         and(
           eq(connectCodes.codeHash, hashConnectCode(codeToken.code)),
-          eq(connectCodes.issuer, codeToken.issuer),
+          ...(issuer ? [eq(connectCodes.issuer, issuer)] : []),
           isNull(connectCodes.consumedAt),
           gt(connectCodes.expiresAt, now),
         ),

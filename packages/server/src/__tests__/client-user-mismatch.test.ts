@@ -12,7 +12,7 @@ import { createTestAdmin, createTestApp } from "./helpers.js";
  * because a clientId is org-visible (agent list) and must not double as a
  * transfer capability — with only-JWT auth it let any authenticated user
  * knock another user's machine offline. Machine handover is local-only:
- * `login <token>` on the target user parks the old local identity before a
+ * `login <code>` on the target user parks the old local identity before a
  * separate client id is registered or restored.
  *
  * What remains server-side is the WS handshake refusal: a JWT for a

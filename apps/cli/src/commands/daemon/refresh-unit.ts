@@ -33,7 +33,7 @@ import { print } from "../../core/output.js";
  *
  * Hidden because it's an internal supervisor-cooperation interface, not a
  * day-to-day user command. End users get the same effect — and more —
- * from `login <token>` (which also re-authenticates) or `upgrade`
+ * from `login <code>` (which also re-authenticates) or `upgrade`
  * (which also installs the npm package).
  */
 export function registerDaemonRefreshUnitCommand(daemon: Command): void {

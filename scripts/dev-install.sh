@@ -11,7 +11,7 @@
 #
 # Usage:
 #   ./scripts/dev-install.sh                    # build + (re)link + restart installed daemon
-#   first-tree-dev login <token>                # first-time setup creates the service
+#   first-tree-dev login <code>                # first-time setup creates the service
 #   first-tree-dev daemon status                # same verbs as staging/prod
 #
 # Re-run this script after editing any source file to rebuild dist.
@@ -69,7 +69,7 @@ if restart_output=$("$BIN_DIR/first-tree-dev" daemon restart 2>&1); then
   printf "%s\n" "$restart_output"
 elif grep -q "No background service installed" <<<"$restart_output"; then
   printf "%s\n" "$restart_output"
-  echo "[dev-install] daemon service is not installed yet; run first-tree-dev login <token> to create it."
+  echo "[dev-install] daemon service is not installed yet; run first-tree-dev login <code> to create it."
 else
   printf "%s\n" "$restart_output" >&2
   echo "[dev-install] daemon restart failed; install output is on disk, but the running daemon was not updated." >&2
@@ -79,4 +79,4 @@ echo
 echo "Next:"
 echo "  1. Make sure $BIN_DIR is on \$PATH"
 echo "  2. Start your local First Tree server on http://127.0.0.1:8000"
-echo "  3. first-tree-dev login <token>      # token from http://127.0.0.1:8000/clients"
+echo "  3. first-tree-dev login <code>      # token from http://127.0.0.1:8000/clients"

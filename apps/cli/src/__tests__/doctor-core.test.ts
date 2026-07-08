@@ -239,7 +239,7 @@ describe("doctor core checks", () => {
     expect(checkBackgroundService()).toEqual({
       label: "Background service",
       ok: false,
-      detail: "not installed — re-run `first-tree-dev login <token>` to install",
+      detail: "not installed — re-run `first-tree-dev login <code>` to install",
     });
 
     printResults([

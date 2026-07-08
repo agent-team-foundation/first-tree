@@ -238,7 +238,7 @@ describe("local agent shared helpers", () => {
     expect(() => readClientId()).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith(
       "MISSING_CLIENT_ID",
-      "No client.id found in client.yaml. Run `first-tree-dev login <token>` first.",
+      "No client.id found in client.yaml. Run `first-tree-dev login <code>` first.",
       2,
     );
   });

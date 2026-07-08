@@ -31,11 +31,10 @@ function assertSecretsValid(config: Config): void {
 }
 
 function assertProductionRequiresPublicUrl(config: Config): void {
-  // `server.publicUrl` is what the connect-token `iss` claim and OAuth
-  // callback URL are built off of. Booting prod without it means the CLI's
-  // `connect <token>` form would have no anchor and OAuth would echo back
-  // to whatever the inbound proxy injected via Host headers (forgery
-  // risk). Fail closed.
+  // `server.publicUrl` is what short connect codes store as their issuer and
+  // what OAuth callback URLs are built off of. Booting prod without it means
+  // code exchange and OAuth would trust whatever the inbound proxy injected
+  // via Host headers (forgery risk). Fail closed.
   if (process.env.NODE_ENV === "production" && !config.server.publicUrl) {
     throw new Error("FIRST_TREE_PUBLIC_URL is required in production — set the public-facing First Tree URL.");
   }

@@ -28,6 +28,25 @@ describe("Rate limit", () => {
     }
   });
 
+  it("applies the global user bucket to connect-code minting", async () => {
+    const app = await createTestApp({ rateLimit: { max: 2 } });
+    try {
+      const admin = await createTestAdmin(app, { username: `rl-connect-${crypto.randomUUID().slice(0, 8)}` });
+      const mintConnectCode = () =>
+        app.inject({
+          method: "POST",
+          url: "/api/v1/me/connect-tokens",
+          headers: { authorization: `Bearer ${admin.accessToken}` },
+        });
+
+      expect((await mintConnectCode()).statusCode).toBe(200);
+      expect((await mintConnectCode()).statusCode).toBe(200);
+      expect((await mintConnectCode()).statusCode).toBe(429);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("keys agent runtime buckets by agent id before manager user id", async () => {
     const app = await createTestApp({ rateLimit: { max: 2 } });
     try {

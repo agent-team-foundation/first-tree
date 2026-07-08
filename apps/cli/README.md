@@ -8,10 +8,10 @@ Install the CLI globally:
 npm install -g first-tree
 ```
 
-Then connect this computer with a token from the First Tree web console:
+Then connect this computer with a short code from the First Tree web console:
 
 ```bash
-first-tree login <connect-token>
+first-tree login <connect-code>
 ```
 
 The binary is `first-tree`; the short alias `ft` is installed with it.

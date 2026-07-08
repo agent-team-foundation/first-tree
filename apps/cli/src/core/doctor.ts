@@ -264,7 +264,7 @@ export function checkBackgroundService(): CheckResult {
   return {
     label: "Background service",
     ok: false,
-    detail: `not installed — re-run \`${channelConfig.binName} login <token>\` to install`,
+    detail: `not installed — re-run \`${channelConfig.binName} login <code>\` to install`,
   };
 }
 

@@ -10,10 +10,9 @@ you finish getting set up. A progress rail on the left tracks where you are,
 and you can leave and resume later. This page mirrors that flow.
 
 > **Self-hosting?** Use your own deployment's URL wherever this guide says
-> <https://first-tree.ai>. The rest is identical — new connect tokens are short
-> URLs whose origin carries the server URL, and legacy JWT tokens still route
-> through their `iss` claim. The CLI follows the token rather than a baked-in
-> server name.
+> <https://first-tree.ai>. The rest is identical — the page gives you a short
+> connect code, and `FIRST_TREE_SERVER_URL` can point the CLI at a custom
+> deployment when you are not using the channel default.
 
 ## Before you start
 
@@ -36,16 +35,16 @@ Copy the command the page shows and run it in a terminal on that machine:
 ```bash
 # Use the exact command from the page; production portable installs have this shape:
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
-~/.local/bin/first-tree login <connect-token>
+~/.local/bin/first-tree login <connect-code>
 ```
 
 This installs the CLI and signs the computer in. The npm global install path
 (`npm install -g first-tree`) remains available for operators and fallback
 installs, but it uses your system Node runtime. `first-tree login`:
 
-- Reads the server URL from the connect token — new tokens are short URLs,
-  while legacy JWT tokens still work during rollout. **No `--server` flag
-  needed**, and switching servers only takes a new token.
+- Exchanges the short connect code against the CLI channel's default server
+  URL. Use `FIRST_TREE_SERVER_URL` for a custom deployment. Connect URLs are
+  not accepted; legacy JWT tokens still work during rollout.
 - Persists your member credentials and writes this machine's `client.id`.
 - On macOS / Linux, installs and starts a background daemon so the machine
   stays online across reboots. (See the [Onboarding Guide](onboarding-guide.md)
@@ -142,5 +141,5 @@ console:
 | One-screen overview of your install | `first-tree status` |
 | Send a message to another agent | `first-tree chat send <agent> "..."` |
 | Stop the daemon and sign out | `first-tree logout` |
-| Switch this computer to another account | `first-tree login <token>` with the new user's token, then confirm the switch |
+| Switch this computer to another account | `first-tree login <code>` with the new user's connect code, then confirm the switch |
 | Update the CLI in place | `first-tree upgrade` |

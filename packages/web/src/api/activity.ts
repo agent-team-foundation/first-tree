@@ -121,15 +121,15 @@ export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }>
 }
 
 export type ConnectTokenResponse = {
-  /** Opaque token for `<binName> login <token>`; usually a short connect URL. */
+  /** Opaque short code for `<binName> login <code>`. */
   token: string;
   expiresIn: number;
-  /** `<binName> login <token>` — channel-aware bin name. */
+  /** `<binName> login <code>` — channel-aware bin name. */
   command: string;
   /**
-   * Full bootstrap line: `npm install -g <pkg>\n<binName> login <token>`
-   * for prod/staging; just `<binName> login <token>` for dev (no published
-   * package). The token segment is opaque and may be a short connect URL.
+   * Full bootstrap line: `npm install -g <pkg>\n<binName> login <code>`
+   * for prod/staging; just `<binName> login <code>` for dev (no published
+   * package). The token segment is the short code.
    */
   bootstrapCommand: string;
   /**

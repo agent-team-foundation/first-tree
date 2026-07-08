@@ -21,10 +21,10 @@ everything online.
   `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh`.
 - **Node.js** ≥ 22.13 only when you choose the npm fallback path
   (`npm install -g first-tree`).
-- **A connect token** — generated from the web console's *Computers → New
-  Connection* dialog. New tokens are short URLs whose origin carries the
-  server URL; legacy JWT tokens with an `iss` claim remain accepted during
-  rollout. The CLI does not need a server flag.
+- **A connect code** — generated from the web console's *Computers → New
+  Connection* dialog. New codes are short, single-use strings. The CLI uses
+  its channel default server URL unless `FIRST_TREE_SERVER_URL` is set; connect
+  URLs are not accepted. Legacy JWT tokens remain accepted during rollout.
 - **A server you can reach** — either the hosted SaaS or a locally
   running server.
 
@@ -35,7 +35,7 @@ FT_BIN=<binName> # first-tree, first-tree-staging, or first-tree-dev
 
 # 1. Sign this machine in. Persists credentials and installs the
 #    background daemon on macOS / Linux.
-$FT_BIN login <connect-token>
+$FT_BIN login <connect-code>
 
 # 2. Create the agent record on the server and bind it to this client.
 #    The same JWT signs every request — no per-agent token.
@@ -53,8 +53,8 @@ because an agent is permanently bound to exactly one client machine.
 ## What `first-tree login` writes
 
 - `$FIRST_TREE_HOME/config/credentials.json` (mode `0600`) —
-  `accessToken`, `refreshToken`, and the server URL derived from the
-  connect token. New tokens are short URLs; legacy JWT tokens are still
+  `accessToken`, `refreshToken`, and the server URL resolved from the CLI
+  channel default or `FIRST_TREE_SERVER_URL`. Legacy JWT tokens are still
   accepted during rollout.
 - `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
@@ -94,7 +94,7 @@ name — there is no separate "local alias" to invent.
 | Cross-subsystem readiness check | `first-tree doctor` |
 | List local agent bindings | `first-tree agent list` |
 | List every agent you manage on the server | `first-tree agent list --remote` |
-| Switch a machine to another user | `first-tree login <token>` with the new user's token, then confirm the switch |
+| Switch a machine to another user | `first-tree login <code>` with the new user's connect code, then confirm the switch |
 | Destructively reset damaged local client state | `first-tree computer reset` |
 | Send a chat message | `first-tree chat send <agent-name> "message"` |
 | List chats | `first-tree chat list` |
@@ -118,7 +118,7 @@ retained as a read-only debug endpoint.
 | Variable | Purpose |
 |---|---|
 | `FIRST_TREE_HOME` | Override config/data home directory. By default this is channel-dependent: `~/.first-tree` for prod, `~/.first-tree-staging` for staging, `~/.first-tree-dev` for dev. |
-| `FIRST_TREE_SERVER_URL` | Server URL for SDK and non-login commands; `login` derives it from the connect token. |
+| `FIRST_TREE_SERVER_URL` | Server URL override for `login <code>` and fallback for SDK/non-login commands. |
 
 ## Using the SDK
 
@@ -149,10 +149,10 @@ and ack via `connection.sendInboxAck(entryId)`.
 
 | Error | Cause | Fix |
 |---|---|---|
-| `HTTP_401` | Invalid or revoked token | Run `first-tree login <token>` with a fresh token |
+| `HTTP_401` | Invalid or revoked connect code | Run `first-tree login <code>` with a fresh code |
 | `HTTP_403` | Agent suspended or deleted | Check the agent's status in the admin UI |
 | `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_SERVER_URL` or that the local server is running |
-| `CLIENT_USER_MISMATCH` (WS close 4403) | Active client id is not accepted for the current credentials | Back up local workspaces, run `first-tree computer reset`, then run `first-tree login <token>` with the intended account |
+| `CLIENT_USER_MISMATCH` (WS close 4403) | Active client id is not accepted for the current credentials | Back up local workspaces, run `first-tree computer reset`, then run `first-tree login <code>` with the intended account |
 | `AMBIGUOUS_AGENT` | Multiple local agents and no `--agent` flag | Pass `--agent <name>` explicitly |
 
 ## For AI agents driving onboarding
@@ -166,8 +166,8 @@ and ack via `connection.sendInboxAck(entryId)`.
   it explicitly when more than one agent runs on the same client to
   avoid `AMBIGUOUS_AGENT`.
 - If the user already has local First Tree state for a different account
-  on this machine, run `first-tree login <token>` with the new user's
-  connect token. Interactive terminals prompt for confirmation; non-TTY
+  on this machine, run `first-tree login <code>` with the new user's
+  connect code. Interactive terminals prompt for confirmation; non-TTY
   automation must pass `--force-switch`. That flag only confirms the switch:
   First Tree still stops and drains the old runtime, verifies switch gates,
   parks inactive local client state, and refuses to move root state if any

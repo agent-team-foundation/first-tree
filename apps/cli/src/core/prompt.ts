@@ -81,19 +81,19 @@ export async function promptMissingFields(options: {
  */
 export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{ name: string; agentId: string }> {
   // Phase 3 needs a live server to resolve the canonical agent name, which
-  // means the caller must have run `connect <token>` first. Detect the
+  // means the caller must have run `login <code>` first. Detect the
   // two common "not connected yet" states up front with a clear error
   // instead of letting `ensureFreshAccessToken` or `resolveServerUrl`
   // throw a cryptic message after the user already typed a UUID.
   if (loadCredentials() === null) {
-    throw new Error(`Not connected. Run \`${channelConfig.binName} login <token>\` first.`);
+    throw new Error(`Not connected. Run \`${channelConfig.binName} login <code>\` first.`);
   }
   let serverUrl: string;
   try {
     serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${msg} Run \`${channelConfig.binName} login <token>\` or set FIRST_TREE_SERVER_URL.`);
+    throw new Error(`${msg} Run \`${channelConfig.binName} login <code>\` or set FIRST_TREE_SERVER_URL.`);
   }
 
   const agentId =

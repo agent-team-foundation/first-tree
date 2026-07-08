@@ -327,8 +327,9 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("id: client_c0ffee00");
   });
 
-  it("exchanges a short connect URL token", async () => {
-    const token = "http://first-tree.test/connect/short_code-123";
+  it("exchanges a short connect code using the configured server URL", async () => {
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test/";
+    const token = "short_code-1234567890";
     await runLogin(["login", token, "--no-start"]);
 
     expect(cliFetchMock).toHaveBeenCalledWith(
@@ -344,14 +345,23 @@ describe("login command", { timeout: 60_000 }, () => {
     });
   });
 
-  it("requires explicit confirmation for cross-account login with a short connect URL", async () => {
+  it("rejects a connect URL instead of accepting it as a short code", async () => {
+    const token = "http://first-tree.test/connect/short_code-123";
+    await expect(runLogin(["login", token, "--no-start"])).rejects.toThrow("process.exit");
+
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Connect code must be the short code only",
+    );
+  });
+
+  it("requires explicit confirmation for cross-account login with a short connect code", async () => {
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
     writeCredentials("member-old", "http://first-tree.test", "user-old");
 
-    await expect(runLogin(["login", "http://first-tree.test/connect/short_code-123", "--no-start"])).rejects.toThrow(
-      "process.exit",
-    );
+    await expect(runLogin(["login", "short_code-1234567890", "--no-start"])).rejects.toThrow("process.exit");
 
     expect(cliFetchMock).toHaveBeenCalledTimes(1);
     expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
@@ -362,14 +372,15 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(output).toContain("--force-switch");
   });
 
-  it("parks the old local client when --force-switch confirms a short-URL account switch", async () => {
+  it("parks the old local client when --force-switch confirms a short-code account switch", async () => {
+    process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
     mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
     writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-old\nruntime: claude-code\n");
     writeCredentials("member-old", "http://first-tree.test", "user-old");
 
-    await runLogin(["login", "http://first-tree.test/connect/short_code-123", "--no-start", "--force-switch"]);
+    await runLogin(["login", "short_code-1234567890", "--no-start", "--force-switch"]);
 
     const parkedRoot = join(home, "parked-clients", "client_aabbccdd");
     expect(readFileSync(join(parkedRoot, "config", "client.yaml"), "utf8")).toContain("client_aabbccdd");
@@ -681,7 +692,7 @@ describe("login command", { timeout: 60_000 }, () => {
     await expect(runLogin(["login", jwt({ iss: "http://hub.test" })])).rejects.toThrow("process.exit");
     expect(handleClientOrgMismatchMock).toHaveBeenCalledWith(
       expect.any(client.ClientOrgMismatchError),
-      expect.objectContaining({ managed: false, rerunCommand: "first-tree-dev login <token>" }),
+      expect.objectContaining({ managed: false, rerunCommand: "first-tree-dev login <code>" }),
     );
 
     stderrMock.mockClear();
