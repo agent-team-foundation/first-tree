@@ -204,7 +204,8 @@ fi
   (the examples above are English).
 
 Finally, in the **current** chat, report the issue URL back to the user and
-mention that a dedicated tracking chat has been opened to follow it.
+say where it is being tracked: the dedicated chat if one was opened, or (on
+the fallback) this chat.
 
 ## Guardrails
 
