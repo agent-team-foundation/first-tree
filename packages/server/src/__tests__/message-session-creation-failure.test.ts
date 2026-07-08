@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createChat } from "../services/chat.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -35,6 +35,11 @@ beforeAll(async () => {
   vi.resetModules();
   const m = await import("../services/message.js");
   sendMessage = m.sendMessage;
+});
+
+afterAll(() => {
+  vi.doUnmock("../services/activity.js");
+  vi.resetModules();
 });
 
 describe("sendMessage — N4-B: predictive activation failure does not block the message", () => {
