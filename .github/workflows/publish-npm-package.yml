@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: "scripts/portable/node-version.txt"
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
 
@@ -267,7 +267,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: "scripts/portable/node-version.txt"
           registry-url: "https://registry.npmjs.org"
 
       - name: Ensure trusted publishing npm version

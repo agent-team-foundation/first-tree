@@ -1,6 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,13 +19,21 @@ import {
   artifactDownloadUrl,
   artifactFileName,
   buildPortableReleaseMetadata,
+  copyPortableAppTemplate,
   DEFAULT_DOWNLOAD_BASE_URL,
+  DEFAULT_NODE_VERSION,
   manifestDownloadUrl,
+  NODE_VERSION_FILE,
   normalizeDownloadBaseUrl,
   normalizeGeneratedAt,
+  normalizeNodeVersion,
+  packageJsonForApp,
   parsePlatform,
   portableTarCreateArgs,
+  relativizeInternalSymlinks,
   renderInstallerForChannel,
+  resolveNodeVersion,
+  resolvePinnedDependenciesFromPnpmList,
   validateChannelVersion,
   writeDeterministicTarGz,
 } from "../../../scripts/portable/build-portable.mjs";
@@ -148,6 +165,112 @@ describe("portable builder helpers", () => {
   it("normalizes generatedAt timestamps for release metadata", () => {
     expect(normalizeGeneratedAt("2026-01-01T08:00:00+08:00")).toBe("2026-01-01T00:00:00.000Z");
     expect(() => normalizeGeneratedAt("not-a-date")).toThrow(/valid timestamp/);
+  });
+
+  it("uses an exact default Node runtime version from the portable pin file", () => {
+    expect(readFileSync(NODE_VERSION_FILE, "utf8").trim()).toBe(DEFAULT_NODE_VERSION);
+    expect(DEFAULT_NODE_VERSION).toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(normalizeNodeVersion(DEFAULT_NODE_VERSION.slice(1))).toBe(DEFAULT_NODE_VERSION);
+  });
+
+  it("rejects floating Node runtime specs", async () => {
+    await expect(resolveNodeVersion("latest-v24.x")).rejects.toThrow(/exact Node.js version/);
+  });
+
+  it("writes portable package dependencies with exact locked versions", () => {
+    const sourcePackage = {
+      description: "First Tree CLI",
+      license: "MIT",
+      repository: { type: "git", url: "https://example.test/first-tree.git" },
+      engines: { node: ">=22.13" },
+      dependencies: {
+        commander: "^13.1.0",
+        zod: "^4.0.0",
+      },
+    };
+    const dependencies = resolvePinnedDependenciesFromPnpmList({
+      packageName: "first-tree-dev",
+      sourceDependencies: sourcePackage.dependencies,
+      listOutput: JSON.stringify([
+        {
+          name: "first-tree-dev",
+          dependencies: {
+            commander: { version: "13.1.0" },
+            zod: { version: "4.3.6" },
+          },
+        },
+      ]),
+    });
+    const appPackage = packageJsonForApp({
+      channelConfig: {
+        packageName: "first-tree",
+        binName: "first-tree",
+        aliasName: "ft",
+      },
+      version: "1.2.3",
+      dependencies,
+      sourcePackage,
+    });
+
+    expect(appPackage.dependencies).toEqual({ commander: "13.1.0", zod: "4.3.6" });
+    expect(
+      Object.values(appPackage.dependencies).every((version) => !version.startsWith("^") && !version.startsWith("~")),
+    ).toBe(true);
+  });
+
+  it("fails when a portable dependency is missing from locked pnpm output", () => {
+    expect(() =>
+      resolvePinnedDependenciesFromPnpmList({
+        packageName: "first-tree-dev",
+        sourceDependencies: {
+          commander: "^13.1.0",
+          zod: "^4.0.0",
+        },
+        listOutput: JSON.stringify([
+          {
+            name: "first-tree-dev",
+            dependencies: {
+              commander: { version: "13.1.0" },
+            },
+          },
+        ]),
+      }),
+    ).toThrow(/zod.*missing/);
+  });
+
+  it("rewrites pnpm absolute internal symlinks to portable relative targets", async () => {
+    const root = tempDir("first-tree-portable-symlink-");
+    await mkdir(join(root, "node_modules", ".pnpm", "zod@4.3.6", "node_modules", "zod"), { recursive: true });
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    const target = join(root, "node_modules", ".pnpm", "zod@4.3.6", "node_modules", "zod");
+    const link = join(root, "node_modules", "zod");
+    await writeFile(join(target, "index.js"), "export {};\n");
+    await symlink(target, link);
+
+    relativizeInternalSymlinks(root);
+
+    expect(readlinkSync(link)).toBe(".pnpm/zod@4.3.6/node_modules/zod");
+    expect(readFileSync(join(link, "index.js"), "utf8")).toBe("export {};\n");
+  });
+
+  it("copies portable app templates without rewriting relative symlinks to the source temp dir", async () => {
+    const source = tempDir("first-tree-portable-copy-source-");
+    const output = tempDir("first-tree-portable-copy-output-");
+    await mkdir(join(source, "node_modules", ".pnpm", "zod@4.3.6", "node_modules", "zod"), { recursive: true });
+    const link = join(source, "node_modules", "zod");
+    await symlink(".pnpm/zod@4.3.6/node_modules/zod", link);
+
+    copyPortableAppTemplate(source, join(output, "app"));
+
+    expect(readlinkSync(join(output, "app", "node_modules", "zod"))).toBe(".pnpm/zod@4.3.6/node_modules/zod");
+  });
+
+  it("rejects portable app symlinks that point outside the app root", async () => {
+    const root = tempDir("first-tree-portable-outside-symlink-");
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    await symlink(tmpdir(), join(root, "node_modules", "outside"));
+
+    expect(() => relativizeInternalSymlinks(root)).toThrow(/outside app root/);
   });
 
   it("writes deterministic portable archive bytes for the same inputs", async () => {

@@ -7,26 +7,50 @@ import {
   lstatSync,
   lutimesSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-
-export const PORTABLE_PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
-export const DEFAULT_NODE_VERSION = "latest-v24.x";
-export const DEFAULT_DOWNLOAD_BASE_URL = "https://download.first-tree.ai/releases";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..");
 const CLI_ROOT = join(REPO_ROOT, "apps", "cli");
 const SHARED_CHANNEL_DIST = join(REPO_ROOT, "packages", "shared", "dist", "channel", "index.mjs");
+const EXACT_NODE_VERSION_RE = /^v?\d+\.\d+\.\d+$/;
+const EXACT_PACKAGE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+export const PORTABLE_PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
+export const DEFAULT_DOWNLOAD_BASE_URL = "https://download.first-tree.ai/releases";
+export const NODE_VERSION_FILE = join(SCRIPT_DIR, "node-version.txt");
+
+function normalizeExactNodeVersionString(version) {
+  if (typeof version !== "string") return null;
+  const trimmed = version.trim();
+  if (!EXACT_NODE_VERSION_RE.test(trimmed)) return null;
+  return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
+}
+
+export function readDefaultNodeVersion() {
+  const value = readFileSync(NODE_VERSION_FILE, "utf8").trim();
+  const normalized = normalizeExactNodeVersionString(value);
+  if (!normalized) {
+    throw new Error(`scripts/portable/node-version.txt must contain an exact Node.js version like v24.18.0`);
+  }
+  return normalized;
+}
+
+export const DEFAULT_NODE_VERSION = readDefaultNodeVersion();
 
 const CHANNEL_FALLBACKS = {
   prod: {
@@ -154,7 +178,7 @@ function printHelp() {
   console.log(`Usage: node scripts/portable/build-portable.mjs --channel prod|staging --version <semver> --git-sha <sha> --out-dir <path> [options]
 
 Options:
-  --node-version <version>          Node.js version or latest-v24.x (default: ${DEFAULT_NODE_VERSION})
+  --node-version <version>          Exact Node.js version (vX.Y.Z or X.Y.Z). Defaults to scripts/portable/node-version.txt (${DEFAULT_NODE_VERSION})
   --download-base-url <url>         Public artifact base URL (default: ${DEFAULT_DOWNLOAD_BASE_URL})
   --generated-at <timestamp>        Release generation timestamp. Defaults to the current time.
   --platform <platform>             Repeatable: ${PORTABLE_PLATFORMS.join(", ")}
@@ -309,50 +333,137 @@ function copyPruneScripts(appDir) {
   }
 }
 
-function packageJsonForApp({ channelConfig, version }) {
-  const source = readJson(join(CLI_ROOT, "package.json"));
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function resolvePinnedDependenciesFromPnpmList({ packageName, sourceDependencies, listOutput }) {
+  let parsed;
+  try {
+    parsed = JSON.parse(listOutput);
+  } catch (err) {
+    fail(`failed to parse pnpm list output for ${packageName}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!Array.isArray(parsed)) fail(`pnpm list output for ${packageName} must be a JSON array`);
+  const project = parsed.find((item) => isRecord(item) && item.name === packageName);
+  if (!isRecord(project)) {
+    fail(`pnpm list did not return package ${packageName}; run pnpm install --frozen-lockfile first`);
+  }
+  const listedDependencies = isRecord(project.dependencies) ? project.dependencies : {};
+  const pinned = {};
+  for (const depName of Object.keys(sourceDependencies ?? {})) {
+    const entry = listedDependencies[depName];
+    if (!isRecord(entry) || typeof entry.version !== "string") {
+      fail(`portable dependency ${depName} is missing from locked pnpm output for ${packageName}`);
+    }
+    if (!EXACT_PACKAGE_VERSION_RE.test(entry.version)) {
+      fail(`portable dependency ${depName} resolved to non-exact version ${entry.version}`);
+    }
+    pinned[depName] = entry.version;
+  }
+  return pinned;
+}
+
+export function resolvePinnedAppDependencies(sourcePackage = readJson(join(CLI_ROOT, "package.json"))) {
+  if (!sourcePackage.name) fail("apps/cli/package.json must have a package name");
+  const sourceDependencies = isRecord(sourcePackage.dependencies) ? sourcePackage.dependencies : {};
+  const res = run("pnpm", ["list", "--filter", sourcePackage.name, "--prod", "--json", "--depth", "0"], {
+    cwd: REPO_ROOT,
+    stdio: "pipe",
+  });
+  return resolvePinnedDependenciesFromPnpmList({
+    packageName: sourcePackage.name,
+    sourceDependencies,
+    listOutput: res.stdout,
+  });
+}
+
+export function packageJsonForApp({
+  channelConfig,
+  version,
+  dependencies,
+  sourcePackage = readJson(join(CLI_ROOT, "package.json")),
+}) {
   return {
     name: channelConfig.packageName,
     version,
     type: "module",
-    description: source.description,
-    license: source.license,
-    repository: source.repository,
-    engines: source.engines,
+    description: sourcePackage.description,
+    license: sourcePackage.license,
+    repository: sourcePackage.repository,
+    engines: sourcePackage.engines,
     bin: {
       [channelConfig.binName]: "./cli/index.mjs",
       [channelConfig.aliasName]: "./cli/index.mjs",
     },
-    dependencies: source.dependencies,
+    dependencies,
   };
+}
+
+function cleanupPnpmInstallMetadata(appDir) {
+  for (const path of [
+    join(appDir, "pnpm-lock.yaml"),
+    join(appDir, "node_modules", ".modules.yaml"),
+    join(appDir, "node_modules", ".pnpm-workspace-state-v1.json"),
+    join(appDir, "node_modules", ".pnpm", "lock.yaml"),
+  ]) {
+    rmSync(path, { force: true });
+  }
+}
+
+function isPathInside(parent, child) {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+export function relativizeInternalSymlinks(root, dir = root) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const target = readlinkSync(path);
+      const absoluteTarget = resolve(dirname(path), target);
+      if (!isPathInside(root, absoluteTarget)) {
+        fail(`portable app contains symlink outside app root: ${path} -> ${target}`);
+      }
+      const relativeTarget = relative(dirname(path), absoluteTarget) || ".";
+      if (relativeTarget !== target) {
+        unlinkSync(path);
+        symlinkSync(relativeTarget, path);
+      }
+    } else if (entry.isDirectory()) {
+      relativizeInternalSymlinks(root, path);
+    }
+  }
+}
+
+export function copyPortableAppTemplate(sourceDir, destDir) {
+  cpSync(sourceDir, destDir, { recursive: true, verbatimSymlinks: true });
 }
 
 async function prepareAppTemplate({ channel, channelConfig, version }) {
   const root = await mkdtemp(join(tmpdir(), "first-tree-portable-app-"));
   const appDir = join(root, "app");
+  const sourcePackage = readJson(join(CLI_ROOT, "package.json"));
+  const dependencies = resolvePinnedAppDependencies(sourcePackage);
   cpSync(join(CLI_ROOT, "dist"), appDir, { recursive: true });
   await rewriteBundleChannel(appDir, channel);
   cpSync(join(REPO_ROOT, "skills"), join(appDir, "skills"), { recursive: true });
   cpSync(join(CLI_ROOT, "README.md"), join(appDir, "README.md"));
   cpSync(join(CLI_ROOT, "LICENSE"), join(appDir, "LICENSE"));
   copyPruneScripts(appDir);
-  writeJson(join(appDir, "package.json"), packageJsonForApp({ channelConfig, version }));
+  writeJson(join(appDir, "package.json"), packageJsonForApp({ channelConfig, version, dependencies, sourcePackage }));
+  cpSync(join(REPO_ROOT, "pnpm-lock.yaml"), join(appDir, "pnpm-lock.yaml"));
 
   run(
-    "npm",
-    [
-      "install",
-      "--omit=dev",
-      "--omit=optional",
-      "--ignore-scripts",
-      "--package-lock=false",
-      "--fund=false",
-      "--audit=false",
-    ],
+    "pnpm",
+    ["install", "--lockfile-only", "--prod", "--ignore-scripts", "--no-optional", "--offline", "--no-frozen-lockfile"],
     {
       cwd: appDir,
     },
   );
+  run("pnpm", ["install", "--prod", "--ignore-scripts", "--no-optional", "--frozen-lockfile"], {
+    cwd: appDir,
+  });
   for (const script of [
     "scripts/prune-codex-runtime-binary.mjs",
     "scripts/prune-claude-runtime-binary.mjs",
@@ -363,13 +474,17 @@ async function prepareAppTemplate({ channel, channelConfig, version }) {
       env: { ...process.env, npm_config_global: "true" },
     });
   }
+  relativizeInternalSymlinks(appDir);
+  cleanupPnpmInstallMetadata(appDir);
   return { root, appDir };
 }
 
-function normalizeNodeVersion(version) {
-  if (/^v\d+\.\d+\.\d+$/.test(version)) return version;
-  if (/^\d+\.\d+\.\d+$/.test(version)) return `v${version}`;
-  fail(`unsupported Node.js version string: ${version}`);
+export function normalizeNodeVersion(version) {
+  const normalized = normalizeExactNodeVersionString(version);
+  if (normalized) return normalized;
+  fail(
+    `portable release builds require an exact Node.js version (vX.Y.Z or X.Y.Z), got ${version}. Use scripts/portable/node-version.txt or --node-version vX.Y.Z.`,
+  );
 }
 
 async function downloadText(url) {
@@ -385,13 +500,7 @@ async function downloadFile(url, dest) {
   await writeFile(dest, body);
 }
 
-async function resolveNodeVersion(versionSpec) {
-  if (versionSpec === "latest-v24.x") {
-    const index = JSON.parse(await downloadText("https://nodejs.org/dist/index.json"));
-    const found = index.find((entry) => typeof entry.version === "string" && entry.version.startsWith("v24."));
-    if (!found) fail("could not resolve latest Node.js v24.x from nodejs.org/dist/index.json");
-    return found.version;
-  }
+export async function resolveNodeVersion(versionSpec) {
   return normalizeNodeVersion(versionSpec);
 }
 
@@ -477,7 +586,7 @@ async function buildPlatformArtifact(options) {
   const artifactRoot = await mkdtemp(join(tmpdir(), "first-tree-portable-root-"));
   try {
     const appEntry = "app/cli/index.mjs";
-    cpSync(options.appTemplateDir, join(artifactRoot, "app"), { recursive: true });
+    copyPortableAppTemplate(options.appTemplateDir, join(artifactRoot, "app"));
     await downloadNodeRuntime({
       nodeVersion: options.nodeVersion,
       platform: options.platform,

@@ -3,9 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+NODE_VERSION_FILE="$SCRIPT_DIR/node-version.txt"
 
 DEFAULT_PLATFORMS=("darwin-arm64" "darwin-x64" "linux-arm64" "linux-x64")
-DEFAULT_NODE_VERSION="latest-v24.x"
+DEFAULT_NODE_VERSION="$(tr -d '[:space:]' < "$NODE_VERSION_FILE")"
 DEFAULT_OUT_DIR=".portable-release"
 DEFAULT_DOWNLOAD_BASE_URL="https://download.first-tree.ai/releases"
 
@@ -35,7 +36,7 @@ Options:
   --download-base-url <url>     Public release base URL, without prod/staging.
   --out-dir <dir>               Output directory. Defaults to FIRST_TREE_PORTABLE_OUT_DIR or .portable-release.
   --platform <platform>         Repeatable platform filter.
-  --node-version <version>      Node runtime version. Defaults to FIRST_TREE_PORTABLE_NODE_VERSION or latest-v24.x.
+  --node-version <version>      Exact Node runtime version. Defaults to FIRST_TREE_PORTABLE_NODE_VERSION or scripts/portable/node-version.txt.
   --generated-at <timestamp>    Release generation timestamp. Defaults to the current git commit timestamp.
   --skip-workspace-build        Reuse an existing apps/cli/dist build.
   --help                        Show this help.

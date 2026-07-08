@@ -171,7 +171,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: "scripts/portable/node-version.txt"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
       - name: Build linux-x64 portable artifact
@@ -179,7 +179,6 @@ jobs:
           ./scripts/portable/build-release.sh \
             --channel prod \
             --version 0.0.0 \
-            --node-version latest-v24.x \
             --download-base-url "https://downloads.first-tree.ai" \
             --out-dir .portable-smoke \
             --platform linux-x64
