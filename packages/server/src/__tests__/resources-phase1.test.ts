@@ -6,7 +6,7 @@ import {
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
   PROMPT_APPEND_MAX_LENGTH,
 } from "@first-tree/shared";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -16,6 +16,7 @@ import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { resources } from "../db/schema/resources.js";
 import { createAgent } from "../services/agent.js";
+import { LANDING_CAMPAIGN_TRIAL_PROMPT } from "../services/landing-campaigns/trial-prompt.js";
 import { createOrganization } from "../services/organization.js";
 import { backfillResourcesPhase1 } from "../services/resources-migration.js";
 import { uuidv7 } from "../uuid.js";
@@ -864,6 +865,213 @@ describe("Resources Phase 1", () => {
       `/api/v1/orgs/${owner.organizationId}/resources/${resource.id}`,
     );
     expect(classBDetail.statusCode).toBe(404);
+  });
+
+  it("lists active and stale team resources only", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const prompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Alpha prompt",
+        defaultEnabled: "available",
+        payload: { body: "Alpha" },
+      },
+      owner.memberId,
+    );
+    const skill = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "skill",
+        name: "Beta skill",
+        defaultEnabled: "available",
+        payload: {
+          name: "beta",
+          description: "Beta skill",
+          body: "Use beta.",
+          metadata: {},
+        },
+      },
+      owner.memberId,
+    );
+    const retired = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "repo",
+        name: "Retired repo",
+        defaultEnabled: "available",
+        payload: { url: "https://github.com/acme/retired.git" },
+      },
+      owner.memberId,
+    );
+    await app.resourcesService.retireResource(retired.id, owner.memberId);
+
+    const rows = await app.resourcesService.listTeamResources(owner.organizationId);
+
+    expect(rows.map((row) => row.id)).toEqual([prompt.id, skill.id]);
+    expect(rows[0]).toMatchObject({
+      id: prompt.id,
+      organizationId: owner.organizationId,
+      scope: "team",
+      status: "active",
+      payload: { body: "Alpha" },
+    });
+  });
+
+  it("rejects invalid agent resource binding references", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+    const otherAgent = await createRuntimeAgent(app, owner);
+    const teamPrompt = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "prompt",
+        name: "Team prompt",
+        defaultEnabled: "available",
+        payload: { body: "Prompt" },
+      },
+      owner.memberId,
+    );
+
+    const expectRejectedBinding = async (
+      binding: Parameters<typeof app.resourcesService.replaceAgentResources>[1]["bindings"][number],
+      message: string,
+    ) => {
+      const current = await app.resourcesService.getAgentResources(agent.uuid);
+      await expect(
+        app.resourcesService.replaceAgentResources(
+          agent.uuid,
+          { expectedVersion: current.version, bindings: [binding] },
+          owner.memberId,
+        ),
+      ).rejects.toThrow(message);
+    };
+
+    await expectRejectedBinding(
+      { type: "repo", mode: "include", resourceId: crypto.randomUUID() },
+      "is not available to this agent",
+    );
+    await expectRejectedBinding(
+      { type: "repo", mode: "include", resourceId: teamPrompt.id },
+      'has type "prompt", expected "repo"',
+    );
+
+    const ownedAgentRepoId = uuidv7();
+    await app.db.insert(resources).values({
+      id: ownedAgentRepoId,
+      organizationId: owner.organizationId,
+      type: "repo",
+      scope: "agent",
+      ownerAgentId: agent.uuid,
+      name: "Owned repo",
+      repoCanonicalKey: canonicalizeResourceRepoUrl("https://github.com/acme/owned.git"),
+      defaultEnabled: null,
+      status: "active",
+      payload: { url: "https://github.com/acme/owned.git" },
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await expectRejectedBinding(
+      { type: "repo", mode: "disable", resourceId: ownedAgentRepoId },
+      "is not a Team resource",
+    );
+
+    const otherAgentRepoId = uuidv7();
+    await app.db.insert(resources).values({
+      id: otherAgentRepoId,
+      organizationId: owner.organizationId,
+      type: "repo",
+      scope: "agent",
+      ownerAgentId: otherAgent.uuid,
+      name: "Other repo",
+      repoCanonicalKey: canonicalizeResourceRepoUrl("https://github.com/acme/other.git"),
+      defaultEnabled: null,
+      status: "active",
+      payload: { url: "https://github.com/acme/other.git" },
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await expectRejectedBinding(
+      { type: "repo", mode: "include", resourceId: otherAgentRepoId },
+      "is not owned by this agent",
+    );
+
+    const agentMcpId = uuidv7();
+    await app.db.insert(resources).values({
+      id: agentMcpId,
+      organizationId: owner.organizationId,
+      type: "mcp",
+      scope: "agent",
+      ownerAgentId: agent.uuid,
+      name: "Agent MCP",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { name: "agent-mcp", transport: "stdio", command: "agent-mcp" },
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await expectRejectedBinding(
+      { type: "mcp", mode: "include", resourceId: agentMcpId },
+      "Only repo and skill resources may be agent-scoped",
+    );
+  });
+
+  it("refreshes landing campaign trial prompt content and removes stale inline guardrails", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const agent = await createRuntimeAgent(app, owner);
+
+    await app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(agent.uuid, owner.memberId);
+    const [promptResource] = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "prompt"), eq(resources.scope, "agent")))
+      .limit(1);
+    expect(promptResource).toBeDefined();
+    await app.db
+      .update(resources)
+      .set({ payload: { body: "stale", description: "stale" } })
+      .where(eq(resources.id, promptResource?.id ?? ""));
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: owner.organizationId,
+      agentId: agent.uuid,
+      type: "prompt",
+      mode: "include",
+      resourceId: null,
+      replacesResourceId: null,
+      inlinePromptBody: LANDING_CAMPAIGN_TRIAL_PROMPT,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 99,
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    const before = await app.configService.get(agent.uuid);
+
+    await app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(agent.uuid, owner.memberId);
+
+    const [refreshed] = await app.db
+      .select({ payload: resources.payload })
+      .from(resources)
+      .where(eq(resources.id, promptResource?.id ?? ""));
+    expect(refreshed?.payload).toMatchObject({ body: LANDING_CAMPAIGN_TRIAL_PROMPT });
+    const staleInlineRows = await app.db
+      .select({ id: agentResourceBindings.id })
+      .from(agentResourceBindings)
+      .where(
+        and(
+          eq(agentResourceBindings.agentId, agent.uuid),
+          isNull(agentResourceBindings.resourceId),
+          eq(agentResourceBindings.inlinePromptBody, LANDING_CAMPAIGN_TRIAL_PROMPT),
+        ),
+      );
+    expect(staleInlineRows).toHaveLength(0);
+    const after = await app.configService.get(agent.uuid);
+    expect(after.version).toBe(before.version + 1);
   });
 });
 
