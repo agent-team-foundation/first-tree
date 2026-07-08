@@ -1,9 +1,12 @@
 # QA Package Instructions
 
-`@first-tree/qa` is the internal entry point for agent-run QA work in this repository. It owns reusable QA
-briefings, natural-language QA cases, isolated environment recipes, observability guidance, and reusable fixtures.
+`@first-tree/qa` is the internal entry point for human-requested, agent-run QA work in this repository. It owns reusable
+briefings, natural-language QA cases, isolated environment recipes, evidence guidance, and reusable fixtures.
 
-It is not a test runner, a CLI, a CI gate, or a replacement for product unit, integration, or E2E tests.
+It is not a test runner, a CLI, a CI gate, or a replacement for product unit, integration, E2E, or skill-eval coverage.
+If a check can be made deterministic and stable, move it to the product test suite. If the goal is recurring regression
+coverage for agent-backed behavior, use `@first-tree/skill-evals`. Use this package for task-scoped QA where a capable
+agent must plan, observe, adapt, and report honestly.
 
 ## Required Invariants
 
@@ -16,14 +19,19 @@ A formal QA result cannot be `PASS` when any of these invariants is violated:
 4. Run artifacts are written to a temporary run directory, not committed to the source repository.
 5. Environment, dependency, credential, provider/auth, or data-precondition failures are `BLOCKED`, not product `FAIL`.
 
-## Working Model
+## Default Flow
 
-- Start from a QA task request, not from a complete test plan.
-- Read the relevant repository, issue, PR, design, or Context Tree context before planning.
-- Create a run-local QA plan before executing validation.
-- Use cases as reusable prompts for a capable agent, not as a rigid machine DSL.
-- Choose observability evidence based on the task, case scope, and live risk.
-- Report limitations plainly when coverage is partial.
+1. Start from the QA task request. It can be incomplete; it does not need to be a test plan.
+2. Read the relevant repository, issue, PR, design, or Context Tree context before planning.
+3. Write a run-local QA plan that names the validation question, selected cases, run cell, evidence, limits, and stop
+   conditions.
+4. Prepare the smallest isolated run cell that can answer the question.
+5. Execute through black-box product entry points where possible, adapt when live facts contradict assumptions, and keep
+   evidence tied to conclusions.
+6. Report one status with limitations and artifact locations.
+
+Cases are reusable prompts for a capable agent, not a rigid machine DSL. They can guide judgment, but the run-local plan
+and live product evidence own the current run.
 
 ## Result Statuses
 
@@ -36,7 +44,7 @@ A formal QA result cannot be `PASS` when any of these invariants is violated:
 
 - Put case authoring guidance under `cases/`.
 - Put execution guidance under `briefings/`.
-- Put environment recipes under `environment/`.
-- Put observability capability guidance under `observability/`.
+- Put run-cell and provider-bridge recipes under `environment/`.
+- Put evidence and redaction guidance under `observability/`.
 - Put reusable, non-run-specific assets under `fixtures/`.
 - Do not add a public `bin`, lifecycle CLI, automated runner, or guard command without a separate design decision.

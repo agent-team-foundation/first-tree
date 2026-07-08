@@ -2,7 +2,7 @@
 
 Use this briefing to execute a planned QA run and report the result.
 
-## Execution Principles
+## Execution Loop
 
 - Execute against the isolated run cell described in the QA plan.
 - Prefer black-box product entry points: CLI, HTTP API, web UI, daemon/runtime behavior, provider behavior, and persisted
@@ -10,6 +10,7 @@ Use this briefing to execute a planned QA run and report the result.
 - Use source reading to understand risk and interpret behavior, not as the only evidence for `PASS`.
 - Adjust the plan when live facts contradict assumptions, and record the reason.
 - Stop early with `BLOCKED` when required setup, data, credentials, or provider readiness cannot be established.
+- Stop with `INCONCLUSIVE` when validation ran but evidence is incomplete, unstable, interrupted, or contradictory.
 
 ## Evidence
 
@@ -24,5 +25,14 @@ to quote, summarize it and keep the local artifact path available for the operat
 
 Use one overall status: `PASS`, `FAIL`, `BLOCKED`, or `INCONCLUSIVE`.
 
-For `FAIL`, produce a bug artifact with reproduction steps, expected behavior, actual behavior, evidence, impact, and a
-suspected cause or dispatch direction. Do not turn the bug artifact into an implementation plan.
+A useful report includes:
+
+- status and one-sentence conclusion;
+- scope actually covered;
+- evidence that supports the conclusion;
+- findings, including any reproducible product bugs;
+- limitations and skipped areas;
+- artifact paths.
+
+For `FAIL`, produce a bug artifact with reproduction steps, expected behavior, actual behavior, evidence, impact, and
+suspected owner or dispatch direction. Do not turn the bug artifact into an implementation plan.
