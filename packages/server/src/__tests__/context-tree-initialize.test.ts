@@ -511,6 +511,61 @@ owners: [${ACCOUNT_LOGIN}]
     expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
   });
 
+  it("returns repo_unavailable when the installation loses access before writing NODE.md", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    const fetchSpy = mockFetch(async (url) => {
+      if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) return githubRepoResponse(201);
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ message: "Resource not accessible by integration" }, 403);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "repo_unavailable" });
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+  });
+
+  it("returns repo_unavailable when validation workflow creation loses installation access", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    const fetchSpy = mockFetch(async (url) => {
+      if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) return githubRepoResponse(201);
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        return jsonResponse({ message: "Resource not accessible by integration" }, 403);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "repo_unavailable" });
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+  });
+
   for (const createConflictStatus of [409, 422]) {
     it(`initializes successfully when validation workflow create returns ${createConflictStatus} and the file now exists`, async () => {
       const app = getApp();
