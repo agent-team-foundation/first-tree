@@ -146,12 +146,18 @@ jobs:
             "ft": "./dist/cli/index.mjs",
           };
           fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+          const clientSentryDsn = JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "");
+          const clientSentryDsnAssignment = `export const CLIENT_SENTRY_DSN = ${clientSentryDsn};`;
+          const formattedClientSentryDsn =
+            clientSentryDsnAssignment.length > 120
+              ? `export const CLIENT_SENTRY_DSN =\n  ${clientSentryDsn};\n`
+              : `${clientSentryDsnAssignment}\n`;
           fs.writeFileSync(
             "src/build-info.ts",
             'import type { ChannelName } from "@first-tree/shared/channel";\n' +
               'export const CHANNEL: ChannelName = "prod";\n' +
               `export const GIT_SHA = ${JSON.stringify(process.env.RELEASE_GIT_SHA)};\n` +
-              `export const CLIENT_SENTRY_DSN = ${JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "")};\n`,
+              formattedClientSentryDsn,
           );
           NODE
           echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for prod publish"
@@ -350,12 +356,18 @@ jobs:
             "fts": "./dist/cli/index.mjs",
           };
           fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+          const clientSentryDsn = JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "");
+          const clientSentryDsnAssignment = `export const CLIENT_SENTRY_DSN = ${clientSentryDsn};`;
+          const formattedClientSentryDsn =
+            clientSentryDsnAssignment.length > 120
+              ? `export const CLIENT_SENTRY_DSN =\n  ${clientSentryDsn};\n`
+              : `${clientSentryDsnAssignment}\n`;
           fs.writeFileSync(
             "src/build-info.ts",
             'import type { ChannelName } from "@first-tree/shared/channel";\n' +
               'export const CHANNEL: ChannelName = "staging";\n' +
               `export const GIT_SHA = ${JSON.stringify(process.env.RELEASE_GIT_SHA)};\n` +
-              `export const CLIENT_SENTRY_DSN = ${JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "")};\n`,
+              formattedClientSentryDsn,
           );
           NODE
           echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for staging publish"
