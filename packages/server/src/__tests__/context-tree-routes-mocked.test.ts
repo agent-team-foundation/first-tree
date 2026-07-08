@@ -201,4 +201,103 @@ describe("org context tree routes with mocked service edges", () => {
     });
     expect(ctx.mocks.getRepoFileWithToken).toHaveBeenCalledTimes(2);
   });
+
+  it("maps root node verification failures to an upstream initialize error", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getRepoFileWithToken.mockRejectedValueOnce(new Error("github timeout"));
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "Couldn't verify the Context Tree root node. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
+    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+  });
+
+  it("maps workflow verification failures after root success", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getRepoFileWithToken
+      .mockResolvedValueOnce({ path: "NODE.md" })
+      .mockRejectedValueOnce(new Error("github timeout"));
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "Couldn't verify the Context Tree validation workflow. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+  });
+
+  it("maps workflow conflict verification failures to the existing-file upstream error", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getRepoFileWithToken
+      .mockResolvedValueOnce({ path: "NODE.md" })
+      .mockRejectedValueOnce(new ctx.classes.GithubAppApiError(404))
+      .mockRejectedValueOnce(new Error("github timeout"));
+    ctx.mocks.createRepoFileWithToken.mockRejectedValueOnce(new ctx.classes.GithubAppApiError(422));
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "Couldn't verify the existing Context Tree validation workflow. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.getRepoFileWithToken).toHaveBeenCalledTimes(3);
+    expect(ctx.mocks.putOrgSetting).not.toHaveBeenCalled();
+  });
+
+  it("initializes missing root and workflow files before saving the org setting", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getOrganization.mockResolvedValueOnce({
+      id: ctx.scope.organizationId,
+      name: "fallback-name",
+      displayName: "  Àcme   Research Team  ",
+    });
+    ctx.mocks.getRepoFileWithToken
+      .mockRejectedValueOnce(new ctx.classes.GithubAppApiError(404))
+      .mockRejectedValueOnce(new ctx.classes.GithubAppApiError(404));
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      repo: ctx.repo.cloneUrl,
+      htmlUrl: ctx.repo.htmlUrl,
+      branch: "main",
+      nodePath: "NODE.md",
+    });
+    expect(ctx.mocks.ensureInstallationOwnedContextTreeRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ repoName: "acme-research-team-context-tree", teamName: "Àcme Research Team" }),
+    );
+    expect(ctx.mocks.createRepoFileWithToken).toHaveBeenCalledTimes(2);
+    expect(ctx.mocks.createRepoFileWithToken).toHaveBeenNthCalledWith(
+      1,
+      "ghs_test",
+      expect.objectContaining({
+        path: "NODE.md",
+        message: "Initialize Context Tree root node",
+      }),
+    );
+    expect(ctx.mocks.createRepoFileWithToken).toHaveBeenNthCalledWith(
+      2,
+      "ghs_test",
+      expect.objectContaining({
+        path: ".github/workflows/validate-tree.yml",
+        message: "Initialize Context Tree validation workflow",
+      }),
+    );
+    expect(ctx.mocks.putOrgSetting).toHaveBeenCalledWith(
+      ctx.app.db,
+      ctx.scope.organizationId,
+      "context_tree",
+      { repo: ctx.repo.cloneUrl, branch: "main" },
+      { updatedBy: ctx.scope.userId },
+    );
+  });
 });

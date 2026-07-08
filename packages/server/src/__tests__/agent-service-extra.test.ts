@@ -13,6 +13,7 @@ import {
   clearAgentAvatarImage,
   createAgent,
   deleteAgent,
+  ensureClientSupportsRuntimeProvider,
   getAgentAvatarImage,
   getAgentSkills,
   listAgentsForAdmin,
@@ -24,6 +25,8 @@ import {
   updateAgent,
   updateAgentSkills,
 } from "../services/agent.js";
+import { createMember } from "../services/member.js";
+import { createOrganization } from "../services/organization.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
 describe("agent service extra coverage", () => {
@@ -143,6 +146,74 @@ describe("agent service extra coverage", () => {
     ).rejects.toThrow(/Manager "member-missing" not found/);
   });
 
+  it("validates reserved names, explicit manager/org pairs, and direct capability checks", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `agent-extra-${crypto.randomUUID().slice(0, 8)}` });
+    const otherOrg = await createOrganization(app.db, {
+      name: `agent-extra-org-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Agent Extra Org",
+    });
+
+    await expect(
+      createAgent(app.db, {
+        name: `__reserved-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: admin.memberId,
+        clientId: admin.clientId,
+      }),
+    ).rejects.toThrow(/names starting with "__"/);
+    await expect(
+      createAgent(app.db, {
+        name: "system",
+        type: "agent",
+        managerId: admin.memberId,
+        clientId: admin.clientId,
+      }),
+    ).rejects.toThrow(/reserved/);
+    await expect(
+      createAgent(app.db, {
+        name: `missing-pair-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: "member-missing",
+        organizationId: admin.organizationId,
+      }),
+    ).rejects.toThrow(/Manager "member-missing" not found/);
+    await expect(
+      createAgent(app.db, {
+        name: `wrong-org-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: admin.memberId,
+        organizationId: otherOrg.id,
+        clientId: admin.clientId,
+      }),
+    ).rejects.toThrow(/same organization/);
+
+    await app.db.update(members).set({ status: "left" }).where(eq(members.id, admin.memberId));
+    await expect(
+      createAgent(app.db, {
+        name: `inactive-manager-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: admin.memberId,
+        organizationId: admin.organizationId,
+        clientId: admin.clientId,
+      }),
+    ).rejects.toThrow(/Manager/);
+    await app.db.update(members).set({ status: "active" }).where(eq(members.id, admin.memberId));
+
+    await app.db.update(clients).set({ retiredAt: new Date() }).where(eq(clients.id, admin.clientId));
+    await expect(ensureClientSupportsRuntimeProvider(app.db, admin.clientId, "codex")).rejects.toMatchObject({
+      statusCode: 410,
+    });
+    await expect(ensureClientSupportsRuntimeProvider(app.db, null, "codex")).resolves.toBeUndefined();
+
+    const unusual = await createAgent(app.db, {
+      name: `unusual-type-${crypto.randomUUID().slice(0, 6)}`,
+      type: "external" as never,
+      managerId: admin.memberId,
+    });
+    expect(unusual.visibility).toBe("private");
+  });
+
   it("validates updateAgent client, type, manager, and delegate mutation guards", async () => {
     const app = getApp();
     const admin = await createAdminContext(app, { username: `agent-update-${crypto.randomUUID().slice(0, 8)}` });
@@ -168,6 +239,18 @@ describe("agent service extra coverage", () => {
     await expect(updateAgent(app.db, bound.uuid, { managerId: null })).rejects.toThrow(/managerId cannot be cleared/);
     await expect(updateAgent(app.db, bound.uuid, { managerId: "member-missing" })).rejects.toThrow(
       /Manager "member-missing" not found/,
+    );
+    const otherOrg = await createOrganization(app.db, {
+      name: `agent-update-org-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Agent Update Org",
+    });
+    const otherOrgMember = await createMember(app.db, otherOrg.id, {
+      username: `agent-update-foreign-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Foreign Manager",
+      role: "admin",
+    });
+    await expect(updateAgent(app.db, bound.uuid, { managerId: otherOrgMember.id })).rejects.toThrow(
+      /same organization/,
     );
     await expect(updateAgent(app.db, bound.uuid, { delegateMention: admin.humanAgentUuid })).rejects.toThrow(
       /delegateMention can only be set on human agents/,
