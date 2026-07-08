@@ -141,8 +141,10 @@ describe("GithubAppInstallationPanel", () => {
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
     const { container, root } = await renderDom(<GithubAppInstallationPanel />);
 
-    await waitForText(container, "Connected as");
-    expect(container.textContent).toContain("octocat");
+    await waitForText(container, "Connected to");
+    // GitHub accounts render as the full github.com path so a GitHub org is
+    // never confusable with a First Tree team name.
+    expect(container.textContent).toContain("github.com/octocat");
     expect(container.textContent).toContain("User");
     expect(container.textContent).toContain("suspended upstream");
     expect(container.querySelector<HTMLAnchorElement>("a")?.href).toBe(
@@ -280,9 +282,12 @@ describe("GithubAppInstallationPanel", () => {
     await click(buttonByText(container, "Connect GitHub"));
 
     await waitForText(container, "Available to connect");
-    expect(container.textContent).toContain("free-org");
+    // The panel reads as the two steps of the real flow.
+    expect(container.textContent).toContain("Step 1: Install the First Tree App on your GitHub");
+    expect(container.textContent).toContain("Step 2: Connect to your GitHub");
+    expect(container.textContent).toContain("github.com/free-org");
     expect(container.textContent).toContain("Connected to this team");
-    expect(container.textContent).toContain("mine-org");
+    expect(container.textContent).toContain("github.com/mine-org");
     expect(container.textContent).toContain("Connected to other teams");
     expect(container.textContent).toContain("Connected to Other Team");
 
@@ -298,13 +303,40 @@ describe("GithubAppInstallationPanel", () => {
     });
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
     const { container, root } = await renderDom(<GithubAppInstallationPanel />);
-    await waitForText(container, "Connected as");
+    await waitForText(container, "Connected to");
     await click(buttonByText(container, "Manage connection"));
 
     await waitForText(container, "Connected to this team");
     await click(buttonByText(container, "Disconnect"));
     expect(githubMocks.disconnectGithubAppInstallation).toHaveBeenCalledWith("org-1");
 
+    await act(async () => root.unmount());
+  });
+
+  it("shows the installed state in Step 1 (Reinstall + Manage on GitHub) once the team is connected", async () => {
+    githubMocks.getGithubAppConnectPanel.mockResolvedValue({
+      installations: [panelInstallation({ installationId: 22, accountLogin: "mine-org", status: "connected-here" })],
+    });
+    const fakeTab = { location: { href: "" }, close: vi.fn() };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel />);
+    await waitForText(container, "Connected to");
+    await click(buttonByText(container, "Manage connection"));
+
+    // Step 1 flips from the install CTA to the done state with two follow-ups.
+    await waitForText(container, "GitHub App installed.");
+    expect(buttonByText(container, "Install on GitHub")).toBeNull();
+    const manageLink = [...container.querySelectorAll("a")].find((a) => a.textContent?.includes("Manage on GitHub"));
+    expect(manageLink?.href).toBe("https://github.com/organizations/acme/settings/installations/123");
+
+    // Reinstall starts a fresh install through the same mint-on-click flow.
+    await click(buttonByText(container, "Reinstall"));
+    expect(githubMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
+    expect(fakeTab.location.href).toBe("https://github.com/apps/first-tree/installations/new");
+    await waitForText(container, "Waiting for GitHub… You may need a GitHub org admin to approve.");
+
+    openSpy.mockRestore();
     await act(async () => root.unmount());
   });
 

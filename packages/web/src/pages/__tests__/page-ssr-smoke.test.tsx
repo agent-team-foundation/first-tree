@@ -1350,7 +1350,7 @@ describe("page SSR smoke coverage", () => {
         />,
       ),
     ).toContain("Join Acme");
-    expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected as");
+    expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected to");
     expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Repository");
     expect(renderPage(<UserMenu />)).toContain("user-menu");
     expect(() => renderPage(<TeamSetupModal action="create" onClose={() => undefined} />)).not.toThrow();
