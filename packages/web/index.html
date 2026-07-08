@@ -42,6 +42,27 @@
         });
       })();
     </script>
+    <!--
+      Microsoft Clarity — session insights for the production Web Console.
+      Like GA4, this is hostname-gated because the Docker build ships one dist
+      across channels; staging/local must not write into the production project.
+    -->
+    <script>
+      (() => {
+        if (window.location.hostname !== "cloud.first-tree.ai") return;
+        window.clarity =
+          window.clarity ||
+          ((...args) => {
+            const queue = window.clarity.q || [];
+            window.clarity.q = queue;
+            queue.push(args);
+          });
+        const tag = document.createElement("script");
+        tag.async = true;
+        tag.src = "https://www.clarity.ms/tag/xj2f9syfng";
+        document.head.appendChild(tag);
+      })();
+    </script>
     <script>
       (() => {
         const t = localStorage.getItem("theme");

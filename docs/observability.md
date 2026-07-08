@@ -93,6 +93,18 @@ The Docker release workflow passes `VITE_SENTRY_DSN` and
 the Web build, which makes Sentry enabled by default for the managed release
 path without committing the public DSN to the repo.
 
+## Web product analytics and session insights
+
+The Web Console loads Microsoft Clarity for production session insights. The
+project id is `xj2f9syfng`.
+
+Clarity is loaded from `packages/web/index.html` only when
+`window.location.hostname` is `cloud.first-tree.ai`. Local development hosts and
+staging hosts such as `dev.cloud.first-tree.ai` do not fetch the Clarity SDK and
+do not write into the production project. This mirrors the GA4 host gate in the
+same SPA shell and avoids requiring a Vite env var, Docker build argument, or
+secret for this fixed production tag.
+
 ### Client configuration
 
 ```bash
