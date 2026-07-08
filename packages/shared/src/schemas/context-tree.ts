@@ -319,6 +319,16 @@ export const contextTreeIoSummarySchema = z.object({
 });
 export type ContextTreeIoSummary = z.infer<typeof contextTreeIoSummarySchema>;
 
+// The one structured recovery cause the Context tab can act on: the snapshot
+// is unavailable specifically because the GitHub App installation can't read
+// the bound repo, and adding the repo to the installation fixes it. The server
+// sets this only after probing repo access, so the UI never misdirects users
+// to GitHub for unavailable causes that adding a repo can't fix (bad branch,
+// transient clone error, local / non-GitHub binding, missing / suspended
+// installation).
+export const contextTreeRecoveryActionSchema = z.literal("manage_github_app_installation");
+export type ContextTreeRecoveryAction = z.infer<typeof contextTreeRecoveryActionSchema>;
+
 export const contextTreeSnapshotSchema = z.object({
   repo: z.string().nullable(),
   branch: z.string().nullable(),
@@ -326,6 +336,9 @@ export const contextTreeSnapshotSchema = z.object({
   syncedAt: z.string().nullable(),
   snapshotStatus: contextTreeSnapshotStatusSchema,
   contextStatus: contextTreeStatusSchema,
+  // Absent/null for the happy path and for every unavailable cause other than
+  // a probed GitHub App repo-coverage gap. See contextTreeRecoveryActionSchema.
+  recoveryAction: contextTreeRecoveryActionSchema.nullish(),
   summary: contextTreeSummarySchema,
   usage: contextTreeUsageSummarySchema,
   io: contextTreeIoSummarySchema,

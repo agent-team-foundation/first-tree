@@ -431,6 +431,8 @@ describe("ContextPage DOM behavior", () => {
         repo: "https://github.com/acme/context-tree",
         branch: "main",
         snapshotStatus: "unavailable",
+        // Server probed and confirmed the App can't read the repo.
+        recoveryAction: "manage_github_app_installation",
         contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
       }),
     );
@@ -448,11 +450,38 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => root.unmount());
   });
 
-  it("shows an admin the problem without a dead button when no App installation is bound", async () => {
+  it("keeps the generic copy and shows no CTA for a non-coverage unavailable cause", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
-    // No installation at all (endpoint 404 → null): the recovery button has no
-    // manageUrl to point at, so it must not render, and the copy must not dangle
-    // an "add it" instruction the admin can't act on here.
+    const { ContextPage } = await import("../context.js");
+    // Unavailable but NOT a GitHub App coverage gap (e.g. bad branch / transient
+    // clone): the server leaves recoveryAction unset, so the admin sees the
+    // generic sync copy and no misdirecting "Add repo" CTA, and the admin-only
+    // installation endpoint is never fetched.
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "unavailable",
+        recoveryAction: null,
+        contextStatus: { label: "Sync failed", detail: "Invalid branch", severity: "error" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "First Tree cannot read the team Context Tree yet.");
+    expect(
+      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Add repo to the GitHub App")),
+    ).toBe(false);
+    expect(container.textContent).not.toContain("Ask an admin to add it to the GitHub App");
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it("shows an admin the problem without a dead button when the manage URL never resolves", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    // Coverage gap confirmed by the server, but the manage-URL fetch resolves to
+    // null (e.g. the installation row raced away): the button must not render,
+    // and the copy must not dangle an "add it" instruction with nothing to click.
     githubAppMocks.getGithubAppInstallation.mockResolvedValue(null);
     const { ContextPage } = await import("../context.js");
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
@@ -460,6 +489,7 @@ describe("ContextPage DOM behavior", () => {
         repo: "https://github.com/acme/context-tree",
         branch: "main",
         snapshotStatus: "unavailable",
+        recoveryAction: "manage_github_app_installation",
         contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
       }),
     );
@@ -472,7 +502,7 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => root.unmount());
   });
 
-  it("directs a member to ask an admin (no CTA, no admin-only fetch) when a bound tree repo is unreadable", async () => {
+  it("directs a member to ask an admin (no CTA, no admin-only fetch) when the App can't read the repo", async () => {
     authMock.value = { organizationId: "org-1", role: "member" };
     const { ContextPage } = await import("../context.js");
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
@@ -480,6 +510,7 @@ describe("ContextPage DOM behavior", () => {
         repo: "https://github.com/acme/context-tree",
         branch: "main",
         snapshotStatus: "unavailable",
+        recoveryAction: "manage_github_app_installation",
         contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
       }),
     );

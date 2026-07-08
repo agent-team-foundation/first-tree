@@ -1,9 +1,10 @@
-import type { ContextTreeSnapshot } from "@first-tree/shared";
+import type { ContextTreeRecoveryAction, ContextTreeSnapshot } from "@first-tree/shared";
 import { type ContextTreeBinding, isGithubRemoteBinding } from "./context-tree-snapshot.js";
 import {
   createAppJwt,
   GithubAppApiError,
   type GithubAppCredentials,
+  getRepository,
   type InstallationToken,
   mintInstallationToken,
 } from "./github-app.js";
@@ -124,4 +125,71 @@ export function decorateSnapshotWithMintGuidance(
       detail: `${snapshot.contextStatus.detail} ${guidance}`,
     },
   };
+}
+
+/**
+ * Parse a binding's `repo` (a GitHub HTTPS URL or `owner/name` shorthand) into
+ * `{ owner, repo }`. Returns null for non-GitHub / unparseable values, matching
+ * the `isGithubRemoteBinding` boundary.
+ */
+function parseGithubOwnerRepo(repo: string | undefined): { owner: string; repo: string } | null {
+  if (!repo) return null;
+  const normalized = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(repo) ? `https://github.com/${repo}` : repo;
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com") return null;
+  const parts = url.pathname
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/, "")
+    .split("/");
+  if (parts.length < 2 || !parts[0] || !parts[1]) return null;
+  return { owner: parts[0], repo: parts[1] };
+}
+
+/**
+ * Resolve the one structured recovery action the Context tab can offer for an
+ * unavailable snapshot: "the GitHub App installation can't read this repo — add
+ * it to the installation."
+ *
+ * This is DEFINITIVE, not a heuristic: it probes the repo with the minted
+ * installation token and only returns the action on a 404 — GitHub's signal
+ * that this installation token can't see the repo (outside a selected-repos
+ * installation, or the repo is gone), which is exactly what adding the repo to
+ * the installation fixes. It returns null — leaving the generic sync-unavailable
+ * copy in place — for every other case, so the UI never sends users to GitHub
+ * for a failure that adding a repo can't fix:
+ *  - snapshot not unavailable (nothing to recover)
+ *  - non-GitHub / local binding (`isGithubRemoteBinding` false)
+ *  - no minted token (no installation / suspended / mint failed — different fixes)
+ *  - the App CAN read the repo (so the failure is a bad branch, transient clone
+ *    error, or other cause) → readable, no action
+ *  - a 403 (ambiguous: rate limit, SAML enforcement, a missing permission — none
+ *    fixed by adding a repo) or any transient/unknown probe error → fail toward
+ *    the generic copy, never toward a misdirecting CTA
+ */
+export async function resolveContextTreeRecoveryAction(
+  snapshot: ContextTreeSnapshot,
+  binding: ContextTreeBinding,
+  mintResult: ContextTreeInstallationTokenResult,
+  options: MintContextTreeInstallationTokenOptions = {},
+): Promise<ContextTreeRecoveryAction | null> {
+  if (snapshot.snapshotStatus !== "unavailable") return null;
+  if (!isGithubRemoteBinding(binding)) return null;
+  if (!mintResult.ok) return null;
+  const parsed = parseGithubOwnerRepo(binding.repo);
+  if (!parsed) return null;
+  try {
+    await getRepository(mintResult.token, parsed.owner, parsed.repo, { fetcher: options.fetcher });
+    return null;
+  } catch (error) {
+    if (error instanceof GithubAppApiError && error.status === 404) {
+      return "manage_github_app_installation";
+    }
+    return null;
+  }
 }

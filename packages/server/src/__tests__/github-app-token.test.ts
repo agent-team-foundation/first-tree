@@ -7,6 +7,7 @@ import {
   type ContextTreeInstallationTokenResult,
   decorateSnapshotWithMintGuidance,
   mintContextTreeInstallationToken,
+  resolveContextTreeRecoveryAction,
 } from "../services/github-app-token.js";
 
 /**
@@ -166,6 +167,117 @@ describe("services/github-app-token", () => {
       };
       const decorated = decorateSnapshotWithMintGuidance(snapshot, githubBinding, failure);
       expect(decorated.contextStatus.detail).toContain("GitHub returned 403");
+    });
+  });
+
+  describe("resolveContextTreeRecoveryAction", () => {
+    const githubBinding: ContextTreeBinding = { repo: "agent-team-foundation/first-tree-context", branch: "main" };
+    const mintOk: ContextTreeInstallationTokenResult = {
+      ok: true,
+      token: "ghs_t",
+      permissions: { contents: "read" },
+      repositorySelection: "selected",
+    };
+    const readableRepoBody = JSON.stringify({
+      owner: { login: "agent-team-foundation" },
+      name: "first-tree-context",
+      full_name: "agent-team-foundation/first-tree-context",
+      clone_url: "https://github.com/agent-team-foundation/first-tree-context.git",
+      html_url: "https://github.com/agent-team-foundation/first-tree-context",
+      private: true,
+    });
+
+    it("returns the manage action when the App cannot read the repo (404)", async () => {
+      const fetcher: typeof fetch = async () => new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
+      const action = await resolveContextTreeRecoveryAction(snapshot, githubBinding, mintOk, { fetcher });
+      expect(action).toBe("manage_github_app_installation");
+    });
+
+    it("parses a full https .git URL binding and probes the right repo (404 → action)", async () => {
+      const probed: string[] = [];
+      const fetcher: typeof fetch = async (url) => {
+        probed.push(String(url));
+        return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      };
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
+      const action = await resolveContextTreeRecoveryAction(
+        snapshot,
+        { repo: "https://github.com/agent-team-foundation/first-tree-context.git", branch: "main" },
+        mintOk,
+        { fetcher },
+      );
+      expect(action).toBe("manage_github_app_installation");
+      expect(probed).toEqual(["https://api.github.com/repos/agent-team-foundation/first-tree-context"]);
+    });
+
+    it("returns null on a 403 (ambiguous — rate limit / SAML / missing permission, not a coverage gap)", async () => {
+      const fetcher: typeof fetch = async () => new Response(JSON.stringify({ message: "Forbidden" }), { status: 403 });
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
+      const action = await resolveContextTreeRecoveryAction(snapshot, githubBinding, mintOk, { fetcher });
+      expect(action).toBeNull();
+    });
+
+    it("returns null when the App can read the repo (some other unavailable cause, e.g. bad branch)", async () => {
+      const fetcher: typeof fetch = async () =>
+        new Response(readableRepoBody, { status: 200, headers: { "content-type": "application/json" } });
+      const snapshot = unavailableSnapshot("Invalid branch 'nope'.");
+      const action = await resolveContextTreeRecoveryAction(snapshot, githubBinding, mintOk, { fetcher });
+      expect(action).toBeNull();
+    });
+
+    it("does not probe (returns null) when the snapshot is not unavailable", async () => {
+      let probed = false;
+      const fetcher: typeof fetch = async () => {
+        probed = true;
+        return new Response("{}", { status: 200 });
+      };
+      const snapshot: ContextTreeSnapshot = { ...unavailableSnapshot("ok"), snapshotStatus: "active" };
+      const action = await resolveContextTreeRecoveryAction(snapshot, githubBinding, mintOk, { fetcher });
+      expect(action).toBeNull();
+      expect(probed).toBe(false);
+    });
+
+    it("does not probe (returns null) for a non-GitHub / local binding", async () => {
+      let probed = false;
+      const fetcher: typeof fetch = async () => {
+        probed = true;
+        return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      };
+      const snapshot = unavailableSnapshot("Context Tree checkout not found at /tmp/tree.");
+      const action = await resolveContextTreeRecoveryAction(
+        snapshot,
+        { repo: "agent-team-foundation/first-tree-context", localPath: "/tmp/tree" },
+        mintOk,
+        { fetcher },
+      );
+      expect(action).toBeNull();
+      expect(probed).toBe(false);
+    });
+
+    it("does not probe (returns null) when no token was minted", async () => {
+      let probed = false;
+      const fetcher: typeof fetch = async () => {
+        probed = true;
+        return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      };
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
+      const action = await resolveContextTreeRecoveryAction(
+        snapshot,
+        githubBinding,
+        { ok: false, reason: "no-installation" },
+        { fetcher },
+      );
+      expect(action).toBeNull();
+      expect(probed).toBe(false);
+    });
+
+    it("returns null on a transient probe error (never misdirects on a 5xx)", async () => {
+      const fetcher: typeof fetch = async () =>
+        new Response(JSON.stringify({ message: "Server Error" }), { status: 500 });
+      const snapshot = unavailableSnapshot("First Tree could not sync the configured Context Tree repo.");
+      const action = await resolveContextTreeRecoveryAction(snapshot, githubBinding, mintOk, { fetcher });
+      expect(action).toBeNull();
     });
   });
 });
