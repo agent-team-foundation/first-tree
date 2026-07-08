@@ -9,6 +9,7 @@ Use this briefing to execute a planned QA run and report the result.
   state.
 - Use source reading to understand risk and interpret behavior, not as the only evidence for `PASS`.
 - Adjust the plan when live facts contradict assumptions, and record the reason.
+- Leave a traceable record of what ran, why it changed from the plan, and where the supporting evidence lives.
 - Stop early with `BLOCKED` when required setup, data, credentials, or provider readiness cannot be established.
 - Stop with `INCONCLUSIVE` when validation ran but evidence is incomplete, unstable, interrupted, or contradictory.
 

@@ -46,5 +46,6 @@ and live product evidence own the current run.
 - Put execution guidance under `briefings/`.
 - Put run-cell and provider-bridge recipes under `environment/`.
 - Put evidence and redaction guidance under `observability/`.
+- Put minimal run artifact templates under `templates/`.
 - Put reusable, non-run-specific assets under `fixtures/`.
 - Do not add a public `bin`, lifecycle CLI, automated runner, or guard command without a separate design decision.

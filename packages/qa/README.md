@@ -16,7 +16,8 @@ agent-behavior regression coverage belongs in `@first-tree/skill-evals`.
 
 ## Run Shape
 
-A normal QA run has four local artifacts, all under a temporary run directory:
+A normal QA run has four local artifacts, all under a temporary run directory. Start from the templates in `templates/`
+when they fit, and keep them short when the run is narrow:
 
 - `plan.md` records the validation question, selected cases, environment, evidence, limits, and stop conditions.
 - `run-context.md` records the target ref, run root, service endpoints, data setup, provider readiness, and known setup
@@ -34,6 +35,7 @@ These artifacts are process output. Summarize them back to the requester; do not
 - `cases/` describes how to author prose QA cases and stores reusable cases.
 - `environment/` describes isolated run-cell recipes.
 - `observability/` describes evidence choices and redaction rules.
+- `templates/` provides minimal run artifact templates.
 - `fixtures/` is for reusable, non-sensitive QA assets only.
 
 The package deliberately has no public `bin`, runner lifecycle, case validator, or CI gate.

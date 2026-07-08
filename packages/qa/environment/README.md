@@ -14,7 +14,17 @@ git clone --bare --no-hardlinks <source-repo> "$RUN_ROOT_REAL/repo.git"
 git --git-dir="$RUN_ROOT_REAL/repo.git" worktree add --detach "$RUN_ROOT_REAL/source" <target-ref>
 ```
 
-Mount the run root at the same absolute path inside containers when host and container artifact paths need to match.
+`realpath` is intentional: on macOS `/tmp` normally resolves through `/private/tmp`, and git writes absolute gitdir paths
+for worktrees. Mounting the unresolved path into Docker can leave containerized git commands pointing at a path that does
+not exist.
+
+This recipe materializes committed refs only. Uncommitted changes in a developer checkout are silently omitted unless
+they are first committed, stashed into a ref, or otherwise materialized as the `<target-ref>`. If the requested target
+depends on uncommitted local state that cannot be reproduced in the run cell, mark the run `BLOCKED` or explicitly report
+the limitation instead of claiming full validation.
+
+Mount the resolved run root at the same absolute path inside containers when host and container artifact paths need to
+match.
 
 ## Docker Run Cell
 
