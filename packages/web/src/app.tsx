@@ -113,6 +113,12 @@ const UserMenuPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/user-menu-preview.js").then((module) => ({ default: module.UserMenuPreviewPage })))
   : null;
 
+const SupportMenuPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/support-menu-preview.js").then((module) => ({ default: module.SupportMenuPreviewPage })),
+    )
+  : null;
+
 const ChatSummaryPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/chat-summary-preview.js").then((module) => ({ default: module.ChatSummaryPreviewPage })))
   : null;
@@ -238,6 +244,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <UserMenuPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {SupportMenuPreviewPage ? (
+                <Route
+                  path="/preview/support-menu"
+                  element={
+                    <Suspense fallback={null}>
+                      <SupportMenuPreviewPage />
                     </Suspense>
                   }
                 />

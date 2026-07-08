@@ -5,6 +5,7 @@ import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { Button } from "../../../components/ui/button.js";
+import { DISCORD_INVITE_URL, WECHAT_QR_SRC } from "../../../lib/community.js";
 import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../../../utils/onboarding-flags.js";
 import {
   buildInviteeReadyBootstrap,
@@ -226,6 +227,7 @@ function AdminStartChat() {
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
+          <CommunityBlock />
         </div>
       </div>
     );
@@ -256,6 +258,7 @@ function AdminStartChat() {
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
+        <CommunityBlock />
       </div>
     </div>
   );
@@ -393,6 +396,7 @@ function InviteeReady() {
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
+        <CommunityBlock />
       </div>
     </div>
   );
@@ -459,6 +463,7 @@ function InviteeNotReady() {
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
+        <CommunityBlock />
       </div>
     </div>
   );
@@ -468,4 +473,48 @@ function InviteeNotReady() {
 
 function StartingState() {
   return <WorkingState label={COPY.startChat.starting} />;
+}
+
+/**
+ * "Join the community" — Discord + WeChat entry points under the launch CTA.
+ * Rendered only in the stable finale bodies (never during loading/starting
+ * transitions), below the primary action so it can't compete with "Start
+ * chat". The QR carries fixed dimensions so the screen doesn't jump when the
+ * image loads, and stays small so the finale keeps its upper-third anchor
+ * (see onboarding-shell.tsx).
+ */
+function CommunityBlock() {
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)", marginTop: "var(--sp-4)" }}>
+      <span className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
+        {COPY.startChat.community.title}
+      </span>
+      <div className="flex items-start" style={{ gap: "var(--sp-6)" }}>
+        <a
+          href={DISCORD_INVITE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-body underline underline-offset-2"
+          style={{ color: "var(--fg-2)" }}
+        >
+          {COPY.startChat.community.discord}
+        </a>
+        <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+          <img
+            src={WECHAT_QR_SRC}
+            width={96}
+            height={96}
+            alt={COPY.startChat.community.wechatAlt}
+            style={{
+              borderRadius: 6,
+              border: "var(--hairline) solid var(--border)",
+            }}
+          />
+          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+            {COPY.startChat.community.wechatHint}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
