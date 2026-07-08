@@ -502,18 +502,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /me/connect-tokens — short-lived connect token for the CLI.
-   * The token now carries only `sub = userId`; the CLI rejoins via
-   * `exchangeConnectToken` which probes `members` realtime.
+   * The public token is a short connect URL; the CLI rejoins via
+   * `exchangeConnectToken`, which consumes the code and probes `members`
+   * realtime before issuing user credentials.
    */
   app.post("/me/connect-tokens", async (request) => {
     const { userId } = requireUser(request);
     const issuer = resolvePublicUrl(app, request);
-    const { token, expiresIn } = await authService.generateConnectToken(
-      userId,
-      app.config.secrets.jwtSecret,
-      app.config.auth,
-      issuer,
-    );
+    const { token, expiresIn } = await authService.generateConnectToken(app.db, userId, app.config.auth, issuer);
     // Channel-aware npm spec + bin name. Web onboarding renders the
     // returned `bootstrapCommand` / `binName` directly so a fresh-machine
     // install lands on the right package without web needing to know

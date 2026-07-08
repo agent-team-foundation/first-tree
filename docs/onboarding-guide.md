@@ -49,7 +49,8 @@ because an agent is permanently bound to exactly one client machine.
 
 - `$FIRST_TREE_HOME/config/credentials.json` (mode `0600`) —
   `accessToken`, `refreshToken`, and the server URL derived from the
-  token's `iss` claim.
+  connect token. New tokens are short URLs; legacy JWT tokens are still
+  accepted during rollout.
 - `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
 - On macOS / Linux, the background daemon is installed as a user-level

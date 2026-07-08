@@ -37,7 +37,7 @@ export function decodeJwtPayload(token: string): ConnectJwt | null {
 
 export class HubUrlDerivationError extends Error {
   constructor(
-    public readonly code: "INVALID_TOKEN" | "TOKEN_MISSING_ISS" | "TOKEN_BAD_ISS",
+    public readonly code: "INVALID_TOKEN" | "TOKEN_MISSING_ISS" | "TOKEN_BAD_ISS" | "TOKEN_BAD_URL",
     message: string,
   ) {
     super(message);
@@ -46,7 +46,9 @@ export class HubUrlDerivationError extends Error {
 }
 
 /**
- * Derive the server URL from a connect token's `iss` claim. Throws
+ * Derive the server URL from a connect token. New connect tokens are short
+ * URLs (`https://hub/connect/<code>`) whose origin is the server URL. Legacy
+ * JWT connect tokens still carry the server URL in their `iss` claim. Throws
  * `HubUrlDerivationError` when the claim is missing or malformed — we
  * *never* fall back to a default URL because that would let a stale connect
  * token from one environment silently re-target another (prod → staging
@@ -56,11 +58,30 @@ export class HubUrlDerivationError extends Error {
  * function stays unit-testable without spawning a subprocess.
  */
 export function deriveHubUrlFromToken(token: string): string {
+  try {
+    const url = new URL(token);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new HubUrlDerivationError(
+        "TOKEN_BAD_URL",
+        "Connect token URL must use http(s). Generate a new token from the First Tree web console.",
+      );
+    }
+    if (!/^\/connect\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) {
+      throw new HubUrlDerivationError(
+        "TOKEN_BAD_URL",
+        "Connect token URL must look like https://<server>/connect/<code>. Generate a new token from the First Tree web console.",
+      );
+    }
+    return url.origin;
+  } catch (err) {
+    if (err instanceof HubUrlDerivationError) throw err;
+  }
+
   const payload = decodeJwtPayload(token);
   if (!payload) {
     throw new HubUrlDerivationError(
       "INVALID_TOKEN",
-      "Connect token is not a valid JWT. Generate a new one from the First Tree web console.",
+      "Connect token is not a valid connect URL or JWT. Generate a new one from the First Tree web console.",
     );
   }
   const iss = payload.iss;
