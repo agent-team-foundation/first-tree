@@ -58,6 +58,7 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 - `packages/client/` — `@first-tree/client` SDK and AgentRuntime
 - `packages/web/` — `@first-tree/web` React workspace
 - `packages/skill-evals/` — eval tooling for repo-local skills
+- `packages/qa/` — internal QA workflow assets for agent-run validation
 - `docs/` — user, operator, development, migration, and troubleshooting docs
 - `skills/` — repo-local skill payloads
 
