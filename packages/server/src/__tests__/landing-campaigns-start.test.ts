@@ -212,6 +212,9 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignServiceOrgId: SERVICE_ORG_ID,
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
   });
+  const getUnconfiguredApp = useTestApp({
+    growthLandingPagesEnabled: true,
+  });
   const getClaudeProviderApp = useTestApp({
     growthLandingPagesEnabled: true,
     landingCampaignServiceUserId: SERVICE_USER_ID,
@@ -311,6 +314,28 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(trialAgents).toHaveLength(0);
   });
 
+  it("requires the official runtime config before provisioning anything", async () => {
+    const app = getUnconfiguredApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await startProductionScan(app, admin);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining("official runtime is not configured"),
+    });
+    const trialAgents = await app.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, admin.organizationId),
+          sql`${agents.metadata} ->> 'landingCampaignTrial' = 'true'`,
+        ),
+      );
+    expect(trialAgents).toHaveLength(0);
+  });
+
   it("fails closed for Claude Code until landing campaign workspace-only is implemented", async () => {
     const app = getClaudeProviderApp();
     const admin = await createTestAdmin(app);
@@ -336,6 +361,28 @@ describe("POST /me/landing-campaigns/start", () => {
         ),
       );
     expect(trialAgents).toHaveLength(0);
+  });
+
+  it("rejects unknown landing campaign runtime providers before provisioning", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const landingCampaigns = app.config.growth.landingCampaigns;
+    if (!landingCampaigns) throw new Error("landing campaign config missing");
+    const previousRuntimeProvider = landingCampaigns.runtimeProvider;
+
+    try {
+      const mutableConfig = landingCampaigns as unknown as { runtimeProvider: "unknown-runtime" };
+      mutableConfig.runtimeProvider = "unknown-runtime";
+
+      const res = await startProductionScan(app, admin);
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({
+        error: expect.stringContaining('runtime provider "unknown-runtime" is not supported'),
+      });
+    } finally {
+      landingCampaigns.runtimeProvider = previousRuntimeProvider;
+    }
   });
 
   it("rejects an official client registered outside the service org", async () => {
@@ -377,6 +424,41 @@ describe("POST /me/landing-campaigns/start", () => {
         ),
       );
     expect(trialAgents).toHaveLength(0);
+  });
+
+  it("rejects invalid or non-GitHub repository URLs before provisioning", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const invalid = await startProductionScan(app, admin, "https://github.com/");
+    const nonGithub = await startProductionScan(app, admin, "https://gitlab.com/acme/backend");
+
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({
+      error: expect.stringContaining("valid GitHub repository"),
+    });
+    expect(nonGithub.statusCode).toBe(400);
+    expect(nonGithub.json()).toMatchObject({
+      error: expect.stringContaining("require a GitHub owner/repo URL"),
+    });
+    const serviceMembers = await app.db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)));
+    expect(serviceMembers).toHaveLength(0);
+  });
+
+  it("returns 404 when the requested organization is not an active caller membership", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await startProductionScanInOrg(app, admin, `org-missing-${crypto.randomUUID().slice(0, 8)}`);
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining("Active membership not found"),
+    });
   });
 
   it("creates the service-managed trial agent, binds only the trial prompt, and starts an unlocked capped chat", async () => {
@@ -506,6 +588,89 @@ describe("POST /me/landing-campaigns/start", () => {
       campaign: "production-scan",
       landingCampaignTrial: true,
     });
+  });
+
+  it("falls back from colliding service and trial agent names and repairs the service member", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    await app.db.insert(agents).values([
+      {
+        uuid: uuidv7(),
+        name: "first-tree-campaigns",
+        organizationId: admin.organizationId,
+        type: "human",
+        displayName: "Reserved service name",
+        inboxId: `inbox_${uuidv7()}`,
+        source: "admin-api",
+        visibility: "private",
+        managerId: admin.memberId,
+      },
+      {
+        uuid: uuidv7(),
+        name: "first-tree-campaigns-service",
+        organizationId: admin.organizationId,
+        type: "human",
+        displayName: "Reserved service suffix",
+        inboxId: `inbox_${uuidv7()}`,
+        source: "admin-api",
+        visibility: "private",
+        managerId: admin.memberId,
+      },
+      {
+        uuid: uuidv7(),
+        name: "production-scanner",
+        organizationId: admin.organizationId,
+        type: "agent",
+        displayName: "Existing production scanner",
+        inboxId: `inbox_${uuidv7()}`,
+        source: "admin-api",
+        visibility: "organization",
+        managerId: admin.memberId,
+      },
+    ]);
+
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ agentUuid: string }>();
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, firstBody.agentUuid)).limit(1);
+    expect(trialAgent?.name).toMatch(/^production-scanner-[0-9a-f]+$/);
+    const [serviceMember] = await app.db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)))
+      .limit(1);
+    expect(serviceMember?.status).toBe("active");
+    const [serviceAgent] = await app.db
+      .select()
+      .from(agents)
+      .where(eq(agents.uuid, serviceMember?.agentId ?? ""))
+      .limit(1);
+    expect(serviceAgent?.name).toMatch(/^first-tree-campaigns-[0-9a-f]+$/);
+
+    await app.db
+      .update(members)
+      .set({ status: "left", role: "admin" })
+      .where(eq(members.id, serviceMember?.id ?? ""));
+    const reactivated = await startProductionScan(app, admin, "https://github.com/acme/api");
+    expect(reactivated.statusCode).toBe(200);
+    const [afterReactivation] = await app.db
+      .select({ status: members.status, role: members.role })
+      .from(members)
+      .where(eq(members.id, serviceMember?.id ?? ""));
+    expect(afterReactivation).toEqual({ status: "active", role: "member" });
+
+    await app.db
+      .update(members)
+      .set({ role: "admin" })
+      .where(eq(members.id, serviceMember?.id ?? ""));
+    const roleRepaired = await startProductionScan(app, admin, "https://github.com/acme/frontend");
+    expect(roleRepaired.statusCode).toBe(200);
+    const [afterRoleRepair] = await app.db
+      .select({ role: members.role })
+      .from(members)
+      .where(eq(members.id, serviceMember?.id ?? ""));
+    expect(afterRoleRepair?.role).toBe("member");
   });
 
   it("purges the legacy server-materialized campaign skill from a reused trial agent", async () => {

@@ -2,20 +2,48 @@ import { AGENT_STATUSES } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
+import { assertAgentManageableByUser } from "../scope/require-resource.js";
 import {
+  agentMetadataUpdateExpressionPreservingRuntimeState,
+  assertUserAgentMetadataHasNoReservedKeys,
   checkAgentNameAvailability,
   clearAgentAvatarImage,
   createAgent,
+  deleteAgent,
   getAgentAvatarImage,
+  getAgentSkills,
   listAgentsForAdmin,
   MAX_AVATAR_IMAGE_BYTES,
+  reactivateAgent,
   setAgentAvatarImage,
+  stripReservedAgentMetadata,
+  suspendAgent,
+  updateAgent,
+  updateAgentSkills,
 } from "../services/agent.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
 describe("agent service extra coverage", () => {
   const getApp = useTestApp();
+
+  it("strips and rejects reserved metadata keys at the service boundary", () => {
+    expect(stripReservedAgentMetadata(null)).toEqual({});
+    expect(stripReservedAgentMetadata(["runtimeSession"])).toEqual({});
+    expect(
+      stripReservedAgentMetadata({
+        publicKey: "kept",
+        runtimeSession: { tokenHash: "secret" },
+        runtimeSwitch: { leaseId: "hidden" },
+      }),
+    ).toEqual({ publicKey: "kept" });
+    expect(() => assertUserAgentMetadataHasNoReservedKeys({ runtimeSession: {} })).toThrow(
+      /metadata.runtimeSession is reserved/i,
+    );
+    expect(agentMetadataUpdateExpressionPreservingRuntimeState({ publicKey: "kept" })).toBeDefined();
+  });
 
   it("reports name availability for invalid, reserved, taken, and available names", async () => {
     const app = getApp();
@@ -42,6 +70,113 @@ describe("agent service extra coverage", () => {
     await expect(checkAgentNameAvailability(app.db, admin.organizationId, "free-agent")).resolves.toEqual({
       available: true,
     });
+  });
+
+  it("validates createAgent client ownership and human pinning preconditions", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `agent-client-pre-${crypto.randomUUID().slice(0, 8)}` });
+    const other = await createAdminContext(app, { username: `agent-client-other-${crypto.randomUUID().slice(0, 8)}` });
+    const unclaimedClientId = `cli-unclaimed-${crypto.randomUUID().slice(0, 8)}`;
+    const retiredClientId = `cli-retired-${crypto.randomUUID().slice(0, 8)}`;
+    await app.db.insert(clients).values([
+      {
+        id: unclaimedClientId,
+        userId: null,
+        organizationId: admin.organizationId,
+        status: "connected",
+      },
+      {
+        id: retiredClientId,
+        userId: admin.userId,
+        organizationId: admin.organizationId,
+        status: "disconnected",
+        retiredAt: new Date(),
+      },
+    ]);
+
+    await expect(
+      createAgent(app.db, {
+        name: `human-pinned-${crypto.randomUUID().slice(0, 6)}`,
+        type: "human",
+        managerId: admin.memberId,
+        clientId: admin.clientId,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestError);
+    await expect(
+      createAgent(app.db, {
+        name: `missing-client-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: admin.memberId,
+        clientId: "cli-missing",
+      }),
+    ).rejects.toThrow(/Client "cli-missing" not found/);
+    await expect(
+      createAgent(app.db, {
+        name: `unclaimed-client-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: admin.memberId,
+        clientId: unclaimedClientId,
+      }),
+    ).rejects.toThrow(/has not been claimed by a user/);
+    await expect(
+      createAgent(app.db, {
+        name: `wrong-owner-client-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: admin.memberId,
+        clientId: other.clientId,
+      }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(
+      createAgent(app.db, {
+        name: `retired-client-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: admin.memberId,
+        clientId: retiredClientId,
+      }),
+    ).rejects.toMatchObject({ statusCode: 410 });
+    await expect(
+      createAgent(app.db, {
+        name: `missing-manager-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        managerId: "member-missing",
+      }),
+    ).rejects.toThrow(/Manager "member-missing" not found/);
+  });
+
+  it("validates updateAgent client, type, manager, and delegate mutation guards", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `agent-update-${crypto.randomUUID().slice(0, 8)}` });
+    const other = await createAdminContext(app, { username: `agent-update-other-${crypto.randomUUID().slice(0, 8)}` });
+    const bound = await createAgent(app.db, {
+      name: `bound-update-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const unbound = await createAgent(app.db, {
+      name: `unbound-update-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+    });
+
+    const invalidTypeUpdate = { type: "human" } as unknown as Parameters<typeof updateAgent>[2];
+    await expect(updateAgent(app.db, bound.uuid, invalidTypeUpdate)).rejects.toThrow(/type is immutable/);
+    await expect(updateAgent(app.db, bound.uuid, { clientId: null })).rejects.toThrow(/clientId cannot be cleared/);
+    await expect(updateAgent(app.db, bound.uuid, { clientId: other.clientId })).rejects.toThrow(
+      /clientId cannot be changed/,
+    );
+    await expect(updateAgent(app.db, bound.uuid, { managerId: null })).rejects.toThrow(/managerId cannot be cleared/);
+    await expect(updateAgent(app.db, bound.uuid, { managerId: "member-missing" })).rejects.toThrow(
+      /Manager "member-missing" not found/,
+    );
+    await expect(updateAgent(app.db, bound.uuid, { delegateMention: admin.humanAgentUuid })).rejects.toThrow(
+      /delegateMention can only be set on human agents/,
+    );
+
+    await app.db.update(agents).set({ status: AGENT_STATUSES.SUSPENDED }).where(eq(agents.uuid, unbound.uuid));
+    await expect(updateAgent(app.db, unbound.uuid, { clientId: admin.clientId })).rejects.toThrow(
+      /Suspended agents without a runtime route/,
+    );
   });
 
   it("paginates admin agent listings and skips deleted rows", async () => {
@@ -95,6 +230,74 @@ describe("agent service extra coverage", () => {
     expect(secondPage.items.map((agent) => agent.uuid)).toContain(older.uuid);
     expect(secondPage.items.map((agent) => agent.uuid)).not.toContain(deleted.uuid);
     expect(secondPage.nextCursor).toBeNull();
+  });
+
+  it("checks direct agent manageability for admins, managers, outsiders, and deleted rows", async () => {
+    const app = getApp();
+    const manager = await createAdminContext(app, {
+      username: `agent-scope-manager-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const outsider = await createAdminContext(app, {
+      username: `agent-scope-outsider-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const agent = await createAgent(app.db, {
+      name: `manageable-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: manager.memberId,
+      clientId: manager.clientId,
+    });
+
+    await expect(assertAgentManageableByUser(app.db, manager.userId, agent.uuid)).resolves.toMatchObject({
+      userId: manager.userId,
+      memberId: manager.memberId,
+      organizationId: manager.organizationId,
+    });
+
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, manager.memberId));
+    await expect(assertAgentManageableByUser(app.db, manager.userId, agent.uuid)).resolves.toMatchObject({
+      role: "member",
+      memberId: manager.memberId,
+    });
+
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, outsider.memberId));
+    await expect(assertAgentManageableByUser(app.db, outsider.userId, agent.uuid)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await app.db.update(agents).set({ status: AGENT_STATUSES.DELETED }).where(eq(agents.uuid, agent.uuid));
+    await expect(assertAgentManageableByUser(app.db, manager.userId, agent.uuid)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(assertAgentManageableByUser(app.db, manager.userId, crypto.randomUUID())).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+
+  it("rejects invalid lifecycle transitions and skill writes for missing agents", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `agent-life-${crypto.randomUUID().slice(0, 8)}` });
+    const active = await createAgent(app.db, {
+      name: `life-active-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const unbound = await createAgent(app.db, {
+      name: `life-unbound-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+    });
+
+    await expect(suspendAgent(app.db, admin.humanAgentUuid)).rejects.toThrow(/Human agent lifecycle/);
+    await expect(reactivateAgent(app.db, admin.humanAgentUuid)).rejects.toThrow(/Human agent lifecycle/);
+    await expect(deleteAgent(app.db, admin.humanAgentUuid)).rejects.toThrow(/Human agent lifecycle/);
+    await expect(reactivateAgent(app.db, active.uuid)).rejects.toThrow(/Only suspended agents/);
+    await expect(deleteAgent(app.db, active.uuid)).rejects.toThrow(/Suspend the agent first/);
+    await app.db.update(agents).set({ status: AGENT_STATUSES.SUSPENDED }).where(eq(agents.uuid, unbound.uuid));
+    await expect(reactivateAgent(app.db, unbound.uuid)).rejects.toThrow(/Suspended agents without a runtime route/);
+    await expect(suspendAgent(app.db, crypto.randomUUID())).rejects.toBeInstanceOf(NotFoundError);
+    await expect(reactivateAgent(app.db, crypto.randomUUID())).rejects.toBeInstanceOf(NotFoundError);
+    await expect(deleteAgent(app.db, crypto.randomUUID())).rejects.toBeInstanceOf(NotFoundError);
+
+    await expect(getAgentSkills(app.db, crypto.randomUUID())).rejects.toBeInstanceOf(NotFoundError);
+    await expect(updateAgentSkills(app.db, crypto.randomUUID(), [])).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("validates, stores, reads, and clears avatar image blobs", async () => {
