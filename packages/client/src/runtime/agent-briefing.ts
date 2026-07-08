@@ -824,6 +824,21 @@ and there is no auto-binding. Declaring the dependency is your job:
 
   Skip the follow only when the entity is clearly unrelated to this
   chat's task.
+- **If the follow fails because the org has not installed the First Tree
+  GitHub App**, do not dismiss it as "no action needed." You just delivered
+  something the user cares about (the PR/issue) — treat installing the App as
+  an optional value upgrade, in plain product language: it makes this entity's
+  live activity (CI results, review comments, merge) flow back into this chat,
+  and lets future PRs or issues you follow flow back here too (the App is
+  required for that; you still follow each one). Installing is an org-admin
+  action, so route by who you are talking to: if the human can set up the team
+  (an org admin — e.g. from the onboarding greeting), point them to
+  **Settings → GitHub** in the First Tree web app (you cannot mint the install
+  link yourself); if they are not an admin or you are unsure, say an
+  organization admin can enable it and offer to hand over the exact steps. Be
+  honest — it is optional and the PR/issue works either way — and never surface
+  the raw error code or \`github follow\` mechanics to the user. Say it in a
+  tight line or two, not a wall of text; users skim.
 - **Unfollow only when the human explicitly asks to stop tracking** the
   entity (\`${bin} github unfollow <entity>\`). Do not proactively unfollow
   merely because a PR or Issue completed, merged, or closed; terminal
@@ -1045,10 +1060,14 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} tree verify\` | validate a Context Tree's structure |
 | \`${bin} tree tree\` | browse Context Tree nodes as a hierarchy |
 
-Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`,
-workspace ↔ tree binding) runs from the web console or a human terminal
-— **never from inside a running agent**. Full surface:
-\`docs/cli-reference.md\`.`;
+Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`) runs from
+the web console or a human terminal — **never from inside a running agent**.
+Binding a workspace to a Context Tree is operator-owned too, with **one
+sanctioned in-agent exception**: the seed skill's own create + bind, which a
+**confirmed org admin** (with authenticated \`gh\`) runs directly on a
+build-the-tree task — no human hand-off, and never a "who runs the bind?"
+question. Stop and ask a human only if the caller is not an admin or \`gh\` is
+unauthenticated. Full surface: \`docs/cli-reference.md\`.`;
 }
 
 // --- # Context Tree ---------------------------------------------------------
@@ -1183,18 +1202,22 @@ The Context Tree for this workspace lives at:
 
 Read the root \`NODE.md\` first to map the domains before you act.`);
   } else {
-    // Tree-less stub. Binding a workspace to a tree is an operator
-    // action (web console / human at the terminal), not something an
-    // agent can self-serve — so surface the gap to a human instead of
-    // suggesting any in-agent action. (The retired `first-tree-onboarding`
-    // skill used to live here; PR following #844 deleted that provisioning
-    // flow and the broad tree-management commands it depended on.)
+    // Tree-less stub. For ordinary tasks, binding stays operator-owned —
+    // surface the gap rather than self-serving a bind. The ONE sanctioned
+    // in-agent path is the seed skill's `tree init` create + bind, for a
+    // confirmed org admin on a build/set-up-the-tree task (#844 removed the
+    // retired `first-tree-onboarding` provisioning flow; #1379 added
+    // `tree init` as the admin create+bind path this carve-out points to).
     blocks.push(`## Tree Location
 
-This agent has no Context Tree bound. If a task needs cross-domain
-context that should be persistent (decisions, ownership), surface that
-gap to a human — binding a workspace to a tree is an operator action
-taken from the web console, not from inside a running agent.`);
+This agent has no Context Tree bound. For an ordinary task that needs
+persistent cross-domain context (decisions, ownership) and no tree exists,
+surface that gap to a human — binding is normally an operator action, from the
+web console. The one exception is a **build / set up the Context Tree** task:
+there the seed skill's own create + bind is the sanctioned path for a
+**confirmed org admin** with authenticated \`gh\` — run it directly and proceed,
+never a "who runs the bind?" question; stop and ask a human only if the caller
+is not an admin or \`gh\` is unauthenticated.`);
   }
 
   return blocks.join("\n\n");
