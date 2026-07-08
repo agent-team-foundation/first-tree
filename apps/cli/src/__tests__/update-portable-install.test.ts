@@ -39,11 +39,13 @@ function sha256(path: string): string {
 async function makeArtifactPayload(options: {
   version: string;
   platform: string;
+  nodeVersion?: string;
   packageName?: string;
   binName?: string;
   aliasName?: string;
 }): Promise<string> {
   const payload = tempDir("ft-portable-payload-");
+  const nodeVersion = options.nodeVersion ?? "v24.0.0";
   const packageName = options.packageName ?? "first-tree";
   const binName = options.binName ?? "first-tree";
   const aliasName = options.aliasName ?? "ft";
@@ -64,7 +66,7 @@ async function makeArtifactPayload(options: {
       channel: "prod",
       version: options.version,
       gitSha: "abc123",
-      nodeVersion: "v24.0.0",
+      nodeVersion,
       packageName,
       binName,
       aliasName,
@@ -80,11 +82,12 @@ async function makeArtifactPayload(options: {
 }
 
 async function makePortableFixture(
-  options: { version?: string; packageName?: string; binName?: string; aliasName?: string } = {},
+  options: { version?: string; nodeVersion?: string; packageName?: string; binName?: string; aliasName?: string } = {},
 ): Promise<{ root: string; latestPath: string; manifestPath: string; tarball: string; platform: string }> {
   const platform = currentPlatform();
   if (platform === null) throw new Error("unsupported test platform");
   const version = options.version ?? "1.2.3";
+  const nodeVersion = options.nodeVersion ?? "v24.0.0";
   const packageName = options.packageName ?? "first-tree";
   const binName = options.binName ?? "first-tree";
   const aliasName = options.aliasName ?? "ft";
@@ -93,7 +96,7 @@ async function makePortableFixture(
   const versionDir = join(channelDir, version);
   mkdirSync(versionDir, { recursive: true });
 
-  const payload = await makeArtifactPayload({ version, platform, packageName, binName, aliasName });
+  const payload = await makeArtifactPayload({ version, platform, nodeVersion, packageName, binName, aliasName });
   const tarball = join(versionDir, `${packageName}-${version}-${platform}.tar.gz`);
   const tar = spawnSync("tar", ["-czf", tarball, "-C", payload, "."], { encoding: "utf8" });
   if (tar.status !== 0) throw new Error(tar.stderr);
@@ -103,7 +106,7 @@ async function makePortableFixture(
     channel: "prod",
     version,
     gitSha: "abc123",
-    nodeVersion: "v24.0.0",
+    nodeVersion,
     packageName,
     binName,
     aliasName,
@@ -126,7 +129,8 @@ async function makePortableFixture(
   return { root, latestPath, manifestPath, tarball, platform };
 }
 
-async function seedOldInstall(prefix: string): Promise<void> {
+async function seedOldInstall(prefix: string, options: { nodeVersion?: string } = {}): Promise<void> {
+  const nodeVersion = options.nodeVersion ?? "v24.0.0";
   await mkdir(join(prefix, "versions", "old"), { recursive: true });
   await writeFile(join(prefix, "versions", "old", "VERSION"), "old\n");
   await writeFile(
@@ -136,7 +140,7 @@ async function seedOldInstall(prefix: string): Promise<void> {
       channel: "prod",
       version: "0.1.0",
       gitSha: "old",
-      nodeVersion: "v24.0.0",
+      nodeVersion,
       packageName: "first-tree",
       binName: "first-tree",
       aliasName: "ft",
@@ -229,6 +233,32 @@ describe("installPortableSpec", () => {
     const { installPortableSpec } = await importProdUpdateModule();
     const result = await installPortableSpec("2.0.0");
     expect(result).toEqual({ ok: true, mode: "portable", installedVersion: "2.0.0" });
+    expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("2.0.0\n");
+  });
+
+  it("hands portable installs across bundled Node major upgrades", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makePortableFixture({ version: "2.0.0", nodeVersion: "v25.0.0" });
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix, { nodeVersion: "v24.11.1" });
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+    vi.stubEnv("HOME", home);
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    const result = await installPortableSpec("latest");
+    expect(result).toEqual({ ok: true, mode: "portable", installedVersion: "2.0.0" });
+
+    const currentInstall = JSON.parse(readFileSync(join(prefix, "current", "INSTALL.json"), "utf8")) as {
+      nodeVersion: string;
+    };
+    const oldInstall = JSON.parse(readFileSync(join(prefix, "versions", "old", "INSTALL.json"), "utf8")) as {
+      nodeVersion: string;
+    };
+    expect(oldInstall.nodeVersion).toBe("v24.11.1");
+    expect(currentInstall.nodeVersion).toBe("v25.0.0");
     expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("2.0.0\n");
   });
 

@@ -5,8 +5,13 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
-import { artifactFileName, parsePlatform, validateChannelVersion } from "../../../scripts/portable/build-portable.mjs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  artifactFileName,
+  parsePlatform,
+  resolveNodeVersion,
+  validateChannelVersion,
+} from "../../../scripts/portable/build-portable.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -70,6 +75,7 @@ exec "$FT_TEST_REAL_MV" "$@"
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
   tmpDirs = [];
 });
@@ -92,6 +98,18 @@ describe("portable builder helpers", () => {
     expect(artifactFileName({ packageName: "first-tree", version: "1.2.3", platform: "linux-x64" })).toBe(
       "first-tree-1.2.3-linux-x64.tar.gz",
     );
+  });
+
+  it("resolves latest-v<major>.x Node pins from the Node.js dist index", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      text: async () => JSON.stringify([{ version: "v25.3.1" }, { version: "v25.3.0" }, { version: "v24.11.0" }]),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(resolveNodeVersion("latest-v25.x")).resolves.toBe("v25.3.1");
+    await expect(resolveNodeVersion("24.11.0")).resolves.toBe("v24.11.0");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

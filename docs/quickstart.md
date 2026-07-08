@@ -17,8 +17,9 @@ and you can leave and resume later. This page mirrors that flow.
 ## Before you start
 
 - A **GitHub account** to sign in with.
-- **Node.js ≥ 22.13** (24 recommended) on the computer your agent will run
-  on. Setup installs the CLI for you, but Node must already be present.
+- A macOS or Linux computer where your agent will run. The default portable
+  install bundles Node.js, so Node does not need to be installed separately.
+  If you choose the npm fallback path, that machine needs Node.js ≥ 22.13.
 
 ## 1. Sign in and name your team
 
@@ -32,11 +33,14 @@ Your agent runs on a real machine, so the next step links one to your team.
 Copy the command the page shows and run it in a terminal on that machine:
 
 ```bash
-npm install -g first-tree
-first-tree login <connect-token>
+# Use the exact command from the page; production portable installs have this shape:
+curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-token>
 ```
 
-This installs the CLI and signs the computer in. `first-tree login`:
+This installs the CLI and signs the computer in. The npm global install path
+(`npm install -g first-tree`) remains available for operators and fallback
+installs, but it uses your system Node runtime. `first-tree login`:
 
 - Reads the server URL from the token's `iss` claim — **no `--server` flag
   needed**, and switching servers only takes a new token.
