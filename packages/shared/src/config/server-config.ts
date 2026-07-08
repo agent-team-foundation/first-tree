@@ -72,12 +72,19 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
     }),
     /**
-     * Optional approximate token budget for each landing campaign trial chat.
-     * When unset, trial quota remains turn-only. When set, successful agent
-     * turns advance both the turn count and this metadata-backed estimate.
+     * Approximate token budget for each landing campaign trial chat. Successful
+     * agent turns advance both the turn count and this metadata-backed estimate.
      */
-    landingCampaignMaxEstimatedTokens: field(z.number().int().min(1).optional(), {
+    landingCampaignMaxEstimatedTokens: field(z.number().int().min(1).default(120_000), {
       env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS",
+    }),
+    /**
+     * Maximum number of new landing campaign trial chats a user can create
+     * across all organizations in a rolling 24-hour window. Idempotent starts
+     * for an existing campaign/repo chat do not consume this quota.
+     */
+    landingCampaignMaxTrialsPerUserPer24Hours: field(z.number().int().min(1).default(5), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_TRIALS_PER_USER_PER_24_HOURS",
     }),
     landingCampaigns: optional({
       /**

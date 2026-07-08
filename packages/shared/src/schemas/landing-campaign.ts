@@ -35,7 +35,7 @@ export const landingCampaignTrialAgentMetadataSchema = z.object({
   campaign: landingCampaignSlugSchema,
   skillSetId: z.string().min(1),
   skillSetVersion: z.string().min(1),
-  repo: landingCampaignRepoMetadataSchema,
+  repo: landingCampaignRepoMetadataSchema.optional(),
 });
 export type LandingCampaignTrialAgentMetadata = z.infer<typeof landingCampaignTrialAgentMetadataSchema>;
 
