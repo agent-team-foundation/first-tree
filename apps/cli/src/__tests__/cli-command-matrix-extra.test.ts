@@ -312,6 +312,32 @@ describe("daemon utility commands", () => {
     expect(output).toContain("Ctrl+C");
     expect(output).toContain("daemon start");
   });
+
+  it("restarts an active systemd service when ensure-service refreshes a drifted unit", async () => {
+    setPlatform("linux");
+    coreMocks.installClientService.mockClear();
+    coreMocks.restartClientService.mockClear();
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({ state: "active", platform: "systemd", detail: "pid 123" })
+      .mockReturnValueOnce({ state: "active", platform: "systemd", detail: "pid 456" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(true);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/first-tree.service",
+      state: "active",
+    });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: true });
+
+    await runDaemon(["ensure-service"]);
+
+    expect(coreMocks.installClientService).toHaveBeenCalledTimes(1);
+    expect(coreMocks.restartClientService).toHaveBeenCalledTimes(1);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "systemd service refreshed and restarted",
+    );
+  });
 });
 
 describe("agent admin and local commands", () => {

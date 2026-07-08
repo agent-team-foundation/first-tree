@@ -6,6 +6,7 @@ import {
   isServiceSupported,
   isServiceUnitDriftDetected,
   loadCredentials,
+  restartClientService,
 } from "../../core/index.js";
 import { print } from "../../core/output.js";
 
@@ -42,6 +43,26 @@ export function registerDaemonEnsureServiceCommand(daemon: Command): void {
 
       try {
         const info = installClientService();
+        if (svc.state === "active") {
+          const restart = restartClientService();
+          if (!restart.ok) {
+            print.line(
+              `  ensure-service: ${info.platform} service refresh succeeded but restart failed: ${restart.reason}\n`,
+            );
+            process.exit(1);
+          }
+          const after = getClientServiceStatus();
+          if (after.state !== "active") {
+            print.line(
+              `  ensure-service: ${after.platform} service restarted but is not running` +
+                `${after.detail ? ` (${after.detail})` : ""}.\n`,
+            );
+            process.exit(1);
+          }
+          print.line(`  ensure-service: ${after.platform} service refreshed and restarted.\n`);
+          return;
+        }
+
         if (info.state !== "active") {
           print.line(
             `  ensure-service: ${info.platform} service installed but not running` +
