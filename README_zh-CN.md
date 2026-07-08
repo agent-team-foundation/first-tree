@@ -75,7 +75,7 @@ First Tree 围绕 Context Tree 连接五个部分：
 ## 开始使用
 
 打开 <https://first-tree.ai> 或你自己的部署登录。引导式流程会带你完成首次
-使用：给团队命名、连接一台电脑、创建第一个 Agent、连接代码、开始工作。
+使用：给团队命名、连接一台电脑、创建第一个 Agent、开始工作。
 
 完整步骤见 [Quickstart](docs/quickstart.md)。
 

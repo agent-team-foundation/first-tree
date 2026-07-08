@@ -4,10 +4,10 @@ A walkthrough that takes a brand-new account from signup to a working chat
 with your first agent.
 
 Signing in for the first time drops you into a **full-screen guided setup**.
-It walks you through five steps — name your team, connect a computer, create
-your agent, connect your code, and start your first chat — with a progress
-rail on the left tracking where you are. You can leave and resume later. This
-page mirrors that flow.
+It walks you through the essentials — name your team, connect a computer, and
+create your agent — then hands off to your first chat, where the agent helps
+you finish getting set up. A progress rail on the left tracks where you are,
+and you can leave and resume later. This page mirrors that flow.
 
 > **Self-hosting?** Use your own deployment's URL wherever this guide says
 > <https://first-tree.ai>. The rest is identical — every connect token
@@ -45,15 +45,18 @@ This installs the CLI and signs the computer in. `first-tree login`:
   stays online across reboots. (See the [Onboarding Guide](onboarding-guide.md)
   for exactly what gets written and the `--no-start` flag.)
 
-The page watches for the machine, then confirms an AI engine — a **runtime**
-such as Claude Code — is installed and signed in on it. Once it shows your
-computer connected with a ready runtime, press **Continue**. If it reports
-that no engine is ready, install one (e.g. Claude Code) on that computer and
-sign in; it appears here automatically.
+The page watches for the machine, then confirms a **coding agent** (such as
+Claude Code or Codex) is installed and signed in on it. Once it shows your
+computer connected with a ready coding agent, press **Continue**. If it
+reports that none is ready, install one (e.g. Claude Code) on that computer
+and sign in; it appears here automatically.
 
 ## 3. Create your agent
 
-Give your agent a name (for example `Buddy`) and pick who can use it:
+Your team agent runs on top of a coding agent already installed on the
+computer you just connected. Pick which one to use (Claude Code is selected
+by default when detected), give the agent a name (for example `Buddy`), and
+choose who can use it:
 
 - **Shared with team** — anyone on your team can talk to this agent.
 - **Just me** — only you can see and talk to it.
@@ -62,29 +65,31 @@ There is no "type" to choose — every agent you create here is a standard
 agent, and the visibility choice is the only difference. Click **Create**.
 
 Setup then waits for the agent to come online on the computer you connected
-("Setting up your agent… usually about 10 seconds"). This **runtime-ready
-gate** is what guarantees your first message reaches a live agent. The daemon
-on your machine picks up the new agent automatically — there is no CLI
-command to run by hand. If it doesn't come online within ~30 seconds, check
-that the computer is awake and its runtime is signed in, then try again.
+("Bringing your agent online… usually a few seconds"). This readiness gate is
+what guarantees your first message reaches a live agent. The daemon on your
+machine picks up the new agent automatically — there is no CLI command to run
+by hand. If it doesn't come online within ~30 seconds, check that the
+computer is awake and its coding agent is signed in, then try again.
 
-## 4. Connect your code
+## 4. Start your first chat
 
-Connect the projects your agent should work on: click **Install First Tree
-on GitHub**, approve the GitHub App, then pick one or more projects. Every
-change your agent makes comes back as a request you review.
+The final step launches your first conversation and lands you in the
+**Workspace** with the chat open. Setup finishes here — agent-led, in the
+chat, not as more wizard steps. Your agent walks you through the key
+operations, one approved step at a time:
 
-Not ready, or not a GitHub organization owner? You can **skip for now** and
-connect a project later from **Settings** — your first agent will simply
-start with an intro chat.
+- **Point it at your code** — share a local project folder path or a GitHub
+  repo URL, and the agent reads your project and gets a first task done. (No
+  GitHub setup is required up front; you can connect the First Tree GitHub App
+  later, when a task needs it.)
+- **Build your team's Context Tree** — once it has shown real value from your
+  code, your agent offers to build your team's shared memory: it proposes an
+  initial structure and fills it in from your code, with you approving each
+  change. (Offered to team admins; teammates who join later inherit the tree
+  automatically.)
 
-## 5. Start your first chat
-
-The final step kicks off your first conversation. For a new team it is
-**Start building your Context Tree** — your agent builds your team's shared
-knowledge base with you in the chat, walking you through each change to
-approve. Press **Start** and you land in the **Workspace** with the chat
-open.
+You reach a working agent first — none of this is a gate you clear up front.
+You can also connect code anytime from **Settings**.
 
 The Workspace is a three-panel layout:
 
@@ -94,8 +99,8 @@ The Workspace is a three-panel layout:
   send. Markdown is rendered live; agent-generated document references open
   inline in the right panel's preview mode.
 - **Right** — context for the selected chat: session state, agent text
-  output, connected computer, runtime, SDK version, recent notifications,
-  and management links.
+  output, connected computer, coding agent, SDK version, recent
+  notifications, and management links.
 
 That's it — you're chatting with your first agent.
 
@@ -103,9 +108,10 @@ That's it — you're chatting with your first agent.
 
 If you joined through an invite rather than creating the team, setup is
 shorter: a brief welcome, **Connect a computer**, **Create your agent**, then
-**Start work** — picking which of your own projects your agent should help
-with. There is no team-naming or code-connection step; your team's admin has
-already set those up.
+**Start chat**. There is no team-naming step — your team's admin has already
+set up the team, so your agent inherits whatever shared context it has (its
+connected code and Context Tree) automatically. Its first chat helps you get
+settled rather than building the tree from scratch.
 
 ## Where to go next
 
@@ -125,6 +131,7 @@ console:
 | Need | Where |
 |---|---|
 | Connect another computer | **Settings → Computers → + New Connection** |
+| Connect a code repo | **Settings** → connect GitHub |
 | Create another agent | **Team → New agent** (same name + visibility form) |
 | One-screen overview of your install | `first-tree status` |
 | Send a message to another agent | `first-tree chat send <agent> "..."` |
