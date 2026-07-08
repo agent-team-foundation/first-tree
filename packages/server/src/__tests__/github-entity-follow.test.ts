@@ -1,6 +1,6 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
@@ -408,6 +408,54 @@ describe("github-entity-follow", () => {
     expect(row?.entityState).toBe("draft");
   });
 
+  it("follows a commit URL and stores the full sha with its first-line title", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const fullSha = "3f2a91c0aaaabbbbccccddddeeeeffff00001111";
+    const fetcher = makeFetcher({
+      "/repos/Acme/Api/commits/3f2a91c0": () =>
+        json({
+          sha: fullSha,
+          html_url: `https://github.com/Acme/Api/commit/${fullSha}`,
+          commit: { message: "Fix inbox routing\n\nLonger body" },
+        }),
+      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+    });
+
+    const result = await declareEntityFollow(
+      app.db,
+      deps(fetcher),
+      followParams(s, "https://github.com/acme/api/commit/3F2A91C0"),
+    );
+
+    expect(result.outcome).toBe("created");
+    if (result.outcome !== "created") throw new Error("unreachable");
+    expect(result.entity).toMatchObject({
+      entityType: "commit",
+      entityKey: `Acme/Api@${fullSha}`,
+      htmlUrl: `https://github.com/Acme/Api/commit/${fullSha}`,
+      title: "Fix inbox routing",
+      state: null,
+      number: null,
+    });
+
+    const [row] = await app.db
+      .select({
+        entityType: githubEntityChatMappings.entityType,
+        entityKey: githubEntityChatMappings.entityKey,
+        title: githubEntityChatMappings.title,
+        entityState: githubEntityChatMappings.entityState,
+      })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, s.chatId));
+    expect(row).toEqual({
+      entityType: "commit",
+      entityKey: `Acme/Api@${fullSha}`,
+      title: "Fix inbox routing",
+      entityState: "open",
+    });
+  });
+
   it("an issue without a pull_request block resolves to entityType issue", async () => {
     const app = getApp();
     const s = await setup(app);
@@ -420,6 +468,22 @@ describe("github-entity-follow", () => {
     expect(result.outcome).toBe("created");
     if (result.outcome !== "created") throw new Error("unreachable");
     expect(result.entity.entityType).toBe("issue");
+  });
+
+  it("does not fall back to discussions when an explicit issue URL misses", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const discussionProbe = vi.fn(() => json({ number: 42 }, 200));
+    const fetcher = makeFetcher({
+      "/repos/acme/api/issues/42": () => json({ message: "Not Found" }, 404),
+      "/repos/Acme/Api/discussions/42": discussionProbe,
+      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+    });
+
+    await expect(
+      declareEntityFollow(app.db, deps(fetcher), followParams(s, "https://github.com/acme/api/issues/42")),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(discussionProbe).not.toHaveBeenCalled();
   });
 
   it("422: no installation for the org", async () => {
@@ -453,6 +517,27 @@ describe("github-entity-follow", () => {
     );
   });
 
+  it("503: installation token mint failure is retryable and writes no mapping", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const fetcher = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/access_tokens")) {
+        return json({ message: "server error" }, 500);
+      }
+      return json({ message: "unexpected" }, 500);
+    }) as typeof fetch;
+
+    await expect(declareEntityFollow(app.db, deps(fetcher), followParams(s, "acme/api#42"))).rejects.toBeInstanceOf(
+      ServiceUnavailableError,
+    );
+    const rows = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, s.chatId));
+    expect(rows).toHaveLength(0);
+  });
+
   it("R7 / 503: GitHub down → no blind write, nothing persisted", async () => {
     const app = getApp();
     const s = await setup(app);
@@ -467,6 +552,45 @@ describe("github-entity-follow", () => {
       .select()
       .from(githubEntityChatMappings)
       .where(eq(githubEntityChatMappings.chatId, s.chatId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("R7 / 503: GitHub rate-limit and network failures are retryable without writes", async () => {
+    const app = getApp();
+    const rateLimited = await setup(app);
+    const rateLimitedFetcher = makeFetcher({
+      "/repos/acme/api": () =>
+        new Response(JSON.stringify({ message: "rate limited" }), {
+          status: 403,
+          headers: { "content-type": "application/json", "x-ratelimit-remaining": "0" },
+        }),
+    });
+
+    await expect(
+      declareEntityFollow(app.db, deps(rateLimitedFetcher), followParams(rateLimited, "acme/api#42")),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+
+    const networkFetcher = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/access_tokens")) {
+        return json({
+          token: "ghs_test_token",
+          expires_at: "2099-01-01T00:00:00Z",
+          permissions: { contents: "read" },
+          repository_selection: "selected",
+        });
+      }
+      throw new Error("network down");
+    }) as typeof fetch;
+
+    await expect(
+      declareEntityFollow(app.db, deps(networkFetcher), followParams(rateLimited, "acme/api#42")),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+
+    const rows = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42"));
     expect(rows).toHaveLength(0);
   });
 
