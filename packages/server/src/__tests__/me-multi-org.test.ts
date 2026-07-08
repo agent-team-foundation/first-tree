@@ -1,9 +1,11 @@
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { invitationRedemptions } from "../db/schema/invitations.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
+import { rotateInvitation } from "../services/invitation.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, seedClient, useTestApp } from "./helpers.js";
 
@@ -114,6 +116,76 @@ describe("Multi-org self-service", () => {
     expect(meBody.memberships.length).toBe(1);
     expect(meBody.memberships[0]?.organizationId).not.toBe(admin.organizationId);
   });
+
+  it("POST /me/memberships/:memberId/leave hides memberships owned by another user", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const caller = await createTestAdmin(app);
+
+    const leaveRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/me/memberships/${owner.memberId}/leave`,
+      headers: { authorization: `Bearer ${caller.accessToken}` },
+    });
+
+    expect(leaveRes.statusCode).toBe(404);
+    expect(leaveRes.json<{ error: string }>().error).toContain(`Membership "${owner.memberId}" not found`);
+
+    const rows = await app.db.select().from(members).where(eq(members.id, owner.memberId));
+    expect(rows[0]?.status).toBe("active");
+  });
+
+  it("POST /me/organizations/join returns 404 for inactive or unknown invite tokens", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/organizations/join",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { token: `missing-${crypto.randomUUID()}` },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Invitation not found or no longer valid" });
+  });
+
+  it("POST /me/organizations/join creates membership and records redemption", async () => {
+    const app = getApp();
+    const inviter = await createTestAdmin(app);
+    const invitee = await createTestAdmin(app);
+    const sideOrg = await attachOrg(app, inviter.userId, "admin");
+    const invitation = await rotateInvitation(app.db, sideOrg.orgId, inviter.userId);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/organizations/join",
+      headers: {
+        authorization: `Bearer ${invitee.accessToken}`,
+        "user-agent": "me-multi-org-test",
+      },
+      payload: { token: invitation.token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ organizationId: string; memberId: string; role: string }>();
+    expect(body).toMatchObject({ organizationId: sideOrg.orgId, role: "member" });
+
+    const [joined] = await app.db.select().from(members).where(eq(members.id, body.memberId)).limit(1);
+    expect(joined).toMatchObject({
+      userId: invitee.userId,
+      organizationId: sideOrg.orgId,
+      role: "member",
+      status: "active",
+    });
+
+    const redemptions = await app.db
+      .select()
+      .from(invitationRedemptions)
+      .where(eq(invitationRedemptions.invitationId, invitation.id));
+    expect(redemptions).toHaveLength(1);
+    expect(redemptions[0]).toMatchObject({ userId: invitee.userId, userAgent: "me-multi-org-test" });
+  });
 });
 
 describe("Connect code bootstrap", () => {
@@ -179,6 +251,21 @@ describe("/me onboarding step inference", () => {
     expect(me.json<{ onboarding: { step: string } }>().onboarding.step).toBe("connect");
   });
 
+  it("GET /me/onboarding-step returns create_agent once a client exists without an autonomous agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedClient(app, admin.userId, admin.organizationId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/onboarding-step",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ step: "create_agent" });
+  });
+
   /**
    * Regression for #239: the onboarding inference used to key off the JWT's
    * default `memberId`, so a user whose only autonomous agent lived in a
@@ -218,5 +305,39 @@ describe("/me onboarding step inference", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json<{ onboarding: { step: string } }>().onboarding.step).toBe("completed");
+  });
+});
+
+describe("GET /me/pinned-agents", () => {
+  const getApp = useTestApp();
+
+  it("returns agents pinned to clients owned by the caller across memberships", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const clientId = await seedClient(app, admin.userId, admin.organizationId);
+    const agent = await createAgent(app.db, {
+      name: `pin-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Pinned Agent",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/pinned-agents",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toContainEqual(
+      expect.objectContaining({
+        agentId: agent.uuid,
+        clientId,
+        runtimeProvider: agent.runtimeProvider,
+        status: "active",
+      }),
+    );
   });
 });
