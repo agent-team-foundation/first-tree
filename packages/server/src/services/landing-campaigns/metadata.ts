@@ -27,14 +27,12 @@ export function buildLandingCampaignAgentMetadata(input: {
   campaign: string;
   skillSetId: string;
   skillSetVersion: string;
-  repo: LandingCampaignRepoMetadata;
 }): Record<string, unknown> {
   return {
     landingCampaignTrial: true,
     campaign: input.campaign,
     skillSetId: input.skillSetId,
     skillSetVersion: input.skillSetVersion,
-    repo: input.repo,
   };
 }
 

@@ -114,9 +114,28 @@ async function startProductionScan(
   return startCampaign(app, admin, "production-scan", repoUrl);
 }
 
+async function startProductionScanInOrg(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  organizationId: string,
+  repoUrl = "https://github.com/acme/backend",
+) {
+  return startCampaignInOrg(app, admin, organizationId, "production-scan", repoUrl);
+}
+
 async function startCampaign(
   app: ReturnType<ReturnType<typeof useTestApp>>,
   admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  campaign: string,
+  repoUrl = "https://github.com/acme/backend",
+) {
+  return startCampaignInOrg(app, admin, admin.organizationId, campaign, repoUrl);
+}
+
+async function startCampaignInOrg(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  organizationId: string,
   campaign: string,
   repoUrl = "https://github.com/acme/backend",
 ) {
@@ -124,7 +143,7 @@ async function startCampaign(
     method: "POST",
     url: START_URL,
     headers: { authorization: `Bearer ${admin.accessToken}` },
-    payload: { organizationId: admin.organizationId, campaign, repoUrl },
+    payload: { organizationId, campaign, repoUrl },
   });
 }
 
@@ -162,6 +181,23 @@ async function createLandingCampaignServiceAccessToken(
 ): Promise<string> {
   const tokens = await signTokensForUser(app.config.secrets.jwtSecret, SERVICE_USER_ID, app.config.auth);
   return tokens.accessToken;
+}
+
+async function countTrialChatsForUser(app: ReturnType<ReturnType<typeof useTestApp>>, userId: string): Promise<number> {
+  const [row] = await app.db
+    .select({ count: sql<number>`count(DISTINCT ${chats.id})::int` })
+    .from(chats)
+    .innerJoin(
+      chatMembership,
+      and(
+        eq(chatMembership.chatId, chats.id),
+        eq(chatMembership.role, "owner"),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
+    .innerJoin(members, eq(members.agentId, chatMembership.agentId))
+    .where(and(eq(members.userId, userId), sql`${chats.metadata} ? 'landingCampaignTrial'`));
+  return row?.count ?? 0;
 }
 
 describe("POST /me/landing-campaigns/start", () => {
@@ -217,6 +253,13 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignMaxAgentTurns: 3,
     landingCampaignMaxEstimatedTokens: 900,
+  });
+  const getSingleTrialQuotaApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxTrialsPerUserPer24Hours: 1,
   });
 
   it("parses legacy trial chat metadata with estimated token defaults", () => {
@@ -360,8 +403,8 @@ describe("POST /me/landing-campaigns/start", () => {
       landingCampaignTrial: true,
       campaign: "production-scan",
       skillSetId: "production-scan",
-      repo: { canonicalKey: "github.com/acme/backend" },
     });
+    expect(agentMeta?.repo).toBeUndefined();
 
     const [serviceMember] = await app.db
       .select()
@@ -441,7 +484,7 @@ describe("POST /me/landing-campaigns/start", () => {
       inputLocked: false,
       maxAgentTurns: 1,
       completedAgentTurns: 0,
-      maxEstimatedTokens: null,
+      maxEstimatedTokens: 120_000,
       estimatedTokensUsed: 0,
       lastObservedEstimatedTokens: 0,
       lastObservedTokenUsageEventId: null,
@@ -660,6 +703,72 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(promptBindings[0]?.inlinePromptBody).toBeNull();
   });
 
+  it("does not charge quota for the same repo replay but rejects a second new repo in the rolling window", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    const replay = await startProductionScan(app, admin);
+    const secondRepo = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json<{ chatId: string }>().chatId).toBe(first.json<{ chatId: string }>().chatId);
+    expect(secondRepo.statusCode).toBe(403);
+    expect(secondRepo.json<{ error: string }>().error).toContain("free trial limit");
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(1);
+  });
+
+  it("counts landing trial quota across organizations for the same user", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const otherOrg = await attachOrg(app, admin.userId, "admin");
+
+    const first = await startProductionScan(app, admin);
+    const secondOrg = await startProductionScanInOrg(app, admin, otherOrg.orgId, "https://github.com/acme/api");
+
+    expect(first.statusCode).toBe(200);
+    expect(secondOrg.statusCode).toBe(403);
+    expect(secondOrg.json<{ error: string }>().error).toContain("last 24 hours");
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(1);
+  });
+
+  it("allows another new repo after the rolling 24-hour quota window expires", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string }>();
+    await app.db
+      .update(chats)
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+      .where(eq(chats.id, firstBody.chatId));
+
+    const second = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).not.toBe(firstBody.chatId);
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(2);
+  });
+
+  it("serializes concurrent new repo starts against the per-user quota", async () => {
+    const app = getSingleTrialQuotaApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const results = await Promise.all([
+      startProductionScan(app, admin, "https://github.com/acme/backend"),
+      startProductionScan(app, admin, "https://github.com/acme/api"),
+    ]);
+
+    expect(results.map((res) => res.statusCode).sort()).toEqual([200, 403]);
+    expect(await countTrialChatsForUser(app, admin.userId)).toBe(1);
+  });
+
   it("resends the bootstrap when a running trial has been silent past the retry window", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -803,8 +912,8 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata)).toMatchObject({
       landingCampaignTrial: true,
       campaign: "production-scan",
-      repo: { canonicalKey: "github.com/acme/api" },
     });
+    expect(parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata)?.repo).toBeUndefined();
     const runtimeSession = (trialAgent?.metadata as Record<string, unknown> | undefined)?.runtimeSession;
     expect(runtimeSession).toMatchObject({
       clientId: OFFICIAL_CLIENT_ID,
@@ -1281,12 +1390,27 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(afterLimit.statusCode).toBe(403);
   });
 
-  it("keeps turn-only behavior when the estimated token cap is not configured", async () => {
+  it("keeps turn-only behavior for legacy uncapped trial metadata", async () => {
     const app = getMultiTurnApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
     const started = await startProductionScan(app, admin);
     const body = started.json<{ chatId: string; agentUuid: string }>();
+    const [initialChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    const initialTrial = parseLandingCampaignTrialChatMetadata(initialChat?.metadata);
+    if (!initialChat || !initialTrial) throw new Error("expected trial chat metadata");
+    await app.db
+      .update(chats)
+      .set({
+        metadata: {
+          ...initialChat.metadata,
+          landingCampaignTrial: { ...initialTrial, maxEstimatedTokens: null },
+        },
+      })
+      .where(eq(chats.id, body.chatId));
 
     const uncappedEvent = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
       kind: "token_usage",

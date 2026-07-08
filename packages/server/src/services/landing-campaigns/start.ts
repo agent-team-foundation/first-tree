@@ -34,7 +34,7 @@ import { sendToClient } from "../connection-manager.js";
 import { MEMBER_STATUSES, reactivateMembership } from "../membership.js";
 import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
-import { isLandingCampaignServiceOrg } from "./guards.js";
+import { assertTrialQuota, isLandingCampaignServiceOrg } from "./guards.js";
 import {
   buildLandingCampaignAgentMetadata,
   buildLandingCampaignChatMetadata,
@@ -268,14 +268,12 @@ async function ensureTrialAgent(
     runtimeProvider: RuntimeProvider;
     campaign: string;
     skillSet: LandingCampaignSkillSet;
-    repo: LandingCampaignRepoMetadata;
   },
 ) {
   const metadata = buildLandingCampaignAgentMetadata({
     campaign: input.campaign,
     skillSetId: input.skillSet.id,
     skillSetVersion: input.skillSet.version,
-    repo: input.repo,
   });
 
   const [existing] = await db
@@ -339,7 +337,6 @@ async function provisionTrialAgent(
     runtimeProvider: RuntimeProvider;
     campaign: string;
     skillSet: LandingCampaignSkillSet;
-    repo: LandingCampaignRepoMetadata;
   },
 ): Promise<{
   serviceMember: typeof members.$inferSelect;
@@ -357,7 +354,6 @@ async function provisionTrialAgent(
       runtimeProvider: input.runtimeProvider,
       campaign: input.campaign,
       skillSet: input.skillSet,
-      repo: input.repo,
     });
     return { serviceMember, trialAgent };
   });
@@ -386,6 +382,7 @@ function notifyClientAgentPinned(app: FastifyInstance, agent: Awaited<ReturnType
 async function ensureTrialChatAndBootstrap(
   app: FastifyInstance,
   input: {
+    userId: string;
     humanAgentId: string;
     agentId: string;
     campaign: string;
@@ -417,15 +414,19 @@ async function ensureTrialChatAndBootstrap(
     lastObservedTokenUsageEventId: null,
   });
 
-  let chatId: string;
-  const [existing] = await app.db
-    .select({ id: chats.id })
-    .from(chats)
-    .where(eq(chats.onboardingKickoffKey, kickoffKey))
-    .limit(1);
-  if (existing) {
-    chatId = existing.id;
-  } else {
+  const chatId = await app.db.transaction(async (tx) => {
+    const db = tx as unknown as Database;
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext('landing_campaign_trial_quota'), hashtext(${input.userId}))`,
+    );
+    const [existing] = await tx
+      .select({ id: chats.id })
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, kickoffKey))
+      .limit(1);
+    if (existing) return existing.id;
+
+    await assertTrialQuota(db, app.config, input.userId);
     const created = await createChat(app.db, {
       mode: "legacy-empty-agent",
       creatorAgentId: input.humanAgentId,
@@ -435,8 +436,8 @@ async function ensureTrialChatAndBootstrap(
       onboardingKickoffKey: kickoffKey,
       allowLandingCampaignTrial: true,
     });
-    chatId = created.id;
-  }
+    return created.id;
+  });
 
   let sent: { recipients: string[]; messageId: string } | undefined;
   await app.db.transaction(async (tx) => {
@@ -550,13 +551,13 @@ export async function startLandingCampaignTrial(
     runtimeProvider: config.runtimeProvider,
     campaign: body.campaign,
     skillSet,
-    repo,
   });
   await app.resourcesService.unbindLegacyCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id);
   await app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(trialAgent.uuid, serviceMember.id);
   notifyClientAgentPinned(app, trialAgent);
 
   const result = await ensureTrialChatAndBootstrap(app, {
+    userId,
     humanAgentId: caller.agentId,
     agentId: trialAgent.uuid,
     campaign: body.campaign,
