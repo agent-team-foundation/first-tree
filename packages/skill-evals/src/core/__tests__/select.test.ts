@@ -131,6 +131,15 @@ describe("skill eval selection", () => {
     expect(summary.notes).toEqual(["No skill-eval-related changes were detected."]);
   });
 
+  it("emits an explicit note (not silence) for a shipped skill intentionally outside skill-evals", () => {
+    const summary = selectSkillEvalRecommendations(["skills/first-tree-file-bug/SKILL.md"]);
+
+    expect(summary.recommendations).toEqual([]);
+    expect(summary.notes).toEqual([
+      "skills/first-tree-file-bug/SKILL.md belongs to first-tree-file-bug, a shipped skill intentionally outside skill-evals (see UNEVALUATED_SHIPPED_SKILLS); no eval selected.",
+    ]);
+  });
+
   it("includes untracked working-tree files when selecting from git", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-select-test-"));
     try {
