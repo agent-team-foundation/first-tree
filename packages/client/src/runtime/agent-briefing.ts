@@ -1255,7 +1255,8 @@ to build the team's Context Tree from the connected code, load
 |---|---|
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-seed\` | set up the team's Context Tree from the connected sources when it has no domain structure yet — creates + binds the repo if none exists, else fills a bound-but-empty tree; refuses once the tree has domain structure |
-| \`first-tree-write\` | pulled in by \`first-tree-seed\` as its authoring dependency (source-driven tree writes) |`;
+| \`first-tree-write\` | pulled in by \`first-tree-seed\` as its authoring dependency (source-driven tree writes) |
+| \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
   }
   return `## First Tree Family
 
@@ -1271,7 +1272,8 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
-| \`first-tree-seed\`    | no domain structure yet — bootstrap the team's Context Tree from its sources (create + bind if none exists, else fill a bound-but-empty tree); refuses once the tree has domain structure |`;
+| \`first-tree-seed\`    | no domain structure yet — bootstrap the team's Context Tree from its sources (create + bind if none exists, else fill a bound-but-empty tree); refuses once the tree has domain structure |
+| \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
 }
 
 /**
@@ -1288,4 +1290,5 @@ export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree-write",
   "first-tree-read",
   "first-tree-seed",
+  "first-tree-file-bug",
 ] as const;

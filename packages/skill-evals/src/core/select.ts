@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-import type { ShippedSkillName } from "./case-schema.js";
+import { type ShippedSkillName, UNEVALUATED_SHIPPED_SKILLS } from "./case-schema.js";
 
 export type EvalRecommendationKind = "floor" | "gate" | "periodic" | "quality";
 
@@ -146,6 +146,17 @@ function matchingSkill(path: string): ShippedSkillName | null {
   return null;
 }
 
+// A shipped skill that is intentionally outside the eval harness
+// (`UNEVALUATED_SHIPPED_SKILLS`). Returns the skill name so the selector can
+// emit an explicit "no eval by design" note instead of silently recommending
+// nothing, which would read the same as "forgot to wire up a suite".
+function intentionallyUnevaluatedSkill(path: string): string | null {
+  for (const skill of UNEVALUATED_SHIPPED_SKILLS) {
+    if (path.startsWith(`skills/${skill}/`)) return skill;
+  }
+  return null;
+}
+
 function isSkillEvalCorePath(path: string): boolean {
   return path.startsWith("packages/skill-evals/src/core/") || path === "packages/skill-evals/src/index.ts";
 }
@@ -188,6 +199,14 @@ export function selectSkillEvalRecommendations(
   const notes: string[] = [];
 
   for (const path of changedFiles) {
+    const unevaluatedSkill = intentionallyUnevaluatedSkill(path);
+    if (unevaluatedSkill !== null) {
+      notes.push(
+        `${path} belongs to ${unevaluatedSkill}, a shipped skill intentionally outside skill-evals (see UNEVALUATED_SHIPPED_SKILLS); no eval selected.`,
+      );
+      continue;
+    }
+
     const periodicSkill = periodicFrameworkSkill(path);
     if (periodicSkill !== null) {
       addRecommendation(recommendations, {
@@ -242,7 +261,7 @@ export function selectSkillEvalRecommendations(
   if (changedFiles.length === 0) {
     notes.push("No changed files were provided; no skill eval runs selected.");
   }
-  if (recommendations.size === 0 && changedFiles.length > 0) {
+  if (recommendations.size === 0 && changedFiles.length > 0 && notes.length === 0) {
     notes.push("No skill-eval-related changes were detected.");
   }
 

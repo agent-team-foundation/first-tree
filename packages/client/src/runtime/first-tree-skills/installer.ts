@@ -56,8 +56,16 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
  *   - `first-tree-write` rides along because seed's Required Reading loads it as
  *     a hard dependency; without its payload on disk, seed breaks on its first
  *     step.
+ *   - `first-tree-file-bug` lets any agent file a First Tree bug report as a
+ *     GitHub issue. It depends on nothing but the user's `gh` CLI, so it ships
+ *     to every agent regardless of Context Tree binding.
  */
-export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-write", "first-tree-seed"] as const;
+export const CORE_SKILL_NAMES = [
+  "first-tree-welcome",
+  "first-tree-write",
+  "first-tree-seed",
+  "first-tree-file-bug",
+] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
 

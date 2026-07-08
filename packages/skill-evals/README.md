@@ -29,10 +29,14 @@ pnpm --filter @first-tree/skill-evals eval:compare
 ```
 
 `eval:floor` is a no-model check for the skill-eval framework itself. It
-validates that all shipped First Tree skills are present in the coverage
-matrix, their `SKILL.md` frontmatter is readable, and their case declarations
-have the minimum schema required by the shared runner. It does not execute
-Codex, Claude Code, LLM-as-judge, or live gate cases.
+validates that every eval-covered skill (`SHIPPED_SKILLS`) is present in the
+coverage matrix, their `SKILL.md` frontmatter is readable, and their case
+declarations have the minimum schema required by the shared runner. It does not
+execute Codex, Claude Code, LLM-as-judge, or live gate cases. A shipped skill
+may be intentionally left outside this harness by listing it in
+`UNEVALUATED_SHIPPED_SKILLS`; the `shipped-skill-inventory` test enforces that
+every on-disk `skills/*/` payload is either eval-covered or explicitly excluded,
+so nothing escapes both.
 
 `eval:select` is a no-model helper for local development and PR review. It
 looks at changed files and recommends the smallest relevant eval commands:
