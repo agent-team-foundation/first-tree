@@ -526,6 +526,13 @@
       "when": 1783498176310,
       "tag": "0074_long_roughhouse",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1783501214695,
+      "tag": "0075_right_jigsaw",
+      "breakpoints": true
     }
   ]
 }

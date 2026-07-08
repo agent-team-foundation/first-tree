@@ -179,6 +179,7 @@ function installationFixture(overrides: Partial<InstallationRow> = {}): Installa
     accountLogin: "acme",
     accountGithubId: 999,
     installerGithubId: null,
+    requesterGithubId: null,
     hubOrganizationId: "org-1",
     permissions: { contents: "read" },
     events: ["push"],

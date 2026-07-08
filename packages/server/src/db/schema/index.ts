@@ -14,7 +14,6 @@ export { clients } from "./clients.js";
 export { connectCodes } from "./connect-codes.js";
 export { contextTreeIoEvents } from "./context-tree-io-events.js";
 export { docComments, docDocuments, docVersions } from "./doc-documents.js";
-export { githubAppInstallIntents } from "./github-app-install-intents.js";
 export { githubAppInstallations } from "./github-app-installations.js";
 export { githubEntityChatMappings } from "./github-entity-chat-mappings.js";
 export { inboxEntries } from "./inbox-entries.js";

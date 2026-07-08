@@ -3,7 +3,6 @@ import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
-import { githubAppInstallIntents } from "../db/schema/github-app-install-intents.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { findInstallationByGithubId, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
@@ -293,11 +292,9 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
   it("refuses (error, no bind) when the install is completed under a different GitHub identity than the kickoff admin", async () => {
     // A kickoff admin starts the install (admin-gated at mint), but the
     // browser's github.com session resolves to a DIFFERENT GitHub identity.
-    // In the webhook-sourced binding model this install cannot bind (the
-    // intent is keyed by the kickoff admin's GitHub id; the webhook `sender`
-    // won't match), and we must not sign the browser in as the foreign
-    // identity. The callback surfaces `install-not-verified` and binds
-    // nothing.
+    // The callback binds nothing either way, but it must not sign the
+    // browser in as the foreign identity (that would replace the kickoff
+    // admin's session in every tab). It surfaces `install-not-verified`.
     const app = getApp();
     const kickoffGithubId = 770_005;
     const strangerGithubId = 770_006;
@@ -337,13 +334,12 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     expect(await findInstallationByGithubId(app.db, installationId)).toBeNull();
   });
 
-  it("does NOT bind (and records no pending bind) when a matching installation row exists but the callback identity mismatches", async () => {
-    // Regression (yuezengwu): the signed webhook already created the
+  it("does NOT bind when a matching installation row exists but the callback identity mismatches", async () => {
+    // Regression (yuezengwu): the signed webhook already recorded the
     // installation row with the kickoff admin as installer, but the callback
     // is completed under a DIFFERENT GitHub identity carrying that
-    // installation_id in the URL. The mismatch guard must run BEFORE any
-    // pending-bind side effect — expect install-not-verified, no bind, and no
-    // lingering pending bind.
+    // installation_id in the URL. Expect install-not-verified and no bind —
+    // the row stays unbound until an explicit connect-panel action.
     const app = getApp();
     const kickoffGithubId = 770_020;
     const strangerGithubId = 770_021;
@@ -391,16 +387,11 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       restore();
     }
 
-    // No bind, despite the matching installer row...
+    // No bind, despite the matching installer row — connecting it is a
+    // deliberate panel action by the signed-in kickoff admin, never a
+    // side effect of whoever completes the browser flow.
     const row = await findInstallationByGithubId(app.db, installationId);
     expect(row?.hubOrganizationId).toBeNull();
-    // ...and no pending bind was recorded (the mismatch guard ran first).
-    const pending = await app.db
-      .select()
-      .from(githubAppInstallIntents)
-      .where(eq(githubAppInstallIntents.installationId, installationId))
-      .limit(1);
-    expect(pending).toHaveLength(0);
   });
 
   it("surfaces an error (not success) when the identities mismatch, regardless of installation_id", async () => {
@@ -479,6 +470,39 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     // The callback binds/upserts nothing — the authority refusal short-circuits,
     // and binding is webhook-driven regardless. No row is created here.
     expect(await findInstallationByGithubId(app.db, installationId)).toBeNull();
+  });
+
+  it("lands a stateless setup redirect on the SPA instead of a raw validation error", async () => {
+    // GitHub redirects here from its OWN settings UI (an owner approving or
+    // reconfiguring the App) with setup_action + installation_id but no
+    // First Tree state and no code. This used to explode as a raw Zod error
+    // page stranding the owner on the API URL.
+    const app = getApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/callback?setup_action=install&installation_id=8822099",
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/");
+  });
+
+  it("lands an approval-request round-trip (state, no code) back on the kickoff surface", async () => {
+    // setup_action=request: the caller asked to install on an org they
+    // don't own; GitHub parks the install for owner approval and redirects
+    // back WITHOUT an OAuth code. The browser goes back to `next` (the
+    // panel), whose polling picks the installation up once approved.
+    const app = getApp();
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      targetOrganizationId: uuidv7(),
+      kickoffUserId: uuidv7(),
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/callback?state=${token}&setup_action=request`,
+      headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/settings/github");
   });
 
   it("ignores a targetOrganizationId naming an org the user isn't a member of", async () => {
