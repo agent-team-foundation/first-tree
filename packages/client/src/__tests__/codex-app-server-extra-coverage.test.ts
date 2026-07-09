@@ -965,6 +965,176 @@ describe("codex app-server handler extra branches", () => {
     await interruptedHandler.shutdown();
   });
 
+  it("closes the session and retries the accepted prefix when active inject formatting fails", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const injectToken = makeDeliveryToken();
+    const log = vi.fn<(message: string) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      log,
+      formatInboundContent: async (message) => {
+        if (message.id === "m2") throw new Error("format m2 failed");
+        return `body:${message.id}`;
+      },
+    });
+    const first = makeMessage("m1", "first");
+    const second = makeMessage("m2", "second");
+
+    const startPromise = handler.start(first, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "active format turn/start");
+    handler.inject(second, injectToken);
+
+    await waitFor(() => fake.shutdownCalls === 1, "format failure shutdown");
+    await startPromise;
+    expect(token.retry).toHaveBeenCalledWith([first, second], "codex_queued_turn_format_failed");
+    expect(log.mock.calls.some(([entry]) => entry.includes("inject formatInboundContent failed"))).toBe(true);
+    expect(fake.isClosed).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("retries post-turn queued input when formatting fails before a new turn starts", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const queuedToken = makeDeliveryToken();
+    const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      failSessionForRecovery,
+      formatInboundContent: async (message) => {
+        if (message.id === "m2") throw new Error("queued formatter down");
+        return `body:${message.id}`;
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "post-turn first start");
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        error: null,
+        items: [{ type: "agentMessage", id: "agent-1", text: "done" }],
+      },
+    });
+    await startPromise;
+
+    const second = makeMessage("m2", "second");
+    handler.inject(second, queuedToken);
+
+    await waitFor(() => vi.mocked(queuedToken.retry).mock.calls.length === 1, "queued formatter retry");
+    expect(queuedToken.retry).toHaveBeenCalledWith(second, "codex_queued_turn_format_failed");
+    expect(failSessionForRecovery).toHaveBeenCalledWith("codex_queued_turn_format_failed", "thread-app-server");
+    expect(fake.shutdownCalls).toBe(1);
+
+    await handler.shutdown();
+  });
+
+  it("retries a turn when the app-server stream ends without a terminal turn payload", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent, failSessionForRecovery });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "stream-end turn/start");
+    fake.emit("turn/completed", { threadId: "thread-app-server", turnId: "turn-1" });
+    await startPromise;
+
+    expect(emitEvent).toHaveBeenCalledWith({ kind: "turn_end", payload: { status: "error" } });
+    expect(token.retry).toHaveBeenCalledWith([message], "codex_app_server_stream_ended_without_completion");
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      "codex_app_server_stream_ended_without_completion",
+      "thread-app-server",
+    );
+
+    await handler.shutdown();
+  });
+
+  it("returns a queued resume route when resume message formatting fails", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const log = vi.fn<(message: string) => void>();
+    const handler = makeHandler(fake);
+    const message = makeMessage("m1", "resume");
+    const ctx = makeContext({
+      log,
+      formatInboundContent: async () => {
+        throw new Error("resume formatter down");
+      },
+    });
+
+    await expect(handler.resume(message, "thread-existing", ctx, token)).resolves.toEqual({
+      sessionId: "thread-existing",
+      route: { kind: "owned", mode: "queued" },
+    });
+
+    expect(fake.requests.some((request) => request.method === "thread/resume")).toBe(true);
+    expect(fake.requests.some((request) => request.method === "turn/start")).toBe(false);
+    expect(token.retry).toHaveBeenCalledWith(message, "codex_app_server_initial_format_failed");
+    expect(log.mock.calls.some(([entry]) => entry.includes("resume formatInboundContent failed"))).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("falls nested activeTurnNotSteerable RPC errors back to the next turn", async () => {
+    const fake = new FakeAppServerClient();
+    fake.errors.set(
+      "turn/steer",
+      new CodexAppServerRpcError("turn/steer", {
+        code: -32602,
+        message: "cannot steer this turn",
+        data: { detail: [{ nested: { activeTurnNotSteerable: true } }] },
+      }),
+    );
+    const firstToken = makeDeliveryToken();
+    const secondToken = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const first = makeMessage("m1", "first");
+    const second = makeMessage("m2", "second");
+
+    const startPromise = handler.start(first, ctx, firstToken);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "nested steer first start");
+    handler.inject(second, secondToken);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"), "nested steer attempt");
+
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        error: null,
+        items: [{ type: "agentMessage", id: "agent-1", text: "first done" }],
+      },
+    });
+    await startPromise;
+    await waitFor(
+      () => fake.requests.filter((request) => request.method === "turn/start").length === 2,
+      "fallback second turn",
+    );
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-2",
+        status: "completed",
+        error: null,
+        items: [{ type: "agentMessage", id: "agent-2", text: "second done" }],
+      },
+    });
+
+    await waitFor(() => vi.mocked(secondToken.complete).mock.calls.length === 1, "fallback second complete");
+    expect(firstToken.complete).toHaveBeenCalledWith([first], { status: "success", terminal: true });
+    expect(secondToken.complete).toHaveBeenCalledWith([second], { status: "success", terminal: true });
+
+    await handler.shutdown();
+  });
+
   it("suspends by retrying queued input, interrupting the active turn, and clearing app-server state", async () => {
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();
