@@ -157,6 +157,63 @@ function optionByText(text: string): HTMLButtonElement | null {
   );
 }
 
+function submitCommentButton(root: ParentNode): HTMLButtonElement | null {
+  const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>("button"));
+  for (let index = buttons.length - 1; index >= 0; index--) {
+    const button = buttons[index];
+    if (button?.textContent?.trim() === "Comment") return button;
+  }
+  return null;
+}
+
+function mockDocSelection(
+  root: ParentNode,
+  selectedText: string,
+): {
+  paragraph: HTMLParagraphElement;
+  removeAllRanges: ReturnType<typeof vi.fn>;
+  restore: () => void;
+} {
+  const paragraph = Array.from(root.querySelectorAll<HTMLParagraphElement>("p")).find((item) =>
+    item.textContent?.includes("latest quote"),
+  );
+  if (!paragraph?.firstChild) throw new Error("Expected rendered document paragraph");
+
+  const cloneTexts = ["# Docs Review Plan\n\nThe ", " needs review."];
+  const range = {
+    startContainer: paragraph.firstChild,
+    endContainer: paragraph.firstChild,
+    startOffset: 4,
+    endOffset: 16,
+    cloneRange: () => ({
+      setStart: vi.fn(),
+      setEnd: vi.fn(),
+      toString: () => cloneTexts.shift() ?? "",
+    }),
+    getBoundingClientRect: () => ({
+      bottom: 16,
+      height: 16,
+      left: 12,
+      right: 96,
+      top: 0,
+      width: 84,
+      x: 12,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  };
+  const removeAllRanges = vi.fn();
+  const selection = {
+    isCollapsed: false,
+    rangeCount: 1,
+    getRangeAt: () => range,
+    removeAllRanges,
+    toString: () => selectedText,
+  };
+  const spy = vi.spyOn(window, "getSelection").mockReturnValue(selection as unknown as Selection);
+  return { paragraph, removeAllRanges, restore: () => spy.mockRestore() };
+}
+
 describe("DocsListPage extra DOM coverage", () => {
   let h: DomHarness;
 
@@ -282,6 +339,90 @@ describe("DocPage extra DOM coverage", () => {
       expect(h.container.textContent).toContain("Note: original draft");
       expect(h.container.textContent).toContain("The original quote needs review.");
     });
+  });
+
+  it("creates an anchored comment from selected document text", async () => {
+    docsApiMocks.createDocComment.mockResolvedValue(comment({ body: "Please clarify this." }));
+    renderDocPage();
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("The latest quote needs review."));
+    const selection = mockDocSelection(h.container, "latest quote");
+
+    await act(async () => {
+      selection.paragraph.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    await click(h, submitCommentButton(h.container));
+    const textarea = h.container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) return;
+
+    await setTextareaValue(h, textarea, "  Please clarify this.  ");
+    await click(h, submitCommentButton(h.container));
+
+    await waitForSettled(h, () => expect(docsApiMocks.createDocComment).toHaveBeenCalledTimes(1));
+    expect(docsApiMocks.createDocComment).toHaveBeenCalledWith(
+      "doc-1",
+      expect.objectContaining({
+        body: "Please clarify this.",
+        versionNumber: 2,
+        anchor: expect.objectContaining({ exact: "latest quote" }),
+      }),
+    );
+    await waitForSettled(h, () => expect(h.container.querySelector("textarea")).toBeNull());
+    expect(selection.removeAllRanges).toHaveBeenCalled();
+    selection.restore();
+  });
+
+  it("falls back to document-level comments when the selection cannot be anchored", async () => {
+    docsApiMocks.createDocComment.mockResolvedValue(comment({ body: "Fallback note." }));
+    renderDocPage();
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("The latest quote needs review."));
+    const selection = mockDocSelection(h.container, "rendered only");
+
+    await act(async () => {
+      selection.paragraph.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    await click(h, submitCommentButton(h.container));
+    await waitForSettled(h, () => {
+      expect(h.container.textContent).toContain("This selection spans formatting");
+    });
+    const textarea = h.container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) return;
+
+    await setTextareaValue(h, textarea, "Fallback note.");
+    await click(h, submitCommentButton(h.container));
+
+    await waitForSettled(h, () => expect(docsApiMocks.createDocComment).toHaveBeenCalledTimes(1));
+    expect(docsApiMocks.createDocComment).toHaveBeenCalledWith("doc-1", {
+      body: "> rendered only\n\nFallback note.",
+      versionNumber: 2,
+    });
+    expect(selection.removeAllRanges).toHaveBeenCalled();
+    selection.restore();
+  });
+
+  it("cancels an open selection composer without posting a comment", async () => {
+    renderDocPage();
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("The latest quote needs review."));
+    const selection = mockDocSelection(h.container, "latest quote");
+
+    await act(async () => {
+      selection.paragraph.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+    });
+    await h.flush();
+    await click(h, submitCommentButton(h.container));
+    const textarea = h.container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) return;
+    await setTextareaValue(h, textarea, "Never posted");
+
+    await click(h, buttonByText(h.container, "Cancel"));
+
+    expect(h.container.querySelector("textarea")).toBeNull();
+    expect(docsApiMocks.createDocComment).not.toHaveBeenCalled();
+    selection.restore();
   });
 });
 
