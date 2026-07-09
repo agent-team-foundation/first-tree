@@ -158,6 +158,26 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     ensureAgentBootstrap(params);
     // No Context Tree → installFirstTreeIntegration is never called regardless.
     expect(installFirstTreeIntegration).not.toHaveBeenCalled();
+    expect(installCoreSkills).toHaveBeenLastCalledWith(
+      expect.objectContaining({ workspacePath: workspace, pruneFormerCoreSkills: true }),
+    );
+  });
+
+  it("tree-bound sentinel fast path keeps former-core cleanup disabled", () => {
+    state.cachedCli = "1.0.0";
+
+    ensureAgentBootstrap({
+      workspace,
+      sessionCtx: fakeSessionCtx(),
+      contextTreePath: "/tree",
+      briefing: "# Agent Identity\n\nstub briefing\n",
+      currentSourceRepoNames: null,
+    });
+
+    expect(installFirstTreeIntegration).not.toHaveBeenCalled();
+    expect(installCoreSkills).toHaveBeenLastCalledWith(
+      expect.objectContaining({ workspacePath: workspace, pruneFormerCoreSkills: false }),
+    );
   });
 
   it("installs core skills even when an existing tree-less workspace takes the sentinel fast path", () => {

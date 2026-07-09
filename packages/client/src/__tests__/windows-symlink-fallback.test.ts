@@ -18,7 +18,7 @@ vi.mock("node:fs", async (importOriginal) => {
 import { installCoreSkills, writeAgentBriefing } from "../runtime/bootstrap.js";
 
 const originalPlatform = process.platform;
-const CORE_SKILLS = ["first-tree-welcome", "first-tree-write", "first-tree-seed", "first-tree-file-bug"] as const;
+const CORE_SKILLS = ["first-tree-welcome", "first-tree-seed", "first-tree-file-bug"] as const;
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
@@ -37,8 +37,8 @@ function makeFixtureSkillsRoot(parent: string, version: string, label: string): 
     writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\n---\nfixture ${label} for ${name}\n`);
     writeFileSync(join(dir, "VERSION"), version);
   }
-  mkdirSync(join(root, "first-tree-write", "nested"), { recursive: true });
-  writeFileSync(join(root, "first-tree-write", "nested", "extra.txt"), `extra ${label}\n`);
+  mkdirSync(join(root, "first-tree-seed", "nested"), { recursive: true });
+  writeFileSync(join(root, "first-tree-seed", "nested", "extra.txt"), `extra ${label}\n`);
   return root;
 }
 
@@ -107,10 +107,10 @@ describe("Windows symlink fallbacks", () => {
     });
 
     expect(result, logs.join("\n")).toBe(true);
-    const claudeSkill = join(workspace, ".claude", "skills", "first-tree-write");
+    const claudeSkill = join(workspace, ".claude", "skills", "first-tree-seed");
     expect(lstatSync(claudeSkill).isDirectory()).toBe(true);
     expect(lstatSync(claudeSkill).isSymbolicLink()).toBe(false);
-    expect(readFileSync(join(claudeSkill, "SKILL.md"), "utf-8")).toContain("fixture v1 for first-tree-write");
+    expect(readFileSync(join(claudeSkill, "SKILL.md"), "utf-8")).toContain("fixture v1 for first-tree-seed");
     expect(readFileSync(join(claudeSkill, "VERSION"), "utf-8")).toBe("1.0.0");
     expect(readFileSync(join(claudeSkill, "nested", "extra.txt"), "utf-8")).toBe("extra v1\n");
   });
@@ -125,8 +125,8 @@ describe("Windows symlink fallbacks", () => {
     const bundledSkillsRoot = makeFixtureSkillsRoot(tmpBase, "1.0.0", "v1");
     installCoreSkills({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
 
-    writeFileSync(join(workspace, ".agents", "skills", "first-tree-write", ".sentinel"), "agents marker\n");
-    writeFileSync(join(workspace, ".claude", "skills", "first-tree-write", ".sentinel"), "claude marker\n");
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree-seed", ".sentinel"), "agents marker\n");
+    writeFileSync(join(workspace, ".claude", "skills", "first-tree-seed", ".sentinel"), "claude marker\n");
     fsMocks.symlinkSync.mockClear();
     const logs: string[] = [];
 
@@ -138,8 +138,8 @@ describe("Windows symlink fallbacks", () => {
 
     expect(result, logs.join("\n")).toBe(true);
     expect(fsMocks.symlinkSync).not.toHaveBeenCalled();
-    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-write", ".sentinel"))).toBe(true);
-    expect(existsSync(join(workspace, ".claude", "skills", "first-tree-write", ".sentinel"))).toBe(true);
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-seed", ".sentinel"))).toBe(true);
+    expect(existsSync(join(workspace, ".claude", "skills", "first-tree-seed", ".sentinel"))).toBe(true);
     expect(logs.join("\n")).toContain("up-to-date");
   });
 
@@ -152,7 +152,7 @@ describe("Windows symlink fallbacks", () => {
     mkdirSync(workspace, { recursive: true });
     const bundledV1 = makeFixtureSkillsRoot(tmpBase, "1.0.0", "v1");
     installCoreSkills({ workspacePath: workspace, bundledSkillsRoot: bundledV1, log: () => {} });
-    writeFileSync(join(workspace, ".claude", "skills", "first-tree-write", ".sentinel"), "stale marker\n");
+    writeFileSync(join(workspace, ".claude", "skills", "first-tree-seed", ".sentinel"), "stale marker\n");
 
     const bundledV2 = makeFixtureSkillsRoot(tmpBase, "2.0.0", "v2");
     const logs: string[] = [];
@@ -163,8 +163,8 @@ describe("Windows symlink fallbacks", () => {
     });
 
     expect(result, logs.join("\n")).toBe(true);
-    const claudeSkill = join(workspace, ".claude", "skills", "first-tree-write");
-    expect(readFileSync(join(claudeSkill, "SKILL.md"), "utf-8")).toContain("fixture v2 for first-tree-write");
+    const claudeSkill = join(workspace, ".claude", "skills", "first-tree-seed");
+    expect(readFileSync(join(claudeSkill, "SKILL.md"), "utf-8")).toContain("fixture v2 for first-tree-seed");
     expect(readFileSync(join(claudeSkill, "VERSION"), "utf-8")).toBe("2.0.0");
     expect(readFileSync(join(claudeSkill, "nested", "extra.txt"), "utf-8")).toBe("extra v2\n");
     expect(existsSync(join(claudeSkill, ".sentinel"))).toBe(false);

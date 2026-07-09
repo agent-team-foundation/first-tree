@@ -155,6 +155,7 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
     installCoreSkills({
       workspacePath: workspace,
       log: (msg) => sessionCtx.log(msg),
+      pruneFormerCoreSkills: contextTreePath === null,
     });
     return;
   }
@@ -178,6 +179,7 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   installCoreSkills({
     workspacePath: workspace,
     log: (msg) => sessionCtx.log(msg),
+    pruneFormerCoreSkills: contextTreePath === null,
   });
 
   let integrationOk = true;

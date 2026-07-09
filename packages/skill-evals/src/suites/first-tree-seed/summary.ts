@@ -12,12 +12,6 @@ function fenced(value: string): string {
   return value.trim().length === 0 ? "_empty_" : `\n\`\`\`text\n${value}\n\`\`\``;
 }
 
-function requiresWriteSkill(evalCase: FirstTreeSeedEvalCase): boolean {
-  return (
-    evalCase.expected.action === "propose_phase1_skeleton" || evalCase.expected.action === "materialize_bare_worktree"
-  );
-}
-
 function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
   if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) return false;
   // A source worktree must not be touched when none is required — check the
@@ -64,8 +58,7 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
 }
 
 export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics, passed: boolean): SkillCaseGrading {
-  const writeSkillRequired = requiresWriteSkill(evalCase);
-  const routingPass = metrics.seedSkillFileReadObserved && (!writeSkillRequired || metrics.writeSkillFileReadObserved);
+  const routingPass = metrics.seedSkillFileReadObserved;
   const processPass =
     metrics.fixtureValidationOk &&
     metrics.runnerExitCode === 0 &&
@@ -94,7 +87,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
     evidence: [
       evidence(
         "routing_pass",
-        `seed skill read=${metrics.seedSkillFileReadObserved}; write skill required=${writeSkillRequired}; write skill read=${metrics.writeSkillFileReadObserved}`,
+        `seed skill read=${metrics.seedSkillFileReadObserved}; write skill read=${metrics.writeSkillFileReadObserved}`,
       ),
       evidence(
         "process_pass",

@@ -53,21 +53,20 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
  *     tree-build chat, which has no binding yet), so seed must ship there too —
  *     gating it on a binding would hide the very skill whose job is to create
  *     that binding.
- *   - `first-tree-write` rides along because seed's Required Reading loads it as
- *     a hard dependency; without its payload on disk, seed breaks on its first
- *     step.
  *   - `first-tree-file-bug` lets any agent file a First Tree bug report as a
  *     GitHub issue. It depends on nothing but the user's `gh` CLI, so it ships
  *     to every agent regardless of Context Tree binding.
  */
-export const CORE_SKILL_NAMES = [
-  "first-tree-welcome",
-  "first-tree-write",
-  "first-tree-seed",
-  "first-tree-file-bug",
-] as const;
+export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-seed", "first-tree-file-bug"] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
+
+/**
+ * Skills that used to ship through the core installer but no longer belong in
+ * tree-less workspaces. Bound workspaces reinstall these through
+ * `TREE_SKILL_NAMES` later in the same bootstrap.
+ */
+const FORMER_CORE_SKILL_NAMES = ["first-tree-write"] as const;
 
 /**
  * Skills that ship only for Context-Tree-bound agents — they operate on an
@@ -77,7 +76,7 @@ const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as c
  * `scripts/copy-bundled-skills.mjs` — that script materialises every skill
  * directory under `<client-pkg>/skills/`.
  */
-export const TREE_SKILL_NAMES = ["first-tree-read"] as const;
+export const TREE_SKILL_NAMES = ["first-tree-read", "first-tree-write"] as const;
 
 export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];
 export type TreeSkillName = (typeof TREE_SKILL_NAMES)[number];
@@ -378,6 +377,12 @@ export type InstallCoreSkillsOptions = {
   workspacePath: string;
   /** Override the bundled-skills lookup root for tests. */
   bundledSkillsRoot?: string;
+  /**
+   * Remove skills that used to ship core but are no longer valid for
+   * tree-less agents. Tree-bound fast paths pass false because they may skip
+   * the tree-skill reinstall in the same session.
+   */
+  pruneFormerCoreSkills?: boolean;
 };
 
 export type InstallFirstTreeSkillsOptions = {
@@ -392,7 +397,7 @@ export type InstallFirstTreeSkillsOptions = {
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
-  reconcileCoreSkillState(options.workspacePath);
+  reconcileCoreSkillState(options.workspacePath, options.pruneFormerCoreSkills ?? true);
   return installSkillSet(options.workspacePath, CORE_SKILL_NAMES, bundledSkillsRoot);
 }
 
@@ -415,9 +420,14 @@ export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): 
   return result;
 }
 
-function reconcileCoreSkillState(workspacePath: string): void {
+function reconcileCoreSkillState(workspacePath: string, pruneFormerCoreSkills: boolean): void {
   for (const retiredSkill of RETIRED_CORE_SKILL_NAMES) {
     removeManagedSkill(workspacePath, retiredSkill);
+  }
+  if (pruneFormerCoreSkills) {
+    for (const formerSkill of FORMER_CORE_SKILL_NAMES) {
+      removeManagedSkill(workspacePath, formerSkill);
+    }
   }
 }
 
@@ -433,12 +443,11 @@ function reconcileCoreSkillState(workspacePath: string): void {
  * pass diffs against today's reality.
  */
 function reconcileTreeSkillState(workspacePath: string): void {
-  // Never remove a skill that either tier currently ships. A skill that moved
-  // from TREE to CORE (`first-tree-seed` / `first-tree-write`) is still on
-  // disk — `installCoreSkills` places it earlier in the same bootstrap — so
-  // treating it as a "dropped TREE skill" here would delete a payload the
-  // runtime still ships. Protect the CORE set alongside TREE; removal is only
-  // for names that left BOTH lists (genuinely retired skills).
+  // Never remove a skill that either tier currently ships. Skills have moved
+  // between CORE and TREE across releases, and a bound workspace may already
+  // have the payload on disk from the other installer path. Protect both
+  // current sets; removal is only for names that left BOTH lists (genuinely
+  // retired skills).
   const protectedSkills = new Set<string>([...TREE_SKILL_NAMES, ...CORE_SKILL_NAMES]);
   const prev = readManagedState(workspacePath);
   if (prev) {

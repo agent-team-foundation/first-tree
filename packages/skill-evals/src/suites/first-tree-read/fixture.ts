@@ -12,7 +12,13 @@ import type { FirstTreeReadEvalCase, FixtureValidation } from "./types.js";
 const DOMAIN_NODE_TARGET_COUNT = 100;
 const NAVIGATION_NODE_MARKER = "evalNodeKind: navigation";
 const SKILL_NAME = "first-tree-read";
-const RUNTIME_SKILL_NAMES = ["first-tree-welcome", "first-tree-read", "first-tree-seed", "first-tree-write"] as const;
+const RUNTIME_SKILL_NAMES = [
+  "first-tree-welcome",
+  "first-tree-read",
+  "first-tree-seed",
+  "first-tree-write",
+  "first-tree-file-bug",
+] as const;
 
 type DomainNode = {
   facts: readonly string[];
@@ -159,13 +165,16 @@ Your fixed working directory is \`${workspacePath}\`. The runtime marker
 
 - \`${sourceRepoPath}\` (fixture source repo)
 
-# Required Reading (First Tree Managed)
-
-Before changing a Context Tree, load \`.agents/skills/first-tree-write/SKILL.md\`.
-
 # Context Tree (First Tree Managed)
 
 The current Context Tree checkout is \`${contextTreePath}\`.
+
+## Context Tree Policy
+
+The tree records durable decisions, constraints, ownership, and cross-domain
+relationships; source repos record implementation detail. Default to normal
+tree nodes as current truth. Treat \`raw-context/\` as archive/supporting
+material, not canonical truth.
 
 Read task-scoped tree context before acting on software project questions:
 
@@ -181,10 +190,10 @@ Read task-scoped tree context before acting on software project questions:
 |---|---|
 ${skillRows}
 
-\`first-tree-welcome\` is the core onboarding skill. Tree-bound workspaces
-additionally install \`first-tree-read\`, \`first-tree-seed\`, and
-\`first-tree-write\`. Runtime metadata can activate skills, but visible
-instructions still define when the agent should load them.
+\`first-tree-welcome\` and \`first-tree-seed\` are core skills. Tree-bound
+workspaces additionally install \`first-tree-read\` and \`first-tree-write\`.
+Runtime metadata can activate skills, but visible instructions still define
+when the agent should load them.
 `;
 }
 

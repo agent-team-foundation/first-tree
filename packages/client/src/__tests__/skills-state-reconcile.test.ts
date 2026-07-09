@@ -114,13 +114,12 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
     expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
   });
 
-  it("keeps CORE skills (seed/write) a prior version recorded as TREE skills — they moved tiers, not retired", () => {
-    // Before the seed/write→CORE move, an agent recorded `first-tree-write`
-    // and `first-tree-seed` in managed state as TREE skills. After upgrade
-    // their payloads are on disk (installCoreSkills plants them earlier in the
-    // same bootstrap), but they're no longer in TREE_SKILL_NAMES. The TREE
-    // reconcile must NOT delete them: they're CORE skills now, not retired.
-    plantManagedSkill(workspace, "first-tree-write");
+  it("keeps CORE skills a prior version recorded as TREE skills — moved tiers, not retired", () => {
+    // Before seed moved to CORE, an agent recorded `first-tree-seed` in
+    // managed state as a TREE skill. After upgrade its payload is on disk
+    // (installCoreSkills plants it earlier in the same bootstrap), but it is
+    // no longer in TREE_SKILL_NAMES. The TREE reconcile must NOT delete it:
+    // it is a CORE skill now, not retired.
     plantManagedSkill(workspace, "first-tree-seed");
     writeManagedState(workspace, {
       schemaVersion: 1,
@@ -131,12 +130,8 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
 
     installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot });
 
-    for (const name of ["first-tree-write", "first-tree-seed"]) {
-      expect(existsSync(join(workspace, ".agents", "skills", name, "SKILL.md")), `${name} payload survives`).toBe(true);
-      expect(lstatSync(join(workspace, ".claude", "skills", name)).isSymbolicLink(), `${name} symlink survives`).toBe(
-        true,
-      );
-    }
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-seed", "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(workspace, ".claude", "skills", "first-tree-seed")).isSymbolicLink()).toBe(true);
     // The ledger still rolls forward to the TREE set only; CORE skills are
     // tracked via RETIRED_CORE_SKILL_NAMES, not this reconcile.
     expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());

@@ -105,10 +105,10 @@ type AgentBriefingRenderModel = {
  *        intro · Working Directory · Source Repositories · Worktrees ·
  *        Communication · Workspace Collaboration · GitHub Entity Attention ·
  *        Asking Humans · Chat Topic & Description · CLI Overview
- *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree-write`
- *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
- *        Core Model · Reading the Tree · Writing the Tree · Tree Location
- *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
+ *   5. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
+ *        Core Model · Context Tree Policy · Reading the Tree ·
+ *        Writing the Tree · Tree Location
+ *   6. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   return renderAgentBriefingTemplate(buildAgentBriefingRenderModel(opts));
@@ -139,20 +139,6 @@ function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBr
     bin,
   );
 
-  // `# Required Reading` — sits AFTER `# Working in First Tree` so the
-  // agent first reads the inline workspace-collab basics (chat send,
-  // working directory, communication contract) it needs to operate at
-  // all, then hits the hard mandate to load `first-tree-write`
-  // before doing any real work. Placing it
-  // immediately before `# Context Tree` also keeps the mandate adjacent
-  // to the content domains the two skills cover. Gated on
-  // `contextTreePath !== null` because the UNCONDITIONAL mandate to load
-  // `first-tree-write` on every task is a tree-ops discipline (reflecting
-  // sources into an existing tree). A tree-less agent DOES carry write on disk
-  // now — it ships core as `first-tree-seed`'s dependency — but should load it
-  // only when seed pulls it in, not on every task; its installed core skills
-  // are still surfaced by the tree-less family map in `skillsSection`.
-  const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
   const contextTreeBlock = contextTreeSection(
     opts.contextTreePath,
     opts.contextTreeRepoUrl ?? null,
@@ -169,7 +155,7 @@ function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBr
     agentPromptOverridesBlock: overridesBlock,
     legacyPromptBlock,
     workingInFirstTreeBlock,
-    requiredReadingBlock: requiredReading,
+    requiredReadingBlock: null,
     contextTreeBlock,
     skillsBlock,
   };
@@ -314,54 +300,6 @@ prompt.*`,
     blocks.push(`## ${section.name.trim() || "Agent prompt override"}\n\n${section.body.trim()}`);
   }
   return blocks.join("\n\n");
-}
-
-// --- # Required Reading -----------------------------------------------------
-
-/**
- * Hard mandate that the agent load `first-tree-write`
- * before doing any non-trivial work, regardless of whether the user
- * mentioned chat / context keywords that would otherwise trigger
- * progressive disclosure.
- *
- * Rationale: the inline briefing is a routing index, not a substitute. The
- * skill payloads carry rules that are NOT duplicated here:
- *
- *  - `first-tree-write` ships the Context Tree concept model, the
- *    Source-System Boundary, the authorship read-discipline, the Hard
- *    Rules 1-7 (default to not writing / read before write / smallest
- *    correct edit / no diffs / verify gate / ownership through humans /
- *    `decisionLocksCode`), the Double Test, Node Shape, and the
- *    Worked Examples.
- *
- * This section is gated on `contextTreePath !== null` because the
- * UNCONDITIONAL mandate to load `first-tree-write` on every task is a
- * tree-ops discipline (reflecting sources into an existing tree). Since the
- * seed/write→core move, a tree-less agent DOES carry `first-tree-write` on
- * disk (it ships core as `first-tree-seed`'s dependency), but should load it
- * only when seed pulls it in — not on every task — so the mandate stays
- * tree-bound. A tree-less agent's installed core skills are surfaced by the
- * tree-less First Tree Family map in `skillsSection` instead.
- */
-function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
-  if (contextTreePath === null) return null;
-  const writeSkillPath = `${workspacePath}/.agents/skills/first-tree-write/SKILL.md`;
-  return `# Required Reading (First Tree Managed)
-
-Before any non-trivial instruction in a tree-bound workspace, you MUST
-load **\`first-tree-write\`** before acting. The inline briefing is only
-the routing index; the skill carries the Context Tree concept model,
-source-system boundary, authorship read-discipline, and Hard Rules +
-Double Test that prevent bad tree writes.
-
-If the runtime does not inject the full skill body after selection, read
-the local payload directly:
-
-- \`${writeSkillPath}\`
-
-This mandate is tree-bound and unconditional. \`first-tree-read\` and
-\`first-tree-seed\` remain on-demand as listed in the First Tree Family
-map below.`;
 }
 
 // --- # Working in First Tree -------------------------------------------------
@@ -658,21 +596,149 @@ function contextTreeSection(
 ): string {
   const blocks: string[] = [];
 
+  const skillRouting =
+    contextTreePath === null
+      ? "The policy below is the always-present baseline for judging what belongs in a future Context Tree. This workspace has no bound tree yet; tree-backed reads and source-backed tree writes are unavailable until a tree is bound. For an initial empty-tree bootstrap from connected sources, load `first-tree-seed`."
+      : "The policy below is the always-present baseline. For task-scoped file selection and operational read workflow, load `first-tree-read`. For source-backed tree edits, load `first-tree-write`.";
+
   blocks.push(`# Context Tree (First Tree Managed)
 
 ## Core Model
 
 The Context Tree is the team's source of truth for **decisions,
 constraints, ownership, and cross-domain relationships**. Execution
-detail stays in source systems. The tree carries the durable *what* and
+detail stays in source systems; the tree carries the durable *what* and
 *why* a future agent must respect. Each domain is a directory; each node
 is Markdown with frontmatter such as \`owners\` and \`soft_links\`.
 
-For node anatomy, ownership tiers, and soft_link navigation, load
-\`first-tree-write\`. For task-scoped file selection and operational
-read workflow, load \`first-tree-read\`.`);
+${skillRouting}
 
-  blocks.push(`## Reading the Tree
+## Context Tree Policy
+
+This policy is the default judgment baseline for every Context Tree read,
+write, and seed task.
+
+### What A Context Tree Is
+
+The Context Tree is durable context, not a source-code mirror, wiki dump, or
+task log. It records current decisions, constraints, ownership, and
+cross-domain relationships with enough rationale that a future reader does
+not have to reconstruct them from PRs, chat logs, or tribal knowledge.
+
+### Source-System Boundary
+
+The tree records **what was decided and why**; source repos record **how it is
+implemented**. If information would rot when the next refactor lands, it does
+not belong in the tree.
+
+| Belongs in the tree | Stays in the source repo |
+| --- | --- |
+| A choice between alternatives and why the alternatives lost | Function signatures, types, class hierarchies |
+| A constraint that shapes future implementation across repos | Step-by-step implementation walkthroughs |
+| An ownership change or clarified review path | API request / response shapes |
+| A current constraint that resulted from a deprecation | Test fixtures, snapshot data, build / CI config |
+| A new relationship between two domains | Bug fixes that do not change a public contract |
+| Rationale that would not be obvious from the diff alone | Refactors that preserve behaviour |
+| A decision as it stands today: current state + present-tense rationale | Historical narrative of how we got here |
+
+### Normal vs \`raw-context/\` Authority
+
+Normal Context Tree content states **current truth**. When a decision
+changes, rewrite or remove the old claim instead of preserving competing
+versions side by side. \`raw-context/\` is archive/supporting material, not
+canonical truth. Read it only when the user asks for that raw material, the
+source artifact is itself raw/proposal/archive content, or the task needs
+archive context. Normal nodes must not require readers to enter
+\`raw-context/\` to understand current truth.
+
+### Code vs Tree Drift Authority
+
+Normal tree content is authoritative for durable context, but not a blind
+override for observed source reality. By default, **code is the ground truth**
+when the tree and code disagree: treat the tree as drifted and update the tree
+from source-backed evidence. \`decisionLocksCode: true\` reverses that default
+for one node: the tree wins, and code drift escalates to a human owner instead
+of being silently fixed or ignored. Set or rely on that flag only on explicit
+human instruction.
+
+### The Double Test
+
+Before writing, apply both questions to every candidate fact:
+
+1. **Decision test.** Does this source establish or change something a future
+   agent must respect when making cross-domain choices?
+2. **Durability test.** If the triggering commit or PR were rewritten, would
+   the decision still stand?
+
+The candidate belongs in the tree only when both answers are yes. Failing the
+decision test means the source is implementation detail; failing the
+durability test means the source captures how something was done this time,
+not what was decided.
+
+### Content Model: What / Why / Who
+
+- **What** — the decision, design choice, or constraint as it stands today.
+  Write the durable claim, not implementation detail or a timeline of prior
+  states.
+- **Why** — the surviving rationale: constraints that won, alternatives that
+  lost, and design course-corrections translated into present-tense reasoning.
+  Capture **why**, not only what. A node without rationale is a fact, not a
+  decision record.
+- **Who** — ownership, carried by \`owners\` frontmatter and
+  \`members/<id>/NODE.md\` nodes. Do not put ownership in the body, and do not
+  unilaterally edit \`owners\`.
+
+### Add vs Edit
+
+Default to editing an existing node. A node earns its existence by being
+independently findable, ownable, or linkable; otherwise edit the existing
+node. Add a leaf only when all three hold:
+
+1. **Distinct identity** — a noun-phrase title that does not overlap any
+   sibling.
+2. **Distinct anchor** — at least one of: different \`owners\`; another domain
+   would \`soft_links\` to this specific decision; or the source naturally has
+   its own Decision / Rationale / Constraints that cannot co-live with an
+   existing leaf.
+3. **Passes the Double Test.**
+
+Add a directory only when there are or are expected to be at least three
+cohesive leaves under the same axis. New top-level domains require explicit
+human-owner approval. When a decision touches two domains, keep canonical
+content in the more specific domain and link from the broader one with
+normal-to-normal \`soft_links\` or short prose pointers.
+
+### Node Shape
+
+Required frontmatter:
+
+\`\`\`yaml
+---
+title: "Short noun phrase"
+owners: [alice, bob]
+---
+\`\`\`
+
+Useful optional frontmatter: \`description\`, \`soft_links\`,
+\`lastReviewed\`, and \`decisionLocksCode\`. Metadata is the reader
+interface: \`title\`, \`description\`, \`owners\`, and \`soft_links\` should
+make scanning, routing, and responsibility clear.
+
+Prefer body sections in this order, omitting any that do not apply:
+\`Decision\`, \`Rationale\`, \`Constraints\`, \`Cross-Domain\`. There is no
+\`Source\`, \`Provenance\`, or \`Shipped-in\` section; PR / commit / issue
+delivery history lives in git history and PR descriptions, not node prose.
+
+### Write / Verify / PR Discipline
+
+Source-backed writes require a concrete source artifact. Actionable future
+work does not live in normal tree content; put it in an issue, source
+artifact, or human decision instead. \`${getCliBinding().binName} tree verify\`
+must pass before any tree commit. A source-backed tree PR should stay scoped
+to one source artifact so owner review and rollback stay precise.`);
+
+  if (contextTreePath) {
+    blocks.push(`## Reading the Tree
 
 When a task has a repo/path/feature/domain/owner/source signal, load
 \`first-tree-read\` before acting. The skill is read-only and requires
@@ -689,9 +755,24 @@ Where the tree's requirements or constraints **conflict with the
 instruction, the tree wins** — follow it and surface the conflict.
 On scope shift to a new domain/repo/owner, read those nodes first. The
 tree hierarchy command normally refreshes with \`git pull --ff-only\`; if
-you read manually, refresh first per Tree Location.`);
+you read manually, refresh first per Tree Location.
 
-  blocks.push(`## Writing the Tree
+Default to normal Context Tree content as current truth. Treat
+\`raw-context/\` as archive/proposal/supporting material, not as the
+canonical answer, unless the user explicitly asks for raw material or the
+task is about that raw artifact itself.`);
+  } else {
+    blocks.push(`## Reading the Tree
+
+This workspace has no Context Tree bound, so there is no tree to read. If a
+task needs durable cross-domain context, surface that binding gap to a human
+instead of pretending the context exists. If the task is the initial tree
+bootstrap from connected sources, load \`first-tree-seed\` and follow that
+empty-tree workflow.`);
+  }
+
+  if (contextTreePath) {
+    blocks.push(`## Writing the Tree
 
 Tree writes are source-driven. A chat is **fresh context**; the tree is
 **persistent context** for future agents. When a specific PR, design doc,
@@ -712,6 +793,15 @@ the PR descriptions, open the tree PR as a draft, merge the code PR first,
 then reconcile the tree PR against the final merged code and mark it ready.
 Do not put PR numbers, commit history, diffs, or implementation details in
 tree node prose.`);
+  } else {
+    blocks.push(`## Writing the Tree
+
+This workspace has no Context Tree bound, so there is no tree to write. Do
+not attempt source-backed tree edits from this workspace and do not ask for a
+tree-write skill payload that is not installed here. If the task is to create
+the team's first tree from connected sources, load \`first-tree-seed\`;
+otherwise surface the missing binding/setup gap to a human.`);
+  }
 
   if (contextTreePath) {
     const branch = contextTreeBranch ?? "main";
@@ -781,10 +871,11 @@ function skillsSection(
   const teamBlock = buildResourceSkillsBriefing(workspacePath, payload).trim();
 
   // The First Tree family map is emitted in both modes, but its rows are scoped
-  // to what is actually installed: tree-bound agents get the full four, while
-  // tree-less agents get only the core skills on disk (welcome + the from-zero
-  // build pair seed/write). A tree-less map matters because a welcome-spawned
-  // tree-build chat needs a routing surface to reach `first-tree-seed`.
+  // to what is actually installed: tree-bound agents get read/write in addition
+  // to core, while tree-less agents get only the core skills on disk
+  // (welcome + seed + file-bug). A tree-less map matters because a
+  // welcome-spawned tree-build chat needs a routing surface to reach
+  // `first-tree-seed`.
   const familyBlock = firstTreeFamilyMap(contextTreePath);
 
   // Skip the `# Skills` umbrella entirely when both inner blocks are
@@ -805,13 +896,12 @@ function firstTreeFamilyMap(contextTreePath: string | null): string {
   // it with no First Tree routing surface. Tests lock this against the
   // installer constants and the repo's `skills/` directory.
   if (contextTreePath === null) {
-    // Tree-less: only the core skills are on disk — `first-tree-welcome` plus
-    // the from-zero build pair (`first-tree-seed` and its `first-tree-write`
-    // dependency). `first-tree-read` is tree-bound and NOT installed here, so
-    // it is omitted. This map is the routing surface a welcome-spawned
-    // tree-build chat relies on to reach `first-tree-seed`: that chat's opening
-    // brief names no skill by design, so without this the agent would fall back
-    // to provider auto-discovery instead of First Tree's own routing.
+    // Tree-less: only the core skills are on disk. `first-tree-read` and
+    // `first-tree-write` are tree-bound and NOT installed here, so both are
+    // omitted. This map is the routing surface a welcome-spawned tree-build
+    // chat relies on to reach `first-tree-seed`: that chat's opening brief
+    // names no skill by design, so without this the agent would fall back to
+    // provider auto-discovery instead of First Tree's own routing.
     return `## First Tree Family
 
 These First Tree skills are installed even before your team has a Context
@@ -823,23 +913,21 @@ to build the team's Context Tree from the connected code, load
 |---|---|
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-seed\` | set up the team's Context Tree from the connected sources when it has no domain structure yet — creates + binds the repo if none exists, else fills a bound-but-empty tree; refuses once the tree has domain structure |
-| \`first-tree-write\` | pulled in by \`first-tree-seed\` as its authoring dependency (source-driven tree writes) |
 | \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
   }
   return `## First Tree Family
 
-\`first-tree-write\` is **unconditional** — load it on every task per
-\`# Required Reading\` above. The remaining rows load on demand: each
-skill's \`description\` field drives
-progressive disclosure when you mention its domain. For general /
+The generated Context Tree Policy above is the always-present baseline. The
+skills below load on demand: each skill's \`description\` field drives
+progressive disclosure when a task mentions its domain. For general /
 harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 …) trust the auto-injected list.
 
 | Skill | Load when |
 |---|---|
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
-| \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
+| \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | \`first-tree-seed\`    | no domain structure yet — bootstrap the team's Context Tree from its sources (create + bind if none exists, else fill a bound-but-empty tree); refuses once the tree has domain structure |
 | \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
 }

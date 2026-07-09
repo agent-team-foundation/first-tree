@@ -74,7 +74,6 @@ describe("buildAgentBriefing — generated skeleton", () => {
     const expectedOrder = [
       "# Identity",
       "# Working in First Tree (First Tree Managed)",
-      "# Required Reading (First Tree Managed)",
       "# Context Tree (First Tree Managed)",
       "# Skills (First Tree Managed)",
     ];
@@ -129,10 +128,10 @@ describe("buildAgentBriefing — generated skeleton", () => {
     expect(lineCount(topLevelSection(briefing, "# Working in First Tree (First Tree Managed)"))).toBeLessThanOrEqual(
       190,
     );
-    expect(lineCount(topLevelSection(briefing, "# Required Reading (First Tree Managed)"))).toBeLessThanOrEqual(18);
-    expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(80);
+    expect(briefing).not.toContain("# Required Reading (First Tree Managed)");
+    expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(210);
     expect(lineCount(topLevelSection(briefing, "# Skills (First Tree Managed)"))).toBeLessThanOrEqual(20);
-    expect(lineCount(briefing)).toBeLessThanOrEqual(440);
+    expect(lineCount(briefing)).toBeLessThanOrEqual(550);
   });
 
   it("renders identity from visibility", () => {
@@ -197,33 +196,45 @@ describe("buildAgentBriefing — prompt provenance sections", () => {
   });
 });
 
-describe("buildAgentBriefing — Required Reading and skill routing", () => {
-  it("emits the tree-bound first-tree-write mandate without implying a retired skill", () => {
+describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
+  it("emits the structured Context Tree policy baseline in generated briefing", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
+    const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
 
-    expect(briefing).toMatch(/you MUST\s+load \*\*`first-tree-write`\*\*/);
-    expect(briefing).toContain("source-system boundary");
-    expect(briefing).toContain("Hard Rules +\nDouble Test");
-    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree-write/SKILL.md`);
+    expect(tree).toContain("## Context Tree Policy");
+    expect(tree).toContain("### Source-System Boundary");
+    expect(tree).toContain("### Normal vs `raw-context/` Authority");
+    expect(tree).toContain("### Code vs Tree Drift Authority");
+    expect(tree).toContain("code is the ground truth");
+    expect(tree).toContain("`decisionLocksCode: true` reverses that default");
+    expect(tree).toContain("### The Double Test");
+    expect(tree).toContain("### Content Model: What / Why / Who");
+    expect(tree).toContain("### Add vs Edit");
+    expect(tree).toContain("### Node Shape");
+    expect(tree).toContain("### Write / Verify / PR Discipline");
+    expect(briefing).not.toMatch(/you MUST\s+load \*\*`first-tree-write`\*\*/);
     expect(briefing).toContain("`first-tree-read`");
     expect(briefing).toContain("`first-tree-seed`");
     expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree/SKILL.md`);
     expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree-context/SKILL.md`);
   });
 
-  it("omits Required Reading for tree-less agents", () => {
+  it("emits the policy baseline but no tree-bound read/write routing for tree-less agents", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     expect(briefing).not.toContain("# Required Reading");
+    const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
+    expect(tree).toContain("## Context Tree Policy");
+    expect(tree).toContain("tree-backed reads and source-backed tree writes are unavailable until a tree is bound");
   });
 
-  it("marks first-tree-write unconditional only for tree-bound agents", () => {
+  it("lists only installed First Tree skills for each binding tier", () => {
     const familyMap = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: "/tree" })),
       "# Skills (First Tree Managed)",
     );
-    expect(familyMap).toMatch(/`first-tree-write` is \*\*unconditional\*\*/);
-    expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| unconditional \(see `# Required Reading`\)/);
+    expect(familyMap).toContain("The generated Context Tree Policy above is the always-present baseline");
     expect(familyMap).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
+    expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
 
     const treelessFamily = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: null })),
@@ -231,7 +242,8 @@ describe("buildAgentBriefing — Required Reading and skill routing", () => {
     );
     expect(treelessFamily).toContain("first-tree-welcome");
     expect(treelessFamily).toContain("first-tree-seed");
-    expect(treelessFamily).toContain("first-tree-write");
+    expect(treelessFamily).toContain("first-tree-file-bug");
+    expect(treelessFamily).not.toContain("first-tree-write");
     expect(treelessFamily).not.toContain("first-tree-read");
     expect(treelessFamily).not.toContain("# Required Reading");
   });
@@ -460,8 +472,11 @@ describe("buildAgentBriefing — Context Tree", () => {
 
     expect(tree).toContain("## Core Model");
     expect(tree).toContain("decisions,\nconstraints, ownership, and cross-domain relationships");
+    expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("load `first-tree-write`");
     expect(tree).toContain("load `first-tree-read`");
+    expect(tree).toContain("Normal Context Tree content states **current truth**");
+    expect(tree).toContain("`raw-context/` is archive/supporting material");
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
     expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
