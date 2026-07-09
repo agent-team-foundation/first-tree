@@ -99,7 +99,11 @@ function claudeProviderTurnNoticeLead(payload: ProviderRetryEventPayload): strin
     return "Claude Code could not run this turn: Anthropic reported a capacity or usage limit. Wait or switch accounts, then retry.";
   }
   if (payload.category === "transient_transport") {
-    return "Claude Code could not run this turn: the Anthropic connection failed after retry handling. Retry later.";
+    return (
+      "Claude Code could not run this turn: the provider API connection failed after retry handling. " +
+      `If you use a proxy or custom ANTHROPIC_BASE_URL, make sure the daemon has those env vars via ${daemonEnvFile()} ` +
+      "and that the upstream endpoint is reachable, then retry."
+    );
   }
   if (payload.category === "configuration") {
     return "Claude Code could not run this turn: the Claude runtime configuration is invalid. Update the agent or provider configuration, then retry.";
