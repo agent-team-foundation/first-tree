@@ -3124,6 +3124,7 @@ export function ChatView({
 
   const toInviteableMentionCandidate = useCallback(
     (a: Agent): MentionCandidate | null => {
+      if (a.type !== "agent") return null;
       if (a.status === "suspended") return null;
       if (myAgentId && a.uuid === myAgentId) return null;
       if (chatParticipantIdSet.has(a.uuid)) return null;

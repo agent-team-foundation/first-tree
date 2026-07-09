@@ -241,6 +241,14 @@ const ORG_AGENTS = [
     managerId: "member-alice",
     clientId: "client-teammate",
   }),
+  agent({
+    uuid: "human-agent-first-tree-ai",
+    name: "first-tree-ai",
+    displayName: "first-tree-ai",
+    type: "human",
+    managerId: "member-alice",
+    clientId: null,
+  }),
 ];
 
 function participant(overrides: Partial<ChatParticipantDetail> & { agentId: string }): ChatParticipantDetail {
@@ -1535,6 +1543,23 @@ describe("ChatView", () => {
       participantIds: ["agent-teammate"],
     });
     expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Please @teammate", ["agent-teammate"]);
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not show human rows as inviteable non-participant agents", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    await setValue(textarea, "Please @");
+    await waitForCondition(
+      () => container.querySelector<HTMLButtonElement>('button[title="@teammate"]') !== null,
+      "Expected bare @ to show runtime agent non-participant",
+    );
+    expect(container.querySelector<HTMLButtonElement>('button[title="@first-tree-ai"]')).toBeNull();
 
     await act(async () => root.unmount());
   });
