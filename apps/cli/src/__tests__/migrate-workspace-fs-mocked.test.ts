@@ -28,7 +28,10 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       return (actual.readdirSync as (...args: unknown[]) => unknown)(path, options);
     }) as typeof actual.readdirSync,
-    renameSync: ((oldPath: Parameters<typeof actual.renameSync>[0], newPath: Parameters<typeof actual.renameSync>[1]) => {
+    renameSync: ((
+      oldPath: Parameters<typeof actual.renameSync>[0],
+      newPath: Parameters<typeof actual.renameSync>[1],
+    ) => {
       const oldText = String(oldPath);
       const newText = String(newPath);
       if (

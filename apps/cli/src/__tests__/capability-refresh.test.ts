@@ -432,10 +432,7 @@ describe("CapabilityRefresher", () => {
 
     await refresher.start();
     await vi.advanceTimersByTimeAsync(0);
-    expect(log).toHaveBeenCalledWith(
-      "⚠️",
-      expect.stringContaining("startup capability re-probe skipped after"),
-    );
+    expect(log).toHaveBeenCalledWith("⚠️", expect.stringContaining("startup capability re-probe skipped after"));
     expect(log.mock.calls.map((call) => String(call[1])).join("\n")).toContain("provider crashed");
 
     await vi.advanceTimersByTimeAsync(BASE * 2);

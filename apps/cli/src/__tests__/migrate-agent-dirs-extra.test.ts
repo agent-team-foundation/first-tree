@@ -223,10 +223,7 @@ describe("migrateLocalAgentDirs extra failure branches", () => {
       },
     });
     expect(forbidden).toMatchObject({ scanned: 1, errors: 1 });
-    expect(printMock.status).toHaveBeenLastCalledWith(
-      "⚠️",
-      expect.stringContaining("likely a non-admin account"),
-    );
+    expect(printMock.status).toHaveBeenLastCalledWith("⚠️", expect.stringContaining("likely a non-admin account"));
 
     vi.clearAllMocks();
     rmSync(root, { recursive: true, force: true });

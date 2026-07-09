@@ -919,11 +919,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(extractPullRequestPayloadInfo("pull_request", null, "org-1")).toBeNull();
     expect(extractPullRequestPayloadInfo("pull_request", pullRequestPayload({ action: "closed" }), "org-1")).toBeNull();
     expect(
-      extractPullRequestPayloadInfo(
-        "pull_request",
-        pullRequestPayload({ repository: null, sender: null }),
-        "org-1",
-      ),
+      extractPullRequestPayloadInfo("pull_request", pullRequestPayload({ repository: null, sender: null }), "org-1"),
     ).toBeNull();
     expect(
       extractPullRequestPayloadInfo(
@@ -933,11 +929,7 @@ describe("handleContextReviewerPrEvent", () => {
       ),
     ).toBeNull();
     expect(
-      extractPullRequestPayloadInfo(
-        "issue_comment",
-        issueCommentPayload({ issue: null, comment: null }),
-        "org-1",
-      ),
+      extractPullRequestPayloadInfo("issue_comment", issueCommentPayload({ issue: null, comment: null }), "org-1"),
     ).toBeNull();
     expect(
       extractPullRequestPayloadInfo(

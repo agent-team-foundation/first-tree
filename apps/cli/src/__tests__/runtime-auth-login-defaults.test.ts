@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CapabilityEntry } from "@first-tree/shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("runRuntimeAuthLogin default dependencies", () => {
   afterEach(() => {

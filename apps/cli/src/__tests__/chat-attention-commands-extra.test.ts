@@ -201,7 +201,10 @@ describe("chat command behavior", () => {
     ioMocks.readStdin.mockResolvedValueOnce(null);
     docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({ content: "" });
     await runChat(["send", "nova"]);
-    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith("", expect.objectContaining({ chatId: "chat-env" }));
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith(
+      "",
+      expect.objectContaining({ chatId: "chat-env" }),
+    );
   });
 
   it("chat ask sends an open question with the body as the ask and JSON --options", async () => {
@@ -409,7 +412,10 @@ describe("chat command behavior", () => {
 
     await runChat(["ask", "nova"]);
 
-    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith("", expect.objectContaining({ chatId: "chat-env" }));
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith(
+      "",
+      expect.objectContaining({ chatId: "chat-env" }),
+    );
   });
 
   it("chat ask is ask-only: it accepts neither --answer nor --reply-to", async () => {
@@ -886,7 +892,9 @@ describe("chat command behavior", () => {
     globalThis.clearInterval = vi.fn() as unknown as typeof clearInterval;
     cliFetchMock
       .mockResolvedValueOnce(jsonResponse({ id: "dm-fallback" }))
-      .mockResolvedValueOnce(jsonResponse({ items: [{ id: "old", senderId: "agent-fallback", content: "old", createdAt: "1" }] }))
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [{ id: "old", senderId: "agent-fallback", content: "old", createdAt: "1" }] }),
+      )
       .mockResolvedValueOnce(jsonResponse("poll failed", false, 502));
 
     await runChat(["open", "fallback"]);
@@ -918,13 +926,11 @@ describe("chat command behavior", () => {
     }) as unknown as typeof setInterval;
     globalThis.clearInterval = vi.fn() as unknown as typeof clearInterval;
     resolveAgentMock.mockResolvedValueOnce({ uuid: "agent-named", name: "NamedOnly" });
-    cliFetchMock
-      .mockResolvedValueOnce(jsonResponse({ id: "dm-named" }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          items: [{ id: "old", senderId: "agent-named", content: "old", createdAt: "2026-06-01T00:00:00.000Z" }],
-        }),
-      );
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ id: "dm-named" })).mockResolvedValueOnce(
+      jsonResponse({
+        items: [{ id: "old", senderId: "agent-named", content: "old", createdAt: "2026-06-01T00:00:00.000Z" }],
+      }),
+    );
 
     await runChat(["open", "named"]);
     cliFetchMock.mockResolvedValueOnce(
@@ -947,26 +953,31 @@ describe("chat command behavior", () => {
       return 102 as unknown as NodeJS.Timeout;
     }) as unknown as typeof setInterval;
     resolveAgentMock.mockResolvedValueOnce({ uuid: "agent-generic" });
-    cliFetchMock
-      .mockResolvedValueOnce(jsonResponse({ id: "dm-generic" }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          items: [{ id: "old", senderId: "agent-generic", content: "old", createdAt: "2026-06-01T00:00:00.000Z" }],
-        }),
-      );
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ id: "dm-generic" })).mockResolvedValueOnce(
+      jsonResponse({
+        items: [{ id: "old", senderId: "agent-generic", content: "old", createdAt: "2026-06-01T00:00:00.000Z" }],
+      }),
+    );
 
     await runChat(["open", "generic"]);
     cliFetchMock.mockResolvedValueOnce(
       jsonResponse({
         items: [
-          { id: "new", senderId: "agent-generic", content: { text: "short object" }, createdAt: "2026-06-01T00:00:02.000Z" },
+          {
+            id: "new",
+            senderId: "agent-generic",
+            content: { text: "short object" },
+            createdAt: "2026-06-01T00:00:02.000Z",
+          },
         ],
       }),
     );
     genericInterval?.();
     await Promise.resolve();
     await Promise.resolve();
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain('[agent] {"text":"short object"}');
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      '[agent] {"text":"short object"}',
+    );
     expect(() => genericEmitter.emit("close")).toThrow("process.exit");
   });
 

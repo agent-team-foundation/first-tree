@@ -5,20 +5,17 @@ import { getActivityOverview } from "../services/activity.js";
 import {
   agentAvatarImageUrl,
   assertUserAgentMetadataHasNoReservedKeys,
+  deleteAgent,
   ensureClientSupportsRuntimeProvider,
   fetchUserAvatarForHumanAgent,
   legacyWireAgentType,
-  deleteAgent,
   listAgents,
   reactivateAgent,
   resolveAvatarImageUrl,
-  suspendAgent,
   stripReservedAgentMetadata,
+  suspendAgent,
 } from "../services/agent.js";
-import {
-  assertNoRuntimeSwitchInProgress,
-  getRuntimeSwitchClaim,
-} from "../services/agent-runtime-switch.js";
+import { assertNoRuntimeSwitchInProgress, getRuntimeSwitchClaim } from "../services/agent-runtime-switch.js";
 import { createChat, resolveAgentIdsByNameInOrg, updateChatMetadata } from "../services/chat.js";
 import { explainContextTreeIoDecision } from "../services/context-tree-io.js";
 import {
@@ -36,24 +33,22 @@ import { listAgentTurns, summarizeAgent } from "../services/usage.js";
 type ChainRows = unknown[];
 
 function queryChain(rows: unknown[]): unknown {
-  const chain = {
-    for: vi.fn(() => chain),
-    from: vi.fn(() => chain),
-    groupBy: vi.fn(() => chain),
-    innerJoin: vi.fn(() => chain),
-    leftJoin: vi.fn(() => chain),
-    limit: vi.fn(() => chain),
-    offset: vi.fn(() => chain),
-    onConflictDoNothing: vi.fn(() => chain),
-    onConflictDoUpdate: vi.fn(() => chain),
-    orderBy: vi.fn(() => chain),
-    returning: vi.fn(async () => rows),
-    set: vi.fn(() => chain),
-    values: vi.fn(() => chain),
-    where: vi.fn(() => chain),
-    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-  };
+  const promise = Promise.resolve(rows);
+  const chain = new Proxy(
+    function queryProxy(): unknown {
+      return chain;
+    },
+    {
+      get: (_target, prop) => {
+        if (prop === "then") return promise.then.bind(promise);
+        if (prop === "catch") return promise.catch.bind(promise);
+        if (prop === "finally") return promise.finally.bind(promise);
+        if (prop === Symbol.iterator) return rows[Symbol.iterator].bind(rows);
+        if (prop === "returning") return vi.fn(async () => rows);
+        return vi.fn(() => chain);
+      },
+    },
+  );
   return chain;
 }
 
@@ -182,15 +177,18 @@ describe("service branch defaults", () => {
         userAvatarUrl: "https://avatars.example/u.png",
       }),
     ).toBe("https://avatars.example/u.png");
-    expect(resolveAvatarImageUrl({ uuid: "agent_1", type: "agent", avatarImageUpdatedAt: null, userAvatarUrl: "x" }))
-      .toBeNull();
+    expect(
+      resolveAvatarImageUrl({ uuid: "agent_1", type: "agent", avatarImageUpdatedAt: null, userAvatarUrl: "x" }),
+    ).toBeNull();
     expect(legacyWireAgentType("human")).toBe("human");
     expect(legacyWireAgentType("agent")).toBe("personal_assistant");
 
-    await expect(fetchUserAvatarForHumanAgent(queuedSelectDb([]) as never, { uuid: "a", type: "agent" })).resolves
-      .toBeNull();
-    await expect(fetchUserAvatarForHumanAgent(queuedSelectDb([[{}]]) as never, { uuid: "h", type: "human" })).resolves
-      .toBeNull();
+    await expect(
+      fetchUserAvatarForHumanAgent(queuedSelectDb([]) as never, { uuid: "a", type: "agent" }),
+    ).resolves.toBeNull();
+    await expect(
+      fetchUserAvatarForHumanAgent(queuedSelectDb([[{}]]) as never, { uuid: "h", type: "human" }),
+    ).resolves.toBeNull();
 
     expect(getRuntimeSwitchClaim(null)).toBeNull();
     expect(getRuntimeSwitchClaim({ runtimeSwitch: { claimId: 42 } })).toBeNull();
@@ -203,12 +201,15 @@ describe("service branch defaults", () => {
   });
 
   it("covers client runtime capability tri-state branches", async () => {
-    await expect(ensureClientSupportsRuntimeProvider(queuedSelectDb([]) as never, null, "codex")).resolves.toBeUndefined();
+    await expect(
+      ensureClientSupportsRuntimeProvider(queuedSelectDb([]) as never, null, "codex"),
+    ).resolves.toBeUndefined();
     await expect(
       ensureClientSupportsRuntimeProvider(queuedSelectDb([]) as never, "client_1", "codex", { force: true }),
     ).resolves.toBeUndefined();
-    await expect(ensureClientSupportsRuntimeProvider(queuedSelectDb([[]]) as never, "client_1", "codex")).resolves
-      .toBeUndefined();
+    await expect(
+      ensureClientSupportsRuntimeProvider(queuedSelectDb([[]]) as never, "client_1", "codex"),
+    ).resolves.toBeUndefined();
     await expect(
       ensureClientSupportsRuntimeProvider(
         queuedSelectDb([[{ metadata: { capabilities: null }, retiredAt: null }]]) as never,
@@ -225,7 +226,9 @@ describe("service branch defaults", () => {
     ).rejects.toThrow(BadRequestError);
     await expect(
       ensureClientSupportsRuntimeProvider(
-        queuedSelectDb([[{ metadata: { capabilities: { codex: { available: true } } }, retiredAt: new Date() }]]) as never,
+        queuedSelectDb([
+          [{ metadata: { capabilities: { codex: { available: true } } }, retiredAt: new Date() }],
+        ]) as never,
         "client_1",
         "codex",
       ),
@@ -236,13 +239,7 @@ describe("service branch defaults", () => {
     const first = { uuid: "agent_1", createdAt: new Date("2026-01-02T00:00:00.000Z") };
     const second = { uuid: "agent_2", createdAt: new Date("2026-01-01T00:00:00.000Z") };
     await expect(
-      listAgents(
-        queuedSelectDb([[first, second]]) as never,
-        "org_1",
-        1,
-        "2026-01-03T00:00:00.000Z",
-        "agent",
-      ),
+      listAgents(queuedSelectDb([[first, second]]) as never, "org_1", 1, "2026-01-03T00:00:00.000Z", "agent"),
     ).resolves.toEqual({ items: [first], nextCursor: first.createdAt.toISOString() });
 
     await expect(
@@ -530,7 +527,6 @@ describe("service branch defaults", () => {
     await expect(
       createChat(legacyKickoffMissingDb as never, {
         mode: "legacy-empty-agent",
-        organizationId: "org_1",
         creatorAgentId: "creator",
         participantAgentIds: ["participant"],
         onboardingKickoffKey: "kickoff-missing",
@@ -644,11 +640,7 @@ describe("service branch defaults", () => {
       notifier,
     });
     await expect(
-      updateService.updateResource(
-        "resource_1",
-        { payload: { url: "https://github.com/acme/repo.git" } },
-        "member_1",
-      ),
+      updateService.updateResource("resource_1", { payload: { url: "https://github.com/acme/repo.git" } }, "member_1"),
     ).rejects.toThrow("A matching resource already exists");
 
     const createFailure = new Error("plain create failure");
@@ -902,11 +894,7 @@ describe("service branch defaults", () => {
     };
 
     await expect(
-      service.replaceAgentResources(
-        "agent_1",
-        { expectedVersion: 1, bindings: bindings as never },
-        "member_1",
-      ),
+      service.replaceAgentResources("agent_1", { expectedVersion: 1, bindings: bindings as never }, "member_1"),
     ).resolves.toMatchObject({ version: 2 });
     expect(db.insert).toHaveBeenCalledTimes(1);
   });
@@ -935,7 +923,9 @@ describe("service branch defaults", () => {
       },
     } as never);
 
-    expect(config.payload.mcpServers).toEqual([{ name: "existing", type: "stdio", command: "node", args: [], env: {} }]);
+    expect(config.payload.mcpServers).toEqual([
+      { name: "existing", type: "stdio", command: "node", args: [], env: {} },
+    ]);
   });
 
   it("exercises empty-database service edges through public APIs", async () => {
@@ -1001,16 +991,7 @@ describe("service branch defaults", () => {
       () => agentService.getAgent(db, "missing-agent"),
       () => agentService.getAgentByName(db, "org_1", "missing"),
       () => agentService.listAgentsForAdmin(db, orgScope, 1, "2026-01-01"),
-      () =>
-        agentService.listAgentsForMember(
-          db,
-          orgScope,
-          1,
-          "2026-01-01",
-          "agent",
-          "Agent 100%_literal",
-          true,
-        ),
+      () => agentService.listAgentsForMember(db, orgScope, 1, "2026-01-01", "agent", "Agent 100%_literal", true),
       () => agentService.checkAgentNameAvailability(db, "org_1", "missing"),
       () => agentService.getNewChatDefaultCandidate(db, orgScope, null),
       () => chatService.getChat(db, "missing-chat"),
@@ -1030,12 +1011,7 @@ describe("service branch defaults", () => {
       () => documentService.setDocumentStatus(db, docRow, "approved"),
       () => documentService.getCommentRow(db, "comment_1"),
       () => documentService.setCommentStatus(db, commentRow, "resolved"),
-      () =>
-        documentService.listComments(
-          db,
-          docRow,
-          { versionNumber: undefined, status: undefined },
-        ),
+      () => documentService.listComments(db, docRow, { versionNumber: undefined, status: undefined }),
       () => inboxService.pollInbox(db, "inbox_1", 1),
       () => inboxService.claimBacklogForPush(db, "inbox_1", 1),
       () => inboxService.claimBacklogForPushForChat(db, "inbox_1", "chat_1", 1),

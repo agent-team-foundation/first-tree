@@ -327,7 +327,8 @@ describe("installPortableSpec", () => {
     });
     await expect(http.fetchPortableLatestVersion()).resolves.toEqual({
       ok: false,
-      reason: 'Refusing portable latest metadata: portable metadata version not-semver belongs to channel "unknown", not my channel "prod"',
+      reason:
+        'Refusing portable latest metadata: portable metadata version not-semver belongs to channel "unknown", not my channel "prod"',
     });
 
     const parseSpy = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
@@ -912,7 +913,10 @@ describe("installPortableSpec", () => {
       const actual = await importOriginal<typeof import("node:fs/promises")>();
       return {
         ...actual,
-        readFile: async (path: Parameters<typeof actual.readFile>[0], options?: Parameters<typeof actual.readFile>[1]) => {
+        readFile: async (
+          path: Parameters<typeof actual.readFile>[0],
+          options?: Parameters<typeof actual.readFile>[1],
+        ) => {
           if (String(path).endsWith("/INSTALL.json")) throw "install metadata denied";
           return actual.readFile(path, options);
         },

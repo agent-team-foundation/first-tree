@@ -119,7 +119,9 @@ describe("Context Tree snapshot service with mocked git", () => {
       return "";
     });
 
-    await expect(service.contextTreeSnapshotTestInternals.readDiffEntries("/fake", safeBase, safeHead)).resolves.toEqual({
+    await expect(
+      service.contextTreeSnapshotTestInternals.readDiffEntries("/fake", safeBase, safeHead),
+    ).resolves.toEqual({
       entries: [],
       truncated: true,
     });

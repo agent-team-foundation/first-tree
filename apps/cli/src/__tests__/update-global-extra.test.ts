@@ -132,7 +132,9 @@ describe("global update helpers", () => {
   });
 
   it("prefers sibling npm, tolerates empty engine stdout, and keeps non-semver installed labels", async () => {
-    existsSyncMock.mockImplementation((path: unknown) => String(path).endsWith("/npm") || String(path).endsWith("\\npm.cmd"));
+    existsSyncMock.mockImplementation(
+      (path: unknown) => String(path).endsWith("/npm") || String(path).endsWith("\\npm.cmd"),
+    );
     spawnSyncMock.mockReturnValueOnce({ status: 0, stderr: "" });
     const child = new FakeChild();
     registrySpawnMock.mockReturnValueOnce({ child });

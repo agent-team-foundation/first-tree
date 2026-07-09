@@ -3,7 +3,7 @@ import { AUTH_REJECTED_CODES, type ClientMessage, type InboxEntryWithMessage } f
 import { SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clientWsRoutes } from "../api/agent/ws-client.js";
-import { inboxEntries } from "../db/schema/inbox-entries.js";
+import type { inboxEntries } from "../db/schema/inbox-entries.js";
 import * as activityService from "../services/activity.js";
 import * as agentRuntimeSessionService from "../services/agent-runtime-session.js";
 import * as clientService from "../services/client.js";
@@ -35,17 +35,21 @@ class FakeSocket extends EventEmitter {
 }
 
 function queryChain(rows: unknown[] = []): unknown {
-  const chain = {
-    from: vi.fn(() => chain),
-    leftJoin: vi.fn(() => chain),
-    limit: vi.fn(() => chain),
-    orderBy: vi.fn(() => chain),
-    returning: vi.fn(() => chain),
-    set: vi.fn(() => chain),
-    where: vi.fn(() => chain),
-    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-  };
+  const promise = Promise.resolve(rows);
+  const chain = new Proxy(
+    function queryProxy(): unknown {
+      return chain;
+    },
+    {
+      get: (_target, prop) => {
+        if (prop === "then") return promise.then.bind(promise);
+        if (prop === "catch") return promise.catch.bind(promise);
+        if (prop === "finally") return promise.finally.bind(promise);
+        if (prop === Symbol.iterator) return rows[Symbol.iterator].bind(rows);
+        return vi.fn(() => chain);
+      },
+    },
+  );
   return chain;
 }
 
@@ -361,11 +365,7 @@ describe("Agent client WS branch fakes", () => {
     });
   }
 
-  async function bindAgent(
-    socket: FakeSocket,
-    handler: WsHandler,
-    ref = "bind-ok",
-  ): Promise<void> {
+  async function bindAgent(socket: FakeSocket, handler: WsHandler, ref = "bind-ok"): Promise<void> {
     await authenticateAndRegister(socket, handler);
     await emitMessage(socket, {
       type: "agent:bind",
@@ -379,7 +379,12 @@ describe("Agent client WS branch fakes", () => {
 
   it("rejects first-bind races when the claim update returns no row", async () => {
     const { handler } = routeHarness(
-      queuedDb([[{ id: "user_1", status: "active" }], [{ userId: "user_1", retiredAt: null }], [activeAgentRow({ clientId: null })], []]),
+      queuedDb([
+        [{ id: "user_1", status: "active" }],
+        [{ userId: "user_1", retiredAt: null }],
+        [activeAgentRow({ clientId: null })],
+        [],
+      ]),
     );
     const socket = new FakeSocket();
     await authenticateAndRegister(socket, handler);
@@ -453,9 +458,7 @@ describe("Agent client WS branch fakes", () => {
 
   it("binds an agent and drains backlog through the fake inbox push path", async () => {
     mockSuccessfulBindServices();
-    vi.spyOn(inboxService, "claimBacklogForPushFair")
-      .mockResolvedValueOnce([inboxEntry()])
-      .mockResolvedValue([]);
+    vi.spyOn(inboxService, "claimBacklogForPushFair").mockResolvedValueOnce([inboxEntry()]).mockResolvedValue([]);
     const { handler, notifier } = routeHarness(
       queuedDb([
         [{ id: "user_1", status: "active" }],
@@ -468,8 +471,12 @@ describe("Agent client WS branch fakes", () => {
     await bindAgent(socket, handler);
     await waitUntil(() => socket.sent.some((frame) => (frame as { type?: string }).type === "inbox:deliver"));
 
-    expect(socket.sent).toContainEqual(expect.objectContaining({ type: "agent:bound", runtimeSessionToken: "runtime-token" }));
-    expect(socket.sent).toContainEqual(expect.objectContaining({ type: "inbox:deliver", entryId: 101, chatId: "chat_1" }));
+    expect(socket.sent).toContainEqual(
+      expect.objectContaining({ type: "agent:bound", runtimeSessionToken: "runtime-token" }),
+    );
+    expect(socket.sent).toContainEqual(
+      expect.objectContaining({ type: "inbox:deliver", entryId: 101, chatId: "chat_1" }),
+    );
     expect(notifier.subscribe).toHaveBeenCalledWith("inbox_1", socket, expect.any(Function));
   });
 
@@ -650,7 +657,12 @@ describe("Agent client WS branch fakes", () => {
     await bindAgent(socket, handler);
 
     await emitMessage(socket, { type: "session:state", agentId: "agent_1", chatId: "chat_1", state: "active" });
-    await emitMessage(socket, { type: "session:runtime", agentId: "agent_1", chatId: "chat_1", runtimeState: "working" });
+    await emitMessage(socket, {
+      type: "session:runtime",
+      agentId: "agent_1",
+      chatId: "chat_1",
+      runtimeState: "working",
+    });
     await emitMessage(socket, { type: "runtime:state", agentId: "agent_1", runtimeState: "idle" });
     await waitUntil(() => vi.mocked(activityService.setSessionRuntime).mock.calls.length > 0);
 

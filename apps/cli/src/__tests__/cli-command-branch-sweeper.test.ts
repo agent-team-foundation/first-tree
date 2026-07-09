@@ -164,15 +164,19 @@ describe("CLI command branch sweeper", () => {
         "missing",
       ]),
     ).rejects.toMatchObject({ code: "CREATE_ERROR" });
-    expect(outputMocks.fail).toHaveBeenCalledWith(
-      "ORG_NOT_FOUND",
-      'Not an active member of organization "missing"',
-      1,
-    );
+    expect(outputMocks.fail).toHaveBeenCalledWith("ORG_NOT_FOUND", 'Not an active member of organization "missing"', 1);
 
     fetchMock.mockResolvedValueOnce(jsonResponse("down", false, 503));
     await expect(
-      runWith(registerAgentCommands, ["agent", "create", "agent-epsilon", "--type", "agent", "--client-id", "client-a"]),
+      runWith(registerAgentCommands, [
+        "agent",
+        "create",
+        "agent-epsilon",
+        "--type",
+        "agent",
+        "--client-id",
+        "client-a",
+      ]),
     ).rejects.toMatchObject({ code: "CREATE_ERROR" });
     expect(outputMocks.fail).toHaveBeenCalledWith("FETCH_ERROR", "Failed to fetch /me: HTTP 503", 1);
   });
@@ -273,7 +277,9 @@ describe("CLI command branch sweeper", () => {
       }),
     );
 
-    await expect(runWith(registerChatCommands, ["chat", "send", "alice", "inline", "--message-file", "x"])).rejects.toMatchObject({
+    await expect(
+      runWith(registerChatCommands, ["chat", "send", "alice", "inline", "--message-file", "x"]),
+    ).rejects.toMatchObject({
       code: "CONFLICTING_ARGS",
     });
 
@@ -283,7 +289,9 @@ describe("CLI command branch sweeper", () => {
     });
 
     ioMocks.looksLikeEscapedNewlineBody.mockReturnValue(false);
-    await expect(runWith(registerChatCommands, ["chat", "send", "alice", "hello", "--metadata", "{bad"])).rejects.toMatchObject({
+    await expect(
+      runWith(registerChatCommands, ["chat", "send", "alice", "hello", "--metadata", "{bad"]),
+    ).rejects.toMatchObject({
       code: "INVALID_METADATA",
     });
 

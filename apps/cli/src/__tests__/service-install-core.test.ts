@@ -795,7 +795,9 @@ describe("service install helpers", () => {
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "inactive\n", stderr: "" });
     expect(refreshClientServiceUnitForUpdate()).toMatchObject({ state: "inactive" });
-    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("loginctl enable-linger failed: exit unknown"));
+    expect(printMocks.line).toHaveBeenCalledWith(
+      expect.stringContaining("loginctl enable-linger failed: exit unknown"),
+    );
 
     spawnSyncMock.mockReset();
     spawnSyncMock

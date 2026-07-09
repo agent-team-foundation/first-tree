@@ -1104,11 +1104,14 @@ describe("ClientRuntime context-tree wiring", () => {
     paused("auth_refresh_failed", new Error("refresh rejected"));
     expect(print.status).toHaveBeenCalledWith("✗", "auth rejected — pausing agents until fresh credentials arrive.");
     expect(print.status).toHaveBeenCalledWith("", "refresh rejected");
-    paused("auth_refresh_failed", (() => {
-      const err = new Error("missing auth message");
-      Object.defineProperty(err, "authCode", { value: "invalid_token" });
-      return err;
-    })());
+    paused(
+      "auth_refresh_failed",
+      (() => {
+        const err = new Error("missing auth message");
+        Object.defineProperty(err, "authCode", { value: "invalid_token" });
+        return err;
+      })(),
+    );
     expect(print.status).toHaveBeenCalledWith("", "Auth rejection code: invalid_token");
     const credentialsError = fsWatchMocks.on.mock.calls.find((call) => call[0] === "error")?.[1] as
       | ((err: Error) => void)

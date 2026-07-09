@@ -469,7 +469,11 @@ describe("small API route handlers", () => {
       role: "admin",
       token: "invite_admin",
     });
-    routeMocks.ensureMembership.mockResolvedValueOnce({ id: "member_admin", organizationId: "org_join", role: "admin" });
+    routeMocks.ensureMembership.mockResolvedValueOnce({
+      id: "member_admin",
+      organizationId: "org_join",
+      role: "admin",
+    });
     const joinAdmin = makeApp({
       ...appBase,
       db: makeQueuedSelectDb([[{ username: "alice", displayName: "Alice" }]]),
@@ -506,7 +510,11 @@ describe("small API route handlers", () => {
 
     const leave = makeApp({
       ...appBase,
-      db: makeQueuedSelectDb([[{ id: "member_leave", userId: "user_1" }], [{ id: "member_other", userId: "user_2" }], []]),
+      db: makeQueuedSelectDb([
+        [{ id: "member_leave", userId: "user_1" }],
+        [{ id: "member_other", userId: "user_2" }],
+        [],
+      ]),
     });
     await meRoutes(leave.app as never);
     const leaveReply = makeReply();

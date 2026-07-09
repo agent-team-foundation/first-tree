@@ -164,7 +164,8 @@ vi.mock("node:child_process", async (importOriginal) => {
         if (execState.mode === "many-daemon-untrusted") {
           return Array.from(
             { length: 9 },
-            (_value, index) => `  ${200 + index} first-tree daemon start --foreground FIRST_TREE_HOME=${execState.home}`,
+            (_value, index) =>
+              `  ${200 + index} first-tree daemon start --foreground FIRST_TREE_HOME=${execState.home}`,
           ).join("\n");
         }
         if (execState.mode === "daemon-active") {

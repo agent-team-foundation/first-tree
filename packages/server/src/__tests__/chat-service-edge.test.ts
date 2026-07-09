@@ -443,7 +443,9 @@ describe("chat service edge coverage", () => {
     await expect(getChatDetail(app.db, chat.id, seed.humanAgentUuid)).resolves.toMatchObject({
       viewerMembershipKind: "participant",
     });
-    await expect(getChatDetail(app.db, chat.id, watcherId)).resolves.toMatchObject({ viewerMembershipKind: "watching" });
+    await expect(getChatDetail(app.db, chat.id, watcherId)).resolves.toMatchObject({
+      viewerMembershipKind: "watching",
+    });
   });
 
   it("adds participants by agent name and formats missing addParticipant selectors", async () => {
@@ -452,9 +454,9 @@ describe("chat service edge coverage", () => {
     const newcomer = await createManagedAgent({ ...seed, suffix: "add-name-target" });
     const chat = await createChat(app.db, seed.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
 
-    await expect(addParticipant(app.db, chat.id, seed.humanAgentUuid, { agentName: newcomer.name ?? "" })).resolves.toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: newcomer.uuid })]),
-    );
+    await expect(
+      addParticipant(app.db, chat.id, seed.humanAgentUuid, { agentName: newcomer.name ?? "" }),
+    ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ agentId: newcomer.uuid })]));
     await expect(addParticipant(app.db, chat.id, seed.humanAgentUuid, {} as never)).rejects.toThrow(
       'Agent "(unknown)" not found',
     );

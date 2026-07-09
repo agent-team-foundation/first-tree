@@ -1721,7 +1721,9 @@ describe("Resources Phase 1", () => {
     const agent = await createRuntimeAgent(app, owner);
 
     await expect(app.resourcesService.getResource(crypto.randomUUID())).rejects.toMatchObject({ statusCode: 404 });
-    await expect(app.resourcesService.getAgentResources(crypto.randomUUID())).rejects.toMatchObject({ statusCode: 404 });
+    await expect(app.resourcesService.getAgentResources(crypto.randomUUID())).rejects.toMatchObject({
+      statusCode: 404,
+    });
 
     await app.db.delete(agentConfigs).where(eq(agentConfigs.agentId, agent.uuid));
     await expect(app.resourcesService.resolveEffectiveResources(agent.uuid)).rejects.toMatchObject({ statusCode: 404 });

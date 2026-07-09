@@ -74,9 +74,9 @@ describe("github entity live helpers", () => {
     expect(__testing.buildHtmlUrl("commit", { kind: "sha", owner: "o", repo: "r", sha: "abcdef1" })).toBe(
       "https://github.com/o/r/commit/abcdef1",
     );
-    expect(
-      __testing.buildHtmlUrl("commit", { kind: "numeric", owner: "o", repo: "r", number: 4 } as never),
-    ).toBe("https://github.com/o/r");
+    expect(__testing.buildHtmlUrl("commit", { kind: "numeric", owner: "o", repo: "r", number: 4 } as never)).toBe(
+      "https://github.com/o/r",
+    );
   });
 });
 

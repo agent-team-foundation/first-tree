@@ -199,7 +199,7 @@ Body`);
     const tree = contextTreeSnapshotTestInternals.buildTreeFromRawFiles([
       {
         relativePath: "domain/empty.md",
-        raw: "---\ntitle: \"\"\nowners: owner\nsoft_links: [\"/domain/\"]\n---\n# Heading only\n[missing](missing.md)",
+        raw: '---\ntitle: ""\nowners: owner\nsoft_links: ["/domain/"]\n---\n# Heading only\n[missing](missing.md)',
       },
       {
         relativePath: "domain/target.md",
@@ -239,7 +239,7 @@ Body`);
     const tree = contextTreeSnapshotTestInternals.buildTreeFromRawFiles([
       {
         relativePath: "",
-        raw: "---\nowners: []\nsoft_links: [\"#local\"]\n---\nEmpty path body",
+        raw: '---\nowners: []\nsoft_links: ["#local"]\n---\nEmpty path body',
       },
       {
         relativePath: "target.md",

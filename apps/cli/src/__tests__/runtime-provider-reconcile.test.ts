@@ -215,10 +215,7 @@ describe("reconcileLocalRuntimeProviders", () => {
 
     const after = parseYaml(readFileSync(goodPath, "utf-8")) as { runtime?: string };
     expect(after.runtime).toBe("codex");
-    expect(logs).toContainEqual([
-      "info",
-      'agent agent-unset: yaml runtime "(unset)" → "codex" (server authoritative)',
-    ]);
+    expect(logs).toContainEqual(["info", 'agent agent-unset: yaml runtime "(unset)" → "codex" (server authoritative)']);
   });
 });
 

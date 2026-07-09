@@ -168,7 +168,9 @@ describe("prompt core", () => {
     expect(yaml).toContain("provider: codex");
     expect(yaml).not.toContain("skip:");
 
-    const customValueValidate = inputMock.mock.calls[2]?.[0]?.validate as ((value: string) => true | string) | undefined;
+    const customValueValidate = inputMock.mock.calls[2]?.[0]?.validate as
+      | ((value: string) => true | string)
+      | undefined;
     expect(customValueValidate?.("")).toBe("Value is required");
     expect(customValueValidate?.("filled")).toBe(true);
   });
@@ -189,9 +191,7 @@ describe("prompt core", () => {
       }),
     ).resolves.toEqual({ server: { url: "https://default-config.test" } });
 
-    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain(
-      "url: https://default-config.test",
-    );
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: https://default-config.test");
   });
 
   it("returns an empty prompt result when no schema prompts are missing", async () => {

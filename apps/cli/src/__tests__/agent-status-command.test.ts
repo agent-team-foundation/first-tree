@@ -192,26 +192,24 @@ describe("agent status command", () => {
     expect(output()).toContain("—");
 
     printLineMock.mockClear();
-    fetchMock
-      .mockResolvedValueOnce(jsonResponse({ memberships: [{ organizationId: "org-a" }] }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          total: 1,
-          running: 1,
-          byState: { idle: 0, working: 0, blocked: 1, error: 0 },
-          clients: 1,
-          agents: [
-            {
-              agentId: "agent-nullable",
-              clientId: null,
-              runtimeType: null,
-              runtimeState: null,
-              activeSessions: 3,
-              totalSessions: null,
-            },
-          ],
-        }),
-      );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ memberships: [{ organizationId: "org-a" }] })).mockResolvedValueOnce(
+      jsonResponse({
+        total: 1,
+        running: 1,
+        byState: { idle: 0, working: 0, blocked: 1, error: 0 },
+        clients: 1,
+        agents: [
+          {
+            agentId: "agent-nullable",
+            clientId: null,
+            runtimeType: null,
+            runtimeState: null,
+            activeSessions: 3,
+            totalSessions: null,
+          },
+        ],
+      }),
+    );
 
     await runStatus(["agent-nullable"]);
 
