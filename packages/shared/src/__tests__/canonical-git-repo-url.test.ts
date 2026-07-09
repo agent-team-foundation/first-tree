@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { canonicalGitRepoUrl } from "../canonical-git-repo-url.js";
 
 describe("canonicalGitRepoUrl", () => {
@@ -29,5 +29,30 @@ describe("canonicalGitRepoUrl", () => {
     expect(canonicalGitRepoUrl("   ")).toBeNull();
     expect(canonicalGitRepoUrl("not a url")).toBeNull();
     expect(canonicalGitRepoUrl("https://github.com/")).toBeNull();
+    expect(canonicalGitRepoUrl("github.com:.git")).toBeNull();
+    expect(canonicalGitRepoUrl("git@github.com:////.git")).toBeNull();
+  });
+
+  it("defensively rejects scp-like matches with missing capture values", () => {
+    const originalExec = RegExp.prototype.exec;
+    const execSpy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+      this: RegExp,
+      value: string,
+    ): RegExpExecArray | null {
+      if (value === "force-empty-scp-host") {
+        const match: RegExpExecArray = Object.assign(["force-empty-scp-host", "", "owner/repo"], {
+          index: 0,
+          input: value,
+        });
+        return match;
+      }
+      return Reflect.apply(originalExec, this, [value]);
+    });
+
+    try {
+      expect(canonicalGitRepoUrl("force-empty-scp-host")).toBeNull();
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 });
