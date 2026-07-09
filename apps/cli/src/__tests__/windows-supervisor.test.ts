@@ -99,16 +99,18 @@ describe("Windows supervisor loop", () => {
     expect(resolveInvocation).toHaveBeenCalledTimes(2);
     expect(spawnProcess).toHaveBeenNthCalledWith(
       1,
-      "C:\\First Tree\\old\\first-tree-dev.cmd",
-      ["daemon", "start", "--no-interactive"],
+      process.env.ComSpec || "cmd.exe",
+      ["/d", "/s", "/c", expect.stringContaining('"C:\\First Tree\\old\\first-tree-dev.cmd"')],
       expect.any(Object),
     );
     expect(spawnProcess).toHaveBeenNthCalledWith(
       2,
-      "C:\\First Tree\\new\\first-tree-dev.cmd",
-      ["daemon", "start", "--no-interactive"],
+      process.env.ComSpec || "cmd.exe",
+      ["/d", "/s", "/c", expect.stringContaining('"C:\\First Tree\\new\\first-tree-dev.cmd"')],
       expect.any(Object),
     );
+    expect((spawnProcess.mock.calls[0]?.[1] as string[])[3]).toContain('"daemon" "start" "--no-interactive"');
+    expect((spawnProcess.mock.calls[1]?.[1] as string[])[3]).toContain('"daemon" "start" "--no-interactive"');
   });
 
   it("backs off after a non-zero crash before restarting", async () => {

@@ -39,11 +39,32 @@ type RuntimeMarker = {
 type LiveServiceRuntimeMarker = {
   pid: number;
   clientId: string;
+  createdAt: string;
 };
 
 type MarkerReadResult = { ok: true; markers: LiveServiceRuntimeMarker[] } | { ok: false; reason: string };
 
+type WindowsProcessIdentity = {
+  commandLine: string;
+  creationTimeUtc: string;
+  executablePath: string;
+  parentProcessId: number | null;
+  processId: number;
+};
+
+type WindowsProcessIdentityResult =
+  | { status: "present"; identity: WindowsProcessIdentity }
+  | { status: "gone" }
+  | { status: "unknown"; reason: string };
+
+type RuntimeMarkerTrustResult = { trusted: true } | { trusted: false; gone?: boolean; reason: string };
+type KillRuntimeMarkerResult =
+  | { ok: true; detail?: string; killAttempted: boolean }
+  | { ok: false; reason: string; killAttempted: boolean };
+type TrustedMarkersForStopResult = { ok: true; markers: LiveServiceRuntimeMarker[] } | { ok: false; reason: string };
+
 const POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"] as const;
+const PID_REUSE_CREATION_TOLERANCE_MS = 5_000;
 
 function windowsInfo(state: ServiceState, pid?: number, detail?: string): ServiceInfo {
   return {
@@ -173,6 +194,102 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+function valueAsString(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function valueAsNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function parseWindowsProcessIdentity(stdout: string): WindowsProcessIdentity | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  const processId = valueAsNumber(record.ProcessId);
+  if (processId === null) return null;
+  return {
+    processId,
+    parentProcessId: valueAsNumber(record.ParentProcessId),
+    commandLine: valueAsString(record.CommandLine),
+    executablePath: valueAsString(record.ExecutablePath),
+    creationTimeUtc: valueAsString(record.CreationTimeUtc),
+  };
+}
+
+function queryWindowsProcessIdentity(pid: number): WindowsProcessIdentityResult {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction SilentlyContinue`,
+    "if ($null -eq $p) { exit 3 }",
+    "$creation = if ($null -eq $p.CreationDate) { $null } else { $p.CreationDate.ToUniversalTime().ToString('o') }",
+    "$item = [PSCustomObject]@{ ProcessId = $p.ProcessId; ParentProcessId = $p.ParentProcessId; CommandLine = $p.CommandLine; ExecutablePath = $p.ExecutablePath; CreationTimeUtc = $creation }",
+    "[Console]::Out.Write(($item | ConvertTo-Json -Compress))",
+  ].join("; ");
+  const res = runCaptureOut("powershell.exe", [...POWERSHELL_ARGS, script], 5_000);
+  if (!res.ok) {
+    if (res.code === 3) return { status: "gone" };
+    return { status: "unknown", reason: res.stderr || `powershell exit ${res.code ?? "unknown"}` };
+  }
+  const identity = parseWindowsProcessIdentity(res.stdout);
+  if (!identity) return { status: "unknown", reason: "process query returned malformed JSON" };
+  if (identity.processId !== pid) {
+    return { status: "unknown", reason: `process query returned pid ${identity.processId} for pid ${pid}` };
+  }
+  return { status: "present", identity };
+}
+
+function looksLikeFirstTreeDaemonStart(command: string): boolean {
+  const normalized = command.replace(/\\/g, "/").toLowerCase();
+  const tokens = normalized.match(/"[^"]*"|\S+/gu)?.map((token) => token.replace(/^"|"$/gu, "")) ?? [];
+  const daemonIndex = tokens.indexOf("daemon");
+  const startIndex = tokens.indexOf("start");
+  if (daemonIndex < 0 || startIndex <= daemonIndex || !tokens.includes("--no-interactive")) return false;
+  return (
+    /(^|[/\s"])first-tree(?:-(?:dev|staging))?(?:\.(?:cmd|bat|exe|js|mjs|cjs|ts))?(?=$|[\s"])/u.test(normalized) ||
+    /(?:^|[/\s"])(?:cli\/index|index)\.(?:mjs|cjs|js|ts)(?=$|[\s"])/u.test(normalized)
+  );
+}
+
+function verifyRuntimeMarkerProcess(marker: LiveServiceRuntimeMarker): RuntimeMarkerTrustResult {
+  const identity = queryWindowsProcessIdentity(marker.pid);
+  if (identity.status === "gone") return { trusted: false, gone: true, reason: "already stopped" };
+  if (identity.status === "unknown") return { trusted: false, reason: identity.reason };
+
+  const command = `${identity.identity.commandLine} ${identity.identity.executablePath}`.trim();
+  if (!looksLikeFirstTreeDaemonStart(command)) {
+    const detail = command.length > 180 ? `${command.slice(0, 180)}...` : command || "empty command line";
+    return { trusted: false, reason: `pid command does not match First Tree daemon start: ${detail}` };
+  }
+
+  const markerCreated = Date.parse(marker.createdAt);
+  if (!Number.isFinite(markerCreated)) {
+    return { trusted: false, reason: `runtime marker has invalid createdAt ${marker.createdAt}` };
+  }
+  const processCreated = Date.parse(identity.identity.creationTimeUtc);
+  if (!Number.isFinite(processCreated)) {
+    return { trusted: false, reason: "process creation time is unavailable" };
+  }
+  if (processCreated > markerCreated + PID_REUSE_CREATION_TOLERANCE_MS) {
+    return {
+      trusted: false,
+      reason: `pid process was created after runtime marker (${identity.identity.creationTimeUtc} > ${marker.createdAt})`,
+    };
+  }
+
+  return { trusted: true };
+}
+
 function listLiveServiceRuntimeMarkers(): MarkerReadResult {
   const markerDir = clientRuntimeMarkerDir();
   if (!existsSync(markerDir)) return { ok: true, markers: [] };
@@ -204,7 +321,7 @@ function listLiveServiceRuntimeMarkers(): MarkerReadResult {
       rmSync(path, { force: true });
       continue;
     }
-    markers.push({ pid: marker.pid, clientId: marker.clientId });
+    markers.push({ pid: marker.pid, clientId: marker.clientId, createdAt: marker.createdAt });
   }
   return { ok: true, markers };
 }
@@ -275,17 +392,43 @@ function waitForPidExit(pid: number, timeoutMs: number): boolean {
   return !isPidAlive(pid);
 }
 
-function killRuntimeMarker(marker: LiveServiceRuntimeMarker): ServiceOpResult {
-  if (!isPidAlive(marker.pid)) return { ok: true, detail: "already stopped" };
+function killRuntimeMarker(marker: LiveServiceRuntimeMarker): KillRuntimeMarkerResult {
+  if (!isPidAlive(marker.pid)) return { ok: true, detail: "already stopped", killAttempted: false };
+  const trusted = verifyRuntimeMarkerProcess(marker);
+  if (!trusted.trusted) {
+    if (trusted.gone) return { ok: true, detail: "already stopped", killAttempted: false };
+    return {
+      ok: false,
+      reason: `refusing to taskkill untrusted service runtime marker pid ${marker.pid}: ${trusted.reason}`,
+      killAttempted: false,
+    };
+  }
   const graceful = runCapture("taskkill.exe", ["/PID", String(marker.pid), "/T"], 10_000);
-  if (waitForPidExit(marker.pid, graceful.ok ? 5_000 : 0)) return { ok: true };
+  if (waitForPidExit(marker.pid, graceful.ok ? 5_000 : 0)) return { ok: true, killAttempted: true };
 
   const forced = runCapture("taskkill.exe", ["/PID", String(marker.pid), "/T", "/F"], 10_000);
-  if (waitForPidExit(marker.pid, forced.ok ? 5_000 : 0)) return { ok: true };
+  if (waitForPidExit(marker.pid, forced.ok ? 5_000 : 0)) return { ok: true, killAttempted: true };
   if (!forced.ok) {
-    return { ok: false, reason: forced.stderr || `taskkill /F exit ${forced.code ?? "unknown"}` };
+    return { ok: false, reason: forced.stderr || `taskkill /F exit ${forced.code ?? "unknown"}`, killAttempted: true };
   }
-  return { ok: false, reason: `pid ${marker.pid} did not exit after taskkill /F` };
+  return { ok: false, reason: `pid ${marker.pid} did not exit after taskkill /F`, killAttempted: true };
+}
+
+function trustedMarkersForStop(markers: LiveServiceRuntimeMarker[]): TrustedMarkersForStopResult {
+  const trustedMarkers: LiveServiceRuntimeMarker[] = [];
+  for (const marker of markers) {
+    if (!isPidAlive(marker.pid)) continue;
+    const trusted = verifyRuntimeMarkerProcess(marker);
+    if (!trusted.trusted) {
+      if (trusted.gone) continue;
+      return {
+        ok: false,
+        reason: `refusing to taskkill untrusted service runtime marker pid ${marker.pid}: ${trusted.reason}`,
+      };
+    }
+    trustedMarkers.push(marker);
+  }
+  return { ok: true, markers: trustedMarkers };
 }
 
 function installWindowsTaskScheduler(): ServiceInfo {
@@ -337,15 +480,22 @@ function stopWindowsTaskSchedulerService(): ServiceOpResult {
   }
   if (task.state === "unknown") return { ok: false, reason: task.detail ?? "task state unavailable" };
 
-  writeWindowsSupervisorStopIntent();
   const markers = listLiveServiceRuntimeMarkers();
   if (!markers.ok) {
-    clearWindowsSupervisorStopIntent();
     return { ok: false, reason: markers.reason };
   }
-  for (const marker of markers.markers) {
+  const trustedMarkers = trustedMarkersForStop(markers.markers);
+  if (!trustedMarkers.ok) return trustedMarkers;
+
+  writeWindowsSupervisorStopIntent();
+  let anyKillAttempted = false;
+  for (const marker of trustedMarkers.markers ?? []) {
     const killed = killRuntimeMarker(marker);
-    if (!killed.ok) return killed;
+    anyKillAttempted ||= killed.killAttempted;
+    if (!killed.ok) {
+      if (!anyKillAttempted) clearWindowsSupervisorStopIntent();
+      return { ok: false, reason: killed.reason };
+    }
   }
 
   const end = task.state === "running" ? endTask() : { ok: true as const, detail: "not running" };

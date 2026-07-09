@@ -123,6 +123,23 @@ function childProgram(invocation: ResolvedBinary): string {
   return invocation.program;
 }
 
+function isWindowsCommandShim(program: string): boolean {
+  return /\.(?:cmd|bat)$/iu.test(program);
+}
+
+function childSpawnTarget(invocation: ResolvedBinary): { program: string; args: string[]; display: string } {
+  const program = childProgram(invocation);
+  const args = childArgs(invocation);
+  const display = [program, ...args].join(" ");
+  if (!isWindowsCommandShim(program)) return { program, args, display };
+
+  return {
+    program: process.env.ComSpec || "cmd.exe",
+    args: ["/d", "/s", "/c", [program, ...args].map(cmdQuote).join(" ")],
+    display,
+  };
+}
+
 function normalizeExitCode(code: number | null, signal: NodeJS.Signals | null): string {
   if (code !== null) return String(code);
   return signal ? `signal ${signal}` : "unknown";
@@ -206,12 +223,11 @@ export async function runWindowsSupervisorLoop(options: WindowsSupervisorLoopOpt
       continue;
     }
 
-    const program = childProgram(invocation);
-    const args = childArgs(invocation);
-    appendWindowsSupervisorLog(`starting daemon child: ${[program, ...args].join(" ")}`);
+    const target = childSpawnTarget(invocation);
+    appendWindowsSupervisorLog(`starting daemon child: ${target.display}`);
     let child: ChildProcess;
     try {
-      child = spawnProcess(program, args, {
+      child = spawnProcess(target.program, target.args, {
         detached: false,
         env: {
           ...process.env,

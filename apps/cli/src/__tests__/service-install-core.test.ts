@@ -23,6 +23,7 @@ import {
   windowsTaskName,
   windowsTaskXmlPath,
 } from "../core/service-install.js";
+import { windowsSupervisorStopIntentPath } from "../core/supervisor/windows-supervisor.js";
 
 const printMocks = vi.hoisted(() => ({
   line: vi.fn(),
@@ -68,6 +69,19 @@ function setExecPath(value: string): void {
 
 function tempHome(): string {
   return join(tmpdir(), `ft-service-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+}
+
+function windowsProcessIdentityJson(
+  pid: number,
+  opts: { commandLine?: string; creationTimeUtc?: string; executablePath?: string } = {},
+): string {
+  return JSON.stringify({
+    ProcessId: pid,
+    ParentProcessId: 1234,
+    CommandLine: opts.commandLine ?? '"node.exe" "C:\\First Tree\\index.mjs" "daemon" "start" "--no-interactive"',
+    ExecutablePath: opts.executablePath ?? "C:\\Program Files\\nodejs\\node.exe",
+    CreationTimeUtc: opts.creationTimeUtc ?? "2026-01-01T23:59:59.0000000Z",
+  });
 }
 
 let home: string;
@@ -730,6 +744,7 @@ describe("service install helpers", () => {
   it("stops Windows by writing stop intent, killing the service child, then ending the task", () => {
     setPlatform("win32");
     const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    const markerCreatedAt = "2026-01-02T00:00:00.000Z";
     mkdirSync(markerDir, { recursive: true });
     writeFileSync(
       join(markerDir, "4321.json"),
@@ -739,20 +754,22 @@ describe("service install helpers", () => {
         clientId: "client_aabbccdd",
         home: process.env.FIRST_TREE_HOME,
         mode: "service",
-        createdAt: new Date().toISOString(),
+        createdAt: markerCreatedAt,
       }),
     );
     let pidChecks = 0;
     const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
       if (pid === 4321 && signal === 0) {
         pidChecks += 1;
-        if (pidChecks <= 2) return true;
+        if (pidChecks <= 3) return true;
         throw Object.assign(new Error("gone"), { code: "ESRCH" });
       }
       return true;
     }) as typeof process.kill);
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: windowsProcessIdentityJson(4321), stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: windowsProcessIdentityJson(4321), stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
@@ -765,6 +782,14 @@ describe("service install helpers", () => {
           expect.arrayContaining([
             expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
           ]),
+        ],
+        [
+          "powershell.exe",
+          expect.arrayContaining([expect.stringContaining('Get-CimInstance Win32_Process -Filter "ProcessId = 4321"')]),
+        ],
+        [
+          "powershell.exe",
+          expect.arrayContaining([expect.stringContaining('Get-CimInstance Win32_Process -Filter "ProcessId = 4321"')]),
         ],
         ["taskkill.exe", ["/PID", "4321", "/T"]],
         ["schtasks.exe", ["/End", "/TN", windowsTaskName()]],
@@ -783,6 +808,7 @@ describe("service install helpers", () => {
   it("treats localized taskkill failure as success when the Windows service pid has already exited", () => {
     setPlatform("win32");
     const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    const markerCreatedAt = "2026-01-02T00:00:00.000Z";
     mkdirSync(markerDir, { recursive: true });
     writeFileSync(
       join(markerDir, "5432.json"),
@@ -792,20 +818,22 @@ describe("service install helpers", () => {
         clientId: "client_aabbccdd",
         home: process.env.FIRST_TREE_HOME,
         mode: "service",
-        createdAt: new Date().toISOString(),
+        createdAt: markerCreatedAt,
       }),
     );
     let pidChecks = 0;
     const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
       if (pid === 5432 && signal === 0) {
         pidChecks += 1;
-        if (pidChecks <= 2) return true;
+        if (pidChecks <= 3) return true;
         throw Object.assign(new Error("gone"), { code: "ESRCH" });
       }
       return true;
     }) as typeof process.kill);
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: windowsProcessIdentityJson(5432), stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: windowsProcessIdentityJson(5432), stderr: "" })
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "FEHLER: Prozess wurde nicht gefunden" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
@@ -819,6 +847,14 @@ describe("service install helpers", () => {
             expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
           ]),
         ],
+        [
+          "powershell.exe",
+          expect.arrayContaining([expect.stringContaining('Get-CimInstance Win32_Process -Filter "ProcessId = 5432"')]),
+        ],
+        [
+          "powershell.exe",
+          expect.arrayContaining([expect.stringContaining('Get-CimInstance Win32_Process -Filter "ProcessId = 5432"')]),
+        ],
         ["taskkill.exe", ["/PID", "5432", "/T"]],
         ["schtasks.exe", ["/End", "/TN", windowsTaskName()]],
         [
@@ -828,6 +864,111 @@ describe("service install helpers", () => {
           ]),
         ],
       ]);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("refuses to taskkill a Windows runtime marker when the pid identity does not match the marker", () => {
+    setPlatform("win32");
+    const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    mkdirSync(markerDir, { recursive: true });
+    writeFileSync(
+      join(markerDir, "6543.json"),
+      JSON.stringify({
+        version: 1,
+        pid: 6543,
+        clientId: "client_aabbccdd",
+        home: process.env.FIRST_TREE_HOME,
+        mode: "service",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
+      if (pid === 6543 && signal === 0) return true;
+      return true;
+    }) as typeof process.kill);
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" }).mockReturnValueOnce({
+      status: 0,
+      stdout: windowsProcessIdentityJson(6543, { creationTimeUtc: "2026-01-02T00:00:30.0000000Z" }),
+      stderr: "",
+    });
+
+    try {
+      expect(stopClientService()).toEqual({
+        ok: false,
+        reason: expect.stringContaining("refusing to taskkill untrusted service runtime marker pid 6543"),
+      });
+      expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+        [
+          "powershell.exe",
+          expect.arrayContaining([expect.stringContaining('Get-CimInstance Win32_Process -Filter "ProcessId = 6543"')]),
+        ],
+      ]);
+      expect(spawnSyncMock.mock.calls.some((call) => call[0] === "taskkill.exe")).toBe(false);
+      expect(existsSync(windowsSupervisorStopIntentPath())).toBe(false);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("prevalidates all Windows runtime markers before writing stop intent or killing any pid", () => {
+    setPlatform("win32");
+    const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    mkdirSync(markerDir, { recursive: true });
+    for (const pid of [1111, 2222]) {
+      writeFileSync(
+        join(markerDir, `${pid}.json`),
+        JSON.stringify({
+          version: 1,
+          pid,
+          clientId: "client_aabbccdd",
+          home: process.env.FIRST_TREE_HOME,
+          mode: "service",
+          createdAt: "2026-01-02T00:00:00.000Z",
+        }),
+      );
+    }
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
+      if ((pid === 1111 || pid === 2222) && signal === 0) return true;
+      return true;
+    }) as typeof process.kill);
+    spawnSyncMock.mockImplementation((program: string, args: string[]) => {
+      const command = args.join(" ");
+      if (program === "powershell.exe" && command.includes("Get-ScheduledTask")) {
+        return { status: 0, stdout: "Running", stderr: "" };
+      }
+      if (program === "powershell.exe" && command.includes('ProcessId = 1111"')) {
+        return { status: 0, stdout: windowsProcessIdentityJson(1111), stderr: "" };
+      }
+      if (program === "powershell.exe" && command.includes('ProcessId = 2222"')) {
+        return {
+          status: 0,
+          stdout: windowsProcessIdentityJson(2222, { creationTimeUtc: "2026-01-02T00:00:30.0000000Z" }),
+          stderr: "",
+        };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    try {
+      expect(stopClientService()).toEqual({
+        ok: false,
+        reason: expect.stringContaining("refusing to taskkill untrusted service runtime marker pid 2222"),
+      });
+      const commands = spawnSyncMock.mock.calls
+        .map((call) => `${call[0]} ${(call[1] as string[]).join(" ")}`)
+        .join("\n");
+      expect(commands).toContain('Get-CimInstance Win32_Process -Filter "ProcessId = 1111"');
+      expect(commands).toContain('Get-CimInstance Win32_Process -Filter "ProcessId = 2222"');
+      expect(spawnSyncMock.mock.calls.some((call) => call[0] === "taskkill.exe")).toBe(false);
+      expect(existsSync(windowsSupervisorStopIntentPath())).toBe(false);
     } finally {
       killSpy.mockRestore();
     }
