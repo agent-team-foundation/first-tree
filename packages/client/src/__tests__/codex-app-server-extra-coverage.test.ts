@@ -509,6 +509,16 @@ describe("workspace-only app-server sandbox extra edges", () => {
 
 describe("codex app-server handler extra branches", () => {
   it("wraps startup failures from binary resolution, initialization, and thread/start responses", async () => {
+    const thrownResolve = makeHandler(new FakeAppServerClient(), {
+      codexRuntimeBinaryResolver: async () => {
+        throw new Error("resolver exploded");
+      },
+    });
+    await expect(thrownResolve.start(makeMessage("m0", "first"), makeContext())).rejects.toMatchObject({
+      stage: "resolve-binary",
+      message: expect.stringContaining("resolver exploded"),
+    });
+
     const resolveFailure = makeHandler(new FakeAppServerClient(), {
       codexRuntimeBinaryResolver: async () => ({ ok: false, error: "missing codex binary" }),
     });
@@ -781,6 +791,80 @@ describe("codex app-server handler extra branches", () => {
       [makeMessage("m1", "first"), makeMessage("m2", "second"), makeMessage("m3", "third")],
       { status: "success", terminal: true },
     );
+
+    await handler.shutdown();
+  });
+
+  it("replays pre-turn buffered notifications and settles terminal turn/start tool fallbacks", async () => {
+    const fake = new FakeAppServerClient();
+    fake.responders.set("turn/start", () => {
+      fake.emit("item/completed", {
+        threadId: "thread-app-server",
+        turnId: "turn-inline",
+        item: { type: "agentMessage", id: "buffered-agent", text: "buffered answer" },
+      });
+      fake.emit("unknown/event", { threadId: "thread-app-server", turnId: "turn-inline", ignored: true });
+      return {
+        turn: {
+          id: "turn-inline",
+          status: "completed",
+          error: null,
+          items: [
+            {
+              type: "commandExecution",
+              id: "cmd-failed",
+              status: "failed",
+              command: "false",
+              aggregatedOutput: { ignored: true },
+            },
+            { type: "commandExecution", id: "cmd-pending", status: "queued", command: null, cwd: 42 },
+            { type: "fileChange", id: "file-declined", status: "declined", changes: [{ path: "src/blocked.ts" }] },
+            { type: "mcpToolCall", id: "mcp-pending", status: "queued", arguments: { query: "docs" } },
+          ],
+        },
+      };
+    });
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+
+    await handler.start(makeMessage("m1", "first"), makeContext({ emitEvent }), token);
+
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "assistant_text", payload: { text: "buffered answer" } }),
+        expect.objectContaining({
+          kind: "tool_call",
+          payload: expect.objectContaining({ toolUseId: "cmd-failed", name: "command", status: "error" }),
+        }),
+        expect.objectContaining({
+          kind: "tool_call",
+          payload: expect.objectContaining({ toolUseId: "cmd-pending", name: "command", status: "pending" }),
+        }),
+        expect.objectContaining({
+          kind: "tool_call",
+          payload: expect.objectContaining({ toolUseId: "file-declined", name: "file_change", status: "error" }),
+        }),
+        expect.objectContaining({
+          kind: "tool_call",
+          payload: expect.objectContaining({
+            toolUseId: "mcp-pending",
+            name: "mcp:unknown/unknown",
+            status: "pending",
+          }),
+        }),
+      ]),
+    );
+    const mcpEvent = events.find(
+      (event): event is Extract<SessionEvent, { kind: "tool_call" }> =>
+        event.kind === "tool_call" && event.payload.toolUseId === "mcp-pending",
+    );
+    expect(mcpEvent?.payload.resultPreview).toBeUndefined();
+    expect(token.complete).toHaveBeenCalledWith([makeMessage("m1", "first")], {
+      status: "success",
+      terminal: true,
+    });
 
     await handler.shutdown();
   });
