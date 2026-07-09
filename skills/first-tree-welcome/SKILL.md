@@ -323,13 +323,14 @@ it does not belong in this value-task list.)
 
 Once the user picks — or, for a production-scan fix launcher, once you have
 triaged the confirmed safe blockers (see "Production-scan fix handoff") — **do
-not do the work in this launcher chat**. Fan the selected work out into parallel
-chats — **one chat per task**: if the user picked the value bundle, open one chat
-for EACH task in it; if they picked individual value tasks, open one chat per
-picked task; if they picked the tree build, open one chat for it; for a scan-fix
-launcher, open one chat per confirmed safe blocker with a distinct, fix-specific
-topic. (That per-task parallelism is the leverage the user is meant to feel.)
-Open each with:
+not do the work in this launcher chat** (one exception: a scan-fix launcher with
+**exactly one** safe blocker fixes it in place, per that section). Fan the
+selected work out into parallel chats — **one chat per task**: if the user picked
+the value bundle, open one chat for EACH task in it; if they picked individual
+value tasks, open one chat per picked task; if they picked the tree build, open
+one chat for it; for a scan-fix launcher with **two or more** safe blockers, open
+one chat per blocker with a distinct, fix-specific topic. (That per-task
+parallelism is the leverage the user is meant to feel.) Open each with:
 
 `first-tree chat create --to <your-own-agent-name> --topic "<short task topic>" "<self-contained task brief>"`
 
@@ -556,7 +557,9 @@ surface; involve the responsible admin.
   option; accept free text. (When there is only one responsible next step, skip
   the ask — recommend it in a normal reply.)
 - Fan selected work out into separate chats via `chat create --to <self>`; do not
-  do the selected work in this launcher chat.
+  do the selected work in this launcher chat. (Exception: a production-scan fix
+  launcher with exactly one safe blocker fixes it in place — see Production-scan
+  fix handoff.)
 - Every spawned chat's opening message is a self-contained task brief (task +
   context + how "done" is verified), because it is all the context the woken
   agent has and it reads as if the user sent it.
