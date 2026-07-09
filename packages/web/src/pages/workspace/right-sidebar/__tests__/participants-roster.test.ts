@@ -68,6 +68,47 @@ const statusBase: Omit<AgentChatStatusInput, "agentId"> = {
 };
 
 describe("orderParticipantsByActivity", () => {
+  it("keeps failed agents ahead of working and recent speakers", () => {
+    const roster = [participant("working", "agent"), participant("human-1", "human"), participant("failed", "agent")];
+
+    const ordered = orderParticipantsByActivity(
+      roster,
+      [{ senderId: "human-1", createdAt: "2026-07-09T04:00:00.000Z" }],
+      [
+        buildAgentChatStatus({ ...statusBase, agentId: "working", working: true }),
+        buildAgentChatStatus({ ...statusBase, agentId: "failed", errored: true }),
+      ],
+    );
+
+    expect(ordered.map((p) => p.agentId)).toEqual(["failed", "working", "human-1"]);
+  });
+
+  it("keeps fatal terminal recovery reasons ahead of recent speakers", () => {
+    const roster = [participant("human-1", "human"), participant("fatal", "agent")];
+
+    const ordered = orderParticipantsByActivity(
+      roster,
+      [{ senderId: "human-1", createdAt: "2026-07-09T04:00:00.000Z" }],
+      [
+        buildAgentChatStatus({
+          ...statusBase,
+          agentId: "fatal",
+          statusReason: {
+            kind: "terminal",
+            severity: "error",
+            provider: "codex",
+            scope: "provider_turn",
+            category: "unknown",
+            reasonCode: "unknown_exhausted",
+            label: "Provider retry exhausted",
+          },
+        }),
+      ],
+    );
+
+    expect(ordered.map((p) => p.agentId)).toEqual(["fatal", "human-1"]);
+  });
+
   it("puts currently working agents before more recent speakers", () => {
     const roster = [participant("human-1", "human"), participant("agent-1", "agent"), participant("agent-2", "agent")];
 

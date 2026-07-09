@@ -16,10 +16,29 @@ function isActiveAgent(
   return liveTurnAgentIds.has(participant.agentId) || status?.working === true || status?.main === "working";
 }
 
+function isRecoveryAgent(participant: ChatParticipantDetail, status: AgentChatStatus | null): boolean {
+  if (participant.type === "human" || !status) return false;
+  return (
+    status.main === "failed" ||
+    (status.main !== "working" && status.statusReason?.kind === "terminal" && status.statusReason.severity === "error")
+  );
+}
+
+function participantTier(
+  participant: ChatParticipantDetail,
+  status: AgentChatStatus | null,
+  liveTurnAgentIds: ReadonlySet<string>,
+): number {
+  if (isRecoveryAgent(participant, status)) return 0;
+  if (isActiveAgent(participant, status, liveTurnAgentIds)) return 1;
+  return 2;
+}
+
 /**
  * Rank the chat-local roster by what matters in the conversation:
- * currently-working agents first, then the most recent speakers, then the
- * server's stable membership order for ties/no-activity rows.
+ * failed/fatal recovery agents first, then currently-working agents, then the
+ * most recent speakers, then the server's stable membership order for
+ * ties/no-activity rows.
  */
 export function orderParticipantsByActivity(
   participants: ChatParticipantDetail[],
@@ -43,9 +62,11 @@ export function orderParticipantsByActivity(
   const statusByAgent = new Map(statuses.map((status) => [status.agentId, status]));
 
   return [...participants].sort((a, b) => {
-    const aActive = isActiveAgent(a, statusByAgent.get(a.agentId) ?? null, liveTurnAgentIds);
-    const bActive = isActiveAgent(b, statusByAgent.get(b.agentId) ?? null, liveTurnAgentIds);
-    if (aActive !== bActive) return aActive ? -1 : 1;
+    const aStatus = statusByAgent.get(a.agentId) ?? null;
+    const bStatus = statusByAgent.get(b.agentId) ?? null;
+    const aTier = participantTier(a, aStatus, liveTurnAgentIds);
+    const bTier = participantTier(b, bStatus, liveTurnAgentIds);
+    if (aTier !== bTier) return aTier - bTier;
 
     const aActivity = latestActivity.get(a.agentId);
     const bActivity = latestActivity.get(b.agentId);

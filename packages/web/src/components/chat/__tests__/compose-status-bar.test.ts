@@ -34,13 +34,23 @@ describe("selectAttention — the bar surfaces only actionable/active states, mo
     expect(idx).toEqual([...idx].sort((x, y) => x - y));
   });
 
-  it("uses the shared participant order when supplied", () => {
+  it("keeps failed attention ahead of the shared participant order", () => {
     const working = mk("working", { working: true });
     const failed = mk("failed", { errored: true });
 
     expect(selectAttention([failed, working], ["working", "failed"]).map((s) => s.agentId)).toEqual([
-      "working",
       "failed",
+      "working",
+    ]);
+  });
+
+  it("uses the shared participant order within the same attention tier", () => {
+    const workingA = mk("working-a", { working: true });
+    const workingB = mk("working-b", { working: true });
+
+    expect(selectAttention([workingA, workingB], ["working-b", "working-a"]).map((s) => s.agentId)).toEqual([
+      "working-b",
+      "working-a",
     ]);
   });
 

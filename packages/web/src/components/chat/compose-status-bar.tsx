@@ -52,8 +52,9 @@ function visibleStatusReason(status: AgentChatStatus): AgentChatStatus["statusRe
 
 /**
  * The agents worth raising the bar for — failed / working — sorted
- * by the caller's participant order when provided. ready / paused / offline
- * are filtered out unless they carry a visible provider status reason.
+ * by recovery severity first, then the caller's participant order when
+ * provided. ready / paused / offline are filtered out unless they carry a
+ * visible provider status reason.
  * Exported for tests.
  */
 export function selectAttention(
@@ -67,12 +68,14 @@ export function selectAttention(
   return statuses
     .filter((s) => ATTENTION.has(s.main) || visibleStatusReason(s) !== undefined)
     .sort((a, b) => {
+      const rank = attentionRank(a) - attentionRank(b);
+      if (rank !== 0) return rank;
       const aOrder = order.get(a.agentId);
       const bOrder = order.get(b.agentId);
       if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder;
       if (aOrder !== undefined) return -1;
       if (bOrder !== undefined) return 1;
-      return attentionRank(a) - attentionRank(b) || compareMainStatus(a.main, b.main);
+      return compareMainStatus(a.main, b.main);
     });
 }
 
