@@ -31,6 +31,8 @@ async function runStartChat(args: {
   topic: string;
   treeBindingPlan?: TreeBindingPlan | "none";
   joinPath?: "invite";
+  /** Production-scan fix conversion `owner/repo` — keys the launcher for dedup. */
+  scanFixRepoSlug?: string;
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
   const agent = await resolveOnboardingAgent(args.organizationId);
@@ -42,6 +44,7 @@ async function runStartChat(args: {
     topic: args.topic,
     treeBindingPlan: args.treeBindingPlan ?? "none",
     joinPath: args.joinPath,
+    ...(args.scanFixRepoSlug ? { scanFixRepoSlug: args.scanFixRepoSlug } : {}),
   });
   await args.complete(chatId);
 }
@@ -117,6 +120,8 @@ function AdminStartChat() {
           organizationId,
           topic: scanFixHandoff ? "Fix production scan blockers" : "Get started with First Tree",
           treeBindingPlan: "none",
+          // Key the fix launcher on the repo so it dedups with the direct path.
+          ...(scanFixHandoff?.repoSlug ? { scanFixRepoSlug: scanFixHandoff.repoSlug } : {}),
           complete: async (chatId) => {
             // The chat now exists with the fix bootstrap — the handoff is consumed.
             writeScanFixHandoffFlag(null);

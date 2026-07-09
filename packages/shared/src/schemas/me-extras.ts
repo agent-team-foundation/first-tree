@@ -64,6 +64,15 @@ export const kickoffOnboardingSchema = z
     bootstrap: z.string().min(1),
     topic: z.string().trim().min(1).max(120).optional(),
     complete: z.boolean().optional(),
+    // Production-scan fix conversion: when present, the kickoff chat is keyed
+    // `<humanAgent>:scan-fix:<repoSlug>` instead of the default onboarding key,
+    // so the fix launcher created here dedups with the already-onboarded direct
+    // path (`POST /orgs/:orgId/chats`) that reuses the same key. `owner/repo`.
+    scanFixRepoSlug: z
+      .string()
+      .max(200)
+      .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/)
+      .optional(),
     // Retained only so stale quickstart clients receive a controlled
     // moved/disabled response from /me/onboarding/kickoff. Current campaign
     // quickstart uses /me/landing-campaigns/start; this field must not create an

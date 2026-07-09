@@ -124,6 +124,13 @@ const SCAN_FIX_HANDOFF_KEY = "onboarding:scanFixHandoff";
 export type StoredScanFixHandoff = {
   repoUrl: string;
   reportKey: string | null;
+  /**
+   * `owner/repo` — used to key the onboarding-path fix launcher on the repo so
+   * it dedups with the already-onboarded direct path. Optional so a flag stored
+   * by a pre-deploy bundle still resolves (that user just misses cross-path
+   * dedup until they re-click the fix link).
+   */
+  repoSlug?: string;
 };
 
 export function readScanFixHandoffFlag(): StoredScanFixHandoff | null {
@@ -137,7 +144,17 @@ export function readScanFixHandoffFlag(): StoredScanFixHandoff | null {
     if (typeof o.repoUrl !== "string" || !(typeof o.reportKey === "string" || o.reportKey === null)) {
       throw new Error("invalid scan-fix handoff");
     }
-    return { repoUrl: o.repoUrl, reportKey: o.reportKey };
+    // Only carry a well-formed `owner/repo` slug. A corrupt same-origin flag
+    // with a malformed slug must degrade to "no slug" (falls back to the
+    // default onboarding key) rather than reach the server and 400 the whole
+    // kickoff — the server keys on this and rejects anything off-pattern.
+    const repoSlug =
+      typeof o.repoSlug === "string" && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(o.repoSlug) ? o.repoSlug : undefined;
+    return {
+      repoUrl: o.repoUrl,
+      reportKey: o.reportKey,
+      ...(repoSlug ? { repoSlug } : {}),
+    };
   } catch {
     window.sessionStorage.removeItem(SCAN_FIX_HANDOFF_KEY);
     return null;
