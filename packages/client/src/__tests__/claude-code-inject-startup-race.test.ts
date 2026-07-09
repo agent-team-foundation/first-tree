@@ -117,6 +117,21 @@ function makeMessage(id: string, content: string): SessionMessage {
   };
 }
 
+function makeFileMessage(
+  id: string,
+  content: Record<string, unknown>,
+  chatId = "chat-claude-startup-race",
+): SessionMessage {
+  return {
+    id,
+    chatId,
+    senderId: "sender-1",
+    format: "file",
+    content,
+    metadata: {},
+  };
+}
+
 function makeContext(
   onFinishTurn: (count?: number) => void,
   opts: { formatInboundContent?: SessionContext["formatInboundContent"] } = {},
@@ -174,6 +189,68 @@ afterEach(() => {
 });
 
 describe("claude-code handler startup inject queue", () => {
+  it("materializes legacy inline images and describes unavailable image batches", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext((count) => {
+      completedCounts.push(count);
+    });
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(
+      makeFileMessage(
+        "legacy-image",
+        {
+          data: Buffer.from("fake image bytes").toString("base64"),
+          mimeType: "image/png",
+          filename: "legacy.png",
+        },
+        "../unsafe/chat",
+      ),
+      ctx,
+    );
+
+    handler.inject(
+      makeFileMessage("batch-images", {
+        caption: "Compare these screenshots",
+        attachments: [
+          {
+            imageId: "00000000-0000-4000-8000-000000000001",
+            mimeType: "image/png",
+            filename: "one.png",
+            size: 12,
+          },
+          {
+            imageId: "00000000-0000-4000-8000-000000000002",
+            mimeType: "image/jpeg",
+            filename: "two.jpg",
+            size: 34,
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => state.observedInputs.length === 2);
+    expect(state.observedInputs[0]).toContain("Filename: legacy.png");
+    expect(state.observedInputs[0]).toContain(join("first-tree", "images", "unknown"));
+    expect(state.observedInputs[0]).toContain(".png");
+    expect(state.observedInputs[1]).toContain("Compare these screenshots");
+    expect(state.observedInputs[1]).toContain(
+      "2 images were shared in this chat. Please use the Read tool to read each one",
+    );
+    expect(state.observedInputs[1]).toContain('[Image "one.png" not available on this device]');
+    expect(state.observedInputs[1]).toContain('[Image "two.jpg" not available on this device]');
+    expect(completedCounts).toEqual([undefined, undefined]);
+
+    await handler.shutdown();
+  });
+
   it("queues injects received before the InputController exists so their inbox entries stay aligned with acks", async () => {
     const completedCounts: Array<number | undefined> = [];
     const handler = createClaudeCodeHandler({ workspaceRoot });
