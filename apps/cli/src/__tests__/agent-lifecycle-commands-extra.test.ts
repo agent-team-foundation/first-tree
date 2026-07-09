@@ -1072,6 +1072,20 @@ describe("logout and upgrade commands", () => {
       "first-tree-dev upgrade --latest",
     );
 
+    printLineMock.mockClear();
+    coreMocks.fetchServerCommandVersion.mockResolvedValueOnce({
+      ok: false,
+      reasonCode: "server_url_not_configured",
+      reason:
+        "Server URL not configured.\n" +
+        "  Provide via: --server <url>, FIRST_TREE_SERVER_URL env var, or\n" +
+        "  first-tree-dev config set server.url <url>",
+    });
+    await expect(runTopLevel(registerUpgradeCommand, ["upgrade"])).rejects.toMatchObject({ code: 1 });
+    const missingServerUrlOutput = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(missingServerUrlOutput).toContain("Could not fetch server update target: Server URL not configured");
+    expect(missingServerUrlOutput).not.toContain("upgrade --latest");
+
     coreMocks.fetchLatestVersion.mockReturnValueOnce({ ok: false, reason: "npm down" });
     await expect(runTopLevel(registerUpgradeCommand, ["upgrade", "--latest"])).rejects.toMatchObject({ code: 1 });
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import * as semver from "semver";
 import { channelConfig } from "../core/channel.js";
+import type { VersionLookupResult } from "../core/index.js";
 import {
   COMMAND_VERSION,
   detectInstallMode,
@@ -78,7 +79,7 @@ export function registerUpgradeCommand(program: Command): void {
             : "latest version"
           : "server update target";
         print.line(`  Could not fetch ${targetLabel}: ${target.reason}\n`);
-        if (!useLatest) {
+        if (!useLatest && shouldSuggestLatestBypass(target)) {
           print.line(`  Run \`${binName} upgrade --latest\` to install latest instead.\n`);
         }
         print.line("\n");
@@ -166,4 +167,8 @@ export function registerUpgradeCommand(program: Command): void {
       }
       print.line(`  Service restarted on ${installed}.\n\n`);
     });
+}
+
+function shouldSuggestLatestBypass(target: Extract<VersionLookupResult, { ok: false }>): boolean {
+  return target.reasonCode !== "server_url_not_configured";
 }

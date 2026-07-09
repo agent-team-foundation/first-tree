@@ -165,11 +165,14 @@ tarball, including the bundled Node.js runtime. npm installs run `npm install
 -g` against the channel package and keep using the system Node.js runtime. Use
 `--latest` only when you intentionally want to bypass the server target and
 install the channel's latest release data directly.
+If the configured server URL is missing, configure it with
+`first-tree config set server.url <url>` or `FIRST_TREE_SERVER_URL`; `--latest`
+does not repair that server-target configuration.
 
 | Flag | Effect |
 |---|---|
 | `--check` | Only check for an available version; print "update available" or "already on latest". Do not install. |
-| `--latest` | Bypass the server target and query npm for the package's latest published version. |
+| `--latest` | Bypass the server target and query the channel's latest release data directly: npm for global installs, portable metadata for portable installs. |
 | `--no-restart` | Install the new version and refresh the supervisor definition, but leave the running service alone. Used for staged rollouts. |
 
 Refusing to run from a source checkout (anywhere under a `.git`
