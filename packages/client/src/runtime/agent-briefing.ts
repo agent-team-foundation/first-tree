@@ -615,9 +615,6 @@ ${skillRouting}
 
 ## Context Tree Policy
 
-This policy is the default judgment baseline for every Context Tree read,
-write, and seed task.
-
 ### What A Context Tree Is
 
 The Context Tree is durable context, not a source-code mirror, wiki dump, or
@@ -684,10 +681,9 @@ not what was decided.
   lost, and design course-corrections translated into present-tense reasoning.
   Capture **why**, not only what. Design-phase chat, review, and meeting
   threads are where this rationale is produced: somebody flags a constraint,
-  a first proposal is corrected, or an option is dropped because it conflicts
-  with another domain. The node records the surviving constraint and reasoning
-  from those moments, not the chronology of how the discussion unfolded. A node
-  without rationale is a fact, not a decision record.
+  a first proposal is corrected, or an option conflicts with another domain.
+  The node records the surviving constraint and reasoning from those moments,
+  not the chronology. A node without rationale is a fact, not a decision record.
 - **Who** — ownership, carried by \`owners\` frontmatter and
   \`members/<id>/NODE.md\` nodes. Do not put ownership in the body, and do not
   unilaterally edit \`owners\`.
@@ -706,11 +702,10 @@ node. Add a leaf only when all three hold:
    existing leaf.
 3. **Passes the Double Test.**
 
-Add a directory only when there are or are expected to be at least three
-cohesive leaves under the same axis. New top-level domains require explicit
-human-owner approval. When a decision touches two domains, keep canonical
-content in the more specific domain and link from the broader one with
-normal-to-normal \`soft_links\` or short prose pointers.
+Add a directory only when at least three cohesive leaves share an axis. New
+top-level domains require explicit human-owner approval. When a decision
+touches two domains, keep canonical content in the more specific domain and
+link from the broader one with normal-to-normal \`soft_links\` or short prose.
 
 ### Node Shape
 
