@@ -25,6 +25,7 @@ import {
   ArrowUp,
   AtSign,
   Check,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
@@ -51,7 +52,12 @@ import { useSearchParams } from "react-router";
 import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
-import { fetchAttachmentBase64, uploadAttachment, uploadMimeFor } from "../../../api/attachments.js";
+import {
+  downloadAttachment,
+  fetchAttachmentBase64,
+  uploadAttachment,
+  uploadMimeFor,
+} from "../../../api/attachments.js";
 import {
   type FileMessageContent,
   getChat,
@@ -595,6 +601,15 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     }
     return map;
   }, [msg.metadata]);
+  // Attachment refs to render as download chips: everything in
+  // `metadata.attachments` that is NOT already surfaced as an inline
+  // `[display](attachment:<id>)` link in the body (the agent doc-capture
+  // flow, which keeps its drawer link). Human composer uploads carry the ref
+  // with no inline link, so they render here as a FileChip.
+  const chipAttachmentRefs = useMemo(() => {
+    const body = typeof msg.content === "string" ? msg.content : "";
+    return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
+  }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
@@ -764,6 +779,23 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         >
           {JSON.stringify(msg.content, null, 2)}
         </pre>
+      )}
+      {chipAttachmentRefs.length > 0 && (
+        <div className="flex flex-col items-start" style={{ gap: 6, marginTop: 6 }}>
+          {chipAttachmentRefs.map((ref) => (
+            <button
+              key={ref.attachmentId}
+              type="button"
+              onClick={() => {
+                void downloadAttachment(ref.attachmentId, ref.filename);
+              }}
+              aria-label={`Download ${ref.filename}`}
+              className="cursor-pointer border-none bg-transparent p-0 text-left"
+            >
+              <FileChip filename={ref.filename} trailing={<Download className="size-4 text-muted-foreground" />} />
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
