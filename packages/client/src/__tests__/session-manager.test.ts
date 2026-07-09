@@ -2075,7 +2075,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const notice = String(sendMessage.mock.calls[0]?.[1].content);
-    expect(notice).toContain("Anthropic connection failed after retry handling");
+    expect(notice).toContain("provider API connection failed after retry handling");
     expect(notice).toContain("socket connection was closed unexpectedly");
     expect(ackEntry).toHaveBeenCalledWith(25);
 
@@ -2127,7 +2127,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const notice = String(sendMessage.mock.calls[0]?.[1].content);
-    expect(notice).toContain("Anthropic connection failed after retry handling");
+    expect(notice).toContain("provider API connection failed after retry handling");
     expect(notice).toContain("initial sdk transport crash");
     expect(notice).toContain("respawn build failed");
     expect(ackEntry).toHaveBeenCalledWith(26);

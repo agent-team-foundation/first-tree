@@ -125,7 +125,11 @@ describe("classifyProviderFailure", () => {
   });
 
   it("maps network and 5xx failures to transient_transport", () => {
-    for (const err of [new Error("fetch failed"), Object.assign(new Error("upstream 503"), { status: 503 })]) {
+    for (const err of [
+      new Error("fetch failed"),
+      new Error("API Error: Unable to connect to API (ConnectionRefused)"),
+      Object.assign(new Error("upstream 503"), { status: 503 }),
+    ]) {
       expect(classifyProviderFailure(err, { provider: "codex", scope: "provider_turn", source: "sdk" }).category).toBe(
         "transient_transport",
       );

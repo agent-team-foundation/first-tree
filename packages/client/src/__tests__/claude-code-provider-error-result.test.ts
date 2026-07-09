@@ -268,7 +268,7 @@ describe("claude-code handler — structured provider error result", () => {
       replaySafety: "user_visible",
     });
     expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain(
-      "Anthropic connection failed after retry handling",
+      "provider API connection failed after retry handling",
     );
     expect(completed[0]?.outcome).toMatchObject({
       status: "error",
