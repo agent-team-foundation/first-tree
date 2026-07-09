@@ -705,15 +705,26 @@ describe("Agent client WS edge protocol coverage", () => {
     });
     const presenceAgent = await createPinnedAgent({ ...presenceSeed, suffix: "presence-fail" });
     const presenceWs = await openRegisteredSocket(presenceSeed);
+    const reusedRuntimeSpy = vi.spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession").mockResolvedValueOnce({
+      token: "reused-runtime-token",
+      reused: true,
+    });
+    const revokeSpy = vi
+      .spyOn(agentRuntimeSessionService, "revokeAgentRuntimeSessionIfTokenMatches")
+      .mockResolvedValueOnce(true);
     const presenceSpy = vi.spyOn(presenceService, "bindAgentIfActiveClient").mockResolvedValueOnce(false);
     try {
       await expect(bindAgent(presenceWs, presenceAgent.uuid, "bind-presence-fail")).resolves.toMatchObject({
         type: "agent:bind:rejected",
         reason: AGENT_BIND_REJECT_REASONS.WRONG_CLIENT,
       });
+      expect(reusedRuntimeSpy).toHaveBeenCalled();
       expect(presenceSpy).toHaveBeenCalled();
+      expect(revokeSpy).not.toHaveBeenCalled();
     } finally {
       await closeSocket(presenceWs);
+      reusedRuntimeSpy.mockRestore();
+      revokeSpy.mockRestore();
       presenceSpy.mockRestore();
     }
   }, 15000);
@@ -725,6 +736,13 @@ describe("Agent client WS edge protocol coverage", () => {
     const agent = await createPinnedAgent({ ...seed, suffix: "active-drift" });
     const ws = await openRegisteredSocket(seed);
     const activeSpy = vi.spyOn(connectionManager, "isActiveClientConnection");
+    const reusedRuntimeSpy = vi.spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession").mockResolvedValueOnce({
+      token: "reused-runtime-token",
+      reused: true,
+    });
+    const revokeSpy = vi
+      .spyOn(agentRuntimeSessionService, "revokeAgentRuntimeSessionIfTokenMatches")
+      .mockResolvedValueOnce(true);
 
     try {
       activeSpy.mockReturnValueOnce(false);
@@ -740,9 +758,13 @@ describe("Agent client WS edge protocol coverage", () => {
         ref: "bind-active-drift-after-presence",
         reason: AGENT_BIND_REJECT_REASONS.WRONG_CLIENT,
       });
+      expect(reusedRuntimeSpy).toHaveBeenCalledTimes(1);
+      expect(revokeSpy).not.toHaveBeenCalled();
     } finally {
       await closeSocket(ws);
       activeSpy.mockRestore();
+      reusedRuntimeSpy.mockRestore();
+      revokeSpy.mockRestore();
     }
   }, 15000);
 

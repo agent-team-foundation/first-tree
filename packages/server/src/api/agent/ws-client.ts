@@ -1199,17 +1199,21 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 runtimeVersion: bindRequest.runtimeVersion,
               });
               if (!published) {
-                await agentRuntimeSessionService
-                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
-                  .catch(() => {});
+                if (!runtimeSessionReused) {
+                  await agentRuntimeSessionService
+                    .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                    .catch(() => {});
+                }
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
                 return;
               }
 
               if (!connectionManager.isActiveClientConnection(clientId, socket)) {
-                const revoked = await agentRuntimeSessionService
-                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
-                  .catch(() => false);
+                const revoked = runtimeSessionReused
+                  ? false
+                  : await agentRuntimeSessionService
+                      .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                      .catch(() => false);
                 if (revoked && connectionManager.getAgentClientId(agent.id) !== clientId) {
                   await presenceService.unbindAgent(app.db, agent.id, { expectedClientId: clientId }).catch(() => {});
                 }
