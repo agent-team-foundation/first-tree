@@ -7,6 +7,10 @@ describe("classifyShellCommandIo", () => {
       supported: false,
       reason: "empty",
     });
+    expect(classifyShellCommandIo("''")).toEqual({
+      supported: false,
+      reason: "empty",
+    });
     expect(classifyShellCommandIo('cat "unterminated')).toEqual({
       supported: false,
       reason: "complex_shell",
@@ -22,6 +26,19 @@ describe("classifyShellCommandIo", () => {
     expect(classifyShellCommandIo("$READER /tree/NODE.md")).toEqual({
       supported: false,
       reason: "dynamic_path",
+    });
+  });
+
+  it("rejects unsupported tools after resolving the command basename", () => {
+    expect(classifyShellCommandIo("git status")).toEqual({
+      supported: false,
+      reason: "unsupported_tool",
+      commandName: "git",
+    });
+    expect(classifyShellCommandIo("/")).toEqual({
+      supported: false,
+      reason: "unsupported_tool",
+      commandName: "/",
     });
   });
 
