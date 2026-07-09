@@ -41,6 +41,8 @@ import {
   resolveNodeVersion,
   resolvePinnedDependenciesFromPnpmList,
   rewriteBinShimBuildRoots,
+  rewriteBundleChannel,
+  rewriteBundleChannelText,
   sanitizePortableBinShims,
   validateChannelVersion,
   writeDeterministicTarGz,
@@ -162,6 +164,29 @@ describe("portable builder helpers", () => {
   it("uses immutable artifact names", () => {
     expect(artifactFileName({ packageName: "first-tree", version: "1.2.3", platform: "linux-x64" })).toBe(
       "first-tree-1.2.3-linux-x64.tar.gz",
+    );
+  });
+
+  it("rewrites historical and current bundled channel shapes", () => {
+    expect(rewriteBundleChannelText('const channelConfig = getChannelConfig("dev");', "staging")).toEqual({
+      content: 'const channelConfig = getChannelConfig("staging");',
+      replacements: 1,
+    });
+    expect(
+      rewriteBundleChannelText('var CHANNEL = "dev";\nconst channelConfig = getChannelConfig(CHANNEL);', "prod"),
+    ).toEqual({
+      content: 'var CHANNEL = "prod";\nconst channelConfig = getChannelConfig(CHANNEL);',
+      replacements: 1,
+    });
+  });
+
+  it("accepts already-channel-built bundles without a rewrite target", async () => {
+    const appDir = tempDir("first-tree-portable-bundle-channel-");
+    writeFileSync(join(appDir, "index.mjs"), 'const bundled = "already staging";\n');
+
+    await expect(rewriteBundleChannel(appDir, "staging", { sourceChannel: "staging" })).resolves.toBeUndefined();
+    await expect(rewriteBundleChannel(appDir, "prod", { sourceChannel: "dev" })).rejects.toThrow(
+      /expected to rewrite exactly one bundled channel constant/,
     );
   });
 
