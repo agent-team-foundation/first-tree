@@ -3744,6 +3744,7 @@ export function ChatView({
             descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
             lastReadAt={chatDetail?.lastReadAt ?? null}
             freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
+            autoExpandUnread={!narrow}
             scrollContainerRef={scrollContainerRef}
             overlayContainerRef={overlayContainerRef}
           />

@@ -42,6 +42,21 @@ vi.mock("../pages/onboarding/onboarding-page.js", () => ({ OnboardingPage: () =>
 vi.mock("../pages/workspace/index.js", () => ({ WorkspacePage: () => <div>workspace page</div> }));
 vi.mock("../pages/context.js", () => ({ ContextPage: () => <div>context page</div> }));
 vi.mock("../pages/team/index.js", () => ({ TeamPage: () => <div>team page</div> }));
+vi.mock("../pages/mobile/shell.js", async () => {
+  const { Outlet } = await import("react-router");
+  return {
+    MobileShell: () => (
+      <div data-testid="mobile-shell">
+        mobile shell
+        <Outlet />
+      </div>
+    ),
+  };
+});
+vi.mock("../pages/mobile/today.js", () => ({ MobileTodayPage: () => <div>mobile today</div> }));
+vi.mock("../pages/mobile/chat.js", () => ({ MobileChatPage: () => <div>mobile chat</div> }));
+vi.mock("../pages/mobile/team.js", () => ({ MobileTeamPage: () => <div>mobile team</div> }));
+vi.mock("../pages/mobile/me.js", () => ({ MobileMePage: () => <div>mobile me</div> }));
 vi.mock("../pages/settings.js", async () => {
   const { Outlet } = await import("react-router");
   return {
@@ -141,6 +156,22 @@ describe("App routes", () => {
     document.body.innerHTML = "";
 
     expect(await renderAppAt("/admin#agents")).toContain("team page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m")).toContain("mobile today");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/chat")).toContain("mobile chat");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/team")).toContain("mobile team");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/me")).toContain("mobile me");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 

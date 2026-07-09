@@ -167,6 +167,24 @@ describe("ChatSummary", () => {
     overlayEl.remove();
   });
 
+  it("can keep an unread summary collapsed on narrow mobile entry", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+      autoExpandUnread: false,
+    });
+
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(overlayEl.querySelector("strong")).toBeNull();
+    expect(container.textContent).toContain("Updated");
+
+    await act(async () => root.unmount());
+    container.remove();
+    overlayEl.remove();
+  });
+
   it("does not auto-expand the same unread summary version after the user manually collapses it", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");

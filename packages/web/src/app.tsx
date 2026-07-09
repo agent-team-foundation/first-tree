@@ -19,6 +19,11 @@ import { DocPage } from "./pages/docs/doc-page.js";
 import { DocsListPage } from "./pages/docs/docs-list-page.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
+import { MobileChatPage } from "./pages/mobile/chat.js";
+import { MobileMePage } from "./pages/mobile/me.js";
+import { MobileShell } from "./pages/mobile/shell.js";
+import { MobileTeamPage } from "./pages/mobile/team.js";
+import { MobileTodayPage } from "./pages/mobile/today.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
@@ -342,6 +347,19 @@ export function App() {
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
+                <Route
+                  element={
+                    <PulseProvider>
+                      <MobileShell />
+                    </PulseProvider>
+                  }
+                >
+                  <Route path="m" element={<Navigate to="/m/today" replace />} />
+                  <Route path="m/today" element={<MobileTodayPage />} />
+                  <Route path="m/chat" element={<MobileChatPage />} />
+                  <Route path="m/team" element={<MobileTeamPage />} />
+                  <Route path="m/me" element={<MobileMePage />} />
+                </Route>
                 <Route
                   element={
                     <PulseProvider>

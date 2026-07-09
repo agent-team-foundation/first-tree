@@ -161,6 +161,7 @@ export function ChatSummary({
   descriptionUpdatedAt,
   lastReadAt,
   freshnessReady,
+  autoExpandUnread = true,
   scrollContainerRef,
   overlayContainerRef,
 }: {
@@ -172,6 +173,10 @@ export function ChatSummary({
    *  list-nav initialData stub, which lacks the freshness fields). The
    *  auto-expand decision waits for this so it reads true unread/last-read. */
   freshnessReady: boolean;
+  /** Narrow mobile chat routes keep the summary as an in-flow bar on entry so
+   * the floating card does not cover the first messages. Desktop preserves the
+   * unread auto-open behavior by default. */
+  autoExpandUnread?: boolean;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   /** The message timeline's `relative` wrapper. The expanded summary is
    *  portaled here and floated `absolute; top:0` over the message area. */
@@ -237,14 +242,14 @@ export function ChatSummary({
     manualExpandTopRef.current = null;
     setScrollCollapsed(false);
     const dismissedVersion = loadDismissedVersion(chatId);
-    if (unread && descriptionUpdatedAt && dismissedVersion !== descriptionUpdatedAt) {
+    if (autoExpandUnread && unread && descriptionUpdatedAt && dismissedVersion !== descriptionUpdatedAt) {
       setOpen(true);
       setHighlighted(true);
     } else {
       setOpen(loadManualPref(chatId) ?? false);
       setHighlighted(false);
     }
-  }, [entryKey, chatId, descriptionUpdatedAt, hasDescription, freshnessReady, unread]);
+  }, [autoExpandUnread, entryKey, chatId, descriptionUpdatedAt, hasDescription, freshnessReady, unread]);
 
   const onToggle = useCallback(() => {
     setOpen((prev) => {

@@ -29,7 +29,8 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
   if (row.chatHasExplicitMentionToMe || row.unreadMentionCount > 0) {
     return {
       tone: "unread",
-      label: row.unreadMentionCount === 1 ? "Unread" : `${row.unreadMentionCount} unread`,
+      label:
+        row.unreadMentionCount === 0 || row.unreadMentionCount === 1 ? "Unread" : `${row.unreadMentionCount} unread`,
       rank: 2,
       attention: true,
     };
