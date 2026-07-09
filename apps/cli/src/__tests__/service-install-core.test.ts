@@ -12,11 +12,16 @@ import {
   renderLaunchdWrapper,
   renderPlist,
   renderSystemdUnit,
+  renderWindowsSupervisorCmd,
+  renderWindowsTaskXml,
   resolveCliInvocation,
   restartClientService,
   startClientService,
   stopClientService,
   uninstallClientService,
+  windowsSupervisorWrapperPath,
+  windowsTaskName,
+  windowsTaskXmlPath,
 } from "../core/service-install.js";
 
 const printMocks = vi.hoisted(() => ({
@@ -134,6 +139,22 @@ describe("service install helpers", () => {
     expect(unit).toContain('ExecStart="/usr/local/bin/first tree" daemon start --no-interactive');
     expect(unit).toContain(`Environment=FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}`);
     expect(unit).not.toContain("HTTPS_PROXY");
+
+    const windowsWrapper = renderWindowsSupervisorCmd({
+      kind: "node",
+      program: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\First Tree\\index.mjs"],
+    });
+    expect(windowsWrapper).toContain(
+      '"C:\\Program Files\\nodejs\\node.exe" "C:\\First Tree\\index.mjs" "daemon" "supervise"',
+    );
+    expect(windowsWrapper).toContain("supervisor.log");
+    expect(windowsWrapper).toContain(" 2>&1");
+    const taskXml = renderWindowsTaskXml("C:\\First Tree\\supervisor.cmd", "ACME\\gandy & team");
+    expect(taskXml).toContain("<LogonTrigger>");
+    expect(taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(taskXml).toContain("ACME\\gandy &amp; team");
+    expect(taskXml).not.toContain("RestartOnFailure");
   });
 
   it("lifts a proxy baked into a prior launchd plist into the user-owned daemon.env (upgrade buffer)", () => {
@@ -192,6 +213,8 @@ describe("service install helpers", () => {
     setPlatform("linux");
     expect(isServiceSupported()).toBe(true);
     setPlatform("win32");
+    expect(isServiceSupported()).toBe(true);
+    setPlatform("freebsd");
     expect(isServiceSupported()).toBe(false);
   });
 
@@ -275,9 +298,11 @@ describe("service install helpers", () => {
     expect(stopClientService()).toEqual({ ok: true, detail: "not running" });
 
     setPlatform("win32");
-    expect(startClientService()).toEqual({ ok: false, reason: "service control not supported on win32" });
-    expect(stopClientService()).toEqual({ ok: false, reason: "service control not supported on win32" });
-    expect(restartClientService()).toEqual({ ok: false, reason: "service control not supported on win32" });
+    spawnSyncMock.mockReset();
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "Ready", stderr: "" });
+    expect(startClientService()).toEqual({ ok: true });
+    expect(stopClientService()).toEqual({ ok: true });
+    expect(restartClientService()).toEqual({ ok: true });
   });
 
   it("uses launchctl bootstrap and kickstart paths for launchd control", () => {
@@ -537,8 +562,12 @@ describe("service install helpers", () => {
     expect(isServiceUnitDriftDetected()).toBe(false);
 
     setPlatform("win32");
-    expect(isServiceUnitDriftDetected()).toBe(false);
-    expect(() => refreshClientServiceUnitForUpdate()).toThrow("Background service refresh is not supported on win32");
+    spawnSyncMock.mockReturnValueOnce({ status: 3, stdout: "", stderr: "" });
+    expect(isServiceUnitDriftDetected()).toBe(true);
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
+    expect(refreshClientServiceUnitForUpdate()).toMatchObject({ platform: "task-scheduler" });
   });
 
   it("surfaces launchd bootstrap retry failures and warnings", () => {
@@ -613,14 +642,205 @@ describe("service install helpers", () => {
     expect(existsSync(wrapperPath)).toBe(false);
   });
 
-  it("returns unsupported status for uninstall and throws install errors on unsupported platforms", () => {
+  it("installs and refreshes a Windows Task Scheduler supervisor task", () => {
     setPlatform("win32");
-    expect(() => installClientService()).toThrow("Background service install is not supported on win32");
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "", stderr: "" });
+
+    const info = installClientService();
+    const wrapper = readFileSync(windowsSupervisorWrapperPath(), "utf-8");
+    const xml = readFileSync(windowsTaskXmlPath(), "utf-8");
+
+    expect(info).toMatchObject({
+      platform: "task-scheduler",
+      label: windowsTaskName(),
+      state: "active",
+      detail: "task run requested",
+    });
+    expect(wrapper).toContain(`set "FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}"`);
+    expect(wrapper).toContain('"daemon" "supervise"');
+    expect(xml).toContain("<LogonTrigger>");
+    expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+    expect(xml).not.toContain("RestartOnFailure");
+    expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["schtasks.exe", ["/Create", "/TN", windowsTaskName(), "/XML", windowsTaskXmlPath(), "/F"]],
+      ["schtasks.exe", ["/Run", "/TN", windowsTaskName()]],
+    ]);
+  });
+
+  it("reports Windows Task Scheduler status from the task state plus service runtime marker", () => {
+    setPlatform("win32");
+    const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    mkdirSync(markerDir, { recursive: true });
+    writeFileSync(
+      join(markerDir, `${process.pid}.json`),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        clientId: "client_aabbccdd",
+        home: process.env.FIRST_TREE_HOME,
+        mode: "service",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" });
+
+    expect(getClientServiceStatus()).toMatchObject({
+      platform: "task-scheduler",
+      state: "active",
+      pid: process.pid,
+      detail: `pid ${process.pid}`,
+    });
+
+    rmSync(markerDir, { recursive: true, force: true });
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" });
+    expect(getClientServiceStatus()).toMatchObject({
+      platform: "task-scheduler",
+      state: "unknown",
+      detail: "task running but no live service runtime marker",
+    });
+  });
+
+  it("refuses to start a Windows task when an orphan service marker is still live", () => {
+    setPlatform("win32");
+    const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    mkdirSync(markerDir, { recursive: true });
+    writeFileSync(
+      join(markerDir, `${process.pid}.json`),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        clientId: "client_aabbccdd",
+        home: process.env.FIRST_TREE_HOME,
+        mode: "service",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
+
+    expect(startClientService()).toEqual({
+      ok: false,
+      reason: "service runtime marker is live without a running task; run daemon stop before starting again",
+    });
+  });
+
+  it("stops Windows by writing stop intent, killing the service child, then ending the task", () => {
+    setPlatform("win32");
+    const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    mkdirSync(markerDir, { recursive: true });
+    writeFileSync(
+      join(markerDir, "4321.json"),
+      JSON.stringify({
+        version: 1,
+        pid: 4321,
+        clientId: "client_aabbccdd",
+        home: process.env.FIRST_TREE_HOME,
+        mode: "service",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    let pidChecks = 0;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
+      if (pid === 4321 && signal === 0) {
+        pidChecks += 1;
+        if (pidChecks <= 2) return true;
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    }) as typeof process.kill);
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
+
+    try {
+      expect(stopClientService()).toEqual({ ok: true });
+      expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+        ["taskkill.exe", ["/PID", "4321", "/T"]],
+        ["schtasks.exe", ["/End", "/TN", windowsTaskName()]],
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+      ]);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("treats localized taskkill failure as success when the Windows service pid has already exited", () => {
+    setPlatform("win32");
+    const markerDir = join(process.env.FIRST_TREE_HOME ?? "", "state", "client-runtimes");
+    mkdirSync(markerDir, { recursive: true });
+    writeFileSync(
+      join(markerDir, "5432.json"),
+      JSON.stringify({
+        version: 1,
+        pid: 5432,
+        clientId: "client_aabbccdd",
+        home: process.env.FIRST_TREE_HOME,
+        mode: "service",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    let pidChecks = 0;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: number | string) => {
+      if (pid === 5432 && signal === 0) {
+        pidChecks += 1;
+        if (pidChecks <= 2) return true;
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    }) as typeof process.kill);
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "FEHLER: Prozess wurde nicht gefunden" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
+
+    try {
+      expect(stopClientService()).toEqual({ ok: true });
+      expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+        ["taskkill.exe", ["/PID", "5432", "/T"]],
+        ["schtasks.exe", ["/End", "/TN", windowsTaskName()]],
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+      ]);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("returns unsupported status for uninstall and throws install errors on unsupported platforms", () => {
+    setPlatform("freebsd");
+    expect(() => installClientService()).toThrow("Background service install is not supported on freebsd");
     expect(uninstallClientService()).toMatchObject({
       platform: "unsupported",
       label: "",
       state: "not-installed",
-      detail: "platform win32 not supported",
+      detail: "platform freebsd not supported",
     });
   });
 

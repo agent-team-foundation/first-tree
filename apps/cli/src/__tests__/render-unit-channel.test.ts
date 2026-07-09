@@ -2,7 +2,13 @@ import { dirname, join } from "node:path";
 import { defaultHome } from "@first-tree/shared/config";
 import { describe, expect, it } from "vitest";
 import { channelConfig } from "../core/channel.js";
-import { renderLaunchdWrapper, renderPlist, renderSystemdUnit } from "../core/service-install.js";
+import {
+  renderLaunchdWrapper,
+  renderPlist,
+  renderSystemdUnit,
+  renderWindowsSupervisorCmd,
+  renderWindowsTaskXml,
+} from "../core/service-install.js";
 
 /**
  * Lock the channel → unit-file contract at the unit-template layer.
@@ -150,5 +156,36 @@ describe("renderLaunchdWrapper — launcher script execs the resolved CLI", () =
       args: ["/opt/first-tree/dist/cli/index.mjs"],
     });
     expect(wrapper).toContain("exec /usr/bin/node /opt/first-tree/dist/cli/index.mjs daemon start --no-interactive");
+  });
+});
+
+describe("renderWindowsTaskXml — channel identity baked into Task Scheduler text", () => {
+  const wrapperPath = join(defaultHome(), "service", `${channelConfig.launchdLabel}-supervisor.cmd`);
+  const taskXml = renderWindowsTaskXml(wrapperPath, "ACME\\developer");
+
+  it("uses an interactive least-privilege logon trigger", () => {
+    expect(taskXml).toContain("<LogonTrigger>");
+    expect(taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(taskXml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+  });
+
+  it("launches the channel-specific supervisor wrapper and avoids RestartOnFailure", () => {
+    expect(taskXml).toContain(wrapperPath);
+    expect(taskXml).toContain(`${channelConfig.launchdLabel}-supervisor.cmd`);
+    expect(taskXml).not.toContain("RestartOnFailure");
+  });
+});
+
+describe("renderWindowsSupervisorCmd — wrapper enters the hidden supervisor command", () => {
+  it("pins FIRST_TREE_HOME and preserves node script invocation order", () => {
+    const wrapper = renderWindowsSupervisorCmd({
+      kind: "node",
+      program: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\First Tree\\index.mjs"],
+    });
+    expect(wrapper).toContain(`set "FIRST_TREE_HOME=${defaultHome()}"`);
+    expect(wrapper).toContain('"C:\\Program Files\\nodejs\\node.exe" "C:\\First Tree\\index.mjs" "daemon" "supervise"');
+    expect(wrapper).toContain("supervisor.log");
+    expect(wrapper).toContain(" 2>&1");
   });
 });

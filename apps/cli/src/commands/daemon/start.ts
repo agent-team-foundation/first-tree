@@ -180,7 +180,9 @@ export function registerDaemonStartCommand(daemon: Command): void {
             const supervisorHint =
               after.platform === "systemd"
                 ? `  Supervisor fallback: \`journalctl --user -u ${after.label.replace(/\.service$/, "")}\`\n\n`
-                : `  Supervisor fallback: ${join(after.logDir, "client.stdout.log")} / ${join(after.logDir, "client.stderr.log")}\n\n`;
+                : after.platform === "task-scheduler"
+                  ? `  Supervisor fallback: ${join(after.logDir, "supervisor.log")}\n\n`
+                  : `  Supervisor fallback: ${join(after.logDir, "client.stdout.log")} / ${join(after.logDir, "client.stderr.log")}\n\n`;
             writeLine(supervisorHint);
             return;
           }

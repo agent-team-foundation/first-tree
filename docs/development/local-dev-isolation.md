@@ -3,21 +3,22 @@
 This repo's CLI is a long-running background service on the developer's
 machine. Most of us run prod (`first-tree`) or staging
 (`first-tree-staging`) somewhere — installed globally via npm and kept
-alive by systemd / launchd. The in-tree dev build must coexist with
-both without touching their state.
+alive by systemd / launchd / Task Scheduler. The in-tree dev build must
+coexist with both without touching their state.
 
 The multi-env split (see [`MIGRATION.md`](../../MIGRATION.md) Phase 2)
 makes this trivial: every channel has its own bin name, default home,
-and service unit. Running `scripts/dev-install.sh` installs the dev
+and supervisor identifier. Running `scripts/dev-install.sh` installs the dev
 channel (`first-tree-dev` / `~/.first-tree-dev/` /
-`first-tree-dev.service`) alongside whatever prod / staging install you
+`first-tree-dev.service`, or the Windows Task Scheduler task
+`\FirstTree\first-tree-dev`) alongside whatever prod / staging install you
 already have.
 
-| Channel | Install via | Bin | Default home | Service unit |
+| Channel | Install via | Bin | Default home | Supervisor identifier |
 |---|---|---|---|---|
-| dev | `scripts/dev-install.sh` (in-tree, symlinked) | `first-tree-dev` / `ftd` | `~/.first-tree-dev/` | `first-tree-dev.service` |
-| staging | `npm i -g first-tree-staging` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` |
-| prod | `npm i -g first-tree` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` |
+| dev | `scripts/dev-install.sh` (in-tree, symlinked) | `first-tree-dev` / `ftd` | `~/.first-tree-dev/` | `first-tree-dev.service` / `\FirstTree\first-tree-dev` |
+| staging | `npm i -g first-tree-staging` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` / `\FirstTree\first-tree-staging` |
+| prod | `npm i -g first-tree` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` / `\FirstTree\first-tree` |
 
 Each install registers as a separate `clientId` on whichever server it
 connects to (dev → local server, staging → `dev.cloud.first-tree.ai`,

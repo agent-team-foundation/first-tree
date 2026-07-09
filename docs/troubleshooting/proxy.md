@@ -1,9 +1,10 @@
 # Proxy & network egress (daemon behind a firewall)
 
-First Tree's background daemon (launchd on macOS, systemd `--user` on Linux) is
-**compatible with** whatever proxy you run — it does not configure, capture, or
-manage a proxy for you. This page explains the one thing you must do so the
-daemon can reach the network the same way your shell does.
+First Tree's background daemon (launchd on macOS, systemd `--user` on Linux,
+and per-user Task Scheduler on Windows) is **compatible with** whatever proxy
+you run — it does not configure, capture, or manage a proxy for you. This page
+explains the one thing you must do so the daemon can reach the network the same
+way your shell does.
 
 ## Symptom
 
@@ -20,12 +21,13 @@ daemon is not going through your proxy — **not** that your login is broken.
 
 ## Why it happens
 
-launchd / systemd do **not** inherit your interactive login-shell environment.
-Anything your shell exports — including `HTTP_PROXY` / `HTTPS_PROXY` — is absent
-from the daemon's process, so the daemon and every agent runtime it spawns
-(the Claude CLI, `git`, `npm`) attempt **direct** connections. On a network
-where direct egress is blocked, those fail. Your interactive `claude` works only
-because your terminal already has the proxy in its environment.
+launchd / systemd / Task Scheduler do **not** inherit your interactive
+login-shell environment. Anything your shell exports — including `HTTP_PROXY` /
+`HTTPS_PROXY` — is absent from the daemon's process, so the daemon and every
+agent runtime it spawns (the Claude CLI, `git`, `npm`) attempt **direct**
+connections. On a network where direct egress is blocked, those fail. Your
+interactive `claude` works only because your terminal already has the proxy in
+its environment.
 
 ## Fix: tell the daemon your proxy (`daemon.env`)
 

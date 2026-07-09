@@ -1,12 +1,22 @@
 import { launchdBackend, renderLaunchdWrapper, renderPlist } from "./launchd.js";
 import { resolveCliInvocation } from "./shared.js";
 import { renderSystemdUnit, systemdBackend } from "./systemd.js";
+import {
+  renderWindowsSupervisorCmd,
+  renderWindowsTaskXml,
+  taskSchedulerBackend,
+  windowsSupervisorLogPath,
+  windowsSupervisorWrapperPath,
+  windowsTaskName,
+  windowsTaskXmlPath,
+} from "./task-scheduler.js";
 import type { ServiceInfo, ServiceOpResult, ServiceState, SupervisorBackend } from "./types.js";
 import { unsupportedBackend } from "./unsupported.js";
 
 function currentBackend(): SupervisorBackend {
   if (process.platform === "darwin") return launchdBackend;
   if (process.platform === "linux") return systemdBackend;
+  if (process.platform === "win32") return taskSchedulerBackend;
   return unsupportedBackend;
 }
 
@@ -25,7 +35,7 @@ export function installClientService(): ServiceInfo {
 }
 
 /**
- * Rewrite the supervised unit for an in-daemon auto-update handoff.
+ * Rewrite the supervisor definition for an in-daemon auto-update handoff.
  *
  * On launchd this deliberately avoids bootout/bootstrap: refresh-unit runs as
  * a child of the current daemon job, and unloading that label can terminate the
@@ -40,22 +50,24 @@ export function refreshClientServiceUnitForUpdate(): ServiceInfo {
 }
 
 /**
- * Cheap idempotency probe used by `daemon refresh-unit`: render the unit
- * file the *current binary* would write and compare against what's on disk.
+ * Cheap idempotency probe used by `daemon refresh-unit`: render the
+ * supervisor definition the *current binary* would write and compare against
+ * what's on disk.
  *
  * `true`  → contents differ, the next CLI version invocation will read a
- *           stale unit and `installClientService()` SHOULD be called.
- * `false` → on-disk unit already matches (the common case for patch
+ *           stale supervisor definition and `installClientService()` SHOULD
+ *           be called.
+ * `false` → on-disk definition already matches (the common case for patch
  *           upgrades within the same CLI surface), no need to pay the
- *           bootout/bootstrap or daemon-reload + enable cost.
+ *           platform supervisor refresh cost.
  *
- * Defensive: if the unit file is missing entirely, we treat that as "drift"
- * — the caller likely needs `installClientService()` to lay it down,
- * NOT a refresh skip. Errors during read also return `true` rather than
- * silently skipping, so a permission glitch can't ever stall the unit
- * behind a stale ExecStart.
+ * Defensive: if the supervisor definition is missing entirely, we treat that
+ * as "drift" — the caller likely needs `installClientService()` to lay it
+ * down, NOT a refresh skip. Errors during read also return `true` rather than
+ * silently skipping, so a permission glitch can't ever stall the supervisor
+ * behind a stale launch action.
  *
- * Returns `false` on unsupported platforms (Windows): there's no unit file
+ * Returns `false` on unsupported platforms: there's no supervisor definition
  * to refresh, so "no drift" is the honest answer.
  */
 export function isServiceUnitDriftDetected(): boolean {
@@ -95,4 +107,15 @@ export function uninstallClientService(): ServiceInfo {
 }
 
 export type { ServiceInfo, ServiceOpResult, ServiceState };
-export { renderLaunchdWrapper, renderPlist, renderSystemdUnit, resolveCliInvocation };
+export {
+  renderLaunchdWrapper,
+  renderPlist,
+  renderSystemdUnit,
+  renderWindowsSupervisorCmd,
+  renderWindowsTaskXml,
+  resolveCliInvocation,
+  windowsSupervisorLogPath,
+  windowsSupervisorWrapperPath,
+  windowsTaskName,
+  windowsTaskXmlPath,
+};
