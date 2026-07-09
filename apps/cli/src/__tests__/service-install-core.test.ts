@@ -166,6 +166,20 @@ describe("service install helpers", () => {
     expect(() => resolveCliInvocation()).toThrow("Cannot resolve CLI entry point");
   });
 
+  it("uses the Windows cmd shim when where returns npm's extensionless shell shim first", () => {
+    setPlatform("win32");
+    const npmBinDir = join(home, "npm");
+    const extensionlessShim = join(npmBinDir, channelConfig.binName);
+    const cmdShim = `${extensionlessShim}.cmd`;
+    mkdirSync(npmBinDir, { recursive: true });
+    writeFileSync(extensionlessShim, "#!/bin/sh\nexec node cli.mjs \"$@\"\n");
+    writeFileSync(cmdShim, "@ECHO off\r\nnode cli.mjs %*\r\n");
+
+    execFileSyncMock.mockReturnValueOnce(`${extensionlessShim}\r\n${cmdShim}\r\n`);
+
+    expect(resolveCliInvocation()).toEqual({ kind: "bin", program: cmdShim });
+  });
+
   it("renders service templates with escaped values and quoted shell arguments", () => {
     const plist = renderPlist("/tmp/First & Tree");
     expect(plist).toContain("<string>/tmp/First &amp; Tree</string>");
