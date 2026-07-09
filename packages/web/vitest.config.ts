@@ -15,7 +15,18 @@ export default defineConfig({
     __WEB_BUILD_ID__: JSON.stringify("test"),
   },
   test: {
-    coverage: unitCoverageConfig(),
+    coverage: unitCoverageConfig({
+      // Design-time Storybook-like previews / fixtures and app bootstrap are not
+      // shipped product surface for unit coverage. Real production pages stay included.
+      exclude: [
+        "src/**/*-preview.tsx",
+        "src/**/*-preview.ts",
+        "src/**/*-mocks.tsx",
+        "src/**/*-mock.ts",
+        "src/**/*-preview-mock.ts",
+        "src/main.tsx", // app bootstrap entry
+      ],
+    }),
     testTimeout: 20_000,
     hookTimeout: 20_000,
   },

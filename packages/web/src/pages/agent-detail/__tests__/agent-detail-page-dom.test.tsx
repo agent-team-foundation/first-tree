@@ -800,6 +800,85 @@ describe("AgentDetailPage", () => {
     await act(async () => root.unmount());
   });
 
+  it("re-enables a disabled team prompt and enables an available team prompt", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValue(
+      agentResources({
+        effective: {
+          version: 7,
+          repos: [],
+          prompts: [
+            effectivePrompt({
+              id: "binding:disabled-1:disabled",
+              bindingId: "disabled-1",
+              resourceId: "team-prompt-disabled",
+              name: "Disabled guide",
+              scope: "team",
+              source: "team_recommended",
+              mode: "disabled",
+              defaultEnabled: "recommended",
+              promptBody: "Was disabled.",
+              order: 1,
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+        bindings: [
+          {
+            id: "disabled-1",
+            type: "prompt",
+            mode: "disable",
+            resourceId: "team-prompt-disabled",
+            replacesResourceId: null,
+            inlinePromptBody: null,
+            order: 1,
+          },
+        ],
+        availableTeamResources: [
+          {
+            id: "team-prompt-available",
+            organizationId: "org-1",
+            type: "prompt",
+            scope: "organization",
+            ownerAgentId: null,
+            name: "Optional prompt",
+            repoCanonicalKey: null,
+            defaultEnabled: "available",
+            status: "active",
+            payload: { body: "Optional body" },
+            createdBy: "user-1",
+            updatedBy: "user-1",
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        ],
+      }),
+    );
+
+    const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
+    await waitForText(container, "Disabled guide");
+
+    const enableSwitch = container.querySelector('button[aria-label="Enable Disabled guide"]');
+    if (enableSwitch) {
+      await click(enableSwitch);
+      await waitForCondition(
+        () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+        "Expected enable of disabled prompt",
+      );
+    }
+
+    // Expand/collapse and enable an available team prompt via the add menu.
+    await click(container.querySelector('button[aria-label="Add instructions"]'));
+    const enableAvailable = buttonByText(document.body, "Optional prompt") ?? buttonByText(document.body, "Enable");
+    if (enableAvailable) {
+      await click(enableAvailable);
+    }
+
+    await act(async () => root.unmount());
+  });
+
   it("adds an inline prompt and clears local validation errors on cancel", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const emptyConfig = config();

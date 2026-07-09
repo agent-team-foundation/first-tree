@@ -743,7 +743,8 @@ function TeamComputersTable({
  * — the card-based IA uses the same vocabulary, so duplicating strings
  * here would invite drift.
  */
-function CapabilityMatrix({ capabilities, os }: { capabilities: ClientCapabilities; os: string | null }) {
+/** Exported for unit tests (owner expand matrix; team rows keep restricted). */
+export function CapabilityMatrix({ capabilities, os }: { capabilities: ClientCapabilities; os: string | null }) {
   const empty = Object.keys(capabilities).length === 0;
   return (
     <>
@@ -846,7 +847,8 @@ function TeamLoadErrorBanner() {
   );
 }
 
-function ClientRow({
+/** Exported for unit tests (owner-row expand / menu / matrix paths). */
+export function ClientRow({
   client,
   boundAgents,
   isExpanded,

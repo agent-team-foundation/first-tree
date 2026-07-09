@@ -150,7 +150,8 @@ const LANDING_TRIAL_CHAT_ENDED_PLACEHOLDER =
  * description-driven default; an explicit `"1"` / `"0"` is honored as the
  * user's own choice.
  */
-function loadSidebarOpen(): boolean | null {
+/** Exported for unit tests (localStorage preference helpers). */
+export function loadSidebarOpen(): boolean | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
@@ -161,7 +162,8 @@ function loadSidebarOpen(): boolean | null {
   }
 }
 
-function saveSidebarOpen(open: boolean): void {
+/** Exported for unit tests (localStorage preference helpers). */
+export function saveSidebarOpen(open: boolean): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, open ? "1" : "0");
@@ -182,7 +184,8 @@ function saveSidebarOpen(open: boolean): void {
  */
 const HIDE_AGENT_FINAL_TEXT_STORAGE_KEY = "first-tree:chat:hide-agent-final-text:v1";
 
-function loadHideAgentFinalText(): boolean {
+/** Exported for unit tests (localStorage preference helpers). */
+export function loadHideAgentFinalText(): boolean {
   if (typeof window === "undefined") return false;
   try {
     return window.localStorage.getItem(HIDE_AGENT_FINAL_TEXT_STORAGE_KEY) === "1";
@@ -191,7 +194,8 @@ function loadHideAgentFinalText(): boolean {
   }
 }
 
-function saveHideAgentFinalText(hide: boolean): void {
+/** Exported for unit tests (localStorage preference helpers). */
+export function saveHideAgentFinalText(hide: boolean): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(HIDE_AGENT_FINAL_TEXT_STORAGE_KEY, hide ? "1" : "0");
@@ -200,7 +204,8 @@ function saveHideAgentFinalText(hide: boolean): void {
   }
 }
 
-function formatClockTime(iso: string): string {
+/** Exported for unit tests. */
+export function formatClockTime(iso: string): string {
   const d = new Date(iso);
   const parts = new Intl.DateTimeFormat("en-GB", {
     month: "2-digit",
@@ -214,13 +219,15 @@ function formatClockTime(iso: string): string {
 }
 
 // Compact token count for the composer marker: 1234 → "1.2k", 2_500_000 → "2.5M".
-function formatTokenCount(n: number): string {
+/** Exported for unit tests. */
+export function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: string | null }) {
+/** Exported for unit tests (own-message delivery glyphs). */
+export function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: string | null }) {
   if (!myAgentId || msg.senderId !== myAgentId) return null;
   const status = msg.deliveryStatus ?? "sent";
   if (status === "acked") {
@@ -957,7 +964,8 @@ export function failedDocMentionsFromMetadata(
  * User-facing tooltip text for an inert-chip reason. Kept in this file (not
  * the shared lib) because copy lives with the surface that renders it.
  */
-function failedDocReasonTooltip(reason: DocSnapshotFailReason): string {
+/** Exported for unit tests (tooltip copy for failed doc chips). */
+export function failedDocReasonTooltip(reason: DocSnapshotFailReason): string {
   switch (reason) {
     case "missing":
       return "文档不存在";
@@ -996,7 +1004,8 @@ export function docMessageAttachmentRefsQueryKey(msgId: string): readonly unknow
   return ["chat-doc-message-attachment-refs", msgId] as const;
 }
 
-function isInlineImageContent(content: unknown): content is FileMessageContent {
+/** Exported for unit tests. */
+export function isInlineImageContent(content: unknown): content is FileMessageContent {
   if (typeof content !== "object" || content === null) return false;
   const c = content as Record<string, unknown>;
   return typeof c.data === "string" && typeof c.mimeType === "string" && (c.mimeType as string).startsWith("image/");

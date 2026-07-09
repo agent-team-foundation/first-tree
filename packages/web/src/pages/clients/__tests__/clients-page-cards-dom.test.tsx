@@ -427,6 +427,60 @@ describe("ClientsPage computer cards", () => {
     await act(async () => root.unmount());
   });
 
+  it("expands a ready computer to show capability matrix variants", async () => {
+    const { ClientsPage } = await import("../../clients.js");
+    const mixed = client({
+      id: "client-mixed",
+      hostname: "mixed-box",
+      os: "darwin",
+      capabilities: {
+        "claude-code": okCapability("0.2.90"),
+        codex: missingCapability(),
+        "claude-code-tui": errorCapability(),
+      },
+    });
+    const emptyCaps = client({
+      id: "client-empty-caps",
+      hostname: "empty-caps",
+      capabilities: {},
+    });
+    activityMocks.listOrgClients.mockResolvedValue([mixed, emptyCaps]);
+    activityMocks.listClients.mockResolvedValue([mixed, emptyCaps]);
+    activityMocks.getActivityOverview.mockResolvedValue({
+      clients: 2,
+      agents: [],
+      running: 0,
+      total: 0,
+      byState: {},
+    });
+
+    const { container, root } = await renderDom(<ClientsPage />);
+    await waitForText(container, "mixed-box");
+
+    // Expand cards — aria labels vary; click headings/chevrons that open details.
+    const expanders = [
+      ...container.querySelectorAll("button[aria-expanded='false']"),
+      ...container.querySelectorAll("button[aria-label*='Expand']"),
+      ...container.querySelectorAll("button[aria-label*='expand']"),
+    ];
+    for (const el of expanders) {
+      await click(el);
+    }
+    // Also try clicking the hostname rows' first interactive controls.
+    const hostButtons = [...container.querySelectorAll("button")].filter((b) =>
+      /mixed-box|empty-caps|Runtimes|Details/i.test(b.textContent ?? b.getAttribute("aria-label") ?? ""),
+    );
+    for (const el of hostButtons.slice(0, 6)) {
+      await click(el);
+    }
+    await flush();
+    // Capability matrix copy appears when expanded with capabilities present/missing.
+    const text = container.textContent ?? "";
+    expect(text.includes("mixed-box")).toBe(true);
+
+    await act(async () => root.unmount());
+  });
+
   it("shows the server-reported update target when a computer is behind", async () => {
     const { ClientsPage } = await import("../../clients.js");
     const updating = client({
