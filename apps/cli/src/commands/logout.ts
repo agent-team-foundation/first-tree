@@ -80,7 +80,7 @@ async function retireServerClientBeforePurge(opts: {
   if (!opts.credentials || !opts.clientId) {
     print.line("  Refusing to purge because this local client cannot be retired on the server.\n");
     print.line(
-      `  Run \`${channelConfig.binName} login <token>\` as the current owner, then retry \`${opts.retryCommand}\`.\n`,
+      `  Run \`${channelConfig.binName} login <code>\` as the current owner, then retry \`${opts.retryCommand}\`.\n`,
     );
     print.line(`  For local-only damaged state recovery, run \`${channelConfig.binName} computer reset\`.\n\n`);
     fail(
@@ -254,5 +254,5 @@ export async function runLogout(opts: {
       print.line(`  ✓ Removed ${entry.label}\n`);
     }
   }
-  print.line(`\n  Logged out. Run \`${channelConfig.binName} login <token>\` to reconnect.\n\n`);
+  print.line(`\n  Logged out. Run \`${channelConfig.binName} login <code>\` to reconnect.\n\n`);
 }

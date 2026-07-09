@@ -465,7 +465,7 @@ describe("daemon start command", () => {
 
     expect(failMock).not.toHaveBeenCalled();
     expect(daemonLogger.error).toHaveBeenCalledWith(
-      "✗ no credentials — run `first-tree-dev login <token>` to sign in before starting the daemon.",
+      "✗ no credentials — run `first-tree-dev login <code>` to sign in before starting the daemon.",
     );
     expect(output()).toBe("");
   });
@@ -485,7 +485,7 @@ describe("daemon start command", () => {
 
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "error" });
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("client.yaml is not accepted"));
-    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <token>"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <code>"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
     expect(output()).toBe("");
   });
@@ -507,7 +507,7 @@ describe("daemon start command", () => {
 
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "warn" });
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("wrong org"));
-    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <token>"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <code>"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
     expect(output()).toBe("");
   });
@@ -548,7 +548,7 @@ describe("daemon start command", () => {
     const mismatchText = output();
     expect(mismatchText).toContain("client.yaml is not accepted");
     expect(mismatchText).toContain("valid server-side owner pair");
-    expect(mismatchText).toContain("login <token>");
+    expect(mismatchText).toContain("login <code>");
     expect(mismatchText).toContain("computer reset");
     // Purge-first account switching must NOT resurrect the removed server-side
     // transfer/unpin language.

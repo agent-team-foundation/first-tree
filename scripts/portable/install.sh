@@ -2,13 +2,15 @@
 set -eu
 
 PORTABLE_CHANNEL="${FIRST_TREE_PORTABLE_CHANNEL:-prod}"
-DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://downloads.first-tree.ai}"
+DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://download.first-tree.ai/releases}"
 DEFAULT_PREFIX="${HOME}/.local/share/first-tree/${PORTABLE_CHANNEL}"
 DEFAULT_BIN_DIR="${HOME}/.local/bin"
 PATH_MODE="auto"
 REQUESTED_VERSION=""
 PREFIX="$DEFAULT_PREFIX"
 BIN_DIR="$DEFAULT_BIN_DIR"
+PATH_UPDATED_PROFILE=""
+ORIGINAL_PATH="${PATH:-}"
 
 START_MARKER="# >>> first-tree portable >>>"
 END_MARKER="# <<< first-tree portable <<<"
@@ -113,6 +115,16 @@ sha256_file() {
   fi
 }
 
+extract_tarball() {
+  tarball="$1"
+  dest="$2"
+  if tar --version 2>/dev/null | grep -qi "GNU tar"; then
+    tar --warning=no-unknown-keyword -xzf "$tarball" -C "$dest"
+  else
+    tar -xzf "$tarball" -C "$dest"
+  fi
+}
+
 json_string() {
   file="$1"
   key="$2"
@@ -193,10 +205,20 @@ atomic_replace_current_link() {
 }
 
 path_contains_bin_dir() {
-  case ":${PATH:-}:" in
+  path_value="$1"
+  case ":${path_value}:" in
     *:"$BIN_DIR":*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+portable_shim_wins_on_original_path() {
+  bin_name="$1"
+  old_path="${PATH:-}"
+  PATH="$ORIGINAL_PATH"
+  resolved="$(command -v "$bin_name" 2>/dev/null || true)"
+  PATH="$old_path"
+  [ "$resolved" = "$BIN_DIR/$bin_name" ]
 }
 
 profile_for_shell() {
@@ -238,18 +260,20 @@ rewrite_path_block() {
 }
 
 maybe_edit_path() {
+  bin_name="$1"
   [ "$PATH_MODE" != "off" ] || return 0
-  path_contains_bin_dir && return 0
+  if path_contains_bin_dir "$ORIGINAL_PATH" && portable_shim_wins_on_original_path "$bin_name"; then
+    return 0
+  fi
 
   if ! profile="$(profile_for_shell)"; then
-    log "Installed successfully, but this shell is not recognized for automatic PATH setup."
-    log "Add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\""
+    log "Automatic PATH setup skipped: this shell is not recognized."
     return 0
   fi
 
   if [ "$PATH_MODE" = "prompt" ]; then
     if [ ! -t 0 ]; then
-      log "Installed successfully. Add this to $profile: export PATH=\"$BIN_DIR:\$PATH\""
+      log "Automatic PATH setup skipped because prompt mode requires an interactive shell."
       return 0
     fi
     printf 'Add %s to PATH in %s? [Y/n] ' "$BIN_DIR" "$profile"
@@ -257,18 +281,59 @@ maybe_edit_path() {
     case "$answer" in
       ""|y|Y|yes|YES) ;;
       *)
-        log "Skipped PATH setup. Add this manually: export PATH=\"$BIN_DIR:\$PATH\""
+        log "Skipped PATH setup."
         return 0
         ;;
     esac
   fi
 
   if rewrite_path_block "$profile"; then
+    PATH_UPDATED_PROFILE="$profile"
     log "Updated PATH block in $profile"
   else
-    log "Installed successfully, but PATH setup failed for $profile."
-    log "Add this manually: export PATH=\"$BIN_DIR:\$PATH\""
+    log "PATH setup failed for $profile."
   fi
+}
+
+print_path_guidance() {
+  if [ -n "$PATH_UPDATED_PROFILE" ]; then
+    log "Restart your shell, or run: . \"$PATH_UPDATED_PROFILE\""
+  elif path_contains_bin_dir "$ORIGINAL_PATH"; then
+    # Judge against the user's incoming PATH: the installer prepends BIN_DIR
+    # to its own PATH for recovery, which says nothing about the user's shell.
+    log "$BIN_NAME should be available now."
+  else
+    log "Add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\""
+  fi
+}
+
+clean_npm_temp_residue() {
+  package_name="$1"
+  case "$package_name" in
+    first-tree|first-tree-staging) ;;
+    *) return 0 ;;
+  esac
+  command_exists npm || return 0
+
+  npm_root="$(npm root -g 2>/dev/null | sed -n '1p' || true)"
+  [ -n "$npm_root" ] || return 0
+  [ -d "$npm_root" ] || return 0
+
+  for residue in "$npm_root/.$package_name"-*; do
+    [ -e "$residue" ] || continue
+    [ -d "$residue" ] || continue
+    rm -rf "$residue"
+    log "Removed stale npm temp directory: $residue"
+  done
+}
+
+ensure_daemon_service() {
+  bin_name="$1"
+  if "$BIN_DIR/$bin_name" daemon ensure-service; then
+    return 0
+  fi
+  log "Background service repair failed or is not available yet."
+  log "Run $BIN_DIR/$bin_name login <code> to refresh credentials and service state."
 }
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/first-tree-portable.XXXXXX")"
@@ -290,9 +355,11 @@ log "Downloading First Tree portable metadata: $MANIFEST_URL"
 download_to "$MANIFEST_URL" "$MANIFEST_FILE"
 
 VERSION="$(json_string "$MANIFEST_FILE" version)"
+PACKAGE_NAME="$(json_string "$MANIFEST_FILE" packageName)"
 BIN_NAME="$(json_string "$MANIFEST_FILE" binName)"
 ALIAS_NAME="$(json_string "$MANIFEST_FILE" aliasName)"
 [ -n "$VERSION" ] || die "metadata missing version"
+[ -n "$PACKAGE_NAME" ] || die "metadata missing packageName"
 [ -n "$BIN_NAME" ] || die "metadata missing binName"
 [ -n "$ALIAS_NAME" ] || die "metadata missing aliasName"
 
@@ -307,6 +374,7 @@ ASSET_SIZE="$(json_number "$ASSET_FILE" size)"
 [ -n "$ASSET_SHA" ] || die "asset missing sha256"
 [ -n "$ASSET_SIZE" ] || die "asset missing size"
 
+clean_npm_temp_residue "$PACKAGE_NAME"
 mkdir -p "$PREFIX/versions" "$PREFIX/.tmp" "$BIN_DIR"
 TARBALL="$WORK_DIR/payload.tar.gz"
 log "Downloading First Tree ${VERSION} for ${PLATFORM}"
@@ -320,7 +388,7 @@ FINAL_VERSION_DIR="$PREFIX/versions/$VERSION"
 TEMP_VERSION_DIR="$PREFIX/.tmp/${VERSION}.$$"
 rm -rf "$TEMP_VERSION_DIR"
 mkdir -p "$TEMP_VERSION_DIR"
-tar -xzf "$TARBALL" -C "$TEMP_VERSION_DIR"
+extract_tarball "$TARBALL" "$TEMP_VERSION_DIR"
 
 if [ -e "$FINAL_VERSION_DIR" ]; then
   rm -rf "$TEMP_VERSION_DIR"
@@ -340,8 +408,12 @@ atomic_replace_current_link "$NEW_LINK" "$CURRENT_LINK"
 write_shim "$BIN_DIR/$BIN_NAME" "$CURRENT_LINK"
 write_shim "$BIN_DIR/$ALIAS_NAME" "$CURRENT_LINK"
 
+PATH="$BIN_DIR:${PATH:-}"
+export PATH
 "$BIN_DIR/$BIN_NAME" --version >/dev/null
-maybe_edit_path
+maybe_edit_path "$BIN_NAME"
+ensure_daemon_service "$BIN_NAME"
 
 log "First Tree ${VERSION} installed at $FINAL_VERSION_DIR"
 log "Command: $BIN_DIR/$BIN_NAME"
+print_path_guidance

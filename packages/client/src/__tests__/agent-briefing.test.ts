@@ -974,6 +974,9 @@ describe("buildAgentBriefing — # Context Tree", () => {
     // lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
+    expect(briefing).toMatch(/request explicitly includes[\s\n]+creating and updating the needed tree-node files/);
+    expect(briefing).toContain("`NODE.md` and other");
+    expect(briefing).toContain("`*.md` nodes");
     expect(briefing).toMatch(
       /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
     );
@@ -1006,7 +1009,7 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });
 
-  it("substitutes a tree-less Tree Location stub that surfaces the gap to a human", () => {
+  it("substitutes a tree-less Tree Location stub that surfaces the gap for ordinary tasks but carves out the seed admin create+bind", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     // Section header still emitted so the briefing's # Context Tree always
     // contains all four subsections — predictable for the agent and for
@@ -1015,10 +1018,17 @@ describe("buildAgentBriefing — # Context Tree", () => {
     const treeLocationStart = briefing.indexOf("## Tree Location");
     const stub = briefing.slice(treeLocationStart);
     expect(stub).toContain("This agent has no Context Tree bound");
-    expect(stub).toContain("surface that\ngap to a human");
+    // Ordinary task with no tree → still an operator action; surface the gap.
+    expect(stub).toContain("surface that gap to a human");
     expect(stub).toContain("operator action");
-    // The retired onboarding skill must not be named — there is no
-    // in-agent flow to bind a workspace anymore.
+    // Carve-out: a build / set-up-the-tree task IS the sanctioned in-agent
+    // create + bind for a confirmed admin — the agent must not turn that
+    // happy-path into a "who runs the bind?" question (reconciles the briefing
+    // with first-tree-seed State A).
+    expect(stub).toContain("build / set up the Context Tree");
+    expect(stub).toContain("confirmed org admin");
+    expect(stub).toContain('"who runs the bind?"');
+    // The retired onboarding skill must not be named.
     expect(stub).not.toContain("first-tree-onboarding");
   });
 

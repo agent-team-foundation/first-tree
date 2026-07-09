@@ -12,8 +12,23 @@ export const githubStartQuerySchema = z.object({
 export type GithubStartQuery = z.infer<typeof githubStartQuerySchema>;
 
 export const githubCallbackQuerySchema = z.object({
-  code: z.string().min(1),
-  state: z.string().min(1),
+  /**
+   * OAuth authorization code. Optional because GitHub's *setup* redirects
+   * land here without one: `setup_action=request` (install awaiting owner
+   * approval, observed on staging with no `code`) and post-approval /
+   * post-configure landings from GitHub's own settings UI. The route
+   * handles code-less shapes as navigation-only landings — no sign-in, no
+   * session change.
+   */
+  code: z.string().min(1).optional(),
+  /**
+   * Signed First Tree state JWT. Optional because setup redirects that
+   * originate on GitHub's side (an owner approving/configuring the App
+   * from GitHub's settings UI) carry no state — those used to explode as
+   * a raw Zod error page. The route redirects stateless landings to the
+   * SPA instead.
+   */
+  state: z.string().min(1).optional(),
   /**
    * GitHub App installation ID. Present when the user landed in callback
    * via the install flow ("first install of the App by this user / org").
@@ -28,9 +43,9 @@ export const githubCallbackQuerySchema = z.object({
    * GitHub may send `setup_action=install` (first-time install), `update`
    * (existing install reconfigured / re-visited), or `request` (the user
    * requested install but an org admin must approve). We don't branch on
-   * it — `installation_id` is the actual signal — but we accept all three
-   * shapes so otherwise-valid callbacks aren't rejected at the schema
-   * gate (codex P2 follow-up).
+   * it — `code`/`state` presence is the actual signal — but we accept all
+   * three shapes so otherwise-valid callbacks aren't rejected at the
+   * schema gate (codex P2 follow-up).
    */
   setup_action: z.enum(["install", "update", "request"]).optional(),
 });

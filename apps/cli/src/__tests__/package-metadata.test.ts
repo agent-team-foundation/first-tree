@@ -43,7 +43,7 @@ describe("npm package metadata", () => {
     const readme = readText(readmePath);
 
     expect(readme).toContain("npm install -g first-tree");
-    expect(readme).toContain("first-tree login <connect-token>");
+    expect(readme).toContain("first-tree login <connect-code>");
     expect(readme).toContain("https://github.com/agent-team-foundation/first-tree/blob/main/docs/cli-reference.md");
     expect(readme).toContain("Apache-2.0");
   });

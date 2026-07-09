@@ -102,12 +102,25 @@ export function createSdk(agentName?: string): FirstTreeHubSDK {
 function resolveRuntimeSessionToken(): string | undefined {
   const tokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
   if (tokenFile) {
+    let token: string;
     try {
-      return readFileSync(tokenFile, "utf8").trim() || undefined;
+      token = readFileSync(tokenFile, "utf8").trim();
     } catch (err) {
-      void err;
-      return undefined;
+      const detail = err instanceof Error ? err.message : String(err);
+      fail(
+        "RUNTIME_SESSION_TOKEN_FILE_UNREADABLE",
+        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file could not be read: ${detail}`,
+        2,
+      );
     }
+    if (!token) {
+      fail(
+        "RUNTIME_SESSION_TOKEN_FILE_EMPTY",
+        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file is empty.`,
+        2,
+      );
+    }
+    return token;
   }
   return process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN?.trim() || undefined;
 }
@@ -128,7 +141,7 @@ export function handleSdkError(error: unknown): never {
 /**
  * Read the persisted `client.id` from `client.yaml`. Required by `agent prune`
  * to filter `listMyAgents` down to "what binds on THIS machine". `fail()`
- * instead of throwing so the "no client.yaml — run login <token> first" path
+ * instead of throwing so the "no client.yaml — run login <code> first" path
  * renders as a clean CLI error rather than a stack trace.
  */
 export function readClientId(): string {
@@ -139,7 +152,7 @@ export function readClientId(): string {
   if (typeof id !== "string" || id.length === 0) {
     fail(
       "MISSING_CLIENT_ID",
-      `No client.id found in client.yaml. Run \`${channelConfig.binName} login <token>\` first.`,
+      `No client.id found in client.yaml. Run \`${channelConfig.binName} login <code>\` first.`,
       2,
     );
   }

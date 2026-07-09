@@ -266,7 +266,7 @@ function installLaunchd(): ServiceInfo {
     throw new Error(
       `launchctl bootstrap failed: ${lastBootstrapErr.stderr || `exit ${lastBootstrapErr.code ?? "unknown"}`}\n` +
         `    Command: launchctl bootstrap ${target} ${plistPath}\n` +
-        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`${channelConfig.binName} login <token>\`.`,
+        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`${channelConfig.binName} login <code>\`.`,
     );
   }
 

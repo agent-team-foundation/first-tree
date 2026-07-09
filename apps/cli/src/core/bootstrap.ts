@@ -45,13 +45,13 @@ export function resolveServerUrl(flagValue?: string): string {
  * Resolve the current member access JWT from persisted credentials.
  *
  * Unified-user-token milestone: the CLI has a single credential store and a
- * single onboarding path (`<bin> login <token>`). Callers without
- * a credentials.json get a clear error pointing at `login <token>`.
+ * single onboarding path (`<bin> login <code>`). Callers without
+ * a credentials.json get a clear error pointing at `login <code>`.
  */
 export function resolveAccessToken(): string {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error(`No credentials found. Run \`${channelConfig.binName} login <token>\` to sign in.`);
+    throw new Error(`No credentials found. Run \`${channelConfig.binName} login <code>\` to sign in.`);
   }
   return creds.accessToken;
 }
@@ -140,7 +140,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
   const minValidityMs = opts?.minValidityMs ?? DEFAULT_MIN_VALIDITY_MS;
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error(`No credentials found. Run \`${channelConfig.binName} login <token>\` to sign in.`);
+    throw new Error(`No credentials found. Run \`${channelConfig.binName} login <code>\` to sign in.`);
   }
 
   if (!isTokenStale(creds.accessToken, minValidityMs)) {
@@ -161,7 +161,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
 
     if (res.status === 401) {
       throw new AuthRefreshFailedError(
-        `Refresh token rejected by server. Re-run \`${channelConfig.binName} login <token>\` ` +
+        `Refresh token rejected by server. Re-run \`${channelConfig.binName} login <code>\` ` +
           "(get a fresh token from the Web Computers page → New Connection).",
       );
     }
@@ -212,7 +212,7 @@ function isTokenStale(token: string, minValidityMs: number): boolean {
  * calls the file is empty, and a concurrent `loadCredentials()` (e.g. a
  * background daemon refreshing while the user runs a foreground CLI command)
  * reads "" → `JSON.parse` throws → we fall back to "no credentials" and
- * surface a misleading "run `connect <token>` again" error. write-to-temp +
+ * surface a misleading "run `login <code>` again" error. write-to-temp +
  * rename gives readers an all-or-nothing view: they see the old file or the
  * new file, never a half-written one. Server-side the sliding-window design
  * already accepts last-writer-wins semantics for the refresh token itself

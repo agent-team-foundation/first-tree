@@ -28,6 +28,14 @@ function run(command, args, options = {}) {
   return res;
 }
 
+function tarExtractArgs(tarball, dest) {
+  const version = spawnSync("tar", ["--version"], { encoding: "utf8" });
+  if (version.status === 0 && /GNU tar/i.test(version.stdout)) {
+    return ["--warning=no-unknown-keyword", "-xzf", tarball, "-C", dest];
+  }
+  return ["-xzf", tarball, "-C", dest];
+}
+
 function parseArgs(argv) {
   const options = { manifest: null, platform: null, tarball: null };
   for (let i = 0; i < argv.length; i += 1) {
@@ -67,7 +75,7 @@ function verify(options) {
 
   const root = mkdtempSync(join(tmpdir(), "first-tree-portable-verify-"));
   try {
-    run("tar", ["-xzf", options.tarball, "-C", root]);
+    run("tar", tarExtractArgs(options.tarball, root));
     for (const path of [
       "VERSION",
       "INSTALL.json",

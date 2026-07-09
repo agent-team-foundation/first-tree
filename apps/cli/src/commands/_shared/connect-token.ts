@@ -15,6 +15,8 @@ type ConnectJwt = {
   organizationId?: unknown;
 };
 
+const SHORT_CONNECT_CODE_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
+
 /**
  * @internal
  * Decode a JWT payload without verifying its signature. Used only by the
@@ -37,7 +39,7 @@ export function decodeJwtPayload(token: string): ConnectJwt | null {
 
 export class HubUrlDerivationError extends Error {
   constructor(
-    public readonly code: "INVALID_TOKEN" | "TOKEN_MISSING_ISS" | "TOKEN_BAD_ISS",
+    public readonly code: "INVALID_TOKEN" | "TOKEN_MISSING_ISS" | "TOKEN_BAD_ISS" | "TOKEN_BAD_URL",
     message: string,
   ) {
     super(message);
@@ -45,22 +47,56 @@ export class HubUrlDerivationError extends Error {
   }
 }
 
+function normalizeHubUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new HubUrlDerivationError("TOKEN_BAD_ISS", `Connect token server URL "${url}" is not an http(s) URL.`);
+    }
+    return parsed.origin;
+  } catch (err) {
+    if (err instanceof HubUrlDerivationError) throw err;
+    throw new HubUrlDerivationError("TOKEN_BAD_ISS", `Connect token server URL "${url}" is not an http(s) URL.`);
+  }
+}
+
+export function isShortConnectCode(token: string): boolean {
+  return SHORT_CONNECT_CODE_PATTERN.test(token);
+}
+
 /**
- * Derive the server URL from a connect token's `iss` claim. Throws
- * `HubUrlDerivationError` when the claim is missing or malformed — we
- * *never* fall back to a default URL because that would let a stale connect
- * token from one environment silently re-target another (prod → staging
- * foot-gun).
+ * Derive the server URL from a connect token. New connect tokens are short
+ * codes whose server URL comes from the current CLI channel (or an explicit
+ * caller fallback). Legacy JWT connect tokens still carry the server URL
+ * themselves. Throws `HubUrlDerivationError` when no safe routing source is
+ * available.
  *
  * The action handler maps the thrown error to a `fail()` exit so this
  * function stays unit-testable without spawning a subprocess.
  */
-export function deriveHubUrlFromToken(token: string): string {
-  const payload = decodeJwtPayload(token);
+export function deriveHubUrlFromToken(token: string, fallbackUrl?: string): string {
+  const trimmed = token.trim();
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol) {
+      throw new HubUrlDerivationError(
+        "TOKEN_BAD_URL",
+        "Connect code must be the short code only, not a URL. Generate a fresh code from the First Tree web console.",
+      );
+    }
+  } catch (err) {
+    if (err instanceof HubUrlDerivationError) throw err;
+  }
+
+  const payload = decodeJwtPayload(trimmed);
   if (!payload) {
+    if (fallbackUrl && isShortConnectCode(trimmed)) {
+      return normalizeHubUrl(fallbackUrl);
+    }
+    const expected = fallbackUrl ? "short code or JWT" : "JWT";
     throw new HubUrlDerivationError(
       "INVALID_TOKEN",
-      "Connect token is not a valid JWT. Generate a new one from the First Tree web console.",
+      `Connect token is not a valid ${expected}. Generate a new one from the First Tree web console.`,
     );
   }
   const iss = payload.iss;
@@ -70,11 +106,5 @@ export function deriveHubUrlFromToken(token: string): string {
       "Connect token does not carry an issuer (`iss` claim). Generate a new token from a First Tree server running v0.10+.",
     );
   }
-  if (!/^https?:\/\//i.test(iss)) {
-    throw new HubUrlDerivationError(
-      "TOKEN_BAD_ISS",
-      `Connect token issuer "${iss}" is not an http(s) URL. Generate a new token.`,
-    );
-  }
-  return iss.replace(/\/+$/, "");
+  return normalizeHubUrl(iss);
 }

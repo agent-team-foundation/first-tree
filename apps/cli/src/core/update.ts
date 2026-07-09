@@ -26,6 +26,8 @@ import { print } from "./output.js";
 
 /** Hard ceiling on a single `npm install -g` invocation (5 min). */
 const NPM_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
+/** Short metadata probe used only to catch guaranteed npm-mode engine mismatch. */
+const NPM_METADATA_TIMEOUT_MS = 10 * 1000;
 
 export type InstallMode = "global" | "npx" | "source" | "portable";
 export type VersionLookupResult = { ok: true; version: string } | { ok: false; reason: string };
@@ -204,6 +206,68 @@ function isSafeInstallSpec(spec: string): boolean {
 /** Does this spec look like a concrete SemVer (vs a dist-tag like "latest")? */
 function looksLikeVersion(spec: string): boolean {
   return /^\d+\.\d+\.\d+(?:-|$)/.test(spec);
+}
+
+function parseNpmViewEngineRange(stdout: string): string | null {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0 || trimmed === "null" || trimmed === "undefined") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (typeof parsed === "string" && parsed.trim().length > 0) return parsed.trim();
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record["engines.node"] === "string" && record["engines.node"].trim().length > 0) {
+    return record["engines.node"].trim();
+  }
+  const engines = record.engines;
+  if (engines !== null && typeof engines === "object" && !Array.isArray(engines)) {
+    const node = (engines as Record<string, unknown>).node;
+    if (typeof node === "string" && node.trim().length > 0) return node.trim();
+  }
+  return null;
+}
+
+function lookupNpmTargetNodeEngineRange(spec: string): string | null {
+  if (PACKAGE_NAME === null) return null;
+  const res = spawnSync(resolveNpmCommand(), ["view", `${PACKAGE_NAME}@${spec}`, "engines.node", "--json"], {
+    encoding: "utf-8",
+    timeout: NPM_METADATA_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status !== 0) return null;
+  return parseNpmViewEngineRange(res.stdout ?? "");
+}
+
+function portableMigrationHint(): string {
+  const baseUrl = channelConfig.portable.downloadBaseUrl?.replace(/\/+$/, "");
+  const installerPath = channelConfig.portable.publicInstallerPath;
+  if (baseUrl && installerPath) {
+    return `or migrate to the portable install path from the web console (installer: ${baseUrl}/${installerPath})`;
+  }
+  return "or migrate to the portable install path from the web console";
+}
+
+function checkNpmTargetNodeEngine(spec: string): Extract<ExecuteUpdateResult, { ok: false }> | null {
+  const range = lookupNpmTargetNodeEngineRange(spec);
+  if (range === null) return null;
+  const normalizedRange = semver.validRange(range);
+  if (normalizedRange === null) return null;
+  if (semver.satisfies(process.version, normalizedRange, { includePrerelease: true })) return null;
+  const packageSpec = PACKAGE_NAME === null ? channelConfig.binName : `${PACKAGE_NAME}@${spec}`;
+  return {
+    ok: false,
+    mode: "global",
+    reason:
+      `Cannot install ${packageSpec}: this npm-mode install is running on Node ${process.version}, ` +
+      `but the target package requires Node ${range}. npm-mode updates cannot replace the system Node runtime; ` +
+      `upgrade system Node and rerun \`${channelConfig.binName} upgrade\`, ${portableMigrationHint()}.`,
+    retryable: false,
+    reasonCode: "npm_ebadengine",
+  };
 }
 
 function failPortable(reason: string, retryable = false, reasonCode?: string): ExecuteUpdateResult {
@@ -594,6 +658,11 @@ export async function installGlobalSpec(
       writeInstallOutput(options, `  [update] ${reason}\n`);
       return { ok: false, mode: "global", reason };
     }
+  }
+  const engineMismatch = checkNpmTargetNodeEngine(spec);
+  if (engineMismatch) {
+    writeInstallOutput(options, `  [update] ${engineMismatch.reason}\n`);
+    return engineMismatch;
   }
   return new Promise((resolvePromise) => {
     const npmCmd = resolveNpmCommand();

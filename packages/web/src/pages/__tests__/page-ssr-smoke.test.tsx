@@ -942,9 +942,9 @@ describe("page SSR smoke coverage", () => {
     expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
 
     authMock.value = { ...authMock.value, role: "member" };
-    // Admin-only surfaces redirect members out (empty render); Context tree
-    // and Resources stay visible (read-only) for members.
-    expect(renderPage(<SettingsGithubPage />)).toBe("");
+    // Settings GitHub, Context tree, and Resources stay visible (read-only)
+    // for members.
+    expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
     expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
     expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
 
@@ -1350,7 +1350,7 @@ describe("page SSR smoke coverage", () => {
         />,
       ),
     ).toContain("Join Acme");
-    expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected as");
+    expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected to");
     expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Repository");
     expect(renderPage(<UserMenu />)).toContain("user-menu");
     expect(() => renderPage(<TeamSetupModal action="create" onClose={() => undefined} />)).not.toThrow();

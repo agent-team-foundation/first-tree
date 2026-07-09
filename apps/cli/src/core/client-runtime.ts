@@ -203,10 +203,10 @@ export class ClientRuntime {
       this.output.blank();
       this.output.status("✗", "auth rejected — pausing agents until fresh credentials arrive.");
       this.output.status("", authPausedDetail(err));
-      this.output.status("", "Recovery: get a new connect token from the First Tree web console");
+      this.output.status("", "Recovery: get a new connect code from the First Tree web console");
       this.output.status(
         "",
-        `          (Computers → + New Connection), then re-run \`${channelConfig.binName} login <token>\`.`,
+        `          (Computers → + New Connection), then re-run \`${channelConfig.binName} login <code>\`.`,
       );
       this.output.status("", `Paused reason: ${reason}. Process is staying alive — no restart needed after login.`);
       this.ensureCredentialsWatcher();

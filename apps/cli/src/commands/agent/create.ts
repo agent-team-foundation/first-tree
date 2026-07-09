@@ -12,7 +12,7 @@ export function registerAgentCreateCommand(agent: Command): void {
     .requiredOption("--type <type>", "Agent type (human, agent)")
     .requiredOption(
       "--client-id <id>",
-      `Client (machine) that will run this agent — must be owned by you. Run \`${channelConfig.binName} login <token>\` on that machine first.`,
+      `Client (machine) that will run this agent — must be owned by you. Run \`${channelConfig.binName} login <code>\` on that machine first.`,
     )
     .option(
       "--runtime <runtime>",

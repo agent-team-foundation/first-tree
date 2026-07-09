@@ -65,7 +65,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       key: "connect",
       label: "Signed in",
       status: "missing_required",
-      hint: `Run \`${channelConfig.binName} login <token>\` first`,
+      hint: `Run \`${channelConfig.binName} login <code>\` first`,
     });
   }
 

@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: "scripts/portable/node-version.txt"
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
 
@@ -105,14 +105,25 @@ jobs:
             exit 1
           fi
 
+          {
+            echo "package_name=$TARGET_PACKAGE_NAME"
+            echo "package_version=$PACKAGE_VERSION"
+            echo "release_git_sha=$TAG_COMMIT"
+          } >> "$GITHUB_OUTPUT"
+
           VIEW_ERROR=$(mktemp)
-          trap 'rm -f "$VIEW_ERROR"' EXIT
-          if npm view "${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION}" version > /dev/null 2> "$VIEW_ERROR"; then
-            echo "::error::${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION} is already published to npm; refusing to republish."
-            exit 1
+          VIEW_OUTPUT=$(mktemp)
+          trap 'rm -f "$VIEW_ERROR" "$VIEW_OUTPUT"' EXIT
+          if npm view "${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION}" version > "$VIEW_OUTPUT" 2> "$VIEW_ERROR"; then
+            EXISTING_GIT_HEAD=$(npm view "${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION}" gitHead 2>> "$VIEW_ERROR" || true)
+            if [[ "$EXISTING_GIT_HEAD" != "$TAG_COMMIT" ]]; then
+              echo "::error::${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION} is already published from gitHead '${EXISTING_GIT_HEAD:-missing}', expected '$TAG_COMMIT'."
+              exit 1
+            fi
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION} is already published from $TAG_COMMIT; resuming portable release."
           elif grep -q "E404" "$VIEW_ERROR"; then
-            echo "package_name=$TARGET_PACKAGE_NAME" >> "$GITHUB_OUTPUT"
-            echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "Publishing ${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION} with npm dist-tag 'latest'."
           else
             echo "::error::Failed to check npm registry for ${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION}."
@@ -123,7 +134,7 @@ jobs:
       - name: Rewrite package.json + build-info.ts for prod
         working-directory: apps/cli
         env:
-          RELEASE_GIT_SHA: ${{ github.sha }}
+          RELEASE_GIT_SHA: ${{ steps.release.outputs.release_git_sha }}
           FIRST_TREE_CLIENT_SENTRY_DSN: ${{ vars.FIRST_TREE_CLIENT_SENTRY_DSN }}
         run: |
           node <<'NODE'
@@ -135,12 +146,18 @@ jobs:
             "ft": "./dist/cli/index.mjs",
           };
           fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+          const clientSentryDsn = JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "");
+          const clientSentryDsnAssignment = `export const CLIENT_SENTRY_DSN = ${clientSentryDsn};`;
+          const formattedClientSentryDsn =
+            clientSentryDsnAssignment.length > 120
+              ? `export const CLIENT_SENTRY_DSN =\n  ${clientSentryDsn};\n`
+              : `${clientSentryDsnAssignment}\n`;
           fs.writeFileSync(
             "src/build-info.ts",
             'import type { ChannelName } from "@first-tree/shared/channel";\n' +
               'export const CHANNEL: ChannelName = "prod";\n' +
               `export const GIT_SHA = ${JSON.stringify(process.env.RELEASE_GIT_SHA)};\n` +
-              `export const CLIENT_SENTRY_DSN = ${JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "")};\n`,
+              formattedClientSentryDsn,
           );
           NODE
           echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for prod publish"
@@ -164,9 +181,45 @@ jobs:
 
       - run: pnpm typecheck
 
+      - name: Preflight portable release in S3
+        env:
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: ${{ vars.FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL }}
+          FIRST_TREE_PORTABLE_S3_BUCKET: ${{ vars.FIRST_TREE_PORTABLE_S3_BUCKET }}
+          FIRST_TREE_PORTABLE_S3_PREFIX: ${{ vars.FIRST_TREE_PORTABLE_S3_PREFIX }}
+          FIRST_TREE_PORTABLE_S3_ENDPOINT_URL: ${{ vars.FIRST_TREE_PORTABLE_S3_ENDPOINT_URL }}
+          FIRST_TREE_PORTABLE_S3_REGION: ${{ vars.FIRST_TREE_PORTABLE_S3_REGION }}
+          FIRST_TREE_PORTABLE_PLATFORMS: ${{ vars.FIRST_TREE_PORTABLE_PLATFORMS }}
+          FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID: ${{ secrets.FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID }}
+          FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY: ${{ secrets.FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY }}
+          FIRST_TREE_PORTABLE_S3_SESSION_TOKEN: ${{ secrets.FIRST_TREE_PORTABLE_S3_SESSION_TOKEN }}
+        run: |
+          ./scripts/portable/release-s3.sh \
+            --channel prod \
+            --version "${{ steps.release.outputs.package_version }}" \
+            --skip-workspace-build \
+            --preflight-only
+
       - name: Publish to npm
+        if: steps.release.outputs.publish == 'true'
         working-directory: apps/cli
         run: npm publish --tag latest --access public
+
+      - name: Publish portable release to S3
+        env:
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: ${{ vars.FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL }}
+          FIRST_TREE_PORTABLE_S3_BUCKET: ${{ vars.FIRST_TREE_PORTABLE_S3_BUCKET }}
+          FIRST_TREE_PORTABLE_S3_PREFIX: ${{ vars.FIRST_TREE_PORTABLE_S3_PREFIX }}
+          FIRST_TREE_PORTABLE_S3_ENDPOINT_URL: ${{ vars.FIRST_TREE_PORTABLE_S3_ENDPOINT_URL }}
+          FIRST_TREE_PORTABLE_S3_REGION: ${{ vars.FIRST_TREE_PORTABLE_S3_REGION }}
+          FIRST_TREE_PORTABLE_PLATFORMS: ${{ vars.FIRST_TREE_PORTABLE_PLATFORMS }}
+          FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID: ${{ secrets.FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID }}
+          FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY: ${{ secrets.FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY }}
+          FIRST_TREE_PORTABLE_S3_SESSION_TOKEN: ${{ secrets.FIRST_TREE_PORTABLE_S3_SESSION_TOKEN }}
+        run: |
+          ./scripts/portable/release-s3.sh \
+            --channel prod \
+            --version "${{ steps.release.outputs.package_version }}" \
+            --skip-build
 
       - name: Send feishu message
         if: always()
@@ -216,9 +269,11 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: "scripts/portable/node-version.txt"
           registry-url: "https://registry.npmjs.org"
 
       - name: Ensure trusted publishing npm version
@@ -230,6 +285,7 @@ jobs:
         env:
           SOURCE_PACKAGE_NAME: "first-tree-dev"
           TARGET_PACKAGE_NAME: "first-tree-staging"
+          RELEASE_GIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
         run: |
           PACKAGE_JSON_NAME=$(node -p "require('./package.json').name")
           if [[ "$PACKAGE_JSON_NAME" != "$SOURCE_PACKAGE_NAME" ]]; then
@@ -260,12 +316,20 @@ jobs:
             echo "base_version=$BASE_VERSION"
             echo "next_version=$NEXT_VERSION"
             echo "staging_version=$STAGING_VERSION"
+            echo "release_git_sha=$RELEASE_GIT_SHA"
           } >> "$GITHUB_OUTPUT"
 
           VIEW_ERROR=$(mktemp)
-          if npm view "${TARGET_PACKAGE_NAME}@${STAGING_VERSION}" version > /dev/null 2> "$VIEW_ERROR"; then
+          VIEW_OUTPUT=$(mktemp)
+          trap 'rm -f "$VIEW_ERROR" "$VIEW_OUTPUT"' EXIT
+          if npm view "${TARGET_PACKAGE_NAME}@${STAGING_VERSION}" version > "$VIEW_OUTPUT" 2> "$VIEW_ERROR"; then
+            EXISTING_GIT_HEAD=$(npm view "${TARGET_PACKAGE_NAME}@${STAGING_VERSION}" gitHead 2>> "$VIEW_ERROR" || true)
+            if [[ "$EXISTING_GIT_HEAD" != "$RELEASE_GIT_SHA" ]]; then
+              echo "::error::${TARGET_PACKAGE_NAME}@${STAGING_VERSION} is already published from gitHead '${EXISTING_GIT_HEAD:-missing}', expected '$RELEASE_GIT_SHA'."
+              exit 1
+            fi
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "Staging version already exists: ${TARGET_PACKAGE_NAME}@${STAGING_VERSION}; skipping publish"
+            echo "${TARGET_PACKAGE_NAME}@${STAGING_VERSION} is already published from $RELEASE_GIT_SHA; resuming portable release."
           elif grep -q "E404" "$VIEW_ERROR"; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "Publishing staging version: ${TARGET_PACKAGE_NAME}@${STAGING_VERSION}"
@@ -275,15 +339,11 @@ jobs:
             exit 1
           fi
 
-      - if: steps.version.outputs.publish == 'true'
-        uses: pnpm/action-setup@v4
-
       - name: Rewrite package.json + build-info.ts for staging
-        if: steps.version.outputs.publish == 'true'
         working-directory: apps/cli
         env:
           STAGING_VERSION: ${{ steps.version.outputs.staging_version }}
-          RELEASE_GIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          RELEASE_GIT_SHA: ${{ steps.version.outputs.release_git_sha }}
           FIRST_TREE_CLIENT_SENTRY_DSN: ${{ vars.FIRST_TREE_CLIENT_SENTRY_DSN }}
         run: |
           node <<'NODE'
@@ -296,18 +356,23 @@ jobs:
             "fts": "./dist/cli/index.mjs",
           };
           fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+          const clientSentryDsn = JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "");
+          const clientSentryDsnAssignment = `export const CLIENT_SENTRY_DSN = ${clientSentryDsn};`;
+          const formattedClientSentryDsn =
+            clientSentryDsnAssignment.length > 120
+              ? `export const CLIENT_SENTRY_DSN =\n  ${clientSentryDsn};\n`
+              : `${clientSentryDsnAssignment}\n`;
           fs.writeFileSync(
             "src/build-info.ts",
             'import type { ChannelName } from "@first-tree/shared/channel";\n' +
               'export const CHANNEL: ChannelName = "staging";\n' +
               `export const GIT_SHA = ${JSON.stringify(process.env.RELEASE_GIT_SHA)};\n` +
-              `export const CLIENT_SENTRY_DSN = ${JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "")};\n`,
+              formattedClientSentryDsn,
           );
           NODE
           echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for staging publish"
 
       - name: Verify CHANNEL was rewritten
-        if: steps.version.outputs.publish == 'true'
         working-directory: apps/cli
         run: |
           if ! grep -q 'CHANNEL: ChannelName = "staging"' src/build-info.ts; then
@@ -318,16 +383,53 @@ jobs:
 
       # lockfile drifts after the name rewrite; let pnpm re-resolve in
       # the ephemeral runner workspace.
-      - if: steps.version.outputs.publish == 'true'
-        run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --no-frozen-lockfile
 
-      - if: steps.version.outputs.publish == 'true'
-        run: pnpm build
+      - run: pnpm check
+
+      - run: pnpm build
+
+      - run: pnpm typecheck
+
+      - name: Preflight portable release in S3
+        env:
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: ${{ vars.FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL }}
+          FIRST_TREE_PORTABLE_S3_BUCKET: ${{ vars.FIRST_TREE_PORTABLE_S3_BUCKET }}
+          FIRST_TREE_PORTABLE_S3_PREFIX: ${{ vars.FIRST_TREE_PORTABLE_S3_PREFIX }}
+          FIRST_TREE_PORTABLE_S3_ENDPOINT_URL: ${{ vars.FIRST_TREE_PORTABLE_S3_ENDPOINT_URL }}
+          FIRST_TREE_PORTABLE_S3_REGION: ${{ vars.FIRST_TREE_PORTABLE_S3_REGION }}
+          FIRST_TREE_PORTABLE_PLATFORMS: ${{ vars.FIRST_TREE_PORTABLE_PLATFORMS }}
+          FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID: ${{ secrets.FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID }}
+          FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY: ${{ secrets.FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY }}
+          FIRST_TREE_PORTABLE_S3_SESSION_TOKEN: ${{ secrets.FIRST_TREE_PORTABLE_S3_SESSION_TOKEN }}
+        run: |
+          ./scripts/portable/release-s3.sh \
+            --channel staging \
+            --version "${{ steps.version.outputs.staging_version }}" \
+            --skip-workspace-build \
+            --preflight-only
 
       - name: Publish to npm
         if: steps.version.outputs.publish == 'true'
         working-directory: apps/cli
         run: npm publish --tag latest --access public
+
+      - name: Publish portable release to S3
+        env:
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: ${{ vars.FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL }}
+          FIRST_TREE_PORTABLE_S3_BUCKET: ${{ vars.FIRST_TREE_PORTABLE_S3_BUCKET }}
+          FIRST_TREE_PORTABLE_S3_PREFIX: ${{ vars.FIRST_TREE_PORTABLE_S3_PREFIX }}
+          FIRST_TREE_PORTABLE_S3_ENDPOINT_URL: ${{ vars.FIRST_TREE_PORTABLE_S3_ENDPOINT_URL }}
+          FIRST_TREE_PORTABLE_S3_REGION: ${{ vars.FIRST_TREE_PORTABLE_S3_REGION }}
+          FIRST_TREE_PORTABLE_PLATFORMS: ${{ vars.FIRST_TREE_PORTABLE_PLATFORMS }}
+          FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID: ${{ secrets.FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID }}
+          FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY: ${{ secrets.FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY }}
+          FIRST_TREE_PORTABLE_S3_SESSION_TOKEN: ${{ secrets.FIRST_TREE_PORTABLE_S3_SESSION_TOKEN }}
+        run: |
+          ./scripts/portable/release-s3.sh \
+            --channel staging \
+            --version "${{ steps.version.outputs.staging_version }}" \
+            --skip-build
 
       - name: Send feishu message
         if: ${{ failure() || steps.version.outputs.publish == 'true' }}

@@ -32,7 +32,7 @@ partitioned too.
 
 # Start your local server (any way you like — e.g. `pnpm --filter @first-tree/server dev`)
 
-first-tree-dev login <connect-token>   # token from http://127.0.0.1:8000/clients
+first-tree-dev login <connect-code>    # code from http://127.0.0.1:8000/clients
 first-tree-dev daemon status
 journalctl --user -u first-tree-dev -f
 ```

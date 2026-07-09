@@ -154,6 +154,49 @@ describe("local agent shared helpers", () => {
     }
   });
 
+  it("fails clearly instead of falling back when the runtime session token file is missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "first-tree-token-"));
+    try {
+      const tokenFile = join(dir, "missing.token");
+      const { createSdk } = await import("../commands/_shared/local-agent.js");
+
+      process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "stale-runtime-token";
+      process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
+
+      expect(() => createSdk("nova")).toThrow();
+      expect(outputMocks.fail).toHaveBeenLastCalledWith(
+        "RUNTIME_SESSION_TOKEN_FILE_UNREADABLE",
+        expect.stringContaining(tokenFile),
+        2,
+      );
+      expect(clientMocks.FirstTreeHubSDK).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails clearly instead of falling back when the runtime session token file is empty", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "first-tree-token-"));
+    try {
+      const tokenFile = join(dir, "runtime.token");
+      writeFileSync(tokenFile, "\n", "utf8");
+      const { createSdk } = await import("../commands/_shared/local-agent.js");
+
+      process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "stale-runtime-token";
+      process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
+
+      expect(() => createSdk("nova")).toThrow();
+      expect(outputMocks.fail).toHaveBeenLastCalledWith(
+        "RUNTIME_SESSION_TOKEN_FILE_EMPTY",
+        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file is empty.`,
+        2,
+      );
+      expect(clientMocks.FirstTreeHubSDK).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("maps local agent resolution failures to CLI errors", async () => {
     const { readClientId, resolveLocalAgent } = await import("../commands/_shared/local-agent.js");
 
@@ -195,7 +238,7 @@ describe("local agent shared helpers", () => {
     expect(() => readClientId()).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith(
       "MISSING_CLIENT_ID",
-      "No client.id found in client.yaml. Run `first-tree-dev login <token>` first.",
+      "No client.id found in client.yaml. Run `first-tree-dev login <code>` first.",
       2,
     );
   });

@@ -210,7 +210,7 @@ describe("client org mismatch handler", () => {
     expect(readFileSync(yamlPath, "utf8")).toBe(before);
     const output = printMocks.line.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("wrong org");
-    expect(output).toContain("first-tree-dev login <token>");
+    expect(output).toContain("first-tree-dev login <code>");
     expect(output).toContain("first-tree-dev computer reset");
     expect(output).toContain("valid server-side owner pair");
     expect(output).not.toContain("Rotate");
@@ -230,7 +230,7 @@ describe("client org mismatch handler", () => {
     ).rejects.toMatchObject({ code: 1 });
 
     const output = printMocks.line.mock.calls.map((call) => String(call[0])).join("");
-    expect(output).toContain("first-tree-dev login <token>");
+    expect(output).toContain("first-tree-dev login <code>");
     expect(output).toContain("first-tree-dev computer reset");
   });
 
@@ -274,7 +274,7 @@ describe("client org mismatch handler", () => {
     ).rejects.toMatchObject({ code: 1 });
 
     expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("wrong org"));
-    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("first-tree-dev login <token>"));
+    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("first-tree-dev login <code>"));
     expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("first-tree-dev computer reset"));
     expect(output.blank).not.toHaveBeenCalled();
     expect(output.line).not.toHaveBeenCalled();

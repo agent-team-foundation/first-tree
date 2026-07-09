@@ -322,7 +322,7 @@ async function resolveAgentClient(
   if (!client.userId) {
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
-        `\`${getServerCliBinding().binName} login <token>\` on that machine before pinning an agent to it.`,
+        `\`${getServerCliBinding().binName} login <code>\` on that machine before pinning an agent to it.`,
     );
   }
   if (client.userId !== manager.userId) {

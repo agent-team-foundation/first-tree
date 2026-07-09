@@ -116,16 +116,20 @@ describe("Multi-org self-service", () => {
   });
 });
 
-describe("Connect token carries iss claim", () => {
+describe("Connect code bootstrap", () => {
   const getApp = useTestApp();
 
-  it("POST /me/connect-tokens stamps an iss derived from request host", async () => {
+  it("POST /me/connect-tokens returns a short connect code", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/me/connect-tokens",
-      headers: { authorization: `Bearer ${admin.accessToken}` },
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        host: "127.0.0.1:8000",
+        "x-forwarded-proto": "http",
+      },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json<{
@@ -138,13 +142,8 @@ describe("Connect token carries iss claim", () => {
       binName: string;
     }>();
 
-    // Decode the JWT payload (not verifying signature — it's our own key)
-    const parts = body.token.split(".");
-    const payload = parts[1];
-    if (!payload) throw new Error("expected JWT payload segment");
-    const decoded = JSON.parse(Buffer.from(payload, "base64url").toString()) as { iss?: string; type?: string };
-    expect(decoded.type).toBe("connect");
-    expect(decoded.iss).toMatch(/^https?:\/\//);
+    expect(body.token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+    expect(body.token).not.toContain("/");
 
     // Default test config runs channel=dev (server default) — dev has no
     // published package, so npmSpec is null and bootstrapCommand collapses

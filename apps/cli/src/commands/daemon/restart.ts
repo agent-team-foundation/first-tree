@@ -31,7 +31,7 @@ export function registerDaemonRestartCommand(daemon: Command): void {
       const svc = getClientServiceStatus();
       if (svc.state === "not-installed") {
         print.line("\n  No background service installed.\n");
-        print.line(`  Run \`${channelConfig.binName} login <token>\` first.\n\n`);
+        print.line(`  Run \`${channelConfig.binName} login <code>\` first.\n\n`);
         process.exit(1);
       }
       const res = restartClientService();

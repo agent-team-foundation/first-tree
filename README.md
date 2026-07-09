@@ -127,17 +127,22 @@ At the "connect a computer" step, setup gives you the command to install the
 CLI and link the machine:
 
 ```bash
-npm install -g first-tree
-first-tree login <connect-token>
+# Use the exact command shown in the web console; production portable installs
+# have this shape:
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-code>
 ```
 
-The binary lives at `first-tree`; a short alias `ft` is also installed.
+The portable installer bundles Node.js, so new users do not need to install
+Node separately. The npm global install path (`npm install -g first-tree`) is
+still supported for operators and fallback installs; npm mode uses your system
+Node runtime.
 
 ## CLI
 
 ```text
 first-tree
-├── login <token>           Sign this computer in
+├── login <code>            Sign this computer in
 ├── logout                  Stop the daemon and clear credentials
 ├── status                  CLI / daemon / server / auth overview
 ├── doctor                  Cross-subsystem readiness check
@@ -159,6 +164,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - `packages/server/` — Fastify API server (`@first-tree/server`)
 - `packages/client/` — Agent SDK + Runtime (`@first-tree/client`)
 - `packages/web/` — React web workspace (`@first-tree/web`)
+- `packages/qa/` — internal QA workflow assets for agent-run validation (`@first-tree/qa`)
 - `skills/` — repo-local skill payloads for First Tree agents
 
 ## Documentation
@@ -167,6 +173,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - [Onboarding Guide](docs/onboarding-guide.md) — CLI flow, SDK, troubleshooting
 - [CLI Reference](docs/cli-reference.md) — every command and environment variable
 - [Observability](docs/observability.md) — logs and OpenTelemetry traces
+- [Portable Node Runtime](docs/development/portable-node-runtime.md) — bundled Node policy for portable releases
 - [docs/development/](docs/development/) — contributor reference
 - [docs/troubleshooting/](docs/troubleshooting/) — environment-specific gotchas
 - [docs/migration/](docs/migration/) — coming from `first-tree@0.4.x`

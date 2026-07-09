@@ -1,0 +1,10 @@
+{
+  "name": "@first-tree/qa",
+  "private": true,
+  "type": "module",
+  "description": "Internal QA workflow assets for agent-run First Tree validation.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "vitest run --passWithNoTests"
+  }
+}

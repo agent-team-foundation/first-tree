@@ -183,7 +183,7 @@ function installSystemd(): ServiceInfo {
   if (!enableRes.ok) {
     throw new Error(
       `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`${channelConfig.binName} login <token>\`.`,
+        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`${channelConfig.binName} login <code>\`.`,
     );
   }
 

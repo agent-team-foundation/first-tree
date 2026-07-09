@@ -12,7 +12,7 @@ export function registerAgentBindClientCommand(bind: Command): void {
     .description("Bind an unbound agent to a client machine (first-time bind only; use runtime switch to move later)")
     .requiredOption(
       "--client-id <id>",
-      `Client (machine) ID — must be owned by you. Run \`${channelConfig.binName} login <token>\` on that machine first.`,
+      `Client (machine) ID — must be owned by you. Run \`${channelConfig.binName} login <code>\` on that machine first.`,
     )
     .option("--server <url>", "First Tree server URL")
     .action(async (agentName: string, options: { clientId: string; server?: string }) => {

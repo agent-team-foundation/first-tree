@@ -23,15 +23,20 @@ export const connectTokenExchangeSchema = z.object({
 export type ConnectTokenExchange = z.infer<typeof connectTokenExchangeSchema>;
 
 export const connectTokenResponseSchema = z.object({
+  /**
+   * Opaque connect token accepted by `<binName> login <code>`. New servers
+   * return a bare short code; legacy JWT connect tokens remain accepted by the
+   * exchange endpoint during rollout.
+   */
   token: z.string(),
   expiresIn: z.number(),
-  /** `<binName> login <token>` — channel-aware bin name. */
+  /** `<binName> login <code>` — channel-aware bin name. */
   command: z.string(),
   /**
    * Full bootstrap line shown by web onboarding / connect-computer dialogs.
-   * For prod/staging: `npm install -g <pkg>\n<binName> login <token>`.
+   * For prod/staging: `npm install -g <pkg>\n<binName> login <code>`.
    * For dev (server has no published package): just the `<binName> login
-   * <token>` line.
+   * <code>` line.
    */
   bootstrapCommand: z.string(),
   /**
@@ -56,7 +61,7 @@ export const connectTokenResponseSchema = z.object({
    *   - prod    → "first-tree"
    *   - staging → "first-tree-staging"
    *   - dev     → "first-tree-dev"
-   * Web onboarding uses this to render the right `… login <token>` line
+   * Web onboarding uses this to render the right `… login <code>` line
    * (and the right `… agent add` prefix in the new-agent-dialog).
    */
   binName: z.string(),

@@ -123,7 +123,7 @@ export {
   uninstallClientService,
 } from "./service-install.js";
 export type { ExecuteUpdateResult, InstallMode, VersionLookupResult } from "./update.js";
-// Self-update glue — exported so both `client start` and `connect <token>`
+// Self-update glue — exported so both `client start` and `login <code>`
 // can pass identical prompt / install callbacks to the ClientRuntime.
 export {
   detectInstallMode,

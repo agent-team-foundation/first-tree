@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/connection.js";
+import { connectCodes } from "../db/schema/connect-codes.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { UnauthorizedError } from "../errors.js";
@@ -23,6 +24,7 @@ export type AuthTokenExpiries = {
 /** In-memory set of consumed connect token JTIs. Entries auto-expire after 10 minutes. */
 const consumedConnectJtis = new Map<string, number>();
 const CONNECT_JTI_TTL_MS = 600_000;
+const CONNECT_CODE_BYTES = 16;
 
 /**
  * JWT payload shape. Normal access/refresh/connect tokens carry only the user
@@ -61,6 +63,28 @@ export function expiryToSeconds(expiry: string): number {
   const u = m[2] as "s" | "m" | "h" | "d" | "w";
   const mult = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 } as const;
   return n * mult[u];
+}
+
+function normalizeIssuer(issuer: string): string {
+  try {
+    return new URL(issuer).origin;
+  } catch {
+    return issuer.replace(/\/+$/, "");
+  }
+}
+
+function generateConnectCode(): string {
+  return randomBytes(CONNECT_CODE_BYTES).toString("base64url");
+}
+
+function hashConnectCode(code: string): string {
+  return createHash("sha256").update(code).digest("hex");
+}
+
+function parseConnectCodeToken(token: string): { issuer: string | null; code: string } | null {
+  const trimmed = token.trim();
+  if (/^[A-Za-z0-9_-]{20,}$/.test(trimmed)) return { issuer: null, code: trimmed };
+  return null;
 }
 
 /**
@@ -219,29 +243,77 @@ export async function refreshAccessToken(
 
 /**
  * Generate a short-lived connect token for CLI authentication.
+ *
+ * The public token is a short code, not a JWT. The CLI picks the server URL
+ * from its channel/default configuration while the opaque code is hashed in
+ * PostgreSQL for restart-safe, single-use exchange. We still store the minting
+ * issuer so the exchange route can reject a code presented to the wrong
+ * deployment.
  */
 export async function generateConnectToken(
+  db: Database,
   userId: string,
-  jwtSecretKey: string,
   expiries: Pick<AuthTokenExpiries, "connectTokenExpiry">,
-  iss?: string,
+  issuer: string,
 ): Promise<{ token: string; expiresIn: number }> {
-  const secret = new TextEncoder().encode(jwtSecretKey);
-  const jti = randomUUID();
-  const builder = new SignJWT({ sub: userId, type: "connect" })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setJti(jti)
-    .setExpirationTime(expiries.connectTokenExpiry);
-  if (iss) builder.setIssuer(iss);
-  const token = await builder.sign(secret);
-  return { token, expiresIn: expiryToSeconds(expiries.connectTokenExpiry) };
+  const expiresIn = expiryToSeconds(expiries.connectTokenExpiry);
+  const code = generateConnectCode();
+  await db.insert(connectCodes).values({
+    id: randomUUID(),
+    codeHash: hashConnectCode(code),
+    userId,
+    issuer: normalizeIssuer(issuer),
+    expiresAt: new Date(Date.now() + expiresIn * 1000),
+  });
+  return { token: code, expiresIn };
 }
 
 /**
  * Exchange a connect token for full access+refresh tokens.
  */
 export async function exchangeConnectToken(
+  db: Database,
+  connectToken: string,
+  jwtSecretKey: string,
+  expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
+  expectedIssuer?: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const codeToken = parseConnectCodeToken(connectToken);
+  if (codeToken) {
+    const requestIssuer = expectedIssuer ? normalizeIssuer(expectedIssuer) : null;
+    if (codeToken.issuer && requestIssuer && codeToken.issuer !== requestIssuer) {
+      throw new UnauthorizedError("Invalid or expired connect token", {
+        "auth.connect.reason": "code_issuer_mismatch",
+      });
+    }
+    const issuer = codeToken.issuer ?? requestIssuer;
+    const now = new Date();
+    const [row] = await db
+      .update(connectCodes)
+      .set({ consumedAt: now })
+      .where(
+        and(
+          eq(connectCodes.codeHash, hashConnectCode(codeToken.code)),
+          ...(issuer ? [eq(connectCodes.issuer, issuer)] : []),
+          isNull(connectCodes.consumedAt),
+          gt(connectCodes.expiresAt, now),
+        ),
+      )
+      .returning({ userId: connectCodes.userId });
+
+    if (!row) {
+      throw new UnauthorizedError("Invalid or expired connect token", {
+        "auth.connect.reason": "code_invalid_or_expired",
+      });
+    }
+
+    return signTokensForActiveUser(db, row.userId, jwtSecretKey, expiries, "auth.connect");
+  }
+
+  return exchangeLegacyConnectJwt(db, connectToken, jwtSecretKey, expiries);
+}
+
+async function exchangeLegacyConnectJwt(
   db: Database,
   connectToken: string,
   jwtSecretKey: string,
@@ -280,14 +352,28 @@ export async function exchangeConnectToken(
     }
   }
 
+  return signTokensForActiveUser(db, payload.sub, jwtSecretKey, expiries, "auth.connect");
+}
+
+async function signTokensForActiveUser(
+  db: Database,
+  userId: string,
+  jwtSecretKey: string,
+  expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
+  attrPrefix: "auth.connect" | "auth.refresh",
+): Promise<{ accessToken: string; refreshToken: string }> {
   const [user] = await db
     .select({ id: users.id, status: users.status })
     .from(users)
-    .where(eq(users.id, payload.sub))
+    .where(eq(users.id, userId))
     .limit(1);
 
   if (!user || user.status !== "active") {
-    throw new UnauthorizedError("User not found or suspended");
+    throw new UnauthorizedError("User not found or suspended", {
+      [`${attrPrefix}.reason`]: user ? "user_suspended" : "user_not_found",
+      [`${attrPrefix}.user_id`]: userId,
+      ...(user ? { [`${attrPrefix}.user_status`]: user.status } : {}),
+    });
   }
 
   // Same membership-existence check as refreshAccessToken — clear failure
@@ -295,12 +381,15 @@ export async function exchangeConnectToken(
   const [anyMember] = await db
     .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.userId, user.id), eq(members.status, "active")))
+    .where(and(eq(members.userId, userId), eq(members.status, "active")))
     .limit(1);
 
   if (!anyMember) {
-    throw new UnauthorizedError("No active membership");
+    throw new UnauthorizedError("No active membership", {
+      [`${attrPrefix}.reason`]: "no_active_membership",
+      [`${attrPrefix}.user_id`]: userId,
+    });
   }
 
-  return signTokensForUser(jwtSecretKey, user.id, expiries);
+  return signTokensForUser(jwtSecretKey, userId, expiries);
 }

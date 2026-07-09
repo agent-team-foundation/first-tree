@@ -112,7 +112,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
       // uniform — supervisor child, foreground debug, or background daemon
       // launch all bail out the same way pointing at `login`.
       if (!loadCredentials()) {
-        const message = `no credentials — run \`${binName} login <token>\` to sign in before starting the daemon.`;
+        const message = `no credentials — run \`${binName} login <code>\` to sign in before starting the daemon.`;
         if (daemonOutput) {
           writeErrorAndExit(message);
         }
@@ -434,7 +434,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           if (daemonOutput) {
             writeStatus(
               "✗",
-              `client.yaml is not accepted for the current credentials; back up local workspaces, run \`${binName} computer reset\`, then run \`${binName} login <token>\` with the intended account.`,
+              `client.yaml is not accepted for the current credentials; back up local workspaces, run \`${binName} computer reset\`, then run \`${binName} login <code>\` with the intended account.`,
             );
             process.exit(1);
           }
@@ -442,7 +442,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           writeLine("  ⚠️  This client.yaml is not accepted for the current credentials.\n");
           writeLine("  The active client id and current credentials do not form a valid server-side owner pair.\n");
           writeLine(
-            `  Back up local workspaces, run \`${binName} computer reset\`, then run \`${binName} login <token>\` with the intended account.\n\n`,
+            `  Back up local workspaces, run \`${binName} computer reset\`, then run \`${binName} login <code>\` with the intended account.\n\n`,
           );
           process.exit(1);
         }
