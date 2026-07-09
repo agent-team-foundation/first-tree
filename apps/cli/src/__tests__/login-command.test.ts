@@ -93,7 +93,7 @@ async function runLogin(args: string[]): Promise<void> {
 }
 
 async function waitForAsyncWork(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }

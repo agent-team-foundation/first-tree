@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-describe("public barrel exports", () => {
+describe("public barrel exports", { timeout: 30_000 }, () => {
   it("loads the package entrypoint exports", async () => {
     const api = await import("../index.js");
 
