@@ -219,7 +219,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree-context/SKILL.md`);
   });
 
-  it("emits the policy baseline but no tree-bound read/write routing for tree-less agents", () => {
+  it("emits the policy baseline and tree-less binding guidance", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     expect(briefing).not.toContain("# Required Reading");
     const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
@@ -227,7 +227,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(tree).toContain("tree-backed reads and source-backed tree writes are unavailable until a tree is bound");
   });
 
-  it("lists only installed First Tree skills for each binding tier", () => {
+  it("lists every installed First Tree skill in the family map", () => {
     const familyMap = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: "/tree" })),
       "# Skills (First Tree Managed)",
@@ -243,8 +243,9 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toContain("first-tree-welcome");
     expect(treelessFamily).toContain("first-tree-seed");
     expect(treelessFamily).toContain("first-tree-file-bug");
-    expect(treelessFamily).not.toContain("first-tree-write");
-    expect(treelessFamily).not.toContain("first-tree-read");
+    expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
+    expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
+    expect(treelessFamily).toContain("These First Tree skills are installed in every workspace");
     expect(treelessFamily).not.toContain("# Required Reading");
   });
 });

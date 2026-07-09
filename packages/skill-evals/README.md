@@ -117,11 +117,11 @@ runner:
 
 `eval:periodic -- --suite first-tree-read` runs
 `first-tree-read-runtime-generated-briefing-periodic`. The fixture writes a
-runtime-generated `AGENTS.md`/`CLAUDE.md` pair, installs the core onboarding
-skill plus tree-bound read/seed/write skills, binds a deterministic Context
-Tree fixture, and then runs the same read trigger oracle. This covers the
-generated-briefing and skill-topology boundary only; real Cloud chat delivery,
-GitHub webhooks, and live First Tree runtime E2E remain outside skill evals.
+runtime-generated `AGENTS.md`/`CLAUDE.md` pair, installs the default First
+Tree skill family, binds a deterministic Context Tree fixture, and then runs
+the same read trigger oracle. This covers the generated-briefing and
+skill-topology boundary only; real Cloud chat delivery, GitHub webhooks, and
+live First Tree runtime E2E remain outside skill evals.
 
 `eval:gate -- --suite first-tree-write` runs the live tested-agent gate for
 `first-tree-write`. It covers the minimum source-boundary cases:

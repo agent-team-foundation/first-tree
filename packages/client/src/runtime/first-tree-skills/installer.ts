@@ -43,40 +43,33 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
 
 /**
  * Skills always shipped, regardless of whether the agent has a Context Tree
- * binding — the capabilities an agent needs *before* a tree exists.
+ * binding. Installation is deliberately broad and cheap; generated routing and
+ * each skill's workflow decide when a payload applies.
  *
- *   - `first-tree-welcome` launches onboarding, which can start before a team
- *     has a Context Tree (especially the no-repo path).
- *   - `first-tree-seed` bootstraps a tree that has no domain structure yet
- *     (creating + binding it when none exists). Onboarding runs the build in a
- *     still-tree-less session (the welcome launcher spawns a dedicated
- *     tree-build chat, which has no binding yet), so seed must ship there too —
- *     gating it on a binding would hide the very skill whose job is to create
- *     that binding.
- *   - `first-tree-file-bug` lets any agent file a First Tree bug report as a
- *     GitHub issue. It depends on nothing but the user's `gh` CLI, so it ships
- *     to every agent regardless of Context Tree binding.
+ * Keeping `first-tree-read` and `first-tree-write` present in every workspace
+ * avoids mid-session install churn when a tree is created while the agent is
+ * already running, and keeps generated briefing rows aligned with the on-disk
+ * skill set.
  */
-export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-seed", "first-tree-file-bug"] as const;
+export const CORE_SKILL_NAMES = [
+  "first-tree-welcome",
+  "first-tree-seed",
+  "first-tree-file-bug",
+  "first-tree-read",
+  "first-tree-write",
+] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
 
 /**
- * Skills that used to ship through the core installer but no longer belong in
- * tree-less workspaces. Bound workspaces reinstall these through
- * `TREE_SKILL_NAMES` later in the same bootstrap.
- */
-const FORMER_CORE_SKILL_NAMES = ["first-tree-write"] as const;
-
-/**
- * Skills that ship only for Context-Tree-bound agents — they operate on an
- * existing tree, so they are pointless before one is bound. Installed by
- * `installFirstTreeSkills()` on every bootstrap when `contextTreePath` is set.
+ * The current installer has no separate tree-bound payload tier: all shipped
+ * First Tree payloads are installed by `CORE_SKILL_NAMES`. Keep this exported
+ * empty list so the historical tree-skill reconciliation path can keep pruning
+ * genuinely retired managed-state entries without installing a second tier.
  * The UNION with `CORE_SKILL_NAMES` must stay in sync with `BUNDLED_SKILLS` in
- * `scripts/copy-bundled-skills.mjs` — that script materialises every skill
- * directory under `<client-pkg>/skills/`.
+ * `scripts/copy-bundled-skills.mjs`.
  */
-export const TREE_SKILL_NAMES = ["first-tree-read", "first-tree-write"] as const;
+export const TREE_SKILL_NAMES = [] as const;
 
 export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];
 export type TreeSkillName = (typeof TREE_SKILL_NAMES)[number];
@@ -377,12 +370,6 @@ export type InstallCoreSkillsOptions = {
   workspacePath: string;
   /** Override the bundled-skills lookup root for tests. */
   bundledSkillsRoot?: string;
-  /**
-   * Remove skills that used to ship core but are no longer valid for
-   * tree-less agents. Tree-bound fast paths pass false because they may skip
-   * the tree-skill reinstall in the same session.
-   */
-  pruneFormerCoreSkills?: boolean;
 };
 
 export type InstallFirstTreeSkillsOptions = {
@@ -392,26 +379,24 @@ export type InstallFirstTreeSkillsOptions = {
 };
 
 /**
- * Install the core skill payloads (Context-Tree-independent) into the
- * workspace.
+ * Install the default First Tree skill payload family into the workspace.
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
-  reconcileCoreSkillState(options.workspacePath, options.pruneFormerCoreSkills ?? true);
+  reconcileCoreSkillState(options.workspacePath);
   return installSkillSet(options.workspacePath, CORE_SKILL_NAMES, bundledSkillsRoot);
 }
 
 /**
- * Install the tree-aware skill payloads into the workspace. Called by the agent bootstrap when the agent
- * has a Context Tree binding.
+ * Reconcile the historical tree-skill ledger. Called by the agent bootstrap
+ * when the agent has a Context Tree binding.
  *
  * Also reconciles `.agent/managed.json::skills`: any skill the workspace
  * recorded as installed by a previous CLI version but that's no longer in
  * `TREE_SKILL_NAMES` gets its `.agents/skills/<name>/` payload and
  * `.claude/skills/<name>` symlink removed. The current set is then written
- * back to state. Core skills are reconciled separately because they also ship
- * for tree-less workspaces, where there may be no managed-state tree skill
- * install.
+ * back to state. The current tree-specific set is empty because all shipped
+ * First Tree payloads install through the default family.
  */
 export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
@@ -420,14 +405,9 @@ export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): 
   return result;
 }
 
-function reconcileCoreSkillState(workspacePath: string, pruneFormerCoreSkills: boolean): void {
+function reconcileCoreSkillState(workspacePath: string): void {
   for (const retiredSkill of RETIRED_CORE_SKILL_NAMES) {
     removeManagedSkill(workspacePath, retiredSkill);
-  }
-  if (pruneFormerCoreSkills) {
-    for (const formerSkill of FORMER_CORE_SKILL_NAMES) {
-      removeManagedSkill(workspacePath, formerSkill);
-    }
   }
 }
 
@@ -457,7 +437,8 @@ function reconcileTreeSkillState(workspacePath: string): void {
     }
   }
   // Managed state records only the TREE set: it is the reconcile ledger for
-  // this install path. CORE skills are cleaned up via
+  // this install path. Today that set is empty because all shipped First Tree
+  // skills install through CORE. CORE skills are cleaned up via
   // `RETIRED_CORE_SKILL_NAMES` in `reconcileCoreSkillState`, not by diffing
   // this ledger, so recording them here would double-count their lifecycle.
   updateManagedState(workspacePath, resolveBundledCliVersion(), (current) => ({

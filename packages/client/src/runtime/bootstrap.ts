@@ -480,26 +480,19 @@ export type InstallCoreSkillsOptions = {
   log: (msg: string) => void;
   /** See {@link InstallFirstTreeIntegrationOptions.bundledSkillsRoot}. */
   bundledSkillsRoot?: string;
-  /** See {@link installCoreSkillsImpl}. */
-  pruneFormerCoreSkills?: boolean;
 };
 
 /**
- * Install the shipped first-tree skill payloads into the workspace.
+ * Reconcile the historical tree-skill ledger for a tree-bound workspace.
  *
- * Copies each tree skill (see {@link TREE_SKILL_NAMES}) from the npm
- * package's bundled `skills/` directory into
- * `<workspacePath>/.agents/skills/<name>/` and makes
- * `<workspacePath>/.claude/skills/<name>` a relative symlink to it.
+ * The current `TREE_SKILL_NAMES` set is empty because the default First Tree
+ * skill family installs through `installCoreSkills`. This path remains as the
+ * managed-state cleanup hook for names previous versions recorded as
+ * tree-scoped skills; it removes genuinely retired entries and records the
+ * current empty ledger.
  *
- * Per-skill VERSION gate: when the on-disk VERSION matches the bundled
- * VERSION, the rm+cp+symlink-replace is skipped (fast path on every
- * session start). Mismatched or missing → full reinstall of just that
- * skill.
- *
- * Returns `false` if ANY skill failed; caller logs the failure and
- * continues. The agent session still starts — the missing skill just
- * isn't reachable on disk.
+ * Returns `false` when reconciliation fails; caller logs the failure and
+ * continues. The agent session still starts.
  *
  * Pre-2026-06 history: this used to shell out to `<binName> tree skill
  * install --root <workspacePath>`. The CLI dependency was removed when
@@ -529,30 +522,28 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
 }
 
 /**
- * Install the **core** (Context-Tree-independent) first-tree skill payloads.
- * These are useful even before a team has a Context Tree binding.
- *
- * Same inline-from-bundled-payload model as
- * {@link installFirstTreeIntegration}: no shell-out, no CLI dependency.
+ * Install the default First Tree skill payload family. The function name keeps
+ * the old "core" API surface, but the installed set is now the full small
+ * family: welcome, seed, bug reporting, read, and write.
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
-  const { workspacePath, log, bundledSkillsRoot, pruneFormerCoreSkills } = options;
+  const { workspacePath, log, bundledSkillsRoot } = options;
   try {
-    const result = installCoreSkillsImpl({ workspacePath, bundledSkillsRoot, pruneFormerCoreSkills });
+    const result = installCoreSkillsImpl({ workspacePath, bundledSkillsRoot });
     if (result.installed.length > 0 || result.skipped.length > 0 || result.failed.length > 0) {
       const parts: string[] = [];
       if (result.installed.length > 0) parts.push(`installed ${result.installed.join(", ")}`);
       if (result.skipped.length > 0) parts.push(`up-to-date ${result.skipped.join(", ")}`);
       if (result.failed.length > 0) parts.push(`failed ${result.failed.map((f) => f.name).join(", ")}`);
-      log(`Core skills: ${parts.join("; ")}`);
+      log(`First-tree skills: ${parts.join("; ")}`);
     }
     for (const f of result.failed) {
-      log(`Core skill install failed (${f.name}): ${f.reason.slice(0, 200)}`);
+      log(`First-tree skill install failed (${f.name}): ${f.reason.slice(0, 200)}`);
     }
     return result.ok;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log(`Core skill install skipped: ${msg.slice(0, 200)}`);
+    log(`First-tree skill install skipped: ${msg.slice(0, 200)}`);
     return false;
   }
 }

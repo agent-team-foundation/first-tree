@@ -18,7 +18,13 @@ vi.mock("node:fs", async (importOriginal) => {
 import { installCoreSkills, writeAgentBriefing } from "../runtime/bootstrap.js";
 
 const originalPlatform = process.platform;
-const CORE_SKILLS = ["first-tree-welcome", "first-tree-seed", "first-tree-file-bug"] as const;
+const CORE_SKILLS = [
+  "first-tree-welcome",
+  "first-tree-seed",
+  "first-tree-file-bug",
+  "first-tree-read",
+  "first-tree-write",
+] as const;
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });

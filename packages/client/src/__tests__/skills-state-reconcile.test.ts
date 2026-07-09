@@ -1,10 +1,10 @@
 // Integration test for the state-based skill cleanup wiring inside
-// `installFirstTreeSkills`. Verifies that a skill the CLI previously
-// installed (recorded in `.agent/managed.json::skills`) but that's no
-// longer in the bundled `TREE_SKILL_NAMES` gets its `.agents/skills/<name>/`
-// payload AND its `.claude/skills/<name>` symlink removed. Anything the
-// user added under either location is path-precision-protected (the
-// reconcile only touches names from the recorded set).
+// `installFirstTreeSkills`. The current TREE tier is empty because all shipped
+// First Tree skills install through CORE, but this historical reconcile ledger
+// still removes names the CLI previously recorded and that are no longer in
+// either current tier. Anything the user added under either location is
+// path-precision-protected (the reconcile only touches names from the recorded
+// set).
 //
 // Helper-level coverage of the installer copy logic lives in
 // `bootstrap.test.ts`; this file proves the reconcile wiring in PR #869.
@@ -109,18 +109,14 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
       expect(existsSync(join(workspace, ".agents", "skills", name))).toBe(false);
       expect(() => lstatSync(join(workspace, ".claude", "skills", name))).toThrow();
     }
-    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-read", "SKILL.md"))).toBe(true);
-    expect(lstatSync(join(workspace, ".claude", "skills", "first-tree-read")).isSymbolicLink()).toBe(true);
     expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
   });
 
   it("keeps CORE skills a prior version recorded as TREE skills — moved tiers, not retired", () => {
-    // Before seed moved to CORE, an agent recorded `first-tree-seed` in
-    // managed state as a TREE skill. After upgrade its payload is on disk
-    // (installCoreSkills plants it earlier in the same bootstrap), but it is
-    // no longer in TREE_SKILL_NAMES. The TREE reconcile must NOT delete it:
-    // it is a CORE skill now, not retired.
-    plantManagedSkill(workspace, "first-tree-seed");
+    // Older versions recorded read/write/seed through the TREE ledger. All
+    // shipped First Tree skills now install through CORE, so the TREE reconcile
+    // must not delete those payloads when rolling the ledger forward to empty.
+    for (const name of ["first-tree-seed", "first-tree-read", "first-tree-write"]) plantManagedSkill(workspace, name);
     writeManagedState(workspace, {
       schemaVersion: 1,
       cliVersion: "pre-core-move",
@@ -130,8 +126,10 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
 
     installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot });
 
-    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-seed", "SKILL.md"))).toBe(true);
-    expect(lstatSync(join(workspace, ".claude", "skills", "first-tree-seed")).isSymbolicLink()).toBe(true);
+    for (const name of ["first-tree-seed", "first-tree-read", "first-tree-write"]) {
+      expect(existsSync(join(workspace, ".agents", "skills", name, "SKILL.md"))).toBe(true);
+      expect(lstatSync(join(workspace, ".claude", "skills", name)).isSymbolicLink()).toBe(true);
+    }
     // The ledger still rolls forward to the TREE set only; CORE skills are
     // tracked via RETIRED_CORE_SKILL_NAMES, not this reconcile.
     expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());

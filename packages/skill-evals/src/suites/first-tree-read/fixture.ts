@@ -190,10 +190,9 @@ Read task-scoped tree context before acting on software project questions:
 |---|---|
 ${skillRows}
 
-\`first-tree-welcome\` and \`first-tree-seed\` are core skills. Tree-bound
-workspaces additionally install \`first-tree-read\` and \`first-tree-write\`.
-Runtime metadata can activate skills, but visible instructions still define
-when the agent should load them.
+All First Tree skills are installed in every workspace. Runtime metadata can
+activate skills, but visible instructions still define when the agent should
+load them.
 `;
 }
 

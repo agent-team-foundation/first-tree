@@ -682,8 +682,12 @@ not what was decided.
   states.
 - **Why** — the surviving rationale: constraints that won, alternatives that
   lost, and design course-corrections translated into present-tense reasoning.
-  Capture **why**, not only what. A node without rationale is a fact, not a
-  decision record.
+  Capture **why**, not only what. Design-phase chat, review, and meeting
+  threads are where this rationale is produced: somebody flags a constraint,
+  a first proposal is corrected, or an option is dropped because it conflicts
+  with another domain. The node records the surviving constraint and reasoning
+  from those moments, not the chronology of how the discussion unfolded. A node
+  without rationale is a fact, not a decision record.
 - **Who** — ownership, carried by \`owners\` frontmatter and
   \`members/<id>/NODE.md\` nodes. Do not put ownership in the body, and do not
   unilaterally edit \`owners\`.
@@ -797,9 +801,8 @@ tree node prose.`);
     blocks.push(`## Writing the Tree
 
 This workspace has no Context Tree bound, so there is no tree to write. Do
-not attempt source-backed tree edits from this workspace and do not ask for a
-tree-write skill payload that is not installed here. If the task is to create
-the team's first tree from connected sources, load \`first-tree-seed\`;
+not attempt source-backed tree edits from this workspace. If the task is to
+create the team's first tree from connected sources, load \`first-tree-seed\`;
 otherwise surface the missing binding/setup gap to a human.`);
   }
 
@@ -870,12 +873,9 @@ function skillsSection(
   // header so we can splice it under the new `# Skills` umbrella.
   const teamBlock = buildResourceSkillsBriefing(workspacePath, payload).trim();
 
-  // The First Tree family map is emitted in both modes, but its rows are scoped
-  // to what is actually installed: tree-bound agents get read/write in addition
-  // to core, while tree-less agents get only the core skills on disk
-  // (welcome + seed + file-bug). A tree-less map matters because a
-  // welcome-spawned tree-build chat needs a routing surface to reach
-  // `first-tree-seed`.
+  // The First Tree family map is emitted in both modes. All First Tree skills
+  // are installed in every workspace; the surrounding Context Tree section
+  // carries the current binding/location state.
   const familyBlock = firstTreeFamilyMap(contextTreePath);
 
   // Skip the `# Skills` umbrella entirely when both inner blocks are
@@ -889,29 +889,28 @@ function skillsSection(
 }
 
 function firstTreeFamilyMap(contextTreePath: string | null): string {
-  // Listed skills MUST match what the inline installer actually deploys for
-  // THIS agent: `CORE_SKILL_NAMES` always, plus `TREE_SKILL_NAMES` only when
-  // tree-bound. Listing a skill the runtime never puts on disk would tell the
-  // agent to load a payload that isn't there; omitting an installed one leaves
-  // it with no First Tree routing surface. Tests lock this against the
+  // Listed skills MUST match what the inline installer deploys. Installation
+  // is broad; routing remains binding-aware. Tests lock this against the
   // installer constants and the repo's `skills/` directory.
   if (contextTreePath === null) {
-    // Tree-less: only the core skills are on disk. `first-tree-read` and
-    // `first-tree-write` are tree-bound and NOT installed here, so both are
-    // omitted. This map is the routing surface a welcome-spawned tree-build
-    // chat relies on to reach `first-tree-seed`: that chat's opening brief
-    // names no skill by design, so without this the agent would fall back to
-    // provider auto-discovery instead of First Tree's own routing.
+    // Tree-less: every payload is on disk, but read/write are binding-gated.
+    // This map is the routing surface a welcome-spawned tree-build chat relies
+    // on to reach `first-tree-seed`: that chat's opening brief names no skill
+    // by design, so without this the agent would fall back to provider
+    // auto-discovery instead of First Tree's own routing.
     return `## First Tree Family
 
-These First Tree skills are installed even before your team has a Context
-Tree; each row's \`description\` drives progressive disclosure. If the task is
-to build the team's Context Tree from the connected code, load
-\`first-tree-seed\`.
+These First Tree skills are installed in every workspace. Each row's
+\`description\` drives progressive disclosure. If the task is to build the
+team's Context Tree from the connected code, load \`first-tree-seed\`. If a
+read/write task needs a tree that is not bound yet, use the Tree Location
+guidance above to surface/setup/seed first.
 
 | Skill | Load when |
 |---|---|
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
+| \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
+| \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | \`first-tree-seed\` | set up the team's Context Tree from the connected sources when it has no domain structure yet — creates + binds the repo if none exists, else fills a bound-but-empty tree; refuses once the tree has domain structure |
 | \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
   }

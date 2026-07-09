@@ -142,11 +142,12 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
 
   // A tree-bound agent only pins its CLI version after `installFirstTreeIntegration`
   // SUCCEEDS (see the integrationOk gate below). So a missing CLI pin on a
-  // tree-bound agent means integration has never succeeded — force the slow
-  // path to retry it rather than freezing behind the sentinel without skills /
-  // briefing. Guard on `currentCliVersion !== null`: when the CLI version is
-  // unknown we can't pin one anyway, so fall back to the sentinel-only decision
-  // (no perpetual re-integration in version-less environments).
+  // tree-bound agent means the tree integration ledger has never succeeded —
+  // force the slow path to retry it rather than freezing behind the sentinel
+  // with stale managed state. Guard on `currentCliVersion !== null`: when the
+  // CLI version is unknown we can't pin one anyway, so fall back to the
+  // sentinel-only decision (no perpetual re-integration in version-less
+  // environments).
   const integrationNeverPinned = contextTreePath !== null && currentCliVersion !== null && cachedCliVersion === null;
 
   if (sentinelPresent && !cliDrifted && !integrationNeverPinned) {
@@ -155,7 +156,6 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
     installCoreSkills({
       workspacePath: workspace,
       log: (msg) => sessionCtx.log(msg),
-      pruneFormerCoreSkills: contextTreePath === null,
     });
     return;
   }
@@ -174,12 +174,11 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   });
   writeAgentBriefing(workspace, briefing);
 
-  // Core skills ship with every agent, tree or not. Degrade gracefully when the
-  // bundled payload is unavailable.
+  // The default First Tree skill family ships with every agent, tree or not.
+  // Degrade gracefully when the bundled payload is unavailable.
   installCoreSkills({
     workspacePath: workspace,
     log: (msg) => sessionCtx.log(msg),
-    pruneFormerCoreSkills: contextTreePath === null,
   });
 
   let integrationOk = true;
@@ -191,13 +190,12 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   }
 
   // Only pin the CLI version when integration ACTUALLY RAN and succeeded —
-  // i.e. the agent is tree-bound. A tree-less session skips
-  // `installFirstTreeIntegration` (so no skills land) but `integrationOk` stays
-  // `true`; pinning here would set `cachedCliVersion` non-null, which then
-  // defeats the `integrationNeverPinned` trigger when the agent later becomes
-  // tree-bound (new-tree onboarding) — `ensureAgentBootstrap` would take the
-  // fast path and never install `first-tree-seed`. Gating on `contextTreePath`
-  // keeps the upgrade path's slow-bootstrap trigger intact.
+  // i.e. the agent is tree-bound. A tree-less session skips the tree
+  // integration ledger even though default skills are installed; pinning here
+  // would set `cachedCliVersion` non-null, which then defeats the
+  // `integrationNeverPinned` trigger when the agent later becomes tree-bound
+  // (new-tree onboarding). Gating on `contextTreePath` keeps that
+  // slow-bootstrap trigger intact.
   if (contextTreePath !== null && integrationOk) {
     writeBundledCliVersion(workspace, currentCliVersion);
   }

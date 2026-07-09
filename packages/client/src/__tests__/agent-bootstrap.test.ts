@@ -107,12 +107,12 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     expect(installFirstTreeIntegration).toHaveBeenCalledTimes(2);
   });
 
-  it("a tree-less session leaves the CLI pin unset so a later tree-bound session still installs skills", () => {
+  it("a tree-less session leaves the CLI pin unset so a later tree-bound session still runs integration", () => {
     // Regression: a tree-less session used to pin the CLI version (because
     // `integrationOk` defaults to true even when integration is skipped),
     // which defeated `integrationNeverPinned` and made the eventual tree-bound
-    // upgrade (new-tree onboarding) take the fast path and never install
-    // `first-tree-seed`.
+    // upgrade (new-tree onboarding) take the fast path and never run tree
+    // integration.
     vi.mocked(installFirstTreeIntegration).mockReturnValue(true);
     const sentinel = join(workspace, INIT_COMPLETE_SENTINEL_REL);
     rmSync(sentinel, { force: true }); // start sentinel-absent → slow path
@@ -135,7 +135,7 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
 
     // Session 2: the org tree now exists → tree-bound. Sentinel is present, but
     // because the tree-less session never pinned the CLI version,
-    // `integrationNeverPinned` fires and the slow path installs the skills.
+    // `integrationNeverPinned` fires and the slow path runs integration.
     ensureAgentBootstrap({
       workspace,
       sessionCtx: fakeSessionCtx(),
@@ -158,12 +158,10 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     ensureAgentBootstrap(params);
     // No Context Tree → installFirstTreeIntegration is never called regardless.
     expect(installFirstTreeIntegration).not.toHaveBeenCalled();
-    expect(installCoreSkills).toHaveBeenLastCalledWith(
-      expect.objectContaining({ workspacePath: workspace, pruneFormerCoreSkills: true }),
-    );
+    expect(installCoreSkills).toHaveBeenLastCalledWith(expect.objectContaining({ workspacePath: workspace }));
   });
 
-  it("tree-bound sentinel fast path keeps former-core cleanup disabled", () => {
+  it("tree-bound sentinel fast path still refreshes default skills without re-running integration", () => {
     state.cachedCli = "1.0.0";
 
     ensureAgentBootstrap({
@@ -175,12 +173,10 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     });
 
     expect(installFirstTreeIntegration).not.toHaveBeenCalled();
-    expect(installCoreSkills).toHaveBeenLastCalledWith(
-      expect.objectContaining({ workspacePath: workspace, pruneFormerCoreSkills: false }),
-    );
+    expect(installCoreSkills).toHaveBeenLastCalledWith(expect.objectContaining({ workspacePath: workspace }));
   });
 
-  it("installs core skills even when an existing tree-less workspace takes the sentinel fast path", () => {
+  it("installs default First Tree skills even when an existing tree-less workspace takes the sentinel fast path", () => {
     const params = {
       workspace,
       sessionCtx: fakeSessionCtx(),
