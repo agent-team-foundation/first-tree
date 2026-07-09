@@ -154,25 +154,22 @@ red and you want a guided drill-down.
 ## upgrade
 
 ```
-first-tree upgrade [--check] [--latest] [--no-restart]
+first-tree upgrade [--check] [--no-restart]
 ```
 
 Self-update for the CLI: query the configured server for its recommended
-Command version, install that exact version through the current install mode,
-refresh the supervisor definition on top of the new bits, then restart the
-client service. Portable installs download the channel manifest and verified
-tarball, including the bundled Node.js runtime. npm installs run `npm install
--g` against the channel package and keep using the system Node.js runtime. Use
-`--latest` only when you intentionally want to bypass the server target and
-install the channel's latest release data directly.
-If the configured server URL is missing, configure it with
-`first-tree config set server.url <url>` or `FIRST_TREE_SERVER_URL`; `--latest`
-does not repair that server-target configuration.
+Command version when a server URL is configured, install that exact version
+through the current install mode, refresh the supervisor definition on top of
+the new bits, then restart the client service. If no server URL is configured
+yet, `upgrade` falls back to the current channel's latest release data directly
+so the update path still works before login/config. Portable installs download
+the channel manifest and verified tarball, including the bundled Node.js
+runtime. npm installs run `npm install -g` against the channel package and keep
+using the system Node.js runtime.
 
 | Flag | Effect |
 |---|---|
 | `--check` | Only check for an available version; print "update available" or "already on latest". Do not install. |
-| `--latest` | Bypass the server target and query the channel's latest release data directly: npm for global installs, portable metadata for portable installs. |
 | `--no-restart` | Install the new version and refresh the supervisor definition, but leave the running service alone. Used for staged rollouts. |
 
 Refusing to run from a source checkout (anywhere under a `.git`

@@ -618,10 +618,10 @@ export async function fetchPortableLatestVersion(): Promise<VersionLookupResult>
  * that (so the UpdateManager can attempt the restart itself while this
  * function remains side-effect-scoped).
  *
- * Why both shapes exist: the auto-update path and the default manual
- * `upgrade` command receive an exact target version from the server and MUST
- * install that exact version. The explicit `upgrade --latest` escape hatch keeps the dist-tag form for
- * operators who want the freshest package directly from npm.
+ * Why both shapes exist: managed update paths usually receive an exact target
+ * version from the server and MUST install that exact version. The dist-tag
+ * form remains for default `upgrade` fallback before server URL configuration
+ * and for hidden compatibility with older operator scripts.
  */
 export async function installGlobalSpec(
   spec: string,
@@ -736,9 +736,10 @@ export async function installGlobalSpec(
 }
 
 /**
- * Back-compat shim: install `<pkg>@latest`. Used by
- * `upgrade --latest`; managed update paths prefer
- * `installGlobalSpec` with the server-advertised target version.
+ * Back-compat shim: install `<pkg>@latest`. Used by default `upgrade` fallback
+ * before server URL configuration and by the hidden `upgrade --latest`
+ * compatibility path; managed update paths prefer `installGlobalSpec` with the
+ * server-advertised target version.
  */
 export async function installGlobalLatest(options?: InstallGlobalSpecOptions): Promise<ExecuteUpdateResult> {
   return installGlobalSpec("latest", options);
