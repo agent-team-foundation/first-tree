@@ -5,16 +5,20 @@ export function canonicalizeGithubEntityKey(entityType: string, entityKey: strin
   if (entityType !== "discussion") return entityKey;
   const legacy = LEGACY_DISCUSSION_ENTITY_KEY.exec(entityKey);
   if (!legacy) return entityKey;
-  const [, owner, repo, number] = legacy;
-  if (!owner || !repo || !number) return entityKey;
+  // Capture groups are always present when the regex matches.
+  const owner = legacy[1] as string;
+  const repo = legacy[2] as string;
+  const number = legacy[3] as string;
   return `${owner}/${repo}#${number}`;
 }
 
 export function legacyDiscussionEntityKey(entityKey: string): string | null {
   const numeric = NUMERIC_ENTITY_KEY.exec(entityKey);
   if (!numeric) return null;
-  const [, owner, repo, number] = numeric;
-  if (!owner || !repo || !number) return null;
+  // Capture groups are always present when the regex matches.
+  const owner = numeric[1] as string;
+  const repo = numeric[2] as string;
+  const number = numeric[3] as string;
   return `${owner}/${repo}#discussion-${number}`;
 }
 
