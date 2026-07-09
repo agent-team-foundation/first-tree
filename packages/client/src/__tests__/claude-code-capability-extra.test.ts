@@ -39,6 +39,7 @@ describe("resolveBundledClaudeBinary edge cases", () => {
     try {
       const sdkDir = join(root, "sdk");
       mkdirSync(sdkDir);
+      setProcessTarget("linux", "x64");
       vi.resetModules();
       vi.doMock("node:module", async (importOriginal) => {
         const actual = await importOriginal<typeof import("node:module")>();
