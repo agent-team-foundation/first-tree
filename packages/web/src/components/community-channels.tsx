@@ -9,7 +9,7 @@ import { DISCORD_INVITE_URL, WECHAT_QR_SRC } from "../lib/community.js";
 function DiscordMark({ size }: { size: number }) {
   return (
     <svg
-      aria-hidden
+      aria-hidden="true"
       width={size}
       height={size}
       viewBox="0 0 24 24"
