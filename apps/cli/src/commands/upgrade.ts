@@ -36,7 +36,7 @@ import { print } from "../core/output.js";
 export function registerUpgradeCommand(program: Command): void {
   program
     .command("upgrade")
-    .description("Upgrade this First Tree CLI to the server-recommended version and restart the daemon")
+    .description("Upgrade this First Tree CLI from the server target or channel latest fallback")
     .option("--check", "Only check whether a newer version is available; do not install")
     .addOption(new Option("--latest", "Deprecated compatibility: query the channel latest directly").hideHelp())
     .option("--no-restart", "Install the new version but skip restarting the background service")
