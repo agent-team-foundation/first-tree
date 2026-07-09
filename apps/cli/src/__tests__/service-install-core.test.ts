@@ -19,6 +19,8 @@ import {
   startClientService,
   stopClientService,
   uninstallClientService,
+  windowsSupervisorLogPath,
+  windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,
   windowsTaskName,
   windowsTaskXmlPath,
@@ -168,7 +170,8 @@ describe("service install helpers", () => {
     expect(windowsWrapper).toContain(
       '"C:\\Program Files\\nodejs\\node.exe" "C:\\First Tree\\index.mjs" "daemon" "supervise"',
     );
-    expect(windowsWrapper).toContain("supervisor.log");
+    expect(windowsWrapper).toContain(`>>"${windowsSupervisorWrapperLogPath()}" 2>&1`);
+    expect(windowsWrapper).not.toContain(`>>"${windowsSupervisorLogPath()}"`);
     expect(windowsWrapper).toContain(" 2>&1");
     const taskXml = renderWindowsTaskXml("C:\\First Tree\\supervisor.cmd", "ACME\\gandy & team");
     expect(taskXml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
