@@ -172,7 +172,7 @@ describe("service install helpers", () => {
     const extensionlessShim = join(npmBinDir, channelConfig.binName);
     const cmdShim = `${extensionlessShim}.cmd`;
     mkdirSync(npmBinDir, { recursive: true });
-    writeFileSync(extensionlessShim, "#!/bin/sh\nexec node cli.mjs \"$@\"\n");
+    writeFileSync(extensionlessShim, '#!/bin/sh\nexec node cli.mjs "$@"\n');
     writeFileSync(cmdShim, "@ECHO off\r\nnode cli.mjs %*\r\n");
 
     execFileSyncMock.mockReturnValueOnce(`${extensionlessShim}\r\n${cmdShim}\r\n`);
