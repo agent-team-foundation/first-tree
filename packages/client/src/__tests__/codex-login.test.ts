@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runCodexBrowserLogin, stripAnsi } from "../runtime/codex-login.js";
 import { extractAuthUrl } from "../runtime/runtime-login.js";
 
@@ -41,6 +41,12 @@ describe("extractAuthUrl", () => {
 
   it("returns null when there is no URL yet", () => {
     expect(extractAuthUrl("Starting local login server…\n")).toBeNull();
+  });
+
+  it("skips malformed URL tokens and continues scanning", () => {
+    expect(extractAuthUrl("open https://[broken\nthen https://auth.openai.com/ok\n")).toBe(
+      "https://auth.openai.com/ok",
+    );
   });
 });
 
@@ -84,9 +90,11 @@ describe("runCodexBrowserLogin", () => {
   it("resolves ok on exit 0 (codex wrote auth.json) and surfaces a fallback URL once", async () => {
     const child = new FakeChild();
     const urls: string[] = [];
+    const rawOutput: string[] = [];
     const run = runCodexBrowserLogin({
       binary: "/bundled/codex",
       onAuthUrl: (u) => urls.push(u),
+      onRawOutput: (chunk) => rawOutput.push(chunk),
       spawnFn: fakeSpawn(child),
     });
 
@@ -96,6 +104,7 @@ describe("runCodexBrowserLogin", () => {
 
     await expect(run).resolves.toEqual({ ok: true });
     expect(urls).toEqual(["https://auth.openai.com/auth?x=1"]);
+    expect(rawOutput.join("")).toContain("Starting local login server");
   });
 
   it("does NOT surface the loopback callback server as a fallback link (QA #1225 / redirect-404)", async () => {
@@ -144,6 +153,53 @@ describe("runCodexBrowserLogin", () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.reason).toBe("aborted");
     expect(child.killed).toBe(true);
+  });
+
+  it("returns aborted without spawning when the signal is already cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const spawnFn = vi.fn() as unknown as typeof import("node:child_process").spawn;
+
+    const outcome = await runCodexBrowserLogin({
+      binary: "/bundled/codex",
+      signal: controller.signal,
+      spawnFn,
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: "aborted", error: "codex login aborted before start" });
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("maps child process error events to spawn-error and kills the child", async () => {
+    const child = new FakeChild();
+    const run = runCodexBrowserLogin({ binary: "/bundled/codex", spawnFn: fakeSpawn(child) });
+    child.emit("error", new Error("spawn crashed"));
+
+    await expect(run).resolves.toEqual({ ok: false, reason: "spawn-error", error: "spawn crashed" });
+    expect(child.killed).toBe(true);
+  });
+
+  it("times out the login subprocess and kills the child", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const run = runCodexBrowserLogin({
+        binary: "/bundled/codex",
+        timeoutMs: 25,
+        spawnFn: fakeSpawn(child),
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(run).resolves.toEqual({
+        ok: false,
+        reason: "timeout",
+        error: "codex login timed out after 25ms",
+      });
+      expect(child.killed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("maps a spawn throw to spawn-error", async () => {
