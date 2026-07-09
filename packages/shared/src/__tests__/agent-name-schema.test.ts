@@ -4,9 +4,12 @@ import {
   AGENT_NAME_REGEX,
   agentSchema,
   createAgentSchema,
+  findReservedAgentMetadataKey,
   isReservedAgentName,
+  listAgentsQuerySchema,
   RESERVED_AGENT_NAMES,
   updateAgentSchema,
+  userAgentMetadataSchema,
 } from "../schemas/agent.js";
 
 /**
@@ -58,6 +61,49 @@ describe("isReservedAgentName", () => {
   it("does not flag ordinary names", () => {
     expect(isReservedAgentName("alice")).toBe(false);
     expect(isReservedAgentName("coder-agent")).toBe(false);
+  });
+});
+
+describe("agent metadata guards", () => {
+  it("finds the first reserved metadata key and ignores ordinary metadata", () => {
+    expect(findReservedAgentMetadataKey(undefined)).toBeNull();
+    expect(findReservedAgentMetadataKey({ theme: "dark" })).toBeNull();
+    expect(findReservedAgentMetadataKey({ runtimeSwitch: { target: "codex" }, runtimeSession: {} })).toBe(
+      "runtimeSwitch",
+    );
+    expect(findReservedAgentMetadataKey({ theme: "dark", runtimeSession: { active: true } })).toBe("runtimeSession");
+  });
+
+  it("rejects user metadata that tries to write reserved runtime keys", () => {
+    const result = userAgentMetadataSchema.safeParse({
+      runtimeSession: {
+        routeId: "session-1",
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(["runtimeSession"]);
+    }
+  });
+});
+
+describe("listAgentsQuerySchema", () => {
+  it.each([
+    [undefined, false],
+    ["", false],
+    [true, true],
+    ["true", true],
+    ["1", true],
+    [false, false],
+    ["false", false],
+    ["0", false],
+  ] as const)("normalizes addressableOnly=%s", (value, expected) => {
+    expect(listAgentsQuerySchema.parse({ addressableOnly: value }).addressableOnly).toBe(expected);
+  });
+
+  it("rejects unsupported addressableOnly values", () => {
+    expect(listAgentsQuerySchema.safeParse({ addressableOnly: "yes" }).success).toBe(false);
   });
 });
 
