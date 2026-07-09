@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MAX_MESSAGE_ATTACHMENT_REFS } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { BadRequestError } from "../errors.js";
 import type { AttachmentReader } from "../services/attachment.js";
@@ -124,6 +125,19 @@ describe("validateMessageAttachmentRefs", () => {
     await expect(validateMessageAttachmentRefs(readerWith(null), { attachments: [baseRef()] })).rejects.toThrow(
       BadRequestError,
     );
+  });
+
+  it("rejects more attachment refs than the message cap", async () => {
+    await expect(
+      validateMessageAttachmentRefs(readerWith(null), {
+        attachments: Array.from({ length: MAX_MESSAGE_ATTACHMENT_REFS + 1 }, () => baseRef()),
+      }),
+    ).rejects.toMatchObject({
+      attrs: {
+        "attachment_ref.count": MAX_MESSAGE_ATTACHMENT_REFS + 1,
+        "attachment_ref.limit": MAX_MESSAGE_ATTACHMENT_REFS,
+      },
+    });
   });
 
   it("rejects a mime mismatch", async () => {

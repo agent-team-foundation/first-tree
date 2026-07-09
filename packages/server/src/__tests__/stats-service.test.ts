@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
@@ -12,6 +12,29 @@ import { createAdminContext, useTestApp } from "./helpers.js";
 
 describe("stats service", () => {
   const getApp = useTestApp();
+
+  it("keeps message-only organizations when merging breakdown rows", async () => {
+    const queuedRows = [[], [], [{ organizationId: "org-message-only", messageCount: 3 }]] satisfies unknown[][];
+    const db = {
+      select: vi.fn(() => {
+        const rows = queuedRows.shift() ?? [];
+        const chain = {
+          from: vi.fn(() => chain),
+          groupBy: vi.fn(async () => rows),
+          innerJoin: vi.fn(() => chain),
+          where: vi.fn(() => chain),
+        };
+        return chain;
+      }),
+    };
+
+    await expect(getStats(db as never)).resolves.toEqual({
+      totalAgents: 0,
+      totalChats: 0,
+      totalMessages: 3,
+      byOrganization: [{ organizationId: "org-message-only", agentCount: 0, chatCount: 0, messageCount: 3 }],
+    });
+  });
 
   it("merges agent, chat, and message counts by organization", async () => {
     const app = getApp();

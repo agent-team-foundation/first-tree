@@ -17,6 +17,7 @@ vi.mock("../core/service-install.js", () => ({
 
 const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
+const originalNodeVersion = process.versions.node;
 
 let home: string;
 
@@ -42,6 +43,7 @@ afterEach(() => {
   else process.env.FIRST_TREE_HOME = originalFirstTreeHome;
   if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
   else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
+  Object.defineProperty(process.versions, "node", { configurable: true, value: originalNodeVersion });
 });
 
 describe("doctor core checks", () => {
@@ -59,6 +61,19 @@ describe("doctor core checks", () => {
       label: "Node.js",
       ok: true,
     });
+    Object.defineProperty(process.versions, "node", { configurable: true, value: "22.12.0" });
+    expect(checkNodeVersion()).toEqual({
+      label: "Node.js",
+      ok: false,
+      detail: "v22.12.0 (requires >= 22.13)",
+    });
+    Object.defineProperty(process.versions, "node", { configurable: true, value: "22.13.0" });
+    expect(checkNodeVersion()).toEqual({
+      label: "Node.js",
+      ok: true,
+      detail: "v22.13.0",
+    });
+    Object.defineProperty(process.versions, "node", { configurable: true, value: originalNodeVersion });
 
     expect(checkClientConfig()).toEqual({
       label: "Config",
@@ -73,6 +88,8 @@ describe("doctor core checks", () => {
       join(home, "config", "client.yaml"),
       "server:\n  url: http://first-tree.test\nclient:\n  id: client_1234abcd\n",
     );
+    process.env.FIRST_TREE_SERVER_URL = "http://env.test";
+    expect(checkClientConfig()).toEqual({ label: "Config", ok: true, detail: "config file + env vars" });
     delete process.env.FIRST_TREE_SERVER_URL;
     expect(checkClientConfig().detail).toContain("client.yaml");
 
@@ -146,13 +163,28 @@ describe("doctor core checks", () => {
     });
 
     writeAgent("moved", "agentId: agent-2\nruntime: claude-code\n");
+    writeAgent("suspended", "agentId: agent-3\nruntime: claude-code\n");
     const stale = await reconcileAgentConfigs({
       clientId: "client-1",
-      listPinnedAgents: async () => [{ agentId: "agent-2", clientId: "client-2" }],
+      listPinnedAgents: async () => [
+        { agentId: "agent-2", clientId: "client-2" },
+        { agentId: "agent-3", clientId: "client-1", status: "suspended" },
+      ],
     });
     expect(stale.ok).toBe(false);
     expect(stale.detail).toContain("moved [pinned to another client: client-2]");
+    expect(stale.detail).toContain("1 suspended/disabled");
     expect(stale.detail).toContain("run `first-tree-dev agent prune`");
+
+    for (let index = 4; index <= 10; index++) {
+      writeAgent(`stale-${index}`, `agentId: agent-${index}\nruntime: claude-code\n`);
+    }
+    const truncated = await reconcileAgentConfigs({
+      clientId: "client-1",
+      listPinnedAgents: async () => [],
+    });
+    expect(truncated.ok).toBe(false);
+    expect(truncated.detail).toContain("...+");
   });
 
   it("handles reconciliation failures and background-service states", async () => {
@@ -188,6 +220,25 @@ describe("doctor core checks", () => {
     expect(failed.ok).toBe(false);
     expect(failed.detail).toContain("server reconciliation failed");
 
+    const failedString = await reconcileAgentConfigs({
+      clientId: "client-1",
+      listPinnedAgents: async () => {
+        throw "server string failure";
+      },
+    });
+    expect(failedString.ok).toBe(false);
+    expect(failedString.detail).toContain("server string failure");
+
+    writeAgent("missing-yaml", "");
+    rmSync(join(home, "config", "agents", "missing-yaml", "agent.yaml"), { force: true });
+    writeAgent("null-yaml", "null\n");
+    writeAgent("bad-yaml", "agentId: [broken\n");
+    const suspendedWithUnreadableAliases = await reconcileAgentConfigs({
+      clientId: "client-1",
+      listPinnedAgents: async () => [{ agentId: "agent-1", clientId: "client-1", status: "suspended" }],
+    });
+    expect(suspendedWithUnreadableAliases.detail).toContain("1 suspended/disabled");
+
     serviceStatusMock.mockReturnValueOnce({
       platform: "unsupported",
       label: "",
@@ -216,6 +267,19 @@ describe("doctor core checks", () => {
     });
 
     serviceStatusMock.mockReturnValueOnce({
+      platform: "systemd",
+      label: "first-tree.service",
+      unitPath: "/unit",
+      logDir: "/logs",
+      state: "active",
+    });
+    expect(checkBackgroundService()).toEqual({
+      label: "Background service",
+      ok: true,
+      detail: "running (systemd); logs at /logs",
+    });
+
+    serviceStatusMock.mockReturnValueOnce({
       platform: "launchd",
       label: "dev.first-tree",
       unitPath: "/unit",
@@ -227,6 +291,19 @@ describe("doctor core checks", () => {
       label: "Background service",
       ok: false,
       detail: "installed but not running — loaded; unit at /unit",
+    });
+
+    serviceStatusMock.mockReturnValueOnce({
+      platform: "launchd",
+      label: "dev.first-tree",
+      unitPath: "/unit",
+      logDir: "/logs",
+      state: "inactive",
+    });
+    expect(checkBackgroundService()).toEqual({
+      label: "Background service",
+      ok: false,
+      detail: "installed but not running; unit at /unit",
     });
 
     serviceStatusMock.mockReturnValueOnce({
@@ -251,5 +328,57 @@ describe("doctor core checks", () => {
     stderrMock.mockClear();
     printResults([{ label: "One", ok: true, detail: "ok" }]);
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("All checks passed.");
+  });
+
+  it("formats runtime provider checks and handles empty capability snapshots", async () => {
+    const { runtimeProviderCheck, runtimeProviderChecks } = await import("../core/doctor.js");
+
+    expect(
+      runtimeProviderCheck("codex", {
+        state: "ok",
+        available: true,
+        detectedAt: "2026-01-01T00:00:00.000Z",
+        runtimeSource: "path",
+        sdkVersion: "1.2.3",
+        latencyMs: 42,
+      }),
+    ).toEqual({
+      label: "codex",
+      ok: true,
+      detail: "ok — installed, path, v1.2.3, 42ms",
+    });
+    expect(
+      runtimeProviderCheck("claude-code", {
+        state: "missing",
+        available: false,
+        detectedAt: "2026-01-01T00:00:00.000Z",
+        error: "  not found  ",
+      }),
+    ).toEqual({
+      label: "claude-code",
+      ok: false,
+      detail: "missing — not found",
+    });
+    expect(
+      runtimeProviderCheck("other", {
+        state: "error",
+        available: false,
+        detectedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ).toEqual({
+      label: "other",
+      ok: false,
+      detail: "error",
+    });
+    expect(runtimeProviderChecks({})).toEqual([
+      { label: "Runtime providers", ok: false, detail: "no providers probed" },
+    ]);
+    expect(
+      runtimeProviderChecks({
+        zed: { state: "ok", available: true, detectedAt: "2026-01-01T00:00:00.000Z" },
+        codex: undefined,
+        "claude-code": { state: "missing", available: false, detectedAt: "2026-01-01T00:00:00.000Z" },
+      }).map((result) => result.label),
+    ).toEqual(["claude-code", "zed"]);
   });
 });

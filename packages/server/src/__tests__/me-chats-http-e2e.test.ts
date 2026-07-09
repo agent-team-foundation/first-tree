@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { createMeChat } from "../services/me-chat.js";
+import { sendMessage } from "../services/message.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
@@ -190,6 +191,122 @@ describe("GET /orgs/:orgId/chats — liveActivity wire shape", () => {
     // Live indicator: terminal event → no chip (the session lifecycle stays
     // active, but the chat list only consumes liveActivity presence now).
     expect(row?.liveActivity).toBeNull();
+  });
+});
+
+describe("GET/POST /chats/:chatId resource routes", () => {
+  const getApp = useTestApp();
+
+  it("returns watcher membership kind on chat detail for supervised chats", async () => {
+    const app = getApp();
+    const manager = await createTestAdmin(app);
+    const peer = await createTestAdmin(app);
+    const managed = await createAgent(app.db, {
+      name: `detail-managed-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Detail Managed",
+      managerId: manager.memberId,
+      organizationId: manager.organizationId,
+    });
+    const { chatId } = await createMeChat(app.db, peer.humanAgentUuid, peer.organizationId, {
+      participantIds: [managed.uuid],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${chatId}`,
+      headers: { authorization: `Bearer ${manager.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ viewerMembershipKind: string | null }>().viewerMembershipKind).toBe("watching");
+  });
+
+  it("exercises token usage, github entity list, unread, participant add, workspace leave, and message pagination", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peerA = await createAgent(app.db, {
+      name: `route-peer-a-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Route Peer A",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+    });
+    const peerB = await createAgent(app.db, {
+      name: `route-peer-b-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Route Peer B",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+    });
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peerA.uuid],
+    });
+    await sendMessage(
+      app.db,
+      chatId,
+      admin.humanAgentUuid,
+      { source: "api", format: "text", content: "first route message" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      chatId,
+      admin.humanAgentUuid,
+      { source: "api", format: "text", content: "second route message" },
+      { allowRecipientlessSend: true },
+    );
+
+    const headers = { authorization: `Bearer ${admin.accessToken}` };
+    const tokenUsage = await app.inject({ method: "GET", url: `/api/v1/chats/${chatId}/token-usage`, headers });
+    expect(tokenUsage.statusCode).toBe(200);
+
+    const githubEntities = await app.inject({ method: "GET", url: `/api/v1/chats/${chatId}/github-entities`, headers });
+    expect(githubEntities.statusCode).toBe(200);
+    expect(githubEntities.json<{ items: unknown[] }>().items).toEqual([]);
+
+    const unfollowMissing = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/chats/${chatId}/github-entities`,
+      headers,
+    });
+    expect(unfollowMissing.statusCode).toBe(400);
+    const unfollow = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/chats/${chatId}/github-entities?entity=${encodeURIComponent("owner/repo#1")}`,
+      headers,
+    });
+    expect(unfollow.statusCode).toBe(200);
+    expect(unfollow.json<{ removed: number }>().removed).toBe(0);
+
+    const unread = await app.inject({ method: "POST", url: `/api/v1/chats/${chatId}/unread`, headers });
+    expect(unread.statusCode).toBe(200);
+    expect(unread.json<{ unreadMentionCount: number }>().unreadMentionCount).toBe(1);
+
+    const addParticipant = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${chatId}/participants`,
+      headers,
+      payload: { participantIds: [peerB.uuid] },
+    });
+    expect(addParticipant.statusCode).toBe(204);
+
+    const page1 = await app.inject({ method: "GET", url: `/api/v1/chats/${chatId}/messages?limit=1`, headers });
+    expect(page1.statusCode).toBe(200);
+    const page1Body = page1.json<{ items: Array<{ id: string; createdAt: string }>; nextCursor: string | null }>();
+    expect(page1Body.items).toHaveLength(1);
+    expect(page1Body.nextCursor).toBeTruthy();
+
+    const page2 = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${chatId}/messages?limit=1&cursor=${encodeURIComponent(page1Body.nextCursor ?? "")}`,
+      headers,
+    });
+    expect(page2.statusCode).toBe(200);
+    expect(page2.json<{ items: unknown[] }>().items).toHaveLength(1);
+
+    const leave = await app.inject({ method: "POST", url: `/api/v1/chats/${chatId}/workspace-leave`, headers });
+    expect(leave.statusCode).toBe(200);
+    expect(leave.json<{ chatId: string }>().chatId).toBe(chatId);
   });
 });
 

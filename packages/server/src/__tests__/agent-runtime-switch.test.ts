@@ -6,9 +6,11 @@ import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
+import { recoverAgentRuntimeSwitch, switchAgentRuntime } from "../services/agent-runtime-switch.js";
 import { createChat } from "../services/chat.js";
 import { retireClient } from "../services/client.js";
 import * as sessionEventService from "../services/session-event.js";
@@ -43,6 +45,36 @@ async function setClientRuntimeSupport(
 
 describe("POST /agents/:uuid/switch-runtime", () => {
   const getApp = useTestApp({ runtimeHttpTokenEnforcement: true });
+
+  it("rejects fault injection headers when fault injection is disabled", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const agent = await createAgent(app.db, {
+      name: `switch-fault-disabled-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Fault Disabled",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-first-tree-runtime-switch-fault": "after_claim",
+      },
+      payload: {
+        clientId: ctx.clientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toContain("fault injection is disabled");
+  });
 
   it("switches runtime with a metadata claim, config retag, and session eviction", async () => {
     const app = getApp();
@@ -546,6 +578,36 @@ describe("POST /agents/:uuid/switch-runtime", () => {
 describe("POST /agents/:uuid/switch-runtime recovery", () => {
   const getApp = useTestApp({ runtimeHttpTokenEnforcement: true, runtimeSwitchFaultInjection: true });
 
+  it("rejects unknown fault injection headers", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const agent = await createAgent(app.db, {
+      name: `switch-fault-unknown-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Fault Unknown",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-first-tree-runtime-switch-fault": "not-a-fault",
+      },
+      payload: {
+        clientId: ctx.clientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toContain('Unknown runtime switch fault "not-a-fault"');
+  });
+
   it("aborts the claim and preserves sessions when a pre-commit fault occurs", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app);
@@ -740,5 +802,201 @@ describe("POST /agents/:uuid/switch-runtime preconditions", () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.json<{ error: string }>().error).toContain("runtime-session enforcement");
+  });
+});
+
+describe("agent runtime switch service preconditions", () => {
+  const getApp = useTestApp({ runtimeHttpTokenEnforcement: true });
+
+  async function createSwitchFixture(app: FastifyInstance): Promise<{
+    ctx: Awaited<ReturnType<typeof createAdminContext>>;
+    agent: Awaited<ReturnType<typeof createAgent>>;
+    targetClientId: string;
+  }> {
+    const ctx = await createAdminContext(app);
+    const targetClientId = await seedClient(app, ctx.userId, ctx.organizationId);
+    await setClientRuntimeSupport(app, targetClientId, {
+      "claude-code": capability("ok"),
+      codex: capability("ok"),
+    });
+    const agent = await createAgent(app.db, {
+      name: `switch-service-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Service",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+    return { ctx, agent, targetClientId };
+  }
+
+  it("rejects service calls when runtime-session enforcement is disabled", async () => {
+    const app = getApp();
+    const { ctx, agent, targetClientId } = await createSwitchFixture(app);
+
+    await expect(
+      switchAgentRuntime(
+        app.db,
+        agent.uuid,
+        { clientId: targetClientId, runtimeProvider: "codex" },
+        { userId: ctx.userId, memberId: ctx.memberId },
+        { runtimeHttpTokenEnforced: false },
+      ),
+    ).rejects.toThrow("runtime-session enforcement");
+
+    await expect(recoverAgentRuntimeSwitch(app.db, agent.uuid, { runtimeHttpTokenEnforced: false })).rejects.toThrow(
+      "runtime-session enforcement",
+    );
+  });
+
+  it("rejects missing, human, invalid-state, and no-op switch targets before claiming", async () => {
+    const app = getApp();
+    const { ctx, agent, targetClientId } = await createSwitchFixture(app);
+    const actor = { userId: ctx.userId, memberId: ctx.memberId };
+
+    await expect(
+      switchAgentRuntime(app.db, crypto.randomUUID(), { clientId: targetClientId, runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("not found");
+
+    await expect(
+      switchAgentRuntime(app.db, ctx.humanAgentUuid, { clientId: targetClientId, runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("Human agents");
+
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, agent.uuid));
+    await expect(
+      switchAgentRuntime(app.db, agent.uuid, { clientId: targetClientId, runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("Only active agents");
+
+    await app.db.update(agents).set({ status: "active" }).where(eq(agents.uuid, agent.uuid));
+    await expect(
+      switchAgentRuntime(app.db, agent.uuid, { clientId: ctx.clientId, runtimeProvider: "claude-code" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("current configuration");
+  });
+
+  it("rejects manager and target-client ownership/version preconditions", async () => {
+    const app = getApp();
+    const { ctx, agent, targetClientId } = await createSwitchFixture(app);
+    const actor = { userId: ctx.userId, memberId: ctx.memberId };
+
+    await app.db.update(members).set({ status: "inactive" }).where(eq(members.id, ctx.memberId));
+    await expect(
+      switchAgentRuntime(app.db, agent.uuid, { clientId: targetClientId, runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("Manager");
+    await app.db.update(members).set({ status: "active" }).where(eq(members.id, ctx.memberId));
+
+    await expect(
+      switchAgentRuntime(app.db, agent.uuid, { clientId: "missing-client", runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("not found");
+
+    const unclaimedClientId = `cli-unclaimed-${crypto.randomUUID().slice(0, 8)}`;
+    await app.db.insert(clients).values({
+      id: unclaimedClientId,
+      userId: null,
+      organizationId: ctx.organizationId,
+      status: "connected",
+      sdkVersion: "0.5.11",
+      metadata: { capabilities: { codex: capability("ok") } },
+    });
+    await expect(
+      switchAgentRuntime(app.db, agent.uuid, { clientId: unclaimedClientId, runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("has not been claimed");
+
+    const otherCtx = await createAdminContext(app);
+    await setClientRuntimeSupport(app, otherCtx.clientId, { codex: capability("ok") });
+    await expect(
+      switchAgentRuntime(app.db, agent.uuid, { clientId: otherCtx.clientId, runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("not owned");
+
+    await app.db.update(clients).set({ sdkVersion: "0.5.10" }).where(eq(clients.id, targetClientId));
+    await expect(
+      switchAgentRuntime(app.db, agent.uuid, { clientId: targetClientId, runtimeProvider: "codex" }, actor, {
+        runtimeHttpTokenEnforced: true,
+      }),
+    ).rejects.toThrow("0.5.11");
+  });
+
+  it("rejects recovery when state is missing, malformed, or the agent is gone", async () => {
+    const app = getApp();
+    const { agent } = await createSwitchFixture(app);
+
+    await expect(
+      recoverAgentRuntimeSwitch(app.db, crypto.randomUUID(), { runtimeHttpTokenEnforced: true }),
+    ).rejects.toThrow("not found");
+
+    await expect(recoverAgentRuntimeSwitch(app.db, agent.uuid, { runtimeHttpTokenEnforced: true })).rejects.toThrow(
+      "no runtime switch recovery state",
+    );
+
+    await app.db
+      .update(agents)
+      .set({ metadata: { runtimeSwitch: { claimId: "claim-malformed" } } })
+      .where(eq(agents.uuid, agent.uuid));
+    await expect(recoverAgentRuntimeSwitch(app.db, agent.uuid, { runtimeHttpTokenEnforced: true })).rejects.toThrow(
+      "claim-malformed",
+    );
+
+    await app.db
+      .update(agents)
+      .set({ metadata: { runtimeSwitch: true } })
+      .where(eq(agents.uuid, agent.uuid));
+    await expect(recoverAgentRuntimeSwitch(app.db, agent.uuid, { runtimeHttpTokenEnforced: true })).rejects.toThrow(
+      "malformed",
+    );
+  });
+
+  it("aborts a persisted claimed recovery state through the service", async () => {
+    const app = getApp();
+    const { ctx, agent, targetClientId } = await createSwitchFixture(app);
+    await app.db
+      .update(agents)
+      .set({
+        status: "suspended",
+        metadata: {
+          runtimeSwitch: {
+            claimId: "claim-service-abort",
+            phase: "claimed",
+            claimedAt: new Date().toISOString(),
+            claimedByUserId: ctx.userId,
+            claimedByMemberId: ctx.memberId,
+            oldClientId: ctx.clientId,
+            oldRuntimeProvider: "claude-code",
+            targetClientId,
+            targetRuntimeProvider: "codex",
+          },
+        },
+      })
+      .where(eq(agents.uuid, agent.uuid));
+
+    const recovered = await recoverAgentRuntimeSwitch(app.db, agent.uuid, { runtimeHttpTokenEnforced: true });
+
+    expect(recovered).toMatchObject({
+      claimId: "claim-service-abort",
+      oldClientId: ctx.clientId,
+      targetClientId,
+      terminatedChatIds: [],
+      recoveryAction: "aborted",
+    });
+    expect(recovered.agent).toMatchObject({
+      status: "active",
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+    expect(recovered.agent.metadata.runtimeSwitch).toBeUndefined();
   });
 });

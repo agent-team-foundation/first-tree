@@ -1,8 +1,10 @@
-import { AGENT_RUNTIME_SESSION_HEADER } from "@first-tree/shared";
+import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
+import { agentSelectorHook } from "../middleware/agent-selector.js";
 import { bindAgentRuntimeSession, revokeAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
@@ -142,6 +144,76 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
       headers: { authorization: `Bearer ${accessToken}` },
     });
     expect(res.statusCode).toBe(403);
+  });
+
+  it("rejects when the selected agent row is missing", async () => {
+    const app = getApp();
+    const { accessToken } = await createTestAgent(app);
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "x-agent-id": crypto.randomUUID(),
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toMatch(/Agent not found/);
+  });
+
+  it("rejects when the authenticated user no longer has active org membership", async () => {
+    const app = getApp();
+    const { agent } = await createTestAgent(app);
+    const other = await createTestAdmin(app);
+    await app.db.update(members).set({ status: "left" }).where(eq(members.id, other.memberId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${other.accessToken}`,
+        "x-agent-id": agent.uuid,
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toMatch(/caller is not a member/);
+  });
+
+  it("rejects human-agent selection by a different active member", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const other = await createTestAdmin(app);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${other.accessToken}`,
+        "x-agent-id": admin.humanAgentUuid,
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toMatch(/Agent not runnable/);
+  });
+
+  it("rejects missing user state and mismatched agent-outbox state inside the selector hook", async () => {
+    const app = getApp();
+    const { agent, userId } = await createTestAgent(app);
+    const hook = agentSelectorHook(app.db);
+
+    await expect(hook({ headers: {} } as never, {} as never)).rejects.toThrow(/User authentication required/);
+
+    await expect(
+      hook(
+        {
+          user: { userId, agentOutbox: { agentId: crypto.randomUUID() } },
+          headers: { [AGENT_SELECTOR_HEADER]: agent.uuid },
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toThrow(/outbox token is not valid/);
   });
 });
 

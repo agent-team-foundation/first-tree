@@ -563,6 +563,35 @@ describe("services/github-app", () => {
       expect(err.status).toBe(500);
       expect(err.message).toContain("expires_in");
     });
+
+    it("throws GithubAppApiError when the profile fetch fails", async () => {
+      const fakeFetch: typeof fetch = async (url) => {
+        if (String(url) === "https://github.com/login/oauth/access_token") {
+          return new Response(
+            JSON.stringify({
+              access_token: "a",
+              expires_in: 28800,
+              refresh_token: "r",
+              refresh_token_expires_in: 15897600,
+              scope: "",
+              token_type: "bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ message: "profile unavailable" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      };
+
+      await expect(
+        exchangeCodeForAppUserProfile(
+          { clientId: "c", clientSecret: "s", code: "x", redirectUri: "r", installationId: null },
+          { fetcher: fakeFetch },
+        ),
+      ).rejects.toMatchObject({ name: "GithubAppApiError", status: 503 });
+    });
   });
 });
 
@@ -794,6 +823,49 @@ describe("services/github-app › installation repository helpers", () => {
       name: "GithubAppApiError",
       status: 422,
       message: expect.stringContaining("Repository creation failed."),
+    });
+  });
+
+  it("throws GithubAppApiError when GitHub repo helpers return invalid success bodies", async () => {
+    await expect(
+      getRepository("ghs_token", "acme", "tree", {
+        fetcher: async () => new Response("null", { status: 200, headers: { "content-type": "application/json" } }),
+      }),
+    ).rejects.toMatchObject({
+      name: "GithubAppApiError",
+      status: 502,
+      message: expect.stringContaining("invalid response"),
+    });
+
+    await expect(
+      createOrganizationRepo(
+        "ghs_token",
+        { org: "acme", name: "tree", private: true },
+        {
+          fetcher: async () => new Response("{}", { status: 201, headers: { "content-type": "application/json" } }),
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "GithubAppApiError",
+      status: 502,
+      message: expect.stringContaining("invalid response"),
+    });
+  });
+
+  it("omits upstream detail when a JSON error body cannot be parsed", async () => {
+    await expect(
+      getRepoFileWithToken(
+        "ghs_token",
+        { owner: "acme", repo: "tree", path: "NODE.md", branch: "main" },
+        {
+          fetcher: async () =>
+            new Response("not-json", { status: 500, headers: { "content-type": "application/json" } }),
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "GithubAppApiError",
+      status: 500,
+      message: "GitHub file fetch failed (500)",
     });
   });
 });

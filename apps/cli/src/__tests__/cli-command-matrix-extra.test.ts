@@ -26,6 +26,7 @@ const bootstrapMocks = vi.hoisted(() => ({
 const cliFetchMock = vi.hoisted(() => vi.fn());
 
 const resolveAgentMock = vi.hoisted(() => vi.fn());
+const doctorChecksMock = vi.hoisted(() => vi.fn());
 
 const outputMocks = vi.hoisted(() => ({
   fail: vi.fn((code: string, message: string, exitCode = 1) => {
@@ -42,6 +43,7 @@ const coreMocks = vi.hoisted(() => ({
   isServiceSupported: vi.fn(),
   isServiceUnitDriftDetected: vi.fn(),
   loadCredentials: vi.fn(),
+  printResults: vi.fn(),
   refreshClientServiceUnitForUpdate: vi.fn(),
   removeLocalAgent: vi.fn(),
   restartClientService: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock("@first-tree/shared/config", () => sharedConfigMocks);
 vi.mock("../core/bootstrap.js", () => bootstrapMocks);
 vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../commands/_shared/resolve-agent.js", () => ({ resolveAgent: resolveAgentMock }));
+vi.mock("../commands/_shared/doctor-checks.js", () => ({ runDaemonChecks: doctorChecksMock }));
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
@@ -129,6 +132,7 @@ beforeEach(() => {
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("access-token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "nova" });
+  doctorChecksMock.mockResolvedValue([{ label: "daemon", ok: true, detail: "ready" }]);
   coreMocks.isServiceSupported.mockReturnValue(true);
   coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd", detail: "pid 123" });
   coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
@@ -183,6 +187,10 @@ describe("config commands", () => {
     await runConfig(["get", "server.missing"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("server.missing: (not set)");
 
+    sharedConfigMocks.getConfigValue.mockReturnValueOnce(undefined);
+    await runConfig(["show", "server.missing"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("server.missing: (not set)");
+
     await runConfig(["set", "update.restart_check_interval_seconds", "15"]);
     expect(sharedConfigMocks.setConfigValue).toHaveBeenLastCalledWith(
       join(tempDir, "config", "client.yaml"),
@@ -226,16 +234,29 @@ describe("daemon utility commands", () => {
     await runDaemon(["stop"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Stopped launchd service");
 
+    setPlatform("win32");
+    coreMocks.isServiceSupported.mockReturnValueOnce(false);
+    await runDaemon(["stop"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Stop the PowerShell");
+    setPlatform(originalPlatform);
+
     coreMocks.isServiceSupported.mockReturnValueOnce(false);
     await runDaemon(["restart"]);
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "not-installed", platform: "systemd" });
     await expect(runDaemon(["restart"])).rejects.toMatchObject({ code: 1 });
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active", platform: "systemd" });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: false, reason: "restart failed" });
+    await expect(runDaemon(["restart"])).rejects.toMatchObject({ code: 1 });
     coreMocks.getClientServiceStatus
       .mockReturnValueOnce({ state: "active", platform: "systemd" })
       .mockReturnValueOnce({ state: "active", platform: "systemd", detail: "pid 42" });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: true });
     await runDaemon(["restart"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Restarted systemd service");
+
+    await runDaemon(["doctor"]);
+    expect(coreMocks.printResults).toHaveBeenCalledWith([{ label: "daemon", ok: true, detail: "ready" }]);
 
     coreMocks.isServiceSupported.mockReturnValueOnce(false);
     await runDaemon(["refresh-unit"]);
@@ -338,6 +359,50 @@ describe("daemon utility commands", () => {
       "systemd service refreshed and restarted",
     );
   });
+
+  it("surfaces ensure-service restart and inactive install failures", async () => {
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active", platform: "systemd", detail: "pid 1" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(true);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/first-tree.service",
+      state: "active",
+    });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: false, reason: "restart denied" });
+    await expect(runDaemon(["ensure-service"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("restart failed");
+
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({ state: "active", platform: "launchd", detail: "pid 2" })
+      .mockReturnValueOnce({ state: "inactive", platform: "launchd", detail: "stopped" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(true);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "launchd",
+      unitPath: "/tmp/first-tree.plist",
+      state: "active",
+    });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: true });
+    await expect(runDaemon(["ensure-service"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "service restarted but is not running",
+    );
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "inactive", platform: "systemd" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/first-tree.service",
+      state: "inactive",
+      detail: "not loaded",
+    });
+    await expect(runDaemon(["ensure-service"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "service installed but not running",
+    );
+  });
 });
 
 describe("agent admin and local commands", () => {
@@ -355,6 +420,9 @@ describe("agent admin and local commands", () => {
     cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
     await runAgent(["reset", "agent-1"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain('Agent "agent-1" reset');
+
+    cliFetchMock.mockResolvedValueOnce(jsonResponse("nope", false, 503));
+    await expect(runAgent(["reset", "agent-1"])).rejects.toMatchObject({ code: "RESET_ERROR", exitCode: 1 });
 
     const agentDir = join(tempDir, "config", "agents", "nova");
     mkdirSync(agentDir, { recursive: true });

@@ -3,6 +3,7 @@ import { channelConfig } from "../core/channel.js";
 
 const updateMocks = vi.hoisted(() => ({
   detectInstallMode: vi.fn(),
+  fetchServerCommandVersion: vi.fn(),
   installGlobalSpec: vi.fn(),
   installPortableSpec: vi.fn(),
   PACKAGE_NAME: "first-tree",
@@ -36,6 +37,7 @@ function output(): string {
 describe("update glue", () => {
   beforeEach(() => {
     updateMocks.detectInstallMode.mockReset();
+    updateMocks.fetchServerCommandVersion.mockReset();
     updateMocks.installGlobalSpec.mockReset();
     updateMocks.installPortableSpec.mockReset();
     updateStateMocks.isLoopGuarded.mockReset();
@@ -45,6 +47,7 @@ describe("update glue", () => {
     exitMock.mockClear();
 
     updateMocks.detectInstallMode.mockReturnValue("global");
+    updateMocks.fetchServerCommandVersion.mockResolvedValue({ ok: true, version: "0.6.0" });
     updateMocks.installGlobalSpec.mockResolvedValue({
       ok: true,
       mode: "global",
@@ -60,7 +63,9 @@ describe("update glue", () => {
   });
 
   it("declines prompts and skips unsupported install modes", async () => {
-    const { createExecuteUpdate, declineUpdate, promptUpdate } = await import("../core/update-glue.js");
+    const { createExecuteUpdate, declineUpdate, promptUpdate, refreshServerUpdateTarget } = await import(
+      "../core/update-glue.js"
+    );
 
     await expect(declineUpdate({ currentVersion: "0.5.0", targetVersion: "0.6.0", timeoutSeconds: 1 })).resolves.toBe(
       false,
@@ -68,6 +73,9 @@ describe("update glue", () => {
     await expect(promptUpdate({ currentVersion: "0.5.0", targetVersion: "0.6.0", timeoutSeconds: 0 })).resolves.toBe(
       false,
     );
+    await expect(refreshServerUpdateTarget()).resolves.toEqual({ ok: true, targetVersion: "0.6.0" });
+    updateMocks.fetchServerCommandVersion.mockResolvedValueOnce({ ok: false, reason: "server down" });
+    await expect(refreshServerUpdateTarget()).resolves.toEqual({ ok: false, reason: "server down" });
 
     updateMocks.detectInstallMode.mockReturnValueOnce("source");
     await expect(
@@ -113,11 +121,34 @@ describe("update glue", () => {
       retryable: true,
       reasonCode: "network",
     });
+
+    updateMocks.installGlobalSpec.mockResolvedValueOnce({
+      ok: false,
+      mode: "global",
+      reason: "bad mirror",
+    });
+    await expect(
+      createExecuteUpdate({
+        managed: false,
+        onUpdateFailed: () => {
+          throw new Error("listener down");
+        },
+      })({ currentVersion: "0.5.0", targetVersion: "0.6.1" }),
+    ).resolves.toEqual({ installed: false });
   });
 
   it("uses the portable installer in portable mode and records failures through the same path", async () => {
     const { createExecuteUpdate } = await import("../core/update-glue.js");
     updateMocks.detectInstallMode.mockReturnValue("portable");
+
+    updateStateMocks.isLoopGuarded.mockReturnValueOnce(true);
+    await expect(
+      createExecuteUpdate({ managed: false })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).resolves.toEqual({ installed: true });
+    expect(output()).toContain("stale portable metadata target or a shim/path mismatch");
+    expect(output()).toContain("manually run `first-tree-dev upgrade`");
+    printLineMock.mockClear();
+    updateStateMocks.isLoopGuarded.mockReturnValue(false);
 
     await expect(
       createExecuteUpdate({ managed: false })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
@@ -198,6 +229,31 @@ describe("update glue", () => {
       createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
     ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
     expect(output()).toContain("warning: 'daemon refresh-unit' exited with status 7");
+
+    printLineMock.mockClear();
+    spawnSyncMock.mockReturnValueOnce({ status: undefined, signal: undefined });
+    await expect(
+      createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
+    expect(output()).toContain("status unknown (signal=none)");
+
+    printLineMock.mockClear();
+    spawnSyncMock.mockImplementationOnce(() => {
+      throw new Error("spawn denied");
+    });
+    await expect(
+      createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
+    expect(output()).toContain("warning: could not spawn 'daemon refresh-unit': spawn denied");
+
+    printLineMock.mockClear();
+    spawnSyncMock.mockImplementationOnce(() => {
+      throw "spawn string denied";
+    });
+    await expect(
+      createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
+    expect(output()).toContain("warning: could not spawn 'daemon refresh-unit': spawn string denied");
   });
 
   it("routes managed update output through the injected logger and captures refresh-unit output", async () => {

@@ -57,6 +57,7 @@ const RUNTIME_TEST_TIMEOUT_MS = 15_000;
 const disposeMock = vi.fn();
 const killAllMock = vi.fn(async () => undefined);
 const cliFetchMock = vi.hoisted(() => vi.fn());
+const connectionCtorOptions: unknown[] = [];
 let connectionMaxListeners = 10;
 const connectionMock = {
   clientId: "client-test",
@@ -108,6 +109,9 @@ vi.mock("@first-tree/client", () => {
       clearPaused = connectionMock.clearPaused;
       getMaxListeners = connectionMock.getMaxListeners;
       setMaxListeners = connectionMock.setMaxListeners;
+      constructor(options: unknown) {
+        connectionCtorOptions.push(options);
+      }
     },
     UpdateManager: { attach: vi.fn(() => ({ dispose: disposeMock })) },
     createLogger: vi.fn(() => ({
@@ -163,6 +167,7 @@ describe("ClientRuntime context-tree wiring", () => {
     process.env.FIRST_TREE_HOME = home;
     slotInstances.length = 0;
     connectionListeners.clear();
+    connectionCtorOptions.length = 0;
     connectionMock.on.mockClear();
     connectionMock.connect.mockClear();
     connectionMock.disconnect.mockClear();
@@ -186,6 +191,66 @@ describe("ClientRuntime context-tree wiring", () => {
     if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
     else process.env.FIRST_TREE_HOME = originalHome;
     vi.clearAllMocks();
+  });
+
+  it("adapts runtime output to logger methods with trimmed status levels", async () => {
+    const { createLoggerRuntimeOutput } = await import("../core/client-runtime.js");
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const output = createLoggerRuntimeOutput(logger);
+
+    output.blank();
+    output.check(true, "connected", "agent alpha");
+    output.check(false, "degraded");
+    output.line("  hello logger  \n");
+    output.line("   ");
+    output.status("✗", "hard failure");
+    output.status("⚠️", "soft warning");
+    output.status("", "plain status");
+
+    expect(logger.info).toHaveBeenCalledWith("connected: agent alpha");
+    expect(logger.info).toHaveBeenCalledWith("hello logger");
+    expect(logger.info).toHaveBeenCalledWith("plain status");
+    expect(logger.warn).toHaveBeenCalledWith("degraded");
+    expect(logger.warn).toHaveBeenCalledWith("⚠️ soft warning");
+    expect(logger.error).toHaveBeenCalledWith("✗ hard failure");
+  });
+
+  it("wires default output and connection auth/update callbacks", async () => {
+    const { print } = await import("../core/output.js");
+    mkdirSync(join(home, "state"), { recursive: true });
+    writeFileSync(
+      join(home, "state", "update-state.json"),
+      JSON.stringify({
+        last: {
+          result: "ok",
+          target: "0.6.0",
+          currentBefore: "0.5.0",
+          installedVersion: "0.6.0",
+          reason: null,
+          at: "2026-05-20T00:00:00.000Z",
+        },
+      }),
+    );
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test") as unknown as {
+      output: { line: (text: string) => void };
+    };
+
+    rt.output.line("default output line");
+
+    const connectionOptions = connectionCtorOptions.at(-1) as
+      | {
+          getAccessToken?: (opts?: unknown) => Promise<string>;
+          getLastUpdateAttempt?: () => unknown;
+        }
+      | undefined;
+    await expect(connectionOptions?.getAccessToken?.({ force: true })).resolves.toBe("tok-test");
+    expect(connectionOptions?.getLastUpdateAttempt?.()).toMatchObject({ target: "0.6.0", result: "ok" });
+    expect(print.line).toHaveBeenCalledWith("default output line");
   });
 
   it(
@@ -275,6 +340,7 @@ describe("ClientRuntime context-tree wiring", () => {
 
   it("handles connection events, update hooks, and graceful stop", async () => {
     const client = await import("@first-tree/client");
+    const { print } = await import("../core/output.js");
     slotInstances.length = 0;
 
     const update = {
@@ -301,8 +367,10 @@ describe("ClientRuntime context-tree wiring", () => {
     slotInstances[0]?.getQuietGateSnapshot.mockReturnValue({ activeCount: 2, lastActivityMs: 400 });
     const updateOptions = vi.mocked(client.UpdateManager.attach).mock.calls[0]?.[1] as {
       getQuietGateSnapshot: () => { activeCount: number; lastActivityMs: number };
+      log: (level: "info" | "warn" | "error" | "debug", message: string) => void;
     };
     expect(updateOptions.getQuietGateSnapshot()).toEqual({ activeCount: 2, lastActivityMs: 400 });
+    updateOptions.log("warn", "update warning");
 
     connectionMock.isPaused.mockReturnValue(true);
     connectionMock.getPausedReason.mockReturnValue("auth_refresh_failed");
@@ -319,6 +387,39 @@ describe("ClientRuntime context-tree wiring", () => {
       reasonCode: "INSTALL_FAILED",
     });
 
+    const reconnectOk = vi.fn();
+    const reconnectBroken = vi.fn(() => {
+      throw new Error("probe failed");
+    });
+    const reconnectStringBroken = vi.fn(() => {
+      throw "probe string failed";
+    });
+    rt.onReconnect(reconnectOk);
+    rt.onReconnect(reconnectBroken);
+    rt.onReconnect(reconnectStringBroken);
+    const welcome = connectionListeners.get("server:welcome");
+    if (!welcome) throw new Error("server:welcome listener missing");
+    welcome({ isReconnect: false });
+    expect(reconnectOk).not.toHaveBeenCalled();
+    welcome({ isReconnect: true });
+    expect(reconnectOk).toHaveBeenCalled();
+    expect(print.status).toHaveBeenCalledWith("⚠️", "reconnect handler error: probe failed");
+    expect(print.status).toHaveBeenCalledWith("⚠️", "reconnect handler error: probe string failed");
+
+    const runtimeAuth = vi.fn();
+    rt.onRuntimeAuthStart(runtimeAuth);
+    const runtimeAuthStart = connectionListeners.get("runtime-auth:start");
+    if (!runtimeAuthStart) throw new Error("runtime-auth:start listener missing");
+    runtimeAuthStart({ provider: "codex", ref: "cmd-1" });
+    expect(runtimeAuth).toHaveBeenCalledWith({ provider: "codex", ref: "cmd-1" });
+
+    const unbound = connectionListeners.get("agent:unbound");
+    if (!unbound) throw new Error("agent:unbound listener missing");
+    unbound("agent-alpha", undefined);
+    unbound("agent-alpha", "agent_suspended");
+    unbound("agent-alpha", "unpinned");
+
+    killAllMock.mockRejectedValueOnce(new Error("kill failed"));
     await rt.stop();
     expect(disposeMock).toHaveBeenCalled();
     expect(slotInstances[0]?.stop).toHaveBeenCalled();
@@ -369,7 +470,9 @@ describe("ClientRuntime context-tree wiring", () => {
 
   it("reports generic agent start failures and ignores already-starting entries", async () => {
     const { print } = await import("../core/output.js");
-    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const { ClientRuntime, isAgentSuspendedBindError } = await import("../core/client-runtime.js");
+    expect(isAgentSuspendedBindError("agent_suspended by server")).toBe(true);
+    expect(isAgentSuspendedBindError("plain bind failure")).toBe(false);
     const rt = new ClientRuntime("https://hub.test", "client-test");
     rt.addAgent("broken", {
       agentId: "agent-broken",
@@ -394,7 +497,9 @@ describe("ClientRuntime context-tree wiring", () => {
     expect(print.status).toHaveBeenCalledWith("", "agent runtime confirmed: broken");
     expect(print.check).toHaveBeenCalledWith(true, "broken: connected", "agent: broken");
     const runtimeProbe = rt as unknown as {
-      agents: Array<{ state: "idle" | "starting" | "running" | "suspended-skipped" | "failed" }>;
+      agents: Array<{
+        state: "idle" | "starting" | "running" | "suspended-skipped" | "failed" | "unsupported-runtime";
+      }>;
       startAgentEntry(entry: unknown): Promise<"connected" | "skipped" | "failed">;
       startAgent(name: string): void;
     };
@@ -404,7 +509,48 @@ describe("ClientRuntime context-tree wiring", () => {
     await expect(runtimeProbe.startAgentEntry(entry)).resolves.toBe("connected");
     entry.state = "starting";
     await expect(runtimeProbe.startAgentEntry(entry)).resolves.toBe("skipped");
+    entry.state = "unsupported-runtime";
+    await expect(runtimeProbe.startAgentEntry(entry)).resolves.toBe("skipped");
     runtimeProbe.startAgent("missing");
+    slotInstances[0]?.start.mockRejectedValueOnce("string start failure");
+    entry.state = "idle";
+    await expect(runtimeProbe.startAgentEntry(entry)).resolves.toBe("failed");
+    expect(print.check).toHaveBeenCalledWith(false, "broken: connection failed", "string start failure");
+    slotInstances[0]?.start.mockResolvedValueOnce({ agentId: "agent-broken" });
+    entry.state = "idle";
+    await expect(runtimeProbe.startAgentEntry(entry)).resolves.toBe("connected");
+    expect(print.check).toHaveBeenCalledWith(true, "broken: connected", "agent: agent-broken");
+    await rt.stop();
+  });
+
+  it("handles duplicate local agents and watcher guard paths", async () => {
+    const fs = await import("node:fs");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://hub.test", "client-test");
+    const config = {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1];
+    rt.addAgent("alpha", config);
+    rt.addAgent("alpha", { ...config, agentId: "agent-alpha-duplicate-name" });
+    expect(slotInstances).toHaveLength(1);
+
+    const missingDir = join(home, "missing-agents");
+    rt.watchAgentsDir(missingDir);
+    expect(vi.mocked(fs.watch)).not.toHaveBeenCalledWith(missingDir, expect.anything(), expect.anything());
+
+    const agentsDir = join(home, "config", "agents");
+    mkdirSync(join(agentsDir, "duplicate-id"), { recursive: true });
+    writeFileSync(join(agentsDir, "duplicate-id", "agent.yaml"), "agentId: agent-alpha\nruntime: claude-code\n");
+    rt.watchAgentsDir(agentsDir);
+    rt.watchAgentsDir(agentsDir);
+    expect(fsWatchMocks.watch).toHaveBeenCalledTimes(1);
+
+    const runtimeProbe = rt as unknown as { scanForNewAgents(agentsDir: string): void };
+    runtimeProbe.scanForNewAgents(agentsDir);
+    expect(slotInstances).toHaveLength(1);
     await rt.stop();
   });
 
@@ -488,6 +634,229 @@ describe("ClientRuntime context-tree wiring", () => {
     await rt.stop();
   });
 
+  it("continues supported runtime switches when the previous slot stop fails", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+    const agentsDir = join(home, "config", "agents");
+    const alphaDir = join(agentsDir, "alpha");
+    mkdirSync(alphaDir, { recursive: true });
+    writeFileSync(join(alphaDir, "agent.yaml"), "agentId: agent-alpha\nruntime: codex\n");
+    rt.watchAgentsDir(agentsDir);
+    rt.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "codex",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+    slotInstances[0]?.stop.mockRejectedValueOnce(new Error("stop failed"));
+
+    const pinned = connectionListeners.get("agent:pinned");
+    if (!pinned) throw new Error("agent:pinned listener missing");
+    pinned({
+      agentId: "agent-alpha",
+      name: "alpha",
+      runtimeProvider: "claude-code",
+    });
+
+    await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
+    expect(print.status).toHaveBeenCalledWith("⚠️", "failed to stop previous runtime for alpha: stop failed");
+    expect(slotInstances[1]?.start).toHaveBeenCalled();
+    await rt.stop();
+  });
+
+  it("stringifies non-Error runtime switch stop and write failures", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const agentsDir = join(home, "config", "agents");
+
+    const supported = new ClientRuntime("https://first-tree.test", "client-test");
+    mkdirSync(join(agentsDir, "supported"), { recursive: true });
+    writeFileSync(join(agentsDir, "supported", "agent.yaml"), "agentId: agent-supported\nruntime: codex\n");
+    supported.watchAgentsDir(agentsDir);
+    supported.addAgent("supported", {
+      agentId: "agent-supported",
+      runtime: "codex",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof supported.addAgent>[1]);
+    slotInstances.at(-1)?.stop.mockRejectedValueOnce("string stop failure");
+    connectionListeners.get("agent:pinned")?.({
+      agentId: "agent-supported",
+      name: "supported",
+      runtimeProvider: "claude-code",
+    });
+    await vi.waitFor(() =>
+      expect(print.status).toHaveBeenCalledWith(
+        "⚠️",
+        "failed to stop previous runtime for supported: string stop failure",
+      ),
+    );
+
+    const unsupported = new ClientRuntime("https://first-tree.test", "client-test");
+    unsupported.watchAgentsDir(agentsDir);
+    unsupported.addAgent("unsupported", {
+      agentId: "agent-unsupported",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof unsupported.addAgent>[1]);
+    slotInstances.at(-1)?.stop.mockRejectedValueOnce("unsupported stop failure");
+    connectionListeners.get("agent:pinned")?.({
+      agentId: "agent-unsupported",
+      name: "unsupported",
+      runtimeProvider: "claude-code-tui",
+    });
+    await vi.waitFor(() =>
+      expect(print.status).toHaveBeenCalledWith(
+        "⚠️",
+        "failed to stop previous runtime for unsupported: unsupported stop failure",
+      ),
+    );
+
+    const writeFailure = new ClientRuntime("https://first-tree.test", "client-test");
+    writeFailure.watchAgentsDir(agentsDir);
+    writeFailure.addAgent("write-failure", {
+      agentId: "agent-write-failure",
+      runtime: "codex",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof writeFailure.addAgent>[1]);
+    const writeFailureProbe = writeFailure as unknown as { writeAgentYaml: () => never };
+    writeFailureProbe.writeAgentYaml = () => {
+      throw "string write failure";
+    };
+    connectionListeners.get("agent:pinned")?.({
+      agentId: "agent-write-failure",
+      name: "write-failure",
+      runtimeProvider: "claude-code",
+    });
+    await vi.waitFor(() =>
+      expect(print.check).toHaveBeenCalledWith(
+        false,
+        'failed to update agent "write-failure" runtime',
+        "string write failure",
+      ),
+    );
+
+    await supported.stop();
+    await unsupported.stop();
+    await writeFailure.stop();
+  });
+
+  it("marks runtime switches to unsupported providers and reports stop/write failures", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+    const agentsDir = join(home, "config", "agents");
+    const alphaDir = join(agentsDir, "alpha");
+    mkdirSync(alphaDir, { recursive: true });
+    writeFileSync(join(alphaDir, "agent.yaml"), "agentId: agent-alpha\nruntime: claude-code\n");
+    rt.watchAgentsDir(agentsDir);
+    rt.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+    slotInstances[0]?.stop.mockRejectedValueOnce(new Error("stop failed"));
+
+    const pinned = connectionListeners.get("agent:pinned");
+    if (!pinned) throw new Error("agent:pinned listener missing");
+    pinned({
+      agentId: "agent-alpha",
+      name: "alpha",
+      runtimeProvider: "claude-code-tui",
+    });
+
+    await vi.waitFor(() =>
+      expect(print.status).toHaveBeenCalledWith(
+        "⚠️",
+        expect.stringContaining('agent "alpha" switched to runtime "claude-code-tui"'),
+      ),
+    );
+    expect(print.status).toHaveBeenCalledWith("⚠️", "failed to stop previous runtime for alpha: stop failed");
+    expect(readFileSync(join(alphaDir, "agent.yaml"), "utf8")).toContain("runtime: claude-code-tui");
+
+    const rtWithoutDir = new ClientRuntime("https://first-tree.test", "client-test");
+    rtWithoutDir.addAgent("beta", {
+      agentId: "agent-beta",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rtWithoutDir.addAgent>[1]);
+    const pinnedWithoutDir = connectionListeners.get("agent:pinned");
+    if (!pinnedWithoutDir) throw new Error("agent:pinned listener missing");
+    pinnedWithoutDir({
+      agentId: "agent-beta",
+      name: "beta",
+      runtimeProvider: "codex",
+    });
+    await vi.waitFor(() =>
+      expect(print.check).toHaveBeenCalledWith(false, 'failed to update agent "beta" runtime', "agents dir is not set"),
+    );
+    await rt.stop();
+    await rtWithoutDir.stop();
+  });
+
+  it("stops the previous slot cleanly when switching to an unsupported provider", async () => {
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+    const agentsDir = join(home, "config", "agents");
+    const alphaDir = join(agentsDir, "alpha");
+    mkdirSync(alphaDir, { recursive: true });
+    writeFileSync(join(alphaDir, "agent.yaml"), "agentId: agent-alpha\nruntime: claude-code\n");
+    rt.watchAgentsDir(agentsDir);
+    rt.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+
+    connectionListeners.get("agent:pinned")?.({
+      agentId: "agent-alpha",
+      name: "alpha",
+      runtimeProvider: "claude-code-tui",
+    });
+
+    await vi.waitFor(() =>
+      expect(slotInstances[0]?.stop).toHaveBeenCalledWith("runtime switched to unsupported provider by server", {
+        sessionShutdown: {
+          clearPersistedRegistry: true,
+          reportSuspendedSessions: false,
+        },
+      }),
+    );
+    expect(readFileSync(join(alphaDir, "agent.yaml"), "utf8")).toContain("runtime: claude-code-tui");
+    await rt.stop();
+  });
+
+  it("debounces agents-dir watcher rescans for newly written agent configs", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ClientRuntime } = await import("../core/client-runtime.js");
+      const rt = new ClientRuntime("https://first-tree.test", "client-test");
+      const agentsDir = join(home, "config", "agents");
+      mkdirSync(join(agentsDir, "debounced"), { recursive: true });
+      writeFileSync(join(agentsDir, "debounced", "agent.yaml"), "agentId: agent-debounced\nruntime: claude-code\n");
+      rt.watchAgentsDir(agentsDir);
+
+      fsWatchMocks.state.callback("rename", "debounced/agent.yaml");
+      fsWatchMocks.state.callback("change", "debounced/agent.yaml");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(slotInstances.map((slot) => slot.name)).toContain("debounced");
+      expect(slotInstances.at(-1)?.start).toHaveBeenCalled();
+      const runtimeProbe = rt as unknown as { debounceTimer: ReturnType<typeof setTimeout> | null };
+      runtimeProbe.debounceTimer = setTimeout(() => undefined, 10_000);
+      rt.unwatchAgentsDir();
+      await rt.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("repairs runtime-provider bind mismatches once without looping", async () => {
     const { print } = await import("../core/output.js");
     const { ClientRuntime } = await import("../core/client-runtime.js");
@@ -533,6 +902,112 @@ describe("ClientRuntime context-tree wiring", () => {
       "alpha: runtime repair already attempted; not retrying bind mismatch.",
     );
     await rt.stop();
+  });
+
+  it("uses runtime-provider repair fallbacks for loose server agent shapes", async () => {
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+    const agentsDir = join(home, "config", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    rt.watchAgentsDir(agentsDir);
+    rt.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+    await rt.start();
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        name: 123,
+        displayName: 456,
+        type: "human",
+        runtimeProvider: "codex",
+      }),
+    });
+
+    const rejected = connectionListeners.get("agent:bind:rejected");
+    if (!rejected) throw new Error("agent:bind:rejected listener missing");
+    rejected("agent_suspended", "agent-alpha");
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    rejected("runtime_provider_mismatch", "missing-agent");
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    rejected("runtime_provider_mismatch", "agent-alpha");
+
+    await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
+    expect(readFileSync(join(agentsDir, "alpha", "agent.yaml"), "utf8")).toContain("runtime: codex");
+    await rt.stop();
+  });
+
+  it("reports runtime-provider repair HTTP, schema, and fetch failures", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rejected = () => {
+      const listener = connectionListeners.get("agent:bind:rejected");
+      if (!listener) throw new Error("agent:bind:rejected listener missing");
+      listener("runtime_provider_mismatch", "agent-alpha");
+    };
+
+    const rtHttp = new ClientRuntime("https://first-tree.test", "client-test");
+    rtHttp.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rtHttp.addAgent>[1]);
+    await rtHttp.start();
+    cliFetchMock.mockResolvedValueOnce({ ok: false, status: 503 });
+    rejected();
+    await vi.waitFor(() => expect(print.status).toHaveBeenCalledWith("⚠️", "alpha: runtime repair failed (HTTP 503)"));
+    await rtHttp.stop();
+
+    vi.clearAllMocks();
+    const rtSchema = new ClientRuntime("https://first-tree.test", "client-test");
+    rtSchema.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rtSchema.addAgent>[1]);
+    await rtSchema.start();
+    cliFetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ runtimeProvider: "future" }) });
+    rejected();
+    await vi.waitFor(() =>
+      expect(print.status).toHaveBeenCalledWith("⚠️", "alpha: runtime repair failed (server returned unknown runtime)"),
+    );
+    await rtSchema.stop();
+
+    vi.clearAllMocks();
+    const rtFetch = new ClientRuntime("https://first-tree.test", "client-test");
+    rtFetch.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rtFetch.addAgent>[1]);
+    await rtFetch.start();
+    cliFetchMock.mockRejectedValueOnce(new Error("network down"));
+    rejected();
+    await vi.waitFor(() =>
+      expect(print.status).toHaveBeenCalledWith("⚠️", "alpha: runtime repair failed: network down"),
+    );
+    await rtFetch.stop();
+
+    vi.clearAllMocks();
+    const rtNonErrorFetch = new ClientRuntime("https://first-tree.test", "client-test");
+    rtNonErrorFetch.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rtNonErrorFetch.addAgent>[1]);
+    await rtNonErrorFetch.start();
+    cliFetchMock.mockRejectedValueOnce("offline");
+    rejected();
+    await vi.waitFor(() => expect(print.status).toHaveBeenCalledWith("⚠️", "alpha: runtime repair failed: offline"));
+    await rtNonErrorFetch.stop();
   });
 
   it("chooses suffixed pinned-agent names and reports auto-add write failures", async () => {
@@ -629,6 +1104,20 @@ describe("ClientRuntime context-tree wiring", () => {
     paused("auth_refresh_failed", new Error("refresh rejected"));
     expect(print.status).toHaveBeenCalledWith("✗", "auth rejected — pausing agents until fresh credentials arrive.");
     expect(print.status).toHaveBeenCalledWith("", "refresh rejected");
+    paused(
+      "auth_refresh_failed",
+      (() => {
+        const err = new Error("missing auth message");
+        Object.defineProperty(err, "authCode", { value: "invalid_token" });
+        return err;
+      })(),
+    );
+    expect(print.status).toHaveBeenCalledWith("", "Auth rejection code: invalid_token");
+    const credentialsError = fsWatchMocks.on.mock.calls.find((call) => call[0] === "error")?.[1] as
+      | ((err: Error) => void)
+      | undefined;
+    credentialsError?.(new Error("watch failed"));
+    expect(print.status).toHaveBeenCalledWith("⚠️", "credentials watcher error: watch failed");
     const structured = new Error("Server rejected access token");
     Object.defineProperty(structured, "authCode", { value: "invalid_token" });
     Object.defineProperty(structured, "authMessage", { value: "signature mismatch" });
@@ -656,6 +1145,54 @@ describe("ClientRuntime context-tree wiring", () => {
     await rt.stop();
   });
 
+  it("reports credentials watcher setup failures", async () => {
+    const fs = await import("node:fs");
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    mkdirSync(join(home, "config"), { recursive: true });
+    vi.mocked(fs.watch).mockImplementationOnce(() => {
+      throw new Error("watch denied");
+    });
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+
+    const paused = connectionListeners.get("auth:paused");
+    if (!paused) throw new Error("auth:paused listener missing");
+    paused("auth_refresh_failed", new Error("refresh rejected"));
+
+    expect(print.status).toHaveBeenCalledWith("⚠️", "credentials watcher failed: watch denied");
+    await rt.stop();
+  });
+
+  it("skips credentials watcher setup when the config directory is absent", async () => {
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+
+    const paused = connectionListeners.get("auth:paused");
+    if (!paused) throw new Error("auth:paused listener missing");
+    paused("auth_refresh_failed", new Error("refresh rejected"));
+
+    expect(fsWatchMocks.watch).not.toHaveBeenCalled();
+    await rt.stop();
+  });
+
+  it("reports non-Error credentials watcher setup failures", async () => {
+    const fs = await import("node:fs");
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    mkdirSync(join(home, "config"), { recursive: true });
+    vi.mocked(fs.watch).mockImplementationOnce(() => {
+      throw "watch denied as string";
+    });
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+
+    const paused = connectionListeners.get("auth:paused");
+    if (!paused) throw new Error("auth:paused listener missing");
+    paused("auth_refresh_failed", new Error("refresh rejected"));
+
+    expect(print.status).toHaveBeenCalledWith("⚠️", "credentials watcher failed: watch denied as string");
+    await rt.stop();
+  });
+
   it("clears paused mode after credentials.json content changes", async () => {
     const { print } = await import("../core/output.js");
     expect(watchMockProbe).toBe(fsWatchMocks.watch);
@@ -668,9 +1205,12 @@ describe("ClientRuntime context-tree wiring", () => {
     const paused = connectionListeners.get("auth:paused");
     if (!paused) throw new Error("auth:paused listener missing");
     paused("auth_refresh_failed", new Error("refresh rejected"));
+    paused("auth_refresh_failed", new Error("refresh rejected again"));
+    fsWatchMocks.state.callback("rename", "ignored.txt");
     writeFileSync(join(home, "config", "credentials.json"), JSON.stringify({ refreshToken: "new" }));
     if (!fsWatchMocks.state.registered) throw new Error("credentials watcher callback missing");
     fsWatchMocks.state.callback("change", "credentials.json");
+    fsWatchMocks.state.callback("change", null);
 
     await vi.waitFor(() => expect(connectionMock.clearPaused).toHaveBeenCalled(), { timeout: 2000 });
     expect(print.status).toHaveBeenCalledWith("", "credentials.json updated — clearing paused mode");
@@ -678,9 +1218,21 @@ describe("ClientRuntime context-tree wiring", () => {
     const runtimeProbe = rt as unknown as {
       credentialsDebounce: ReturnType<typeof setTimeout> | null;
       readCredentialsSnapshot(path: string): string | null;
+      readAgentYamlRecord(name: string): Record<string, unknown>;
+      scanForNewAgents(agentsDir: string): void;
     };
     runtimeProbe.credentialsDebounce = setTimeout(() => undefined, 10_000);
     expect(runtimeProbe.readCredentialsSnapshot(join(home, "config", "missing.json"))).toBeNull();
+    expect(runtimeProbe.readAgentYamlRecord("missing")).toEqual({});
+    mkdirSync(join(home, "config", "agents", "array-yaml"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "array-yaml", "agent.yaml"), "[]\n");
+    expect(runtimeProbe.readAgentYamlRecord("array-yaml")).toEqual({});
+    mkdirSync(join(home, "config", "agents", "null-yaml"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "null-yaml", "agent.yaml"), "null\n");
+    expect(runtimeProbe.readAgentYamlRecord("null-yaml")).toEqual({});
+    mkdirSync(join(home, "config", "agents"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "bad-agent.yaml"), "not a directory");
+    runtimeProbe.scanForNewAgents(join(home, "config", "agents", "bad-agent.yaml"));
     await rt.stop();
     expect(fsWatchMocks.close).toHaveBeenCalled();
   });

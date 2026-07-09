@@ -35,6 +35,7 @@ import {
   addMeChatParticipants,
   countUnreadMeChats,
   createMeChat,
+  getCallerEngagement,
   joinMeChat,
   leaveMeChat,
   listMeChats,
@@ -73,6 +74,17 @@ describe("chat-first workspace service layer", () => {
       participantIds: [peer.agent.uuid],
     });
     expect(a.chatId).not.toBe(b.chatId);
+  });
+
+  it("createMeChat rejects self-only participant lists", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await expect(
+      createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+        participantIds: [admin.humanAgentUuid, admin.humanAgentUuid],
+      }),
+    ).rejects.toThrow(/non-self participant/i);
   });
 
   it("listMeChats: resolves human external avatars while leaving agent avatars null without an upload", async () => {
@@ -120,6 +132,36 @@ describe("chat-first workspace service layer", () => {
       [owner.humanAgentUuid, peerA.agent.uuid, peerB.agent.uuid].sort(),
     );
     expect(row?.participantCount).toBe(row?.participants.length);
+  });
+
+  it("listMeChats filters by participant and treats empty participant ids as no filter", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peerA = await createTestAgent(app, { name: `with-peer-a-${crypto.randomUUID().slice(0, 6)}` });
+    const peerB = await createTestAgent(app, { name: `with-peer-b-${crypto.randomUUID().slice(0, 6)}` });
+
+    const chatA = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [peerA.agent.uuid],
+    });
+    const chatB = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [peerB.agent.uuid],
+    });
+
+    const peerAOnly = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+      with: [peerA.agent.uuid, peerA.agent.uuid],
+    });
+    expect(peerAOnly.rows.map((r) => r.chatId)).toEqual([chatA.chatId]);
+
+    const blankFilter = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+      with: [""],
+    });
+    expect(blankFilter.rows.map((r) => r.chatId).sort()).toEqual([chatA.chatId, chatB.chatId].sort());
   });
 
   it("listMeChats: only reports explicit mention attention while the mention is unread", async () => {
@@ -793,6 +835,64 @@ describe("chat-first workspace service layer", () => {
     expect(seen.size).toBe(3);
   });
 
+  it("listMeChats: cursor pagination advances across timestamped chats", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `peer-ts-cur-${crypto.randomUUID().slice(0, 6)}` });
+
+    const c1 = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    const c2 = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await sendMessage(
+      app.db,
+      c1.chatId,
+      admin.humanAgentUuid,
+      { source: "api", format: "text", content: "older timestamped chat" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      c2.chatId,
+      admin.humanAgentUuid,
+      { source: "api", format: "text", content: "newer timestamped chat" },
+      { allowRecipientlessSend: true },
+    );
+
+    const page1 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 1,
+      filter: "all",
+      engagement: "all",
+    });
+    expect(page1.rows).toHaveLength(1);
+    expect(page1.nextCursor).toBeTruthy();
+    expect(page1.rows[0]?.chatId).toBe(c2.chatId);
+
+    const page2 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 1,
+      filter: "all",
+      engagement: "all",
+      cursor: page1.nextCursor ?? undefined,
+    });
+    expect(page2.rows[0]?.chatId).toBe(c1.chatId);
+  });
+
+  it("listMeChats rejects an invalid cursor", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await expect(
+      listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+        cursor: "not-a-valid-cursor",
+      }),
+    ).rejects.toThrow(/invalid cursor/i);
+  });
+
   it("listMeChats nested-chat filter: parent_chat_id IS NOT NULL is excluded", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -1009,6 +1109,19 @@ describe("chat-first workspace service layer", () => {
     expect(res.rows.find((r) => r.chatId === chatId)?.engagementStatus).toBe("active");
   });
 
+  it("getCallerEngagement defaults to active and returns persisted engagement", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `eng-read-${crypto.randomUUID().slice(0, 6)}` });
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    await expect(getCallerEngagement(app.db, chatId, admin.humanAgentUuid)).resolves.toBe("active");
+    await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "archived");
+    await expect(getCallerEngagement(app.db, chatId, admin.humanAgentUuid)).resolves.toBe("archived");
+  });
+
   /**
    * Regression for issue 343 — the web picker-source switch (from `/activity`
    * to `/orgs/:orgId/agents`) is only useful if the server's add-participant
@@ -1044,5 +1157,18 @@ describe("chat-first workspace service layer", () => {
       sql`SELECT access_mode FROM chat_membership WHERE chat_id = ${chatId} AND agent_id = ${teammate.humanAgentUuid}`,
     );
     expect(rows[0]?.access_mode).toBe("speaker");
+  });
+
+  it("addMeChatParticipants rejects an empty participant list before probing the chat", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const aiAgent = await createTestAgent(app, { name: `agp-empty-ai-${crypto.randomUUID().slice(0, 6)}` });
+    const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [aiAgent.agent.uuid],
+    });
+
+    await expect(
+      addMeChatParticipants(app.db, chatId, owner.humanAgentUuid, owner.organizationId, { participantIds: [] }),
+    ).rejects.toThrow(/at least one participant/i);
   });
 });

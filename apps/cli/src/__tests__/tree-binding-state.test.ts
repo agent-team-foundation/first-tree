@@ -8,6 +8,7 @@ import {
   buildTreeId,
   deriveDefaultEntrypoint,
   determineScope,
+  isLegacyBindingMode,
   listTreeBindings,
   readSourceState,
   readTreeBinding,
@@ -87,18 +88,60 @@ describe("tree binding state helpers", () => {
       treeRepoName: "context-tree",
     });
 
+    mkdirSync(join(root, "custom-tree", ".first-tree"), { recursive: true });
+    writeFileSync(
+      treeStatePath(join(root, "custom-tree")),
+      JSON.stringify({
+        schemaVersion: 7,
+        treeId: "custom-tree",
+        treeMode: "dedicated",
+        treeRepoName: "custom-tree",
+      }),
+    );
+    mkdirSync(join(root, "folder-source", ".first-tree"), { recursive: true });
+    writeFileSync(
+      sourceStatePath(join(root, "folder-source")),
+      JSON.stringify({
+        bindingMode: "workspace-root",
+        rootKind: "folder",
+        scope: "workspace",
+        schemaVersion: 3,
+        sourceId: "folder-root",
+        sourceName: "Folder Root",
+        tree: {
+          entrypoint: "/workspaces/folder-root",
+          treeId: "folder-tree",
+          treeMode: "shared",
+          treeRepoName: "folder-tree",
+        },
+      }),
+    );
+
     expect(readSourceState(root)).toMatchObject({
       bindingMode: "workspace-root",
       schemaVersion: 1,
       sourceId: "workspace-root",
       tree: { entrypoint: "/workspaces/first-tree" },
     });
+    const folderSource = readSourceState(join(root, "folder-source"));
+    expect(folderSource).toMatchObject({
+      rootKind: "folder",
+      schemaVersion: 3,
+    });
+    expect(folderSource?.tree).not.toHaveProperty("remoteUrl");
+    expect(folderSource).not.toHaveProperty("workspaceId");
     expect(readTreeState(root)).toEqual({
       published: { remoteUrl: "git@github.com:acme/context-tree.git" },
       schemaVersion: 1,
       treeId: "context-tree",
       treeMode: "shared",
       treeRepoName: "context-tree",
+    });
+    expect(readTreeState(join(root, "custom-tree"))).toEqual({
+      schemaVersion: 7,
+      treeId: "custom-tree",
+      treeMode: "dedicated",
+      treeRepoName: "custom-tree",
     });
     expect(sourceStatePath(root)).toBe(join(root, ".first-tree", "source.json"));
     expect(treeStatePath(root)).toBe(join(root, ".first-tree", "tree.json"));
@@ -113,11 +156,34 @@ describe("tree binding state helpers", () => {
     expect(readSourceState(root)).toBeNull();
     expect(readTreeState(root)).toBeNull();
     expect(readTreeBinding(root, "bad")).toBeNull();
+
+    writeFileSync(sourceStatePath(root), JSON.stringify({ ...sourceState(), tree: [] }));
+    expect(readSourceState(root)).toBeNull();
+
+    writeFileSync(sourceStatePath(root), JSON.stringify({ ...sourceState(), tree: { treeMode: "shared" } }));
+    expect(readSourceState(root)).toBeNull();
+
+    writeFileSync(sourceStatePath(root), JSON.stringify({ ...sourceState(), bindingMode: "future-mode" }));
+    expect(readSourceState(root)).toBeNull();
   });
 
   it("round-trips and sorts tree bindings while ignoring invalid files", () => {
     writeTreeBinding(root, "zeta", binding({ sourceId: "zeta", sourceName: "zeta" }));
     writeTreeBinding(root, "alpha", binding({ sourceId: "alpha", sourceName: "alpha" }));
+    writeFileSync(
+      treeBindingPath(root, "folder"),
+      JSON.stringify({
+        bindingMode: "workspace-member",
+        entrypoint: "/workspaces/first-tree/repos/folder",
+        rootKind: "folder",
+        schemaVersion: 4,
+        scope: "workspace",
+        sourceId: "folder",
+        sourceName: "folder",
+        treeMode: "shared",
+        treeRepoName: "context-tree",
+      }),
+    );
     writeFileSync(join(treeBindingsDir(root), "ignored.txt"), "{}");
     writeFileSync(treeBindingPath(root, "broken"), JSON.stringify({ sourceId: "broken" }));
 
@@ -126,7 +192,14 @@ describe("tree binding state helpers", () => {
       schemaVersion: 1,
       remoteUrl: "git@github.com:acme/api.git",
     });
-    expect(listTreeBindings(root).map((row) => row.sourceId)).toEqual(["alpha", "zeta"]);
+    const folderBinding = readTreeBinding(root, "folder");
+    expect(folderBinding).toMatchObject({
+      rootKind: "folder",
+      schemaVersion: 4,
+    });
+    expect(folderBinding).not.toHaveProperty("remoteUrl");
+    expect(folderBinding).not.toHaveProperty("workspaceId");
+    expect(listTreeBindings(root).map((row) => row.sourceId)).toEqual(["alpha", "folder", "zeta"]);
   });
 
   it("returns null or empty values for missing state files", () => {
@@ -154,6 +227,7 @@ describe("tree binding state helpers", () => {
 
     const folder = buildStableSourceId("", { fallbackRoot: join(root, "My Folder") });
     expect(folder).toMatch(/^my-folder-[a-f0-9]{8}$/u);
+    expect(buildStableSourceId("Plain Source")).toMatch(/^plain-source-[a-f0-9]{8}$/u);
     expect(buildTreeId("Context Tree!")).toBe("context-tree");
     expect(determineScope("workspace-root")).toBe("workspace");
     expect(determineScope("workspace-member")).toBe("workspace");
@@ -162,9 +236,11 @@ describe("tree binding state helpers", () => {
     expect(deriveDefaultEntrypoint("workspace-root", "Source Repo", "First Tree All")).toBe(
       "/workspaces/first-tree-all",
     );
+    expect(deriveDefaultEntrypoint("workspace-root", "Source Repo")).toBe("/workspaces/source-repo");
     expect(deriveDefaultEntrypoint("workspace-member", "First Tree", "First Tree All")).toBe(
       "/workspaces/first-tree-all/repos/first-tree",
     );
+    expect(deriveDefaultEntrypoint("workspace-member", "First Tree")).toBe("/workspaces/workspace/repos/first-tree");
     expect(deriveDefaultEntrypoint("shared-source", "First Tree")).toBe("/repos/first-tree");
     expect(deriveDefaultEntrypoint("standalone-source", "First Tree")).toBe("/");
     expect(relativePathWithin(root, join(root, "repos", "first-tree"))).toBe("repos/first-tree");
@@ -203,6 +279,23 @@ describe("tree binding state helpers", () => {
       ["alpha", "/workspaces/first-tree/repos/alpha"],
       ["api", "/workspaces/first-tree/repos/api-v2"],
     ]);
+
+    writeSourceState(root, sourceState({ members: undefined }));
+    upsertWorkspaceMember(root, "first-tree", tree({ entrypoint: "/workspaces/first-tree/repos/zeta" }), {
+      bindingMode: "workspace-member",
+      entrypoint: "/workspaces/first-tree/repos/zeta",
+      rootKind: "git-repo",
+      sourceId: "zeta",
+      sourceName: "same",
+    });
+    upsertWorkspaceMember(root, "first-tree", tree({ entrypoint: "/workspaces/first-tree/repos/alpha" }), {
+      bindingMode: "workspace-member",
+      entrypoint: "/workspaces/first-tree/repos/alpha",
+      rootKind: "git-repo",
+      sourceId: "alpha",
+      sourceName: "same",
+    });
+    expect(readSourceState(root)?.members?.map((member) => member.sourceId)).toEqual(["alpha", "zeta"]);
   });
 
   it("throws when upserting a member without workspace state and removes source state", () => {
@@ -229,6 +322,7 @@ describe("tree binding state helpers", () => {
       JSON.stringify({
         ...sourceState(),
         members: [
+          null,
           { sourceId: "bad" },
           {
             bindingMode: "workspace-member",
@@ -257,6 +351,10 @@ describe("tree binding state helpers", () => {
   });
 
   it("writes deterministic JSON documents", () => {
+    expect(isLegacyBindingMode("standalone-source")).toBe(true);
+    expect(isLegacyBindingMode("shared-source")).toBe(true);
+    expect(isLegacyBindingMode("workspace-root")).toBe(false);
+
     writeTreeBinding(root, "api", {
       bindingMode: "workspace-member",
       entrypoint: "/workspaces/first-tree/repos/api",

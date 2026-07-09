@@ -20,6 +20,27 @@ const childRegistryMocks = vi.hoisted(() => ({
 }));
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const registrySpawnMock = vi.hoisted(() => vi.fn());
+const originalPlatform = process.platform;
+const originalArch = process.arch;
+
+const prodChannelConfig = {
+  channel: "prod",
+  binName: "first-tree",
+  aliasName: "ft",
+  packageName: "first-tree",
+  defaultHome: "/tmp/home",
+  defaultServerUrl: "https://cloud.first-tree.ai",
+  serviceUnitFile: "first-tree.service",
+  launchdLabel: "first-tree",
+  launchdPlistFile: "first-tree.plist",
+  displayName: "First Tree",
+  portable: {
+    channelPrefix: "prod",
+    publicInstallerPath: "prod/install.sh",
+    downloadBaseUrl: "https://download.first-tree.ai/releases",
+  },
+};
 
 vi.mock("../core/bootstrap.js", () => bootstrapMocks);
 vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
@@ -34,8 +55,9 @@ class MockChild extends EventEmitter {
 
 function installSpawn(child: MockChild): void {
   childRegistryMocks.getChildProcessRegistry.mockReturnValue({
-    spawn: vi.fn(() => ({ child })),
+    spawn: registrySpawnMock,
   });
+  registrySpawnMock.mockImplementationOnce(() => ({ child }));
 }
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
@@ -48,6 +70,12 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.resetModules();
+  vi.doUnmock("node:fs");
+  vi.doMock("../core/channel.js", () => ({ channelConfig: prodChannelConfig }));
+  registrySpawnMock.mockReset();
+  Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   childRegistryMocks.classify.mockReturnValue({ kind: "permanent", reasonCode: "classified" });
@@ -70,6 +98,39 @@ describe("core update helpers", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("selects platform npm commands, including Windows and sibling npm layouts", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        existsSync: (path: Parameters<typeof actual.existsSync>[0]) =>
+          String(path).endsWith("/npm.cmd") || actual.existsSync(path),
+      };
+    });
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "0.6.0\n", stderr: "" });
+    const winUpdate = await import("../core/update.js");
+
+    expect(winUpdate.fetchLatestVersion()).toEqual({ ok: true, version: "0.6.0" });
+    expect(String(spawnSyncMock.mock.calls[0]?.[0])).toMatch(/\/npm\.cmd$/);
+
+    vi.resetModules();
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        existsSync: (path: Parameters<typeof actual.existsSync>[0]) =>
+          String(path).endsWith("/npm") || actual.existsSync(path),
+      };
+    });
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "0.7.0\n", stderr: "" });
+    const siblingUpdate = await import("../core/update.js");
+
+    expect(siblingUpdate.fetchLatestVersion()).toEqual({ ok: true, version: "0.7.0" });
+    expect(String(spawnSyncMock.mock.calls[1]?.[0])).toMatch(/\/npm$/);
   });
 
   it("runs npm installs through the child registry and parses installed versions", async () => {
@@ -151,6 +212,220 @@ describe("core update helpers", () => {
     expect(output).toHaveBeenCalledWith(expect.stringContaining("requires Node >=999.0.0"));
   });
 
+  it("allows npm installs when target engine metadata is absent, malformed, invalid, or already satisfied", async () => {
+    vi.doMock("../core/channel.js", () => ({
+      channelConfig: {
+        channel: "prod",
+        binName: "first-tree",
+        aliasName: "ft",
+        packageName: "first-tree",
+        defaultHome: "/tmp/home",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        serviceUnitFile: "first-tree.service",
+        launchdLabel: "first-tree",
+        launchdPlistFile: "first-tree.plist",
+        displayName: "First Tree",
+      },
+    }));
+    const { installGlobalSpec } = await import("../core/update.js");
+
+    const cases = [
+      { status: 1, stdout: "", stderr: "npm view failed" },
+      { status: 0, stdout: "", stderr: "" },
+      { status: 0, stdout: "not-json", stderr: "" },
+      { status: 0, stdout: JSON.stringify([]), stderr: "" },
+      { status: 0, stdout: JSON.stringify({ engines: { node: "not a range" } }), stderr: "" },
+      { status: 0, stdout: JSON.stringify({ engines: { node: `>=${process.versions.node}` } }), stderr: "" },
+    ];
+
+    for (const [index, metadata] of cases.entries()) {
+      spawnSyncMock.mockReturnValueOnce(metadata);
+      const child = new MockChild();
+      installSpawn(child);
+      const installing = installGlobalSpec("latest");
+      child.stdout.emit("data", Buffer.from(`+ first-tree@0.9.${index}\n`));
+      child.emit("exit", 0, null);
+      await expect(installing).resolves.toMatchObject({ ok: true, mode: "global" });
+    }
+
+    expect(registrySpawnMock).toHaveBeenCalledTimes(cases.length);
+  });
+
+  it("parses nested npm engine metadata and omits installer URLs when portable metadata is not configured", async () => {
+    vi.resetModules();
+    vi.doMock("../core/channel.js", () => ({
+      channelConfig: {
+        channel: "prod",
+        binName: "first-tree",
+        aliasName: "ft",
+        packageName: "first-tree",
+        defaultHome: "/tmp/home",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        serviceUnitFile: "first-tree.service",
+        launchdLabel: "first-tree",
+        launchdPlistFile: "first-tree.plist",
+        displayName: "First Tree",
+        portable: {
+          channelPrefix: "prod",
+          publicInstallerPath: "prod/install.sh",
+          downloadBaseUrl: null,
+        },
+      },
+    }));
+    spawnSyncMock.mockReturnValueOnce({
+      status: 0,
+      stdout: JSON.stringify({ engines: { node: ">=999.0.0" } }),
+      stderr: "",
+    });
+    const child = new MockChild();
+    installSpawn(child);
+
+    const { installGlobalSpec } = await import("../core/update.js");
+    const result = await installGlobalSpec("0.6.0");
+
+    expect(result).toMatchObject({
+      ok: false,
+      mode: "global",
+      retryable: false,
+      reasonCode: "npm_ebadengine",
+    });
+    if (result.ok) throw new Error("expected engine mismatch");
+    expect(result.reason).toContain("or migrate to the portable install path from the web console.");
+    expect(result.reason).not.toContain("installer: https://");
+    expect(childRegistryMocks.getChildProcessRegistry().spawn).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for dev-channel npm publishing paths", async () => {
+    vi.doMock("../core/channel.js", () => ({
+      channelConfig: {
+        channel: "dev",
+        binName: "first-tree-dev",
+        aliasName: "ftd",
+        packageName: null,
+        defaultHome: "/tmp/home",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        serviceUnitFile: "first-tree-dev.service",
+        launchdLabel: "first-tree-dev",
+        launchdPlistFile: "first-tree-dev.plist",
+        displayName: "First Tree Dev",
+        portable: { channelPrefix: null, publicInstallerPath: null, downloadBaseUrl: null },
+      },
+    }));
+    const { fetchLatestVersion, installGlobalSpec } = await import("../core/update.js");
+
+    expect(await installGlobalSpec("latest")).toMatchObject({
+      ok: false,
+      mode: "global",
+      reason: expect.stringContaining("does not publish to npm"),
+    });
+    expect(fetchLatestVersion()).toEqual({
+      ok: false,
+      reason: "this binary's channel does not publish to npm (dev channel).",
+    });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("reports unsupported portable platforms before metadata download", async () => {
+    vi.doMock("../core/channel.js", () => ({
+      channelConfig: {
+        channel: "prod",
+        binName: "first-tree",
+        aliasName: "ft",
+        packageName: "first-tree",
+        defaultHome: "/tmp/home",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        serviceUnitFile: "first-tree.service",
+        launchdLabel: "first-tree",
+        launchdPlistFile: "first-tree.plist",
+        displayName: "First Tree",
+        portable: {
+          channelPrefix: "prod",
+          publicInstallerPath: "prod/install.sh",
+          downloadBaseUrl: "https://download.first-tree.ai/releases",
+        },
+      },
+    }));
+    const { installPortableSpec } = await import("../core/update.js");
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "freebsd" });
+    await expect(installPortableSpec("1.2.3")).resolves.toMatchObject({
+      ok: false,
+      reason: "portable self-update is not supported on freebsd-x64",
+    });
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    Object.defineProperty(process, "arch", { configurable: true, value: "ia32" });
+    await expect(installPortableSpec("1.2.3")).resolves.toMatchObject({
+      ok: false,
+      reason: "portable self-update is not supported on linux-ia32",
+    });
+    expect(cliFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("validates portable latest metadata shape and channel before returning a version", async () => {
+    vi.doMock("../core/channel.js", () => ({
+      channelConfig: {
+        channel: "prod",
+        binName: "first-tree",
+        aliasName: "ft",
+        packageName: "first-tree",
+        defaultHome: "/tmp/home",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        serviceUnitFile: "first-tree.service",
+        launchdLabel: "first-tree",
+        launchdPlistFile: "first-tree.plist",
+        displayName: "First Tree",
+        portable: {
+          channelPrefix: "prod",
+          publicInstallerPath: "prod/install.sh",
+          downloadBaseUrl: "https://download.first-tree.ai/releases/",
+        },
+      },
+    }));
+    const { fetchPortableLatestVersion } = await import("../core/update.js");
+    const base = {
+      schemaVersion: 1,
+      channel: "staging",
+      version: "1.2.3",
+      gitSha: "abc123",
+      nodeVersion: "v24.0.0",
+      packageName: "first-tree",
+      binName: "first-tree",
+      aliasName: "ft",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      manifestUrl: "https://download.first-tree.ai/releases/prod/1.2.3/manifest.json",
+      assets: [
+        {
+          platform: "linux-x64",
+          fileName: "first-tree-linux-x64.tar.gz",
+          url: "https://download.first-tree.ai/releases/prod/1.2.3/first-tree-linux-x64.tar.gz",
+          sha256: "a".repeat(64),
+          size: 1,
+        },
+      ],
+    };
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: vi.fn(async () => JSON.stringify(base)),
+    } as unknown as Response);
+
+    await expect(fetchPortableLatestVersion()).resolves.toEqual({
+      ok: false,
+      reason: 'Refusing portable latest metadata: portable metadata channel "staging" does not match my channel "prod"',
+    });
+
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: vi.fn(async () => "{not-json"),
+    } as unknown as Response);
+    await expect(fetchPortableLatestVersion()).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("invalid JSON from"),
+    });
+  });
+
   it("classifies child errors, non-zero exits, and timeouts", async () => {
     vi.resetModules();
     vi.doMock("../core/channel.js", () => ({
@@ -219,8 +494,14 @@ describe("core update helpers", () => {
     spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "registry down\n" });
     expect(fetchLatestVersion()).toEqual({ ok: false, reason: "registry down" });
 
+    spawnSyncMock.mockReturnValueOnce({ status: 8, stdout: undefined, stderr: undefined });
+    expect(fetchLatestVersion()).toEqual({ ok: false, reason: "npm view exited with code 8" });
+
     spawnSyncMock.mockReturnValueOnce({ status: 7, stdout: "", stderr: "" });
     expect(fetchLatestVersion()).toEqual({ ok: false, reason: "npm view exited with code 7" });
+
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: undefined, stderr: "" });
+    expect(fetchLatestVersion()).toEqual({ ok: false, reason: "npm view returned non-semver value: " });
 
     spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "latest\n", stderr: "" });
     expect(fetchLatestVersion()).toEqual({ ok: false, reason: "npm view returned non-semver value: latest" });
@@ -240,6 +521,18 @@ describe("core update helpers", () => {
     await expect(fetchServerCommandVersion()).resolves.toEqual({
       ok: false,
       reason: "server returned non-semver version: latest",
+    });
+
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn(async () => {
+        throw "json failed";
+      }),
+    } as unknown as Response);
+    await expect(fetchServerCommandVersion()).resolves.toEqual({
+      ok: false,
+      reason: "server returned invalid JSON: json failed",
     });
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse({}, false, 503));

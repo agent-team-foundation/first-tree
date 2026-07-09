@@ -1,11 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTreeLevel, renderContextTree, runTreeTreeCommand } from "../commands/tree/tree.js";
+import {
+  parseTreeLevel,
+  readContextTreeSnapshot,
+  renderContextTree,
+  runTreeTreeCommand,
+} from "../commands/tree/tree.js";
 import type { CommandContext } from "../commands/types.js";
 import { setJsonMode } from "../core/output.js";
 
@@ -57,12 +62,16 @@ function makeTreeFixture(): string {
   const missingTitle = join(root, "missing-title");
   const missingOwners = join(root, "missing-owners");
   const emptyOwners = join(root, "empty-owners");
+  const arrayFrontmatter = join(root, "array-frontmatter");
+  const scalarFrontmatter = join(root, "scalar-frontmatter");
   const scratch = join(root, "scratch");
 
   mkdirSync(deep, { recursive: true });
   mkdirSync(missingTitle, { recursive: true });
   mkdirSync(missingOwners, { recursive: true });
   mkdirSync(emptyOwners, { recursive: true });
+  mkdirSync(arrayFrontmatter, { recursive: true });
+  mkdirSync(scalarFrontmatter, { recursive: true });
   mkdirSync(scratch, { recursive: true });
 
   writeNode(root, "Root Node", "Root description");
@@ -77,9 +86,12 @@ function makeTreeFixture(): string {
   writeMarkdown(join(missingTitle, "NODE.md"), "owners: [alice]\n");
   writeMarkdown(join(missingOwners, "NODE.md"), "title: Missing Owners\n");
   writeMarkdown(join(emptyOwners, "NODE.md"), "title: Empty Owners\nowners: []\n");
+  writeFileSync(join(arrayFrontmatter, "NODE.md"), "---\n[]\n---\n# Invalid\n");
+  writeFileSync(join(scalarFrontmatter, "NODE.md"), "---\ntrue\n---\n# Invalid\n");
   writeMarkdown(join(development, "missing-title.md"), "owners: [alice]\n");
   writeMarkdown(join(development, "missing-owners.md"), "title: Missing Owners Leaf\n");
   writeMarkdown(join(development, "empty-owners.md"), "title: Empty Owners Leaf\nowners: []\n");
+  writeMarkdown(join(development, "numeric-owner.md"), "title: Numeric Owner\nowners: [alice, 3]\n");
   writeLeaf(join(scratch, "note.md"), "Scratch Note", "Temporary details");
   writeFileSync(join(development, "notes.txt"), "not markdown\n");
   writeFileSync(join(root, "AGENTS.md"), frontmatter("title: Should Skip Agents\nowners: [alice]\n"));
@@ -207,6 +219,15 @@ describe("tree tree renderer", () => {
     );
   });
 
+  it("rejects a target that resolves outside the repository through a symlink", () => {
+    const root = makeTreeFixture();
+    const outside = makeTempDir("ft-tree-outside-");
+    mkdirSync(join(outside, "escape"), { recursive: true });
+    symlinkSync(join(outside, "escape"), join(root, "linked-outside"), "dir");
+
+    expect(() => readContextTreeSnapshot(root, { target: "linked-outside" })).toThrow("outside the git repository");
+  });
+
   it("matches patterns against relative path, filename, title, and description while preserving ancestors", () => {
     const root = makeTreeFixture();
 
@@ -243,6 +264,8 @@ describe("tree tree renderer", () => {
 
     expect(output).not.toContain("Missing");
     expect(output).not.toContain("Empty Owners");
+    expect(output).not.toContain("array-frontmatter");
+    expect(output).not.toContain("scalar-frontmatter");
     expect(output).not.toContain("Scratch Note");
     expect(output).not.toContain("notes.txt");
     expect(output).not.toContain("Should Skip");
@@ -256,9 +279,82 @@ describe("tree tree renderer", () => {
     expect(output).not.toContain(".next");
     expect(output).not.toContain(".turbo");
   });
+
+  it("treats blank optional metadata as absent", () => {
+    const root = makeTreeFixture();
+    const blank = join(root, "blank-description");
+    mkdirSync(blank, { recursive: true });
+    writeFileSync(
+      join(blank, "NODE.md"),
+      `${frontmatter("title: Blank Description\nowners: [alice]\ndescription: '   '\n")}# Blank\n`,
+    );
+
+    expect(renderContextTree(root)).toContain("blank-description/ [Blank Description]\n");
+    expect(renderContextTree(root)).not.toContain("Blank Description] ->");
+  });
+
+  it("rejects roots and targets that are not valid Context Tree directories", () => {
+    const root = makeTreeFixture();
+    const plainDir = makeTempDir("ft-tree-empty-");
+    const plainFile = join(makeTempDir("ft-tree-file-"), "plain.txt");
+    writeFileSync(plainFile, "not a directory");
+
+    expect(() => readContextTreeSnapshot(plainDir)).toThrow("No valid Context Tree root node found");
+    expect(() => readContextTreeSnapshot(plainFile)).toThrow('Path "." is not an existing directory.');
+    expect(() => readContextTreeSnapshot(root, { target: "scratch" })).toThrow(
+      'Target path "scratch" is not a valid Context Tree directory node.',
+    );
+    expect(() => readContextTreeSnapshot(root, { target: ".." })).toThrow('Path ".." is outside the git repository.');
+  });
+
+  it("supports wildcard question marks and parseTreeLevel edge values", () => {
+    const root = makeTreeFixture();
+
+    expect(parseTreeLevel(undefined)).toBeUndefined();
+    expect(() => parseTreeLevel("9007199254740993")).toThrow("Invalid --level");
+    expect(renderContextTree(root, { pattern: "H??P*" })).toContain(
+      "docs/development/http.md [HTTP Leaf] -> HTTP routes",
+    );
+  });
+
+  it("keeps a readable root node when child directory enumeration fails", () => {
+    const root = makeTreeFixture();
+
+    chmodSync(root, 0o300);
+    try {
+      const snapshot = readContextTreeSnapshot(root);
+      expect(snapshot.tree.metadata.title).toBe("Root Node");
+      expect(snapshot.tree.children).toEqual([]);
+    } finally {
+      chmodSync(root, 0o700);
+    }
+  });
 });
 
 describe("tree tree command action", () => {
+  it("rejects paths outside any git repository", () => {
+    const root = makeTempDir("ft-tree-no-git-");
+    writeNode(root, "Root Node", "Root description");
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    process.chdir(root);
+
+    expect(() => runTreeTreeCommand(context(commandWithOptions({})))).toThrow(ProcessExit);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
+      ok: false,
+      error: {
+        code: "TREE_TREE_INVALID_PATH",
+        message: "Path must be inside a git repository.",
+      },
+    });
+  });
+
   it("prints the selected subtree with repo-root ancestor context in human mode", () => {
     const root = makeTreeFixture();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -321,6 +417,22 @@ describe("tree tree command action", () => {
     );
   });
 
+  it("uses a detached short SHA branch label when origin/main is absent", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const shortSha = git(root, "rev-parse", "--short", "HEAD");
+    git(root, "checkout", "--detach", "HEAD");
+    process.chdir(root);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
+
+    const output = readMockOutput(stderr);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(output).toContain(`Branch: detached:${shortSha}`);
+    expect(output).toContain(`Warning: current branch "detached:${shortSha}" is not main/master`);
+  });
+
   it("warns when the current tree branch is not mainline", () => {
     const root = makeTreeFixture();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -336,6 +448,22 @@ describe("tree tree command action", () => {
     expect(output).toContain(
       'Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.',
     );
+  });
+
+  it("uses unknown branch metadata when git branch inspection fails", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    rmSync(join(root, ".git"), { recursive: true, force: true });
+    writeFileSync(join(root, ".git"), "not a gitfile\n");
+    process.chdir(root);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
+
+    const output = readMockOutput(stderr);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(output).toContain("Branch: unknown");
+    expect(output).toContain('Warning: current branch "unknown" is not main/master');
   });
 
   it("treats a non-numeric -L value as a path only when no positional path is present", () => {
@@ -569,6 +697,27 @@ describe("tree tree command action", () => {
     });
   });
 
+  it("rejects excess positional paths and non-string level values", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    process.chdir(root);
+
+    expect(() => runTreeTreeCommand(context(commandWithOptions({}, ["docs", "development"])))).toThrow(ProcessExit);
+    expect(() => runTreeTreeCommand(context(commandWithOptions({ level: 1 })))).toThrow(ProcessExit);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    const errors = readMockOutput(stderr)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { error: { code: string; message: string } });
+    expect(errors.map((entry) => entry.error.code)).toEqual(["TREE_TREE_INVALID_PATH", "TREE_TREE_INVALID_LEVEL"]);
+  });
+
   it("rejects repo-outside paths with a stable error envelope", () => {
     const root = makeTreeFixture();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -586,6 +735,56 @@ describe("tree tree command action", () => {
       error: {
         code: "TREE_TREE_INVALID_PATH",
         message: 'Path ".." is outside the git repository.',
+      },
+    });
+  });
+
+  it("reports generic tree read failures with TREE_TREE_FAILED", () => {
+    const root = makeTempDir("ft-tree-invalid-root-");
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    git(root, "init", "-b", "main");
+    writeFileSync(join(root, "README.md"), "# no context tree\n");
+    process.chdir(root);
+
+    expect(() => runTreeTreeCommand(context(commandWithOptions({ pull: false })))).toThrow(ProcessExit);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
+      ok: false,
+      error: {
+        code: "TREE_TREE_FAILED",
+        message: "No valid Context Tree root node found at NODE.md.",
+      },
+    });
+  });
+
+  it("stringifies non-Error command failures", () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+      throw new ProcessExit(typeof code === "number" ? code : 0);
+    });
+    const command = {
+      opts: () => {
+        throw "option parser failed";
+      },
+      args: [],
+    } as unknown as Command;
+
+    expect(() => runTreeTreeCommand(context(command))).toThrow(ProcessExit);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(JSON.parse(readMockOutput(stderr))).toEqual({
+      ok: false,
+      error: {
+        code: "TREE_TREE_FAILED",
+        message: "option parser failed",
       },
     });
   });

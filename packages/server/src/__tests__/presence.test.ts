@@ -1,4 +1,6 @@
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import * as presenceService from "../services/presence.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
@@ -66,6 +68,49 @@ describe("Presence Service", () => {
     await presenceService.heartbeatInstance(app.db, "test-heartbeat-instance");
   });
 
+  it("touches per-agent liveness without changing presence status", async () => {
+    const app = getApp();
+    const { agent } = await createTestAgent(app, { name: "touch-a1" });
+    await presenceService.setOnline(app.db, agent.uuid, "touch-instance");
+    await app.db
+      .update(agentPresence)
+      .set({ lastSeenAt: new Date("2026-01-01T00:00:00.000Z") })
+      .where(eq(agentPresence.agentId, agent.uuid));
+
+    await presenceService.touchAgent(app.db, agent.uuid);
+
+    const presence = await presenceService.getPresence(app.db, agent.uuid);
+    expect(presence?.status).toBe("online");
+    expect(presence?.lastSeenAt.getTime()).toBeGreaterThan(new Date("2026-01-01T00:00:00.000Z").getTime());
+  });
+
+  it("marks stale agents offline by per-agent heartbeat age", async () => {
+    const app = getApp();
+    const { agent, clientId } = await createTestAgent(app, { name: "stale-agent-a1" });
+    await presenceService.setOnline(app.db, agent.uuid, "stale-agent-instance");
+    await app.db.execute(sql`
+      UPDATE agent_presence
+         SET last_seen_at = NOW() - INTERVAL '120 seconds',
+             client_id = ${clientId},
+             runtime_state = 'working',
+             active_sessions = 1,
+             total_sessions = 2
+       WHERE agent_id = ${agent.uuid}
+    `);
+
+    const staleAgentIds = await presenceService.markStaleAgents(app.db, 60);
+
+    expect(staleAgentIds).toEqual([agent.uuid]);
+    const presence = await presenceService.getPresence(app.db, agent.uuid);
+    expect(presence).toMatchObject({
+      status: "offline",
+      clientId: null,
+      runtimeState: null,
+      activeSessions: null,
+      totalSessions: null,
+    });
+  });
+
   it("cleans up stale presence", async () => {
     const app = getApp();
     const { agent } = await createTestAgent(app, { name: "stale-a1" });
@@ -74,7 +119,6 @@ describe("Presence Service", () => {
     await presenceService.setOnline(app.db, agent.uuid, "stale-instance");
 
     // Register stale instance with old heartbeat
-    const { sql } = await import("drizzle-orm");
     await app.db.execute(sql`
       INSERT INTO server_instances (instance_id, last_heartbeat)
       VALUES ('stale-instance', NOW() - INTERVAL '120 seconds')

@@ -30,7 +30,13 @@ import { createAgent } from "../services/agent.js";
 import { createMeChat, joinMeChat, leaveMeChat, markMeChatRead, setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { addChatParticipants } from "../services/participant-mode.js";
-import { recomputeChatWatchers } from "../services/watcher.js";
+import {
+  ensureCanJoin,
+  joinAsParticipant,
+  leaveAsParticipant,
+  recomputeChatWatchers,
+  recomputeWatchersForAgent,
+} from "../services/watcher.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 describe("chat membership invariants", () => {
@@ -103,6 +109,55 @@ describe("chat membership invariants", () => {
       .from(chatMembership)
       .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, admin.humanAgentUuid)));
     expect(watcher?.accessMode).toBe("watcher");
+  });
+
+  it("recomputes watcher rows through the per-agent fan-out helper", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const managed = await createAgent(app.db, {
+      name: `mng-agent-fanout-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Mng Agent Fanout",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    const peer = await createTestAgent(app, { name: `peer-agent-fanout-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
+      participantIds: [managed.uuid],
+    });
+    await app.db
+      .delete(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, admin.humanAgentUuid)));
+
+    await recomputeWatchersForAgent(app.db, managed.uuid);
+
+    const [watcher] = await app.db
+      .select({ accessMode: chatMembership.accessMode })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, admin.humanAgentUuid)));
+    expect(watcher?.accessMode).toBe("watcher");
+  });
+
+  it("handles idempotent joins, missing leaves, and join precondition guard states", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `peer-guard-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    await expect(joinAsParticipant(app.db, chatId, admin.humanAgentUuid)).resolves.toEqual({
+      chatId,
+      inserted: false,
+      carried: null,
+    });
+    await expect(leaveAsParticipant(app.db, chatId, crypto.randomUUID())).rejects.toThrow(/Not a participant/);
+    expect(() => ensureCanJoin("participant")).toThrow(/Already a participant/);
+    expect(() => ensureCanJoin(null)).toThrow(/Not a watcher/);
+    expect(() => ensureCanJoin("watching")).not.toThrow();
   });
 
   it("detach (leaveMeChat without remaining managed speaker) preserves chat_user_state row", async () => {

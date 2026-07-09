@@ -8,11 +8,16 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
 describe("GET /orgs/:orgId/github-app-installation", () => {
   const getApp = useTestApp();
 
-  async function seedInstallation(app: ReturnType<typeof getApp>, orgId: string, installationId: number) {
+  async function seedInstallation(
+    app: ReturnType<typeof getApp>,
+    orgId: string,
+    installationId: number,
+    opts: { accountType?: "Organization" | "User" } = {},
+  ) {
     await upsertInstallationFromMetadata(app.db, {
       installation: {
         id: installationId,
-        accountType: "Organization",
+        accountType: opts.accountType ?? "Organization",
         accountLogin: `org-${installationId}`,
         accountGithubId: installationId * 10,
         permissions: { contents: "read" },
@@ -60,5 +65,34 @@ describe("GET /orgs/:orgId/github-app-installation", () => {
       permissions: { contents: "read" },
       events: ["issues"],
     });
+  });
+
+  it("returns 404 when no installation is bound", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `gh-none-${crypto.randomUUID().slice(0, 8)}` });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json<{ error: string }>().error).toContain("No GitHub App installation");
+  });
+
+  it("uses the user installation manage URL for personal-account installs", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `gh-user-${crypto.randomUUID().slice(0, 8)}` });
+    await seedInstallation(app, admin.organizationId, 901_002, { accountType: "User" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ manageUrl: string }>().manageUrl).toBe("https://github.com/settings/installations/901002");
   });
 });

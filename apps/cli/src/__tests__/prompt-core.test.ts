@@ -84,6 +84,13 @@ describe("prompt core", () => {
         url: { _tag: "field", options: { prompt: { message: "Server URL" }, env: "FIRST_TREE_SERVER_URL" } },
       },
       token: { _tag: "field", options: { prompt: { message: "Token", type: "password" }, env: "TOKEN" } },
+      nested: {
+        _tag: "optional",
+        shape: {
+          value: { _tag: "field", options: { prompt: { message: "Nested" }, env: "NESTED_VALUE" } },
+        },
+      },
+      unlabeled: { _tag: "field", options: { prompt: { message: "No Env" } } },
     };
 
     await expect(
@@ -93,7 +100,7 @@ describe("prompt core", () => {
         configDir: join(home, "config"),
         noInteractive: true,
       }),
-    ).rejects.toThrow("server.url  (env: FIRST_TREE_SERVER_URL)");
+    ).rejects.toThrow("unlabeled");
   });
 
   it("writes prompted input, password, select, and follow-up input values", async () => {
@@ -101,6 +108,7 @@ describe("prompt core", () => {
     const schema = {
       server: {
         url: { _tag: "field", options: { prompt: { message: "Server URL" } } },
+        token: { _tag: "field", options: { prompt: { message: "Server Token" } } },
       },
       secret: { _tag: "field", options: { prompt: { message: "Secret", type: "password" } } },
       runtime: {
@@ -126,23 +134,77 @@ describe("prompt core", () => {
           },
         },
       },
+      provider: {
+        _tag: "field",
+        options: {
+          prompt: {
+            message: "Provider",
+            type: "select",
+            choices: [{ name: "Codex", value: "codex" }],
+          },
+        },
+      },
     };
     setTty(true);
-    inputMock.mockResolvedValueOnce("http://first-tree.test").mockResolvedValueOnce("custom-runtime");
+    inputMock
+      .mockResolvedValueOnce("http://first-tree.test")
+      .mockResolvedValueOnce("server-token")
+      .mockResolvedValueOnce("custom-runtime");
     passwordMock.mockResolvedValueOnce("secret-value");
-    selectMock.mockResolvedValueOnce("__input__").mockResolvedValueOnce("__auto__");
+    selectMock.mockResolvedValueOnce("__input__").mockResolvedValueOnce("__auto__").mockResolvedValueOnce("codex");
 
     await expect(promptMissingFields({ schema, role: "client", configDir: join(home, "config") })).resolves.toEqual({
-      server: { url: "http://first-tree.test" },
+      server: { url: "http://first-tree.test", token: "server-token" },
       secret: "secret-value",
       runtime: "custom-runtime",
+      provider: "codex",
     });
 
     const yaml = readFileSync(join(home, "config", "client.yaml"), "utf8");
     expect(yaml).toContain("url: http://first-tree.test");
+    expect(yaml).toContain("token: server-token");
     expect(yaml).toContain("secret: secret-value");
     expect(yaml).toContain("runtime: custom-runtime");
+    expect(yaml).toContain("provider: codex");
     expect(yaml).not.toContain("skip:");
+
+    const customValueValidate = inputMock.mock.calls[2]?.[0]?.validate as
+      | ((value: string) => true | string)
+      | undefined;
+    expect(customValueValidate?.("")).toBe("Value is required");
+    expect(customValueValidate?.("filled")).toBe(true);
+  });
+
+  it("uses the default client config path when configDir is omitted", async () => {
+    const { promptMissingFields } = await import("../core/prompt.js");
+    setTty(true);
+    inputMock.mockResolvedValueOnce("https://default-config.test");
+
+    await expect(
+      promptMissingFields({
+        schema: {
+          server: {
+            url: { _tag: "field", options: { prompt: { message: "Server URL" } } },
+          },
+        },
+        role: "client",
+      }),
+    ).resolves.toEqual({ server: { url: "https://default-config.test" } });
+
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("url: https://default-config.test");
+  });
+
+  it("returns an empty prompt result when no schema prompts are missing", async () => {
+    const { promptMissingFields } = await import("../core/prompt.js");
+
+    await expect(
+      promptMissingFields({
+        schema: {},
+        role: "client",
+        configDir: join(home, "config"),
+        noInteractive: true,
+      }),
+    ).resolves.toEqual({});
   });
 
   it("resolves add-agent canonical names and rejects missing setup or tombstones", async () => {
@@ -168,6 +230,34 @@ describe("prompt core", () => {
     await expect(promptAddAgent({ agentId: "tombstone" })).rejects.toThrow("has no server-side name");
   });
 
+  it("adds login guidance when server URL resolution fails during add-agent", async () => {
+    vi.doMock("../core/bootstrap.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../core/bootstrap.js")>()),
+      ensureFreshAccessToken: ensureFreshAccessTokenMock,
+      loadCredentials: vi.fn(() => ({ accessToken: "access", refreshToken: "refresh", serverUrl: "https://old.test" })),
+      resolveServerUrl: vi.fn(() => {
+        throw new Error("invalid server URL");
+      }),
+    }));
+    const { promptAddAgent } = await import("../core/prompt.js");
+
+    await expect(promptAddAgent({ agentId: "bad-url" })).rejects.toThrow("Run `first-tree-dev login <code>`");
+  });
+
+  it("stringifies non-Error server URL resolution failures during add-agent", async () => {
+    vi.doMock("../core/bootstrap.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../core/bootstrap.js")>()),
+      ensureFreshAccessToken: ensureFreshAccessTokenMock,
+      loadCredentials: vi.fn(() => ({ accessToken: "access", refreshToken: "refresh", serverUrl: "https://old.test" })),
+      resolveServerUrl: vi.fn(() => {
+        throw "invalid server URL string";
+      }),
+    }));
+    const { promptAddAgent } = await import("../core/prompt.js");
+
+    await expect(promptAddAgent({ agentId: "bad-url" })).rejects.toThrow("invalid server URL string");
+  });
+
   it("prompts for an agent id when omitted", async () => {
     vi.doMock("../core/bootstrap.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../core/bootstrap.js")>()),
@@ -183,5 +273,9 @@ describe("prompt core", () => {
 
     await expect(promptAddAgent()).resolves.toEqual({ name: "prompted", agentId: "agent-from-prompt" });
     expect(cliFetchMock.mock.calls[0]?.[0]).toBe("http://override.test/api/v1/agents/agent-from-prompt");
+
+    const validate = inputMock.mock.calls[0]?.[0]?.validate as ((value: string) => true | string) | undefined;
+    expect(validate?.("")).toBe("Agent UUID is required");
+    expect(validate?.("agent-from-prompt")).toBe(true);
   });
 });

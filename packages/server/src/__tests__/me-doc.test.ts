@@ -95,4 +95,40 @@ describe("getMeDocPreview", () => {
       NotFoundError,
     );
   });
+
+  it("returns not found when the workspace root itself is missing", async () => {
+    const workspacesRoot = await mkdtemp(join(tmpdir(), "first-tree-workspaces-missing-"));
+
+    await expect(getMeDocPreview({ ...baseInput, path: "guide.md", workspacesRoot })).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+
+  it("returns not found when the markdown path is a directory", async () => {
+    const { workspacesRoot, workspaceRoot } = await makeWorkspace();
+    await mkdir(join(workspaceRoot, "directory.md"));
+
+    await expect(getMeDocPreview({ ...baseInput, path: "directory.md", workspacesRoot })).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+
+  it("normalizes the public ref path separately from the resolved workspace path", async () => {
+    const { workspacesRoot, workspaceRoot } = await makeWorkspace();
+    await mkdir(join(workspaceRoot, "nested"));
+    await writeFile(join(workspaceRoot, "guide.md"), "# Guide", "utf8");
+
+    await expect(
+      getMeDocPreview({ ...baseInput, basePath: "nested", path: "../guide.md", workspacesRoot }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("rejects empty public ref paths even when the base path resolves to a markdown file", async () => {
+    const { workspacesRoot, workspaceRoot } = await makeWorkspace();
+    await writeFile(join(workspaceRoot, "guide.md"), "# Guide", "utf8");
+
+    await expect(getMeDocPreview({ ...baseInput, basePath: "guide.md", path: "", workspacesRoot })).rejects.toThrow(
+      /must name a markdown file/,
+    );
+  });
 });

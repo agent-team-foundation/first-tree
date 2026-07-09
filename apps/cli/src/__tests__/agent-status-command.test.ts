@@ -154,6 +154,70 @@ describe("agent status command", () => {
     expect(output()).toContain('Agent "missing-agent" is not running');
   });
 
+  it("skips failed org activity responses and renders nullable runtime fields", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ memberships: [{ organizationId: "org-a" }, { organizationId: "org-b" }] }))
+      .mockResolvedValueOnce(jsonResponse("down", false, 503))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          total: 1,
+          running: 1,
+          byState: { idle: 0, working: 0, blocked: 1, error: 0 },
+          clients: 1,
+          agents: [
+            {
+              agentId: "agent-nullable",
+              clientId: null,
+              runtimeType: null,
+              runtimeState: null,
+              activeSessions: 3,
+              totalSessions: null,
+            },
+            {
+              agentId: null,
+              clientId: null,
+              runtimeType: null,
+              runtimeState: null,
+              activeSessions: null,
+              totalSessions: null,
+            },
+          ],
+        }),
+      );
+
+    await runStatus();
+
+    expect(output()).toContain("agent-nullable");
+    expect(output()).toContain("3/0");
+    expect(output()).toContain("—");
+
+    printLineMock.mockClear();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ memberships: [{ organizationId: "org-a" }] })).mockResolvedValueOnce(
+      jsonResponse({
+        total: 1,
+        running: 1,
+        byState: { idle: 0, working: 0, blocked: 1, error: 0 },
+        clients: 1,
+        agents: [
+          {
+            agentId: "agent-nullable",
+            clientId: null,
+            runtimeType: null,
+            runtimeState: null,
+            activeSessions: 3,
+            totalSessions: null,
+          },
+        ],
+      }),
+    );
+
+    await runStatus(["agent-nullable"]);
+
+    expect(output()).toContain("Runtime: —");
+    expect(output()).toContain("State: —");
+    expect(output()).toContain("Sessions: 3 active / 0 total");
+  });
+
   it("maps /me failures and unexpected errors to clean CLI failures", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse("nope", false, 503));
 
@@ -167,5 +231,11 @@ describe("agent status command", () => {
 
     await expect(runStatus()).rejects.toMatchObject({ code: "STATUS_ERROR" });
     expect(failMock).toHaveBeenCalledWith("STATUS_ERROR", "credentials missing");
+
+    failMock.mockClear();
+    bootstrapMocks.ensureFreshAccessToken.mockRejectedValueOnce("credentials string");
+
+    await expect(runStatus()).rejects.toMatchObject({ code: "STATUS_ERROR" });
+    expect(failMock).toHaveBeenCalledWith("STATUS_ERROR", "credentials string");
   });
 });

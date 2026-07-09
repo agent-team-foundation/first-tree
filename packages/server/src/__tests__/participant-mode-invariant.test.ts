@@ -4,6 +4,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { createAgent } from "../services/agent.js";
 import { addParticipant, createChat, ensureParticipant } from "../services/chat.js";
 import { createMeChat } from "../services/me-chat.js";
+import { addChatParticipants } from "../services/participant-mode.js";
 import { createAdminContext, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -164,5 +165,32 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
     await ensureParticipant(app.db, chat.id, late.uuid);
 
     expect(await loadMode(app, chat.id, late.uuid)).toBe("mention_only");
+  });
+
+  it("addChatParticipants rejects missing participants before writing rows", async () => {
+    const app = getApp();
+    const humanCtx = await createTestAgent(app, { type: "human" });
+    const chat = await createChat(app.db, humanCtx.agent.uuid, {
+      type: "group",
+      participantIds: [],
+    });
+
+    await expect(
+      app.db.transaction((tx) => addChatParticipants(tx, chat.id, [{ agentId: "missing-agent" }])),
+    ).rejects.toThrow("Agents not found: missing-agent");
+  });
+
+  it("addChatParticipants assertHuman rejects non-human agents", async () => {
+    const app = getApp();
+    const humanCtx = await createTestAgent(app, { type: "human" });
+    const { agent } = await createTestAgent(app, { type: "agent" });
+    const chat = await createChat(app.db, humanCtx.agent.uuid, {
+      type: "group",
+      participantIds: [],
+    });
+
+    await expect(
+      app.db.transaction((tx) => addChatParticipants(tx, chat.id, [{ agentId: agent.uuid }], { assertHuman: true })),
+    ).rejects.toThrow("assertHuman violated");
   });
 });

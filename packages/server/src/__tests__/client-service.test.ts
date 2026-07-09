@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
@@ -18,6 +18,116 @@ import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("client service: disconnectClient", () => {
   const getApp = useTestApp();
+
+  it("assertClientOwner hides missing and cross-user clients as not found", async () => {
+    const app = getApp();
+    const owner = await createTestAgent(app, { name: `cs-owner-${crypto.randomUUID().slice(0, 6)}` });
+    const other = await createTestAgent(app, { name: `cs-other-${crypto.randomUUID().slice(0, 6)}` });
+
+    await expect(clientService.assertClientOwner(app.db, "missing-client", { userId: owner.userId })).rejects.toThrow(
+      /not found/i,
+    );
+    await expect(clientService.assertClientOwner(app.db, owner.clientId, { userId: other.userId })).rejects.toThrow(
+      /not found/i,
+    );
+    await expect(clientService.assertClientNotRetired(app.db, "missing-client")).rejects.toThrow(/not found/i);
+  });
+
+  it("classifies registerClient conflicts after a lost upsert race", async () => {
+    function makeRaceDb(current: { userId: string | null; retiredAt: Date | null } | undefined) {
+      const selectResults = [[], current ? [current] : []];
+      return {
+        select: vi.fn(() => {
+          const rows = selectResults.shift() ?? [];
+          return {
+            from: () => ({
+              where: () => ({
+                limit: async () => rows,
+              }),
+            }),
+          };
+        }),
+        insert: vi.fn(() => ({
+          values: () => ({
+            onConflictDoUpdate: () => ({
+              returning: async () => [],
+            }),
+          }),
+        })),
+      };
+    }
+    const data = {
+      clientId: "client-race",
+      userId: "user-a",
+      organizationId: "org-a",
+      instanceId: "instance-a",
+    };
+
+    await expect(
+      clientService.registerClient(makeRaceDb({ userId: "user-a", retiredAt: new Date() }) as never, data),
+    ).rejects.toMatchObject({ statusCode: 410 });
+    await expect(
+      clientService.registerClient(makeRaceDb({ userId: "user-b", retiredAt: null }) as never, data),
+    ).rejects.toMatchObject({ statusCode: 403, code: "CLIENT_USER_MISMATCH" });
+    await expect(clientService.registerClient(makeRaceDb(undefined) as never, data)).rejects.toThrow(
+      /changed concurrently/,
+    );
+  });
+
+  it("registerClient shallow-merges the last update attempt into existing metadata", async () => {
+    const app = getApp();
+    const { userId, organizationId } = await createTestAgent(app, {
+      name: `cs-register-update-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const clientId = `client-update-${crypto.randomUUID().slice(0, 8)}`;
+    await clientService.registerClient(app.db, { clientId, userId, organizationId, instanceId: "first" });
+    await app.db
+      .update(clients)
+      .set({ metadata: { sibling: "kept" } })
+      .where(eq(clients.id, clientId));
+
+    await clientService.registerClient(app.db, {
+      clientId,
+      userId,
+      organizationId,
+      instanceId: "second",
+      lastUpdateAttempt: {
+        result: "failed",
+        target: "0.20.0",
+        currentBefore: "0.19.0",
+        installedVersion: null,
+        reason: "network",
+        at: "2026-07-08T00:00:00.000Z",
+      },
+    });
+
+    const [row] = await app.db.select({ metadata: clients.metadata }).from(clients).where(eq(clients.id, clientId));
+    expect(row?.metadata).toMatchObject({
+      sibling: "kept",
+      lastUpdateAttempt: { result: "failed", target: "0.20.0", reason: "network" },
+    });
+  });
+
+  it("heartbeatClient records a minimal heartbeat for an existing client", async () => {
+    const app = getApp();
+    const { userId, organizationId } = await createTestAgent(app, {
+      name: `cs-heartbeat-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const clientId = `client-heartbeat-${crypto.randomUUID().slice(0, 8)}`;
+    await clientService.registerClient(app.db, { clientId, userId, organizationId, instanceId: "old" });
+    const staleAt = new Date(Date.now() - 120_000);
+    await app.db.update(clients).set({ status: "disconnected", lastSeenAt: staleAt }).where(eq(clients.id, clientId));
+
+    await clientService.heartbeatClient(app.db, clientId, "old");
+
+    const [row] = await app.db
+      .select({ status: clients.status, instanceId: clients.instanceId, lastSeenAt: clients.lastSeenAt })
+      .from(clients)
+      .where(eq(clients.id, clientId));
+    expect(row?.status).toBe("connected");
+    expect(row?.instanceId).toBe("old");
+    expect(row?.lastSeenAt.getTime()).toBeGreaterThan(staleAt.getTime());
+  });
 
   it("sets agents with matching clientId to offline", async () => {
     const app = getApp();
@@ -145,6 +255,50 @@ describe("client service: pinned agent startup surfaces", () => {
       expect.objectContaining({ agentId: active.uuid, clientId, status: "active" }),
       expect.objectContaining({ agentId: suspended.uuid, clientId, status: "suspended" }),
     ]);
+  });
+});
+
+describe("client service: capability updates", () => {
+  const getApp = useTestApp();
+
+  it("rejects invalid, missing, and retired capability updates", async () => {
+    const app = getApp();
+    const { clientId } = await createTestAgent(app, {
+      name: `cs-cap-invalid-${crypto.randomUUID().slice(0, 6)}`,
+    });
+
+    await expect(
+      clientService.updateClientCapabilities(app.db, clientId, {
+        codex: { state: "invalid-state", available: true, detectedAt: "2026-07-08T00:00:00.000Z" },
+      } as never),
+    ).rejects.toThrow(/invalid capabilities/i);
+    await expect(clientService.updateClientCapabilities(app.db, "missing-cap-client", {})).rejects.toThrow(
+      /not found/i,
+    );
+
+    await app.db.update(clients).set({ retiredAt: new Date() }).where(eq(clients.id, clientId));
+    await expect(clientService.updateClientCapabilities(app.db, clientId, {})).rejects.toThrow(/retired/i);
+  });
+
+  it("skips metadata writes when capabilities are unchanged after stable normalization", async () => {
+    const app = getApp();
+    const { clientId } = await createTestAgent(app, {
+      name: `cs-cap-stable-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    const capabilities = {
+      codex: { state: "ok" as const, available: true, detectedAt: "2026-07-08T00:00:00.000Z" },
+      "claude-code": { state: "missing" as const, available: false, detectedAt: "2026-07-08T00:00:01.000Z" },
+    };
+    await clientService.updateClientCapabilities(app.db, clientId, capabilities);
+    const [before] = await app.db.select({ metadata: clients.metadata }).from(clients).where(eq(clients.id, clientId));
+
+    await clientService.updateClientCapabilities(app.db, clientId, {
+      "claude-code": capabilities["claude-code"],
+      codex: capabilities.codex,
+    });
+
+    const [after] = await app.db.select({ metadata: clients.metadata }).from(clients).where(eq(clients.id, clientId));
+    expect(after?.metadata).toEqual(before?.metadata);
   });
 });
 

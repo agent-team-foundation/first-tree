@@ -37,6 +37,26 @@ describe("Agent Messages API", () => {
     expect(listRes.json().items).toHaveLength(1);
   });
 
+  it("edits a message for a chat participant", async () => {
+    const app = getApp();
+    const { a1, a2, chatId } = await setupChat(app);
+
+    const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: "Original",
+      metadata: { mentions: [a2.agent.uuid] },
+    });
+    expect(sendRes.statusCode).toBe(201);
+
+    const editRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}/messages/${sendRes.json().id}`, {
+      format: "text",
+      content: "Edited",
+    });
+    expect(editRes.statusCode).toBe(200);
+    expect(editRes.json().content).toBe("Edited");
+    expect(editRes.json().createdAt).toEqual(expect.any(String));
+  });
+
   it("creates inbox entries for recipient (fan-out)", async () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);

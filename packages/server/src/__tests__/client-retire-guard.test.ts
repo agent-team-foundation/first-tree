@@ -8,6 +8,11 @@ import { createTestAgent, useTestApp } from "./helpers.js";
 describe("retireClient service-layer guard", () => {
   const getApp = useTestApp();
 
+  it("throws not found for an unknown client", async () => {
+    const app = getApp();
+    await expect(retireClient(app.db, "missing-retire-client")).rejects.toThrow(/not found/i);
+  });
+
   it("suspends and unpins non-deleted agents while retiring", async () => {
     const app = getApp();
     const { agent, clientId } = await createTestAgent(app);

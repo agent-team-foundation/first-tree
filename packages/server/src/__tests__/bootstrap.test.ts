@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerConfig } from "@first-tree/shared/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { assertBootConfigValid } from "../boot-guards.js";
 import { shouldAutoGenerateServerSecrets, startServer } from "../bootstrap-server.js";
 import { bootstrapState, markReady, markStage } from "../bootstrap-state.js";
 import { runStage, withTimeout } from "../bootstrap-utils.js";
@@ -120,6 +121,201 @@ describe("server bootstrap", () => {
     expect(runMigrationsFn).not.toHaveBeenCalled();
     expect(markReadyFn).not.toHaveBeenCalled();
     expect(shutdownTelemetryFn).not.toHaveBeenCalled();
+  });
+
+  it("starts the server through telemetry, migrations, app build, listen, and ready stages", async () => {
+    const initTelemetryFn = vi.fn(async () => undefined);
+    const runMigrationsFn = vi.fn(async () => 12);
+    const listenFn = vi.fn(async () => "http://127.0.0.1:0");
+    const closeFn = vi.fn(async () => undefined);
+    const buildAppFn = vi.fn(async () => ({ listen: listenFn, close: closeFn }));
+    const markReadyFn = vi.fn();
+    const shutdownTelemetryFn = vi.fn(async () => undefined);
+    const processOn = vi.spyOn(process, "on").mockReturnValue(process);
+
+    await startServer({
+      initServerConfig: async () => baseServerConfig,
+      randomUUID: () => "12345678-1234-4234-9234-123456789abc",
+      webDistPath: "/srv/web",
+      initTelemetry: initTelemetryFn,
+      runMigrations: runMigrationsFn,
+      buildApp: buildAppFn as never,
+      markReady: markReadyFn,
+      shutdownTelemetry: shutdownTelemetryFn,
+    });
+
+    expect(initTelemetryFn).toHaveBeenCalledWith(baseServerConfig.observability.tracing, "srv_12345678");
+    expect(runMigrationsFn).toHaveBeenCalledWith(baseServerConfig.database.url);
+    expect(buildAppFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: "srv_12345678",
+        webDistPath: "/srv/web",
+      }),
+    );
+    expect(listenFn).toHaveBeenCalledWith({ host: "127.0.0.1", port: 0 });
+    expect(markReadyFn).toHaveBeenCalledTimes(1);
+    expect(processOn).toHaveBeenCalledWith("SIGINT", expect.any(Function));
+    expect(processOn).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
+    expect(closeFn).not.toHaveBeenCalled();
+    expect(shutdownTelemetryFn).not.toHaveBeenCalled();
+  });
+
+  it("runs app and telemetry shutdown from registered process signal handlers", async () => {
+    const initTelemetryFn = vi.fn(async () => undefined);
+    const runMigrationsFn = vi.fn(async () => 0);
+    const listenFn = vi.fn(async () => "http://127.0.0.1:0");
+    const closeFn = vi.fn(async () => undefined);
+    const buildAppFn = vi.fn(async () => ({ listen: listenFn, close: closeFn }));
+    const markReadyFn = vi.fn();
+    const shutdownTelemetryFn = vi.fn(async () => undefined);
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    const processOn = vi.fn((event: string | symbol, handler: (...args: unknown[]) => void) => {
+      handlers.set(String(event), handler as (...args: unknown[]) => void);
+      return fakeProcess;
+    });
+    const processExit = vi.fn();
+    const fakeProcess = Object.assign(Object.create(process), {
+      on: processOn,
+      exit: processExit,
+    }) as NodeJS.Process;
+
+    try {
+      vi.stubGlobal("process", fakeProcess);
+      await startServer({
+        initServerConfig: async () => baseServerConfig,
+        randomUUID: () => "87654321-1234-4234-9234-123456789abc",
+        initTelemetry: initTelemetryFn,
+        runMigrations: runMigrationsFn,
+        buildApp: buildAppFn as never,
+        markReady: markReadyFn,
+        shutdownTelemetry: shutdownTelemetryFn,
+      });
+
+      handlers.get("SIGTERM")?.();
+
+      await vi.waitFor(() => expect(closeFn).toHaveBeenCalledTimes(1));
+      expect(shutdownTelemetryFn).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(processExit).toHaveBeenCalledWith(0));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("runs shutdown from the registered SIGINT handler", async () => {
+    const initTelemetryFn = vi.fn(async () => undefined);
+    const runMigrationsFn = vi.fn(async () => 0);
+    const listenFn = vi.fn(async () => "http://127.0.0.1:0");
+    const closeFn = vi.fn(async () => undefined);
+    const buildAppFn = vi.fn(async () => ({ listen: listenFn, close: closeFn }));
+    const markReadyFn = vi.fn();
+    const shutdownTelemetryFn = vi.fn(async () => undefined);
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    const processOn = vi.fn((event: string | symbol, handler: (...args: unknown[]) => void) => {
+      handlers.set(String(event), handler as (...args: unknown[]) => void);
+      return fakeProcess;
+    });
+    const processExit = vi.fn();
+    const fakeProcess = Object.assign(Object.create(process), {
+      on: processOn,
+      exit: processExit,
+    }) as NodeJS.Process;
+
+    try {
+      vi.stubGlobal("process", fakeProcess);
+      await startServer({
+        initServerConfig: async () => baseServerConfig,
+        randomUUID: () => "97654321-1234-4234-9234-123456789abc",
+        initTelemetry: initTelemetryFn,
+        runMigrations: runMigrationsFn,
+        buildApp: buildAppFn as never,
+        markReady: markReadyFn,
+        shutdownTelemetry: shutdownTelemetryFn,
+      });
+
+      handlers.get("SIGINT")?.();
+
+      await vi.waitFor(() => expect(closeFn).toHaveBeenCalledTimes(1));
+      expect(shutdownTelemetryFn).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(processExit).toHaveBeenCalledWith(0));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  describe("boot config guards", () => {
+    it("rejects missing required secrets", () => {
+      expect(() =>
+        assertBootConfigValid({
+          ...baseServerConfig,
+          instanceId: "srv_test",
+          secrets: { ...baseServerConfig.secrets, jwtSecret: "   " },
+        }),
+      ).toThrow("Missing required server secret env vars: FIRST_TREE_JWT_SECRET");
+    });
+
+    it("requires a public URL in production", () => {
+      vi.stubEnv("NODE_ENV", "production");
+
+      expect(() =>
+        assertBootConfigValid({
+          ...baseServerConfig,
+          instanceId: "srv_test",
+          server: { ...baseServerConfig.server, publicUrl: undefined },
+        }),
+      ).toThrow("FIRST_TREE_PUBLIC_URL is required in production");
+    });
+
+    it("rejects half-configured, empty, and malformed GitHub App blocks", () => {
+      const validGithubApp = {
+        appId: "app-id",
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        privateKeyPem: "-----BEGIN PRIVATE KEY-----\nstub\n-----END PRIVATE KEY-----\n",
+        slug: undefined,
+        webhookSecret: "webhook-secret",
+      };
+
+      expect(() =>
+        assertBootConfigValid({
+          ...baseServerConfig,
+          instanceId: "srv_test",
+          oauth: { githubApp: { ...validGithubApp, webhookSecret: "" } },
+        }),
+      ).toThrow("GitHub App is half-configured");
+
+      expect(() =>
+        assertBootConfigValid({
+          ...baseServerConfig,
+          instanceId: "srv_test",
+          oauth: {
+            githubApp: {
+              appId: "",
+              clientId: "",
+              clientSecret: "",
+              privateKeyPem: "",
+              slug: undefined,
+              webhookSecret: "",
+            },
+          },
+        }),
+      ).toThrow("GitHub App env block is present but every value is empty");
+
+      expect(() =>
+        assertBootConfigValid({
+          ...baseServerConfig,
+          instanceId: "srv_test",
+          oauth: { githubApp: { ...validGithubApp, privateKeyPem: "literal\\nbody" } },
+        }),
+      ).toThrow("FIRST_TREE_GITHUB_APP_PRIVATE_KEY does not look like a PKCS#8 PEM");
+
+      expect(() =>
+        assertBootConfigValid({
+          ...baseServerConfig,
+          instanceId: "srv_test",
+          oauth: { githubApp: validGithubApp },
+        }),
+      ).not.toThrow();
+    });
   });
 
   it("runMigrations resolves the drizzle folder and applies migrations idempotently", async () => {

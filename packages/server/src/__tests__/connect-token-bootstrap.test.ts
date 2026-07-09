@@ -81,6 +81,27 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(body.command).toBe(`FIRST_TREE_SERVER_URL='https://selfhost.example.test' first-tree login ${body.token}`);
       expect(body.bootstrapCommand).toBe(`npm install -g first-tree\n${body.command}`);
     });
+
+    it("falls back to trimming the raw server URL when configured publicUrl is not parseable", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const originalPublicUrl = app.config.server.publicUrl;
+      app.config.server.publicUrl = "first-tree.internal///";
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/v1/me/connect-tokens",
+          headers: { authorization: `Bearer ${admin.accessToken}` },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = res.json<{ token: string; command: string; bootstrapCommand: string }>();
+        expectShortConnectCode(body.token);
+        expect(body.command).toBe(`FIRST_TREE_SERVER_URL='first-tree.internal' first-tree login ${body.token}`);
+        expect(body.bootstrapCommand).toBe(`npm install -g first-tree\n${body.command}`);
+      } finally {
+        app.config.server.publicUrl = originalPublicUrl;
+      }
+    });
   });
 
   describe("prod portable", () => {

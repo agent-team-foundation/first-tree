@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +51,30 @@ describe("ensureFreshAccessToken — safety margin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("resolves access tokens, masks tokens, and ignores malformed credential files", async () => {
+    const token = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials(token);
+
+    const { loadCredentials, maskToken, resolveAccessToken } = await import("../core/bootstrap.js");
+
+    expect(resolveAccessToken()).toBe(token);
+    expect(maskToken("1234567890")).toBe("123456***90");
+    expect(maskToken("short")).toBe("***");
+
+    writeFileSync(join(testHome, "config", "credentials.json"), JSON.stringify({ accessToken: token }));
+    expect(loadCredentials()).toBeNull();
+
+    writeFileSync(join(testHome, "config", "credentials.json"), "{not-json");
+    expect(loadCredentials()).toBeNull();
+    expect(() => resolveAccessToken()).toThrow(/No credentials found/u);
+  });
+
+  it("throws a login hint when freshness is requested without credentials", async () => {
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+
+    await expect(ensureFreshAccessToken()).rejects.toThrow(/No credentials found/u);
+  });
+
   it("refreshes when exp is less than 30s away", async () => {
     const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) + 10 });
     const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
@@ -79,6 +103,17 @@ describe("ensureFreshAccessToken — safety margin", () => {
     const result = await ensureFreshAccessToken();
 
     expect(result).toBe(refreshed);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats malformed access tokens as stale and refreshes them", async () => {
+    const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials("not-a-valid-jwt");
+
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ accessToken: refreshed })));
+
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+    await expect(ensureFreshAccessToken()).resolves.toBe(refreshed);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -115,6 +150,18 @@ describe("ensureFreshAccessToken — safety margin", () => {
     const err = await ensureFreshAccessToken().catch((e) => e);
     expect(err).toBeInstanceOf(AuthRefreshRateLimitedError);
     expect((err as { retryAfterMs: number }).retryAfterMs).toBe(45_000);
+  });
+
+  it("defaults Retry-After to 30s when the 429 header is malformed", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    await writeCredentials(stale);
+
+    fetchMock.mockResolvedValue(new Response(null, { status: 429, headers: { "retry-after": "not-a-date" } }));
+
+    const { ensureFreshAccessToken, AuthRefreshRateLimitedError } = await import("../core/bootstrap.js");
+    const err = await ensureFreshAccessToken().catch((e) => e);
+    expect(err).toBeInstanceOf(AuthRefreshRateLimitedError);
+    expect((err as { retryAfterMs: number }).retryAfterMs).toBe(30_000);
   });
 
   it("defaults Retry-After to 30s when the 429 response omits the header", async () => {
@@ -257,5 +304,27 @@ describe("ensureFreshAccessToken — safety margin", () => {
     expect(first).toBe(refreshed1);
     expect(second).toBe(refreshed2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes the temporary credentials file when an atomic save fails", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      return {
+        ...actual,
+        renameSync: () => {
+          throw new Error("rename denied");
+        },
+      };
+    });
+
+    const { saveCredentials } = await import("../core/bootstrap.js");
+
+    expect(() =>
+      saveCredentials({ accessToken: "access", refreshToken: "refresh", serverUrl: "https://hub.example" }),
+    ).toThrow("rename denied");
+    expect(existsSync(join(testHome, "config", `credentials.json.tmp.${process.pid}`))).toBe(false);
+    expect(() => readFileSync(join(testHome, "config", "credentials.json"), "utf8")).toThrow();
+    vi.doUnmock("node:fs");
   });
 });

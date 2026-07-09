@@ -11,10 +11,15 @@ const childRegistryMocks = vi.hoisted(() => ({
   ERROR_KINDS: { TRANSIENT: "transient", PERMANENT: "permanent" },
   getChildProcessRegistry: vi.fn(),
 }));
+const cliFetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@first-tree/client", () => childRegistryMocks);
+vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 
 let tmpDirs: string[] = [];
+const originalPlatform = process.platform;
+const originalArch = process.arch;
+const originalPath = process.env.PATH;
 
 function tempDir(name: string): string {
   const dir = mkdtempSync(join(tmpdir(), name));
@@ -43,6 +48,7 @@ async function makeArtifactPayload(options: {
   packageName?: string;
   binName?: string;
   aliasName?: string;
+  installOverrides?: Record<string, unknown>;
 }): Promise<string> {
   const payload = tempDir("ft-portable-payload-");
   const nodeVersion = options.nodeVersion ?? "v24.0.0";
@@ -61,20 +67,25 @@ async function makeArtifactPayload(options: {
   await writeFile(join(payload, "VERSION"), `${options.version}\n`);
   await writeFile(
     join(payload, "INSTALL.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      channel: "prod",
-      version: options.version,
-      gitSha: "abc123",
-      nodeVersion,
-      packageName,
-      binName,
-      aliasName,
-      generatedAt: new Date().toISOString(),
-      platform: options.platform,
-      installMode: "portable",
-      appEntry: "app/cli/index.mjs",
-    }),
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        channel: "prod",
+        version: options.version,
+        gitSha: "abc123",
+        nodeVersion,
+        packageName,
+        binName,
+        aliasName,
+        generatedAt: new Date().toISOString(),
+        platform: options.platform,
+        installMode: "portable",
+        appEntry: "app/cli/index.mjs",
+        ...options.installOverrides,
+      },
+      null,
+      2,
+    ),
   );
   await writeFile(join(payload, "bin", binName), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   await writeFile(join(payload, "bin", aliasName), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -82,7 +93,14 @@ async function makeArtifactPayload(options: {
 }
 
 async function makePortableFixture(
-  options: { version?: string; nodeVersion?: string; packageName?: string; binName?: string; aliasName?: string } = {},
+  options: {
+    version?: string;
+    nodeVersion?: string;
+    packageName?: string;
+    binName?: string;
+    aliasName?: string;
+    installOverrides?: Record<string, unknown>;
+  } = {},
 ): Promise<{ root: string; latestPath: string; manifestPath: string; tarball: string; platform: string }> {
   const platform = currentPlatform();
   if (platform === null) throw new Error("unsupported test platform");
@@ -96,7 +114,15 @@ async function makePortableFixture(
   const versionDir = join(channelDir, version);
   mkdirSync(versionDir, { recursive: true });
 
-  const payload = await makeArtifactPayload({ version, platform, nodeVersion, packageName, binName, aliasName });
+  const payload = await makeArtifactPayload({
+    version,
+    platform,
+    nodeVersion,
+    packageName,
+    binName,
+    aliasName,
+    installOverrides: options.installOverrides,
+  });
   const tarball = join(versionDir, `${packageName}-${version}-${platform}.tar.gz`);
   const tar = spawnSync("tar", ["-czf", tarball, "-C", payload, "."], { encoding: "utf8" });
   if (tar.status !== 0) throw new Error(tar.stderr);
@@ -153,14 +179,16 @@ async function seedOldInstall(prefix: string, options: { nodeVersion?: string } 
   await symlink(join(prefix, "versions", "old"), join(prefix, "current"));
 }
 
-async function importProdUpdateModule(): Promise<typeof import("../core/update.js")> {
+async function importProdUpdateModule(
+  overrides: { channelPrefix?: string | null; downloadBaseUrl?: string | null; packageName?: string | null } = {},
+): Promise<typeof import("../core/update.js")> {
   vi.resetModules();
   vi.doMock("../core/channel.js", () => ({
     channelConfig: {
       channel: "prod",
       binName: "first-tree",
       aliasName: "ft",
-      packageName: "first-tree",
+      packageName: overrides.packageName === undefined ? "first-tree" : overrides.packageName,
       defaultHome: "/tmp/home",
       defaultServerUrl: "https://cloud.first-tree.ai",
       serviceUnitFile: "first-tree.service",
@@ -168,9 +196,12 @@ async function importProdUpdateModule(): Promise<typeof import("../core/update.j
       launchdPlistFile: "first-tree.plist",
       displayName: "First Tree",
       portable: {
-        channelPrefix: "prod",
+        channelPrefix: overrides.channelPrefix === undefined ? "prod" : overrides.channelPrefix,
         publicInstallerPath: "prod/install.sh",
-        downloadBaseUrl: "https://download.first-tree.ai/releases",
+        downloadBaseUrl:
+          overrides.downloadBaseUrl === undefined
+            ? "https://download.first-tree.ai/releases"
+            : overrides.downloadBaseUrl,
       },
     },
   }));
@@ -185,11 +216,190 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.doUnmock("../core/channel.js");
+  vi.doUnmock("node:child_process");
+  vi.doUnmock("node:fs/promises");
+  Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
   tmpDirs = [];
 });
 
 describe("installPortableSpec", () => {
+  it("rejects invalid specs and disabled portable metadata configuration", async () => {
+    const prod = await importProdUpdateModule();
+    await expect(prod.installPortableSpec("not-a-version")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: expect.stringContaining("invalid portable version"),
+    });
+
+    const noChannel = await importProdUpdateModule({ channelPrefix: null });
+    await expect(noChannel.fetchPortableLatestVersion()).resolves.toEqual({
+      ok: false,
+      reason: "self-update disabled: this binary's channel does not publish portable artifacts.",
+    });
+
+    const noBaseUrl = await importProdUpdateModule({ downloadBaseUrl: null });
+    await expect(noBaseUrl.fetchPortableLatestVersion()).resolves.toEqual({
+      ok: false,
+      reason: "self-update disabled: portable download base URL is not configured for this channel.",
+    });
+  });
+
+  it("surfaces HTTP metadata download failures for portable latest checks", async () => {
+    const platform = currentPlatform() ?? "linux-x64";
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: vi.fn(async () =>
+        JSON.stringify({
+          schemaVersion: 1,
+          channel: "prod",
+          version: "3.1.4",
+          gitSha: "abc123",
+          nodeVersion: "v24.0.0",
+          packageName: "first-tree",
+          binName: "first-tree",
+          aliasName: "ft",
+          generatedAt: new Date().toISOString(),
+          manifestUrl: "https://download.example/releases/prod/3.1.4/manifest.json",
+          assets: [
+            {
+              platform,
+              fileName: `first-tree-3.1.4-${platform}.tar.gz`,
+              url: "https://download.example/payload.tar.gz",
+              sha256: "0".repeat(64),
+              size: 123,
+            },
+          ],
+        }),
+      ),
+    });
+    const http = await importProdUpdateModule({ downloadBaseUrl: "https://download.example/releases/" });
+
+    await expect(http.fetchPortableLatestVersion()).resolves.toEqual({ ok: true, version: "3.1.4" });
+
+    cliFetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      text: vi.fn(async () => "unavailable"),
+    });
+
+    await expect(http.fetchPortableLatestVersion()).resolves.toEqual({
+      ok: false,
+      reason: "download failed for https://download.example/releases/prod/latest.json: HTTP 503",
+    });
+
+    cliFetchMock.mockRejectedValueOnce(new Error("network down"));
+    await expect(http.fetchPortableLatestVersion()).resolves.toEqual({ ok: false, reason: "network down" });
+
+    cliFetchMock.mockRejectedValueOnce("network string");
+    await expect(http.fetchPortableLatestVersion()).resolves.toEqual({ ok: false, reason: "network string" });
+
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: vi.fn(async () =>
+        JSON.stringify({
+          schemaVersion: 1,
+          channel: "prod",
+          version: "not-semver",
+          gitSha: "abc123",
+          nodeVersion: "v24.0.0",
+          packageName: "first-tree",
+          binName: "first-tree",
+          aliasName: "ft",
+          generatedAt: new Date().toISOString(),
+          manifestUrl: "https://download.example/releases/prod/not-semver/manifest.json",
+          assets: [
+            {
+              platform,
+              fileName: `first-tree-not-semver-${platform}.tar.gz`,
+              url: "https://download.example/payload.tar.gz",
+              sha256: "0".repeat(64),
+              size: 123,
+            },
+          ],
+        }),
+      ),
+    });
+    await expect(http.fetchPortableLatestVersion()).resolves.toEqual({
+      ok: false,
+      reason:
+        'Refusing portable latest metadata: portable metadata version not-semver belongs to channel "unknown", not my channel "prod"',
+    });
+
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+      throw "bad json string";
+    });
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: vi.fn(async () => "{}"),
+    });
+    try {
+      await expect(http.fetchPortableLatestVersion()).resolves.toEqual({
+        ok: false,
+        reason: "invalid JSON from https://download.example/releases/prod/latest.json: bad json string",
+      });
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  it("fails closed when portable self-update is unsupported on this platform", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    const prod = await importProdUpdateModule();
+
+    await expect(prod.installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: expect.stringContaining("portable self-update is not supported on win32"),
+    });
+
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    Object.defineProperty(process, "arch", { configurable: true, value: "s390x" });
+    const unsupportedArch = await importProdUpdateModule();
+    await expect(unsupportedArch.installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: expect.stringContaining(`${originalPlatform}-s390x`),
+    });
+
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    Object.defineProperty(process, "arch", { configurable: true, value: "arm64" });
+    const arm64NoChannel = await importProdUpdateModule({ channelPrefix: null });
+    await expect(arm64NoChannel.installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: "self-update disabled: this binary's channel does not publish portable artifacts.",
+    });
+  });
+
+  it("fails closed before metadata fetch when portable metadata URLs are unavailable", async () => {
+    const noChannel = await importProdUpdateModule({ channelPrefix: null });
+    await expect(noChannel.installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: "self-update disabled: this binary's channel does not publish portable artifacts.",
+    });
+
+    const noBaseUrl = await importProdUpdateModule({ downloadBaseUrl: null });
+    await expect(noBaseUrl.installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: "self-update disabled: portable download base URL is not configured for this channel.",
+    });
+
+    const devChannel = await importProdUpdateModule({ packageName: null });
+    expect(devChannel.fetchLatestVersion()).toEqual({
+      ok: false,
+      reason: "this binary's channel does not publish to npm (dev channel).",
+    });
+  });
+
   it("installs latest from file metadata, switches current, and rewrites shims", async () => {
     const platform = currentPlatform();
     if (platform === null) return;
@@ -219,6 +429,78 @@ describe("installPortableSpec", () => {
     expect(readFileSync(join(binDir, "ft"), "utf8")).toContain('root="');
   });
 
+  it("downloads portable payloads over HTTP and writes fallback shims when PATH has no existing shim", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makePortableFixture();
+    const latest = JSON.parse(readFileSync(fixture.latestPath, "utf8")) as {
+      assets: Array<{ url: string }>;
+    };
+    latest.assets[0].url = "https://download.example/payload.tar.gz";
+    writeFileSync(fixture.latestPath, JSON.stringify(latest, null, 2));
+    const payload = readFileSync(fixture.tarball);
+    cliFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      arrayBuffer: vi.fn(async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength)),
+    });
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("PATH", "/usr/bin:/bin");
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    await expect(installPortableSpec("latest")).resolves.toEqual({
+      ok: true,
+      mode: "portable",
+      installedVersion: "1.2.3",
+    });
+
+    expect(readFileSync(join(home, ".local", "bin", "first-tree"), "utf8")).toContain("FIRST_TREE_PORTABLE_ROOT");
+    expect(readFileSync(join(home, ".local", "bin", "ft"), "utf8")).toContain("FIRST_TREE_PORTABLE_ROOT");
+  });
+
+  it("reports invalid portable roots and HTTP payload download failures", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makePortableFixture();
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "not-current"));
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    await expect(installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: expect.stringContaining("Cannot derive portable install prefix"),
+    });
+
+    const httpFixture = await makePortableFixture({ version: "1.2.4" });
+    const latest = JSON.parse(readFileSync(httpFixture.latestPath, "utf8")) as {
+      assets: Array<{ url: string }>;
+    };
+    latest.assets[0].url = "https://download.example/payload.tar.gz";
+    writeFileSync(httpFixture.latestPath, JSON.stringify(latest, null, 2));
+    cliFetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      arrayBuffer: vi.fn(async () => new ArrayBuffer(0)),
+    });
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${httpFixture.root}`);
+
+    await expect(installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: "download failed for https://download.example/payload.tar.gz: HTTP 502",
+    });
+  });
+
   it("installs exact versions from immutable manifests", async () => {
     const platform = currentPlatform();
     if (platform === null) return;
@@ -234,6 +516,30 @@ describe("installPortableSpec", () => {
     const result = await installPortableSpec("2.0.0");
     expect(result).toEqual({ ok: true, mode: "portable", installedVersion: "2.0.0" });
     expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("2.0.0\n");
+  });
+
+  it("validates an already extracted portable version before switching current", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makePortableFixture({ version: "2.0.1" });
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    const existingVersionDir = join(prefix, "versions", "2.0.1");
+    const payload = await makeArtifactPayload({ version: "2.0.1", platform });
+    mkdirSync(join(prefix, "versions"), { recursive: true });
+    spawnSync("cp", ["-R", `${payload}/.`, existingVersionDir], { encoding: "utf8" });
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+    vi.stubEnv("HOME", home);
+    delete process.env.PATH;
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    const result = await installPortableSpec("latest");
+
+    expect(result).toEqual({ ok: true, mode: "portable", installedVersion: "2.0.1" });
+    expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("2.0.1\n");
+    expect(readFileSync(join(home, ".local", "bin", "first-tree"), "utf8")).toContain("FIRST_TREE_PORTABLE_ROOT");
   });
 
   it("hands portable installs across bundled Node major upgrades", async () => {
@@ -288,7 +594,7 @@ describe("installPortableSpec", () => {
     expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("old\n");
   });
 
-  it("rejects channel, package, and bin mismatches", async () => {
+  it("rejects channel, package, bin, alias, version-channel, and asset name mismatches", async () => {
     const platform = currentPlatform();
     if (platform === null) return;
     const home = tempDir("ft-portable-home-");
@@ -301,6 +607,8 @@ describe("installPortableSpec", () => {
       { channel: "staging", version: "1.2.3-staging.1.1" },
       { packageName: "first-tree-staging" },
       { binName: "first-tree-staging" },
+      { aliasName: "first-tree-staging" },
+      { version: "1.2.3-staging.1.1" },
     ]) {
       const fixture = await makePortableFixture();
       const latest = JSON.parse(readFileSync(fixture.latestPath, "utf8")) as Record<string, unknown>;
@@ -313,6 +621,342 @@ describe("installPortableSpec", () => {
       expect(result.reason).toMatch(/Refusing to install portable update|invalid/i);
       expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("old\n");
     }
+
+    const fixture = await makePortableFixture();
+    const latest = JSON.parse(readFileSync(fixture.latestPath, "utf8")) as {
+      assets: Array<{ fileName: string }>;
+    };
+    latest.assets[0].fileName = "../payload.tar.gz";
+    writeFileSync(fixture.latestPath, JSON.stringify(latest, null, 2));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+    const badAsset = await installPortableSpec("latest");
+    expect(badAsset.ok).toBe(false);
+    if (badAsset.ok) throw new Error("expected unsafe asset failure");
+    expect(badAsset.reason).toContain("portable asset fileName is not a safe basename");
+  });
+
+  it("rejects missing portable assets, empty roots, and null package channel mismatches", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makePortableFixture();
+    const latest = JSON.parse(readFileSync(fixture.latestPath, "utf8")) as {
+      assets: Array<{ platform: string }>;
+    };
+    latest.assets[0].platform = platform === "linux-x64" ? "darwin-x64" : "linux-x64";
+    writeFileSync(fixture.latestPath, JSON.stringify(latest, null, 2));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+    const { installPortableSpec } = await importProdUpdateModule();
+
+    await expect(installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringContaining(`No portable asset for ${platform}`),
+    });
+
+    const rootFixture = await makePortableFixture({ version: "1.2.4" });
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${rootFixture.root}`);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", "   ");
+    await expect(installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      reason: "FIRST_TREE_PORTABLE_ROOT is required for portable self-update.",
+    });
+
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${rootFixture.root}`);
+    const nullPackage = await importProdUpdateModule({ packageName: null });
+    await expect(nullPackage.installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('does not match my package "(none)"'),
+    });
+  });
+
+  it("rejects extracted INSTALL.json mismatches", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const cases: Array<{ installOverrides: Record<string, unknown>; expected: string }> = [
+      { installOverrides: { channel: "staging" }, expected: "extracted INSTALL.json mismatch" },
+      { installOverrides: { version: "9.9.9" }, expected: 'version "9.9.9" does not match metadata version "1.2.3"' },
+      {
+        installOverrides: { platform: platform === "linux-x64" ? "darwin-x64" : "linux-x64" },
+        expected: "platform",
+      },
+      { installOverrides: { installMode: "global" }, expected: "installMode" },
+      { installOverrides: { appEntry: "dist/index.mjs" }, expected: "appEntry" },
+    ];
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    for (const testCase of cases) {
+      const fixture = await makePortableFixture({ installOverrides: testCase.installOverrides });
+      const home = tempDir("ft-portable-home-");
+      const prefix = join(home, "prefix");
+      await seedOldInstall(prefix);
+      vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+      vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+
+      const result = await installPortableSpec("latest");
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected extracted metadata failure");
+      expect(result.reason).toContain(testCase.expected);
+      expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("old\n");
+    }
+  });
+
+  it("rejects prod-looking latest metadata that is not valid semver", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makePortableFixture({ version: "1.2.3" });
+    const latest = JSON.parse(readFileSync(fixture.latestPath, "utf8")) as Record<string, unknown>;
+    latest.version = "01.2.3";
+    writeFileSync(fixture.latestPath, JSON.stringify(latest, null, 2));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+
+    const { fetchPortableLatestVersion } = await importProdUpdateModule();
+
+    await expect(fetchPortableLatestVersion()).resolves.toEqual({
+      ok: false,
+      reason: "portable latest metadata returned non-semver version: 01.2.3",
+    });
+  });
+
+  it("returns classified portable failures for bad tarballs and invalid current links", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    childRegistryMocks.classify.mockReturnValue({ kind: "transient", reasonCode: "classified_transient" });
+    const badTar = await makePortableFixture();
+    const invalidTarball = join(badTar.root, "prod", "1.2.3", "not-a-tar.gz");
+    writeFileSync(invalidTarball, "not a gzip payload");
+    const latest = JSON.parse(readFileSync(badTar.latestPath, "utf8")) as {
+      assets: Array<{ fileName: string; url: string; sha256: string; size: number }>;
+    };
+    latest.assets[0].fileName = "not-a-tar.gz";
+    latest.assets[0].url = `file://${invalidTarball}`;
+    latest.assets[0].sha256 = sha256(invalidTarball);
+    latest.assets[0].size = bytes(invalidTarball);
+    writeFileSync(badTar.latestPath, JSON.stringify(latest, null, 2));
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${badTar.root}`);
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    const tarFailure = await installPortableSpec("latest");
+    expect(tarFailure).toMatchObject({
+      ok: false,
+      mode: "portable",
+      retryable: true,
+      reasonCode: "classified_transient",
+    });
+    if (tarFailure.ok) throw new Error("expected tar failure");
+    expect(tarFailure.reason).toContain("tar exited with code");
+
+    const badCurrent = await makePortableFixture({ version: "2.0.0" });
+    const secondHome = tempDir("ft-portable-home-");
+    const secondPrefix = join(secondHome, "prefix");
+    mkdirSync(join(secondPrefix, "current"), { recursive: true });
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(secondPrefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${badCurrent.root}`);
+    const currentFailure = await installPortableSpec("latest");
+    expect(currentFailure.ok).toBe(false);
+    if (currentFailure.ok) throw new Error("expected current symlink failure");
+    expect(currentFailure.reason).toContain("exists and is not a symlink");
+  });
+
+  it("classifies non-Error portable download failures with fallback reason codes", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    childRegistryMocks.classify.mockReturnValue({ kind: "transient" });
+    const fixture = await makePortableFixture();
+    const latest = JSON.parse(readFileSync(fixture.latestPath, "utf8")) as {
+      assets: Array<{ url: string }>;
+    };
+    latest.assets[0].url = "https://download.example/payload.tar.gz";
+    writeFileSync(fixture.latestPath, JSON.stringify(latest, null, 2));
+    cliFetchMock.mockRejectedValueOnce("payload download failed");
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    await expect(installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: "payload download failed",
+      retryable: true,
+      reasonCode: "portable_update_failed",
+    });
+  });
+
+  it("reports tar start failures from the portable extractor", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      return {
+        ...actual,
+        spawnSync: vi.fn((command: string) =>
+          command === "tar" ? { error: new Error("tar executable missing") } : actual.spawnSync(command),
+        ),
+      };
+    });
+    const fixture = await makePortableFixture();
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    const result = await installPortableSpec("latest");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected tar start failure");
+    expect(result.reason).toContain("tar failed to start: tar executable missing");
+  });
+
+  it("reports tar exits without stdout or stderr detail", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      return {
+        ...actual,
+        spawnSync: vi.fn((command: string) =>
+          command === "tar" ? { status: 2, stdout: "", stderr: "" } : actual.spawnSync(command),
+        ),
+      };
+    });
+    const fixture = await makePortableFixture();
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    await expect(installPortableSpec("latest")).resolves.toMatchObject({
+      ok: false,
+      mode: "portable",
+      reason: "tar exited with code 2",
+    });
+  });
+
+  it("reports missing extracted INSTALL metadata and current symlink replacement cleanup failures", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    childRegistryMocks.classify.mockReturnValue({ kind: "transient", reasonCode: "classified_transient" });
+
+    const missingInstall = await makePortableFixture();
+    const payload = tempDir("ft-portable-no-install-");
+    await mkdir(join(payload, "node", "bin"), { recursive: true });
+    await mkdir(join(payload, "app", "cli"), { recursive: true });
+    await writeFile(join(payload, "node", "bin", "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFile(join(payload, "app", "cli", "index.mjs"), "// fixture\n");
+    const tarball = join(missingInstall.root, "prod", "1.2.3", `missing-install-${platform}.tar.gz`);
+    const tar = spawnSync("tar", ["-czf", tarball, "-C", payload, "."], { encoding: "utf8" });
+    if (tar.status !== 0) throw new Error(tar.stderr);
+    const latest = JSON.parse(readFileSync(missingInstall.latestPath, "utf8")) as {
+      assets: Array<{ fileName: string; url: string; sha256: string; size: number }>;
+    };
+    latest.assets[0].fileName = `missing-install-${platform}.tar.gz`;
+    latest.assets[0].url = `file://${tarball}`;
+    latest.assets[0].sha256 = sha256(tarball);
+    latest.assets[0].size = bytes(tarball);
+    writeFileSync(missingInstall.latestPath, JSON.stringify(latest, null, 2));
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${missingInstall.root}`);
+
+    const { installPortableSpec } = await importProdUpdateModule();
+    const missing = await installPortableSpec("latest");
+    expect(missing).toMatchObject({
+      ok: false,
+      mode: "portable",
+      retryable: true,
+      reasonCode: "classified_transient",
+    });
+    if (missing.ok) throw new Error("expected missing INSTALL failure");
+    expect(missing.reason).toContain("extracted artifact missing or invalid INSTALL.json");
+
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs/promises")>();
+      return {
+        ...actual,
+        rename: async (oldPath: string, newPath: string) => {
+          if (oldPath.includes(".current.") && newPath.endsWith("/current")) {
+            throw new Error("rename current denied");
+          }
+          return actual.rename(oldPath, newPath);
+        },
+      };
+    });
+    const renameFixture = await makePortableFixture({ version: "4.0.0" });
+    const secondHome = tempDir("ft-portable-home-");
+    const secondPrefix = join(secondHome, "prefix");
+    await seedOldInstall(secondPrefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(secondPrefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${renameFixture.root}`);
+    const renameModule = await importProdUpdateModule();
+    const renameFailure = await renameModule.installPortableSpec("latest");
+    expect(renameFailure.ok).toBe(false);
+    if (renameFailure.ok) throw new Error("expected current rename failure");
+    expect(renameFailure.reason).toContain("rename current denied");
+  });
+
+  it("stringifies non-Error fs failures during portable metadata validation and current switching", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs/promises")>();
+      return {
+        ...actual,
+        readFile: async (
+          path: Parameters<typeof actual.readFile>[0],
+          options?: Parameters<typeof actual.readFile>[1],
+        ) => {
+          if (String(path).endsWith("/INSTALL.json")) throw "install metadata denied";
+          return actual.readFile(path, options);
+        },
+      };
+    });
+    const fixture = await makePortableFixture();
+    const home = tempDir("ft-portable-home-");
+    const prefix = join(home, "prefix");
+    await seedOldInstall(prefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+
+    const readFailureModule = await importProdUpdateModule();
+    const readFailure = await readFailureModule.installPortableSpec("latest");
+    expect(readFailure.ok).toBe(false);
+    if (readFailure.ok) throw new Error("expected INSTALL read failure");
+    expect(readFailure.reason).toContain("extracted artifact missing or invalid INSTALL.json: install metadata denied");
+
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs/promises")>();
+      return {
+        ...actual,
+        lstat: async (path: Parameters<typeof actual.lstat>[0], options?: Parameters<typeof actual.lstat>[1]) => {
+          if (String(path).endsWith("/current")) throw "lstat denied";
+          return actual.lstat(path, options);
+        },
+      };
+    });
+    const lstatFixture = await makePortableFixture({ version: "2.0.2" });
+    const secondHome = tempDir("ft-portable-home-");
+    const secondPrefix = join(secondHome, "prefix");
+    await seedOldInstall(secondPrefix);
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(secondPrefix, "current"));
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${lstatFixture.root}`);
+
+    const lstatFailureModule = await importProdUpdateModule();
+    const lstatFailure = await lstatFailureModule.installPortableSpec("latest");
+    expect(lstatFailure.ok).toBe(false);
+    if (lstatFailure.ok) throw new Error("expected lstat failure");
+    expect(lstatFailure.reason).toBe("lstat denied");
   });
 
   it("fetches portable latest metadata for manual upgrade checks", async () => {

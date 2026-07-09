@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findStaleAliases, type PinnedAgent } from "../core/agent-prune.js";
+import { findStaleAliases, formatStaleReason, type PinnedAgent, removeLocalAgent } from "../core/agent-prune.js";
 
 /**
  * Pins the four cases that drove the rewrite:
@@ -26,6 +26,7 @@ function writeAlias(agentsDir: string, name: string, body: string): void {
 }
 
 let agentsDir: string;
+const originalHome = process.env.FIRST_TREE_HOME;
 
 beforeEach(() => {
   agentsDir = mkdtempSync(join(tmpdir(), "fthub-prune-"));
@@ -33,6 +34,8 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(agentsDir, { recursive: true, force: true });
+  if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
+  else process.env.FIRST_TREE_HOME = originalHome;
 });
 
 describe("findStaleAliases", () => {
@@ -153,5 +156,41 @@ describe("findStaleAliases", () => {
       listPinnedAgents: async () => [],
     });
     expect(stale).toEqual([]);
+  });
+
+  it("ignores entries that vanish before stat", async (ctx) => {
+    try {
+      symlinkSync(join(agentsDir, "missing"), join(agentsDir, "broken-link"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const stale = await findStaleAliases({
+      agentsDir,
+      clientId: THIS_CLIENT,
+      listPinnedAgents: async () => [],
+    });
+
+    expect(stale).toEqual([]);
+  });
+
+  it("formats stale reasons and removes local agent footprints", () => {
+    const home = mkdtempSync(join(tmpdir(), "fthub-prune-home-"));
+    process.env.FIRST_TREE_HOME = home;
+    mkdirSync(join(home, "config", "agents", "stale"), { recursive: true });
+    mkdirSync(join(home, "data", "workspaces", "stale"), { recursive: true });
+    mkdirSync(join(home, "data", "sessions"), { recursive: true });
+    writeFileSync(join(home, "data", "sessions", "stale.json"), "{}");
+
+    expect(formatStaleReason({ kind: "unreadable", error: "bad yaml" })).toBe("unreadable: bad yaml");
+    expect(formatStaleReason({ kind: "unowned" })).toContain("no longer owned");
+    expect(formatStaleReason({ kind: "pinned-elsewhere", clientId: OTHER_CLIENT })).toContain(OTHER_CLIENT);
+
+    removeLocalAgent("stale");
+
+    expect(existsSync(join(home, "config", "agents", "stale"))).toBe(false);
+    expect(existsSync(join(home, "data", "workspaces", "stale"))).toBe(false);
+    expect(existsSync(join(home, "data", "sessions", "stale.json"))).toBe(false);
+    rmSync(home, { recursive: true, force: true });
   });
 });

@@ -7,9 +7,13 @@ import {
   getAgentClientId,
   getAgentRuntimeSession,
   getClientAgentIds,
+  getClientConnection,
+  hasActiveConnection,
   hasClientConnection,
   removeClientConnection,
+  removeConnection,
   setClientConnection,
+  setConnection,
   unbindAgentFromClient,
   validateAgentRuntimeSession,
 } from "../services/connection-manager.js";
@@ -22,7 +26,7 @@ import {
  */
 
 /** Create a minimal mock WebSocket (only readyState matters here). */
-function mockWs(readyState = WebSocket.OPEN): WebSocket {
+function mockWs(readyState: number = WebSocket.OPEN): WebSocket {
   return { readyState, close: () => {}, send: () => {} } as unknown as WebSocket;
 }
 
@@ -116,6 +120,70 @@ describe("connection-manager: bindAgentToClient", () => {
     expect(removed).toBe(true);
     expect(getAgentRuntimeSession(agent1)).toBeUndefined();
     expect(validateAgentRuntimeSession(agent1, clientA, token)).toBe(false);
+  });
+});
+
+describe("connection-manager: legacy per-agent connections", () => {
+  const agentId = "legacy-agent";
+
+  beforeEach(() => {
+    removeConnection(agentId, mockWs());
+    forceDisconnect(agentId);
+  });
+
+  it("tracks, replaces, and removes active per-agent sockets by identity", () => {
+    const ws = mockWs();
+    const staleWs = mockWs();
+
+    setConnection(agentId, ws);
+
+    expect(hasActiveConnection(agentId)).toBe(true);
+    expect(removeConnection(agentId, staleWs)).toBe(false);
+    expect(hasActiveConnection(agentId)).toBe(true);
+    expect(removeConnection(agentId, ws)).toBe(true);
+    expect(hasActiveConnection(agentId)).toBe(false);
+  });
+
+  it("treats closed legacy sockets as inactive", () => {
+    const closedWs = mockWs(WebSocket.CLOSED);
+
+    setConnection(agentId, closedWs);
+
+    expect(hasActiveConnection(agentId)).toBe(false);
+    expect(removeConnection(agentId, closedWs)).toBe(true);
+  });
+
+  it("force-disconnect closes legacy sockets and clears their runtime binding", () => {
+    let closeArgs: [number, string] | undefined;
+    const ws = {
+      readyState: WebSocket.OPEN,
+      close: (code: number, reason: string) => {
+        closeArgs = [code, reason];
+      },
+      send: () => {},
+    } as unknown as WebSocket;
+
+    setConnection(agentId, ws);
+
+    expect(forceDisconnect(agentId)).toBe(true);
+    expect(closeArgs).toEqual([4009, "Disconnected by admin"]);
+    expect(hasActiveConnection(agentId)).toBe(false);
+  });
+});
+
+describe("connection-manager: client connection lookup", () => {
+  it("returns only open client sockets", () => {
+    const clientId = "client-lookup";
+    const openWs = mockWs(WebSocket.OPEN);
+    const closingWs = mockWs(WebSocket.CLOSING);
+
+    setClientConnection(clientId, openWs);
+    expect(getClientConnection(clientId)).toBe(openWs);
+
+    setClientConnection(clientId, closingWs);
+    expect(getClientConnection(clientId)).toBeUndefined();
+
+    forceDisconnectClient(clientId);
   });
 });
 

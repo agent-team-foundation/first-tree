@@ -127,6 +127,60 @@ describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)"
     });
   });
 
+  it("admin all-scope listing serializes chat rows and pagination metadata", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const chatId = `chat-oc-list-${crypto.randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: admin.organizationId,
+      type: "group",
+      topic: "All chats row",
+      lifecyclePolicy: "manual",
+      metadata: { source: "test" },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/chats?scope=all&limit=1`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      items: Array<{ id: string; topic: string; participantCount: number }>;
+      nextCursor: string | null;
+    }>();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({ id: chatId, topic: "All chats row", participantCount: 0 });
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("lists source counts and rejects self-only manual chat creation before visibility lookup", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const counts = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/chats/source-counts`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(counts.statusCode).toBe(200);
+    expect(counts.json<{ counts: { manual?: { chatCount: number } } }>().counts.manual).toEqual({
+      chatCount: 0,
+      unreadChatCount: 0,
+    });
+
+    const selfOnly = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/chats`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { participantIds: [admin.humanAgentUuid] },
+    });
+    expect(selfOnly.statusCode).toBe(400);
+    expect(selfOnly.json<{ error: string }>().error).toContain("At least one non-self participant required");
+  });
+
   it("rejects participants from a different org (404 — anti-enumeration, not 400)", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);

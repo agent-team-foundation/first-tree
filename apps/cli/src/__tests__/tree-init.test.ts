@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { Command } from "commander";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildScaffoldFiles, defaultRepoName, resolveRepoOwner, type ScaffoldFile } from "../commands/tree/init.js";
 import {
   memberNodeContent,
@@ -11,7 +12,8 @@ import {
   validateTreeWorkflowContent,
 } from "../commands/tree/scaffold-templates.js";
 import { renderContextTree } from "../commands/tree/tree.js";
-import { verifyTreeRoot } from "../commands/tree/verify.js";
+import { verifyCommand, verifyTreeRoot } from "../commands/tree/verify.js";
+import type { CommandContext } from "../commands/types.js";
 
 /**
  * `first-tree tree init` scaffolds a brand-new team Context Tree repo with the
@@ -23,6 +25,7 @@ import { verifyTreeRoot } from "../commands/tree/verify.js";
  */
 
 const tempDirs: string[] = [];
+const originalCwd = process.cwd();
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "ft-tree-init-"));
@@ -39,6 +42,9 @@ function writeScaffold(dir: string, files: ScaffoldFile[]): void {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  process.chdir(originalCwd);
+  process.exitCode = undefined;
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -68,6 +74,51 @@ describe("buildScaffoldFiles", () => {
     const dir = makeTempDir();
     writeScaffold(dir, buildScaffoldFiles({ title: "Acme", ownerLogin: "octocat", withWorkflow: false }));
     expect(verifyTreeRoot(dir).ok).toBe(true);
+  });
+
+  it("reports root NODE frontmatter problems", () => {
+    const missingFrontmatter = makeTempDir();
+    writeFileSync(join(missingFrontmatter, "NODE.md"), "# Root\n");
+    mkdirSync(join(missingFrontmatter, "members"), { recursive: true });
+    const missingFrontmatterResult = verifyTreeRoot(missingFrontmatter);
+    expect(missingFrontmatterResult.ok).toBe(false);
+    expect(missingFrontmatterResult.checks.rootNodeFrontmatter.errors).toContain(
+      "Root NODE.md is missing frontmatter.",
+    );
+
+    const missingTitle = makeTempDir();
+    writeFileSync(join(missingTitle, "NODE.md"), "---\nowners: [octocat]\n---\n# Root\n");
+    mkdirSync(join(missingTitle, "members"), { recursive: true });
+    const missingTitleResult = verifyTreeRoot(missingTitle);
+    expect(missingTitleResult.ok).toBe(false);
+    expect(missingTitleResult.checks.rootNodeFrontmatter.errors).toContain("Root NODE.md is missing a title.");
+  });
+
+  it("reports missing root frontmatter when NODE.md cannot be read as a file", () => {
+    const unreadableRootNode = makeTempDir();
+    mkdirSync(join(unreadableRootNode, "NODE.md"), { recursive: true });
+    mkdirSync(join(unreadableRootNode, "members"), { recursive: true });
+
+    const result = verifyTreeRoot(unreadableRootNode);
+
+    expect(result.ok).toBe(false);
+    expect(result.checks.rootNodeFrontmatter.errors).toContain("Root NODE.md is missing frontmatter.");
+  });
+
+  it("uses the current repo root when tree verify omits --tree-path", () => {
+    const dir = makeTempDir();
+    writeScaffold(dir, buildScaffoldFiles({ title: "Acme", ownerLogin: "octocat", withWorkflow: false }));
+    process.chdir(dir);
+    const command = new Command("verify");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    verifyCommand.action({
+      command,
+      options: { debug: false, json: false, quiet: false },
+    } satisfies CommandContext);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toContain("All checks passed.");
   });
 
   it("still passes verify with the validate-tree workflow seeded", () => {

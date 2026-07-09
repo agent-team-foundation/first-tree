@@ -75,6 +75,16 @@ describe("detectInstallMode", () => {
     expect(detectInstallMode(argv1, "first-tree")).toBe("npx");
   });
 
+  it("falls back to npx when process.argv[1] is absent", () => {
+    const originalArgv1 = process.argv[1];
+    try {
+      process.argv[1] = undefined as unknown as string;
+      expect(detectInstallMode(undefined, "first-tree")).toBe("npx");
+    } finally {
+      process.argv[1] = originalArgv1;
+    }
+  });
+
   it("classifies a global install as 'global' when invoked through a symlinked bin/", () => {
     // Regression: standard `npm i -g` lays the binary out as
     // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/dist/cli/index.mjs`.

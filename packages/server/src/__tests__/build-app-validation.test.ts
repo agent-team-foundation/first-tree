@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
+import * as resourcesMigration from "../services/resources-migration.js";
 
 /**
  * Boot-time gate: a typo in `FIRST_TREE_AUTH_*_EXPIRY` must fail the
@@ -188,9 +189,60 @@ describe("buildApp — retired feedback route boundary", () => {
       expect(feedback.headers["content-type"]).toContain("application/json");
       expect(feedback.json()).toEqual({ error: "Feedback has been removed" });
       expect(feedback.body).not.toContain("App shell");
+
+      const apiMiss = await app.inject({ method: "GET", url: "/api/missing" });
+      expect(apiMiss.statusCode).toBe(404);
+      expect(apiMiss.json()).toEqual({ error: "Not found" });
+
+      const assetMiss = await app.inject({ method: "GET", url: "/assets/missing.js" });
+      expect(assetMiss.statusCode).toBe(404);
+      expect(assetMiss.json()).toEqual({ error: "Not found" });
     } finally {
       await safeClose(app);
       await rm(webRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildApp — boot-time edge branches", () => {
+  it("boots with package-version fallback, trusted proxy logging, trace attrs, and backfill failure tolerance", async () => {
+    const backfill = vi.spyOn(resourcesMigration, "backfillResourcesPhase1").mockRejectedValueOnce(new Error("down"));
+    let app: FastifyInstance | undefined;
+    try {
+      app = await buildApp({
+        ...baseConfig,
+        trustProxy: true,
+        observability: {
+          ...baseConfig.observability,
+          tracing: {
+            endpoint: "",
+            headers: "",
+            exporter: "otlp-http",
+            serviceName: "first-tree-test",
+            environment: "test",
+            sampleRate: 1,
+            captureClientIp: true,
+          },
+        },
+        update: { ...baseConfig.update, commandVersion: undefined },
+      });
+      await app.ready();
+
+      expect(app.commandVersion()).toBe("0.1.0");
+      expect(backfill).toHaveBeenCalledTimes(1);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/healthz?token=secret",
+        headers: {
+          referer: "https://example.test/workspace",
+          "user-agent": "first-tree-test",
+          "x-forwarded-for": "203.0.113.10",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+    } finally {
+      await safeClose(app);
     }
   });
 });

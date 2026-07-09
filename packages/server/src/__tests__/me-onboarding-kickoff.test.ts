@@ -513,6 +513,25 @@ describe("GET /me/onboarding/tree-setup-status", () => {
     });
   }
 
+  it("does not offer tree setup recovery to non-admin members", async () => {
+    const app = getApp();
+    const member = await createTestAdmin(app);
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, member.memberId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${member.organizationId}`,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      needsTreeSetup: false,
+      hasTreeBinding: false,
+      hasTreeSetupKickoff: false,
+    });
+  });
+
   it("offers recovery to a completed admin whose org has no tree binding", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

@@ -124,6 +124,33 @@ describe("normalizeGithubEvent — pull_request", () => {
     ).toBeNull();
   });
 
+  it("edited: kind=edited with mentions and fallback surface fields", () => {
+    const event = normalize("pull_request", {
+      action: "edited",
+      sender: senderUser,
+      repository,
+      pull_request: {
+        number: 11,
+        body: "Updated notes for @Bob and @bob.",
+      },
+    });
+
+    expect(event?.kind).toBe("edited");
+    expect(event?.entity).toEqual({
+      type: "pull_request",
+      repo: "owner/repo",
+      key: "owner/repo#11",
+      title: undefined,
+      url: undefined,
+    });
+    expect(event?.surface).toEqual({
+      title: "PR #11",
+      body: "Updated notes for @Bob and @bob.",
+      url: "",
+    });
+    expect(event?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
+  });
+
   it("ready_for_review → kind=review_requested with all current reviewers as involves", () => {
     const event = normalize("pull_request", {
       action: "ready_for_review",
@@ -256,6 +283,59 @@ describe("normalizeGithubEvent — pull_request_review / review_comment", () => 
     expect(event?.entity.type).toBe("pull_request");
   });
 
+  it("review.dismissed and edited are normalized as reviewed", () => {
+    for (const action of ["dismissed", "edited"]) {
+      const event = normalize("pull_request_review", {
+        action,
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
+        review: { body: "", html_url: "" },
+      });
+
+      expect(event?.kind).toBe("reviewed");
+      expect(event?.surface.title).toBe("PR #10");
+      expect(event?.surface.url).toBe("");
+    }
+  });
+
+  it("drops malformed pull_request_review payloads", () => {
+    expect(
+      normalize("pull_request_review", {
+        action: "submitted",
+        sender: senderUser,
+        repository,
+        review: { body: "missing pr" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("pull_request_review", {
+        action: "submitted",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("pull_request_review", {
+        action: "submitted",
+        sender: senderUser,
+        repository,
+        pull_request: { number: "10" },
+        review: { body: "bad number" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("pull_request_review", {
+        action: "commented",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
+        review: { body: "unsupported action" },
+      }),
+    ).toBeNull();
+  });
+
   it("pull_request_review_comment.created → kind=review_comment", () => {
     const event = normalize("pull_request_review_comment", {
       action: "created",
@@ -265,6 +345,61 @@ describe("normalizeGithubEvent — pull_request_review / review_comment", () => 
       comment: { body: "nit", html_url: "https://github.com/owner/repo/pull/10#discussion_r1" },
     });
     expect(event?.kind).toBe("review_comment");
+  });
+
+  it("pull_request_review_comment.edited uses fallback surface fields", () => {
+    const event = normalize("pull_request_review_comment", {
+      action: "edited",
+      sender: senderUser,
+      repository,
+      pull_request: { number: 10 },
+      comment: { body: "follow-up @Erin" },
+    });
+
+    expect(event?.kind).toBe("review_comment");
+    expect(event?.surface).toEqual({
+      title: "PR #10",
+      body: "follow-up @Erin",
+      url: "",
+    });
+    expect(event?.involves).toEqual([{ githubLogin: "erin", reason: "mentioned" }]);
+  });
+
+  it("drops malformed pull_request_review_comment payloads", () => {
+    expect(
+      normalize("pull_request_review_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        comment: { body: "missing pr" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("pull_request_review_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("pull_request_review_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        pull_request: { number: Number.NaN },
+        comment: { body: "bad number" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("pull_request_review_comment", {
+        action: "deleted",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
+        comment: { body: "unsupported action" },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -305,6 +440,61 @@ describe("normalizeGithubEvent — issue_comment (Bug 3 core fix)", () => {
     expect(event?.entity.type).toBe("issue");
     expect(event?.surface.title).toBe("Issue #42: Bug X");
   });
+
+  it("issue_comment.edited uses fallback issue title and URL", () => {
+    const event = normalize("issue_comment", {
+      action: "edited",
+      sender: senderUser,
+      repository,
+      issue: { number: 43 },
+      comment: { body: "updated @Carol" },
+    });
+
+    expect(event?.kind).toBe("commented");
+    expect(event?.surface).toEqual({
+      title: "Issue #43",
+      body: "updated @Carol",
+      url: "",
+    });
+    expect(event?.involves).toEqual([{ githubLogin: "carol", reason: "mentioned" }]);
+  });
+
+  it("drops malformed issue_comment payloads", () => {
+    expect(
+      normalize("issue_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        comment: { body: "missing issue" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("issue_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        issue: { number: 42 },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("issue_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        issue: { number: null },
+        comment: { body: "bad issue number" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("issue_comment", {
+        action: "deleted",
+        sender: senderUser,
+        repository,
+        issue: { number: 42 },
+        comment: { body: "unsupported action" },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("normalizeGithubEvent — issues", () => {
@@ -340,6 +530,40 @@ describe("normalizeGithubEvent — issues", () => {
     expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "assigned" }]);
   });
 
+  it("edited, closed, and reopened normalize issue state changes", () => {
+    const edited = normalize("issues", {
+      action: "edited",
+      sender: senderUser,
+      repository,
+      issue: {
+        number: 42,
+        html_url: "https://github.com/owner/repo/issues/42",
+        body: "new details @Bob",
+      },
+    });
+    expect(edited?.kind).toBe("edited");
+    expect(edited?.surface.title).toBe("Issue #42");
+    expect(edited?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
+
+    const closed = normalize("issues", {
+      action: "closed",
+      sender: senderUser,
+      repository,
+      issue: { number: 42, title: "Bug X", html_url: "https://github.com/owner/repo/issues/42" },
+    });
+    expect(closed?.kind).toBe("closed");
+    expect(closed?.involves).toEqual([]);
+
+    const reopened = normalize("issues", {
+      action: "reopened",
+      sender: senderUser,
+      repository,
+      issue: { number: 42, title: "Bug X", html_url: "https://github.com/owner/repo/issues/42" },
+    });
+    expect(reopened?.kind).toBe("reopened");
+    expect(reopened?.involves).toEqual([]);
+  });
+
   it("assigned with no assignee.login → null", () => {
     expect(
       normalize("issues", {
@@ -353,6 +577,18 @@ describe("normalizeGithubEvent — issues", () => {
 
   it("labeled → null", () => {
     expect(normalize("issues", { action: "labeled", sender: senderUser, repository, issue: { number: 1 } })).toBeNull();
+  });
+
+  it("drops malformed issues payloads", () => {
+    expect(normalize("issues", { action: "opened", sender: senderUser, repository })).toBeNull();
+    expect(
+      normalize("issues", {
+        action: "opened",
+        sender: senderUser,
+        repository,
+        issue: { number: "42", title: "Bad number" },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -375,6 +611,65 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
     expect(event?.involves).toEqual([{ githubLogin: "bob", reason: "mentioned" }]);
   });
 
+  it("discussion state changes normalize to edited, closed, reopened, or other", () => {
+    const edited = normalize("discussion", {
+      action: "edited",
+      sender: senderUser,
+      repository,
+      discussion: { number: 9, body: "updated @Carol" },
+    });
+    expect(edited?.kind).toBe("edited");
+    expect(edited?.surface.title).toBe("Discussion #9");
+    expect(edited?.involves).toEqual([{ githubLogin: "carol", reason: "mentioned" }]);
+
+    const closed = normalize("discussion", {
+      action: "closed",
+      sender: senderUser,
+      repository,
+      discussion: { number: 9, title: "RFC" },
+    });
+    expect(closed?.kind).toBe("closed");
+
+    const reopened = normalize("discussion", {
+      action: "reopened",
+      sender: senderUser,
+      repository,
+      discussion: { number: 9, title: "RFC" },
+    });
+    expect(reopened?.kind).toBe("reopened");
+
+    for (const action of ["answered", "unanswered"]) {
+      const event = normalize("discussion", {
+        action,
+        sender: senderUser,
+        repository,
+        discussion: { number: 9, title: "RFC", html_url: "https://github.com/owner/repo/discussions/9" },
+      });
+      expect(event?.kind).toBe("other");
+      expect(event?.involves).toEqual([]);
+    }
+  });
+
+  it("drops malformed discussion payloads", () => {
+    expect(normalize("discussion", { action: "created", sender: senderUser, repository })).toBeNull();
+    expect(
+      normalize("discussion", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        discussion: { number: "9", title: "Bad number" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("discussion", {
+        action: "pinned",
+        sender: senderUser,
+        repository,
+        discussion: { number: 9 },
+      }),
+    ).toBeNull();
+  });
+
   it("discussion_comment.created → kind=commented", () => {
     const event = normalize("discussion_comment", {
       action: "created",
@@ -385,6 +680,61 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
     });
     expect(event?.entity).toMatchObject({ type: "discussion", key: "owner/repo#9" });
     expect(event?.kind).toBe("commented");
+  });
+
+  it("discussion_comment.edited uses fallback URL and title", () => {
+    const event = normalize("discussion_comment", {
+      action: "edited",
+      sender: senderUser,
+      repository,
+      discussion: { number: 9 },
+      comment: { body: "edit @Dave" },
+    });
+
+    expect(event?.kind).toBe("commented");
+    expect(event?.surface).toEqual({
+      title: "Discussion #9",
+      body: "edit @Dave",
+      url: "",
+    });
+    expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "mentioned" }]);
+  });
+
+  it("drops malformed discussion_comment payloads", () => {
+    expect(
+      normalize("discussion_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        comment: { body: "missing discussion" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("discussion_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        discussion: { number: 9 },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("discussion_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        discussion: { number: Number.POSITIVE_INFINITY },
+        comment: { body: "bad number" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("discussion_comment", {
+        action: "deleted",
+        sender: senderUser,
+        repository,
+        discussion: { number: 9 },
+        comment: { body: "unsupported action" },
+      }),
+    ).toBeNull();
   });
 
   it("commit_comment.created → entity is commit keyed on sha", () => {
@@ -405,6 +755,46 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
       url: "https://github.com/owner/repo/commit/abc1234#comment-1",
     });
     expect(event?.kind).toBe("commit_commented");
+  });
+
+  it("commit_comment carries mentions and falls back when optional fields are empty", () => {
+    const event = normalize("commit_comment", {
+      action: "created",
+      sender: senderUser,
+      repository,
+      comment: {
+        body: "please inspect @Erin",
+        commit_id: "def5678",
+        html_url: "",
+      },
+    });
+
+    expect(event?.surface).toEqual({
+      title: "Commit",
+      body: "please inspect @Erin",
+      url: "",
+    });
+    expect(event?.involves).toEqual([{ githubLogin: "erin", reason: "mentioned" }]);
+  });
+
+  it("drops malformed commit_comment payloads", () => {
+    expect(normalize("commit_comment", { action: "created", sender: senderUser, repository })).toBeNull();
+    expect(
+      normalize("commit_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        comment: { body: "missing sha" },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("commit_comment", {
+        action: "edited",
+        sender: senderUser,
+        repository,
+        comment: { commit_id: "abc1234" },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -433,6 +823,53 @@ describe("normalizeGithubEvent — out-of-scope event types & malformed payloads
         action: "opened",
         repository,
         pull_request: { number: 1, title: "x", html_url: "u", body: "" },
+      }),
+    ).toBeNull();
+  });
+
+  it("non-object, invalid sender, and invalid repository payloads return null", () => {
+    expect(normalize("issues", null)).toBeNull();
+    expect(normalize("issues", [])).toBeNull();
+    expect(
+      normalize("issues", {
+        action: "opened",
+        sender: { login: "" },
+        repository,
+        issue: { number: 1 },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("issues", {
+        action: "opened",
+        sender: "alice",
+        repository,
+        issue: { number: 1 },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("issues", {
+        action: "opened",
+        sender: senderUser,
+        repository: { full_name: "" },
+        issue: { number: 1 },
+      }),
+    ).toBeNull();
+    expect(
+      normalize("issues", {
+        action: "opened",
+        sender: senderUser,
+        repository: "owner/repo",
+        issue: { number: 1 },
+      }),
+    ).toBeNull();
+  });
+
+  it("handles missing action as an unsupported action", () => {
+    expect(
+      normalize("pull_request", {
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
       }),
     ).toBeNull();
   });

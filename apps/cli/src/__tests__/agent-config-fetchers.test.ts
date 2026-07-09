@@ -112,6 +112,108 @@ describe("agent config fetch helpers", () => {
     );
   });
 
+  it("wraps resource endpoints, agent resolution, and no-body admin fetches", async () => {
+    const { adminFetch, getAgentResources, patchAgentResources, resolveAgentRecord } = await import(
+      "../commands/agent/config/_shared/fetchers.js"
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ pong: true }));
+
+    await expect(
+      adminFetch<{ pong: boolean }>("https://first-tree.example/api/v1/ping", {
+        method: "GET",
+        adminToken: "admin-token",
+      }),
+    ).resolves.toEqual({ pong: true });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://first-tree.example/api/v1/ping",
+      expect.objectContaining({
+        method: "GET",
+        headers: { Authorization: "Bearer admin-token" },
+      }),
+    );
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ prompt: [], skills: [], resources: [] }));
+    await expect(getAgentResources("https://first-tree.example", "admin-token", "agent-1")).resolves.toEqual({
+      prompt: [],
+      skills: [],
+      resources: [],
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://first-tree.example/api/v1/agents/agent-1/resources",
+      expect.objectContaining({ method: "GET" }),
+    );
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ prompt: [{ id: "p1" }], skills: [], resources: [] }));
+    const patchBody = {
+      expectedVersion: 1,
+      bindings: [
+        {
+          type: "prompt" as const,
+          mode: "include" as const,
+          resourceId: null,
+          inlinePromptBody: "Prefer concise updates.",
+          order: 1,
+        },
+      ],
+    };
+    await expect(
+      patchAgentResources("https://first-tree.example", "admin-token", "agent-1", patchBody),
+    ).resolves.toMatchObject({ prompt: [{ id: "p1" }] });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://first-tree.example/api/v1/agents/agent-1/resources",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify(patchBody),
+      }),
+    );
+
+    fetchMock.mockResolvedValueOnce(jsonResponse([{ uuid: "agent-1", name: "nova", displayName: "Nova" }]));
+    await expect(resolveAgentRecord("https://first-tree.example", "admin-token", "nova")).resolves.toEqual({
+      uuid: "agent-1",
+      name: "nova",
+      displayName: "Nova",
+    });
+  });
+
+  it("prints unset config fields and handles blank HTTP error bodies", async () => {
+    const { adminFetch, printConfig } = await import("../commands/agent/config/_shared/fetchers.js");
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: "Server Error",
+      json: async () => ({}),
+      text: async () => "",
+    } as Response);
+
+    await expect(
+      adminFetch("https://first-tree.example/api/v1/broken", {
+        method: "GET",
+        adminToken: "admin-token",
+      }),
+    ).rejects.toMatchObject({ code: "HTTP_500", message: "Server Error", exitCode: 1 });
+
+    printConfig(
+      config({
+        payload: {
+          kind: "claude-code",
+          prompt: { append: "" },
+          model: "",
+          reasoningEffort: "",
+          mcpServers: [],
+          env: [],
+          gitRepos: [{ url: "https://github.com/acme/api.git" }],
+          resourceSkills: [],
+        },
+      }),
+    );
+
+    expect(output()).toContain("Model:    (unset)");
+    expect(output()).toContain("Reasoning effort: (unset");
+    expect(output()).toContain("Prompt append: (empty)");
+    expect(output()).toContain("MCP servers (0)");
+    expect(output()).toContain("https://github.com/acme/api.git");
+  });
+
   it("prints a readable runtime config summary", async () => {
     const { printConfig } = await import("../commands/agent/config/_shared/fetchers.js");
 
