@@ -1,7 +1,7 @@
 export type ServiceState = "active" | "inactive" | "not-installed" | "unknown";
 
 export type ServiceInfo = {
-  platform: "launchd" | "systemd" | "unsupported";
+  platform: "launchd" | "systemd" | "task-scheduler" | "unsupported";
   label: string;
   unitPath: string;
   logDir: string;

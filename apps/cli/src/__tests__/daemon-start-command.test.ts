@@ -345,6 +345,30 @@ describe("daemon start command", () => {
     expect(output()).toContain("/logs/client.stdout.log / /logs/client.stderr.log");
   });
 
+  it("starts an inactive Windows Task Scheduler service and prints supervisor fallback log", async () => {
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({
+        platform: "task-scheduler",
+        state: "inactive",
+        label: "\\FirstTree\\first-tree",
+        logDir: "/logs",
+      })
+      .mockReturnValueOnce({
+        platform: "task-scheduler",
+        state: "active",
+        label: "\\FirstTree\\first-tree",
+        detail: "pid 123",
+        logDir: "/logs",
+      });
+
+    await expect(runStart()).resolves.toBeTruthy();
+
+    expect(output()).toContain("Started task-scheduler service (pid 123).");
+    expect(output()).toContain("Logs:  /logs/client.log");
+    expect(output()).toContain("Supervisor fallback: /logs/supervisor.log");
+  });
+
   it("prints WSL repair guidance when service startup fails", async () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     coreMocks.isServiceSupported.mockReturnValue(true);

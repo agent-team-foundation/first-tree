@@ -10,6 +10,7 @@ import { registerDaemonRestartCommand } from "./restart.js";
 import { registerDaemonStartCommand } from "./start.js";
 import { registerDaemonStatusCommand } from "./status.js";
 import { registerDaemonStopCommand } from "./stop.js";
+import { registerDaemonSuperviseCommand } from "./supervise.js";
 
 export function registerDaemonCommands(program: Command): void {
   const daemon = program
@@ -30,6 +31,9 @@ export function registerDaemonCommands(program: Command): void {
   // after a self-install to refresh the unit file with the new binary's
   // templates before exit(75).
   registerDaemonRefreshUnitCommand(daemon);
+  // Hidden — Windows Task Scheduler action. It owns the child supervision loop
+  // because Task Scheduler is only reliable as a logon/start trigger.
+  registerDaemonSuperviseCommand(daemon);
   // Hidden — post-bundle test probe; emits resolved channel identity +
   // home paths as JSON. See `apps/cli/src/__tests__/post-bundle-channel-home.test.ts`.
   registerDaemonHomeInfoCommand(daemon);

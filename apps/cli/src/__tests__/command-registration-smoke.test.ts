@@ -105,6 +105,7 @@ describe("CLI command registration", () => {
       "start",
       "status",
       "stop",
+      "supervise",
     ]);
     expect(subcommands(root, "config")).toEqual(["get", "set", "show"]);
     expect(subcommands(root, "org")).toEqual(["bind-tree"]);

@@ -274,7 +274,9 @@ describe("daemon utility commands", () => {
       state: "active",
     });
     await runDaemon(["refresh-unit"]);
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("unit rewritten");
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "supervisor definition rewritten",
+    );
 
     coreMocks.isServiceSupported.mockReturnValueOnce(false);
     await runDaemon(["ensure-service"]);

@@ -16,6 +16,8 @@ describe("daemon namespace — hidden service-maintenance subcommands", () => {
     expect(refresh, "refresh-unit subcommand should exist").toBeDefined();
     const ensure = daemonCmd?.commands.find((c) => c.name() === "ensure-service");
     expect(ensure, "ensure-service subcommand should exist").toBeDefined();
+    const supervise = daemonCmd?.commands.find((c) => c.name() === "supervise");
+    expect(supervise, "supervise subcommand should exist").toBeDefined();
     // `hidden: true` is the contract documented in commands/daemon/refresh-unit.ts:
     // this is a supervisor-cooperation interface, not a user-facing verb.
     // We assert via `_hidden` (Commander internal flag) because Commander
@@ -28,6 +30,10 @@ describe("daemon namespace — hidden service-maintenance subcommands", () => {
     expect(
       (ensure as unknown as { _hidden?: boolean })._hidden,
       "ensure-service must remain hidden from `daemon --help`",
+    ).toBe(true);
+    expect(
+      (supervise as unknown as { _hidden?: boolean })._hidden,
+      "supervise must remain hidden from `daemon --help`",
     ).toBe(true);
   });
 

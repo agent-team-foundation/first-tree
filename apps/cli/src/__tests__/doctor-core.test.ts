@@ -307,6 +307,21 @@ describe("doctor core checks", () => {
     });
 
     serviceStatusMock.mockReturnValueOnce({
+      platform: "task-scheduler",
+      label: "\\FirstTree\\first-tree-dev",
+      unitPath: "C:\\Users\\dev\\.first-tree-dev\\service\\first-tree-dev-task.xml",
+      logDir: "/logs",
+      state: "unknown",
+      detail: "task running but no live service runtime marker",
+    });
+    expect(checkBackgroundService()).toEqual({
+      label: "Background service",
+      ok: false,
+      detail:
+        "state unknown (task-scheduler, task running but no live service runtime marker); unit at C:\\Users\\dev\\.first-tree-dev\\service\\first-tree-dev-task.xml",
+    });
+
+    serviceStatusMock.mockReturnValueOnce({
       platform: "launchd",
       label: "dev.first-tree",
       unitPath: "/unit",

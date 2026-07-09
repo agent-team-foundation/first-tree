@@ -261,6 +261,13 @@ export function checkBackgroundService(): CheckResult {
       detail: `installed but not running${info.detail ? ` — ${info.detail}` : ""}; unit at ${info.unitPath}`,
     };
   }
+  if (info.state === "unknown") {
+    return {
+      label: "Background service",
+      ok: false,
+      detail: `state unknown (${info.platform}${info.detail ? `, ${info.detail}` : ""}); unit at ${info.unitPath}`,
+    };
+  }
   return {
     label: "Background service",
     ok: false,

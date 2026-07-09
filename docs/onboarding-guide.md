@@ -58,9 +58,10 @@ because an agent is permanently bound to exactly one client machine.
   accepted during rollout.
 - `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
-- On macOS / Linux, the background daemon is installed as a user-level
-  service so the machine stays online across reboots. Pass `--no-start`
-  to skip the daemon launch.
+- On macOS / Linux / Windows, the background daemon is installed as a
+  per-user service so the machine stays online after login across reboots.
+  Windows uses a per-user Task Scheduler logon task, not a machine-wide
+  Windows Service. Pass `--no-start` to skip the daemon launch.
 
 Every agent on this machine authenticates as the signed-in member —
 there are no per-agent bearer tokens.

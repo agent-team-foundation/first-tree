@@ -159,18 +159,18 @@ first-tree upgrade [--check] [--latest] [--no-restart]
 
 Self-update for the CLI: query the configured server for its recommended
 Command version, install that exact version through the current install mode,
-refresh the systemd unit / launchd plist on top of the new bits, then restart
-the client service. Portable installs download the channel manifest and
-verified tarball, including the bundled Node.js runtime. npm installs run
-`npm install -g` against the channel package and keep using the system Node.js
-runtime. Use `--latest` only when you intentionally want to bypass the server
-target and install the channel's latest release data directly.
+refresh the supervisor definition on top of the new bits, then restart the
+client service. Portable installs download the channel manifest and verified
+tarball, including the bundled Node.js runtime. npm installs run `npm install
+-g` against the channel package and keep using the system Node.js runtime. Use
+`--latest` only when you intentionally want to bypass the server target and
+install the channel's latest release data directly.
 
 | Flag | Effect |
 |---|---|
 | `--check` | Only check for an available version; print "update available" or "already on latest". Do not install. |
 | `--latest` | Bypass the server target and query npm for the package's latest published version. |
-| `--no-restart` | Install the new version and refresh the unit file, but leave the running service alone. Used for staged rollouts. |
+| `--no-restart` | Install the new version and refresh the supervisor definition, but leave the running service alone. Used for staged rollouts. |
 
 Refusing to run from a source checkout (anywhere under a `.git`
 ancestor) is intentional — keeps a dev build from accidentally
@@ -587,7 +587,13 @@ after scaffolding the tree.
 
 The background service that holds the client WebSocket and runs every
 configured agent on this machine. Installed automatically by `first-tree
-login` on macOS / Linux.
+login` on supported desktop platforms: launchd on macOS, `systemd --user`
+on Linux, and a per-user Task Scheduler logon task on Windows.
+
+On Windows, Task Scheduler only owns per-user logon/start triggering. A hidden
+First Tree supervisor loop owns the daemon child process, exit-code restart
+policy, stop intent, runtime marker PID, and logs. This is not a Windows
+Service / WinSW install and does not run before the Windows user logs in.
 
 ```
 first-tree daemon
@@ -760,9 +766,9 @@ Most environment variables use the `FIRST_TREE_` prefix.
 
 ### Daemon environment file (`daemon.env`) — user-owned
 
-A launchd / systemd daemon does **not** inherit your interactive login-shell
-environment, so anything your shell exports (commonly an `HTTP_PROXY` /
-`HTTPS_PROXY` for users behind a network proxy, or
+A launchd / systemd / Task Scheduler daemon does **not** inherit your
+interactive login-shell environment, so anything your shell exports (commonly
+an `HTTP_PROXY` / `HTTPS_PROXY` for users behind a network proxy, or
 `FIRST_TREE_CLIENT_SENTRY_ENABLED=false` for Client Sentry opt-out) is invisible
 to the background daemon and the agent runtimes it spawns. That is why an
 interactive `claude` / `git` can work while the daemon's calls to
@@ -795,7 +801,7 @@ These are mentioned for completeness; operators don't set them in shell rc.
 
 | Variable | Purpose |
 |---|---|
-| `FIRST_TREE_SERVICE_MODE` | Supervisor → child flag baked into the launchd plist and systemd unit templates. |
+| `FIRST_TREE_SERVICE_MODE` | Supervisor → child flag baked into launchd/systemd templates and set by the Windows supervisor loop. |
 
 ### CLI / daemon — update behavior
 
