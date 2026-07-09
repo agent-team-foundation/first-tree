@@ -16,6 +16,7 @@ export {
   stopClientService,
   uninstallClientService,
   windowsSupervisorLogPath,
+  windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,
   windowsTaskName,
   windowsTaskXmlPath,

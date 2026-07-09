@@ -8,6 +8,8 @@ import {
   renderSystemdUnit,
   renderWindowsSupervisorCmd,
   renderWindowsTaskXml,
+  windowsSupervisorLogPath,
+  windowsSupervisorWrapperLogPath,
 } from "../core/service-install.js";
 
 /**
@@ -189,7 +191,8 @@ describe("renderWindowsSupervisorCmd — wrapper enters the hidden supervisor co
     });
     expect(wrapper).toContain(`set "FIRST_TREE_HOME=${defaultHome()}"`);
     expect(wrapper).toContain('"C:\\Program Files\\nodejs\\node.exe" "C:\\First Tree\\index.mjs" "daemon" "supervise"');
-    expect(wrapper).toContain("supervisor.log");
+    expect(wrapper).toContain(`>>"${windowsSupervisorWrapperLogPath()}" 2>&1`);
+    expect(wrapper).not.toContain(`>>"${windowsSupervisorLogPath()}"`);
     expect(wrapper).toContain(" 2>&1");
   });
 });

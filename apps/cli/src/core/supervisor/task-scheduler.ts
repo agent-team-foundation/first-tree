@@ -17,6 +17,7 @@ import {
   renderWindowsSupervisorCmd,
   windowsSupervisorLogPath,
   windowsSupervisorStopIntentPath,
+  windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,
   windowsTaskLeafName,
   windowsTaskName,
@@ -584,6 +585,7 @@ export const taskSchedulerBackend: SupervisorBackend = {
 export {
   renderWindowsSupervisorCmd,
   windowsSupervisorLogPath,
+  windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,
   windowsTaskName,
   windowsTaskXmlPath,
