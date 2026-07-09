@@ -24,9 +24,18 @@ vi.mock("@first-tree/client", () => ({
   getChildProcessRegistry: () => ({ spawn: registrySpawnMock }),
 }));
 
-vi.mock("../core/bootstrap.js", () => ({
-  resolveServerUrl: resolveServerUrlMock,
-}));
+vi.mock("../core/bootstrap.js", () => {
+  class ServerUrlNotConfiguredError extends Error {
+    constructor() {
+      super("Server URL not configured.");
+      this.name = "ServerUrlNotConfiguredError";
+    }
+  }
+  return {
+    resolveServerUrl: resolveServerUrlMock,
+    ServerUrlNotConfiguredError,
+  };
+});
 
 vi.mock("../core/cli-fetch.js", () => ({
   cliFetch: cliFetchMock,
