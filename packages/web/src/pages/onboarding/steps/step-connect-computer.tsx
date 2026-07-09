@@ -1,11 +1,13 @@
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
-import { STUCK_AFTER_MS } from "../../../components/connect-stuck-panel.js";
 import { Button } from "../../../components/ui/button.js";
 import { runtimeProviderLabel } from "../../clients/cards/shared/providers.js";
 import { COPY } from "../copy.js";
 import { CommandBox, FlowHint, StatusRow } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
+
+/** Wait this long on the connect command before surfacing the Node.js recovery line. */
+const STUCK_AFTER_MS = 75_000;
 
 /**
  * Install the First Tree client (a small background app) on the user's computer.
