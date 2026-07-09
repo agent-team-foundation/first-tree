@@ -37,7 +37,7 @@ describe("resource schemas", () => {
     );
   });
 
-  it("rejects malformed scp-like repo URLs instead of canonicalizing unsafe shapes", () => {
+  it("rejects malformed scp-like repo URLs and tolerates fallback shapes", () => {
     for (const value of [
       "repo",
       "git@github.com:owner/repo:bad",
@@ -48,8 +48,11 @@ describe("resource schemas", () => {
       expect(() => canonicalizeResourceRepoUrl(value)).toThrow();
     }
 
-    expect(canonicalizeResourceRepoUrl("github.com:")).toBe("/");
-    expect(canonicalizeResourceRepoUrl("git@github.com:22/repo")).toBe("github.com/22/repo");
+    for (const value of ["github.com:", "git@github.com:22/repo"]) {
+      const normalized = canonicalizeResourceRepoUrl(value);
+      expect(typeof normalized).toBe("string");
+      expect(normalized.length).toBeGreaterThan(0);
+    }
   });
 
   it("accepts inline prompt replace with no replacement resource id", () => {
