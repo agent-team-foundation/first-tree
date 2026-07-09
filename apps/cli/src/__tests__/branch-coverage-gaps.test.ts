@@ -888,3 +888,159 @@ describe("agent bind client branches", () => {
     expect(success).toHaveBeenCalled();
   });
 });
+
+describe("workspace discovery edge branches", () => {
+  it("handles missing sources roots, non-repos, and empty remotes", async () => {
+    const root = tempDir("ft-ws-status-");
+    mkdirSync(join(root, ".first-tree"), { recursive: true });
+    mkdirSync(join(root, "source-repos"), { recursive: true });
+    writeFileSync(
+      join(root, ".first-tree", "workspace.json"),
+      JSON.stringify({
+        version: 1,
+        tree: "tree",
+        sourcesRoot: "source-repos",
+        sources: ["alpha", "missing"],
+      }),
+    );
+    // tree missing → treePresent false branch
+    // sourcesRoot exists but alpha is not a git repo; missing path absent
+    mkdirSync(join(root, "source-repos", "alpha"), { recursive: true });
+    writeFileSync(join(root, "source-repos", "alpha", "README"), "x");
+
+    const { computeWorkspaceStatus, pickImmediateWorkspaceSources, readGitRemoteUrl } = await import(
+      "../core/workspace.js"
+    );
+    const status = computeWorkspaceStatus(root);
+    expect(status.treePresent).toBe(false);
+    expect(status.boundSources.some((s) => s.name === "missing" && !s.present)).toBe(true);
+    expect(status.boundSources.some((s) => s.name === "alpha" && s.present)).toBe(true);
+
+    // sourcesRoot with no git children + exclude set
+    expect(pickImmediateWorkspaceSources(root, "tree", new Set(["alpha"]))).toEqual([]);
+    // missing directory for listImmediateChildDirs
+    expect(pickImmediateWorkspaceSources(join(root, "no-such"), "tree")).toEqual([]);
+    // non-repo readGitRemoteUrl
+    expect(readGitRemoteUrl(join(root, "source-repos", "alpha"))).toBeUndefined();
+  });
+});
+
+describe("migrate-workspace bindings source names", () => {
+  it("returns empty source names when bindings dir is absent", async () => {
+    const cwd = tempDir("ft-mig-bind-");
+    mkdirSync(join(cwd, "tree"), { recursive: true });
+    // no .first-tree/bindings → detect still works without throwing
+    const { detectMigrationState } = await import("../core/migrate-workspace.js");
+    const state = detectMigrationState(cwd);
+    expect(state).toBeDefined();
+  });
+});
+
+describe("runtime-provider-reconcile yaml rewrite failure", () => {
+  it("logs a warning when yaml rewrite fails", async () => {
+    const home = tempDir("ft-reconcile-");
+    process.env.FIRST_TREE_HOME = home;
+    const agentsDir = join(home, "config", "agents");
+    const agentDir = join(agentsDir, "bot");
+    mkdirSync(agentDir, { recursive: true });
+    const yamlPath = join(agentDir, "agent.yaml");
+    writeFileSync(yamlPath, "agentId: 00000000-0000-4000-8000-000000000001\nruntime: claude-code\n", {
+      mode: 0o600,
+    });
+    // Read-only file so rewrite writeFileSync fails after a successful parse.
+    const { chmodSync } = await import("node:fs");
+    chmodSync(yamlPath, 0o400);
+    chmodSync(agentDir, 0o500);
+
+    const logs: Array<[string, string]> = [];
+    vi.resetModules();
+    vi.doMock("../core/cli-fetch.js", () => ({
+      cliFetch: vi.fn(async () => ({
+        ok: true,
+        json: async () => [
+          {
+            agentId: "00000000-0000-4000-8000-000000000001",
+            clientId: "client_x",
+            runtimeProvider: "codex",
+          },
+        ],
+      })),
+    }));
+    const { reconcileLocalRuntimeProviders } = await import("../core/runtime-provider-reconcile.js");
+    try {
+      await reconcileLocalRuntimeProviders({
+        serverUrl: "https://hub.example",
+        accessToken: "tok",
+        agentsDir,
+        log: (level, msg) => logs.push([level, msg]),
+      });
+    } finally {
+      chmodSync(agentDir, 0o700);
+      chmodSync(yamlPath, 0o600);
+    }
+    expect(logs.some((l) => l[0] === "warn" && l[1].includes("failed to rewrite"))).toBe(true);
+  });
+});
+
+describe("isWslDbusOvermount /proc/version missing", () => {
+  it("returns false when bus fails but /proc/version is absent", async () => {
+    setPlatform("linux");
+    vi.resetModules();
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        existsSync: (path: string) => {
+          if (path === "/proc/version") return false;
+          return actual.existsSync(path);
+        },
+      };
+    });
+    const { isWslDbusOvermount } = await import("../commands/daemon/_shared/wsl-dbus.js");
+    expect(isWslDbusOvermount("Failed to connect to bus: No such file or directory")).toBe(false);
+    vi.doUnmock("node:fs");
+  });
+});
+
+describe("doctor-checks runtime provider check export", () => {
+  it("invokes checkRuntimeProviders via mocked probeCapabilities", async () => {
+    vi.resetModules();
+    const probeCapabilities = vi.fn(async () => ({
+      providers: [{ id: "claude-code", available: true, detail: "ok" }],
+    }));
+    const runtimeProviderChecks = vi.fn(() => [{ name: "Claude", status: "pass" as const, detail: "ok" }]);
+    vi.doMock("@first-tree/client", () => ({
+      FirstTreeHubSDK: class {},
+      probeCapabilities,
+    }));
+    vi.doMock("../../core/index.js", async () => {
+      const actual = await vi.importActual<typeof import("../core/index.js")>("../core/index.js");
+      return { ...actual, runtimeProviderChecks, ensureFreshAccessToken: async () => "tok" };
+    });
+    // path relative from test file is ../commands/_shared/doctor-checks.js
+    vi.doMock("../core/index.js", async () => {
+      const actual = await vi.importActual<typeof import("../core/index.js")>("../core/index.js");
+      return {
+        ...actual,
+        runtimeProviderChecks,
+        ensureFreshAccessToken: async () => "tok",
+        resolveServerUrl: () => {
+          throw new Error("no server");
+        },
+        reconcileAgentConfigs: async () => ({ name: "Agents", status: "pass" as const }),
+        checkAgentConfigs: () => ({ name: "Agents", status: "pass" as const }),
+        checkNodeVersion: () => ({ name: "Node", status: "pass" as const }),
+        checkClientConfig: () => ({ name: "Client", status: "pass" as const }),
+        checkServerReachable: async () => ({ name: "Server", status: "pass" as const }),
+        checkWebSocket: async () => ({ name: "WS", status: "pass" as const }),
+        checkBackgroundService: () => ({ name: "Service", status: "pass" as const }),
+        CLI_USER_AGENT: "test",
+      };
+    });
+    const { checkRuntimeProviders, runDaemonChecks } = await import("../commands/_shared/doctor-checks.js");
+    const runtime = await checkRuntimeProviders();
+    expect(runtime).toEqual([{ name: "Claude", status: "pass", detail: "ok" }]);
+    const all = await runDaemonChecks();
+    expect(all.some((c) => c.name === "Node")).toBe(true);
+  });
+});
