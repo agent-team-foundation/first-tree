@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   pendingResults: [] as unknown[],
   waiters: [] as Array<() => void>,
   coalesceFirstResultAfterInputs: null as number | null,
+  resultMessagesForInput: null as ((turn: number) => unknown[]) | null,
+  closeAfterInput: false,
 }));
 
 function wakeQuery(): void {
@@ -36,12 +38,20 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
           if (turn < state.coalesceFirstResultAfterInputs) continue;
           state.coalesceFirstResultAfterInputs = null;
         }
-        state.pendingResults.push({
-          type: "result",
-          subtype: "success",
-          result: `reply ${turn}`,
-        });
+        const messages = state.resultMessagesForInput?.(turn) ?? [
+          {
+            type: "result",
+            subtype: "success",
+            result: `reply ${turn}`,
+          },
+        ];
+        state.pendingResults.push(...messages);
         wakeQuery();
+        if (state.closeAfterInput) {
+          closed = true;
+          wakeQuery();
+          return;
+        }
       }
       closed = true;
       wakeQuery();
@@ -174,6 +184,8 @@ beforeEach(() => {
   state.pendingResults.length = 0;
   state.waiters.length = 0;
   state.coalesceFirstResultAfterInputs = null;
+  state.resultMessagesForInput = null;
+  state.closeAfterInput = false;
   state.chatContextPromise = new Promise((resolve) => {
     state.resolveChatContext = resolve;
   });
@@ -185,6 +197,8 @@ afterEach(() => {
   state.resolveChatContext = null;
   state.pendingResults.length = 0;
   state.coalesceFirstResultAfterInputs = null;
+  state.resultMessagesForInput = null;
+  state.closeAfterInput = false;
   wakeQuery();
 });
 
@@ -403,6 +417,184 @@ describe("claude-code handler startup inject queue", () => {
     expect(state.observedInputs).toHaveLength(1);
     expect(completedCounts).toEqual([undefined]);
     expect(retryTurn).toHaveBeenCalledWith(makeMessage("m2", "bad"), "claude_inject_format_failed");
+
+    await handler.shutdown();
+  });
+
+  it("logs token usage emit failures without blocking successful turn close", async () => {
+    const events: Array<Parameters<SessionContext["emitEvent"]>[0]> = [];
+    const logs: string[] = [];
+    const outcomes: unknown[] = [];
+    state.resultMessagesForInput = () => [
+      {
+        type: "result",
+        subtype: "success",
+        result: "reply with usage",
+        modelUsage: {
+          "claude-sonnet-4-5": {
+            inputTokens: 3,
+            cacheCreationInputTokens: 2,
+            cacheReadInputTokens: 5,
+            outputTokens: 7,
+          },
+          "empty-model": {
+            inputTokens: 0,
+            cacheReadInputTokens: 0,
+            outputTokens: 0,
+          },
+          missing: null,
+        },
+      },
+    ];
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext(() => {});
+    ctx.log = (message) => {
+      logs.push(message);
+    };
+    ctx.emitEvent = (event) => {
+      events.push(event);
+      if (event.kind === "token_usage") throw new Error("event store down");
+    };
+    ctx.finishTurn = async (_messages, outcome) => {
+      outcomes.push(outcome);
+    };
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "usage"), ctx);
+
+    await waitFor(() => events.some((event) => event.kind === "turn_end"));
+    expect(events.find((event) => event.kind === "token_usage")).toMatchObject({
+      kind: "token_usage",
+      payload: {
+        provider: "claude-code",
+        model: "claude-sonnet-4-5",
+        inputTokens: 5,
+        cachedInputTokens: 5,
+        outputTokens: 7,
+      },
+    });
+    expect(logs).toContain("Failed to emit token_usage: event store down");
+    expect(events.filter((event) => event.kind === "turn_end")).toEqual([
+      { kind: "turn_end", payload: { status: "success" } },
+    ]);
+    expect(outcomes).toEqual([{ status: "success", terminal: true }]);
+
+    await handler.shutdown();
+  });
+
+  it("reports forwardResult failures as terminal runtime turn errors", async () => {
+    const events: Array<Parameters<SessionContext["emitEvent"]>[0]> = [];
+    const logs: string[] = [];
+    const outcomes: unknown[] = [];
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext(() => {});
+    ctx.forwardResult = vi.fn(async () => {
+      throw new Error("completion sink down");
+    });
+    ctx.log = (message) => {
+      logs.push(message);
+    };
+    ctx.emitEvent = (event) => {
+      events.push(event);
+    };
+    ctx.finishTurn = async (_messages, outcome) => {
+      outcomes.push(outcome);
+    };
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "forward"), ctx);
+
+    await waitFor(() => events.some((event) => event.kind === "turn_end"));
+    expect(ctx.forwardResult).toHaveBeenCalledWith("reply 1");
+    expect(logs).toContain("Failed to forward result: completion sink down");
+    expect(events).toContainEqual({
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: "Result forward failed: completion sink down\n---\nreply 1",
+      },
+    });
+    expect(events).toContainEqual({ kind: "turn_end", payload: { status: "error" } });
+    expect(outcomes).toEqual([
+      {
+        status: "error",
+        terminal: true,
+        completion: "consumed",
+        reason: "forward_failed",
+      },
+    ]);
+
+    await handler.shutdown();
+  });
+
+  it("closes successful turns when the SDK result has no result text", async () => {
+    const events: Array<Parameters<SessionContext["emitEvent"]>[0]> = [];
+    const outcomes: unknown[] = [];
+    state.resultMessagesForInput = () => [{ type: "result", subtype: "success" }];
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext(() => {});
+    ctx.forwardResult = vi.fn(async () => {});
+    ctx.emitEvent = (event) => {
+      events.push(event);
+    };
+    ctx.finishTurn = async (_messages, outcome) => {
+      outcomes.push(outcome);
+    };
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "empty result"), ctx);
+
+    await waitFor(() => events.some((event) => event.kind === "turn_end"));
+    expect(ctx.forwardResult).not.toHaveBeenCalled();
+    expect(events).toContainEqual({ kind: "turn_end", payload: { status: "success" } });
+    expect(outcomes).toEqual([{ status: "success", terminal: true }]);
+
+    await handler.shutdown();
+  });
+
+  it("flushes deferred auth hints when the stream closes before a result", async () => {
+    const events: Array<Parameters<SessionContext["emitEvent"]>[0]> = [];
+    state.resultMessagesForInput = () => [{ type: "auth_status", error: "authentication_failed" }];
+    state.closeAfterInput = true;
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext(() => {});
+    ctx.emitEvent = (event) => {
+      events.push(event);
+    };
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "auth"), ctx);
+
+    await waitFor(() => events.some((event) => event.kind === "error"));
+    const errorEvent = events.find((event) => event.kind === "error");
+    if (errorEvent?.kind !== "error") throw new Error("expected sdk error event");
+    expect(errorEvent.payload.source).toBe("sdk");
+    expect(errorEvent.payload.message).toContain("`claude auth login`");
+    expect(errorEvent.payload.message).toContain("Original SDK error: authentication_failed");
 
     await handler.shutdown();
   });
