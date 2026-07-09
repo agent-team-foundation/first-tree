@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.1.1
+version: 1.1.2
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -333,7 +333,9 @@ Key mechanics — read these carefully, they are easy to get wrong:
   own. Include: the task, the relevant repo/paths, and how "done" is verified. Do
   NOT write a terse pointer like "do task 1".
 - **For a value task**: the brief states the change and its verification (test,
-  lint, screenshot, doc diff).
+  lint, screenshot, doc diff). If the task's likely completion artifact is a PR,
+  include that the task should follow the PR and report whether live tracking is
+  active or blocked by missing GitHub App coverage.
 - **For "Build your Context Tree"**: the brief is user-visible, so write it in
   plain product language and **name no skill in it** — e.g. "Build our team's
   Context Tree from the connected code — propose an initial structure for me to
@@ -347,6 +349,36 @@ Then, back in THIS launcher chat, post a short line naming the chats you opened
 so the user can see the parallel streams. As each spawned chat produces a result
 (a PR, a passing test, the seed PRs), note it here so the launcher stays the
 map of what is in flight.
+
+### After a value PR opens: guide App install once
+
+A review-ready PR gives the admin a concrete reason to install or update First
+Tree GitHub App coverage: CI results, review comments, and merge state can flow
+back into chat. The welcome launcher owns one concise install/coverage guidance
+at this moment; do not rely only on the generic PR-following failure text that a
+spawned task may have shown.
+
+- The spawned value task owns following its PR in its own task chat
+  (`first-tree github follow <url>`) and reporting whether live tracking is
+  active or blocked by missing GitHub App coverage. The launcher cannot follow a
+  PR "in" another chat; it consumes the task result and explains the user-facing
+  consequence.
+- If tracking is active, say only that the task chat will track the PR. Do **not**
+  add App-install guidance.
+- If tracking is blocked because the First Tree GitHub App is not installed on,
+  or does not cover, the GitHub account/repo that owns the PR, and the human is a
+  confirmed **admin**, include one launcher-level install/coverage line when you
+  report that PR result. Keep it tied to the win, for example: "PR is open. To
+  have CI, review comments, and merge updates flow back here, install or cover
+  this repo from Settings -> GitHub." Use a product link only when you have a
+  stable one; otherwise name **Settings -> GitHub**. Do not fabricate raw GitHub
+  App install URLs.
+- If the human is an invitee/member or role is unclear, do not route them into
+  an admin-only install surface. Say an organization admin can enable live PR
+  updates for this repo if useful.
+- Give this App-install guidance at most once in the onboarding launcher. If the
+  spawned task chat already mentioned the missing App, still include the short
+  launcher-level line; do not repeat a full setup explanation.
 
 ## After value lands: the one-time tree offer
 
@@ -494,6 +526,11 @@ surface; involve the responsible admin.
 - If the admin did not pick the tree up front, re-offer it exactly once when the
   first value task delivers a verified result (see **After value lands**) — tied
   to that win, one line, no repeated nudging.
+- When the first value result is a PR, consume the task chat's follow/tracking
+  status and, only for a confirmed admin when App coverage is missing, surface
+  the one-time App-install guidance from **After a value PR opens** in this
+  launcher. This does not replace the tree offer; if both apply, keep each to a
+  short sentence and do not repeat either later.
 - Present choices as a multi-select ask with **2–4 options** — the value tasks
   bundled with the tree-build option when tree build is offered, otherwise the
   value tasks listed individually; never a one-option ask; no "Skip for now"
