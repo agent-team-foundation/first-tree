@@ -1,0 +1,512 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  type AgentRuntimeConfig,
+  encodeProviderRetryEventMessage,
+  type InboxEntryWithMessage,
+  type SessionEvent,
+  type SessionState,
+} from "@first-tree/shared";
+import type pino from "pino";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
+import type { ContextTreeBinding } from "../runtime/bootstrap.js";
+import type {
+  AgentHandler,
+  DeliveryToken,
+  HandlerConfig,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "../runtime/handler.js";
+import { InboxDeliveryCoordinator } from "../runtime/inbox-delivery-coordinator.js";
+import type { SubprocessProbe } from "../runtime/process-tree-probe.js";
+import { SessionManager, type SessionManagerShutdownOptions } from "../runtime/session-manager.js";
+import type { FirstTreeHubSDK } from "../sdk.js";
+import { recordingLogger, silentLogger } from "./_logger-helpers.js";
+import { mockEntry } from "./test-helpers.js";
+
+function mockSdk(overrides: Record<string, unknown> = {}): FirstTreeHubSDK {
+  return {
+    register: vi.fn(),
+    sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
+    sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    getChatDetail: vi.fn().mockResolvedValue({ organizationId: "org-1" }),
+    ...overrides,
+  } as unknown as FirstTreeHubSDK;
+}
+
+function mockRuntimeConfig(): AgentRuntimeConfig {
+  return {
+    agentId: "agent-1",
+    version: 1,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    updatedBy: "tester",
+    payload: {
+      kind: "claude-code",
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+      reasoningEffort: "",
+    },
+  };
+}
+
+function mockAckEntry(): (entryId: number) => Promise<void> {
+  return vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+}
+
+function createMockHandler(overrides: Partial<AgentHandler> = {}): AgentHandler {
+  return {
+    start: vi.fn().mockResolvedValue("session-id-mock"),
+    resume: vi.fn().mockResolvedValue("session-id-mock"),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
+    suspend: vi.fn().mockResolvedValue(undefined),
+    shutdown: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function createSessionManager(opts: {
+  sdk?: FirstTreeHubSDK;
+  handler?: AgentHandler;
+  handlerConfig?: HandlerConfig;
+  handlerFactory?: HandlerFactory;
+  resolveContextTreeBinding?: () => Promise<ContextTreeBinding | null>;
+  ackEntry?: (entryId: number) => Promise<void>;
+  recoverChat?: (chatId: string) => Promise<void>;
+  agentConfigCache?: AgentConfigCache;
+  log?: pino.Logger;
+  registryPath?: string;
+  onStateChange?: (chatId: string, state: SessionState) => void;
+  onSessionEvent?: (chatId: string, event: SessionEvent) => void;
+  subprocessProbe?: SubprocessProbe;
+}) {
+  const handler = opts.handler ?? createMockHandler();
+  return new SessionManager({
+    session: {
+      idle_timeout: 300,
+      max_sessions: 10,
+      working_grace_seconds: 3600,
+      reconcile_interval_seconds: 300,
+    },
+    concurrency: 5,
+    subprocessProbe: opts.subprocessProbe,
+    handlerFactory: opts.handlerFactory ?? (() => handler),
+    handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
+    resolveContextTreeBinding: opts.resolveContextTreeBinding ?? (async () => null),
+    agentIdentity: {
+      agentId: "agent-1",
+      inboxId: "inbox-agent-1",
+      displayName: "Agent",
+      type: "agent",
+      visibility: "organization",
+      delegateMention: null,
+      metadata: {},
+    },
+    sdk: opts.sdk ?? mockSdk(),
+    log: opts.log ?? silentLogger(),
+    registryPath: opts.registryPath,
+    ackEntry: opts.ackEntry ?? mockAckEntry(),
+    recoverChat: opts.recoverChat,
+    agentConfigCache: opts.agentConfigCache,
+    onStateChange: opts.onStateChange,
+    onSessionEvent: opts.onSessionEvent,
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toSessionMessage(entry: InboxEntryWithMessage): SessionMessage {
+  return {
+    inboxEntryId: entry.id,
+    id: entry.message.id,
+    chatId: entry.chatId ?? entry.message.chatId,
+    senderId: entry.message.senderId,
+    format: entry.message.format,
+    content:
+      typeof entry.message.content === "string"
+        ? entry.message.content
+        : isRecord(entry.message.content)
+          ? entry.message.content
+          : {},
+    metadata: entry.message.metadata,
+    createdAt: entry.message.createdAt,
+    precedingMessages: entry.message.precedingMessages ?? [],
+  };
+}
+
+function malformedProviderRetryEvent(): SessionEvent {
+  return {
+    kind: "error",
+    payload: {
+      source: "runtime",
+      message: "provider.retry: {not valid json",
+    },
+  };
+}
+
+describe("InboxDeliveryCoordinator additional delivery coverage", () => {
+  it("retains terminal ledger entries after ACK failure and re-ACKs terminal redelivery", async () => {
+    const { logger, records } = recordingLogger();
+    const ackEntry = vi
+      .fn<(entryId: number) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("ack socket closed"))
+      .mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry,
+      recoverChat,
+      onWorkChanged: vi.fn(),
+      log: logger,
+    });
+    const entry = mockEntry({ id: 100, chatId: "chat-ack-fail", messageId: "msg-ack-fail" });
+    const message = toSessionMessage(entry);
+
+    expect(coordinator.receive(entry)).toEqual({
+      kind: "deliver",
+      work: { chatId: "chat-ack-fail", entryId: 100, messageId: "msg-ack-fail" },
+    });
+    await coordinator.finishTurn("chat-ack-fail", message, { status: "success", terminal: true });
+
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-ack-fail"));
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(coordinator.snapshot("chat-ack-fail").entries).toEqual([
+      { entryId: 100, messageId: "msg-ack-fail", phase: "terminal" },
+    ]);
+    expect(records.some((record) => typeof record.msg === "string" && record.msg.includes("ACK-through failed"))).toBe(
+      true,
+    );
+
+    expect(coordinator.receive(entry)).toEqual({ kind: "duplicate-in-flight" });
+    await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledTimes(2));
+    expect(ackEntry).toHaveBeenNthCalledWith(2, 100);
+    expect(coordinator.snapshot("chat-ack-fail").entries).toEqual([]);
+  });
+
+  it("keeps a recovery redelivery burst in recovery mode until unsettled work drains", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry,
+      recoverChat,
+      onWorkChanged: vi.fn(),
+      log: silentLogger(),
+    });
+    const first = mockEntry({ id: 201, chatId: "chat-redelivery-burst", messageId: "msg-redelivery-1" });
+    const second = mockEntry({ id: 202, chatId: "chat-redelivery-burst", messageId: "msg-redelivery-2" });
+
+    expect(coordinator.receive(first).kind).toBe("deliver");
+    coordinator.retryTurn("chat-redelivery-burst", toSessionMessage(first), "provider_retry");
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-redelivery-burst"));
+
+    expect(coordinator.takeRecoveryActivationReady("chat-redelivery-burst")).toBe(true);
+    expect(coordinator.receive(first).kind).toBe("deliver");
+    expect(coordinator.takeRecoveryActivationReady("chat-redelivery-burst")).toBe(true);
+    expect(coordinator.receive(second).kind).toBe("deliver");
+
+    await coordinator.finishTurn("chat-redelivery-burst", [toSessionMessage(first), toSessionMessage(second)], {
+      status: "success",
+      terminal: true,
+    });
+
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(202);
+    expect(coordinator.takeRecoveryActivationReady("chat-redelivery-burst")).toBe(false);
+  });
+
+  it("logs and ignores terminal rejection payloads without an inbox entry id", async () => {
+    const { logger, records } = recordingLogger();
+    const ackEntry = mockAckEntry();
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry,
+      onWorkChanged: vi.fn(),
+      log: logger,
+    });
+    const entry = mockEntry({ id: 301, chatId: "chat-malformed-terminal", messageId: "msg-malformed-terminal" });
+    const message = toSessionMessage(entry);
+    const malformedMessage: SessionMessage = { ...message, inboxEntryId: undefined };
+
+    expect(coordinator.receive(entry).kind).toBe("deliver");
+    await coordinator.terminalRejected("chat-malformed-terminal", malformedMessage, "deterministic_failure", {
+      kind: "chat_message",
+      messageId: "error-message-id",
+    });
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(coordinator.snapshot("chat-malformed-terminal").entries).toEqual([
+      { entryId: 301, messageId: "msg-malformed-terminal", phase: "open" },
+    ]);
+    expect(
+      records.some(
+        (record) =>
+          typeof record.msg === "string" &&
+          record.msg.includes("terminal rejection ignored because no inboxEntryId was provided"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("SessionManager additional delivery token and payload coverage", () => {
+  it("logs and ignores duplicate terminal outcomes from one delivery token", async () => {
+    const { logger, records } = recordingLogger();
+    const ackEntry = mockAckEntry();
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, _ctx, token) => {
+        capturedMessage = message;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({ handler, ackEntry, log: logger });
+
+    await sm.dispatch(mockEntry({ id: 401, chatId: "chat-token-duplicate", messageId: "msg-token-duplicate" }));
+    if (!capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    await capturedToken.complete(capturedMessage, { status: "success", terminal: true });
+    await capturedToken.terminalRejected(capturedMessage, "late_terminal_rejection", {
+      kind: "chat_message",
+      messageId: "late-error-message",
+    });
+
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(401);
+    expect(
+      records.some(
+        (record) =>
+          typeof record.msg === "string" &&
+          record.msg.includes("delivery token terminal outcome ignored after prior outcome") &&
+          record.action === "terminalRejected",
+      ),
+    ).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("retries terminalRejected instead of ACKing when the durable runtime notice cannot be posted", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockRejectedValue(new Error("notice write failed"));
+    const sdk = mockSdk({ sendMessage });
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const emitted: SessionEvent[] = [];
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      recoverChat,
+      sdk,
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
+      onSessionEvent: (_chatId, event) => emitted.push(event),
+    });
+
+    await sm.dispatch(mockEntry({ id: 402, chatId: "chat-terminal-notice-fail", messageId: "msg-terminal-notice" }));
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    capturedCtx.emitEvent({
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: encodeProviderRetryEventMessage({
+          event: "provider_failure_terminal",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "credential",
+          reasonCode: "provider_credential_required",
+          replaySafety: "provider_entered",
+          userSeverity: "error",
+          messagePreview: "refresh token revoked",
+        }),
+      },
+    });
+    await capturedToken.terminalRejected(capturedMessage, "deterministic_pre_provider_failure", {
+      kind: "chat_message",
+      messageId: "runtime-notice-error",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(ackEntry).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-terminal-notice-fail"));
+    expect(
+      emitted.some(
+        (event) =>
+          event.kind === "error" &&
+          event.payload.source === "runtime" &&
+          event.payload.message.includes("runtime failure notice delivery failed"),
+      ),
+    ).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("ignores malformed provider retry event payloads when completing a consumed error", async () => {
+    const ackEntry = mockAckEntry();
+    const sendMessage = vi.fn().mockResolvedValue({ id: "runtime-notice" });
+    const sdk = mockSdk({ sendMessage });
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({ handler, ackEntry, sdk });
+
+    await sm.dispatch(mockEntry({ id: 403, chatId: "chat-malformed-provider-event", messageId: "msg-malformed" }));
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    capturedCtx.emitEvent(malformedProviderRetryEvent());
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_clean_error",
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(403);
+
+    await sm.shutdown();
+  });
+
+  it("routes malformed file payloads without eager attachment fetches", async () => {
+    const fetchAttachment = vi.fn().mockResolvedValue({ bytes: Buffer.from("image bytes") });
+    const sdk = mockSdk({ fetchAttachment });
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message) => {
+        capturedMessage = message;
+        return "session-id-mock";
+      }),
+    });
+    const sm = createSessionManager({ handler, sdk });
+    const base = mockEntry({ id: 404, chatId: "chat-malformed-file", messageId: "msg-malformed-file" });
+    const malformedFileEntry: InboxEntryWithMessage = {
+      ...base,
+      message: {
+        ...base.message,
+        format: "file",
+        content: { attachments: [{ imageId: "image-without-mime-type" }] },
+      },
+    };
+
+    await sm.dispatch(malformedFileEntry);
+
+    expect(fetchAttachment).not.toHaveBeenCalled();
+    expect(handler.start).toHaveBeenCalledTimes(1);
+    expect(capturedMessage?.format).toBe("file");
+    expect(capturedMessage?.content).toEqual({ attachments: [{ imageId: "image-without-mime-type" }] });
+
+    await sm.shutdown();
+  });
+
+  it("logs config refresh failures but still routes the inbox payload", async () => {
+    const { logger, records } = recordingLogger();
+    const agentConfigCache: AgentConfigCache = {
+      get: vi.fn(),
+      refreshIfNewer: vi.fn().mockRejectedValue(new Error("config service unavailable")),
+      refresh: vi.fn().mockResolvedValue(mockRuntimeConfig()),
+      updateSdk: vi.fn(),
+      updateUrls: vi.fn(),
+      allReferencedUrls: vi.fn(() => new Set<string>()),
+      forget: vi.fn(),
+    };
+    const handler = createMockHandler();
+    const sm = createSessionManager({ handler, agentConfigCache, log: logger });
+
+    await sm.dispatch(mockEntry({ id: 405, chatId: "chat-config-log", messageId: "msg-config-log" }));
+
+    expect(handler.start).toHaveBeenCalledTimes(1);
+    expect(
+      records.some(
+        (record) =>
+          typeof record.msg === "string" &&
+          record.msg.includes("config version mismatch") &&
+          record.chatId === "chat-config-log",
+      ),
+    ).toBe(true);
+
+    await sm.shutdown();
+  });
+});
+
+describe("SessionManager additional shutdown and finalization coverage", () => {
+  it("clears pending transient retry timers during shutdown", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlerFactory = vi.fn<HandlerFactory>(() =>
+        createMockHandler({
+          start: vi.fn(async () => {
+            throw Object.assign(new Error("upstream returned 503"), { status: 503 });
+          }),
+        }),
+      );
+      const sm = createSessionManager({
+        handlerFactory,
+        handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "claude-code" },
+      });
+
+      await sm.dispatch(mockEntry({ id: 501, chatId: "chat-retry-shutdown", messageId: "msg-retry-shutdown" }));
+      expect(handlerFactory).toHaveBeenCalledTimes(1);
+
+      await sm.shutdown("test-shutdown");
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(handlerFactory).toHaveBeenCalledTimes(1);
+      expect(sm.activeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("can skip suspended-state reports and flush an empty registry on destructive shutdown", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "session-manager-more-coverage-"));
+    const registryPath = join(dir, "sessions.json");
+    const onStateChange = vi.fn<(chatId: string, state: SessionState) => void>();
+    const handler = createMockHandler({
+      start: vi.fn(async () => "session-to-clear"),
+      shutdown: vi.fn().mockRejectedValue(new Error("provider already closed")),
+    });
+    const sm = createSessionManager({ handler, registryPath, onStateChange });
+    const opts: SessionManagerShutdownOptions = { clearPersistedRegistry: true, reportSuspendedSessions: false };
+
+    try {
+      await sm.dispatch(mockEntry({ id: 502, chatId: "chat-clear-registry", messageId: "msg-clear-registry" }));
+
+      await expect(sm.shutdown("runtime-switch", opts)).resolves.toBeUndefined();
+
+      const raw = JSON.parse(readFileSync(registryPath, "utf-8")) as {
+        entries: Record<string, unknown>;
+      };
+      expect(raw.entries).toEqual({});
+      expect(onStateChange).toHaveBeenCalledWith("chat-clear-registry", "active");
+      expect(onStateChange).not.toHaveBeenCalledWith("chat-clear-registry", "suspended");
+      expect(handler.shutdown).toHaveBeenCalledWith("runtime-switch");
+      expect(sm.totalCount).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
