@@ -79,7 +79,31 @@ export async function deliverNormalizedEvent(
   // Phase 1 — resolve each target to a chat and merge into per-chat deliveries.
   const byChat = new Map<string, ChatDelivery>();
   for (const target of audience) {
-    if (actorHumanId && target.humanAgentId === actorHumanId) {
+    // Self-echo prune: suppress an actor's own action from echoing back to a
+    // chat they already sit in. The carve-out is a `kind: "new"` directed
+    // involve — any non-null `involveReason` (`assigned` / `mentioned`;
+    // `review_requested` can't name the actor themselves on GitHub, so it's
+    // inert here). `kind: "new"` is target-human-scoped: it means THIS involved
+    // human has no existing entity line (`resolveAudience` found no
+    // `subscribedByHuman` row for them) — NOT that the entity has no chat
+    // anywhere; other humans may already track it. Pruning such a target
+    // wouldn't just drop an echo card — it would prevent this human's tracking
+    // chat from ever being created (the actor self-assigns / self-@s an entity
+    // — at creation or later — and it stays invisible to their delegate). A
+    // brand-new directed involve is an intentional "track this" signal, not a
+    // passive echo, so it must survive and mint (or reuse this human's) chat.
+    // Everything else that maps to the actor (subscribed echoes, and directed
+    // involves where this human already has an entity line → `kind: "existing"`)
+    // stays pruned: that human's chat already exists and the card would be a
+    // true self-echo. See #1536.
+    //
+    // The `involveReason !== null` clause is defensive, not load-bearing:
+    // `resolveAudience` only ever mints `kind: "new"` alongside a non-null
+    // reason, but `deliverNormalizedEvent` is exported and takes an arbitrary
+    // target list, so a future producer that mints `kind: "new"` with no reason
+    // fail-closes to pruning rather than inventing a chat.
+    const isFreshDirectedSelfInvolve = target.kind === "new" && target.involveReason !== null;
+    if (actorHumanId && target.humanAgentId === actorHumanId && !isFreshDirectedSelfInvolve) {
       continue;
     }
     let resolved: ResolvedChat | null;
