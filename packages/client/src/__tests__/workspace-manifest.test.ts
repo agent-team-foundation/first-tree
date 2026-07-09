@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SOURCE_REPOS_DIRNAME } from "@first-tree/shared";
@@ -80,5 +80,15 @@ describe("ensureWorkspaceManifest", () => {
     // The manifest may name a tree dir that does not exist yet; the runtime
     // must not create a directory or symlink (even a dangling one) at that path.
     expect(lstatSync(treeDirPath(), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  it("logs and continues when the workspace state dir cannot be created", () => {
+    const fileWorkspace = join(ws, "not-a-directory");
+    const logs: string[] = [];
+    writeFileSync(fileWorkspace, "already a file");
+
+    expect(() => ensureWorkspaceManifest(fileWorkspace, ["app"], (msg) => logs.push(msg))).not.toThrow();
+
+    expect(logs.some((line) => line.includes("workspace manifest write failed"))).toBe(true);
   });
 });
