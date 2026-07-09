@@ -78,6 +78,15 @@ async function flush(): Promise<void> {
   });
 }
 
+async function waitForText(scope: ParentNode, text: string, timeoutMs = 1200): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (scope.textContent?.includes(text)) return;
+    await flush();
+  }
+  throw new Error(`Missing text: ${text}`);
+}
+
 async function renderDom(element: ReactElement): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -162,6 +171,7 @@ function installBrowserStubs(): void {
     configurable: true,
     value: vi.fn(() => ({
       drawImage: vi.fn(),
+      fillRect: vi.fn(),
     })),
   });
   Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
@@ -529,6 +539,138 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     // The custom-image upload path stays available to humans.
     expect(buttonByText(document.body, "Upload image")).not.toBeNull();
     await act(async () => human.root.unmount());
+  });
+
+  it("generates and applies a baked pixel avatar candidate", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    const { root } = await renderDom(
+      <ProfileEditDialog
+        agent={agent({ type: "agent" })}
+        open
+        onOpenChange={vi.fn()}
+        onSave={vi.fn()}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    await click(buttonByText(document.body, "Generate"));
+    expect(document.body.textContent).toContain("Shuffle");
+    expect(document.body.querySelectorAll('button[title="Use this pixel avatar"]')).toHaveLength(5);
+
+    await click(document.body.querySelector('button[aria-label="Use pixel avatar 1"]'));
+    expect(agentApiMocks.uploadAgentAvatar).toHaveBeenCalledWith("agent-1", expect.any(Blob));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    await waitForText(document.body, "Generate");
+
+    await act(async () => root.unmount());
+  });
+
+  it("surfaces pixel avatar encoding errors without uploading", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const toBlob = vi
+      .spyOn(HTMLCanvasElement.prototype, "toBlob")
+      .mockImplementation((callback: BlobCallback) => callback(null));
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent({ type: "agent" })} open onOpenChange={vi.fn()} onSave={vi.fn()} />,
+    );
+
+    await click(buttonByText(document.body, "Generate"));
+    await click(document.body.querySelector('button[aria-label="Use pixel avatar 1"]'));
+    await waitForText(document.body, "Failed to encode the pixel avatar to WEBP.");
+    expect(agentApiMocks.uploadAgentAvatar).not.toHaveBeenCalled();
+
+    toBlob.mockRestore();
+    await act(async () => root.unmount());
+  });
+
+  it("surfaces image decode and remove failures", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    class BrokenImage {
+      naturalWidth = 480;
+      naturalHeight = 320;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        setTimeout(() => this.onerror?.(), 0);
+      }
+    }
+    Object.defineProperty(globalThis, "Image", { configurable: true, value: BrokenImage });
+
+    const decodeFailure = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={vi.fn()} onSave={vi.fn()} />,
+    );
+    const fileInput = document.body.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("Expected file input");
+    await setFileInput(fileInput, new File(["avatar"], "broken.png", { type: "image/png" }));
+    await waitForText(document.body, "Unable to decode the selected image.");
+    expect(agentApiMocks.uploadAgentAvatar).not.toHaveBeenCalled();
+    await act(async () => decodeFailure.root.unmount());
+
+    installBrowserStubs();
+    agentApiMocks.deleteAgentAvatar.mockRejectedValueOnce(new Error("Delete failed"));
+    const deleteFailure = await renderDom(
+      <ProfileEditDialog
+        agent={agent({ avatarImageUrl: "/avatars/agent-1.png" })}
+        open
+        onOpenChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    await click(buttonByText(document.body, "Remove image"));
+    await waitForText(document.body, "Delete failed");
+    expect(agentApiMocks.deleteAgentAvatar).toHaveBeenCalledWith("agent-1");
+    await act(async () => deleteFailure.root.unmount());
+  });
+
+  it("submits display name through the form and saves the auto color swatch", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent({ avatarColorToken: "hue-2" })} open onOpenChange={vi.fn()} onSave={onSave} />,
+    );
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    const form = document.body.querySelector("form");
+    if (!displayInput || !form) throw new Error("Expected profile form");
+
+    await setInputValue(displayInput, "Nova Form");
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Nova Form" });
+
+    await click(document.body.querySelector('button[title="Auto"]'));
+    expect(onSave).toHaveBeenCalledWith({ avatarColorToken: null });
+
+    await act(async () => root.unmount());
+  });
+
+  it("renders a resolved read-only delegate chip for other human members", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    authMock.value = { memberId: "member-other", role: "member", agentId: "human-other" };
+    const { root } = await renderDom(
+      <ProfileEditDialog
+        agent={agent({
+          uuid: "human-1",
+          name: "bestony",
+          displayName: "Bestony",
+          type: "human",
+          delegateMention: "delegate-1",
+        })}
+        open
+        onOpenChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    await waitForText(document.body, "Helper");
+    expect(document.body.textContent).toContain("@helper");
+    expect(document.body.querySelector("#profile-delegate")).toBeNull();
+    expect(document.body.textContent).toContain("Only the member themselves can set their own delegate.");
+
+    await act(async () => root.unmount());
   });
 
   it("edits human visibility + delegate, and disables visibility for non-owners", async () => {
