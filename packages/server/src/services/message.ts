@@ -108,6 +108,27 @@ function validateTextBody(content: string, isRequest: boolean): void {
   }
 }
 
+/**
+ * Detect an agent-authored body whose intended markdown line structure arrived
+ * as literal `\n` tokens. CLI inline sends already reject this shape, but
+ * agent outbox/API callers can bypass the CLI and write directly through the
+ * server boundary; fail here before the row becomes durable.
+ */
+function looksLikeEscapedNewlineBody(content: string): boolean {
+  if (content.includes("\n")) return false;
+  const escapes = content.match(/\\n/g);
+  return (escapes?.length ?? 0) >= 2;
+}
+
+function validateAgentTextEncoding(content: string): void {
+  if (!looksLikeEscapedNewlineBody(content)) return;
+  throw new BadRequestError(
+    'Message content contains literal "\\n" escapes and no real newlines — this looks like a multi-line ' +
+      "markdown body that was shell-escaped or JSON-escaped before sending. Send the body with real newlines " +
+      "via stdin, a message file, or an unescaped API string before retrying.",
+  );
+}
+
 // Structural param (not `SendMessage`) so the edit path can reuse it against
 // the effective post-edit `{ format, content }`, where `format` is a plain
 // string off the stored row.
@@ -284,14 +305,17 @@ export function preflightMessageSendIntent(input: {
 
   let effectiveContent: SendMessage["content"] = data.content;
   if (senderType !== "human" && typeof effectiveContent === "string") {
-    const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
+    let textContent = effectiveContent;
+    const unwrapped = maybeUnwrapDoubleEncoded(textContent);
     if (unwrapped !== null) {
       log.warn(
         { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
         "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
       );
-      effectiveContent = unwrapped;
+      textContent = unwrapped;
+      effectiveContent = textContent;
     }
+    validateAgentTextEncoding(textContent);
   }
 
   // Re-validate the UNWRAPPED body. `validateMessageContent(data)` above checked
