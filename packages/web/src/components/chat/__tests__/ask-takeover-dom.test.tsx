@@ -27,6 +27,20 @@ const OPTS = [
 const CANDIDATES = [{ agentId: "agent-alice", name: "alice", displayName: "Alice", managedByMe: false }];
 
 const roots: Root[] = [];
+function installImmediateAnimationFrame(): () => void {
+  const original = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback: FrameRequestCallback): number => {
+    callback(0);
+    return 1;
+  };
+  return () => {
+    if (original) {
+      globalThis.requestAnimationFrame = original;
+    } else {
+      delete (globalThis as { requestAnimationFrame?: typeof requestAnimationFrame }).requestAnimationFrame;
+    }
+  };
+}
 async function renderDom(element: ReactElement): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -41,7 +55,9 @@ async function renderDom(element: ReactElement): Promise<HTMLElement> {
   return container;
 }
 afterEach(() => {
-  for (const r of roots.splice(0)) r.unmount();
+  act(() => {
+    for (const r of roots.splice(0)) r.unmount();
+  });
   document.body.innerHTML = "";
 });
 
@@ -53,6 +69,13 @@ async function click(el: Element | null): Promise<void> {
 }
 async function keyDown(el: EventTarget, key: string, init: KeyboardEventInit = {}): Promise<KeyboardEvent> {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  return event;
+}
+async function mouseDown(el: EventTarget): Promise<MouseEvent> {
+  const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
   await act(async () => {
     el.dispatchEvent(event);
   });
@@ -71,10 +94,40 @@ async function changeFiles(el: HTMLInputElement, files: File[]): Promise<void> {
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
+async function pasteFiles(el: Element | null, files: File[]): Promise<Event> {
+  if (!el) throw new Error("paste target missing");
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", { configurable: true, value: { files } });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  return event;
+}
+async function dragOver(el: Element | null): Promise<Event> {
+  if (!el) throw new Error("drag target missing");
+  const event = new Event("dragover", { bubbles: true, cancelable: true });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  return event;
+}
+async function dropFiles(el: Element | null, files: File[]): Promise<Event> {
+  if (!el) throw new Error("drop target missing");
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { configurable: true, value: { files } });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  return event;
+}
 function freeTextBox(c: ParentNode): HTMLTextAreaElement | null {
   return c.querySelector<HTMLTextAreaElement>(
     'textarea[placeholder^="Type your answer"], textarea[placeholder^="Other"]',
   );
+}
+function answerSurface(c: ParentNode): HTMLElement | null {
+  const textarea = freeTextBox(c);
+  return textarea?.parentElement?.parentElement ?? null;
 }
 function thumbnails(c: ParentNode): HTMLImageElement[] {
   return [...c.querySelectorAll<HTMLImageElement>("img")];
@@ -91,6 +144,48 @@ function btn(c: ParentNode, text: string): HTMLButtonElement | null {
 }
 
 describe("AskTakeover", () => {
+  it("lifts above the visual viewport keyboard inset and unregisters viewport listeners", async () => {
+    const listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
+    const visualViewport = {
+      height: 500,
+      offsetTop: 25,
+      addEventListener: vi.fn((type: string, listener: EventListenerOrEventListenerObject) => {
+        const set = listeners.get(type) ?? new Set<EventListenerOrEventListenerObject>();
+        set.add(listener);
+        listeners.set(type, set);
+      }),
+      removeEventListener: vi.fn((type: string, listener: EventListenerOrEventListenerObject) => {
+        listeners.get(type)?.delete(listener);
+      }),
+    };
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 720 });
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: visualViewport });
+
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
+    );
+    const scrim = c.firstElementChild;
+    if (!(scrim instanceof HTMLElement)) throw new Error("scrim missing");
+    expect(Number.parseFloat(scrim.style.bottom)).toBe(195);
+
+    visualViewport.height = 690;
+    visualViewport.offsetTop = 20;
+    await act(async () => {
+      for (const listener of listeners.get("resize") ?? []) {
+        if (typeof listener === "function") listener(new Event("resize"));
+        else listener.handleEvent(new Event("resize"));
+      }
+    });
+    expect(Number.parseFloat(scrim.style.bottom)).toBe(10);
+
+    await act(async () => {
+      for (const r of roots.splice(0)) r.unmount();
+    });
+    expect(visualViewport.removeEventListener).toHaveBeenCalledWith("resize", expect.any(Function));
+    expect(visualViewport.removeEventListener).toHaveBeenCalledWith("scroll", expect.any(Function));
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: undefined });
+  });
+
   it("single-select: Reply gated on a pick, preview shows only when selected, sends the label", async () => {
     const onReply = vi.fn();
     const c = await renderDom(
@@ -356,6 +451,38 @@ describe("AskTakeover", () => {
     expect(listbox?.textContent).toContain("Alice");
   });
 
+  it("commits a mention from the popover and through the explicit mention button", async () => {
+    const restoreRaf = installImmediateAnimationFrame();
+    try {
+      const c = await renderDom(
+        <AskTakeover
+          body="# Who?"
+          payload={{ multiSelect: false }}
+          mentionCandidates={CANDIDATES}
+          onReply={() => {}}
+          onSkip={() => {}}
+        />,
+      );
+      const ta = freeTextBox(c);
+      if (!ta) throw new Error("free-text input missing");
+      await setValue(ta, "@al");
+      const alice = c.querySelector<HTMLElement>('[role="option"]');
+      if (!alice) throw new Error("mention option missing");
+      const picked = await mouseDown(alice);
+      expect(picked.defaultPrevented).toBe(true);
+      expect(ta.value).toBe("@alice ");
+
+      await act(async () => {
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        ta.dispatchEvent(new Event("select", { bubbles: true }));
+      });
+      await click(c.querySelector('[aria-label="Mention an agent"]'));
+      expect(ta.value).toBe("@alice @");
+    } finally {
+      restoreRaf();
+    }
+  });
+
   it("stages a pasted/attached image and lets an image-only answer resolve", async () => {
     const onReply = vi.fn();
     const c = await renderDom(
@@ -375,6 +502,51 @@ describe("AskTakeover", () => {
 
     await click(btn(c, "Reply"));
     expect(onReply).toHaveBeenCalledWith({ content: "", mentions: [], images: [file] });
+  });
+
+  it("opens the file picker, stages pasted and dropped images, and removes thumbnails", async () => {
+    const c = await renderDom(
+      <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
+    );
+    const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("file input missing");
+    const openPicker = vi.spyOn(fileInput, "click");
+    await click(c.querySelector('[aria-label="Attach image"]'));
+    expect(openPicker).toHaveBeenCalledTimes(1);
+
+    const pasted = new File(["paste"], "paste.png", { type: "image/png" });
+    const ta = freeTextBox(c);
+    const paste = await pasteFiles(ta, [pasted]);
+    expect(paste.defaultPrevented).toBe(true);
+    expect(thumbnails(c).map((img) => img.alt)).toEqual(["paste.png"]);
+
+    const removed = c.querySelector<HTMLButtonElement>('[aria-label="Remove image"]');
+    await click(removed);
+    expect(thumbnails(c)).toEqual([]);
+
+    const dropped = new File(["drop"], "drop.png", { type: "image/png" });
+    const drag = await dragOver(answerSurface(c));
+    expect(drag.defaultPrevented).toBe(true);
+    const drop = await dropFiles(answerSurface(c), [dropped]);
+    expect(drop.defaultPrevented).toBe(true);
+    expect(thumbnails(c).map((img) => img.alt)).toEqual(["drop.png"]);
+  });
+
+  it("keeps the trial answer input plain by ignoring mention, paste, and drop affordances", async () => {
+    const c = await renderDom(
+      <AskTakeover body="# Evidence?" isTrial payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
+    );
+    expect(c.querySelector('[aria-label="Mention an agent"]')).toBeNull();
+    expect(c.querySelector('[aria-label="Attach image"]')).toBeNull();
+
+    const file = new File(["x"], "trial.png", { type: "image/png" });
+    const paste = await pasteFiles(freeTextBox(c), [file]);
+    const drag = await dragOver(answerSurface(c));
+    const drop = await dropFiles(answerSurface(c), [file]);
+    expect(paste.defaultPrevented).toBe(false);
+    expect(drag.defaultPrevented).toBe(false);
+    expect(drop.defaultPrevented).toBe(false);
+    expect(thumbnails(c)).toEqual([]);
   });
 
   it("rejects an oversized image with an error and stages nothing", async () => {

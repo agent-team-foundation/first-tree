@@ -40,7 +40,7 @@ import {
   selfCreateOrganization,
 } from "../services/membership.js";
 import { notifyRecipients } from "../services/notifier.js";
-import { hasTreeSetupKickoffMessage, kickoffOnboarding } from "../services/onboarding-kickoff.js";
+import { hasTreeSetupKickoffMessage, kickoffOnboarding, scanFixKickoffKey } from "../services/onboarding-kickoff.js";
 import { getOrgContextTreeWithMeta } from "../services/org-settings.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { serializeDate } from "../utils.js";
@@ -348,7 +348,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
       topic: body.topic ?? "Get started with First Tree",
-      kickoffKey: `${humanAgentId}:${body.agentUuid}:onboarding`,
+      // A production-scan fix conversion keys on the repo so this launcher
+      // dedups with the already-onboarded direct path; a normal onboarding
+      // kickoff keeps the per-(human, agent) onboarding key.
+      kickoffKey: body.scanFixRepoSlug
+        ? scanFixKickoffKey(humanAgentId, body.scanFixRepoSlug)
+        : `${humanAgentId}:${body.agentUuid}:onboarding`,
       complete: body.complete ?? true,
     });
     if (result.sent) {

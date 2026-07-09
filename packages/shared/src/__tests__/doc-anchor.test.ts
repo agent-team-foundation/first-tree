@@ -42,6 +42,39 @@ describe("buildDocAnchor", () => {
     expect(anchor?.suffix?.startsWith(" on purpose")).toBe(true);
   });
 
+  it("uses the first repeated occurrence when no rendered context is available", () => {
+    const anchor = buildDocAnchor({
+      source: SOURCE,
+      selectedText: "The cache is per-tenant",
+    });
+
+    expect(anchor).not.toBeNull();
+    expect(anchor?.suffix?.startsWith(". The cache")).toBe(true);
+  });
+
+  it("uses rendered prefix-only context to disambiguate repeated text", () => {
+    const source = "alpha beta gamma. prefix alpha beta omega.";
+    const anchor = buildDocAnchor({
+      source,
+      selectedText: "alpha beta",
+      renderedPrefix: "prefix ",
+    });
+
+    expect(anchor).not.toBeNull();
+    expect(anchor?.prefix?.endsWith("prefix ")).toBe(true);
+  });
+
+  it("omits unavailable prefix and suffix at document boundaries", () => {
+    expect(buildDocAnchor({ source: "alpha beta", selectedText: "alpha" })).toEqual({
+      exact: "alpha",
+      suffix: " beta",
+    });
+    expect(buildDocAnchor({ source: "alpha beta", selectedText: "beta" })).toEqual({
+      exact: "beta",
+      prefix: "alpha ",
+    });
+  });
+
   it("returns null when the selection is absent from the source", () => {
     expect(buildDocAnchor({ source: SOURCE, selectedText: "not in the document" })).toBeNull();
     expect(buildDocAnchor({ source: SOURCE, selectedText: "   " })).toBeNull();
@@ -88,11 +121,23 @@ describe("locateDocAnchor", () => {
     expect(range.start).toBe(source.indexOf("alpha beta delta"));
   });
 
+  it("uses prefix-only context to pick among repeated occurrences", () => {
+    const source = "alpha beta gamma. prefix alpha beta delta.";
+    const range = locateDocAnchor(source, { exact: "alpha beta", prefix: "prefix " });
+    expect(range).not.toBeNull();
+    if (!range) return;
+    expect(range.start).toBe(source.indexOf("alpha beta delta"));
+  });
+
   it("returns null when the quoted text was deleted", () => {
     const anchor = buildDocAnchor({ source: SOURCE, selectedText: "soft delete" });
     if (!anchor) throw new Error("anchor expected");
     const v2 = SOURCE.replace("soft delete", "hard delete");
     expect(locateDocAnchor(v2, anchor)).toBeNull();
+  });
+
+  it("returns null for whitespace-only anchor exact text", () => {
+    expect(locateDocAnchor(SOURCE, { exact: "   " })).toBeNull();
   });
 
   it("tolerates whitespace-only reflows of the quote", () => {

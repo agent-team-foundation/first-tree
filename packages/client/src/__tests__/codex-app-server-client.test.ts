@@ -1,8 +1,16 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { CodexAppServerClient } from "../handlers/codex/app-server/client.js";
+import {
+  CodexAppServerClient,
+  CodexAppServerRpcError,
+  isCodexAppServerTransientError,
+  smokeCodexAppServer,
+} from "../handlers/codex/app-server/client.js";
 
 /**
  * Upper-bound request timeout for the success-path tests, where the `initialize`
@@ -37,6 +45,22 @@ function makeChild(exitOnSignals: readonly NodeJS.Signals[] = []) {
     return true;
   });
   return { child, signals, stderr, stdout };
+}
+
+async function startClient(
+  childState: ReturnType<typeof makeChild>,
+  extra: Partial<Parameters<typeof CodexAppServerClient.start>[0]> = {},
+) {
+  const startPromise = CodexAppServerClient.start({
+    binary: "/tmp/fake-codex",
+    requestTimeoutMs: RESPONSE_OK_TIMEOUT_MS,
+    spawnProcess: () => childState.child,
+    ...extra,
+  });
+  setImmediate(() => {
+    childState.stdout.write(`${JSON.stringify({ id: 1, result: {} })}\n`);
+  });
+  return startPromise;
 }
 
 describe("CodexAppServerClient lifecycle", () => {
@@ -139,5 +163,129 @@ describe("CodexAppServerClient lifecycle", () => {
     expect(onClose.mock.calls[0]?.[0].message).toContain(
       "codex app-server exited with code 1. stderr: ERROR unexpected tool failure",
     );
+  });
+
+  it("exposes stderr and closed state and rejects pending requests on shutdown", async () => {
+    const childState = makeChild(["SIGTERM"]);
+    const client = await startClient(childState);
+
+    childState.stderr.write("diagnostic tail");
+    const pending = client.request("turn/start", { input: [] });
+    const rejected = expect(pending).rejects.toThrow("codex app-server client shut down");
+    await client.shutdown();
+
+    expect(client.stderr).toBe("diagnostic tail");
+    expect(client.isClosed).toBe(true);
+    await rejected;
+    expect(childState.signals).toEqual(["SIGTERM"]);
+  });
+
+  it("reports child process errors once and rejects pending requests", async () => {
+    const childState = makeChild();
+    const onClose = vi.fn();
+    const client = await startClient(childState, { onClose });
+    const pending = client.request("turn/start", { input: [] });
+
+    childState.child.emit("error", new Error("spawn failed"));
+    childState.child.emit("error", new Error("second failure"));
+
+    await expect(pending).rejects.toThrow("spawn failed");
+    expect(client.isClosed).toBe(true);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose.mock.calls[0]?.[0].message).toBe("spawn failed");
+  });
+
+  it("surfaces write failures and logs stdin backpressure", async () => {
+    const childState = makeChild(["SIGTERM"]);
+    const onLog = vi.fn<(message: string) => void>();
+    const client = await startClient(childState, { onLog });
+    const write = vi.spyOn(childState.child.stdin, "write");
+
+    write.mockImplementationOnce(() => {
+      throw new Error("pipe write failed");
+    });
+    await expect(client.request("turn/start", { input: [] })).rejects.toThrow("pipe write failed");
+
+    write.mockImplementationOnce(() => false);
+    client.notify("client/backpressure");
+
+    expect(onLog).toHaveBeenCalledWith("codex app-server stdin backpressure while sending client/backpressure");
+    await client.shutdown();
+  });
+
+  it("handles requests without params and rpc errors with sparse payloads", async () => {
+    const childState = makeChild(["SIGTERM"]);
+    const client = await startClient(childState);
+
+    const noParams = client.request("thread/list");
+    childState.stdout.write(`${JSON.stringify({ id: 2, result: { ok: true } })}\n`);
+    await expect(noParams).resolves.toEqual({ ok: true });
+
+    const sparseError = client.request("bad/rpc");
+    childState.stdout.write(`${JSON.stringify({ id: 3, error: { code: "bad", message: 42 } })}\n`);
+    const err = await sparseError.catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(CodexAppServerRpcError);
+    expect(err).toMatchObject({
+      code: null,
+      message: "codex app-server request failed: bad/rpc",
+      data: undefined,
+    });
+
+    await client.shutdown();
+  });
+
+  it("keeps shutdown best-effort when stdio close and kill throw", async () => {
+    const childState = makeChild();
+    const client = await startClient(childState);
+    const internals = client as unknown as { stdout: { close(): void } };
+    vi.spyOn(internals.stdout, "close").mockImplementationOnce(() => {
+      throw new Error("readline already closed");
+    });
+    childState.child.stdin.end = vi.fn(() => {
+      throw new Error("stdin already closed");
+    }) as unknown as typeof childState.child.stdin.end;
+    childState.child.kill.mockImplementationOnce(() => {
+      throw new Error("kill failed");
+    });
+
+    await client.shutdown(1);
+
+    expect(client.isClosed).toBe(true);
+  });
+
+  it("smokes a real app-server stdio executable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ft-codex-app-server-smoke-"));
+    const binary = join(root, "fake-codex");
+    writeFileSync(
+      binary,
+      [
+        "#!/bin/sh",
+        "while IFS= read -r line; do",
+        '  case "$line" in',
+        "    *'\"id\":1'*) printf '%s\\n' '{\"id\":1,\"result\":{}}' ;;",
+        "  esac",
+        "done",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    try {
+      await expect(smokeCodexAppServer(binary, { PATH: process.env.PATH })).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies transient transport strings", () => {
+    expect(isCodexAppServerTransientError(new CodexAppServerRpcError("turn/start", { code: -32001 }))).toBe(true);
+    expect(isCodexAppServerTransientError("server overloaded")).toBe(true);
+    expect(isCodexAppServerTransientError("retry later after overload")).toBe(true);
+    expect(isCodexAppServerTransientError("request timed out")).toBe(true);
+    expect(isCodexAppServerTransientError("timeout waiting for response")).toBe(true);
+    expect(isCodexAppServerTransientError("ECONNRESET from app-server")).toBe(true);
+    expect(isCodexAppServerTransientError("EPIPE writing request")).toBe(true);
+    expect(isCodexAppServerTransientError("transport is closed")).toBe(true);
+    expect(isCodexAppServerTransientError("fatal deterministic failure")).toBe(false);
   });
 });

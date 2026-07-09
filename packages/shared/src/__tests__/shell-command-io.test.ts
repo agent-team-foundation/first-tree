@@ -2,6 +2,46 @@ import { describe, expect, it } from "vitest";
 import { classifyShellCommandIo, stripShellCommandDisplayWrapper } from "../shell-command-io.js";
 
 describe("classifyShellCommandIo", () => {
+  it("rejects empty, malformed, and dynamic command tokens", () => {
+    expect(classifyShellCommandIo("   ")).toEqual({
+      supported: false,
+      reason: "empty",
+    });
+    expect(classifyShellCommandIo("''")).toEqual({
+      supported: false,
+      reason: "empty",
+    });
+    expect(classifyShellCommandIo('cat "unterminated')).toEqual({
+      supported: false,
+      reason: "complex_shell",
+    });
+    expect(classifyShellCommandIo('cat "unterminated\\')).toEqual({
+      supported: false,
+      reason: "complex_shell",
+    });
+    expect(classifyShellCommandIo("cat trailing\\")).toEqual({
+      supported: false,
+      reason: "complex_shell",
+    });
+    expect(classifyShellCommandIo("$READER /tree/NODE.md")).toEqual({
+      supported: false,
+      reason: "dynamic_path",
+    });
+  });
+
+  it("rejects unsupported tools after resolving the command basename", () => {
+    expect(classifyShellCommandIo("git status")).toEqual({
+      supported: false,
+      reason: "unsupported_tool",
+      commandName: "git",
+    });
+    expect(classifyShellCommandIo("/")).toEqual({
+      supported: false,
+      reason: "unsupported_tool",
+      commandName: "/",
+    });
+  });
+
   it("classifies sed file operands after options and script", () => {
     expect(classifyShellCommandIo("sed -n '1,240p' /tree/NODE.md")).toEqual({
       supported: true,
@@ -23,8 +63,44 @@ describe("classifyShellCommandIo", () => {
     });
   });
 
+  it("classifies file-read operands after double dash and count options", () => {
+    expect(classifyShellCommandIo("head -n 5 -- /tree/-leading-dash.md")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "head",
+      pathArgs: [{ raw: "/tree/-leading-dash.md", pathKindHint: "file" }],
+    });
+    expect(classifyShellCommandIo("tail --lines=10 /tree/log.txt")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "tail",
+      pathArgs: [{ raw: "/tree/log.txt", pathKindHint: "file" }],
+    });
+    expect(classifyShellCommandIo("/usr/bin/wc -l /tree/NODE.md")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "wc",
+      pathArgs: [{ raw: "/tree/NODE.md", pathKindHint: "file" }],
+    });
+  });
+
   it("classifies ripgrep files mode directory operands", () => {
     expect(classifyShellCommandIo("rg --files /tree")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "rg",
+      pathArgs: [{ raw: "/tree", pathKindHint: "directory" }],
+    });
+  });
+
+  it("classifies ripgrep regexp, glob, and double-dash operands", () => {
+    expect(classifyShellCommandIo("rg -e Context -g '*.md' -- /tree")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "rg",
+      pathArgs: [{ raw: "/tree", pathKindHint: "unknown" }],
+    });
+    expect(classifyShellCommandIo("rg --files -g '*.md' /tree")).toEqual({
       supported: true,
       action: "read",
       commandName: "rg",
@@ -50,6 +126,27 @@ describe("classifyShellCommandIo", () => {
     });
   });
 
+  it("classifies grep combined booleans, equals options, and explicit regex patterns", () => {
+    expect(classifyShellCommandIo("grep -Rni --include=*.md Context /tree")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "grep",
+      pathArgs: [{ raw: "/tree", pathKindHint: "unknown" }],
+    });
+    expect(classifyShellCommandIo("grep -e Context -- /tree")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "grep",
+      pathArgs: [{ raw: "/tree", pathKindHint: "unknown" }],
+    });
+    expect(classifyShellCommandIo("grep -m 3 Context /tree")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "grep",
+      pathArgs: [{ raw: "/tree", pathKindHint: "unknown" }],
+    });
+  });
+
   it("rejects unsupported grep options instead of guessing path positions", () => {
     expect(classifyShellCommandIo("grep --custom-option value Context /tree")).toEqual({
       supported: false,
@@ -66,6 +163,20 @@ describe("classifyShellCommandIo", () => {
     expect(classifyShellCommandIo("cat /tree/NODE.md > /tmp/out")).toEqual({
       supported: false,
       reason: "complex_shell",
+    });
+  });
+
+  it("allows dynamic-looking grep patterns but rejects dynamic path operands", () => {
+    expect(classifyShellCommandIo("grep '$TOKEN' /tree/NODE.md")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "grep",
+      pathArgs: [{ raw: "/tree/NODE.md", pathKindHint: "unknown" }],
+    });
+    expect(classifyShellCommandIo("cat `pwd`/NODE.md")).toEqual({
+      supported: false,
+      reason: "dynamic_path",
+      commandName: "cat",
     });
   });
 
@@ -95,6 +206,27 @@ describe("classifyShellCommandIo", () => {
     });
   });
 
+  it("classifies sed scripts supplied by options and after double dash", () => {
+    expect(classifyShellCommandIo("sed -e 's/a/b/' -- /tree/NODE.md")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "sed",
+      pathArgs: [{ raw: "/tree/NODE.md", pathKindHint: "file" }],
+    });
+    expect(classifyShellCommandIo("sed --expression=s/a/b/ /tree/NODE.md")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "sed",
+      pathArgs: [{ raw: "/tree/NODE.md", pathKindHint: "file" }],
+    });
+    expect(classifyShellCommandIo("sed -- 's/a/b/' /tree/NODE.md")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "sed",
+      pathArgs: [{ raw: "/tree/NODE.md", pathKindHint: "file" }],
+    });
+  });
+
   it("rejects find expressions with mutating action primaries", () => {
     expect(classifyShellCommandIo("find /tree -delete")).toEqual({
       supported: false,
@@ -105,6 +237,27 @@ describe("classifyShellCommandIo", () => {
       supported: false,
       reason: "write_or_mutation",
       commandName: "find",
+    });
+  });
+
+  it("classifies non-mutating find and ls operands after expression boundaries", () => {
+    expect(classifyShellCommandIo("find /tree ! -name secret.md")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "find",
+      pathArgs: [{ raw: "/tree", pathKindHint: "directory" }],
+    });
+    expect(classifyShellCommandIo("find -- /tree")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "find",
+      pathArgs: [{ raw: "/tree", pathKindHint: "directory" }],
+    });
+    expect(classifyShellCommandIo("ls -la -- /tree")).toEqual({
+      supported: true,
+      action: "read",
+      commandName: "ls",
+      pathArgs: [{ raw: "/tree", pathKindHint: "unknown" }],
     });
   });
 
@@ -251,6 +404,11 @@ describe("classifyShellCommandIo", () => {
 });
 
 describe("stripShellCommandDisplayWrapper", () => {
+  it("leaves malformed shell syntax and dynamic commands unchanged for display", () => {
+    expect(stripShellCommandDisplayWrapper('cat "unterminated')).toBe('cat "unterminated');
+    expect(stripShellCommandDisplayWrapper("$SHELL -lc 'cat /tree/NODE.md'")).toBe("$SHELL -lc 'cat /tree/NODE.md'");
+  });
+
   it("strips one codex login-shell wrapper for display", () => {
     expect(stripShellCommandDisplayWrapper("/bin/zsh -lc \"sed -n '1,7p' /Users/op/tree/NODE.md\"")).toBe(
       "sed -n '1,7p' /Users/op/tree/NODE.md",

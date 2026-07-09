@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { identiconCells, identiconSvg } from "../identicon.js";
 
 /**
@@ -49,6 +49,16 @@ describe("identiconCells — deterministic symmetric grid", () => {
   it("handles the empty seed without throwing", () => {
     expect(() => identiconCells("")).not.toThrow();
     expect(identiconCells("")).toHaveLength(5);
+  });
+
+  it("skips sparse generated rows defensively", () => {
+    const fromSpy = vi.spyOn(Array, "from").mockReturnValueOnce([undefined, [false, false]]);
+
+    try {
+      expect(identiconSvg("sparse-grid", { gridSize: 2 })).toContain("<svg");
+    } finally {
+      fromSpy.mockRestore();
+    }
   });
 });
 

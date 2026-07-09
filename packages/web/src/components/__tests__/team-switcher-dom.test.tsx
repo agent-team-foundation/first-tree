@@ -104,6 +104,20 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
   await flush();
 }
 
+async function keyDown(element: Element | Window, key: string): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key }));
+  });
+  await flush();
+}
+
+async function mouseDown(element: Element | Window): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
 async function waitForText(container: ParentNode, text: string, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -265,6 +279,37 @@ describe("TeamSwitcher", () => {
     await act(async () => root.unmount());
   });
 
+  it("cancels rename edits with Escape, cancel click, and same-name submit without saving", async () => {
+    const { container, root } = await renderHarness(vi.fn(async () => {}));
+
+    await click(anchorOf(container));
+    await click(buttonByLabel(container, "Edit team name"));
+    let input = container.querySelector<HTMLInputElement>('input[aria-label="Team name"]');
+    if (!input) throw new Error("Team name input missing");
+    await setInputValue(input, "Draft Team");
+    await keyDown(input, "Escape");
+
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Team name"]')).toBeNull();
+    expect(orgMocks.updateOrganization).not.toHaveBeenCalled();
+
+    await click(buttonByLabel(container, "Edit team name"));
+    input = container.querySelector<HTMLInputElement>('input[aria-label="Team name"]');
+    if (!input) throw new Error("Team name input missing");
+    await setInputValue(input, "Another Draft");
+    await click(buttonByLabel(container, "Cancel team name edit"));
+
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Team name"]')).toBeNull();
+    expect(orgMocks.updateOrganization).not.toHaveBeenCalled();
+
+    await click(buttonByLabel(container, "Edit team name"));
+    await submit(container.querySelector("form"));
+
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Team name"]')).toBeNull();
+    expect(orgMocks.updateOrganization).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
   it("keeps the rename form open and shows the server error when rename fails", async () => {
     orgMocks.updateOrganization.mockRejectedValueOnce(new Error("rename failed"));
     const { container, root } = await renderHarness(vi.fn(async () => {}));
@@ -350,6 +395,49 @@ describe("TeamSwitcher", () => {
     await act(async () => root.unmount());
   });
 
+  it("clears stale switch errors when the menu is dismissed by Escape or outside click", async () => {
+    const select = vi.fn(async () => {
+      throw new Error("switch failed");
+    });
+    const { container, root } = await renderHarness(select);
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Globex"));
+    await waitForText(container, "Couldn't switch");
+
+    await keyDown(window, "Escape");
+    expect(container.textContent).not.toContain("Couldn't switch");
+    expect(anchorOf(container).getAttribute("aria-expanded")).toBe("false");
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Globex"));
+    await waitForText(container, "Couldn't switch");
+
+    await mouseDown(document.body);
+    expect(container.textContent).not.toContain("Couldn't switch");
+    expect(anchorOf(container).getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => root.unmount());
+  });
+
+  it("opens team management actions and invite affordances from the menu", async () => {
+    const { container, root } = await renderHarness(vi.fn(async () => {}));
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Create new team"));
+    expect(anchorOf(container).getAttribute("aria-expanded")).toBe("false");
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Join with invite link"));
+    expect(anchorOf(container).getAttribute("aria-expanded")).toBe("false");
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Invite teammates"));
+    expect(anchorOf(container).getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => root.unmount());
+  });
+
   it("keeps the anchor but hides the switch list for a single-team user", async () => {
     clientMocks.get.mockResolvedValue([ORGS[0]]);
     const { container, root } = await renderHarness(vi.fn(async () => {}));
@@ -403,6 +491,23 @@ describe("TeamSwitcher", () => {
     expect(refreshMe).toHaveBeenCalledTimes(1);
     expect(select).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/onboarding");
+
+    await act(async () => root.unmount());
+  });
+
+  it("surfaces leave-team failures and lets the user dismiss the confirmation dialog", async () => {
+    memberMocks.leaveMembership.mockRejectedValueOnce(new Error("cannot leave last admin"));
+    const { container, root } = await renderHarness(vi.fn(async () => {}));
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Leave this team"));
+    await click(buttonByText(document.body, "Leave team"));
+
+    await waitForText(document.body, "cannot leave last admin");
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+
+    await click(buttonByText(document.body, "Cancel"));
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
 
     await act(async () => root.unmount());
   });

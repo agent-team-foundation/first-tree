@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import * as semver from "semver";
 import { channelConfig } from "../core/channel.js";
 import {
@@ -30,14 +30,15 @@ import { print } from "../core/output.js";
  * when a connected client falls behind the server-bundled version. This
  * command is the manual equivalent by default: same server-selected target
  * version plus the same install + restart sequence, but triggered on the
- * operator's terms. `--latest` is the explicit npm bypass.
+ * operator's terms. When no server URL is configured yet, it falls back to the
+ * channel's latest release data so update remains useful before login/config.
  */
 export function registerUpgradeCommand(program: Command): void {
   program
     .command("upgrade")
-    .description("Upgrade this First Tree CLI to the server-recommended version and restart the daemon")
+    .description("Upgrade this First Tree CLI from the server target or channel latest fallback")
     .option("--check", "Only check whether a newer version is available; do not install")
-    .option("--latest", "Bypass the server target and install npm latest")
+    .addOption(new Option("--latest", "Deprecated compatibility: query the channel latest directly").hideHelp())
     .option("--no-restart", "Install the new version but skip restarting the background service")
     .action(async (options: { check?: boolean; latest?: boolean; restart?: boolean }) => {
       const binName = channelConfig.binName;
@@ -57,20 +58,30 @@ export function registerUpgradeCommand(program: Command): void {
         return;
       }
 
-      const useLatest = options.latest === true;
+      const requestedLatest = options.latest === true;
+      let useLatest = requestedLatest;
       const isPortable = mode === "portable";
       print.line(
-        useLatest
+        requestedLatest
           ? isPortable
             ? "\n  Checking portable update target...\n"
             : "\n  Checking npm registry...\n"
-          : "\n  Checking server update target...\n",
+          : "\n  Checking update target...\n",
       );
-      const target = useLatest
+      let target = requestedLatest
         ? isPortable
           ? await fetchPortableLatestVersion()
           : fetchLatestVersion()
         : await fetchServerCommandVersion();
+
+      if (!requestedLatest && !target.ok && target.reasonCode === "server_url_not_configured") {
+        useLatest = true;
+        print.line(
+          isPortable ? "  Checking portable update target...\n" : "  Checking channel latest release data...\n",
+        );
+        target = isPortable ? await fetchPortableLatestVersion() : fetchLatestVersion();
+      }
+
       if (!target.ok) {
         const targetLabel = useLatest
           ? isPortable
@@ -78,9 +89,6 @@ export function registerUpgradeCommand(program: Command): void {
             : "latest version"
           : "server update target";
         print.line(`  Could not fetch ${targetLabel}: ${target.reason}\n`);
-        if (!useLatest) {
-          print.line(`  Run \`${binName} upgrade --latest\` to install latest instead.\n`);
-        }
         print.line("\n");
         process.exit(1);
       }
@@ -95,7 +103,7 @@ export function registerUpgradeCommand(program: Command): void {
 
       if (options.check) {
         print.line(`  Upgrade available: ${current} → ${target.version}\n`);
-        print.line(`  Run \`${binName} upgrade${useLatest ? " --latest" : ""}\` to install.\n\n`);
+        print.line(`  Run \`${binName} upgrade${requestedLatest ? " --latest" : ""}\` to install.\n\n`);
         return;
       }
 

@@ -5,10 +5,19 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const bootstrapMocks = vi.hoisted(() => ({
-  ensureFreshAccessToken: vi.fn(),
-  resolveServerUrl: vi.fn(),
-}));
+const bootstrapMocks = vi.hoisted(() => {
+  class ServerUrlNotConfiguredError extends Error {
+    constructor() {
+      super("Server URL not configured.");
+      this.name = "ServerUrlNotConfiguredError";
+    }
+  }
+  return {
+    ensureFreshAccessToken: vi.fn(),
+    resolveServerUrl: vi.fn(),
+    ServerUrlNotConfiguredError,
+  };
+});
 
 const printLineMock = vi.hoisted(() => vi.fn());
 const cliFetchMock = vi.hoisted(() => vi.fn());
@@ -537,5 +546,14 @@ describe("core update helpers", () => {
 
     cliFetchMock.mockResolvedValueOnce(jsonResponse({}, false, 503));
     await expect(fetchServerCommandVersion()).resolves.toEqual({ ok: false, reason: "server returned HTTP 503" });
+
+    bootstrapMocks.resolveServerUrl.mockImplementationOnce(() => {
+      throw new bootstrapMocks.ServerUrlNotConfiguredError();
+    });
+    await expect(fetchServerCommandVersion()).resolves.toEqual({
+      ok: false,
+      reason: "Server URL not configured.",
+      reasonCode: "server_url_not_configured",
+    });
   });
 });

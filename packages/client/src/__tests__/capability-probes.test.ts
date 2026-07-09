@@ -21,6 +21,18 @@ import { MAX_ERROR_LENGTH, truncateError } from "../runtime/capabilities/detect.
 import { commandFailureDigest, runCommand, verifyLaunchable } from "../runtime/capabilities/launch-probe.js";
 import type { CodexExecutableVerification } from "../runtime/codex-binary.js";
 
+const originalPlatform = process.platform;
+const originalArch = process.arch;
+
+function setProcessTarget(platform: NodeJS.Platform, arch: NodeJS.Architecture): void {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  Object.defineProperty(process, "arch", { configurable: true, value: arch });
+}
+
+afterEach(() => {
+  setProcessTarget(originalPlatform, originalArch);
+});
+
 /**
  * Install-only capability probes — the contract under test:
  *
@@ -177,6 +189,23 @@ describe("probeClaudeCodeCapability (install-only)", () => {
     expect(entry.error).toContain("not found in any parent node_modules");
   });
 
+  it("prefixes a bad CLAUDE_CODE_EXECUTABLE override when no fallback binary resolves", async () => {
+    const entry = await probeClaudeCodeCapability({
+      resolveExecutable: () => ({
+        path: undefined,
+        source: "default",
+        overrideError: "CLAUDE_CODE_EXECUTABLE points at a non-executable file",
+      }),
+      resolveBundled: () => {
+        throw new Error("SDK bundle missing");
+      },
+      exists: () => false,
+    });
+    expect(entry.state).toBe("missing");
+    expect(entry.error).toContain("CLAUDE_CODE_EXECUTABLE points at a non-executable file");
+    expect(entry.error).toContain("SDK bundle missing");
+  });
+
   it("a thrown resolveExecutable becomes state=error (never throws)", async () => {
     const entry = await probeClaudeCodeCapability({
       resolveExecutable: () => {
@@ -255,6 +284,33 @@ describe("resolveBundledClaudeBinary (hermetic — covers the SDK layout change)
       ).toThrow(/no installed Claude native binary|no bundled Claude binary/);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when a native package resolves but does not contain the expected binary", () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-bundle-"));
+    try {
+      const sdkDir = join(root, "sdk");
+      const nativeDir = join(root, "native-without-binary");
+      mkdirSync(sdkDir);
+      mkdirSync(nativeDir);
+      expect(() =>
+        resolveBundledClaudeBinary({ locateSdkDir: () => sdkDir, resolvePlatformPackageRoot: () => nativeDir }),
+      ).toThrow(/no installed Claude native binary/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("default resolver either reports the host SDK bundle or a descriptive missing-bundle error", () => {
+    try {
+      const res = resolveBundledClaudeBinary();
+      expect(["cli-js", "native"]).toContain(res.kind);
+      expect(res.path).toBeTruthy();
+    } catch (err) {
+      expect(err instanceof Error ? err.message : String(err)).toMatch(
+        /Claude native binary|Claude binary|claude-agent-sdk|no bundled Claude binary/,
+      );
     }
   });
 });
@@ -414,6 +470,88 @@ describe("resolveBundledCodexBinary / resolveCodexRuntimeBinary (real node_modul
       expect(res.runtimePath).toBeNull();
     }
   });
+
+  it("reports unsupported codex targets before attempting SDK resolution", async () => {
+    setProcessTarget("linux", "ia32");
+
+    const res = await resolveBundledCodexBinary();
+
+    expect(res).toEqual({ ok: false, error: "unsupported platform for codex: linux (ia32)" });
+  });
+
+  it.each([
+    ["darwin", "arm64", "@openai/codex-darwin-arm64"],
+    ["win32", "x64", "@openai/codex-win32-x64"],
+  ] as const)("maps %s/%s to the matching optional package", async (platform, arch, expectedPackage) => {
+    setProcessTarget(platform, arch);
+    vi.resetModules();
+    vi.doMock("node:module", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:module")>();
+      return {
+        ...actual,
+        createRequire: (anchor: string | URL) => ({
+          resolve: (specifier: string) => {
+            if (specifier === "@openai/codex/package.json") {
+              return "/virtual/node_modules/@openai/codex/package.json";
+            }
+            throw new Error(`missing ${specifier} from ${String(anchor)}`);
+          },
+        }),
+      };
+    });
+    const mod = await import("../runtime/capabilities/codex.js");
+
+    const res = await mod.resolveBundledCodexBinary();
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain(expectedPackage);
+      expect(res.error).toContain("unable to locate codex CLI binaries");
+    }
+
+    vi.doUnmock("node:module");
+    vi.resetModules();
+  });
+
+  it("reports a missing bundled binary after the optional vendor package resolves", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ft-codex-empty-vendor-"));
+    try {
+      setProcessTarget("linux", "x64");
+      vi.resetModules();
+      vi.doMock("node:module", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("node:module")>();
+        return {
+          ...actual,
+          createRequire: (anchor: string | URL) => ({
+            resolve: (specifier: string) => {
+              if (specifier === "@openai/codex/package.json") {
+                return join(root, "node_modules", "@openai", "codex", "package.json");
+              }
+              if (specifier === "@openai/codex-linux-x64/package.json") {
+                return join(root, "node_modules", "@openai", "codex-linux-x64", "package.json");
+              }
+              throw new Error(`unexpected ${specifier} from ${String(anchor)}`);
+            },
+          }),
+        };
+      });
+      const vendorRoot = join(root, "node_modules", "@openai", "codex-linux-x64", "vendor");
+      mkdirSync(join(vendorRoot, "x86_64-unknown-linux-musl"), { recursive: true });
+      const mod = await import("../runtime/capabilities/codex.js");
+
+      const res = await mod.resolveBundledCodexBinary();
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error).toContain("codex binary not found under");
+        expect(res.error).toContain("x86_64-unknown-linux-musl");
+      }
+    } finally {
+      vi.doUnmock("node:module");
+      vi.resetModules();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 /**
@@ -462,6 +600,15 @@ describe("resolveBundledBinaryInPackageRoot (SDK resolveNativePackage parity)", 
   it("returns null when neither layout resolves", () => {
     expect(resolveBundledBinaryInPackageRoot(root)).toBeNull();
   });
+
+  it("uses the Windows executable name when resolving bundled layouts", () => {
+    setProcessTarget("win32", "x64");
+    mkdirSync(join(root, "bin"), { recursive: true });
+    writeExecutable(join(root, "bin", "codex.exe"));
+    writeFileSync(join(root, "codex-package.json"), "{}");
+
+    expect(resolveBundledBinaryInPackageRoot(root)).toBe(join(root, "bin", "codex.exe"));
+  });
 });
 
 describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
@@ -502,6 +649,21 @@ describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
       binary: "/usr/local/bin/codex",
       runtimePath: "/usr/local/bin/codex",
       version: "0.140.0",
+    });
+  });
+
+  it("keeps a validated PATH codex available when its version output has no semantic version", async () => {
+    const verifyPath = (): CodexExecutableVerification => ({ ok: true, output: "codex dev build" });
+    const res = await resolveCodexRuntimeBinary(
+      {},
+      { resolveBundled: notFound, findOnPath: () => "/usr/local/bin/codex", verifyPath },
+    );
+    expect(res).toMatchObject({
+      ok: true,
+      runtimeSource: "path",
+      binary: "/usr/local/bin/codex",
+      runtimePath: "/usr/local/bin/codex",
+      version: null,
     });
   });
 

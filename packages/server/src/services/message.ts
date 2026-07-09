@@ -1,10 +1,13 @@
 import {
   AGENT_FINAL_TEXT_METADATA_KEY,
+  CLI_BODY_ORIGIN_METADATA_KEY,
+  CLI_BODY_ORIGINS,
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
+  MESSAGE_SOURCES,
   RUNTIME_NOTICE_METADATA_KEY,
   requestResolutionSchema,
   type SendMessage,
@@ -45,10 +48,14 @@ function stripUntrustedMetadataKeys(
 ): Record<string, unknown> {
   const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;
   const shouldStripAddressedAgentIds = ADDRESSED_AGENT_IDS_METADATA_KEY in meta;
-  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds) return meta;
+  const shouldStripCliBodyOrigin = CLI_BODY_ORIGIN_METADATA_KEY in meta;
+  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds && !shouldStripCliBodyOrigin) return meta;
   return Object.fromEntries(
     Object.entries(meta).filter(
-      ([key]) => key !== ADDRESSED_AGENT_IDS_METADATA_KEY && (options.allowSystemSender || key !== "systemSender"),
+      ([key]) =>
+        key !== ADDRESSED_AGENT_IDS_METADATA_KEY &&
+        key !== CLI_BODY_ORIGIN_METADATA_KEY &&
+        (options.allowSystemSender || key !== "systemSender"),
     ),
   );
 }
@@ -106,6 +113,55 @@ function validateTextBody(content: string, isRequest: boolean): void {
         "(e.g. a file read that ran before the file was written). Compose the real body, then send.",
     );
   }
+}
+
+/**
+ * Detect an agent-authored body whose intended markdown line structure arrived
+ * as literal `\n` tokens. CLI inline sends already reject this shape, but
+ * agent outbox/API callers can bypass the CLI and write directly through the
+ * server boundary; fail here before the row becomes durable.
+ */
+function looksLikeEscapedNewlineBody(content: string): boolean {
+  if (content.includes("\n")) return false;
+  const escapes = content.match(/\\n/g);
+  return (escapes?.length ?? 0) >= 2;
+}
+
+function validateAgentTextEncoding(content: string): void {
+  if (!looksLikeEscapedNewlineBody(content)) return;
+  throw new BadRequestError(
+    'Message content contains literal "\\n" escapes and no real newlines — this looks like a multi-line ' +
+      "markdown body that was shell-escaped or JSON-escaped before sending. Send the body with real newlines " +
+      "via stdin, a message file, or an unescaped API string before retrying.",
+  );
+}
+
+function normalizeNonHumanTextContent(input: {
+  chatId: string;
+  senderId: string;
+  senderType: string;
+  content: unknown;
+  allowEscapedNewlineBody?: boolean;
+}): unknown {
+  if (input.senderType === "human" || typeof input.content !== "string") return input.content;
+
+  let textContent = input.content;
+  const unwrapped = maybeUnwrapDoubleEncoded(textContent);
+  if (unwrapped !== null) {
+    log.warn(
+      { metric: "double_encoded_content_unwrapped_total", chatId: input.chatId, senderId: input.senderId },
+      "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
+    );
+    textContent = unwrapped;
+  }
+  if (!input.allowEscapedNewlineBody) validateAgentTextEncoding(textContent);
+  return textContent;
+}
+
+function allowsCliEscapedNewlineBody(data: SendMessage, metadata: Record<string, unknown>): boolean {
+  if (data.source !== MESSAGE_SOURCES.CLI) return false;
+  const bodyOrigin = metadata[CLI_BODY_ORIGIN_METADATA_KEY];
+  return bodyOrigin === CLI_BODY_ORIGINS.STDIN || bodyOrigin === CLI_BODY_ORIGINS.MESSAGE_FILE;
 }
 
 // Structural param (not `SendMessage`) so the edit path can reuse it against
@@ -282,17 +338,17 @@ export function preflightMessageSendIntent(input: {
 
   validateMessageContent(data);
 
+  const rawIncomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+  const allowEscapedNewlineBody = allowsCliEscapedNewlineBody(data, rawIncomingMeta);
+
   let effectiveContent: SendMessage["content"] = data.content;
-  if (senderType !== "human" && typeof effectiveContent === "string") {
-    const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
-    if (unwrapped !== null) {
-      log.warn(
-        { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
-        "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
-      );
-      effectiveContent = unwrapped;
-    }
-  }
+  effectiveContent = normalizeNonHumanTextContent({
+    chatId,
+    senderId,
+    senderType,
+    content: effectiveContent,
+    allowEscapedNewlineBody,
+  }) as SendMessage["content"];
 
   // Re-validate the UNWRAPPED body. `validateMessageContent(data)` above checked
   // the raw `data.content`, but for a non-human sender a double-encoded string
@@ -304,7 +360,7 @@ export function preflightMessageSendIntent(input: {
     validateTextBody(effectiveContent, data.format === "request");
   }
 
-  const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
+  const incomingMeta = stripUntrustedMetadataKeys(rawIncomingMeta, options);
   validateDocumentContext(incomingMeta);
   if (incomingMeta.resolves !== undefined && !requestResolutionSchema.safeParse(incomingMeta.resolves).success) {
     throw new BadRequestError(
@@ -943,10 +999,19 @@ export async function editMessage(
   if (data.content !== undefined) {
     // An edit can replace the body of any message — including an already-open
     // `format=request` ask whose format is frozen above. Reuse the send-path
-    // guard against the effective post-edit `{ format, content }` so an edit
-    // can't turn a live message into an empty / placeholder blocking card.
-    validateMessageContent({ format: data.format ?? msg.format, content: data.content });
-    setClause.content = data.content;
+    // guards against the effective post-edit `{ format, content }` so an edit
+    // can't turn a live message into an empty / placeholder blocking card or an
+    // agent-authored escaped-newline body.
+    const [senderRow] = await db.select({ type: agents.type }).from(agents).where(eq(agents.uuid, senderId)).limit(1);
+    if (!senderRow) throw new NotFoundError(`Sender agent "${senderId}" not found`);
+    const effectiveContent = normalizeNonHumanTextContent({
+      chatId,
+      senderId,
+      senderType: senderRow.type,
+      content: data.content,
+    });
+    validateMessageContent({ format: data.format ?? msg.format, content: effectiveContent });
+    setClause.content = effectiveContent;
   }
 
   // Track edit in metadata

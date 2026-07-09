@@ -47,6 +47,31 @@ describe("managed-state", () => {
     expect(readManagedState(workspace)).toBeNull();
   });
 
+  it("returns null when the record is not an object", () => {
+    writeFileSync(join(workspace, MANAGED_STATE_REL), "null", "utf-8");
+    expect(readManagedState(workspace)).toBeNull();
+  });
+
+  it("normalizes invalid optional metadata while preserving valid skills", () => {
+    writeFileSync(
+      join(workspace, MANAGED_STATE_REL),
+      JSON.stringify({
+        schemaVersion: 1,
+        cliVersion: 42,
+        updatedAt: false,
+        skills: ["first-tree-write"],
+      }),
+      "utf-8",
+    );
+
+    expect(readManagedState(workspace)).toEqual({
+      schemaVersion: 1,
+      cliVersion: null,
+      updatedAt: "1970-01-01T00:00:00.000Z",
+      skills: ["first-tree-write"],
+    });
+  });
+
   it("filters non-string entries out of the skills array (defensive read)", () => {
     writeFileSync(
       join(workspace, MANAGED_STATE_REL),
@@ -139,5 +164,21 @@ describe("managed-state", () => {
     expect(raw.endsWith("\n")).toBe(true);
     // Pretty-printed: indented entries should be present.
     expect(raw).toContain('  "schemaVersion"');
+  });
+
+  it("cleans up the temp file when the atomic rename fails", () => {
+    mkdirSync(join(workspace, MANAGED_STATE_REL), { recursive: true });
+
+    expect(() =>
+      writeManagedState(workspace, {
+        schemaVersion: 1,
+        cliVersion: null,
+        updatedAt: "2026-06-08T16:00:00.000Z",
+        skills: [],
+      }),
+    ).toThrow();
+
+    const agentDir = join(workspace, ".first-tree-workspace");
+    expect(readdirSync(agentDir).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
   });
 });

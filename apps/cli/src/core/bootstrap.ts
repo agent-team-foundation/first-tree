@@ -11,6 +11,17 @@ function credentialsPath(): string {
   return join(defaultConfigDir(), "credentials.json");
 }
 
+export class ServerUrlNotConfiguredError extends Error {
+  constructor() {
+    super(
+      "Server URL not configured.\n" +
+        "  Provide via: --server <url>, FIRST_TREE_SERVER_URL env var, or\n" +
+        `  ${channelConfig.binName} config set server.url <url>`,
+    );
+    this.name = "ServerUrlNotConfiguredError";
+  }
+}
+
 type StoredCredentials = {
   accessToken: string;
   refreshToken: string;
@@ -34,11 +45,7 @@ export function resolveServerUrl(flagValue?: string): string {
     if (typeof url === "string" && url.length > 0) return url;
   }
 
-  throw new Error(
-    "Server URL not configured.\n" +
-      "  Provide via: --server <url>, FIRST_TREE_SERVER_URL env var, or\n" +
-      `  ${channelConfig.binName} config set server.url <url>`,
-  );
+  throw new ServerUrlNotConfiguredError();
 }
 
 /**

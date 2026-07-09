@@ -1,5 +1,8 @@
+import { X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils.js";
+import { Avatar } from "./avatar.js";
 
 /**
  * Minimal `@mention` autocomplete surfaced as a popover anchored above a
@@ -28,12 +31,6 @@ export type MentionCandidate = {
   agentId: string;
   name: string | null;
   displayName: string | null;
-  /** False when the candidate is addressable but not yet a speaker in
-   *  the current chat. The existing-chat composer uses this to show
-   *  joined agents first, then inviteable agents under a divider. Omitted
-   *  means "not relevant to this surface" and is treated as joined for
-   *  ordering/rendering so existing pickers keep their behaviour. */
-  inChat?: boolean;
   /** True iff the caller's member is this agent's `managerId`. Drives
    *  participant-picker grouping (mine first, then teammates') and the
    *  empty-query branch of mention autocomplete so the user's own agents
@@ -42,6 +39,15 @@ export type MentionCandidate = {
    *  `useAuth`); callers that can't determine it should pass `false`
    *  rather than omitting — there's no "unknown" state. */
   managedByMe: boolean;
+  /** Manager-selected avatar color token (the agent row's
+   *  `avatarColorToken`); drives the identicon hue when no image is set.
+   *  Optional — callers that don't have it omit it and {@link Avatar}
+   *  falls back to a deterministic hash of the seed. */
+  avatarColorToken?: string | null;
+  /** Resolved avatar image URL (the agent row's `avatarImageUrl`),
+   *  rendered as a circle when present. Optional for the same reason as
+   *  `avatarColorToken`. */
+  avatarImageUrl?: string | null;
 };
 
 /**
@@ -104,6 +110,102 @@ export function MentionLabel({ candidate, ambiguous }: { candidate: MentionCandi
         </span>
       )}
     </>
+  );
+}
+
+/**
+ * Candidate row atom: circle avatar + {@link MentionLabel}, with an
+ * optional trailing slot (e.g. a ✓ for already-in-chat rows). This is the
+ * single candidate-row renderer shared by every agent picker — the
+ * composer / ask `@` popover, the add-participant dropdown, and the
+ * new-chat `[+]` recipient picker — so the avatar and the
+ * display-name/`@handle` format stay pixel-identical across surfaces
+ * (before this atom the popover had no avatar at all and each dropdown
+ * hand-rolled its own `<Avatar> + label`).
+ *
+ * Presentational only: the caller still owns the surrounding
+ * `<button>`/wrapper, click handlers, hover/active background, and the
+ * `title` attribute. Wraps `MentionLabel` rather than re-implementing it
+ * so there stays exactly one label renderer.
+ */
+export function AgentOption({
+  candidate,
+  ambiguous,
+  avatarSize = 28,
+  trailing,
+}: {
+  candidate: MentionCandidate;
+  ambiguous: Set<string>;
+  avatarSize?: number;
+  trailing?: ReactNode;
+}) {
+  const fallback = candidate.displayName ?? candidate.name ?? candidate.agentId.slice(0, 8);
+  return (
+    <span className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-2_5)" }}>
+      <Avatar
+        src={candidate.avatarImageUrl ?? null}
+        name={fallback}
+        seed={candidate.agentId}
+        colorToken={candidate.avatarColorToken ?? null}
+        size={avatarSize}
+      />
+      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        <MentionLabel candidate={candidate} ambiguous={ambiguous} />
+      </span>
+      {trailing != null && <span className="flex shrink-0 items-center">{trailing}</span>}
+    </span>
+  );
+}
+
+/**
+ * Selected-agent chip atom: compact avatar + label + optional remove
+ * button. The single "a chosen agent" visual — used by the new-chat
+ * recipient chips today, and any future single/multi-select field — so a
+ * picked agent looks the same everywhere (the new-chat chip was a bare
+ * `<span>` label with no avatar before this). Hover reveals the remove
+ * `X`; omit `onRemove` for a read-only token.
+ */
+export function AgentToken({ candidate, onRemove }: { candidate: MentionCandidate; onRemove?: () => void }) {
+  const label = candidate.displayName ?? candidate.name ?? candidate.agentId.slice(0, 8);
+  return (
+    <span
+      className="group inline-flex items-center text-label"
+      style={{
+        gap: "var(--sp-1)",
+        padding: "var(--sp-0_5) var(--sp-1_5)",
+        borderRadius: "var(--radius-chip)",
+        background: "var(--bg-sunken)",
+        color: "var(--fg)",
+      }}
+    >
+      <Avatar
+        src={candidate.avatarImageUrl ?? null}
+        name={label}
+        seed={candidate.agentId}
+        colorToken={candidate.avatarColorToken ?? null}
+        size={16}
+      />
+      <span>{label}</span>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          title="Remove participant"
+          className="opacity-0 transition-opacity group-hover:opacity-100"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            border: "none",
+            background: "none",
+            padding: 0,
+            cursor: "pointer",
+            color: "var(--fg-3)",
+          }}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -249,9 +351,7 @@ export function buildPickerSections(
  */
 export function rankCandidates(candidates: MentionCandidate[], query: string): MentionCandidate[] {
   if (!query) {
-    // Joined chat speakers stay above inviteable org agents. Within each
-    // membership bucket, reuse the picker's grouping logic and strip the
-    // divider marker.
+    // Reuse the picker's grouping logic and strip the divider marker.
     // Keeping the empty-query path in lockstep with the picker means
     // changing one (mine-first, alpha) tomorrow won't silently leave the
     // other behind — and that lockstep now includes "no cap": the `[+]`
@@ -261,11 +361,7 @@ export function rankCandidates(candidates: MentionCandidate[], query: string): M
     // cut. A prior hard `.slice(0, 8)` dropped the 9th+ addressable agent
     // from the empty-`@` view with no "more" affordance, so the list read
     // as broken/incomplete the moment an org had more than eight.
-    const inChat = candidates.filter((c) => c.inChat !== false);
-    const notInChat = candidates.filter((c) => c.inChat === false);
-    const sortBucket = (bucket: MentionCandidate[]) =>
-      groupAndSortCandidates(bucket).filter((item): item is MentionCandidate => !("divider" in item));
-    return [...sortBucket(inChat), ...sortBucket(notInChat)];
+    return groupAndSortCandidates(candidates).filter((item): item is MentionCandidate => !("divider" in item));
   }
   const scored: Array<{ c: MentionCandidate; score: number }> = [];
   for (const c of candidates) {
@@ -278,13 +374,7 @@ export function rankCandidates(candidates: MentionCandidate[], query: string): M
     else if (lowerName.includes(query)) score = 3;
     if (score !== Infinity) scored.push({ c, score });
   }
-  scored.sort((a, b) => {
-    if (a.score !== b.score) return a.score - b.score;
-    const aInChat = a.c.inChat !== false;
-    const bInChat = b.c.inChat !== false;
-    if (aInChat !== bInChat) return aInChat ? -1 : 1;
-    return (a.c.displayName ?? "").localeCompare(b.c.displayName ?? "");
-  });
+  scored.sort((a, b) => a.score - b.score || (a.c.displayName ?? "").localeCompare(b.c.displayName ?? ""));
   // No cap here either: every scored match surfaces, scrolling inside the
   // popover. Capping the typed path would hide later matches behind a
   // query the user can't refine further (the substring is already as
@@ -351,7 +441,7 @@ export function useMentionAutocomplete({
   value: string;
   cursor: number;
   candidates: MentionCandidate[];
-  onSelect: (update: MentionInsert, picked: MentionCandidate) => void;
+  onSelect: (update: MentionInsert) => void;
   disabled?: boolean;
 }): {
   trigger: ActiveTrigger | null;
@@ -403,7 +493,7 @@ export function useMentionAutocomplete({
     if (!trigger) return;
     const insert = buildMentionInsert(value, trigger, cursor, candidate);
     if (!insert) return;
-    onSelect(insert, candidate);
+    onSelect(insert);
   }
 
   const handleKey: MentionKeyHandler = (e) => {
@@ -492,10 +582,9 @@ export function MentionAutocompletePopover({
     >
       {(() => {
         const ambiguous = ambiguousDisplayNames(results);
-        return results.flatMap((c, i) => {
+        return results.map((c, i) => {
           const active = i === highlightIndex;
-          const needsMembershipDivider = i > 0 && c.inChat === false && results[i - 1]?.inChat !== false;
-          const row = (
+          return (
             <button
               key={c.agentId}
               type="button"
@@ -509,7 +598,7 @@ export function MentionAutocompletePopover({
                 e.preventDefault();
                 onPick(c);
               }}
-              className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+              className="flex w-full items-center px-3 py-1.5 text-left text-body"
               style={{
                 background: active ? "var(--bg-hover)" : "transparent",
                 color: "var(--fg)",
@@ -518,22 +607,9 @@ export function MentionAutocompletePopover({
                 whiteSpace: "nowrap",
               }}
             >
-              <MentionLabel candidate={c} ambiguous={ambiguous} />
+              <AgentOption candidate={c} ambiguous={ambiguous} />
             </button>
           );
-          if (!needsMembershipDivider) return [row];
-          return [
-            <div
-              key="__not-in-chat-divider"
-              role="presentation"
-              style={{
-                height: "var(--hairline)",
-                background: "var(--border-faint)",
-                margin: "var(--sp-0_5) var(--sp-3)",
-              }}
-            />,
-            row,
-          ];
         });
       })()}
     </div>

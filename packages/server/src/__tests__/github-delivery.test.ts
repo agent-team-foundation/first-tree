@@ -330,6 +330,197 @@ describe("deliverNormalizedEvent", () => {
     expect(afterOk.length).toBeGreaterThan(0);
   });
 
+  it("self-echo carve-out: a fresh self-assigned issue mints a tracking chat (#1536)", async () => {
+    // Regression for #1536. When the actor self-assigns / self-@s a brand-new
+    // entity, the sole audience target is the actor's own (human, delegate)
+    // pair with `kind: "new"`. The old blanket self-echo prune dropped it, so
+    // no chat was ever created and the entity stayed invisible to First Tree.
+    // A fresh directed involve must survive the prune and mint the chat.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `human-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+      type: "human",
+    });
+    const entityKey = "owner/repo#1536";
+    const target = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "new",
+      chatId: null,
+      involveReason: "assigned",
+      involveLogin: humanName.toLowerCase(),
+    } satisfies AudienceTarget;
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "issue",
+      entityKey,
+      rawEventType: "issues",
+      rawAction: "opened",
+      kind: "opened",
+      actorLogin: humanName,
+      involves: [{ githubLogin: humanName.toLowerCase(), reason: "assigned" }],
+    });
+
+    // Actor resolves to the same human that self-assigned — the exact echo
+    // condition — yet the fresh directed involve survives and mints a chat.
+    const stats = await deliverNormalizedEvent(app, event, [target], { actorHumanId: human });
+    expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
+
+    const mapping = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(
+        and(
+          eq(githubEntityChatMappings.organizationId, admin.organizationId),
+          eq(githubEntityChatMappings.entityType, "issue"),
+          eq(githubEntityChatMappings.entityKey, entityKey),
+        ),
+      );
+    expect(mapping).toHaveLength(1);
+    const chatId = mapping[0]?.chatId;
+    expect(chatId).toBeTruthy();
+    if (chatId) {
+      await expect(app.db.select().from(messages).where(eq(messages.chatId, chatId))).resolves.toHaveLength(1);
+      // The payoff of #1536 is that the tracking delegate is WOKEN, not just
+      // that a chat row exists.
+      expect(await notifyCount(app, chatId, delegate)).toBe(1);
+    }
+  });
+
+  it("self-echo carve-out end-to-end: resolveAudience → deliver mints a chat for a self-assigned issue (#1536)", async () => {
+    // Closes the loop the hand-built-target tests leave open: drive the REAL
+    // `resolveAudience` on a fresh `issues.opened` whose actor == assignee, so
+    // the self target is produced by the resolver (not hand-shaped), then let
+    // delivery mint the chat. This is the exact interaction #1536 broke —
+    // `resolveActorHumanId` resolving the actor to the same human the involve
+    // names, which the old blanket prune then dropped.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `human-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+      type: "human",
+    });
+    const entityKey = "owner/repo#1537";
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "issue",
+      entityKey,
+      rawEventType: "issues",
+      rawAction: "opened",
+      kind: "opened",
+      actorLogin: humanName,
+      involves: [{ githubLogin: humanName.toLowerCase(), reason: "assigned" }],
+    });
+
+    const resolution = await resolveAudience(app.db, event);
+    // The actor resolves to the self human, and the sole target is the fresh
+    // self-directed involve.
+    expect(resolution.actorHumanId).toBe(human);
+    expect(resolution.targets).toHaveLength(1);
+    expect(resolution.targets[0]).toMatchObject({ humanAgentId: human, kind: "new", involveReason: "assigned" });
+
+    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+      actorHumanId: resolution.actorHumanId,
+    });
+    expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
+
+    const mapping = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(
+        and(
+          eq(githubEntityChatMappings.organizationId, admin.organizationId),
+          eq(githubEntityChatMappings.entityType, "issue"),
+          eq(githubEntityChatMappings.entityKey, entityKey),
+        ),
+      );
+    expect(mapping).toHaveLength(1);
+    const chatId = mapping[0]?.chatId;
+    expect(chatId).toBeTruthy();
+    if (chatId) {
+      expect(await notifyCount(app, chatId, delegate)).toBe(1);
+    }
+  });
+
+  it("self-echo boundary: a self-assign on an already-bound entity stays pruned (#1536)", async () => {
+    // The other side of the #1536 carve-out. When the entity ALREADY has a
+    // bound chat (`kind: "existing"`), a self-directed involve is a true echo
+    // of the actor's own action into a chat they already sit in — nothing new
+    // to create — so it must stay pruned even though it carries an
+    // `involveReason`. Locks the carve-out to `kind: "new"` only.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `human-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+      type: "human",
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values([
+      { chatId, agentId: human, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId, agentId: delegate, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+    ]);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#207",
+      chatId,
+      boundVia: "direct",
+    });
+    const target = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: "assigned",
+      involveLogin: humanName.toLowerCase(),
+    } satisfies AudienceTarget;
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "issue",
+      entityKey: "owner/repo#207",
+      rawEventType: "issues",
+      rawAction: "assigned",
+      actorLogin: humanName,
+      involves: [{ githubLogin: humanName.toLowerCase(), reason: "assigned" }],
+    });
+
+    const stats = await deliverNormalizedEvent(app, event, [target], { actorHumanId: human });
+    expect(stats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
+    await expect(app.db.select().from(messages).where(eq(messages.chatId, chatId))).resolves.toHaveLength(0);
+    await expect(app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId))).resolves.toHaveLength(0);
+  });
+
   it("humanA requesting humanB review prunes humanA's follow delivery and wakes humanB's delegate", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

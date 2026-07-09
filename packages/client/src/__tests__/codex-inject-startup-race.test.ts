@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   chatContextPromise: null as Promise<ChatContext> | null,
   resolveChatContext: null as ((value: ChatContext) => void) | null,
   runInputs: [] as unknown[],
+  itemsByTurn: new Map<number, unknown[]>(),
   agentMessagesByTurn: new Map<number, string[]>(),
   failureByTurn: new Map<number, string>(),
   streamErrorByTurn: new Map<number, string>(),
@@ -33,12 +34,19 @@ vi.mock("@openai/codex-sdk", () => {
       return {
         events: (async function* () {
           yield { type: "thread.started", thread_id: "thread-test" };
-          const messages = state.agentMessagesByTurn.get(turn) ?? [`reply ${turn}`];
-          const diagnosticAfterFirstMessage = state.diagnosticAfterFirstMessageByTurn.get(turn);
-          for (const [index, text] of messages.entries()) {
-            yield { type: "item.completed", item: { type: "agent_message", text } };
-            if (index === 0 && diagnosticAfterFirstMessage) {
-              yield { type: "error", message: diagnosticAfterFirstMessage };
+          const items = state.itemsByTurn.get(turn);
+          if (items) {
+            for (const item of items) {
+              yield { type: "item.completed", item };
+            }
+          } else {
+            const messages = state.agentMessagesByTurn.get(turn) ?? [`reply ${turn}`];
+            const diagnosticAfterFirstMessage = state.diagnosticAfterFirstMessageByTurn.get(turn);
+            for (const [index, text] of messages.entries()) {
+              yield { type: "item.completed", item: { type: "agent_message", text } };
+              if (index === 0 && diagnosticAfterFirstMessage) {
+                yield { type: "error", message: diagnosticAfterFirstMessage };
+              }
             }
           }
           const failure = state.failureByTurn.get(turn);
@@ -224,6 +232,7 @@ async function waitFor(assertion: () => boolean): Promise<void> {
 beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "ft-codex-startup-race-"));
   state.runInputs.length = 0;
+  state.itemsByTurn.clear();
   state.agentMessagesByTurn.clear();
   state.failureByTurn.clear();
   state.streamErrorByTurn.clear();
@@ -240,6 +249,136 @@ afterEach(() => {
 });
 
 describe("codex handler startup inject queue", () => {
+  it("emits runtime events for every Codex SDK terminal item shape", async () => {
+    const events: SessionEvent[] = [];
+    const completedCounts: Array<number | undefined> = [];
+    state.itemsByTurn.set(1, [
+      { type: "agent_message", text: "   " },
+      { type: "agent_message", text: "visible answer" },
+      {
+        type: "command_execution",
+        id: "cmd-ok",
+        status: "completed",
+        command: "echo ok",
+        aggregated_output: "x".repeat(450),
+      },
+      {
+        type: "command_execution",
+        id: "cmd-error",
+        status: "failed",
+        command: "exit 1",
+        aggregated_output: "failed",
+      },
+      {
+        type: "command_execution",
+        id: "cmd-pending",
+        status: "running",
+        command: "sleep 1",
+      },
+      {
+        type: "file_change",
+        id: "file-ok",
+        status: "completed",
+        changes: [{ path: "src/created.ts" }],
+      },
+      {
+        type: "file_change",
+        id: "file-error",
+        status: "failed",
+        changes: [{ path: "src/rejected.ts" }],
+      },
+      {
+        type: "mcp_tool_call",
+        id: "mcp-error",
+        status: "failed",
+        server: "docs",
+        tool: "lookup",
+        arguments: { query: "missing" },
+        error: { message: "not found" },
+      },
+      {
+        type: "mcp_tool_call",
+        id: "mcp-ok",
+        status: "completed",
+        server: "docs",
+        tool: "lookup",
+        arguments: { query: "present" },
+        result: { structured_content: { answer: 42 } },
+      },
+      {
+        type: "mcp_tool_call",
+        id: "mcp-pending",
+        status: "running",
+        server: "docs",
+        tool: "lookup",
+        arguments: {},
+        result: { content: ["raw"] },
+      },
+      { type: "web_search", id: "web-1", query: "first tree" },
+      { type: "todo_list", id: "todo-1", items: [{ text: "ship tests", completed: false }] },
+      { type: "reasoning" },
+      {
+        type: "error",
+        message:
+          "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.",
+      },
+      { type: "unknown_future_item" },
+    ]);
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      { emitEvent: (event) => events.push(event) },
+    );
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    const toolEvents = events.filter(
+      (event): event is Extract<SessionEvent, { kind: "tool_call" }> => event.kind === "tool_call",
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { kind: "assistant_text", payload: { text: "visible answer" } },
+        { kind: "thinking", payload: {} },
+        expect.objectContaining({
+          kind: "error",
+          payload: expect.objectContaining({ source: "tool", message: expect.stringContaining("codex auth") }),
+        }),
+      ]),
+    );
+    expect(toolEvents.map((event) => `${event.payload.toolUseId}:${event.payload.status}`)).toEqual([
+      "cmd-ok:ok",
+      "cmd-error:error",
+      "cmd-pending:pending",
+      "file-ok:ok",
+      "file-error:error",
+      "mcp-error:error",
+      "mcp-ok:ok",
+      "mcp-pending:pending",
+      "web-1:ok",
+      "todo-1:ok",
+    ]);
+    expect(toolEvents.find((event) => event.payload.toolUseId === "cmd-ok")?.payload.resultPreview).toHaveLength(400);
+    expect(toolEvents.find((event) => event.payload.toolUseId === "mcp-error")?.payload.resultPreview).toBe(
+      "error: not found",
+    );
+    expect(toolEvents.find((event) => event.payload.toolUseId === "mcp-ok")?.payload.resultPreview).toBe(
+      JSON.stringify({ answer: 42 }),
+    );
+    expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
   it("queues injects received before the Codex thread exists so their inbox entries stay aligned with acks", async () => {
     const completedCounts: Array<number | undefined> = [];
     const handler = createCodexHandler({ workspaceRoot });

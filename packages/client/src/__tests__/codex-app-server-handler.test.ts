@@ -681,6 +681,35 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
+  it("leaves landing trial delivery recoverable when confirmed success events are unsupported", async () => {
+    stubLandingTrialHostEnv("confirm-missing");
+
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      failSessionForRecovery,
+      agentMetadata: trialAgentMetadata,
+    });
+    const message = makeMessage("m1", "first", 102);
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeTurn(fake, "turn-1", "final answer");
+    await startPromise;
+
+    expect(token.complete).not.toHaveBeenCalled();
+    expect(token.retry).toHaveBeenCalledWith([message], LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+      "thread-app-server",
+    );
+
+    await handler.shutdown();
+  });
+
   it("does not block ordinary Codex delivery on confirmed event rejection", async () => {
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();
@@ -1543,6 +1572,63 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
+  it.each([
+    ["bad request", "badRequest", "bad request rejected the request", "codex_bad_request_failure"],
+    ["cyber policy", "cyberPolicy", "bad request rejected by cyber policy", "codex_cyber_policy_failure"],
+  ])("terminal-rejects deterministic %s turn failures", async (_label, codexErrorInfo, messageText, reason) => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    failTurn(fake, "turn-1", {
+      message: messageText,
+      codexErrorInfo,
+    });
+    await startPromise;
+
+    expect(token.terminalRejected).toHaveBeenCalledWith([message], reason, {
+      kind: "server_terminal_record",
+      recordId: "turn-1",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("consumes sandbox configuration turn failures instead of retrying delivery", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    failTurn(fake, "turn-1", {
+      message: "sandbox rejected the request",
+      codexErrorInfo: "sandboxError",
+    });
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith([message], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_configuration_error",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
   it("terminal-rejects stderr-only remote compact context-window failures", async () => {
     const fake = new FakeAppServerClient();
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
@@ -1643,6 +1729,7 @@ describe("codex app-server handler", () => {
 
   it("keeps completed empty turns without compact diagnostics as successful silence", async () => {
     const fake = new FakeAppServerClient();
+    fake.stderr = "ordinary app-server diagnostic without compact failure";
     const token = makeDeliveryToken();
     const handler = makeHandler(fake);
     const ctx = makeContext();
@@ -1698,6 +1785,33 @@ describe("codex app-server handler", () => {
     failTurn(fake, "turn-1", {
       message: "server overloaded",
       codexErrorInfo: "serverOverloaded",
+    });
+    await startPromise;
+
+    expect(token.retry).toHaveBeenCalledWith([message], "codex_transient_failure");
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it.each([
+    "httpConnectionFailed",
+    "responseStreamConnectionFailed",
+    "responseStreamDisconnected",
+  ])("keeps structured transient %s turn failures retryable", async (key) => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    failTurn(fake, "turn-1", {
+      message: `${key} while streaming`,
+      codexErrorInfo: { [key]: true },
     });
     await startPromise;
 

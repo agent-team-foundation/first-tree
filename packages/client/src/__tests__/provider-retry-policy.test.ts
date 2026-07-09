@@ -125,7 +125,11 @@ describe("classifyProviderFailure", () => {
   });
 
   it("maps network and 5xx failures to transient_transport", () => {
-    for (const err of [new Error("fetch failed"), Object.assign(new Error("upstream 503"), { status: 503 })]) {
+    for (const err of [
+      new Error("fetch failed"),
+      new Error("API Error: Unable to connect to API (ConnectionRefused)"),
+      Object.assign(new Error("upstream 503"), { status: 503 }),
+    ]) {
       expect(classifyProviderFailure(err, { provider: "codex", scope: "provider_turn", source: "sdk" }).category).toBe(
         "transient_transport",
       );
@@ -183,6 +187,60 @@ describe("classifyProviderFailure", () => {
         category,
       );
     }
+  });
+
+  it("reads retry-after hints from numbers, strings, and date strings", () => {
+    const numeric = classifyProviderFailure(
+      { message: "rate limit", retryAfter: 2 },
+      {
+        provider: "codex",
+        scope: "session_start",
+        source: "sdk",
+      },
+    );
+    expect(numeric).toMatchObject({ category: "provider_capacity", retryAfterMs: 2000 });
+
+    const text = classifyProviderFailure(
+      { message: "rate limit", retryAfter: "3" },
+      {
+        provider: "codex",
+        scope: "session_start",
+        source: "sdk",
+      },
+    );
+    expect(text).toMatchObject({ category: "provider_capacity", retryAfterMs: 3000 });
+
+    const now = Date.now();
+    const date = classifyProviderFailure(
+      { message: "rate limit", retryAfter: new Date(now + 60_000).toUTCString() },
+      { provider: "codex", scope: "session_start", source: "sdk" },
+    );
+    expect(date.retryAfterMs ?? 0).toBeGreaterThan(0);
+  });
+
+  it("classifies string, null, and unshaped object failures without throwing", () => {
+    expect(classifyProviderFailure("upstream 502", { provider: "codex", scope: "provider_turn" })).toMatchObject({
+      category: "transient_transport",
+      reasonCode: "provider_transient_transport",
+    });
+    expect(classifyProviderFailure(null, { provider: "codex", scope: "provider_turn" })).toMatchObject({
+      category: "unknown",
+    });
+    expect(classifyProviderFailure({ code: "EPIPE" }, { provider: "codex", scope: "provider_turn" })).toMatchObject({
+      category: "transient_transport",
+    });
+  });
+
+  it("maps ambiguous capacity and context-room messages to deterministic reasons", () => {
+    expect(
+      classifyProviderFailure({ message: "capacity is overloaded" }, { provider: "codex", scope: "provider_turn" }),
+    ).toMatchObject({ category: "provider_capacity", reasonCode: "provider_overloaded" });
+    expect(
+      classifyProviderFailure("ran out of room in the context window", {
+        provider: "claude-code",
+        scope: "provider_turn",
+      }),
+    ).toMatchObject({ category: "deterministic_input", reasonCode: "provider_deterministic_input" });
   });
 });
 
@@ -268,6 +326,38 @@ describe("decideProviderRetry", () => {
       }),
     ).toMatchObject({ action: "stop", terminalKind: "unsafe_replay" });
   });
+
+  it("retries short provider-entered capacity waits and overloaded responses without Retry-After", () => {
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_rate_limited",
+        replaySafety: "provider_entered",
+        retryAfterMs: 25_000,
+      }),
+    ).toMatchObject({ action: "retry", delayMs: 25_000, userSeverity: "warning" });
+
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_overloaded",
+        replaySafety: "provider_entered",
+      }),
+    ).toMatchObject({ action: "retry", delayMs: 500, userSeverity: "warning" });
+  });
+
+  it("normalizes non-positive and fractional attempts before choosing backoff", () => {
+    expect(decide({ category: "transient_transport", attempt: 0 })).toMatchObject({
+      action: "retry",
+      attempt: 1,
+      delayMs: 500,
+    });
+    expect(decide({ category: "unknown", attempt: 2.9 })).toMatchObject({
+      action: "retry",
+      attempt: 2,
+      delayMs: 15000,
+    });
+  });
 });
 
 describe("buildProviderRetryEvent", () => {
@@ -300,6 +390,26 @@ describe("buildProviderRetryEvent", () => {
       maxAttempts: 2,
       delayMs: 500,
       userSeverity: "info",
+    });
+  });
+
+  it("builds terminal payloads without a retry decision", () => {
+    const c = classification("credential", "provider_credential_required");
+    expect(
+      buildProviderRetryEvent({
+        event: "provider_failure_terminal",
+        provider: "claude-code",
+        scope: "session_start",
+        classification: c,
+        messagePreview: null,
+      }),
+    ).toEqual({
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "session_start",
+      category: "credential",
+      reasonCode: "provider_credential_required",
+      userSeverity: "error",
     });
   });
 });

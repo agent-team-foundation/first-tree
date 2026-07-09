@@ -454,7 +454,7 @@ function isCapacity(text: string, base: Classification, retryAfterMs: number | u
 function isTransportText(text: string): boolean {
   return (
     TRANSIENT_HTTP_CODE_RE.test(text) ||
-    /server error|server_error|unavailable|timed out|timeout|fetch failed|network|econnreset|econnrefused|etimedout|epipe/.test(
+    /server error|server_error|unavailable|timed out|timeout|fetch failed|network|unable to connect|connection refused|connectionrefused|econnreset|econnrefused|etimedout|epipe/.test(
       text,
     )
   );

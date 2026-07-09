@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CLI_BODY_ORIGIN_METADATA_KEY, CLI_BODY_ORIGINS } from "@first-tree/shared";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -110,7 +111,11 @@ describe("chat send/ask --message-file", () => {
     const sdk = localAgentMocks.createSdk.mock.results.at(-1)?.value;
     expect(sdk.sendMessage).toHaveBeenCalledWith(
       "chat-env",
-      expect.objectContaining({ content: body, format: "markdown" }),
+      expect.objectContaining({
+        content: body,
+        format: "markdown",
+        metadata: expect.objectContaining({ [CLI_BODY_ORIGIN_METADATA_KEY]: CLI_BODY_ORIGINS.MESSAGE_FILE }),
+      }),
     );
     expect(outputMocks.success).toHaveBeenCalledWith({ id: "msg-1" });
   });
@@ -122,7 +127,13 @@ describe("chat send/ask --message-file", () => {
     await runChat("send", ["code-agent", "-F", "-"]);
 
     const sdk = localAgentMocks.createSdk.mock.results.at(-1)?.value;
-    expect(sdk.sendMessage).toHaveBeenCalledWith("chat-env", expect.objectContaining({ content: body }));
+    expect(sdk.sendMessage).toHaveBeenCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        content: body,
+        metadata: expect.objectContaining({ [CLI_BODY_ORIGIN_METADATA_KEY]: CLI_BODY_ORIGINS.MESSAGE_FILE }),
+      }),
+    );
   });
 
   it("rejects a missing file (exit 2, nothing sent)", async () => {
@@ -154,7 +165,13 @@ describe("chat send/ask --message-file", () => {
     await runChat("send", ["code-agent", "-f", "markdown", "--message-file", path]);
 
     const sdk = localAgentMocks.createSdk.mock.results.at(-1)?.value;
-    expect(sdk.sendMessage).toHaveBeenCalledWith("chat-env", expect.objectContaining({ content: body }));
+    expect(sdk.sendMessage).toHaveBeenCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        content: body,
+        metadata: expect.objectContaining({ [CLI_BODY_ORIGIN_METADATA_KEY]: CLI_BODY_ORIGINS.MESSAGE_FILE }),
+      }),
+    );
   });
 
   it("chat ask also accepts --message-file", async () => {
@@ -167,7 +184,11 @@ describe("chat send/ask --message-file", () => {
     const sdk = localAgentMocks.createSdk.mock.results.at(-1)?.value;
     expect(sdk.sendMessage).toHaveBeenCalledWith(
       "chat-env",
-      expect.objectContaining({ content: body, format: "request" }),
+      expect.objectContaining({
+        content: body,
+        format: "request",
+        metadata: expect.objectContaining({ [CLI_BODY_ORIGIN_METADATA_KEY]: CLI_BODY_ORIGINS.MESSAGE_FILE }),
+      }),
     );
   });
 

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { ClientConfig } from "@first-tree/shared/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeConfig } from "../runtime/config.js";
 import type { UpdateManagerOptions } from "../runtime/update-manager.js";
@@ -90,6 +91,16 @@ function makeRuntimeConfigWithAgentCount(count: number): RuntimeConfig {
   return {
     server: "http://first-tree.test",
     agents,
+  };
+}
+
+function makeUpdateConfig(overrides: Partial<ClientConfig["update"]> = {}): ClientConfig["update"] {
+  return {
+    policy: "auto",
+    restart_quiet_seconds: 30,
+    restart_check_interval_seconds: 10,
+    prompt_timeout_seconds: 60,
+    ...overrides,
   };
 }
 
@@ -245,6 +256,43 @@ describe("AgentRuntime", () => {
     });
 
     expect(state.connections[0]?.getMaxListeners()).toBe(12);
+  });
+
+  it("attaches update management with aggregate quiet-gate state", async () => {
+    const state = installRuntimeMocks({
+      snapshots: {
+        alpha: { activeCount: 2, lastActivityMs: 400 },
+        beta: { activeCount: 3, lastActivityMs: 900 },
+      },
+    });
+    const signals = captureProcessSignals();
+    const { AgentRuntime } = await import("../runtime/runtime.js");
+    const runtime = new AgentRuntime({
+      config: makeRuntimeConfig(),
+      currentVersion: "1.2.3",
+      getAccessToken: async () => "token",
+      update: {
+        updateConfig: makeUpdateConfig({ policy: "prompt" }),
+        prompt: vi.fn(async () => true),
+        executeUpdate: vi.fn(async () => ({ installed: true })),
+        refreshServerTarget: vi.fn(async () => ({ ok: true as const, targetVersion: "1.2.4" })),
+      },
+    });
+
+    const started = runtime.start();
+    await vi.waitFor(() => expect(signals.getSigint()).not.toBeNull());
+
+    expect(state.updateAttach).toHaveBeenCalledWith(
+      state.connections[0],
+      expect.objectContaining({ currentVersion: "1.2.3", updateConfig: makeUpdateConfig({ policy: "prompt" }) }),
+    );
+    expect(state.updateOptions?.getQuietGateSnapshot()).toEqual({ activeCount: 5, lastActivityMs: 900 });
+    state.updateOptions?.log("warn", "update log entry");
+    expect(state.logger.warn).toHaveBeenCalledWith("update log entry");
+
+    await signals.getSigint()?.();
+    await expect(started).resolves.toBeUndefined();
+    expect(state.updateDispose).toHaveBeenCalledTimes(1);
   });
 
   it("forces exit when shutdown exceeds the timeout", async () => {

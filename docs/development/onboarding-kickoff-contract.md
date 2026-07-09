@@ -23,6 +23,15 @@ chats and the adjacent campaign quickstart handoff.
 - The first-chat endpoint does not accept the retired `kind` discriminator.
 - `POST /api/v1/me/onboarding/tree-setup/kickoff` is the only tree setup
   kickoff entry. It uses the org-level `tree-setup` idempotency key.
+- A `/me/onboarding/kickoff` request carrying `scanFixRepoSlug` (`owner/repo`)
+  is a production-scan fix conversion arriving via onboarding. It keys the
+  kickoff chat `<humanAgent>:scan-fix:<repoSlug>` instead of the default
+  `<humanAgent>:<agent>:onboarding` key. This is the SAME key the
+  already-onboarded direct path composes (`POST /api/v1/orgs/:orgId/chats` task
+  mode, also from `scanFixRepoSlug`): both write `chats.onboarding_kickoff_key`,
+  so its unique constraint makes re-entering the fix link — through either path
+  — reuse the one fix launcher instead of creating a duplicate. It still stamps
+  onboarding completion like any onboarding kickoff.
 
 ## Retired Contract Boundary
 

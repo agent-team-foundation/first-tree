@@ -341,6 +341,7 @@ function seedDefaultMocks(): void {
 beforeEach(() => {
   installBrowserStubs();
   document.body.innerHTML = "";
+  window.history.replaceState({}, "", "/");
   vi.clearAllMocks();
   authMock.value = {
     role: "admin",
@@ -355,6 +356,34 @@ afterEach(() => {
 });
 
 describe("ClientsPage computer cards", () => {
+  it("renders demo mode through the page and wires scenario navigation", async () => {
+    window.history.replaceState({}, "", "/settings/computers?demo=admin-grouped");
+    const { ClientsPage } = await import("../../clients.js");
+    const { container, root } = await renderDom(<ClientsPage />);
+
+    await waitForText(document.body, "DEMO");
+    await waitForText(container, "GandydeMacBook-Pro.local");
+    await waitForText(container, "gandy-developer");
+
+    const select = document.body.querySelector<HTMLSelectElement>('aside select[aria-label="Scenario"]');
+    if (!select) throw new Error("Expected demo scenario selector");
+    await act(async () => {
+      select.value = "empty";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(window.location.search).toContain("demo=empty");
+    await waitForText(container, "No computers connected yet.");
+
+    await click(
+      [...document.body.querySelectorAll("aside button")].find((button) => button.textContent === "Exit") ?? null,
+    );
+    await waitForCondition(() => !document.body.textContent?.includes("DEMO"), "Expected demo navigator to close");
+    expect(window.location.search).not.toContain("demo=");
+
+    await act(async () => root.unmount());
+  });
+
   it("renders admin cards, team table, action dialogs, runtime commands, and connect dialog", async () => {
     const { ClientsPage } = await import("../../clients.js");
     const { container, root } = await renderDom(<ClientsPage />);
@@ -423,6 +452,39 @@ describe("ClientsPage computer cards", () => {
     await click(exactButton(container, "Connect"));
     await waitForText(document.body, "Connect computer");
     await click(exactButton(document.body, "Cancel"));
+
+    await act(async () => root.unmount());
+  });
+
+  it("opens reconnect and cancels destructive computer dialogs", async () => {
+    const { ClientsPage } = await import("../../clients.js");
+    const { container, root } = await renderDom(<ClientsPage />);
+
+    await waitForText(container, "offline-box");
+    await click(exactButton(container, "Reconnect"));
+    await waitForText(document.body, "Connect computer");
+    await click(exactButton(document.body, "Cancel"));
+
+    await click(container.querySelector('button[aria-label="Computer actions"]'));
+    await click(exactButton(container, "Disconnect"));
+    await waitForText(document.body, "Disconnect Computer");
+    await waitForText(document.body, "No bound agents");
+    await click(exactButton(document.body, "Cancel"));
+    await waitForCondition(
+      () => !document.body.textContent?.includes("Disconnect Computer"),
+      "Expected disconnect dialog to close",
+    );
+    expect(activityMocks.disconnectClient).not.toHaveBeenCalled();
+
+    await click(container.querySelector('button[aria-label="Computer actions"]'));
+    await click(exactButton(container, "Retire"));
+    await waitForText(document.body, "Retire Computer");
+    await click(exactButton(document.body, "Cancel"));
+    await waitForCondition(
+      () => !document.body.textContent?.includes("Retire Computer"),
+      "Expected retire dialog to close",
+    );
+    expect(activityMocks.retireClient).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });

@@ -366,7 +366,8 @@ describe("daemon start command", () => {
 
     expect(output()).toContain("Started task-scheduler service (pid 123).");
     expect(output()).toContain("Logs:  /logs/client.log");
-    expect(output()).toContain("Supervisor fallback: /logs/supervisor.log");
+    expect(output()).toContain("Supervisor log: /logs/supervisor.log");
+    expect(output()).toContain("Wrapper fallback: /logs/supervisor-wrapper.log");
   });
 
   it("prints WSL repair guidance when service startup fails", async () => {
