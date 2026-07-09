@@ -1795,31 +1795,32 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
-  it.each(["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected"])(
-    "keeps structured transient %s turn failures retryable",
-    async (key) => {
-      const fake = new FakeAppServerClient();
-      const token = makeDeliveryToken();
-      const handler = makeHandler(fake);
-      const ctx = makeContext();
-      const message = makeMessage("m1", "first");
+  it.each([
+    "httpConnectionFailed",
+    "responseStreamConnectionFailed",
+    "responseStreamDisconnected",
+  ])("keeps structured transient %s turn failures retryable", async (key) => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
 
-      const startPromise = handler.start(message, ctx, token);
-      await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
-      failTurn(fake, "turn-1", {
-        message: `${key} while streaming`,
-        codexErrorInfo: { [key]: true },
-      });
-      await startPromise;
+    failTurn(fake, "turn-1", {
+      message: `${key} while streaming`,
+      codexErrorInfo: { [key]: true },
+    });
+    await startPromise;
 
-      expect(token.retry).toHaveBeenCalledWith([message], "codex_transient_failure");
-      expect(token.terminalRejected).not.toHaveBeenCalled();
-      expect(token.complete).not.toHaveBeenCalled();
+    expect(token.retry).toHaveBeenCalledWith([message], "codex_transient_failure");
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
 
-      await handler.shutdown();
-    },
-  );
+    await handler.shutdown();
+  });
 
   it("consumes accepted-turn capacity wait stops instead of terminal-rejecting them", async () => {
     const fake = new FakeAppServerClient();

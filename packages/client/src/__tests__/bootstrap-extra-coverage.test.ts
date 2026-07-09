@@ -2,14 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FirstTreeHubSDK } from "../sdk.js";
 import {
-  ensureClaudeMdSymlink,
   installCoreSkills,
   installFirstTreeIntegration,
   migrateLegacyRuntimeLayout,
   resolveAgentContextTreeBinding,
 } from "../runtime/bootstrap.js";
+import type { FirstTreeHubSDK } from "../sdk.js";
 
 const originalPlatform = process.platform;
 

@@ -9,7 +9,6 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
-import { encodeProviderRetryEventMessage } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import type { DeliveryDecision, DeliveryRouteOwnership, DeliveryWork } from "../runtime/inbox-delivery-coordinator.js";
@@ -1602,10 +1601,11 @@ describe("SessionManager edge coverage", () => {
 
   it("aborts lost ownership receipts from start, resume, and retry routing branches", async () => {
     const makeOwnedReceipt = (sessionId: string) => ({ sessionId, route: { kind: "owned", mode: "queued" } as const });
+    const loseOwnership: SessionManagerInternals["markRouteOwned"] = () => "lost";
 
     const startHandler = handler({ start: vi.fn().mockResolvedValue(makeOwnedReceipt("start-lost")) });
     const startManager = makeManager({ handlers: [startHandler] });
-    internals(startManager).markRouteOwned = vi.fn(() => "lost");
+    internals(startManager).markRouteOwned = loseOwnership;
     await internals(startManager).routeMessage("chat-start-lost", makeMessage("chat-start-lost"));
     expect(internals(startManager).sessions.has("chat-start-lost")).toBe(false);
     await startManager.shutdown();
@@ -1616,7 +1616,7 @@ describe("SessionManager edge coverage", () => {
       claudeSessionId: "old-evicted",
       lastActivity: 1,
     });
-    internals(evictedManager).markRouteOwned = vi.fn(() => "lost");
+    internals(evictedManager).markRouteOwned = loseOwnership;
     await internals(evictedManager).routeMessage("chat-evicted-lost", makeMessage("chat-evicted-lost"));
     expect(internals(evictedManager).sessions.has("chat-evicted-lost")).toBe(false);
     await evictedManager.shutdown();
@@ -1627,7 +1627,7 @@ describe("SessionManager edge coverage", () => {
     });
     const resumeManager = makeManager();
     internals(resumeManager).sessions.set("chat-resume-lost", suspendedRecord);
-    internals(resumeManager).markRouteOwned = vi.fn(() => "lost");
+    internals(resumeManager).markRouteOwned = loseOwnership;
     await internals(resumeManager).resumeSession(suspendedRecord, makeMessage("chat-resume-lost"));
     expect(internals(resumeManager).sessions.has("chat-resume-lost")).toBe(false);
     await resumeManager.shutdown();
@@ -1642,7 +1642,7 @@ describe("SessionManager edge coverage", () => {
         claudeSessionId: "previous-retry",
       }),
     );
-    internals(retryResumeManager).markRouteOwned = vi.fn(() => "lost");
+    internals(retryResumeManager).markRouteOwned = loseOwnership;
     await internals(retryResumeManager).runRetry("chat-retry-resume-lost");
     expect(internals(retryResumeManager).sessions.has("chat-retry-resume-lost")).toBe(false);
     await retryResumeManager.shutdown();
@@ -1657,7 +1657,7 @@ describe("SessionManager edge coverage", () => {
         claudeSessionId: "",
       }),
     );
-    internals(retryStartManager).markRouteOwned = vi.fn(() => "lost");
+    internals(retryStartManager).markRouteOwned = loseOwnership;
     await internals(retryStartManager).runRetry("chat-retry-start-lost");
     expect(internals(retryStartManager).sessions.has("chat-retry-start-lost")).toBe(false);
     await retryStartManager.shutdown();

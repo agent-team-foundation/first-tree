@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   encodeProviderRetryEventMessage,
+  type ProviderRetryEventPayload,
   parseProviderRetryEventMessage,
   statusReasonFromProviderRetryEvent,
-  type ProviderRetryEventPayload,
 } from "../schemas/provider-retry.js";
 
 function retryPayload(overrides: Partial<ProviderRetryEventPayload> = {}): ProviderRetryEventPayload {

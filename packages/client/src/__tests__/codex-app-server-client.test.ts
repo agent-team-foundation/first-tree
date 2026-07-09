@@ -261,7 +261,7 @@ describe("CodexAppServerClient lifecycle", () => {
       [
         "#!/bin/sh",
         "while IFS= read -r line; do",
-        "  case \"$line\" in",
+        '  case "$line" in',
         "    *'\"id\":1'*) printf '%s\\n' '{\"id\":1,\"result\":{}}' ;;",
         "  esac",
         "done",
