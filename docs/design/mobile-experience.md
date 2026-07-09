@@ -213,6 +213,8 @@ If later phases need a stronger attention queue, add a server-side projection
 after the mobile usage model proves the ranking. Do not introduce client-only
 business rules that become invisible product policy.
 
+Current implementation handoff lives in `docs/design/mobile-handoff.md`.
+
 ## First Phase Scope
 
 The first phase must make the mobile product visible and usable:
