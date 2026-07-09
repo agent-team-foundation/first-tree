@@ -8,6 +8,7 @@ const cliFetchMock = vi.hoisted(() => vi.fn());
 const getClientServiceStatusMock = vi.hoisted(() => vi.fn());
 const installClientServiceMock = vi.hoisted(() => vi.fn());
 const isServiceSupportedMock = vi.hoisted(() => vi.fn());
+const restartClientServiceMock = vi.hoisted(() => vi.fn());
 const stopClientServiceMock = vi.hoisted(() => vi.fn());
 const clientRuntimeMock = vi.hoisted(() => vi.fn());
 const createApiNameResolverMock = vi.hoisted(() => vi.fn());
@@ -30,6 +31,7 @@ vi.mock("../core/service-install.js", async (importOriginal) => ({
   getClientServiceStatus: getClientServiceStatusMock,
   installClientService: installClientServiceMock,
   isServiceSupported: isServiceSupportedMock,
+  restartClientService: restartClientServiceMock,
   stopClientService: stopClientServiceMock,
 }));
 
@@ -254,6 +256,7 @@ beforeEach(() => {
   getClientServiceStatusMock.mockReset();
   installClientServiceMock.mockReset();
   isServiceSupportedMock.mockReset();
+  restartClientServiceMock.mockReset();
   stopClientServiceMock.mockReset();
   clientRuntimeMock.mockReset();
   createApiNameResolverMock.mockReset();
@@ -278,6 +281,7 @@ beforeEach(() => {
     logDir: join(home, "logs"),
   });
   isServiceSupportedMock.mockReturnValue(false);
+  restartClientServiceMock.mockReturnValue({ ok: true });
   stopClientServiceMock.mockReturnValue({ ok: true });
   createApiNameResolverMock.mockReturnValue({ resolveName: vi.fn(async () => "nova") });
   createExecuteUpdateMock.mockReturnValue(async () => undefined);
@@ -542,6 +546,28 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(output).not.toContain("ACCOUNT_SWITCH_REQUIRES_PURGE");
   });
 
+  it("refuses reused local client identity when the server reports it retired", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    writeCredentials("member-new", "http://first-tree.test", "user-new");
+    isServiceSupportedMock.mockReturnValue(true);
+    cliFetchMock
+      .mockResolvedValueOnce(response(200, { accessToken: jwt({ sub: "user-new" }), refreshToken: "r1" }))
+      .mockResolvedValueOnce(response(200, { id: "client_aabbccdd", status: "retired" }));
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" })])).rejects.toThrow("process.exit");
+
+    expect(cliFetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://first-tree.test/api/v1/clients/client_aabbccdd",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(installClientServiceMock).not.toHaveBeenCalled();
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("CLIENT_RETIRED_REQUIRES_RESET");
+    expect(output).toContain("first-tree-dev computer reset");
+  });
+
   it("allows reconnect with preserved client identity and local agent state when credentials are missing", async () => {
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
@@ -551,7 +577,7 @@ describe("login command", { timeout: 60_000 }, () => {
 
     await runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"]);
 
-    expect(cliFetchMock).toHaveBeenCalledTimes(1);
+    expect(cliFetchMock).toHaveBeenCalledTimes(2);
     expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("Authenticated");
@@ -718,6 +744,48 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(output).toContain("Background service installed (launchd)");
     expect(output).toContain(join(home, "logs"));
     expect(clientRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("restarts an already-active background service after login refreshes it", async () => {
+    isServiceSupportedMock.mockReturnValue(true);
+    getClientServiceStatusMock.mockReturnValue({
+      platform: "task-scheduler",
+      state: "active",
+      label: "\\FirstTree\\first-tree-dev",
+      logDir: join(home, "logs"),
+    });
+    installClientServiceMock.mockReturnValue({
+      platform: "task-scheduler",
+      logDir: join(home, "logs"),
+    });
+    restartClientServiceMock.mockReturnValue({ ok: true });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" })]);
+
+    expect(installClientServiceMock).toHaveBeenCalled();
+    expect(restartClientServiceMock).toHaveBeenCalled();
+    expect(clientRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("fails login when an already-active background service cannot restart after refresh", async () => {
+    isServiceSupportedMock.mockReturnValue(true);
+    getClientServiceStatusMock.mockReturnValue({
+      platform: "task-scheduler",
+      state: "active",
+      label: "\\FirstTree\\first-tree-dev",
+      logDir: join(home, "logs"),
+    });
+    installClientServiceMock.mockReturnValue({
+      platform: "task-scheduler",
+      logDir: join(home, "logs"),
+    });
+    restartClientServiceMock.mockReturnValue({ ok: false, reason: "still running" });
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" })])).rejects.toThrow("process.exit");
+
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Background service refreshed but restart failed: still running");
+    expect(output).toContain("first-tree-dev daemon restart");
   });
 
   it("prints cancellation when inline runtime start is interrupted by the prompt layer", async () => {

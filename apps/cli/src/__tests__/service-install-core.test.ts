@@ -739,6 +739,8 @@ describe("service install helpers", () => {
     });
     expect(wrapper).toContain(`set "FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}"`);
     expect(wrapper).toContain('"daemon" "supervise"');
+    expect(wrapper).toContain(":supervisor_loop");
+    expect(wrapper).toContain('if "%FT_EXIT%"=="75" goto supervisor_loop');
     expect(launcher).toContain(`shell.Run("""${windowsSupervisorWrapperPath()}""", 0, True)`);
     expect([...xmlRaw.subarray(0, 2)]).toEqual([0xff, 0xfe]);
     expect(xml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
@@ -1076,7 +1078,7 @@ describe("service install helpers", () => {
 
   it("keeps Windows stop intent when a no-marker stop leaves a supervisor process behind", () => {
     setPlatform("win32");
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(6001);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(70001);
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
@@ -1116,7 +1118,7 @@ describe("service install helpers", () => {
 
   it("keeps Windows stop intent when the task is missing but a supervisor process remains", () => {
     setPlatform("win32");
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(6001);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(70001);
     spawnSyncMock
       .mockReturnValueOnce({ status: 3, stdout: "", stderr: "" })
       .mockReturnValueOnce({
