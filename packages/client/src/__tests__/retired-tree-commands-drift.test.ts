@@ -172,6 +172,17 @@ const RETIRED_SKILL_NAMES = [
   "first-tree-cloud",
 ] as const;
 
+const RETIRED_AGENT_HOOK_MARKERS = [
+  ".claude/settings.json",
+  ".codex/hooks.json",
+  "[features] codex_hooks",
+  "SessionStart",
+  "Stop hook",
+  "PostToolUse",
+  "PreToolUse",
+  "agent-context-hooks",
+] as const;
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
@@ -209,6 +220,24 @@ function listAgentMetadataFiles(skillsRoot: string): string[] {
   return out;
 }
 
+function buildDriftGuardBriefing(): string {
+  return buildAgentBriefing({
+    identity: {
+      agentId: "drift-guard",
+      inboxId: "drift-guard-inbox",
+      displayName: "Drift Guard",
+      type: "agent",
+      visibility: "organization",
+      delegateMention: null,
+      metadata: {},
+    },
+    payload: null,
+    workspacePath: "/tmp/drift-guard",
+    sourceRepos: [],
+    contextTreePath: null,
+  });
+}
+
 describe("retired tree subcommand drift guard", () => {
   it("no shipped skill bash block tells an agent to run a retired `tree` subcommand", () => {
     const skillsRoot = join(repoRoot, "skills");
@@ -237,24 +266,7 @@ describe("retired tree subcommand drift guard", () => {
   });
 
   it("buildAgentBriefing CLI Overview lists only registered tree subcommands — no retired commands", () => {
-    // Reuse a tiny stub of `BuildAgentBriefingOptions`. The CLI Overview
-    // section doesn't depend on identity / payload / sourceRepos / tree
-    // path, so a minimal stub renders the same output.
-    const briefing = buildAgentBriefing({
-      identity: {
-        agentId: "drift-guard",
-        inboxId: "drift-guard-inbox",
-        displayName: "Drift Guard",
-        type: "agent",
-        visibility: "organization",
-        delegateMention: null,
-        metadata: {},
-      },
-      payload: null,
-      workspacePath: "/tmp/drift-guard",
-      sourceRepos: [],
-      contextTreePath: null,
-    });
+    const briefing = buildDriftGuardBriefing();
 
     const overviewStart = briefing.indexOf("## CLI Overview");
     expect(overviewStart, "CLI Overview section must be present").toBeGreaterThanOrEqual(0);
@@ -271,6 +283,52 @@ describe("retired tree subcommand drift guard", () => {
       // "workspace ↔ tree binding" doesn't false-positive on `tree bind`.
       const re = new RegExp(`\\b(?:first-tree|ft)\\s+tree\\s+${sub}\\b`, "u");
       expect(overview, `CLI Overview must not advertise retired \`tree ${sub}\``).not.toMatch(re);
+    }
+  });
+
+  it("does not reintroduce retired agent hook steering in the briefing or shipped skills", () => {
+    // Agent runtime hooks were part of the retired tree-command surface.
+    // Current steering lives in the generated briefing, provider/session
+    // prompt, and shipped skills; reviving hook instructions here would
+    // recreate the old Claude-only Stop-hook gap and leave Codex uncovered.
+    const skillsRoot = join(repoRoot, "skills");
+    const sources: Array<{ file: string; text: string }> = [
+      { file: "<generated briefing>", text: buildDriftGuardBriefing() },
+    ];
+
+    for (const name of SHIPPED_SKILLS) {
+      const skillDir = join(skillsRoot, name);
+      try {
+        if (!statSync(skillDir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      for (const file of listMarkdownFiles(skillDir)) {
+        sources.push({ file: relative(repoRoot, file), text: readFileSync(file, "utf-8") });
+      }
+    }
+    for (const file of listAgentMetadataFiles(skillsRoot)) {
+      sources.push({ file: relative(repoRoot, file), text: readFileSync(file, "utf-8") });
+    }
+
+    const failures: Array<{ file: string; marker: string; line: number; snippet: string }> = [];
+    for (const source of sources) {
+      const lines = source.text.split("\n");
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i] ?? "";
+        for (const marker of RETIRED_AGENT_HOOK_MARKERS) {
+          if (line.includes(marker)) {
+            failures.push({ file: source.file, marker, line: i + 1, snippet: line.trim() });
+          }
+        }
+      }
+    }
+
+    if (failures.length > 0) {
+      const detail = failures.map((f) => `  ${f.file}:${f.line}: \`${f.marker}\` — ${f.snippet}`).join("\n");
+      throw new Error(
+        `Retired agent hook steering resurfaced in generated briefing or shipped skills:\n${detail}\n\nUse provider-neutral briefing / runtime-contract wording unless a new hook surface is deliberately designed and this guard is updated.`,
+      );
     }
   });
 
