@@ -10,6 +10,7 @@ import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NewVersionChip } from "./new-version-chip.js";
+import { SupportMenu } from "./support-menu.js";
 import { TeamSwitchOverlay } from "./team-switch-overlay.js";
 import { TeamSwitcher } from "./team-switcher.js";
 import { Button } from "./ui/button.js";
@@ -335,6 +336,11 @@ export function Layout() {
             ) : null}
             {showThemeToggle ? (
               <>
+                {/* Support (Discord / WeChat) sits with the theme toggle: both
+                    drop on `narrow`, where the row is already at capacity — a
+                    stuck phone user still has the same links on the onboarding
+                    finale and can reach them from a wider window. */}
+                <SupportMenu />
                 <ThemeToggle />
                 <span
                   style={{

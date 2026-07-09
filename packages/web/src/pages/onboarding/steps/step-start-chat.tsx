@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
+import { CommunityChannels } from "../../../components/community-channels.js";
 import { Button } from "../../../components/ui/button.js";
 import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../../../utils/onboarding-flags.js";
 import {
@@ -226,6 +227,7 @@ function AdminStartChat() {
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
+          <CommunityBlock />
         </div>
       </div>
     );
@@ -256,6 +258,7 @@ function AdminStartChat() {
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
+        <CommunityBlock />
       </div>
     </div>
   );
@@ -393,6 +396,7 @@ function InviteeReady() {
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
+        <CommunityBlock />
       </div>
     </div>
   );
@@ -459,6 +463,7 @@ function InviteeNotReady() {
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
+        <CommunityBlock />
       </div>
     </div>
   );
@@ -468,4 +473,30 @@ function InviteeNotReady() {
 
 function StartingState() {
   return <WorkingState label={COPY.startChat.starting} />;
+}
+
+/**
+ * "Join the community" — the two channel cards (WeChat / Discord, see
+ * CommunityChannels) as a footer under the launch CTA. Rendered only in the
+ * stable finale bodies (never during loading/starting transitions), separated
+ * from the primary action by a hairline so it reads as a footer and can't
+ * compete with "Start chat".
+ */
+function CommunityBlock() {
+  return (
+    <div
+      className="flex flex-col"
+      style={{
+        gap: "var(--sp-3)",
+        marginTop: "var(--sp-5)",
+        paddingTop: "var(--sp-5)",
+        borderTop: "var(--hairline) solid var(--border)",
+      }}
+    >
+      <span className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
+        {COPY.startChat.community.title}
+      </span>
+      <CommunityChannels />
+    </div>
+  );
 }

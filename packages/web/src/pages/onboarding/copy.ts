@@ -306,6 +306,14 @@ export const COPY = {
 
     // shared launch transition
     starting: "Starting your agent…",
+
+    /** Heading of the community footer under the launch CTA (every finale).
+     *  The channel cards themselves live in components/community-channels.tsx
+     *  (shared with the top-bar SupportMenu), so only the onboarding-surface
+     *  heading is copy here. */
+    community: {
+      title: "Join the community",
+    },
   },
   /** invitee · join-team confirmation + the one not-ready (blocked-on-admin) state.
    *  The not-ready screen covers both "no Context Tree" and "no GitHub
