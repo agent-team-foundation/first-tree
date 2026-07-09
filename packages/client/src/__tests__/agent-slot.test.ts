@@ -26,6 +26,7 @@ type FakeSessionState = {
     typeof vi.fn<(chatId: string, type: "session:suspend" | "session:terminate") => Promise<void>>
   >;
   applyStaleChatIds: ReturnType<typeof vi.fn<(chatIds: string[]) => void>>;
+  noteBindRecoveryComplete: ReturnType<typeof vi.fn<() => void>>;
   updateTransport: ReturnType<typeof vi.fn<(sdk: unknown, agentConfigCache?: unknown) => void>>;
   shutdown: ReturnType<typeof vi.fn<(reason?: string, opts?: unknown) => Promise<void>>>;
 };
@@ -51,6 +52,7 @@ class FakeClientConnection extends EventEmitter {
   reportSessionState = vi.fn();
   reportRuntimeState = vi.fn();
   reportSessionEvent = vi.fn();
+  reportSessionEventConfirmed = vi.fn(async () => {});
   reportSessionRuntime = vi.fn();
   sendSessionReconcile = vi.fn();
 
@@ -158,7 +160,9 @@ function makeFrame(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelayMs?: number } = {}): MockState {
+function installMocks(
+  options: { syncResult?: MockState["syncResult"]; syncDelayMs?: number; dispatchRejectEntryId?: number } = {},
+): MockState {
   vi.resetModules();
   const state: MockState = {
     logger: makeLogger(),
@@ -203,9 +207,18 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
           runtimeStates: [{ chatId: "chat-1", runtimeState: "working" }],
           aggregateRuntimeState: "working",
           heldChatIds: ["chat-1", "chat-2"],
-          dispatch: vi.fn(async () => {}),
+          dispatch: vi.fn(async (entry: unknown) => {
+            if (
+              typeof entry === "object" &&
+              entry !== null &&
+              Reflect.get(entry, "id") === options.dispatchRejectEntryId
+            ) {
+              throw new Error("buffered dispatch failed");
+            }
+          }),
           handleCommand: vi.fn(async () => {}),
           applyStaleChatIds: vi.fn(),
+          noteBindRecoveryComplete: vi.fn(),
           updateTransport: vi.fn(),
           shutdown: vi.fn(async () => {}),
         };
@@ -247,6 +260,10 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
         this.state.applyStaleChatIds(chatIds);
       }
 
+      noteBindRecoveryComplete(): void {
+        this.state.noteBindRecoveryComplete();
+      }
+
       updateTransport(sdk: unknown, agentConfigCache?: unknown): void {
         this.state.updateTransport(sdk, agentConfigCache);
       }
@@ -275,14 +292,20 @@ async function makeSlot(options?: {
   runtimeType?: string;
   syncResult?: MockState["syncResult"];
   syncDelayMs?: number;
+  dispatchRejectEntryId?: number;
   omitReconcileInterval?: boolean;
+  deferSuspendOnSubprocess?: boolean;
 }): Promise<{
   slot: import("../runtime/agent-slot.js").AgentSlot;
   connection: FakeClientConnection;
   sdk: FirstTreeHubSDK;
   state: MockState;
 }> {
-  const state = installMocks({ syncResult: options?.syncResult, syncDelayMs: options?.syncDelayMs });
+  const state = installMocks({
+    syncResult: options?.syncResult,
+    syncDelayMs: options?.syncDelayMs,
+    dispatchRejectEntryId: options?.dispatchRejectEntryId,
+  });
   const sdk = makeSdk({
     agent: options?.agent,
     configError: options?.configError,
@@ -313,6 +336,9 @@ async function makeSlot(options?: {
       idle_timeout: 300,
       max_sessions: 3,
       working_grace_seconds: 60,
+      ...(options?.deferSuspendOnSubprocess === undefined
+        ? {}
+        : { defer_suspend_on_subprocess: options.deferSuspendOnSubprocess }),
       // AgentSlot has a defensive default for older configs; the runtime schema normally supplies a number.
       reconcile_interval_seconds: (options?.omitReconcileInterval ? undefined : 1) as unknown as number,
     },
@@ -417,6 +443,37 @@ describe("AgentSlot", () => {
     expect(state.sessions).toHaveLength(1);
   });
 
+  it("aborts a transient config backoff immediately when stop is requested", async () => {
+    const { slot, sdk, state } = await makeSlot({
+      configErrorsThenSucceed: { error: new SdkError(503, "boom"), times: 1 },
+    });
+
+    const startOutcome = slot.start().then(
+      () => ({ ok: true }) as const,
+      (err: unknown) => ({ ok: false, err }) as const,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(vi.mocked(sdk.fetchAgentConfig)).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(state.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ attempt: 1, reasonCode: "claude_server_error" }),
+        "agent config fetch failed — retrying with backoff",
+      ),
+    );
+
+    const stopOutcome = slot.stop().then(
+      () => ({ ok: true }) as const,
+      (err: unknown) => ({ ok: false, err }) as const,
+    );
+    const settled = await startOutcome;
+    await stopOutcome;
+
+    expect(settled.ok).toBe(false);
+    if (!settled.ok) expect((settled.err as Error).message).toContain("agent config fetch aborted");
+    expect(state.sessions).toHaveLength(0);
+  });
+
   it("aborts the bind after exhausting retries on a sustained transient failure", async () => {
     vi.useFakeTimers();
     const { slot, connection, sdk } = await makeSlot({ configError: new SdkError(503, "down") });
@@ -515,12 +572,14 @@ describe("AgentSlot", () => {
     const onStateChange = Reflect.get(sessionConfig, "onStateChange");
     const onRuntimeStateChange = Reflect.get(sessionConfig, "onRuntimeStateChange");
     const onSessionEvent = Reflect.get(sessionConfig, "onSessionEvent");
+    const confirmSessionEvent = Reflect.get(sessionConfig, "confirmSessionEvent");
     const onSessionRuntimeChange = Reflect.get(sessionConfig, "onSessionRuntimeChange");
     if (
       typeof ackEntry !== "function" ||
       typeof onStateChange !== "function" ||
       typeof onRuntimeStateChange !== "function" ||
       typeof onSessionEvent !== "function" ||
+      typeof confirmSessionEvent !== "function" ||
       typeof onSessionRuntimeChange !== "function"
     ) {
       throw new Error("session callbacks missing");
@@ -529,12 +588,17 @@ describe("AgentSlot", () => {
     onStateChange("chat-callback", "suspended");
     onRuntimeStateChange("blocked");
     onSessionEvent("chat-callback", { type: "error", message: "oops" });
+    await confirmSessionEvent("chat-callback", { type: "error", message: "oops" });
     onSessionRuntimeChange("chat-callback", "error");
 
     expect(connection.sendInboxAck).toHaveBeenCalledWith(123, "agent-1");
     expect(connection.reportSessionState).toHaveBeenCalledWith("agent-1", "chat-callback", "suspended");
     expect(connection.reportRuntimeState).toHaveBeenCalledWith("agent-1", "blocked");
     expect(connection.reportSessionEvent).toHaveBeenCalledWith("agent-1", "chat-callback", {
+      type: "error",
+      message: "oops",
+    });
+    expect(connection.reportSessionEventConfirmed).toHaveBeenCalledWith("agent-1", "chat-callback", {
       type: "error",
       message: "oops",
     });
@@ -563,6 +627,49 @@ describe("AgentSlot", () => {
 
     connection.emit("inbox:deliver", "inbox-1", makeFrame({ entryId: 99 }));
     expect(session.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("buffers bind-time inbox pushes until the SessionManager exists", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({
+      dispatchRejectEntryId: 78,
+      omitReconcileInterval: true,
+    });
+    connection.bindAgent.mockImplementationOnce(async () => {
+      connection.emit("inbox:deliver", "inbox_agent-1", makeFrame({ entryId: 77, inboxId: "inbox_agent-1" }));
+      connection.emit("inbox:deliver", "inbox_agent-1", makeFrame({ entryId: 78, inboxId: "inbox_agent-1" }));
+      return { sdk };
+    });
+
+    await slot.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+    expect(session.dispatch).toHaveBeenCalledWith(expect.objectContaining({ id: 77, inboxId: "inbox_agent-1" }));
+    expect(session.dispatch).toHaveBeenCalledWith(expect.objectContaining({ id: 78, inboxId: "inbox_agent-1" }));
+    expect(state.logger.info).toHaveBeenCalledWith(
+      { buffered: 2 },
+      "flushing early inbox:deliver buffer — frames received during init window",
+    );
+    expect(state.logger.warn).toHaveBeenCalledWith(
+      { err: new Error("buffered dispatch failed"), entryId: 78 },
+      "buffered inbox:deliver dispatch error",
+    );
+
+    await slot.stop();
+  });
+
+  it("omits the subprocess probe when the session config disables defer-on-subprocess", async () => {
+    const { slot, state } = await makeSlot({ deferSuspendOnSubprocess: false });
+
+    await slot.start();
+
+    const sessionConfig = state.sessionConfigs[0];
+    if (typeof sessionConfig !== "object" || sessionConfig === null) throw new Error("session config missing");
+    expect(Reflect.get(sessionConfig, "subprocessProbe")).toBeUndefined();
+
+    await slot.stop();
   });
 
   it("uses the active runtime chat set for full-state sync and optimistic-adds delivered chats", async () => {
@@ -629,6 +736,7 @@ describe("AgentSlot", () => {
     expect(vi.mocked(nextSdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sdk.listActiveRuntimeChatIds)).not.toHaveBeenCalled();
     expect(session.updateTransport).toHaveBeenCalledWith(nextSdk, expect.anything());
+    expect(session.noteBindRecoveryComplete).toHaveBeenCalled();
 
     await slot.stop();
   });
@@ -753,6 +861,38 @@ describe("AgentSlot", () => {
     await stopPromise;
   });
 
+  it("reschedules periodic active-runtime-chat refreshes while the slot remains live", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const { slot, sdk } = await makeSlot({ omitReconcileInterval: true });
+
+    await slot.start();
+    vi.mocked(sdk.listActiveRuntimeChatIds).mockClear();
+
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(2);
+
+    await slot.stop();
+  });
+
+  it("keeps startup alive when active runtime chat refresh fails", async () => {
+    const err = new Error("active chat list failed");
+    const { slot, state } = await makeSlot({ activeRuntimeChatIdsError: err, omitReconcileInterval: true });
+
+    await slot.start();
+
+    expect(state.sessions).toHaveLength(1);
+    expect(state.logger.warn).toHaveBeenCalledWith(
+      { err, reason: "startup" },
+      "active runtime chat ids refresh failed; keeping previous snapshot",
+    );
+
+    await slot.stop();
+  });
+
   it("shuts down sessions even when unbind fails during stop", async () => {
     const { slot, connection, state } = await makeSlot();
 
@@ -779,6 +919,37 @@ describe("AgentSlot", () => {
     expect(state.logger.info).toHaveBeenCalledWith("stopped");
   });
 
+  it("surfaces session shutdown failures after a successful unbind", async () => {
+    const { slot, connection, state } = await makeSlot();
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+    const err = new Error("shutdown failed");
+    session.shutdown.mockRejectedValueOnce(err);
+
+    await expect(slot.stop("operator stop")).rejects.toThrow("shutdown failed");
+
+    expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
+    expect(state.logger.warn).toHaveBeenCalledWith({ err }, "failed to shut down sessions while stopping");
+    expect(state.logger.info).toHaveBeenCalledWith("stopped");
+  });
+
+  it("logs a forced-stop failure raised by a server unbind event", async () => {
+    const { slot, connection, state } = await makeSlot();
+    await slot.start();
+    const err = new Error("forced unbind failed");
+    connection.unbindAgent.mockRejectedValueOnce(err);
+
+    connection.emit("agent:unbound", "agent-1", "agent_suspended");
+
+    await vi.waitFor(() =>
+      expect(state.logger.warn).toHaveBeenCalledWith({ err }, "failed to unbind agent while stopping"),
+    );
+    await vi.waitFor(() =>
+      expect(state.logger.error).toHaveBeenCalledWith({ err, reason: "agent_suspended" }, "forced agent stop failed"),
+    );
+  });
+
   it("starts the bind-time reconcile grace window after startup full state sync", async () => {
     vi.useFakeTimers();
     const { slot, connection, sdk } = await makeSlot({ syncDelayMs: 4_900, omitReconcileInterval: true });
@@ -803,6 +974,17 @@ describe("AgentSlot", () => {
     expect(connection.sendSessionReconcile).toHaveBeenCalledWith("agent-1", ["chat-1", "chat-2"]);
 
     await slot.stop();
+  });
+
+  it("logs cleanup unbind failures after an aborted post-bind start", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({ configError: new SdkError(403, "forbidden") });
+    const err = new Error("cleanup unbind failed");
+    connection.unbindAgent.mockRejectedValueOnce(err);
+
+    await expect(slot.start()).rejects.toThrow(/rejected agent config/);
+
+    expect(vi.mocked(sdk.fetchAgentConfig)).toHaveBeenCalledTimes(1);
+    expect(state.logger.warn).toHaveBeenCalledWith({ err }, "failed to unbind after aborted agent start");
   });
 
   it("stops only the matching slot when the server force-unbounds an agent", async () => {
