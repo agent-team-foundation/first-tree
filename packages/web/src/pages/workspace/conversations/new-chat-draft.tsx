@@ -9,12 +9,13 @@ import { putImage } from "../../../api/image-store.js";
 import { createMeTaskChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
+  AgentOption,
+  AgentToken,
   ambiguousDisplayNames,
   buildPickerSections,
   detectMentionTrigger,
   MentionAutocompletePopover,
   type MentionCandidate,
-  MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { clearDraft, type DraftSnapshot, loadDraft, newChatDraftScope, saveDraft } from "../../../lib/draft-store.js";
@@ -187,6 +188,8 @@ export function NewChatDraft({
             name: a.name,
             displayName: a.displayName,
             managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
+            avatarImageUrl: a.avatarImageUrl ?? null,
+            avatarColorToken: a.avatarColorToken ?? null,
           };
           const existing = next.get(a.uuid);
           // Skip writes when nothing the cache exposes has changed — bouncing
@@ -196,7 +199,9 @@ export function NewChatDraft({
             existing &&
             existing.name === entry.name &&
             existing.displayName === entry.displayName &&
-            existing.managedByMe === entry.managedByMe
+            existing.managedByMe === entry.managedByMe &&
+            existing.avatarImageUrl === entry.avatarImageUrl &&
+            existing.avatarColorToken === entry.avatarColorToken
           ) {
             continue;
           }
@@ -277,6 +282,8 @@ export function NewChatDraft({
         name: a.name,
         displayName: a.displayName,
         managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
+        avatarImageUrl: a.avatarImageUrl ?? null,
+        avatarColorToken: a.avatarColorToken ?? null,
       });
     }
     return out;
@@ -301,6 +308,8 @@ export function NewChatDraft({
         name: ident?.name ?? a.name,
         displayName: ident?.displayName ?? a.displayName,
         managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
+        avatarImageUrl: ident?.avatarImageUrl ?? a.avatarImageUrl ?? null,
+        avatarColorToken: ident?.avatarColorToken ?? a.avatarColorToken ?? null,
       });
     }
     return Array.from(byId.values());
@@ -939,41 +948,17 @@ function ParticipantChips({
       }}
     >
       {chips.map((id) => {
-        const cand = candidates.find((c) => c.agentId === id);
-        const label = cand?.displayName ?? cand?.name ?? id;
-        return (
-          <span
-            key={id}
-            className="group inline-flex items-center text-label"
-            style={{
-              gap: 2,
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              borderRadius: "var(--radius-chip)",
-              background: "var(--bg-sunken)",
-              color: "var(--fg)",
-            }}
-          >
-            <span>{label}</span>
-            <button
-              type="button"
-              onClick={() => onRemove(id)}
-              title="Remove participant"
-              className="opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{
-                background: "none",
-                border: "none",
-                padding: 0,
-                marginLeft: 2,
-                cursor: "pointer",
-                color: "var(--fg-3)",
-                display: "inline-flex",
-                alignItems: "center",
-              }}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        );
+        // Fall back to a bare candidate when the id isn't in the known
+        // set yet (search cache not warmed). Carry the id through as
+        // `name` so the token still shows the full identifier — matching
+        // the prior chip's `?? id` fallback — with a seed-hashed identicon.
+        const cand = candidates.find((c) => c.agentId === id) ?? {
+          agentId: id,
+          name: id,
+          displayName: null,
+          managedByMe: false,
+        };
+        return <AgentToken key={id} candidate={cand} onRemove={() => onRemove(id)} />;
       })}
 
       <div ref={pickerContainerRef} style={{ position: "relative" }}>
@@ -1067,7 +1052,7 @@ function ParticipantChips({
                           key={item.agentId}
                           role="presentation"
                           title={item.name ? `@${item.name} — already in this draft` : "Already in this draft"}
-                          className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                          className="flex w-full items-center px-3 py-1.5 text-left text-body"
                           style={{
                             background: "transparent",
                             color: "var(--fg-3)",
@@ -1075,10 +1060,11 @@ function ParticipantChips({
                             whiteSpace: "nowrap",
                           }}
                         >
-                          <span className="flex min-w-0 flex-1 items-baseline gap-2">
-                            <MentionLabel candidate={item} ambiguous={ambiguous} />
-                          </span>
-                          <Check className="h-3.5 w-3.5 shrink-0" aria-label="Already in draft" />
+                          <AgentOption
+                            candidate={item}
+                            ambiguous={ambiguous}
+                            trailing={<Check className="h-3.5 w-3.5" aria-label="Already in draft" />}
+                          />
                         </div>
                       );
                     }
@@ -1094,7 +1080,7 @@ function ParticipantChips({
                         title={item.name ? `@${item.name}` : undefined}
                         onClick={() => onAdd(item.agentId)}
                         onMouseEnter={() => setHighlight(myIdx)}
-                        className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                        className="flex w-full items-center px-3 py-1.5 text-left text-body"
                         style={{
                           background: active ? "var(--bg-hover)" : "transparent",
                           color: "var(--fg)",
@@ -1103,7 +1089,7 @@ function ParticipantChips({
                           whiteSpace: "nowrap",
                         }}
                       >
-                        <MentionLabel candidate={item} ambiguous={ambiguous} />
+                        <AgentOption candidate={item} ambiguous={ambiguous} />
                       </button>
                     );
                   });
@@ -1117,7 +1103,13 @@ function ParticipantChips({
   );
 }
 
-type KnownAgentRow = Pick<Agent, "uuid" | "type" | "status" | "name" | "displayName" | "managerId">;
+type KnownAgentRow = Pick<Agent, "uuid" | "type" | "status" | "name" | "displayName" | "managerId"> & {
+  // Optional so callers without avatar data (e.g. the default-candidate
+  // fetch) still fit; the chip then falls back to a seed-hashed identicon
+  // until a search round-trip warms the full row.
+  avatarColorToken?: string | null;
+  avatarImageUrl?: string | null;
+};
 export type StarterAgentCacheCandidate = Pick<KnownAgentRow, "uuid" | "type" | "status">;
 
 export function newChatDefaultAgentCacheKey(userId: string | null, organizationId: string | null): string | null {

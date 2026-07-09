@@ -5,12 +5,11 @@ import { addMeChatParticipants } from "../api/me-chats.js";
 import { useAuth } from "../auth/auth-context.js";
 import { useDebouncedValue } from "../lib/use-debounced-value.js";
 import { useOrgAgentsSearch } from "../lib/use-org-agents.js";
-import { Avatar as RealAvatar } from "./avatar.js";
 import {
+  AgentOption,
   ambiguousDisplayNames,
   buildPickerSections,
   type MentionCandidate,
-  MentionLabel,
 } from "./mention-autocomplete.js";
 
 /**
@@ -64,20 +63,16 @@ export function AddParticipantDropdown({
         name: a.name,
         displayName: a.displayName,
         managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
+        // Candidate carries its own avatar (image + hue token) so the
+        // shared AgentOption renders straight from the row — no side-map,
+        // and no re-routing through the identity cache (itself capped at
+        // the first 100 agents, so it would miss search hits past that).
+        avatarImageUrl: a.avatarImageUrl ?? null,
+        avatarColorToken: a.avatarColorToken ?? null,
       });
     }
     return out;
   }, [agentsPage?.items, myAgentId, myMemberId]);
-
-  // Server response carries the resolved avatar URL — keep a uuid → URL
-  // index so each row can render straight from it without re-routing the
-  // lookup through the identity-map cache (which is itself capped at the
-  // first 100 agents and would miss search hits beyond that window).
-  const avatarById = useMemo(() => {
-    const map = new Map<string, string | null>();
-    for (const a of agentsPage?.items ?? []) map.set(a.uuid, a.avatarImageUrl ?? null);
-    return map;
-  }, [agentsPage?.items]);
 
   // Click-outside closes the dropdown.
   useEffect(() => {
@@ -352,8 +347,6 @@ export function AddParticipantDropdown({
                     );
                   }
                   const isInChat = participantSet.has(it.agentId);
-                  const fallback = it.displayName ?? it.name ?? it.agentId.slice(0, 8);
-                  const avatarSrc = avatarById.get(it.agentId) ?? null;
                   if (isInChat) {
                     return (
                       <div
@@ -362,18 +355,17 @@ export function AddParticipantDropdown({
                         title={it.name ? `@${it.name} — already in this chat` : "Already in this chat"}
                         className="flex w-full items-center text-left"
                         style={{
-                          gap: "var(--sp-2_5)",
                           padding: "var(--sp-1_75) var(--sp-2)",
                           background: "transparent",
                           color: "var(--fg-3)",
                           cursor: "default",
                         }}
                       >
-                        <RealAvatar src={avatarSrc} name={fallback} seed={it.agentId} size={28} />
-                        <span className="flex min-w-0 flex-1 items-baseline gap-2">
-                          <MentionLabel candidate={it} ambiguous={ambiguous} />
-                        </span>
-                        <Check className="h-3.5 w-3.5 shrink-0" aria-label="Already in chat" />
+                        <AgentOption
+                          candidate={it}
+                          ambiguous={ambiguous}
+                          trailing={<Check className="h-3.5 w-3.5" aria-label="Already in chat" />}
+                        />
                       </div>
                     );
                   }
@@ -391,15 +383,13 @@ export function AddParticipantDropdown({
                       disabled={addMut.isPending}
                       className="flex w-full items-center text-left transition-colors"
                       style={{
-                        gap: "var(--sp-2_5)",
                         padding: "var(--sp-1_75) var(--sp-2)",
                         border: 0,
                         background: active ? "var(--bg-hover)" : "transparent",
                         cursor: addMut.isPending ? "default" : "pointer",
                       }}
                     >
-                      <RealAvatar src={avatarSrc} name={fallback} seed={it.agentId} size={28} />
-                      <MentionLabel candidate={it} ambiguous={ambiguous} />
+                      <AgentOption candidate={it} ambiguous={ambiguous} />
                     </button>
                   );
                 });
