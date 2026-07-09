@@ -141,6 +141,36 @@ describe("buildMessageDocumentSnapshots — capture + attachment-link rewrite", 
     );
   });
 
+  it("rewrites a bare doc token enclosed in a code span", async () => {
+    const { refs, rewrittenText } = await buildMessageDocumentSnapshots("see `docs/intro.md`", root, opts(uploader));
+    expect(refs).toHaveLength(1);
+    expect(rewrittenText).toBe("see [`docs/intro.md`](attachment:00000000-0000-4000-8000-000000000001)");
+  });
+
+  it("caps document refs at the per-message attachment budget", async () => {
+    const names = Array.from({ length: 21 }, (_, i) => `budget-${i + 1}.md`);
+    await Promise.all(names.map((name) => writeFile(join(root, name), `# ${name}\n`, "utf8")));
+
+    const { refs, skipped, failedMentions } = await buildMessageDocumentSnapshots(
+      names.map((name) => `[${name}](${name})`).join(" "),
+      root,
+      opts(uploader),
+    );
+
+    expect(refs).toHaveLength(10);
+    expect(skipped).toBe(11);
+    expect(failedMentions).toEqual([]);
+  });
+
+  it("reports an existing .md directory as missing", async () => {
+    await mkdir(join(root, "folder.md"), { recursive: true });
+
+    const { refs, failedMentions } = await buildMessageDocumentSnapshots("see folder.md", root, opts(uploader));
+
+    expect(refs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: "folder.md", reason: "missing" }]);
+  });
+
   it("rejects a symlink whose realpath crosses into a hidden dir (relative + absolute)", async () => {
     const relOut = await buildMessageDocumentSnapshots("see [p](public.md)", root, opts(uploader));
     expect(relOut.refs).toEqual([]);
@@ -213,15 +243,20 @@ describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => 
   let workspacesRoot: string;
   let selfRoot: string;
   let crossRoot: string;
+  let otherChatRoot: string;
   const CHAT = "22222222-2222-4222-8222-222222222222";
+  const OTHER_CHAT = "33333333-3333-4333-8333-333333333333";
 
   beforeAll(async () => {
     workspacesRoot = await mkdtemp(join(tmpdir(), "doc-snap-ws-"));
     selfRoot = join(workspacesRoot, "coder", CHAT);
     crossRoot = join(workspacesRoot, "assistant", CHAT);
+    otherChatRoot = join(workspacesRoot, "assistant", OTHER_CHAT);
     await mkdir(selfRoot, { recursive: true });
     await mkdir(crossRoot, { recursive: true });
+    await mkdir(otherChatRoot, { recursive: true });
     await writeFile(join(crossRoot, "plan.md"), "# their plan\n", "utf8");
+    await writeFile(join(otherChatRoot, "plan.md"), "# other plan\n", "utf8");
   });
 
   afterAll(async () => {
@@ -251,6 +286,54 @@ describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => 
     const abs = join(crossRoot, "plan.md");
     const { refs } = await buildMessageDocumentSnapshots(`see ${abs}`, selfRoot, opts(stub.uploader));
     expect(refs).toEqual([]);
+  });
+
+  it("classifies a cross-agent doc from a different chat as out-of-fence", async () => {
+    const stub = stubUploader();
+    const abs = join(otherChatRoot, "plan.md");
+    const { refs, failedMentions } = await buildMessageDocumentSnapshots(
+      `see ${abs}`,
+      selfRoot,
+      opts(stub.uploader),
+      fence(),
+    );
+
+    expect(refs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: abs, reason: "out-of-fence" }]);
+  });
+
+  it("classifies a same-owner same-chat path outside the current agent home as missing", async () => {
+    const activeRoot = join(selfRoot, "active");
+    const sibling = join(selfRoot, "sibling.md");
+    await mkdir(activeRoot, { recursive: true });
+    await writeFile(sibling, "# sibling\n", "utf8");
+
+    const stub = stubUploader();
+    const { refs, failedMentions } = await buildMessageDocumentSnapshots(
+      `see ${sibling}`,
+      activeRoot,
+      opts(stub.uploader),
+      fence(),
+    );
+
+    expect(refs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: sibling, reason: "missing" }]);
+  });
+
+  it("classifies a cross-agent .md directory as missing", async () => {
+    const dir = join(crossRoot, "directory.md");
+    await mkdir(dir, { recursive: true });
+
+    const stub = stubUploader();
+    const { refs, failedMentions } = await buildMessageDocumentSnapshots(
+      `see ${dir}`,
+      selfRoot,
+      opts(stub.uploader),
+      fence(),
+    );
+
+    expect(refs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: dir, reason: "missing" }]);
   });
 });
 
@@ -285,6 +368,7 @@ describe("buildMessageDocumentSnapshots — wide self-fence over the agent home"
 
     outside = await mkdtemp(join(tmpdir(), "doc-snap-home-outside-"));
     await writeFile(join(outside, "external.md"), "# external\n", "utf8");
+    await symlink(outside, join(agentHome, "outside-link"), "dir");
   });
 
   afterAll(async () => {
@@ -379,6 +463,36 @@ describe("buildMessageDocumentSnapshots — wide self-fence over the agent home"
     expect(stub.uploads).toEqual([]);
     expect(rewrittenText).toBe("see .agent/secret.md");
     expect(failedMentions).toEqual([{ raw: ".agent/secret.md", reason: "hidden-segment" }]);
+  });
+
+  it("falls back to the agent home when singleRepoLocalPath is missing or outside the home", async () => {
+    const missingStub = stubUploader();
+    const missing = await buildMessageDocumentSnapshots(
+      "see docs/note.md",
+      { agentHome: agentHomeReal, singleRepoLocalPath: "missing-repo" },
+      opts(missingStub.uploader),
+    );
+    expect(missing.refs[0]?.source?.path).toBe("docs/note.md");
+
+    const outsideStub = stubUploader();
+    const outsideLink = await buildMessageDocumentSnapshots(
+      "see docs/note.md",
+      { agentHome: agentHomeReal, singleRepoLocalPath: "outside-link" },
+      opts(outsideStub.uploader),
+    );
+    expect(outsideLink.refs[0]?.source?.path).toBe("docs/note.md");
+  });
+
+  it("reports a promoted missing source-repo mention as missing", async () => {
+    const stub = stubUploader();
+    const { refs, failedMentions } = await buildMessageDocumentSnapshots(
+      "see docs/missing.md",
+      { agentHome: agentHomeReal, singleRepoLocalPath: "first-tree" },
+      opts(stub.uploader),
+    );
+
+    expect(refs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: "docs/missing.md", reason: "missing" }]);
   });
 });
 
