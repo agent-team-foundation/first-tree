@@ -133,9 +133,10 @@ function childSpawnTarget(invocation: ResolvedBinary): { program: string; args: 
   const display = [program, ...args].join(" ");
   if (!isWindowsCommandShim(program)) return { program, args, display };
 
+  const commandLine = [program, ...args].map(cmdQuote).join(" ");
   return {
     program: process.env.ComSpec || "cmd.exe",
-    args: ["/d", "/s", "/c", [program, ...args].map(cmdQuote).join(" ")],
+    args: ["/d", "/s", "/c", `"${commandLine}"`],
     display,
   };
 }
