@@ -28,6 +28,12 @@ export type MentionCandidate = {
   agentId: string;
   name: string | null;
   displayName: string | null;
+  /** False when the candidate is addressable but not yet a speaker in
+   *  the current chat. The existing-chat composer uses this to show
+   *  joined agents first, then inviteable agents under a divider. Omitted
+   *  means "not relevant to this surface" and is treated as joined for
+   *  ordering/rendering so existing pickers keep their behaviour. */
+  inChat?: boolean;
   /** True iff the caller's member is this agent's `managerId`. Drives
    *  participant-picker grouping (mine first, then teammates') and the
    *  empty-query branch of mention autocomplete so the user's own agents
@@ -243,7 +249,9 @@ export function buildPickerSections(
  */
 export function rankCandidates(candidates: MentionCandidate[], query: string): MentionCandidate[] {
   if (!query) {
-    // Reuse the picker's grouping logic and strip the divider marker.
+    // Joined chat speakers stay above inviteable org agents. Within each
+    // membership bucket, reuse the picker's grouping logic and strip the
+    // divider marker.
     // Keeping the empty-query path in lockstep with the picker means
     // changing one (mine-first, alpha) tomorrow won't silently leave the
     // other behind — and that lockstep now includes "no cap": the `[+]`
@@ -253,7 +261,11 @@ export function rankCandidates(candidates: MentionCandidate[], query: string): M
     // cut. A prior hard `.slice(0, 8)` dropped the 9th+ addressable agent
     // from the empty-`@` view with no "more" affordance, so the list read
     // as broken/incomplete the moment an org had more than eight.
-    return groupAndSortCandidates(candidates).filter((item): item is MentionCandidate => !("divider" in item));
+    const inChat = candidates.filter((c) => c.inChat !== false);
+    const notInChat = candidates.filter((c) => c.inChat === false);
+    const sortBucket = (bucket: MentionCandidate[]) =>
+      groupAndSortCandidates(bucket).filter((item): item is MentionCandidate => !("divider" in item));
+    return [...sortBucket(inChat), ...sortBucket(notInChat)];
   }
   const scored: Array<{ c: MentionCandidate; score: number }> = [];
   for (const c of candidates) {
@@ -266,7 +278,13 @@ export function rankCandidates(candidates: MentionCandidate[], query: string): M
     else if (lowerName.includes(query)) score = 3;
     if (score !== Infinity) scored.push({ c, score });
   }
-  scored.sort((a, b) => a.score - b.score || (a.c.displayName ?? "").localeCompare(b.c.displayName ?? ""));
+  scored.sort((a, b) => {
+    if (a.score !== b.score) return a.score - b.score;
+    const aInChat = a.c.inChat !== false;
+    const bInChat = b.c.inChat !== false;
+    if (aInChat !== bInChat) return aInChat ? -1 : 1;
+    return (a.c.displayName ?? "").localeCompare(b.c.displayName ?? "");
+  });
   // No cap here either: every scored match surfaces, scrolling inside the
   // popover. Capping the typed path would hide later matches behind a
   // query the user can't refine further (the substring is already as
@@ -333,7 +351,7 @@ export function useMentionAutocomplete({
   value: string;
   cursor: number;
   candidates: MentionCandidate[];
-  onSelect: (update: MentionInsert) => void;
+  onSelect: (update: MentionInsert, picked: MentionCandidate) => void;
   disabled?: boolean;
 }): {
   trigger: ActiveTrigger | null;
@@ -385,7 +403,7 @@ export function useMentionAutocomplete({
     if (!trigger) return;
     const insert = buildMentionInsert(value, trigger, cursor, candidate);
     if (!insert) return;
-    onSelect(insert);
+    onSelect(insert, candidate);
   }
 
   const handleKey: MentionKeyHandler = (e) => {
@@ -474,9 +492,10 @@ export function MentionAutocompletePopover({
     >
       {(() => {
         const ambiguous = ambiguousDisplayNames(results);
-        return results.map((c, i) => {
+        return results.flatMap((c, i) => {
           const active = i === highlightIndex;
-          return (
+          const needsMembershipDivider = i > 0 && c.inChat === false && results[i - 1]?.inChat !== false;
+          const row = (
             <button
               key={c.agentId}
               type="button"
@@ -502,6 +521,19 @@ export function MentionAutocompletePopover({
               <MentionLabel candidate={c} ambiguous={ambiguous} />
             </button>
           );
+          if (!needsMembershipDivider) return [row];
+          return [
+            <div
+              key="__not-in-chat-divider"
+              role="presentation"
+              style={{
+                height: "var(--hairline)",
+                background: "var(--border-faint)",
+                margin: "var(--sp-0_5) var(--sp-3)",
+              }}
+            />,
+            row,
+          ];
         });
       })()}
     </div>

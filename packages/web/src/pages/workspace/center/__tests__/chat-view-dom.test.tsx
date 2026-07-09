@@ -38,6 +38,10 @@ const agentMocks = vi.hoisted(() => ({
   listAgents: vi.fn(),
 }));
 
+const orgAgentsHookMocks = vi.hoisted(() => ({
+  searchOnlyItems: [] as Agent[],
+}));
+
 const attachmentMocks = vi.hoisted(() => ({
   fetchAttachmentBase64: vi.fn(),
   uploadImageAttachment: vi.fn(),
@@ -160,7 +164,21 @@ vi.mock("../../../../lib/use-agent-name-map.js", () => ({
 
 vi.mock("../../../../lib/use-org-agents.js", () => ({
   useOrgAgents: () => ({ data: { items: ORG_AGENTS, nextCursor: null } }),
-  useOrgAgentsSearch: () => ({ data: { items: ORG_AGENTS, nextCursor: null }, isFetching: false }),
+  useOrgAgentsSearch: (query: string, options?: { enabled?: boolean }) => {
+    const enabled = options?.enabled ?? true;
+    return {
+      data: enabled
+        ? {
+            items:
+              query.trim().length > 0 && orgAgentsHookMocks.searchOnlyItems.length > 0
+                ? orgAgentsHookMocks.searchOnlyItems
+                : ORG_AGENTS,
+            nextCursor: null,
+          }
+        : undefined,
+      isFetching: false,
+    };
+  },
 }));
 
 vi.mock("../../../../lib/visibility-interval.js", () => ({
@@ -588,6 +606,15 @@ async function click(element: Element | null): Promise<void> {
   await flush();
 }
 
+async function pickMentionCandidate(container: ParentNode, title: string): Promise<void> {
+  const candidateButton = container.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
+  if (!candidateButton) throw new Error(`Expected mention candidate ${title}`);
+  await act(async () => {
+    candidateButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
 async function setValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): Promise<void> {
   await act(async () => {
     const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -635,6 +662,7 @@ beforeEach(() => {
   installBrowserStubs();
   document.body.innerHTML = "";
   vi.clearAllMocks();
+  orgAgentsHookMocks.searchOnlyItems = [];
   authMock.value = { agentId: "human-agent-self", memberId: "member-self", role: "admin" };
   activityMocks.listClients.mockResolvedValue([
     {
@@ -1409,6 +1437,108 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("invites a mentioned non-participant before sending the message", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    await setValue(textarea, "Please help @teammate");
+    await click(container.querySelector('button[aria-label="Send"]'));
+
+    await waitForCondition(
+      () => meChatMocks.addMeChatParticipants.mock.calls.length > 0,
+      "Expected mentioned non-participant invite",
+    );
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected message send");
+
+    expect(meChatMocks.addMeChatParticipants).toHaveBeenCalledWith("chat-1", { participantIds: ["agent-teammate"] });
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Please help @teammate", ["agent-teammate"]);
+    expect(meChatMocks.addMeChatParticipants.mock.invocationCallOrder[0]).toBeLessThan(
+      chatMocks.sendChatMessage.mock.invocationCallOrder[0] ?? 0,
+    );
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps a search-only inviteable mention resolvable after the autocomplete trigger closes", async () => {
+    const deepAgent = agent({
+      uuid: "agent-deep",
+      name: "deep-agent",
+      displayName: "Deep Agent",
+      managerId: "member-alice",
+    });
+    orgAgentsHookMocks.searchOnlyItems = [deepAgent];
+
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    await setValue(textarea, "Please help @deep");
+    await waitForCondition(
+      () => container.querySelector<HTMLButtonElement>('button[title="@deep-agent"]') !== null,
+      "Expected search-only inviteable mention candidate",
+    );
+    await pickMentionCandidate(container, "@deep-agent");
+    await waitForCondition(
+      () => textarea.value === "Please help @deep-agent ",
+      "Expected selected mention to be inserted",
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    await flush();
+
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(
+      () => meChatMocks.addMeChatParticipants.mock.calls.length > 0,
+      "Expected retained search-only mention to invite",
+    );
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected message send");
+
+    expect(meChatMocks.addMeChatParticipants).toHaveBeenCalledWith("chat-1", { participantIds: ["agent-deep"] });
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Please help @deep-agent", ["agent-deep"]);
+
+    await act(async () => root.unmount());
+  });
+
+  it("shows and selects an inviteable non-participant from a bare @ trigger", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    await setValue(textarea, "Please @");
+    await waitForCondition(
+      () => container.querySelector<HTMLButtonElement>('button[title="@teammate"]') !== null,
+      "Expected bare @ to show inviteable non-participant",
+    );
+    await pickMentionCandidate(container, "@teammate");
+    await waitForCondition(
+      () => textarea.value === "Please @teammate ",
+      "Expected bare @ inviteable mention to be inserted",
+    );
+
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(
+      () => meChatMocks.addMeChatParticipants.mock.calls.length > 0,
+      "Expected bare @ mention to invite",
+    );
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected message send");
+
+    expect(meChatMocks.addMeChatParticipants).toHaveBeenCalledWith("chat-1", {
+      participantIds: ["agent-teammate"],
+    });
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Please @teammate", ["agent-teammate"]);
+
+    await act(async () => root.unmount());
+  });
+
   it("clears the mention tip when switching to another group chat", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, queryClient, root } = await renderDom(
@@ -1786,6 +1916,56 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("invites a search-only inviteable mention before resolving a blocking text answer", async () => {
+    const deepAgent = agent({
+      uuid: "agent-deep",
+      name: "deep-agent",
+      displayName: "Deep Agent",
+      managerId: "member-alice",
+    });
+    orgAgentsHookMocks.searchOnlyItems = [deepAgent];
+
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), freeTextDockMessages()),
+      "/",
+    );
+
+    await waitForText(container, "Reply");
+    const answerBox = askTextarea(container);
+    if (!answerBox) throw new Error("Overlay free-text input missing");
+    await setValue(answerBox, "Loop in @deep");
+    await waitForCondition(
+      () => container.querySelector<HTMLButtonElement>('button[title="@deep-agent"]') !== null,
+      "Expected ask answer search-only inviteable mention candidate",
+    );
+    await pickMentionCandidate(container, "@deep-agent");
+    await waitForCondition(
+      () => answerBox.value === "Loop in @deep-agent ",
+      "Expected ask answer mention to be inserted",
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    await flush();
+
+    await click(buttonByText(container, "Reply"));
+    await waitForCondition(
+      () => meChatMocks.addMeChatParticipants.mock.calls.length > 0,
+      "Expected ask answer mention to invite",
+    );
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text resolve send");
+    expect(meChatMocks.addMeChatParticipants).toHaveBeenCalledWith("chat-1", { participantIds: ["agent-deep"] });
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Loop in @deep-agent", ["agent-1", "agent-deep"], {
+      inReplyTo: "req-file",
+      resolves: { request: "req-file", kind: "answered" },
+    });
+
+    await act(async () => root.unmount());
+  });
+
   it("resolves a blocking free-text question with an attached image via a file-batch resolve", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(
@@ -1822,6 +2002,68 @@ describe("ChatView", () => {
       { inReplyTo: "req-file", resolves: { request: "req-file", kind: "answered" } },
     );
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("invites a search-only inviteable mention before resolving a blocking image answer", async () => {
+    const deepAgent = agent({
+      uuid: "agent-deep",
+      name: "deep-agent",
+      displayName: "Deep Agent",
+      managerId: "member-alice",
+    });
+    orgAgentsHookMocks.searchOnlyItems = [deepAgent];
+
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), freeTextDockMessages()),
+      "/",
+    );
+
+    await waitForText(container, "Reply");
+    const answerBox = askTextarea(container);
+    if (!answerBox) throw new Error("Overlay free-text input missing");
+    await setValue(answerBox, "Screenshot for @deep");
+    await waitForCondition(
+      () => container.querySelector<HTMLButtonElement>('button[title="@deep-agent"]') !== null,
+      "Expected image answer search-only inviteable mention candidate",
+    );
+    await pickMentionCandidate(container, "@deep-agent");
+    await waitForCondition(
+      () => answerBox.value === "Screenshot for @deep-agent ",
+      "Expected image answer mention to be inserted",
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    await flush();
+
+    const file = new File(["abc"], "evidence.png", { type: "image/png" });
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("File input missing");
+    await changeFiles(fileInput, [file]);
+    await click(buttonByText(container, "Reply"));
+    await waitForCondition(
+      () => meChatMocks.addMeChatParticipants.mock.calls.length > 0,
+      "Expected image answer mention to invite",
+    );
+    await waitForCondition(
+      () => chatMocks.sendFileMessageBatch.mock.calls.length > 0,
+      "Expected image file-batch resolve",
+    );
+    expect(meChatMocks.addMeChatParticipants).toHaveBeenCalledWith("chat-1", { participantIds: ["agent-deep"] });
+    expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
+      "chat-1",
+      {
+        caption: "Screenshot for @deep-agent",
+        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "evidence.png", size: 3 }],
+      },
+      { mentions: ["agent-1", "agent-deep"] },
+      { inReplyTo: "req-file", resolves: { request: "req-file", kind: "answered" } },
+    );
 
     await act(async () => root.unmount());
   });
