@@ -3089,6 +3089,8 @@ export function ChatView({
         name: ident.name,
         displayName: ident.displayName,
         managedByMe: managedByMeMap.get(p.agentId) ?? false,
+        avatarImageUrl: ident.avatarImageUrl ?? null,
+        avatarColorToken: ident.avatarColorToken ?? null,
       });
     }
     return out;
