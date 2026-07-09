@@ -137,6 +137,21 @@ function addProviderRecommendations(recommendations: Map<string, EvalRecommendat
   });
 }
 
+function addAgentBriefingRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
+  addRecommendation(recommendations, {
+    command: periodicCommand("first-tree-read"),
+    kind: "periodic",
+    reason,
+    suite: "first-tree-read",
+  });
+  addRecommendation(recommendations, {
+    command: gateCommand("first-tree-write"),
+    kind: "gate",
+    reason,
+    suite: "first-tree-write",
+  });
+}
+
 function matchingSkill(path: string): ShippedSkillName | null {
   for (const entry of SKILL_BY_PATH) {
     if (entry.paths.some((prefix) => path.startsWith(prefix))) {
@@ -188,6 +203,13 @@ function isSkillEvalDocsOnly(path: string): boolean {
   return path === "packages/skill-evals/README.md" || path.startsWith("packages/skill-evals/docs/");
 }
 
+function isAgentBriefingRuntimePath(path: string): boolean {
+  return (
+    path === "packages/client/src/runtime/agent-briefing.ts" ||
+    path === "packages/client/src/runtime/templates/agent-briefing.ejs"
+  );
+}
+
 export function selectSkillEvalRecommendations(
   changedFilesInput: readonly string[],
   base: string | null = null,
@@ -203,6 +225,14 @@ export function selectSkillEvalRecommendations(
     if (unevaluatedSkill !== null) {
       notes.push(
         `${path} belongs to ${unevaluatedSkill}, a shipped skill intentionally outside skill-evals (see UNEVALUATED_SHIPPED_SKILLS); no eval selected.`,
+      );
+      continue;
+    }
+
+    if (isAgentBriefingRuntimePath(path)) {
+      addAgentBriefingRecommendations(
+        recommendations,
+        `${path} changes generated briefing text; run related skill behavior baseline`,
       );
       continue;
     }
