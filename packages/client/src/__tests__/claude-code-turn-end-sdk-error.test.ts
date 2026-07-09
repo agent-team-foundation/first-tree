@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderRetryEventMessage, RUNTIME_NOTICE_METADATA_KEY, type SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -44,6 +44,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { formatProviderFailureRuntimeNotice } from "../runtime/runtime-notice.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d8";
@@ -105,16 +106,9 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
     await handler.suspend();
     await new Promise((r) => setImmediate(r));
 
-    // Success path was NOT taken; the only chat write is an explicit runtime
-    // notice, not final-text forwarding.
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
-      source: "api",
-      format: "text",
-      metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
-      purpose: "agent-final-text",
-    });
-    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("exceeded max turns");
+    // Success path was NOT taken; durable chat notice delivery is owned by
+    // SessionManager after it sees the structured provider event.
+    expect(sendMessage).not.toHaveBeenCalled();
 
     // Error event carries the SDK-reported cause.
     const errors = emitted.filter((e) => e.kind === "error");
@@ -125,6 +119,8 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
       provider: "claude-code",
       scope: "provider_turn",
     });
+    if (!providerPayload) throw new Error("expected provider retry event");
+    expect(formatProviderFailureRuntimeNotice(providerPayload)).toContain("exceeded max turns");
     const sdkErr = errors.find((event) => event.payload.source === "sdk");
     if (!sdkErr || sdkErr.kind !== "error") throw new Error("expected sdk error event");
     expect(sdkErr.payload.message).toContain("exceeded max turns");

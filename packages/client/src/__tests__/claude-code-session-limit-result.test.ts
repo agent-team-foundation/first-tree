@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderRetryEventMessage, RUNTIME_NOTICE_METADATA_KEY, type SessionEvent } from "@first-tree/shared";
+import { type ProviderRetryEventPayload, parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const SESSION_LIMIT_RESULT = "You've hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)";
@@ -37,6 +37,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext, TurnOutcome } from "../runtime/handler.js";
+import { formatProviderFailureRuntimeNotice } from "../runtime/runtime-notice.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019ef431-0000-7000-9000-000000000001";
@@ -62,6 +63,19 @@ function buildCache() {
     }),
   } as unknown as Parameters<typeof createAgentConfigCache>[0]["sdk"];
   return createAgentConfigCache({ sdk: stubSdk });
+}
+
+function providerRetryPayloads(emitted: readonly SessionEvent[]): ProviderRetryEventPayload[] {
+  return emitted
+    .filter((event) => event.kind === "error")
+    .map((event) => parseProviderRetryEventMessage(event.payload.message))
+    .filter((payload): payload is ProviderRetryEventPayload => payload !== null);
+}
+
+function firstProviderPayload(payloads: readonly ProviderRetryEventPayload[]): ProviderRetryEventPayload {
+  const payload = payloads[0];
+  if (!payload) throw new Error("expected provider retry event");
+  return payload;
 }
 
 describe("claude-code handler — session-limit success result", () => {
@@ -113,16 +127,10 @@ describe("claude-code handler — session-limit success result", () => {
     await new Promise((r) => setImmediate(r));
 
     expect(forwardResult).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1].purpose).toBe("agent-final-text");
-    expect(sendMessage.mock.calls[0]?.[1].metadata).toMatchObject({ [RUNTIME_NOTICE_METADATA_KEY]: true });
-    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("capacity or usage limit");
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(logs.some((line) => line.includes("Claude SDK provider failure"))).toBe(true);
 
-    const providerPayloads = emitted
-      .filter((event) => event.kind === "error")
-      .map((event) => parseProviderRetryEventMessage(event.payload.message))
-      .filter((payload) => payload !== null);
+    const providerPayloads = providerRetryPayloads(emitted);
     expect(providerPayloads).toHaveLength(1);
     expect(providerPayloads[0]).toMatchObject({
       event: "provider_failure_terminal",
@@ -132,6 +140,9 @@ describe("claude-code handler — session-limit success result", () => {
       reasonCode: "capacity_wait_required",
       userSeverity: "warning",
     });
+    expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain(
+      "capacity or usage limit",
+    );
 
     expect(
       emitted.some(

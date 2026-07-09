@@ -23,7 +23,6 @@ import {
   encodeProviderRetryEventMessage,
   isImageBatchRefContent,
   isImageRefContent,
-  RUNTIME_NOTICE_METADATA_KEY,
   runtimeProviderSchema,
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
@@ -57,6 +56,7 @@ import {
   type ProviderFailureClassification,
   type ProviderRetryDecision,
 } from "../runtime/provider-retry-policy.js";
+import { redactErrorPreview } from "../runtime/redact-error-preview.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import {
   buildBriefingUpdateNotice,
@@ -73,7 +73,6 @@ import {
   type ClaudeProviderFailure,
   claudeFailureFromAssistantMessage,
   claudeFailureFromSdkResult,
-  formatClaudeProviderFailureNotice,
   isEgressForbiddenText,
   mergeClaudeProviderFailures,
 } from "./claude-provider-error.js";
@@ -859,6 +858,43 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     });
   }
 
+  function emitAutoResumeFailedTerminalEvent(input: {
+    sessionCtx: SessionContext;
+    classification: ProviderFailureClassification;
+    replaySafety: ReplaySafety;
+    providerMessagePreview: string;
+    resumeMsg: string;
+  }): void {
+    const decision: ProviderRetryDecision = {
+      action: "stop",
+      reasonCode: "claude_auto_resume_failed",
+      terminalKind: "exhausted",
+      replaySafety: input.replaySafety,
+      userSeverity: "error",
+    };
+    const messagePreview = `Auto-resume failed: ${input.resumeMsg}\nProvider failure: ${input.providerMessagePreview}`;
+    input.sessionCtx.emitEvent({
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: encodeProviderRetryEventMessage(
+          buildProviderRetryEvent({
+            event: "provider_failure_terminal",
+            provider: runtimeProvider,
+            scope: "provider_turn",
+            classification: input.classification,
+            decision,
+            messagePreview,
+          }),
+        ),
+      },
+    });
+  }
+
+  function formatAutoResumeFailedMessage(resumeMsg: string): string {
+    return `Auto-resume failed: ${redactErrorPreview(resumeMsg, 800)}`;
+  }
+
   function emitProviderTurnSettlementEvent(sessionCtx: SessionContext, settlement: ProviderAttemptSettlement): void {
     sessionCtx.emitEvent({
       kind: "error",
@@ -867,29 +903,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         message: encodeProviderRetryEventMessage(settlement.eventPayload),
       },
     });
-  }
-
-  async function sendClaudeProviderFailureNotice(
-    sessionCtx: SessionContext,
-    settlement: ProviderAttemptSettlement,
-  ): Promise<boolean> {
-    try {
-      await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
-        source: "api",
-        format: "text",
-        content: formatClaudeProviderFailureNotice(settlement.classification, settlement.messagePreview),
-        metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
-        purpose: "agent-final-text",
-      });
-      return true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      sessionCtx.emitEvent({
-        kind: "error",
-        payload: { source: "runtime", message: `claude provider failure notice delivery failed: ${msg}` },
-      });
-      return false;
-    }
   }
 
   function consumedReasonForProviderSettlement(
@@ -1582,9 +1595,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     } catch (resumeErr) {
                       const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
                       sessionCtx.log(`Auto-resume failed after Claude SDK provider failure: ${resumeMsg}`);
+                      emitAutoResumeFailedTerminalEvent({
+                        sessionCtx,
+                        classification: settlement.classification,
+                        replaySafety: settlement.decision.replaySafety,
+                        providerMessagePreview: settlement.messagePreview,
+                        resumeMsg,
+                      });
                       sessionCtx.emitEvent({
                         kind: "error",
-                        payload: { source: "runtime", message: `Auto-resume failed: ${resumeMsg.slice(0, 800)}` },
+                        payload: { source: "runtime", message: formatAutoResumeFailedMessage(resumeMsg) },
                       });
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                       await ackTurnClose("error", "auto_resume_failed_notice_posted", providerEnteredPrefix);
@@ -1599,8 +1619,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   // The result now reveals whether a deferred auth signal is a
                   // genuine credential failure or a network-egress 403 that only
                   // looks like auth. Flush the auth hint for the former; for
-                  // egress, suppress it — the chat notice below carries the
-                  // correct proxy-first guidance.
+                  // egress, suppress it — the runtime notice posted at
+                  // settlement carries the correct proxy-first guidance.
                   const settledEgressForbidden = isEgressForbiddenText(settlement.messagePreview);
                   if (pendingAuthHint !== null) {
                     if (!settledEgressForbidden && settlement.classification.category === "credential") {
@@ -1628,12 +1648,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   }
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                   retryCount = 0;
-                  const noticePosted = await sendClaudeProviderFailureNotice(sessionCtx, settlement);
-                  if (!noticePosted) {
-                    retryBufferedMessages("claude_provider_failure_notice_delivery_failed");
-                    failFatalSessionForRecovery(sessionCtx, "claude_provider_failure_notice_delivery_failed");
-                    return;
-                  }
                   await ackTurnClose("error", consumedReasonForProviderSettlement(settlement), providerEnteredPrefix);
                   resetTurnReplaySafety();
                   continue;
@@ -1852,9 +1866,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Mirror the MAX_RETRIES branch above and close the turn
             // deterministically so the slot can be reclaimed.
             try {
+              emitAutoResumeFailedTerminalEvent({
+                sessionCtx,
+                classification,
+                replaySafety: decision.replaySafety,
+                providerMessagePreview: errMsg,
+                resumeMsg,
+              });
               sessionCtx.emitEvent({
                 kind: "error",
-                payload: { source: "runtime", message: `Auto-resume failed: ${resumeMsg.slice(0, 800)}` },
+                payload: { source: "runtime", message: formatAutoResumeFailedMessage(resumeMsg) },
               });
               sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
             } catch (emitErr) {

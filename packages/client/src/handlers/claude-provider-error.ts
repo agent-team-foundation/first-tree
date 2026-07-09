@@ -1,9 +1,8 @@
 import type { SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk";
-import type { ProviderFailureCategory, ReplaySafety } from "@first-tree/shared";
-import { daemonEnvFile } from "@first-tree/shared/config";
+import type { ReplaySafety } from "@first-tree/shared";
 import type { ProviderAttemptSignal } from "../runtime/provider-attempt.js";
 import type { ProviderFailureClassification } from "../runtime/provider-retry-policy.js";
-import { redactErrorPreview } from "../runtime/redact-error-preview.js";
+import { formatProviderFailureRuntimeNotice, isEgressForbiddenText } from "../runtime/runtime-notice.js";
 
 type ClaudeProviderErrorShape = {
   name: "ClaudeSdkProviderError";
@@ -94,12 +93,15 @@ export function formatClaudeProviderFailureNotice(
   classification: ProviderFailureClassification,
   messagePreview: string,
 ): string {
-  const detail = redactErrorPreview(messagePreview.trim(), 500);
-  const suffix = detail.length > 0 ? ` Original provider message: ${detail}` : "";
-  const lead = looksLikeEgressForbidden(classification, messagePreview)
-    ? egressForbiddenLead()
-    : noticeLead(classification.category, classification.reasonCode);
-  return `${lead}${suffix}`;
+  return formatProviderFailureRuntimeNotice({
+    event: "provider_failure_terminal",
+    provider: "claude-code",
+    scope: "provider_turn",
+    category: classification.category,
+    reasonCode: classification.reasonCode,
+    userSeverity: "error",
+    messagePreview,
+  });
 }
 
 /**
@@ -112,38 +114,7 @@ export function formatClaudeProviderFailureNotice(
  * lead, which sends operators chasing an auth problem that does not exist.
  * Instead we enumerate the real causes in priority order.
  */
-function looksLikeEgressForbidden(classification: ProviderFailureClassification, messagePreview: string): boolean {
-  return classification.category === "credential" && isEgressForbiddenText(messagePreview);
-}
-
-/**
- * True when a provider message carries Anthropic's pre-auth edge-block signature
- * (`403 Request not allowed`). Shared with the Claude handler so the early auth
- * hint and the final failure notice make the same egress-vs-auth call.
- *
- * Requires both the `Request not allowed` phrase AND a `403` / `forbidden`
- * co-marker so a genuine credential error (e.g. a 401 whose body happens to
- * contain the phrase) is not mis-routed to the egress guidance and have its
- * auth hint suppressed.
- */
-export function isEgressForbiddenText(text: string): boolean {
-  return /request not allowed/i.test(text) && /\b403\b|forbidden/i.test(text);
-}
-
-function egressForbiddenLead(): string {
-  // Channel-correct path: dogfood / staging daemons live under
-  // ~/.first-tree-staging (dev under ~/.first-tree-dev), so a hardcoded
-  // ~/.first-tree would send those users to a file the daemon never reads —
-  // re-introducing the very misdiagnosis this lead exists to prevent.
-  return (
-    'Claude Code could not run this turn: Anthropic returned 403 "Request not allowed". ' +
-    "This status comes back before authentication, so it is usually NOT a login problem — most often " +
-    "the background daemon cannot reach Anthropic (e.g. it is not going through your network proxy). " +
-    `Check, in order: (1) if you use a proxy, give the daemon its proxy env via ${daemonEnvFile()} ` +
-    "and restart it; (2) your Anthropic plan / region entitlement; (3) only if those are fine, " +
-    "re-authenticate with `claude auth login`."
-  );
-}
+export { isEgressForbiddenText };
 
 function readResultMessage(message: unknown): {
   subtype: string;
@@ -276,32 +247,4 @@ function firstNonEmpty(...values: Array<string | undefined>): string {
     if (trimmed) return trimmed;
   }
   return "Claude SDK provider failure";
-}
-
-function noticeLead(category: ProviderFailureCategory, reasonCode: string): string {
-  if (category === "credential") {
-    return "Claude Code could not run this turn: Anthropic rejected the local Claude authentication. Run `claude auth login` on this machine, then retry.";
-  }
-  if (category === "provider_capacity") {
-    if (reasonCode === "provider_billing_limit") {
-      return "Claude Code could not run this turn: Anthropic reports insufficient account balance or unavailable billing credits. Add credits or switch accounts, then retry.";
-    }
-    if (reasonCode === "provider_rate_limited") {
-      return "Claude Code could not run this turn: Anthropic rate-limited this account. Wait for the limit to reset, then retry.";
-    }
-    return "Claude Code could not run this turn: Anthropic reported a capacity or usage limit. Wait or switch accounts, then retry.";
-  }
-  if (category === "transient_transport") {
-    return "Claude Code could not run this turn: the Anthropic connection failed after retry handling. Retry later.";
-  }
-  if (category === "configuration") {
-    return "Claude Code could not run this turn: the Claude runtime configuration is invalid. Update the agent or provider configuration, then retry.";
-  }
-  if (category === "deterministic_input") {
-    return "Claude Code could not run this turn: Anthropic rejected this request as invalid. Adjust the request or configuration, then retry.";
-  }
-  if (category === "capability") {
-    return "Claude Code could not run this turn: the Claude runtime is not launchable on this machine. Fix the local runtime, then retry.";
-  }
-  return "Claude Code could not run this turn: Claude SDK reported a provider failure. Retry after checking the provider status.";
 }
