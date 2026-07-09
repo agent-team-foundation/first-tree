@@ -20,9 +20,8 @@
  *     open" path — skip is an answer, not a deferral.
  *
  * The free-text answer surface mirrors the chat composer: it supports `@mention`
- * autocomplete (against chat speakers plus host-supplied inviteable agents) and
- * image attachments (paste / drop / file-picker), so answering an ask is as
- * expressive as a normal message. The
+ * autocomplete (against the chat's members) and image attachments (paste / drop /
+ * file-picker), so answering an ask is as expressive as a normal message. The
  * readable answer is still plain text (`buildResolveAnswer`: selected option
  * labels join on one line, any typed note follows); the host turns the assembled
  * {content, mentions, images} into the resolving reply. This is the ONLY way to
@@ -35,12 +34,7 @@ import { AtSign, Paperclip, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { usePendingImages } from "../../lib/use-pending-images.js";
-import {
-  detectMentionTrigger,
-  MentionAutocompletePopover,
-  type MentionCandidate,
-  useMentionAutocomplete,
-} from "../mention-autocomplete.js";
+import { MentionAutocompletePopover, type MentionCandidate, useMentionAutocomplete } from "../mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../mention-highlight-overlay.js";
 import { Markdown } from "../ui/markdown.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
@@ -101,9 +95,6 @@ export function AskTakeover({
   sending = false,
   mentionCandidates = [],
   error,
-  onMentionQueryChange,
-  onMentionTextChange,
-  onMentionSelect,
   onReply,
   onSkip,
   isTrial = false,
@@ -116,23 +107,13 @@ export function AskTakeover({
   payload: AskRequest;
   askerName?: string;
   sending?: boolean;
-  /** Candidates the free-text `@` autocomplete suggests + resolves against
-   *  (self-excluded chat speakers plus host-supplied inviteable agents, same
-   *  source as the composer). Empty → no autocomplete and every `@<token>`
-   *  stays plain text. */
+  /** Chat members the free-text `@` autocomplete suggests + resolves against
+   *  (self-excluded, same source as the composer). Empty → no autocomplete and
+   *  every `@<token>` stays plain text. */
   mentionCandidates?: MentionCandidate[];
   /** A host-side send failure to surface in the card (the composer is covered,
    *  so a failed resolve must show here or it looks like nothing happened). */
   error?: string;
-  /** Reports the active `@query` so the host can fetch addressable agents that
-   *  are not already chat speakers. */
-  onMentionQueryChange?: (query: string | null) => void;
-  /** Reports the answer draft so the host can retain selected inviteable
-   *  candidates while their `@name` remains in the answer text. */
-  onMentionTextChange?: (text: string) => void;
-  /** Reports the picked candidate so the host can retain search-only
-   *  inviteable agents before the search result cache changes. */
-  onMentionSelect?: (candidate: MentionCandidate) => void;
   /** Resolve the question with the composed answer. */
   onReply: (answer: AskAnswer) => void;
   /** Resolve the question with a "skipped" answer (caller sends the reply). */
@@ -159,7 +140,7 @@ export function AskTakeover({
     onChange: () => setImageError(null),
   });
 
-  // Self-excluded mention projection for `@` resolution + the mirror overlay.
+  // Self-excluded membership projection for `@` resolution + the mirror overlay.
   const mentionParticipants = useMemo<MentionParticipant[]>(
     () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
     [mentionCandidates],
@@ -167,33 +148,13 @@ export function AskTakeover({
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const activeMentionTrigger = useMemo(
-    () => (isTrial || sending ? null : detectMentionTrigger(freeText, cursor)),
-    [freeText, cursor, isTrial, sending],
-  );
-
-  useEffect(() => {
-    onMentionTextChange?.(freeText);
-  }, [freeText, onMentionTextChange]);
-
-  useEffect(() => {
-    onMentionQueryChange?.(activeMentionTrigger?.query ?? null);
-  }, [activeMentionTrigger?.query, onMentionQueryChange]);
-
-  useEffect(() => {
-    return () => {
-      onMentionQueryChange?.(null);
-      onMentionTextChange?.("");
-    };
-  }, [onMentionQueryChange, onMentionTextChange]);
 
   const mention = useMentionAutocomplete({
     value: freeText,
     cursor,
     candidates: mentionCandidates,
     disabled: sending,
-    onSelect: (update, picked) => {
-      onMentionSelect?.(picked);
+    onSelect: (update) => {
       setFreeText(update.text);
       setCursor(update.cursor);
       // Defer so React commits the new value before we move the selection —
