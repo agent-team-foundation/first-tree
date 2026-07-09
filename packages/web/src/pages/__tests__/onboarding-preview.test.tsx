@@ -55,12 +55,14 @@ beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.className = "";
   window.history.replaceState(null, "", "/preview/onboarding");
+  localStorage.clear();
   sessionStorage.clear();
 });
 
 afterEach(() => {
   document.body.innerHTML = "";
   document.documentElement.className = "";
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -221,14 +223,27 @@ describe("onboarding preview review surface", () => {
     await waitForText(repos.container, "User");
     await waitForText(repos.container, "3 repositories available");
 
-    await clickByText(repos.container, "dark");
+    await act(async () => repos.root.unmount());
+  });
+
+  it("wires the preview sidebar theme and role controls", async () => {
+    window.history.replaceState(null, "", "/preview/onboarding?role=admin&view=states&scenario=admin-code-repos-user");
+
+    const { OnboardingPreviewPage } = await import("../onboarding-preview.js");
+    const { container, root } = await renderDom(
+      <MemoryRouter>
+        <OnboardingPreviewPage />
+      </MemoryRouter>,
+    );
+
+    await clickByText(container, "dark");
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(localStorage.getItem("theme")).toBe("dark");
 
-    await clickByText(repos.container, "invitee");
+    await clickByText(container, "invitee");
     expect(window.location.search).toContain("role=invitee");
 
-    await act(async () => repos.root.unmount());
+    await act(async () => root.unmount());
   });
 
   it("surfaces preview install-url failures through the real install button", async () => {
