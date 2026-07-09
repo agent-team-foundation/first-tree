@@ -642,6 +642,44 @@ describe("Agent client WS edge protocol coverage", () => {
     }
   }, 15000);
 
+  it("reuses a presented runtime session token on same-client rebind", async () => {
+    const seed = await createAdminContext(app, { username: `ws-bind-reuse-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createPinnedAgent({ ...seed, suffix: "reuse" });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      const first = await bindAgent(ws, agent.uuid, "bind-reuse-first");
+      expect(first.type).toBe("agent:bound");
+      expect(first.runtimeSessionToken).toEqual(expect.any(String));
+
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          agentId: agent.uuid,
+          ref: "bind-reuse-second",
+          runtimeType: "claude-code",
+          runtimeVersion: "edge-test",
+          currentRuntimeSessionToken: first.runtimeSessionToken,
+        }),
+      );
+      const second = (await waitForFrame(
+        ws,
+        (message) =>
+          (message as { type?: string; ref?: string }).type === "agent:bound" &&
+          (message as { ref?: string }).ref === "bind-reuse-second",
+      )) as { type?: string; ref?: string; agentId?: string; runtimeSessionToken?: string };
+
+      expect(second).toMatchObject({
+        type: "agent:bound",
+        ref: "bind-reuse-second",
+        agentId: agent.uuid,
+      });
+      expect(second).not.toHaveProperty("runtimeSessionToken");
+    } finally {
+      await closeSocket(ws);
+    }
+  }, 15000);
+
   it("rejects bind when runtime session or presence publication fails", async () => {
     const runtimeSeed = await createAdminContext(app, {
       username: `ws-bind-runtime-${crypto.randomUUID().slice(0, 8)}`,

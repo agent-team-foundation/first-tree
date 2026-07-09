@@ -105,19 +105,26 @@ export function agentSelectorHook(db: Database, options: AgentSelectorOptions = 
       // caller's user.
       throw new ForbiddenError("Agent not runnable by this user");
     } else if (!agentOutbox) {
+      const warnLegacyRuntimeHttpAccepted = (reason: "missing_token" | "invalid_token"): void => {
+        if (legacyRuntimeHttpWarnedAgentIds.has(row.uuid)) return;
+        legacyRuntimeHttpWarnedAgentIds.add(row.uuid);
+        options.logger?.warn(
+          { agentId: row.uuid, clientId: row.clientId, reason },
+          "legacy agent-scoped HTTP accepted without a valid runtime session token",
+        );
+      };
       const runtimeSessionToken = request.headers[AGENT_RUNTIME_SESSION_HEADER];
       if (typeof runtimeSessionToken === "string" && runtimeSessionToken.length > 0) {
         if (!(await validateAgentRuntimeSession(db, row.uuid, row.clientId, runtimeSessionToken))) {
-          throw new ForbiddenError("Invalid agent runtime session");
+          if (options.enforceRuntimeSession) {
+            throw new ForbiddenError("Invalid agent runtime session");
+          }
+          warnLegacyRuntimeHttpAccepted("invalid_token");
         }
       } else if (options.enforceRuntimeSession) {
         throw new ForbiddenError(`Missing ${AGENT_RUNTIME_SESSION_HEADER} header`);
-      } else if (!legacyRuntimeHttpWarnedAgentIds.has(row.uuid)) {
-        legacyRuntimeHttpWarnedAgentIds.add(row.uuid);
-        options.logger?.warn(
-          { agentId: row.uuid, clientId: row.clientId },
-          "legacy agent-scoped HTTP without runtime session token accepted",
-        );
+      } else {
+        warnLegacyRuntimeHttpAccepted("missing_token");
       }
     } else {
       // `agent_outbox` JWTs are already route-scoped by userAuthHook to

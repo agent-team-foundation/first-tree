@@ -12,6 +12,11 @@ type AgentRuntimeSessionMetadata = {
   boundAt: string;
 };
 
+export type BindAgentRuntimeSessionResult = {
+  token: string;
+  reused: boolean;
+};
+
 function mintRuntimeSessionToken(): string {
   return randomBytes(32).toString("base64url");
 }
@@ -41,9 +46,43 @@ export function getAgentRuntimeSessionMetadata(metadata: unknown): AgentRuntimeS
   return candidate as AgentRuntimeSessionMetadata;
 }
 
-export async function bindAgentRuntimeSession(db: Database, agentId: string, clientId: string): Promise<string> {
+export async function bindAgentRuntimeSession(
+  db: Database,
+  agentId: string,
+  clientId: string,
+  presentedToken?: string,
+): Promise<BindAgentRuntimeSessionResult> {
+  const [existing] = await db
+    .select({ metadata: agents.metadata })
+    .from(agents)
+    .where(
+      and(
+        eq(agents.uuid, agentId),
+        eq(agents.clientId, clientId),
+        eq(agents.status, "active"),
+        sql`EXISTS (
+          SELECT 1 FROM ${clients}
+          WHERE ${clients.id} = ${clientId}
+            AND ${clients.retiredAt} IS NULL
+        )`,
+      ),
+    )
+    .limit(1);
+  if (!existing) {
+    throw new Error(`Agent "${agentId}" is no longer active on client "${clientId}"`);
+  }
+
+  const existingBinding = getAgentRuntimeSessionMetadata(existing.metadata);
+  if (
+    presentedToken &&
+    existingBinding?.clientId === clientId &&
+    timingSafeStringEqual(existingBinding.tokenHash, hashRuntimeSessionToken(presentedToken))
+  ) {
+    return { token: presentedToken, reused: true };
+  }
+
   const token = mintRuntimeSessionToken();
-  const binding: AgentRuntimeSessionMetadata = {
+  const nextBinding: AgentRuntimeSessionMetadata = {
     clientId,
     tokenHash: hashRuntimeSessionToken(token),
     boundAt: new Date().toISOString(),
@@ -51,7 +90,7 @@ export async function bindAgentRuntimeSession(db: Database, agentId: string, cli
   const [row] = await db
     .update(agents)
     .set({
-      metadata: sql`jsonb_set(${agents.metadata}, '{runtimeSession}', ${JSON.stringify(binding)}::jsonb, true)`,
+      metadata: sql`jsonb_set(${agents.metadata}, '{runtimeSession}', ${JSON.stringify(nextBinding)}::jsonb, true)`,
       updatedAt: new Date(),
     })
     .where(
@@ -70,7 +109,7 @@ export async function bindAgentRuntimeSession(db: Database, agentId: string, cli
   if (!row) {
     throw new Error(`Agent "${agentId}" is no longer active on client "${clientId}"`);
   }
-  return token;
+  return { token, reused: false };
 }
 
 export async function revokeAgentRuntimeSession(

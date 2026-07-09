@@ -103,7 +103,7 @@ describe("POST /agents/:uuid/switch-runtime", () => {
       kind: "error",
       payload: { source: "sdk", message: "stale-evicted" },
     });
-    const oldRuntimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
+    const { token: oldRuntimeSessionToken } = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
 
     const res = await app.inject({
       method: "POST",
@@ -344,7 +344,7 @@ describe("POST /agents/:uuid/switch-runtime", () => {
       runtimeProvider: "claude-code",
     });
     await app.db.update(agents).set({ delegateMention: agent.uuid }).where(eq(agents.uuid, ctx.humanAgentUuid));
-    const oldRuntimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
+    const { token: oldRuntimeSessionToken } = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
 
     const res = await app.inject({
       method: "POST",
@@ -629,7 +629,7 @@ describe("POST /agents/:uuid/switch-runtime recovery", () => {
       kind: "error",
       payload: { source: "sdk", message: "pre-switch" },
     });
-    const oldRuntimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
+    const { token: oldRuntimeSessionToken } = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
 
     const res = await app.inject({
       method: "POST",

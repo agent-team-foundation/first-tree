@@ -338,7 +338,10 @@ describe("Agent client WS branch fakes", () => {
   }
 
   function mockSuccessfulBindServices(): void {
-    vi.spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession").mockResolvedValue("runtime-token");
+    vi.spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession").mockResolvedValue({
+      token: "runtime-token",
+      reused: false,
+    });
     vi.spyOn(agentRuntimeSessionService, "revokeAgentRuntimeSession").mockResolvedValue(true);
     vi.spyOn(agentRuntimeSessionService, "revokeAgentRuntimeSessionIfTokenMatches").mockResolvedValue(true);
     vi.spyOn(presenceService, "bindAgentIfActiveClient").mockResolvedValue(true);

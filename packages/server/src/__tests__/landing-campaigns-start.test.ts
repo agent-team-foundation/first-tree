@@ -1091,7 +1091,11 @@ describe("POST /me/landing-campaigns/start", () => {
     const first = await startProductionScan(app, admin);
     expect(first.statusCode).toBe(200);
     const firstBody = first.json<{ agentUuid: string }>();
-    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID);
+    const { token: runtimeSessionToken } = await bindAgentRuntimeSession(
+      app.db,
+      firstBody.agentUuid,
+      OFFICIAL_CLIENT_ID,
+    );
     expect(
       await validateAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID, runtimeSessionToken),
     ).toBe(true);

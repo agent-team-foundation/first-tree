@@ -1176,12 +1176,16 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               let runtimeSessionToken: string;
+              let runtimeSessionReused = false;
               try {
-                runtimeSessionToken = await agentRuntimeSessionService.bindAgentRuntimeSession(
+                const runtimeSession = await agentRuntimeSessionService.bindAgentRuntimeSession(
                   app.db,
                   agent.id,
                   clientId,
+                  bindRequest.currentRuntimeSessionToken,
                 );
+                runtimeSessionToken = runtimeSession.token;
+                runtimeSessionReused = runtimeSession.reused;
               } catch (err) {
                 app.log.warn({ err, agentId: agent.id, clientId }, "agent:bind runtime session claim failed");
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
@@ -1263,7 +1267,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   agentId: agent.id,
                   displayName: agent.displayName,
                   agentType: agent.type,
-                  runtimeSessionToken,
+                  ...(runtimeSessionReused ? {} : { runtimeSessionToken }),
                 }),
               );
 
