@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
-import type { SessionEvent } from "@first-tree/shared";
+import type { AgentRuntimeConfig, AgentRuntimeConfigPayload, SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -20,6 +20,7 @@ import {
   createWorkspaceOnlySpawnProcess,
   landingCodexDenyPaths,
 } from "../handlers/codex/app-server/workspace-sandbox.js";
+import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
@@ -299,6 +300,16 @@ function makeHandler(fake: FakeAppServerClient, extraConfig: Record<string, unkn
   });
 }
 
+function runtimeConfig(payload: AgentRuntimeConfigPayload): AgentRuntimeConfig {
+  return {
+    agentId: AGENT_ID,
+    version: 7,
+    payload,
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    updatedBy: "member-self",
+  };
+}
+
 function makeCliBin(root: string): string {
   const cliBinDir = join(root, "first-tree-cli-bin");
   mkdirSync(cliBinDir, { recursive: true });
@@ -537,6 +548,82 @@ describe("codex app-server handler extra branches", () => {
       message: expect.stringContaining("thread start rpc failed"),
     });
     await failedThreadHandler.shutdown();
+  });
+
+  it("passes cached MCP config and env while logging chat-context fetch failures", async () => {
+    const { fetchChatContext } = await import("../runtime/chat-context.js");
+    vi.mocked(fetchChatContext).mockRejectedValueOnce(new Error("chat context offline"));
+    const fake = new FakeAppServerClient();
+    const log = vi.fn<(message: string) => void>();
+    let capturedEnv: NodeJS.ProcessEnv | null = null;
+    const payload = {
+      kind: "codex",
+      prompt: { append: "Use the current runbook." },
+      model: "gpt-5-codex",
+      reasoningEffort: "medium",
+      mcpServers: [
+        { name: "stdio-docs", transport: "stdio", command: "node", args: ["server.js"] },
+        { name: "http-docs", transport: "http", url: "https://mcp.example/http", headers: { "x-api": "1" } },
+        { name: "sse-docs", transport: "sse", url: "https://mcp.example/sse" },
+      ],
+      env: [{ key: "EXTRA_FLAG", value: "enabled", sensitive: false }],
+      gitRepos: [],
+      resourceSkills: [],
+    } satisfies AgentRuntimeConfigPayload;
+    const cachedConfig = runtimeConfig(payload);
+    const agentConfigCache = {
+      refresh: vi.fn(async () => cachedConfig),
+      get: vi.fn(() => cachedConfig),
+    } as unknown as AgentConfigCache;
+    const handler = createCodexAppServerHandler({
+      workspaceRoot,
+      agentConfigCache,
+      codexRuntimeBinaryResolver: async () => ({
+        ok: true,
+        binary: "/tmp/fake-codex",
+        runtimeSource: "path",
+        runtimePath: "/tmp/fake-codex",
+        version: "0.0.0-test",
+      }),
+      codexAppServerClientFactory: async (options: {
+        env: NodeJS.ProcessEnv;
+        onNotification?: NotificationHandler;
+        onClose?: CloseHandler;
+      }) => {
+        capturedEnv = options.env;
+        fake.onNotification = options.onNotification ?? null;
+        fake.onClose = options.onClose ?? null;
+        return fake;
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), makeContext({ log }));
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "cached config turn/start");
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-1", status: "completed", error: null, items: [{ type: "agentMessage", text: "done" }] },
+    });
+    await startPromise;
+
+    const threadStart = fake.requests.find((request) => request.method === "thread/start");
+    const params = asRecord(threadStart?.params);
+    expect(params?.model).toBe("gpt-5-codex");
+    expect(params?.config).toMatchObject({
+      mcp_servers: {
+        "stdio-docs": { command: "node", args: ["server.js"] },
+        "http-docs": { url: "https://mcp.example/http", headers: { "x-api": "1" } },
+        "sse-docs": { url: "https://mcp.example/sse" },
+      },
+    });
+    const turnStart = fake.requests.find((request) => request.method === "turn/start");
+    expect(asRecord(turnStart?.params)?.effort).toBe("medium");
+    const envForAssert = capturedEnv as NodeJS.ProcessEnv | null;
+    expect(envForAssert?.EXTRA_FLAG).toBe("enabled");
+    expect(log.mock.calls.some(([entry]) => entry.includes("fetchChatContext failed: chat context offline"))).toBe(
+      true,
+    );
+
+    await handler.shutdown();
   });
 
   it("returns a queued route and retries when initial inbound formatting fails", async () => {
