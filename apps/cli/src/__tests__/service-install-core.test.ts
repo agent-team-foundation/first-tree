@@ -34,6 +34,12 @@ const execFileSyncMock = vi.hoisted(() => vi.fn());
 const userInfoMock = vi.hoisted(() => vi.fn(() => ({ uid: 501, username: "gandy" })));
 const homedirMock = vi.hoisted(() => vi.fn(() => "/Users/gandy"));
 
+function readWindowsTaskXmlFixture(path: string): { raw: Buffer; xml: string } {
+  const raw = readFileSync(path);
+  const body = raw.toString("utf16le");
+  return { raw, xml: body.startsWith("\uFEFF") ? body.slice(1) : body };
+}
+
 vi.mock("node:child_process", () => ({
   spawnSync: spawnSyncMock,
   execFileSync: execFileSyncMock,
@@ -165,6 +171,7 @@ describe("service install helpers", () => {
     expect(windowsWrapper).toContain("supervisor.log");
     expect(windowsWrapper).toContain(" 2>&1");
     const taskXml = renderWindowsTaskXml("C:\\First Tree\\supervisor.cmd", "ACME\\gandy & team");
+    expect(taskXml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
     expect(taskXml).toContain("<LogonTrigger>");
     expect(taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(taskXml).toContain("ACME\\gandy &amp; team");
@@ -665,7 +672,7 @@ describe("service install helpers", () => {
 
     const info = installClientService();
     const wrapper = readFileSync(windowsSupervisorWrapperPath(), "utf-8");
-    const xml = readFileSync(windowsTaskXmlPath(), "utf-8");
+    const { raw: xmlRaw, xml } = readWindowsTaskXmlFixture(windowsTaskXmlPath());
 
     expect(info).toMatchObject({
       platform: "task-scheduler",
@@ -675,6 +682,8 @@ describe("service install helpers", () => {
     });
     expect(wrapper).toContain(`set "FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}"`);
     expect(wrapper).toContain('"daemon" "supervise"');
+    expect([...xmlRaw.subarray(0, 2)]).toEqual([0xff, 0xfe]);
+    expect(xml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
     expect(xml).toContain("<LogonTrigger>");
     expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
@@ -683,6 +692,32 @@ describe("service install helpers", () => {
       ["schtasks.exe", ["/Create", "/TN", windowsTaskName(), "/XML", windowsTaskXmlPath(), "/F"]],
       ["schtasks.exe", ["/Run", "/TN", windowsTaskName()]],
     ]);
+  });
+
+  it("does not report Windows Task Scheduler XML drift after UTF-16LE writes", () => {
+    setPlatform("win32");
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "", stderr: "" });
+
+    installClientService();
+
+    spawnSyncMock.mockClear();
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "Ready", stderr: "" });
+    expect(isServiceUnitDriftDetected()).toBe(false);
+  });
+
+  it("does not surface mojibake from localized Windows native command stderr", () => {
+    setPlatform("win32");
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "\uFFFD\uFFFD\uFFFD\uFFFD: XML" });
+
+    expect(() => installClientService()).toThrow(
+      "schtasks /Create failed: exit 1; Windows returned localized stderr that could not be decoded as UTF-8",
+    );
   });
 
   it("reports Windows Task Scheduler status from the task state plus service runtime marker", () => {

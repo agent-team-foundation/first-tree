@@ -65,6 +65,7 @@ type TrustedMarkersForStopResult = { ok: true; markers: LiveServiceRuntimeMarker
 
 const POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"] as const;
 const PID_REUSE_CREATION_TOLERANCE_MS = 5_000;
+const UTF_16LE_BOM = "\uFEFF";
 
 function windowsInfo(state: ServiceState, pid?: number, detail?: string): ServiceInfo {
   return {
@@ -86,6 +87,16 @@ function escapePowerShellSingleQuoted(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+function windowsNativeFailureDetail(res: { stderr: string; code: number | null }): string {
+  const stderr = res.stderr.trim();
+  const fallback = `exit ${res.code ?? "unknown"}`;
+  if (!stderr) return fallback;
+  if (stderr.includes("\uFFFD")) {
+    return `${fallback}; Windows returned localized stderr that could not be decoded as UTF-8`;
+  }
+  return stderr;
+}
+
 function currentWindowsUserId(): string {
   const domain = process.env.USERDOMAIN?.trim();
   const username = process.env.USERNAME?.trim() || userInfo().username;
@@ -94,7 +105,7 @@ function currentWindowsUserId(): string {
 
 export function renderWindowsTaskXml(wrapperPath: string, userId = currentWindowsUserId()): string {
   const taskName = `${channelConfig.displayName} Client`;
-  return `<?xml version="1.0" encoding="UTF-8"?>
+  return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>${escapeXml(userId)}</Author>
@@ -141,6 +152,23 @@ export function renderWindowsTaskXml(wrapperPath: string, userId = currentWindow
 `;
 }
 
+function encodeWindowsTaskXml(xml: string): Buffer {
+  return Buffer.from(`${UTF_16LE_BOM}${xml}`, "utf16le");
+}
+
+function readWindowsTaskXml(path: string): string {
+  const xml = readFileSync(path, "utf16le");
+  return xml.startsWith(UTF_16LE_BOM) ? xml.slice(1) : xml;
+}
+
+function readWindowsTaskXmlOrFlagDrift(path: string, expected: string): boolean {
+  try {
+    return readWindowsTaskXml(path) !== expected;
+  } catch {
+    return true;
+  }
+}
+
 function writeWindowsSupervisorFiles(): { wrapperPath: string; xmlPath: string } {
   const invocation = resolveCliInvocation();
   ensureLogDir();
@@ -148,7 +176,7 @@ function writeWindowsSupervisorFiles(): { wrapperPath: string; xmlPath: string }
   const wrapperPath = windowsSupervisorWrapperPath();
   const xmlPath = windowsTaskXmlPath();
   writeFileSync(wrapperPath, renderWindowsSupervisorCmd(invocation), { mode: 0o755 });
-  writeFileSync(xmlPath, renderWindowsTaskXml(wrapperPath), { mode: 0o600 });
+  writeFileSync(xmlPath, encodeWindowsTaskXml(renderWindowsTaskXml(wrapperPath)), { mode: 0o600 });
   return { wrapperPath, xmlPath };
 }
 
@@ -362,13 +390,13 @@ function statusFromTaskAndMarkers(): ServiceInfo {
 function createOrUpdateTask(xmlPath: string): void {
   const res = runCapture("schtasks.exe", ["/Create", "/TN", windowsTaskName(), "/XML", xmlPath, "/F"], 10_000);
   if (!res.ok) {
-    throw new Error(`schtasks /Create failed: ${res.stderr || `exit ${res.code ?? "unknown"}`}`);
+    throw new Error(`schtasks /Create failed: ${windowsNativeFailureDetail(res)}`);
   }
 }
 
 function runTask(): ServiceOpResult {
   const res = runCapture("schtasks.exe", ["/Run", "/TN", windowsTaskName()], 10_000);
-  if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+  if (!res.ok) return { ok: false, reason: windowsNativeFailureDetail(res) };
   return { ok: true };
 }
 
@@ -378,7 +406,7 @@ function endTask(): ServiceOpResult {
     if (/not currently running|is not running|cannot find|does not exist|not found/i.test(res.stderr)) {
       return { ok: true, detail: "not running" };
     }
-    return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    return { ok: false, reason: windowsNativeFailureDetail(res) };
   }
   return { ok: true };
 }
@@ -409,7 +437,7 @@ function killRuntimeMarker(marker: LiveServiceRuntimeMarker): KillRuntimeMarkerR
   const forced = runCapture("taskkill.exe", ["/PID", String(marker.pid), "/T", "/F"], 10_000);
   if (waitForPidExit(marker.pid, forced.ok ? 5_000 : 0)) return { ok: true, killAttempted: true };
   if (!forced.ok) {
-    return { ok: false, reason: forced.stderr || `taskkill /F exit ${forced.code ?? "unknown"}`, killAttempted: true };
+    return { ok: false, reason: windowsNativeFailureDetail(forced), killAttempted: true };
   }
   return { ok: false, reason: `pid ${marker.pid} did not exit after taskkill /F`, killAttempted: true };
 }
@@ -450,7 +478,7 @@ function windowsTaskSchedulerDriftDetected(): boolean {
   const invocation = resolveCliInvocation();
   const wrapperPath = windowsSupervisorWrapperPath();
   const wrapperDrift = readFileOrFlagDrift(wrapperPath, renderWindowsSupervisorCmd(invocation));
-  const xmlDrift = readFileOrFlagDrift(windowsTaskXmlPath(), renderWindowsTaskXml(wrapperPath));
+  const xmlDrift = readWindowsTaskXmlOrFlagDrift(windowsTaskXmlPath(), renderWindowsTaskXml(wrapperPath));
   const taskMissing = taskState().state === "missing";
   return taskMissing || wrapperDrift || xmlDrift;
 }
@@ -532,7 +560,7 @@ function uninstallWindowsTaskScheduler(): ServiceInfo {
   }
   const res = runCapture("schtasks.exe", ["/Delete", "/TN", windowsTaskName(), "/F"], 10_000);
   if (!res.ok && !/cannot find|does not exist|not found/i.test(res.stderr)) {
-    throw new Error(`schtasks /Delete failed: ${res.stderr || `exit ${res.code ?? "unknown"}`}`);
+    throw new Error(`schtasks /Delete failed: ${windowsNativeFailureDetail(res)}`);
   }
   rmSync(windowsSupervisorWrapperPath(), { force: true });
   rmSync(windowsTaskXmlPath(), { force: true });

@@ -163,6 +163,10 @@ describe("renderWindowsTaskXml — channel identity baked into Task Scheduler te
   const wrapperPath = join(defaultHome(), "service", `${channelConfig.launchdLabel}-supervisor.cmd`);
   const taskXml = renderWindowsTaskXml(wrapperPath, "ACME\\developer");
 
+  it("declares the UTF-16 encoding used for the imported task XML file", () => {
+    expect(taskXml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
+  });
+
   it("uses an interactive least-privilege logon trigger", () => {
     expect(taskXml).toContain("<LogonTrigger>");
     expect(taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
