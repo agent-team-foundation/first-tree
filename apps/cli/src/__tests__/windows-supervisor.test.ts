@@ -72,6 +72,7 @@ describe("Windows supervisor loop", () => {
       ["/d", "/s", "/c", '""first-tree-dev" "daemon" "start" "--no-interactive""'],
       expect.objectContaining({
         detached: false,
+        windowsVerbatimArguments: true,
         env: expect.objectContaining({
           FIRST_TREE_HOME: home,
           FIRST_TREE_SERVICE_MODE: "1",
@@ -100,7 +101,7 @@ describe("Windows supervisor loop", () => {
         "/c",
         '""C:\\Users\\baixi\\AppData\\Roaming\\npm\\first-tree-staging" "daemon" "start" "--no-interactive""',
       ],
-      expect.objectContaining({ detached: false, windowsHide: true }),
+      expect.objectContaining({ detached: false, windowsHide: true, windowsVerbatimArguments: true }),
     );
   });
 
@@ -124,13 +125,13 @@ describe("Windows supervisor loop", () => {
       1,
       process.env.ComSpec || "cmd.exe",
       ["/d", "/s", "/c", '""C:\\First Tree\\old\\first-tree-dev.cmd" "daemon" "start" "--no-interactive""'],
-      expect.any(Object),
+      expect.objectContaining({ windowsVerbatimArguments: true }),
     );
     expect(spawnProcess).toHaveBeenNthCalledWith(
       2,
       process.env.ComSpec || "cmd.exe",
       ["/d", "/s", "/c", '""C:\\First Tree\\new\\first-tree-dev.cmd" "daemon" "start" "--no-interactive""'],
-      expect.any(Object),
+      expect.objectContaining({ windowsVerbatimArguments: true }),
     );
   });
 

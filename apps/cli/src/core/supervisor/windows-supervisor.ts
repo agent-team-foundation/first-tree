@@ -156,7 +156,7 @@ function isWindowsCommandShim(program: string): boolean {
 function childSpawnTarget(
   invocation: ResolvedBinary,
   platform: NodeJS.Platform,
-): { program: string; args: string[]; display: string } {
+): { program: string; args: string[]; display: string; windowsVerbatimArguments?: boolean } {
   const program = childProgram(invocation);
   const args = childArgs(invocation);
   const display = [program, ...args].join(" ");
@@ -169,6 +169,7 @@ function childSpawnTarget(
     program: process.env.ComSpec || "cmd.exe",
     args: ["/d", "/s", "/c", `"${commandLine}"`],
     display,
+    windowsVerbatimArguments: true,
   };
 }
 
@@ -267,6 +268,7 @@ export async function runWindowsSupervisorLoop(options: WindowsSupervisorLoopOpt
           FIRST_TREE_SERVICE_MODE: "1",
         },
         stdio: ["ignore", "pipe", "pipe"],
+        windowsVerbatimArguments: target.windowsVerbatimArguments,
         windowsHide: true,
       });
     } catch (err) {
