@@ -1,5 +1,6 @@
 import {
   type Agent,
+  type AgentChatStatus,
   type AttachmentRef,
   attachmentRefsFromMetadata,
   type CapabilityEntry,
@@ -121,7 +122,7 @@ import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { useServerChannel } from "../../../hooks/use-server-channel.js";
-import { viewOf } from "../../../lib/agent-status-view.js";
+import { reconcileLiveTurn, viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
@@ -141,6 +142,7 @@ import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
+import { orderParticipantsByActivity } from "../participant-order.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ChatSummary } from "./chat-summary.js";
 
@@ -1711,6 +1713,14 @@ export function ChatView({
     staleTime: 10_000,
   });
 
+  const hasNonHumanParticipants = chatDetail?.participants.some((p) => p.type !== "human") ?? false;
+  const { data: participantStatuses } = useQuery({
+    queryKey: chatAgentStatusQueryKey(chatId),
+    queryFn: () => fetchChatAgentStatuses(chatId),
+    enabled: !!chatId && hasNonHumanParticipants,
+    refetchInterval: 30_000,
+  });
+
   // The right rail no longer auto-opens per chat: the running summary moved to
   // the pinned ChatSummary (above the stream), so the rail — now just
   // participants + GitHub bindings — simply follows the user's stored
@@ -2451,6 +2461,17 @@ export function ChatView({
           .filter((id): id is string => id != null),
       ),
     [items],
+  );
+
+  const orderedParticipants = useMemo(
+    () =>
+      orderParticipantsByActivity(
+        chatDetail?.participants ?? [],
+        mergedMessages,
+        participantStatuses ?? [],
+        liveTurnAgentIds,
+      ),
+    [chatDetail?.participants, mergedMessages, participantStatuses, liveTurnAgentIds],
   );
 
   // Blocking truncation: while a question blocks me (the FIFO-oldest live
@@ -3772,9 +3793,10 @@ export function ChatView({
               opens the same dropdown the sidebar's "+ Add participant"
               uses (shared backend mutation, single one-way-door notice). */}
                   <ParticipantsStats
-                    participants={chatDetail?.participants ?? []}
-                    chatId={chatId}
+                    participants={orderedParticipants}
                     agentIdentity={chatScopedAgentIdentity}
+                    statuses={participantStatuses ?? []}
+                    liveTurnAgentIds={liveTurnAgentIds}
                     onOpen={() => setSidebarByUser(true)}
                   />
                   {/* Vertical divider splits "look" (avatar strip = identity +
@@ -4013,10 +4035,7 @@ export function ChatView({
                         {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
                       </div>
                     ) : null}
-                    <ComposeStatusBar
-                      chatId={chatId}
-                      agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                    />
+                    <ComposeStatusBar chatId={chatId} agents={orderedParticipants.filter((p) => p.type !== "human")} />
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
                         the composer. */}
@@ -4497,7 +4516,7 @@ export function ChatView({
               <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
                 <ChatRightSidebar
                   chatId={chatId}
-                  participants={chatDetail?.participants ?? []}
+                  participants={orderedParticipants}
                   participantsLoading={chatDetailLoading}
                   managedByMe={managedByMeMap}
                   onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
@@ -4509,7 +4528,7 @@ export function ChatView({
           ) : (
             <ChatRightSidebar
               chatId={chatId}
-              participants={chatDetail?.participants ?? []}
+              participants={orderedParticipants}
               participantsLoading={chatDetailLoading}
               managedByMe={managedByMeMap}
               onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
@@ -4538,23 +4557,26 @@ const MAX_VISIBLE_AVATARS = 4;
 
 function ParticipantsStats({
   participants,
-  chatId,
   agentIdentity,
+  statuses,
+  liveTurnAgentIds,
   onOpen,
 }: {
   participants: ChatParticipantDetail[];
-  chatId: string;
   agentIdentity: (uuid: string | null | undefined) => {
     name: string | null;
     displayName: string;
     avatarImageUrl: string | null;
     avatarColorToken: string | null;
   } | null;
+  statuses: ReadonlyArray<AgentChatStatus>;
+  liveTurnAgentIds: ReadonlySet<string>;
   onOpen: () => void;
 }) {
   if (participants.length === 0) return null;
   const visible = participants.slice(0, MAX_VISIBLE_AVATARS);
   const overflow = participants.length - visible.length;
+  const statusByAgent = new Map(statuses.map((status) => [status.agentId, status]));
 
   return (
     <div className="inline-flex items-center" style={{ paddingLeft: 0 }}>
@@ -4562,8 +4584,9 @@ function ParticipantsStats({
         <ParticipantAvatar
           key={p.agentId}
           participant={p}
-          chatId={chatId}
           agentIdentity={agentIdentity}
+          status={statusByAgent.get(p.agentId) ?? null}
+          hasLiveTurn={liveTurnAgentIds.has(p.agentId)}
           stackIndex={idx}
           onOpen={onOpen}
         />
@@ -4594,19 +4617,21 @@ function ParticipantsStats({
 
 function ParticipantAvatar({
   participant,
-  chatId,
   agentIdentity,
+  status,
+  hasLiveTurn,
   stackIndex,
   onOpen,
 }: {
   participant: ChatParticipantDetail;
-  chatId: string;
   agentIdentity: (uuid: string | null | undefined) => {
     name: string | null;
     displayName: string;
     avatarImageUrl: string | null;
     avatarColorToken: string | null;
   } | null;
+  status: AgentChatStatus | null;
+  hasLiveTurn: boolean;
   stackIndex: number;
   onOpen: () => void;
 }) {
@@ -4615,18 +4640,10 @@ function ParticipantAvatar({
   const label = ident?.displayName ?? ident?.name ?? participant.agentId.slice(0, 8);
 
   // Composite per-agent status for the dot, from the chat-level /agent-status
-  // query — the same key the sidebar's AgentStatusPanel uses, so React Query
-  // dedupes it to one request and the admin WS keeps it live (no per-avatar
-  // poll). Humans have no runtime status. Rendered through the shared
-  // viewOf / StatusGlyph vocabulary so the header strip and the sidebar agree.
-  const { data: statuses } = useQuery({
-    queryKey: chatAgentStatusQueryKey(chatId),
-    queryFn: () => fetchChatAgentStatuses(chatId),
-    enabled: !isHuman,
-    refetchInterval: 30_000,
-  });
-  const status = isHuman ? undefined : statuses?.find((s) => s.agentId === participant.agentId);
-  const view = status ? viewOf(status.main) : null;
+  // query owned by ChatView. Reconcile with the live timeline turn so the
+  // header and sidebar can't disagree while a turn is visibly running.
+  const displayStatus = !isHuman && status ? reconcileLiveTurn(status, hasLiveTurn) : null;
+  const view = displayStatus ? viewOf(displayStatus.main) : null;
   const stateText = view ? view.label : isHuman ? "human" : "…";
 
   return (

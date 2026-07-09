@@ -5,50 +5,16 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentStatusPanel } from "../../../components/chat/agent-status-panel.js";
-
-/** Roster rows shown before the "Show all" fold. The rail is a calm
- *  inspection surface, not a member-management screen — a long roster
- *  shouldn't push Description / GitHub off-screen, so we cap the visible
- *  rows and tuck the rest behind a toggle. */
-export const VISIBLE_LIMIT = 5;
-
-/**
- * Order the roster agents-first (their live status is the glanceable pulse),
- * then humans, preserving server order within each group; cap to `limit`
- * unless `showAll`. Pure so the ordering / fold math is unit-testable without
- * rendering the query-backed AgentStatusPanel.
- */
-export function partitionRoster(
-  participants: ChatParticipantDetail[],
-  showAll: boolean,
-  limit: number = VISIBLE_LIMIT,
-): {
-  total: number;
-  visibleAgents: ChatParticipantDetail[];
-  visibleHumans: ChatParticipantDetail[];
-  hiddenCount: number;
-} {
-  const agents = participants.filter((p) => p.type !== "human");
-  const humans = participants.filter((p) => p.type === "human");
-  const ordered = [...agents, ...humans];
-  const total = ordered.length;
-  const visible = showAll ? ordered : ordered.slice(0, limit);
-  return {
-    total,
-    visibleAgents: visible.filter((p) => p.type !== "human"),
-    visibleHumans: visible.filter((p) => p.type === "human"),
-    hiddenCount: total - visible.length,
-  };
-}
+import { partitionRoster, VISIBLE_LIMIT } from "../participant-order.js";
 
 /**
  * Participants section — full chat membership (humans + agents), the top
- * section of the rail. Agents render first (their live status is the
- * glanceable pulse of the work) through <AgentStatusPanel> (one
+ * section of the rail. Non-human agents render through <AgentStatusPanel> (one
  * /chats/:id/agent-status call drives every agent's composite status +
- * per-row Pause when the caller can manage). Humans follow as a simplified
+ * per-row Pause when the caller can manage). Humans render as a simplified
  * roster (no session state, no actions in v1 — Remove / Change role are
- * deferred alongside the missing backend routes for member-side removal).
+ * deferred alongside the missing backend routes for member-side removal). The
+ * caller supplies the display order so header and rail stay aligned.
  *
  * The roster is capped at VISIBLE_LIMIT; the remainder collapses behind a
  * "Show all" toggle so a crowded chat can't dominate the rail.
@@ -79,7 +45,7 @@ export function ParticipantsSection({
   const [showAll, setShowAll] = useState(false);
 
   const isAdmin = role === "admin";
-  const { total, visibleAgents, visibleHumans, hiddenCount } = useMemo(
+  const { total, visibleParticipants, hiddenCount } = useMemo(
     () => partitionRoster(participants, showAll),
     [participants, showAll],
   );
@@ -101,17 +67,19 @@ export function ParticipantsSection({
           </div>
         ) : (
           <>
-            {visibleAgents.length > 0 ? (
-              <AgentStatusPanel
-                chatId={chatId}
-                agents={visibleAgents}
-                canManage={(id) => isAdmin || (managedByMe.get(id) ?? false)}
-                compact
-              />
-            ) : null}
-            {visibleHumans.map((p) => (
-              <HumanRow key={p.agentId} participant={p} />
-            ))}
+            {visibleParticipants.map((p) =>
+              p.type === "human" ? (
+                <HumanRow key={p.agentId} participant={p} />
+              ) : (
+                <AgentStatusPanel
+                  key={p.agentId}
+                  chatId={chatId}
+                  agents={[p]}
+                  canManage={(id) => isAdmin || (managedByMe.get(id) ?? false)}
+                  compact
+                />
+              ),
+            )}
             {hiddenCount > 0 ? (
               <RosterToggle onClick={() => setShowAll(true)}>Show all · {total}</RosterToggle>
             ) : showAll && total > VISIBLE_LIMIT ? (

@@ -25,9 +25,8 @@ import { formatElapsed } from "./working-chip.js";
  * Scope: only **working** and **failed** raise the bar.
  *
  * Single line = lead + N:
- *   - lead = the highest-priority active agent (failed > working; within
- *     working, the most-recently-active, held ~4s so working agents don't swap
- *     faces too fast — but a failure preempts immediately).
+ *   - lead = the first active agent in the chat's shared participant order
+ *     (currently-working agents first, then recent chat activity).
  *   - lead shows `[coloured dot] <name> · <goal> · <tool> · 12s`: working puts
  *     the agent's running narration (`turnText`, the *goal* — what it's trying
  *     to do) first, then the live action (the *means* — `Bash · npm test`,
@@ -44,33 +43,37 @@ import { formatElapsed } from "./working-chip.js";
  */
 const ATTENTION: ReadonlySet<string> = new Set(["failed", "working"]);
 const TICK_INTERVAL_MS = 1000;
-const LEAD_HOLD_MS = 4000;
 const EXPANDED_MAX_HEIGHT = 180;
-
-/** A failure preempts the working-lead anti-flicker hold (see {@link pickLead}).
- *  "alert" is just "failed". */
-function isAlert(s: AgentChatStatus): boolean {
-  return s.main === "failed" || isFatalStatusReason(s);
-}
 
 function visibleStatusReason(status: AgentChatStatus): AgentChatStatus["statusReason"] {
   if (status.main === "working" && status.statusReason?.kind === "terminal") return undefined;
   return status.statusReason;
 }
 
-function activityStartedMs(s: AgentChatStatus): number {
-  return s.activity ? new Date(s.activity.startedAt).getTime() : 0;
-}
-
 /**
  * The agents worth raising the bar for — failed / working — sorted
- * highest-attention first. ready / paused / offline are filtered out.
+ * by the caller's participant order when provided. ready / paused / offline
+ * are filtered out unless they carry a visible provider status reason.
  * Exported for tests.
  */
-export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] {
+export function selectAttention(
+  statuses: AgentChatStatus[],
+  orderedAgentIds: ReadonlyArray<string> = [],
+): AgentChatStatus[] {
+  const order = new Map<string, number>();
+  orderedAgentIds.forEach((agentId, idx) => {
+    order.set(agentId, idx);
+  });
   return statuses
     .filter((s) => ATTENTION.has(s.main) || visibleStatusReason(s) !== undefined)
-    .sort((a, b) => attentionRank(a) - attentionRank(b) || compareMainStatus(a.main, b.main));
+    .sort((a, b) => {
+      const aOrder = order.get(a.agentId);
+      const bOrder = order.get(b.agentId);
+      if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder;
+      if (aOrder !== undefined) return -1;
+      if (bOrder !== undefined) return 1;
+      return attentionRank(a) - attentionRank(b) || compareMainStatus(a.main, b.main);
+    });
 }
 
 function attentionRank(status: AgentChatStatus): number {
@@ -86,32 +89,6 @@ function attentionRank(status: AgentChatStatus): number {
 function isFatalStatusReason(status: AgentChatStatus): boolean {
   const reason = visibleStatusReason(status);
   return reason?.kind === "terminal" && reason.severity === "error";
-}
-
-/**
- * Pick the rail's lead with anti-flicker, given the previously-held lead.
- * Pure & exported for tests.
- *
- * Rules: an alert (failed) preempts immediately. Among working agents the
- * most-recently-active is the candidate, but if the current lead is still
- * working it's held until `holdMs` has elapsed (so working agents don't swap
- * faces every tick). Returns the new held lead (`{ agentId, since }`), or null
- * when nothing is active.
- */
-export function pickLead(
-  current: { agentId: string; since: number } | null,
-  now: number,
-  alerts: AgentChatStatus[],
-  working: AgentChatStatus[],
-  holdMs: number,
-): { agentId: string; since: number } | null {
-  const alert = alerts[0];
-  if (alert) return { agentId: alert.agentId, since: now };
-  const mostRecent = [...working].sort((a, b) => activityStartedMs(b) - activityStartedMs(a))[0];
-  if (!mostRecent) return null; // nothing working
-  const heldStillWorking = current !== null && working.some((w) => w.agentId === current.agentId);
-  if (heldStillWorking && now - current.since < holdMs) return current; // hold the current face
-  return { agentId: mostRecent.agentId, since: now };
 }
 
 /** Live wall-clock elapsed since `startedAt`, re-rendering each second. */
@@ -148,7 +125,6 @@ export function ComposeStatusBar({
   // Stable so TurnTextCard's document-listener effect doesn't re-subscribe on
   // every parent re-render (query refetch / elapsed tick).
   const closeCard = useCallback(() => setCardOpenFor(null), []);
-  const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
   const { data: rawStatuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
@@ -169,26 +145,9 @@ export function ComposeStatusBar({
   // (runtime_state + freshness stamp) and pushed via admin-WS delta, so the
   // local stale-clear ticker that used to live here is gone — the server
   // self-heals after RUNTIME_STALE_MS and pushes the delta down.
-  // Re-pick the lead whenever the status set changes, and once more after
-  // the hold could expire so a steadily most-recent agent can take over
-  // even with no new data. pickLead is pure; the timer just lets the hold
-  // lapse.
-  useEffect(() => {
-    const attention = selectAttention(statuses ?? []);
-    const alerts = attention.filter(isAlert);
-    const working = attention.filter((s) => s.main === "working");
-    const repick = () => setLead((prev) => pickLead(prev, Date.now(), alerts, working, LEAD_HOLD_MS));
-    repick();
-    const t = setTimeout(repick, LEAD_HOLD_MS);
-    return () => clearTimeout(t);
-  }, [statuses]);
-
-  const attention = selectAttention(statuses ?? []);
-  // Resolve the held lead to a live row; fall back to the top of `attention`
-  // before the effect has settled (or if the held agent just dropped out).
-  // Computed before the early returns so the stale-card effect below runs
-  // unconditionally (Rules of Hooks).
-  const leadRow = (lead && attention.find((s) => s.agentId === lead.agentId)) ?? attention[0];
+  const orderedAgentIds = useMemo(() => agents.map((agent) => agent.agentId), [agents]);
+  const attention = useMemo(() => selectAttention(statuses ?? [], orderedAgentIds), [statuses, orderedAgentIds]);
+  const leadRow = attention[0];
   // The lead's full narration — present only when the server attached
   // `turnTextFull` (strictly more than the one-line goal). Only working leads
   // carry live activity.
