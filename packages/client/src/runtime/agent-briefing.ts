@@ -598,7 +598,7 @@ function contextTreeSection(
 
   const skillRouting =
     contextTreePath === null
-      ? "The policy below is the always-present baseline for judging what belongs in a future Context Tree. This workspace has no bound tree yet; tree-backed reads and source-backed tree writes are unavailable until a tree is bound. For an initial empty-tree bootstrap from connected sources, load `first-tree-seed`."
+      ? "The policy below is the always-present baseline for judging what belongs in a Context Tree. This briefing was generated without a bound tree; before any tree read/write, re-check the workspace binding. If a tree is now bound, load `first-tree-read` or `first-tree-write`; otherwise surface the gap or load `first-tree-seed` for initial bootstrap."
       : "The policy below is the always-present baseline. For task-scoped file selection and operational read workflow, load `first-tree-read`. For source-backed tree edits, load `first-tree-write`.";
 
   blocks.push(`# Context Tree (First Tree Managed)
@@ -638,15 +638,17 @@ not belong in the tree.
 | Rationale that would not be obvious from the diff alone | Refactors that preserve behaviour |
 | A decision as it stands today: current state + present-tense rationale | Historical narrative of how we got here |
 
-### Normal vs \`raw-context/\` Authority
+### Content Classes And Authority
 
-Normal Context Tree content states **current truth**. When a decision
-changes, rewrite or remove the old claim instead of preserving competing
-versions side by side. \`raw-context/\` is archive/supporting material, not
-canonical truth. Read it only when the user asks for that raw material, the
-source artifact is itself raw/proposal/archive content, or the task needs
-archive context. Normal nodes must not require readers to enter
-\`raw-context/\` to understand current truth.
+- **Normal content** — root/domain \`NODE.md\` files and regular domain
+  leaves. It states current durable truth. When a decision changes, rewrite or
+  remove the old claim instead of preserving competing versions side by side.
+- **Archive/supporting content** — proposals, meetings, explorations, and other
+  raw material such as \`raw-context/\`. It is evidence, not canonical truth:
+  read it only when the user asks, the source is archive/proposal material, or
+  the task needs archive context. Normal content must not require this class.
+- **Member content** — responsibility, ownership, and review scope such as \`members/<id>/NODE.md\`.
+  Use it to route or validate *Who*, not as a substitute for normal decision/constraint nodes.
 
 ### Code vs Tree Drift Authority
 
@@ -685,8 +687,8 @@ not what was decided.
   The node records the surviving constraint and reasoning from those moments,
   not the chronology. A node without rationale is a fact, not a decision record.
 - **Who** — ownership, carried by \`owners\` frontmatter and
-  \`members/<id>/NODE.md\` nodes. Do not put ownership in the body, and do not
-  unilaterally edit \`owners\`.
+  member content. Do not put ownership in the body, and do not unilaterally
+  edit \`owners\`.
 
 ### Add vs Edit
 
@@ -730,11 +732,15 @@ delivery history lives in git history and PR descriptions, not node prose.
 
 ### Write / Verify / PR Discipline
 
-Source-backed writes require a concrete source artifact. Actionable future
-work does not live in normal tree content; put it in an issue, source
-artifact, or human decision instead. \`${getCliBinding().binName} tree verify\`
-must pass before any tree commit. A source-backed tree PR should stay scoped
-to one source artifact so owner review and rollback stay precise.`);
+Default to not writing: a missing node is a question, a noisy node is a trap.
+Source-backed writes require a concrete source artifact and surrounding context
+(source, target, parent, relevant \`soft_links\`, ownership-adjacent member
+content) unless already known. Actionable future work does not live in normal
+tree content; put it in an issue, source artifact, or human decision instead.
+\`${getCliBinding().binName} tree verify\` must pass before any tree commit. Keep tree prose current-state: no timeline,
+provenance, PR references, or implementation detail. A source-backed tree PR
+should stay scoped to one source artifact so owner review and rollback stay
+precise.`);
 
   if (contextTreePath) {
     blocks.push(`## Reading the Tree
@@ -756,18 +762,17 @@ On scope shift to a new domain/repo/owner, read those nodes first. The
 tree hierarchy command normally refreshes with \`git pull --ff-only\`; if
 you read manually, refresh first per Tree Location.
 
-Default to normal Context Tree content as current truth. Treat
-\`raw-context/\` as archive/proposal/supporting material, not as the
-canonical answer, unless the user explicitly asks for raw material or the
-task is about that raw artifact itself.`);
+Default to normal content as current truth. Apply the Content Classes policy
+above when archive/supporting or member content appears; label non-normal facts
+separately and do not promote them to canonical decisions.`);
   } else {
     blocks.push(`## Reading the Tree
 
-This workspace has no Context Tree bound, so there is no tree to read. If a
-task needs durable cross-domain context, surface that binding gap to a human
-instead of pretending the context exists. If the task is the initial tree
-bootstrap from connected sources, load \`first-tree-seed\` and follow that
-empty-tree workflow.`);
+This briefing was generated without a bound Context Tree. Before concluding
+there is no tree to read, re-check the workspace binding. If a tree is now
+bound, load \`first-tree-read\`; if no binding exists and the task needs durable
+cross-domain context, surface that gap to a human. If the task is the initial
+tree bootstrap from connected sources, load \`first-tree-seed\`.`);
   }
 
   if (contextTreePath) {
@@ -795,9 +800,10 @@ tree node prose.`);
   } else {
     blocks.push(`## Writing the Tree
 
-This workspace has no Context Tree bound, so there is no tree to write. Do
-not attempt source-backed tree edits from this workspace. If the task is to
-create the team's first tree from connected sources, load \`first-tree-seed\`;
+This briefing was generated without a bound Context Tree. Before a
+source-backed tree edit, re-check the workspace binding. If a tree is now
+bound, load \`first-tree-write\`; if no binding exists, do not attempt the edit.
+For the team's first tree from connected sources, load \`first-tree-seed\`;
 otherwise surface the missing binding/setup gap to a human.`);
   }
 
@@ -843,9 +849,10 @@ The Context Tree for this workspace lives at:
     // `tree init` as the admin create+bind path this carve-out points to).
     blocks.push(`## Tree Location
 
-This agent has no Context Tree bound. For an ordinary task that needs
-persistent cross-domain context (decisions, ownership) and no tree exists,
-surface that gap to a human — binding is normally an operator action, from the
+At briefing generation time this agent had no Context Tree bound. Re-check the
+binding if the user says a tree was created or bound during the session. For an
+ordinary task that needs persistent cross-domain context and no tree exists,
+surface that gap to a human — binding is normally an operator action from the
 web console. The one exception is a **build / set up the Context Tree** task:
 there the seed skill's own create + bind is the sanctioned path for a
 **confirmed org admin** with authenticated \`gh\` — run it directly and proceed,

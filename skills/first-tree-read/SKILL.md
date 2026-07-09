@@ -19,27 +19,15 @@ is available and ask for a specific source artifact or scope.
 
 ## Authority Boundary
 
-Default to normal Context Tree content as current truth: root/domain
-`NODE.md` files and normal leaf markdown files under the tree's durable
-domains.
+Apply the generated Context Tree Policy's content classes and drift-authority
+rules before treating a file as current truth. Normal content is the canonical
+decision/constraint source; non-normal classes have narrower authority and
+should be labeled separately when they affect an answer.
 
-Treat `raw-context/` as archive/proposal/supporting material, not canonical
-truth. Read raw material only when the user explicitly names it, the source
-artifact you are inspecting is itself raw/proposal/archive material, or the
-task is to understand that archive. A normal node should never force a reader
-to enter `raw-context/` to understand the current decision; if you discover
-that shape, report it as a tree hygiene concern rather than silently treating
-raw as canonical.
-
-This normal-vs-raw authority boundary does not override code-vs-tree drift
-rules. Unless a node explicitly sets `decisionLocksCode: true`, code is the
-ground truth when source code and tree content disagree: treat the tree as
-drifted and surface/update it from source-backed evidence. With
-`decisionLocksCode: true`, the tree wins and code drift escalates to a human
-owner.
-
-When you mention tree facts in your answer, separate durable normal-tree facts
-from your own inference and from any raw/proposal/archive material you read.
+Do not promote non-normal content into canonical tree facts. If normal content
+requires non-normal material to be understood, report a tree hygiene concern.
+If code and tree content conflict, follow the generated policy's code-vs-tree
+drift rule.
 
 ## Workflow
 
@@ -110,7 +98,7 @@ matter. Prefer reading:
 - parent `NODE.md` files for the matched domain
 - specific leaf files matched by the query
 - `soft_links` targets from matched files when they affect the task
-- `members/<id>/NODE.md` only when ownership or review scope matters
+- member content only when ownership or review scope matters
 
 ### 4. Use `first-tree tree tree` to select files
 

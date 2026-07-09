@@ -173,8 +173,8 @@ The current Context Tree checkout is \`${contextTreePath}\`.
 
 The tree records durable decisions, constraints, ownership, and cross-domain
 relationships; source repos record implementation detail. Default to normal
-tree nodes as current truth. Treat \`raw-context/\` as archive/supporting
-material, not canonical truth.
+tree content as current truth. Treat archive/supporting and member content as
+non-normal classes with narrower authority.
 
 Read task-scoped tree context before acting on software project questions:
 

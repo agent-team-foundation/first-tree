@@ -50,8 +50,8 @@ relationship.
    require explicit human-owner approval.
 4. **Read surrounding tree context.** Before drafting, read the target node,
    parent `NODE.md`, relevant `soft_links` targets, and ownership-adjacent
-   `members/<id>/NODE.md` files when they affect the edit. You do not need to
-   re-read nodes already in working context; the requirement is no surprises.
+   member content when it affects the edit. You do not need to re-read nodes
+   already in working context; the requirement is no surprises.
 5. **Draft the edit.** Capture current truth and present-tense rationale.
    Rewrite superseded claims in place; do not append timeline updates. Keep
    canonical content in one place and use normal-to-normal `soft_links` when a
@@ -69,15 +69,14 @@ relationship.
 - **No code detail in nodes.** Tree prose records the decision and rationale,
   not the implementation.
 - **No history.** Nodes state what is true now and why. Past states live in
-  `git log` and, when present, raw/archive material.
+  `git log` and non-normal archive/supporting material, not normal nodes.
 - **No Source section.** Do not add `## Source`, `Shipped in #123`, inline PR
   citations, or delivery-history prose to node bodies.
 - **No actionable future work in normal nodes.** Put follow-up work in an
   issue, source artifact, or human decision.
 - **Do not unilaterally edit `owners`.** Ownership changes go through humans.
-- **Respect `decisionLocksCode: true`.** Normally code is ground truth when the
-  tree drifts. This flag reverses that for the node; code drift escalates to a
-  human. Set it only on explicit human instruction.
+- **Respect drift authority.** Follow the generated policy's code-vs-tree drift
+  rule, including the human-gated flag that reverses the default for a node.
 
 ## Authoring Judgment
 

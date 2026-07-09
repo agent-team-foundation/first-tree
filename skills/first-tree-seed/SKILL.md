@@ -22,7 +22,7 @@ not here.
 
 | Use `first-tree-seed`                                                 | Use a different skill                                                                                |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| The team has no tree yet, **or** a bound tree with no normal domain structure (no top-level dirs except `members/` / `raw-context/`) | The tree already has a normal domain structure → `first-tree-write` (incremental source-driven write) |
+| The team has no tree yet, **or** a bound tree with no normal domain structure per the generated policy's content classes | The tree already has a normal domain structure → `first-tree-write` (incremental source-driven write) |
 | First content pass on the bound sources                               | Broad maintenance or drift-audit work on an existing tree                                            |
 | Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
 
@@ -168,14 +168,14 @@ its repo" — plus the next step for the case it reports:
 - **A suspended install:** `tree init` prints the installation-settings URL —
   relay it and say to reactivate the First Tree App installation there.
 
-**B — Bound but unseeded.** The tree is bound and holds at most supporting
-structure — a root `NODE.md`, a `members/` index, creator member node(s), and
-possibly `raw-context/` — with **no normal top-level domain directory** yet.
+**B — Bound but unseeded.** The tree is bound and holds at most non-normal
+supporting/member structure under the generated policy's content classes,
+with **no normal top-level domain directory** yet.
 This is the normal seed entry, whether the bootstrap came from state A's
 `tree init` above or from an earlier provision. Proceed to Phase 1. Phase 1
-layers the normal domain skeleton plus any missing supporting structure on top
-of whatever bootstrap nodes already exist: **extend** the root `NODE.md` index
-and the `members/` / `raw-context/` trees rather than recreating them.
+layers the normal domain skeleton plus any missing supporting/member structure
+on top of whatever bootstrap nodes already exist: **extend** the root `NODE.md`
+index and supporting trees rather than recreating them.
 
 **C — Already seeded.** The tree has one or more **normal top-level domain
 directories** — any directory directly under `<workspaceRoot>/<manifest.tree>/`
@@ -185,9 +185,9 @@ dotfile-prefixed dirs. Refuse with a one-line explanation pointing at
 focused maintenance scope. Do **not** delete nodes to force a re-seed —
 that is human-owned.
 
-`raw-context/` is archive/supporting structure, not a normal domain. A tree
-that has only `raw-context/` plus bootstrap nodes is still unseeded for this
-skill's purposes.
+The generated policy's archive/supporting and member content classes are not
+normal domains. A tree that has only those non-normal classes plus bootstrap
+nodes is still unseeded for this skill's purposes.
 
 **In every state, also require all declared sources on disk.** Each source
 clone lives at `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>`
@@ -304,15 +304,14 @@ Aggregate observations across all sources, then abstract:
   organisation are the strongest signals. For `product/` and
   `customer/`, README positioning and marketing-site content are the
   strongest signals.
-- **Supporting structure is automatic, not a candidate.** Ensure
-  `members/<owner>/NODE.md` (owner = most-active recent
-  contributor of the largest source) and `raw-context/NODE.md` (the
-  intake bucket for meeting notes and explorations) exist — state A's
-  `tree init` may have already created a `members/` index and the
-  creator's member node, so **extend those rather than recreating
-  them** (add the computed owner if it differs from the creator). These
-  are scaffolding, not concern axes; do not put them in the user
-  checklist as toggles — but **do compute the primary owner now**
+- **Supporting structure is automatic, not a candidate.** Ensure the
+  generated policy's member content and archive/supporting intake nodes
+  exist — in today's tree shape, `members/<owner>/NODE.md` and
+  `raw-context/NODE.md`. State A's `tree init` may have already created a
+  member index and creator node, so **extend those rather than recreating
+  them** (add the computed owner if it differs from the creator). These are
+  scaffolding, not concern axes; do not put them in the user checklist as
+  toggles — but **do compute the primary owner now**
   (one `git log` per source, seconds) and show the derived name in
   the confirmation message, so the user confirms structure and owner
   in one round-trip instead of being asked twice.

@@ -203,7 +203,10 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
 
     expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("### Source-System Boundary");
-    expect(tree).toContain("### Normal vs `raw-context/` Authority");
+    expect(tree).toContain("### Content Classes And Authority");
+    expect(tree).toContain("**Normal content**");
+    expect(tree).toContain("**Archive/supporting content**");
+    expect(tree).toContain("**Member content**");
     expect(tree).toContain("### Code vs Tree Drift Authority");
     expect(tree).toContain("code is the ground truth");
     expect(tree).toContain("`decisionLocksCode: true` reverses that default");
@@ -224,7 +227,8 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(briefing).not.toContain("# Required Reading");
     const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
     expect(tree).toContain("## Context Tree Policy");
-    expect(tree).toContain("tree-backed reads and source-backed tree writes are unavailable until a tree is bound");
+    expect(tree).toContain("This briefing was generated without a bound tree");
+    expect(tree).toContain("before any tree read/write, re-check the workspace binding");
   });
 
   it("lists every installed First Tree skill in the family map", () => {
@@ -476,8 +480,10 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("load `first-tree-write`");
     expect(tree).toContain("load `first-tree-read`");
-    expect(tree).toContain("Normal Context Tree content states **current truth**");
-    expect(tree).toContain("`raw-context/` is archive/supporting material");
+    expect(tree).toContain("**Normal content**");
+    expect(tree).toContain("**Archive/supporting content**");
+    expect(tree).toContain("**Member content**");
+    expect(tree).toContain("Default to normal content as current truth");
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
     expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
@@ -510,7 +516,8 @@ describe("buildAgentBriefing — Context Tree", () => {
   it("surfaces tree-less binding as a human/operator gap", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
-    expect(tree).toContain("This agent has no Context Tree bound");
+    expect(tree).toContain("At briefing generation time this agent had no Context Tree bound");
+    expect(tree).toContain("Re-check the\nbinding if the user says a tree was created or bound during the session");
     expect(tree).toMatch(/surface that\s+gap to a human/);
     expect(tree).toContain("operator action");
     expect(tree).toContain("build / set up the Context Tree");

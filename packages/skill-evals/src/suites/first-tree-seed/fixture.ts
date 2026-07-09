@@ -56,8 +56,8 @@ relationships; source repos record implementation detail. Use the Double Test:
 a candidate belongs only when it establishes or changes a decision future
 agents must respect and remains durable if the triggering commit or PR is
 rewritten. Capture current truth and rationale, not history, PR references, or
-actionable future work. Normal tree content is canonical; \`raw-context/\` is
-archive/supporting material.
+actionable future work. Normal tree content is canonical; archive/supporting
+and member content are non-normal classes with narrower authority.
 
 ## Eval Workspace State
 
