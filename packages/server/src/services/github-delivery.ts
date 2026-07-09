@@ -83,15 +83,19 @@ export async function deliverNormalizedEvent(
     // chat they already sit in. The carve-out is a `kind: "new"` directed
     // involve — any non-null `involveReason` (`assigned` / `mentioned`;
     // `review_requested` can't name the actor themselves on GitHub, so it's
-    // inert here). `kind: "new"` means the entity has NO bound chat yet, so
-    // pruning wouldn't just drop an echo card — it would prevent the tracking
+    // inert here). `kind: "new"` is target-human-scoped: it means THIS involved
+    // human has no existing entity line (`resolveAudience` found no
+    // `subscribedByHuman` row for them) — NOT that the entity has no chat
+    // anywhere; other humans may already track it. Pruning such a target
+    // wouldn't just drop an echo card — it would prevent this human's tracking
     // chat from ever being created (the actor self-assigns / self-@s an entity
-    // — at creation or later — and it stays invisible to First Tree). A
+    // — at creation or later — and it stays invisible to their delegate). A
     // brand-new directed involve is an intentional "track this" signal, not a
-    // passive echo, so it must survive and mint the chat. Everything else that
-    // maps to the actor (subscribed echoes, and directed involves on an entity
-    // whose chat already exists → `kind: "existing"`) stays pruned: the chat is
-    // already there and the card would be a true self-echo. See #1536.
+    // passive echo, so it must survive and mint (or reuse this human's) chat.
+    // Everything else that maps to the actor (subscribed echoes, and directed
+    // involves where this human already has an entity line → `kind: "existing"`)
+    // stays pruned: that human's chat already exists and the card would be a
+    // true self-echo. See #1536.
     //
     // The `involveReason !== null` clause is defensive, not load-bearing:
     // `resolveAudience` only ever mints `kind: "new"` alongside a non-null
