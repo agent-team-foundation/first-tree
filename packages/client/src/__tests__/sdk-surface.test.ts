@@ -323,4 +323,276 @@ describe("FirstTreeHubSDK public surface", () => {
     expect(err.statusCode).toBe(418);
     expect(err.message).toBe("teapot");
   });
+
+  it("covers outbox token, active runtime chat ids, chat update, and github entity endpoints", async () => {
+    const conflictBody = {
+      error: "ENTITY_FOLLOWED_ELSEWHERE",
+      message: "already followed",
+      conflict: { chatId: "chat-other", topic: "Other" },
+    };
+    const fetchMock = makeFetchMock([
+      jsonResponse({ accessToken: "outbox-token", expiresIn: 60 }),
+      jsonResponse({ chatIds: ["chat-1", "chat-2"] }),
+      jsonResponse({ id: "chat-1", topic: "Updated" }),
+      jsonResponse({ entity: "acme/backend", chatId: "chat-1" }),
+      new Response(JSON.stringify(conflictBody), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response("not json conflict", { status: 409, headers: { "content-type": "text/plain" } }),
+      new Response(JSON.stringify({ error: "nope" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }),
+      jsonResponse({ removed: 1 }),
+      jsonResponse({ entities: [{ entity: "acme/backend" }] }),
+    ]);
+    const sdk = makeSdk();
+
+    await expect(sdk.createAgentOutboxToken("chat-1")).resolves.toEqual({
+      accessToken: "outbox-token",
+      expiresIn: 60,
+    });
+    await expect(sdk.listActiveRuntimeChatIds()).resolves.toEqual({ chatIds: ["chat-1", "chat-2"] });
+    await expect(sdk.updateChat("chat-1", { topic: "Updated", description: null })).resolves.toMatchObject({
+      id: "chat-1",
+    });
+    await expect(sdk.followGithubEntity("chat-1", { entity: "acme/backend" })).resolves.toEqual({
+      ok: true,
+      result: { entity: "acme/backend", chatId: "chat-1" },
+    });
+    await expect(sdk.followGithubEntity("chat-1", { entity: "acme/backend", rebind: true })).resolves.toEqual({
+      ok: false,
+      conflict: conflictBody,
+    });
+    await expect(sdk.followGithubEntity("chat-1", { entity: "acme/backend" })).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining("non-JSON conflict body"),
+    });
+    await expect(sdk.followGithubEntity("chat-1", { entity: "acme/backend" })).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining("malformed conflict body"),
+    });
+    await expect(sdk.followGithubEntity("chat-1", { entity: "missing" })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(sdk.unfollowGithubEntity("chat-1", "acme/backend")).resolves.toEqual({ removed: 1 });
+    await expect(sdk.listChatGithubEntities("chat-1")).resolves.toEqual({ entities: [{ entity: "acme/backend" }] });
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://first-tree.example/api/v1/agent/chats/chat-1/outbox-token",
+      "https://first-tree.example/api/v1/agent/chats/active-runtime-ids",
+      "https://first-tree.example/api/v1/agent/chats/chat-1",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/github-entities",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/github-entities",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/github-entities",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/github-entities",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/github-entities",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/github-entities?entity=acme%2Fbackend",
+      "https://first-tree.example/api/v1/agent/chats/chat-1/github-entities",
+    ]);
+  });
+
+  it("covers attachment upload/download including content-disposition filename parsing", async () => {
+    const uploadBody = {
+      id: "019e71c9-88d2-70be-be67-fdb033b2ef0b",
+      mimeType: "image/png",
+      filename: "shot.png",
+      sizeBytes: 4,
+      uploadedBy: "user-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const bytes = Buffer.from([1, 2, 3, 4]);
+    const fetchMock = makeFetchMock([
+      jsonResponse(uploadBody),
+      new Response(bytes, {
+        status: 200,
+        headers: {
+          "content-type": "image/png",
+          "content-disposition": 'attachment; filename="shot%20copy.png"',
+        },
+      }),
+      new Response(bytes, {
+        status: 200,
+        headers: {
+          "content-type": "application/octet-stream",
+        },
+      }),
+      new Response(bytes, {
+        status: 200,
+        headers: {
+          "content-disposition": 'attachment; filename="%E0%A4%A"',
+        },
+      }),
+      new Response(bytes, {
+        status: 200,
+        headers: {
+          "content-disposition": "inline",
+        },
+      }),
+      textResponse("missing", 404),
+    ]);
+    const sdk = makeSdk();
+
+    await expect(
+      sdk.uploadAttachment({
+        bytes,
+        mimeType: "image/png",
+        filename: "shot.png",
+        orgId: "org/1",
+      }),
+    ).resolves.toEqual(uploadBody);
+
+    const withName = await sdk.fetchAttachment({ id: "att-1" });
+    expect(withName.mimeType).toBe("image/png");
+    expect(withName.filename).toBe("shot copy.png");
+    expect(withName.size).toBe(4);
+    expect(Buffer.compare(withName.bytes, bytes)).toBe(0);
+
+    const defaults = await sdk.fetchAttachment({ id: "att-2" });
+    expect(defaults.mimeType).toBe("application/octet-stream");
+    expect(defaults.filename).toBe("blob");
+
+    const malformedEncoding = await sdk.fetchAttachment({ id: "att-3" });
+    expect(malformedEncoding.filename).toBe("%E0%A4%A");
+
+    const noFilenameDirective = await sdk.fetchAttachment({ id: "att-4" });
+    expect(noFilenameDirective.filename).toBe("blob");
+
+    await expect(sdk.fetchAttachment({ id: "missing" })).rejects.toMatchObject({ statusCode: 404 });
+
+    const uploadCall = fetchMock.mock.calls[0];
+    expect(uploadCall?.[0]).toBe("https://first-tree.example/api/v1/orgs/org%2F1/attachments");
+    expect(uploadCall?.[1]).toMatchObject({
+      method: "POST",
+      headers: expect.objectContaining({
+        "Content-Type": "application/octet-stream",
+      }),
+    });
+  });
+
+  it("covers document publish/list/get/status and comment lifecycle without transport retry", async () => {
+    const fetchMock = makeFetchMock([
+      jsonResponse({ id: "doc-1", slug: "plan", version: 1 }),
+      jsonResponse({ items: [{ id: "doc-1" }], nextCursor: null }),
+      jsonResponse({ id: "doc-1", version: { number: 2, content: "# hi" } }),
+      jsonResponse({ id: "doc-1", status: "published" }),
+      jsonResponse({ items: [{ id: "c1" }] }),
+      jsonResponse({ id: "c1", body: "nit" }),
+      jsonResponse({ id: "c2", body: "reply" }),
+      jsonResponse({ id: "c1", status: "resolved" }),
+      textResponse("boom", 500),
+      textResponse("boom", 500),
+      textResponse("boom", 500),
+    ]);
+    const sdk = makeSdk();
+
+    await expect(
+      sdk.publishDoc({ slug: "plan", title: "Plan", content: "# hi", project: "alpha" }),
+    ).resolves.toMatchObject({ id: "doc-1" });
+    await expect(sdk.listDocs({ slug: "plan", project: "alpha", status: "draft", limit: 5, cursor: "c0" })).resolves
+      .toMatchObject({ nextCursor: null });
+    await expect(sdk.getDoc("doc-1", { version: 2 })).resolves.toMatchObject({ id: "doc-1" });
+    await expect(sdk.setDocStatus("doc-1", "published")).resolves.toMatchObject({ status: "published" });
+    await expect(sdk.listDocComments("doc-1", { status: "open", versionNumber: 1 })).resolves.toMatchObject({
+      items: [{ id: "c1" }],
+    });
+    await expect(sdk.createDocComment("doc-1", { body: "nit" })).resolves.toMatchObject({ id: "c1" });
+    await expect(sdk.replyDocComment("c1", "reply")).resolves.toMatchObject({ id: "c2" });
+    await expect(sdk.setDocCommentStatus("c1", "resolved")).resolves.toMatchObject({ status: "resolved" });
+
+    // publishDoc is non-idempotent — transport retry is disabled.
+    await expect(sdk.publishDoc({ slug: "fail", title: "Fail", content: "x" })).rejects.toMatchObject({
+      statusCode: 500,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(9);
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://first-tree.example/api/v1/agent/documents",
+      "https://first-tree.example/api/v1/agent/documents?slug=plan&project=alpha&status=draft&limit=5&cursor=c0",
+      "https://first-tree.example/api/v1/agent/documents/doc-1?version=2",
+      "https://first-tree.example/api/v1/agent/documents/doc-1",
+      "https://first-tree.example/api/v1/agent/documents/doc-1/comments?status=open&versionNumber=1",
+      "https://first-tree.example/api/v1/agent/documents/doc-1/comments",
+      "https://first-tree.example/api/v1/agent/document-comments/c1/replies",
+      "https://first-tree.example/api/v1/agent/document-comments/c1",
+      "https://first-tree.example/api/v1/agent/documents",
+    ]);
+  });
+
+  it("parses HTTP-date Retry-After and ignores invalid values", async () => {
+    const future = new Date(Date.now() + 60_000).toUTCString();
+    makeFetchMock([
+      new Response(JSON.stringify({ error: "later" }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": future },
+      }),
+      new Response(JSON.stringify({ error: "nope" }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "not-a-date" },
+      }),
+    ]);
+
+    const withDate = await makeSdk().listChats().then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (err: unknown) => err as SdkError,
+    );
+    expect(withDate.retryAfter).toBe(future);
+    expect(withDate.retryAfterMs).toBeGreaterThan(0);
+
+    const invalid = await makeSdk().listChats().then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (err: unknown) => err as SdkError,
+    );
+    expect(invalid.retryAfter).toBe("not-a-date");
+    expect(invalid.retryAfterMs).toBeUndefined();
+  });
+
+  it("exposes runtimeSessionToken and merges custom headers over defaults", async () => {
+    const fetchMock = makeFetchMock([jsonResponse({ ok: true })]);
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: SERVER_URL,
+      agentId: "agent-1",
+      runtimeSessionToken: "runtime-token-xyz",
+      getAccessToken: () => "access-token",
+    });
+
+    expect(sdk.runtimeSessionToken).toBe("runtime-token-xyz");
+
+    const method = Reflect.get(sdk, "doFetchOnce");
+    if (typeof method !== "function") throw new Error("missing doFetchOnce");
+    await method.call(sdk, "/api/v1/test", {
+      method: "POST",
+      body: Buffer.from("raw"),
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Custom": "1",
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://first-tree.example/api/v1/test",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "Content-Type": "application/octet-stream",
+          "X-Custom": "1",
+          "x-agent-runtime-session": "runtime-token-xyz",
+        }),
+      }),
+    );
+  });
+
+  it("covers buildQuery empty/populated branches via listDocs", async () => {
+    const fetchMock = makeFetchMock([jsonResponse({ items: [], nextCursor: null })]);
+    await makeSdk().listDocs();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://first-tree.example/api/v1/agent/documents");
+  });
 });

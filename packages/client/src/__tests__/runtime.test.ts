@@ -247,6 +247,42 @@ describe("AgentRuntime", () => {
     expect(state.connections[0]?.getMaxListeners()).toBe(12);
   });
 
+  it("attaches the update manager and aggregates quiet-gate snapshots", async () => {
+    const state = installRuntimeMocks({
+      snapshots: {
+        alpha: { activeCount: 2, lastActivityMs: 100 },
+        beta: { activeCount: 1, lastActivityMs: 250 },
+      },
+    });
+    const signals = captureProcessSignals();
+    const { AgentRuntime } = await import("../runtime/runtime.js");
+    const update = {
+      updateConfig: { policy: "notify" as const, channel: "stable" as const },
+      prompt: vi.fn(async () => "later" as const),
+      executeUpdate: vi.fn(async () => ({ installed: false })),
+    };
+    const runtime = new AgentRuntime({
+      config: makeRuntimeConfig(),
+      currentVersion: "9.9.9",
+      getAccessToken: async () => "token",
+      update: update as never,
+    });
+
+    const started = runtime.start();
+    await vi.waitFor(() => expect(state.updateAttach).toHaveBeenCalled());
+    expect(state.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ policy: "notify", version: "9.9.9" }),
+      "update manager attached",
+    );
+    const attachOpts = state.updateOptions;
+    expect(attachOpts?.getQuietGateSnapshot?.()).toEqual({ activeCount: 3, lastActivityMs: 250 });
+
+    await vi.waitFor(() => expect(signals.getSigterm()).not.toBeNull());
+    await signals.getSigterm()?.();
+    await expect(started).resolves.toBeUndefined();
+    expect(state.updateDispose).toHaveBeenCalled();
+  });
+
   it("forces exit when shutdown exceeds the timeout", async () => {
     vi.useFakeTimers();
     let releaseStop: () => void = () => {};

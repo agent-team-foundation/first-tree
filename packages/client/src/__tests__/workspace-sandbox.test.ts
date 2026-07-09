@@ -18,6 +18,7 @@ import {
   buildWorkspaceOnlyAppServerEnvironment,
   buildWorkspaceOnlyBubblewrapArgs,
   buildWorkspaceOnlyEnvironment,
+  createWorkspaceOnlySpawnProcess,
   LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS,
   LANDING_CODEX_PERMISSIONS_PROFILE,
   prepareWorkspaceOnlyOutboxHome,
@@ -323,5 +324,53 @@ describe("workspace-only sandbox", () => {
       refreshToken: "scoped-outbox-token",
       serverUrl: "https://first-tree.test",
     });
+  });
+
+  it("rejects missing workspaceRoot and missing absolute labels in assertPathInsideWorkspace", () => {
+    expect(() => assertPathInsideWorkspace("x", join(root, "missing-ws"), "cwd")).toThrow(/does not exist/);
+    expect(() => assertPathInsideWorkspace(join(workspace, "missing-file"), workspace, "cwd")).toThrow(
+      /does not exist/,
+    );
+  });
+
+  it("createWorkspaceOnlySpawnProcess rejects non-linux and missing bwrap", () => {
+    if (process.platform === "linux") {
+      const spawn = createWorkspaceOnlySpawnProcess({ workspaceRoot: workspace, sandboxBinary: "definitely-not-bwrap-xyz" });
+      expect(() =>
+        spawn("/bin/true", [], {
+          cwd: workspace,
+          env: { PATH: "/usr/bin:/bin" },
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        }),
+      ).toThrow(/bubblewrap/);
+    } else {
+      const spawn = createWorkspaceOnlySpawnProcess({ workspaceRoot: workspace });
+      expect(() =>
+        spawn("/bin/true", [], {
+          cwd: workspace,
+          env: {},
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        }),
+      ).toThrow(/Linux bubblewrap/);
+    }
+  });
+
+  it("builds app-server bubblewrap args for a command outside the workspace", () => {
+    const command = join(outside, "external-codex");
+    writeFileSync(command, "#!/bin/sh\n", { mode: 0o755 });
+    const args = buildWorkspaceOnlyBubblewrapArgs({
+      command,
+      args: ["app-server", "--stdio"],
+      workspaceRoot: workspace,
+      cwd: workspace,
+      env: { PATH: "/bin", HOME: workspace },
+      readOnlyPaths: [outside],
+    });
+    expect(args).toContain("--ro-bind");
+    expect(args).toContain(command);
+    expect(args).toContain("--");
+    expect(args.at(-2)).toBe("app-server");
   });
 });

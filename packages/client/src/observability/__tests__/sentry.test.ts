@@ -1,6 +1,33 @@
 import type { Event } from "@sentry/node";
-import { describe, expect, it } from "vitest";
-import { resolveClientSentryConfig, sanitizeClientSentryEvent } from "../sentry.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const sentryMocks = vi.hoisted(() => ({
+  init: vi.fn(),
+  setTag: vi.fn(),
+  isEnabled: vi.fn(() => false),
+  withScope: vi.fn((cb: (scope: { setContext: ReturnType<typeof vi.fn> }) => unknown) =>
+    cb({ setContext: vi.fn() }),
+  ),
+  captureException: vi.fn(() => "event-id"),
+  flush: vi.fn(async () => true),
+}));
+
+vi.mock("@sentry/node", () => ({
+  init: sentryMocks.init,
+  setTag: sentryMocks.setTag,
+  isEnabled: sentryMocks.isEnabled,
+  withScope: sentryMocks.withScope,
+  captureException: sentryMocks.captureException,
+  flush: sentryMocks.flush,
+}));
+
+import {
+  captureClientException,
+  flushClientSentry,
+  initClientSentry,
+  resolveClientSentryConfig,
+  sanitizeClientSentryEvent,
+} from "../sentry.js";
 
 describe("resolveClientSentryConfig", () => {
   it("defaults to enabled when a client DSN is configured", () => {
@@ -150,5 +177,149 @@ describe("sanitizeClientSentryEvent", () => {
     });
 
     expect(event.request?.url).toBe("");
+  });
+
+  it("ignores empty and short path redaction roots", () => {
+    const event = sanitizeClientSentryEvent(
+      {
+        transaction: "/x",
+        extra: { path: "/" },
+      },
+      {
+        enabled: true,
+        dsn: "https://public@example.ingest.sentry.io/1",
+        environment: "production",
+        release: "first-tree-client@abc123",
+        gitSha: "abc123",
+        sampleRate: 0.05,
+      },
+    );
+    expect(event.transaction).toBe("/x");
+  });
+});
+
+describe("resolveClientSentryConfig edge branches", () => {
+  it("falls back sample rate and git sha sources", () => {
+    expect(
+      resolveClientSentryConfig({
+        FIRST_TREE_CLIENT_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
+        FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE: "not-a-number",
+      }).sampleRate,
+    ).toBe(0.05);
+    expect(
+      resolveClientSentryConfig({
+        FIRST_TREE_CLIENT_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
+        FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE: "2",
+      }).sampleRate,
+    ).toBe(0.05);
+    expect(
+      resolveClientSentryConfig({
+        FIRST_TREE_CLIENT_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
+        FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE: "0.25",
+        FIRST_TREE_CLIENT_GIT_SHA: "client-sha",
+      }).gitSha,
+    ).toBe("client-sha");
+    expect(
+      resolveClientSentryConfig({
+        FIRST_TREE_CLIENT_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
+        GITHUB_SHA: "github-sha",
+      }).gitSha,
+    ).toBe("github-sha");
+    expect(resolveClientSentryConfig({}).release).toBe("first-tree-client@unknown");
+    expect(
+      resolveClientSentryConfig({
+        FIRST_TREE_CLIENT_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
+        FIRST_TREE_CLIENT_SENTRY_ENABLED: "yes",
+        FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT: "staging",
+        FIRST_TREE_CLIENT_SENTRY_RELEASE: "custom-release",
+        FIRST_TREE_GIT_SHA: "abc",
+      }),
+    ).toMatchObject({
+      enabled: true,
+      environment: "staging",
+      release: "custom-release",
+    });
+  });
+});
+
+describe("initClientSentry / captureClientException / flushClientSentry", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.clearAllMocks();
+    sentryMocks.isEnabled.mockReturnValue(false);
+  });
+
+  it("skips init when disabled and logs configuration skip when explicit flag set", () => {
+    process.env.FIRST_TREE_CLIENT_SENTRY_ENABLED = "off";
+    process.env.FIRST_TREE_CLIENT_SENTRY_DSN = "https://public@example.ingest.sentry.io/1";
+    initClientSentry();
+    expect(sentryMocks.init).not.toHaveBeenCalled();
+  });
+
+  it("skips init when no DSN is available", () => {
+    delete process.env.FIRST_TREE_CLIENT_SENTRY_DSN;
+    delete process.env.SENTRY_DSN;
+    initClientSentry({ defaultDsn: undefined });
+    expect(sentryMocks.init).not.toHaveBeenCalled();
+  });
+
+  it("initializes Sentry with sanitizing beforeSend hooks and optional version tag", () => {
+    process.env.FIRST_TREE_CLIENT_SENTRY_DSN = "https://public@example.ingest.sentry.io/9";
+    process.env.FIRST_TREE_GIT_SHA = "deadbeef";
+    process.env.FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT = "test";
+    delete process.env.FIRST_TREE_CLIENT_SENTRY_ENABLED;
+
+    initClientSentry({ version: "1.2.3", gitSha: "deadbeef" });
+
+    expect(sentryMocks.init).toHaveBeenCalledOnce();
+    const initArg = sentryMocks.init.mock.calls[0]?.[0] as {
+      dsn: string;
+      beforeSend: (event: Event) => Event;
+      beforeSendTransaction: (event: Event) => Event;
+    };
+    expect(initArg.dsn).toBe("https://public@example.ingest.sentry.io/9");
+    const sanitized = initArg.beforeSend({
+      user: { id: "u" },
+      request: { url: "https://example.com/?token=secret" },
+    });
+    expect(sanitized.user).toBeUndefined();
+    expect(sanitized.request?.url).not.toContain("token=");
+    expect(initArg.beforeSendTransaction({ transaction: "/tmp/x" }).transaction).toBeDefined();
+    expect(sentryMocks.setTag).toHaveBeenCalledWith("first_tree.surface", "client");
+    expect(sentryMocks.setTag).toHaveBeenCalledWith("first_tree.git_sha", "deadbeef");
+    expect(sentryMocks.setTag).toHaveBeenCalledWith("first_tree.cli_version", "1.2.3");
+  });
+
+  it("capture and flush no-op when Sentry is disabled", async () => {
+    sentryMocks.isEnabled.mockReturnValue(false);
+    expect(captureClientException(new Error("x"), { token: "secret" })).toBeUndefined();
+    await expect(flushClientSentry(10)).resolves.toBe(true);
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.flush).not.toHaveBeenCalled();
+  });
+
+  it("capture and flush when Sentry is enabled", async () => {
+    sentryMocks.isEnabled.mockReturnValue(true);
+    const setContext = vi.fn();
+    sentryMocks.withScope.mockImplementationOnce((cb) => cb({ setContext }));
+    expect(captureClientException(new Error("boom"), { workspacePath: "/tmp/ws", token: "secret" })).toBe(
+      "event-id",
+    );
+    expect(setContext).toHaveBeenCalledWith(
+      "first_tree",
+      expect.objectContaining({
+        token: "[REDACTED]",
+      }),
+    );
+    expect(sentryMocks.captureException).toHaveBeenCalledOnce();
+    await expect(flushClientSentry(123)).resolves.toBe(true);
+    expect(sentryMocks.flush).toHaveBeenCalledWith(123);
+  });
+
+  it("capture without context still scopes the exception", () => {
+    sentryMocks.isEnabled.mockReturnValue(true);
+    expect(captureClientException("plain")).toBe("event-id");
   });
 });

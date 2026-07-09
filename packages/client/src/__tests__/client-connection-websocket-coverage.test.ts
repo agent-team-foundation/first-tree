@@ -723,4 +723,155 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     });
     await expect(ackPromise).resolves.toBeUndefined();
   });
+
+  it("covers agent:unbound, session commands, runtime-auth, reconcile, and no-match confirmation frames", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const events: string[] = [];
+    connection.on("agent:unbound", (agentId) => events.push(`unbound:${agentId}`));
+    connection.on("session:command", (cmd) => events.push(`cmd:${cmd.type}:${cmd.agentId}:${cmd.chatId}`));
+    connection.on("runtime-auth:start", (payload) =>
+      events.push(`auth:${payload.provider}:${payload.method}:${payload.ref}`),
+    );
+    connection.on("session:reconcile:result", (payload) =>
+      events.push(`reconcile:${payload.agentId}:${payload.staleChatIds.join(",")}`),
+    );
+    connection.on("agent:pinned", (payload) => events.push(`pinned:${payload.agentId}`));
+
+    internal.boundAgents.set("agent-1", {
+      agentId: "agent-1",
+      displayName: "A",
+      agentType: "agent",
+      sdk: {} as BoundAgent["sdk"],
+    });
+
+    internal.handleMessage({ type: "agent:unbound", agentId: "agent-1" });
+    expect(events).toContain("unbound:agent-1");
+
+    internal.handleMessage({
+      type: "agent:pinned",
+      agentId: "agent-2",
+      clientId: "client_ws_coverage",
+      runtimeProvider: "codex",
+    });
+    // pin may or may not validate depending on schema; still exercise the branch
+    internal.bindRetryRecords?.set?.("agent-2", { attempts: 1, nextAllowedAt: Date.now() + 99999, lastReason: "x" });
+
+    for (const type of ["session:suspend", "session:resume", "session:terminate"] as const) {
+      internal.handleMessage({ type, agentId: "agent-1", chatId: "chat-1" });
+    }
+    expect(events.filter((e) => e.startsWith("cmd:")).length).toBe(3);
+
+    internal.handleMessage({
+      type: "runtime-auth:start",
+      provider: "codex",
+      method: "browser",
+      ref: "ref-1",
+    });
+    internal.handleMessage({
+      type: "session:reconcile:result",
+      agentId: "agent-1",
+      staleChatIds: ["chat-a", "chat-b"],
+    });
+    expect(events.some((e) => e.startsWith("reconcile:"))).toBe(true);
+
+    // Malformed + no-match confirmation frames (accepted/rejected for session/event, inbox ack/recover)
+    internal.handleMessage({ type: "session:event:accepted", ref: "missing" });
+    internal.handleMessage({
+      type: "session:event:accepted",
+      ref: "r1",
+      agentId: "a",
+      chatId: "c",
+    });
+    internal.handleMessage({ type: "session:event:rejected", ref: "missing" });
+    internal.handleMessage({
+      type: "session:event:rejected",
+      ref: "r2",
+      agentId: "a",
+      reason: "x",
+    });
+    internal.handleMessage({ type: "inbox:ack:accepted", entryId: 1 });
+    internal.handleMessage({
+      type: "inbox:ack:accepted",
+      entryId: 1,
+      ref: "nope",
+      disposition: "acked",
+    });
+    internal.handleMessage({ type: "inbox:ack:rejected", entryId: 1 });
+    internal.handleMessage({
+      type: "inbox:ack:rejected",
+      entryId: 1,
+      ref: "nope",
+      reason: "x",
+    });
+    internal.handleMessage({ type: "inbox:recover:accepted", ref: "missing" });
+    internal.handleMessage({
+      type: "inbox:recover:accepted",
+      ref: "r3",
+      agentId: "a",
+      chatId: "c",
+      resetCount: 0,
+    });
+    internal.handleMessage({ type: "inbox:recover:rejected", ref: "missing" });
+    internal.handleMessage({
+      type: "inbox:recover:rejected",
+      ref: "r4",
+      agentId: "a",
+      reason: "x",
+    });
+
+    // error frames with and without pending bind ref
+    const errors: string[] = [];
+    connection.on("error", (err) => errors.push(err.message));
+    internal.handleMessage({ type: "error", message: "global boom" });
+    expect(errors).toContain("global boom");
+
+    const bindReject = new Promise<BoundAgent>((resolve, reject) => {
+      internal.pendingBinds.set("bind-ref", {
+        agentId: "agent-x",
+        runtimeType: "codex",
+        resolve,
+        reject,
+      });
+    });
+    internal.handleMessage({ type: "error", message: "bind boom", ref: "bind-ref" });
+    await expect(bindReject).rejects.toThrow("bind boom");
+  });
+
+  it("skips rebind for agents inside backoff and recovers after successful rebind", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const skipped: string[] = [];
+    const recovered: string[] = [];
+    connection.on("resilience.bind.skipped", (p) => skipped.push(p.agentId));
+    connection.on("resilience.bind.recovered", (p) => recovered.push(p.agentId));
+
+    internal.desiredBindings.set("agent-skip", { agentId: "agent-skip", runtimeType: "codex" });
+    internal.bindRetryRecords = new Map([
+      ["agent-skip", { attempts: 2, nextAllowedAt: Date.now() + 60_000, lastReason: "wrong_client" }],
+    ]);
+    internal.rebindAgents();
+    expect(skipped).toContain("agent-skip");
+
+    // Allow rebind for another agent and succeed after prior attempts.
+    internal.desiredBindings.set("agent-ok", { agentId: "agent-ok", runtimeType: "codex" });
+    internal.bindRetryRecords.set("agent-ok", {
+      attempts: 1,
+      nextAllowedAt: 0,
+      lastReason: "timeout",
+    });
+    internal.sendBind = vi.fn(async (agentId: string) => ({
+      agentId,
+      displayName: "Ok",
+      agentType: "agent",
+      sdk: {} as BoundAgent["sdk"],
+    }));
+    internal.rebindAgents();
+    await flushMicrotasks();
+    expect(recovered).toContain("agent-ok");
+    expect(internal.bindRetryRecords.has("agent-ok")).toBe(false);
+
+    connection.resetBindRetry("agent-skip");
+    expect(internal.bindRetryRecords.has("agent-skip")).toBe(false);
+  });
 });
