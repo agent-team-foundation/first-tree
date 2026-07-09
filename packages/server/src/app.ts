@@ -222,13 +222,14 @@ export async function buildApp(config: Config) {
       const route = request.routeOptions?.url;
       const method = request.method ?? "GET";
       if (route) return `${method} ${route}`;
-      const pathOnly = request.url.split("?")[0] ?? request.url;
+      // `split("?")` always yields at least one segment.
+      const pathOnly = request.url.split("?")[0] as string;
       return `${method} ${pathOnly}`;
     },
     formatSpanAttributes: {
       request: (request) => {
         const route = request.routeOptions?.url;
-        const target = request.url.split("?")[0] ?? request.url;
+        const target = request.url.split("?")[0] as string;
         // `http.url` retains the query string for debugability but is run
         // through `redactUrl` so JWTs in `?token=…` (admin WS upgrade) never
         // reach the trace exporter — same vocabulary as the fastify logger's
@@ -614,7 +615,7 @@ export async function buildApp(config: Config) {
         if (request.url.startsWith("/api/")) {
           return reply.status(404).send({ error: "Not found" });
         }
-        const requestPath = request.url.split("?")[0] ?? request.url;
+        const requestPath = request.url.split("?")[0] as string;
         // Tombstone for the retired Hearback feedback endpoint. The route is
         // gone, but stale cached widgets (and any external caller) may still
         // POST to `/feedback/*`; fail them deliberately with JSON instead of

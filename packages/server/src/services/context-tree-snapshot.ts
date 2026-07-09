@@ -557,7 +557,7 @@ function isSafeBranchName(branch: string): boolean {
 
 function errorMessage(error: unknown): string {
   if (!(error instanceof Error) || error.message.trim().length === 0) return "";
-  return redactSecret(error.message.trim().split("\n")[0] ?? "");
+  return redactSecret(error.message.trim().split("\n")[0] as string);
 }
 
 function redactSecret(message: string): string {
@@ -1171,7 +1171,7 @@ function markdownLinks(content: string): string[] {
   while (match) {
     const target = match[1];
     if (target && !/^https?:\/\//.test(target) && !target.startsWith("#")) {
-      links.push(target.split("#")[0] ?? target);
+      links.push(target.split("#")[0] as string);
     }
     match = re.exec(content);
   }
@@ -1183,7 +1183,7 @@ function resolveLinkedNode(
   fromSourcePath: string,
   nodeByTreePath: Map<string, ContextTreeNode>,
 ): ContextTreeNode | null {
-  const withoutAnchor = link.split("#")[0] ?? link;
+  const withoutAnchor = link.split("#")[0] as string;
   if (!withoutAnchor) return null;
   const baseDir = sourceDir(fromSourcePath);
   const raw = withoutAnchor.startsWith("/") ? withoutAnchor.slice(1) : toPosix(normalize(join(baseDir, withoutAnchor)));

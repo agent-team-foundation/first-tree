@@ -249,14 +249,9 @@ function rejectedCodeForJoseError(reason: JwtFailureReason, err: unknown): AuthR
   if (joseErrorCode(err) === "ERR_JWT_CLAIM_VALIDATION_FAILED") {
     return AUTH_REJECTED_CODES.INVALID_CLAIMS;
   }
-  switch (reason) {
-    case "jwt_signature_invalid":
-    case "jwt_malformed":
-    case "jwt_verify_failed":
-      return AUTH_REJECTED_CODES.INVALID_TOKEN;
-    case "jwt_expired":
-      return AUTH_REJECTED_CODES.INVALID_TOKEN;
-  }
+  // `jwt_expired` is handled before this helper (see auth message path).
+  void reason;
+  return AUTH_REJECTED_CODES.INVALID_TOKEN;
 }
 
 function sendRejected(socket: WebSocket, ref: string | undefined, reason: AgentBindRejectReason): void {
