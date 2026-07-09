@@ -358,6 +358,22 @@ async function setInputValue(element: HTMLInputElement, value: string): Promise<
   await flush();
 }
 
+async function setTextareaValue(element: HTMLTextAreaElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(element, value);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  });
+  await flush();
+}
+
+async function pressKey(element: Element, key: string): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
 async function waitForCondition(check: () => boolean, message: string, timeoutMs = 1200): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -544,6 +560,223 @@ describe("PromptTab extra DOM states", () => {
       expectedVersion: 10,
       bindings: [],
     });
+  });
+
+  it("edits orphan inline prompt bindings and cancels the editor with Escape", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValue(
+      agentResources({
+        effective: { version: 9, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+        bindings: [
+          {
+            id: "orphan-inline",
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            replacesResourceId: null,
+            inlinePromptBody: "Recovered from an invisible binding.",
+            order: 3,
+          },
+        ],
+      }),
+    );
+
+    const container = await renderWithProviders(<PromptTab />);
+    await waitForText(container, "No instructions yet.");
+
+    await click(container.querySelector('button[aria-label="More actions for custom instructions"]'));
+    await click(buttonByText(container, "Edit custom instructions"));
+    await waitForText(container, "Save instructions");
+    const firstTextarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    expect(firstTextarea?.value).toBe("Recovered from an invisible binding.");
+    if (!firstTextarea) throw new Error("Expected orphan prompt textarea");
+    await pressKey(firstTextarea, "Escape");
+    await waitForCondition(
+      () => !container.textContent?.includes("Save instructions"),
+      "Expected Escape to close the orphan editor",
+    );
+    expect(agentResourceMocks.updateAgentResources).not.toHaveBeenCalled();
+
+    await click(container.querySelector('button[aria-label="More actions for custom instructions"]'));
+    await click(buttonByText(container, "Edit custom instructions"));
+    await waitForText(container, "Save instructions");
+    const secondTextarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
+    if (!secondTextarea) throw new Error("Expected orphan prompt textarea");
+    await setTextareaValue(secondTextarea, "Recovered and saved.");
+    await click(buttonByText(container, "Save instructions"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected orphan prompt update",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 9,
+      bindings: [
+        {
+          id: "orphan-inline",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: "Recovered and saved.",
+          order: 3,
+        },
+      ],
+    });
+  });
+
+  it("expands prompt rows and removes a replaced row without a live replacement", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    agentResourceMocks.getAgentResources.mockResolvedValue(
+      agentResources({
+        effective: {
+          version: 9,
+          repos: [],
+          prompts: [
+            promptRow({
+              id: "resource:active-prompt",
+              resourceId: "active-prompt",
+              name: "Active prompt",
+              promptBody: "Active body is hidden until expanded.",
+              order: 1,
+            }),
+            promptRow({
+              id: "binding:replace-1:replaced",
+              bindingId: "replace-1",
+              resourceId: "team-prompt",
+              replacesResourceId: null,
+              name: "Overridden prompt",
+              mode: "replaced",
+              promptBody: "Original body is hidden until expanded.",
+              order: 2,
+            }),
+          ],
+          skills: [],
+          mcp: [],
+          unavailable: [],
+        },
+        bindings: [
+          {
+            id: "replace-1",
+            type: "prompt",
+            mode: "replace",
+            resourceId: null,
+            replacesResourceId: "team-prompt",
+            inlinePromptBody: "",
+            order: 2,
+          },
+          {
+            id: "kept-inline",
+            type: "prompt",
+            mode: "include",
+            resourceId: null,
+            replacesResourceId: null,
+            inlinePromptBody: "Keep me.",
+            order: 3,
+          },
+        ],
+      }),
+    );
+
+    const container = await renderWithProviders(<PromptTab />);
+    await waitForText(container, "Active prompt");
+    expect(container.textContent).not.toContain("Active body is hidden until expanded.");
+
+    await click(container.querySelector('button[aria-label="Expand Active prompt"]'));
+    expect(container.textContent).toContain("Active body is hidden until expanded.");
+    await click(container.querySelector('button[aria-label="Collapse Active prompt"]'));
+    expect(container.textContent).not.toContain("Active body is hidden until expanded.");
+
+    await click(container.querySelector('button[aria-label="Expand Overridden prompt"]'));
+    expect(container.textContent).toContain("Original body is hidden until expanded.");
+    await click(container.querySelector('button[aria-label="More actions for Overridden prompt"]'));
+    await click(buttonByText(container, "Remove"));
+    await waitForCondition(
+      () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
+      "Expected replaced prompt removal",
+    );
+    expect(agentResourceMocks.updateAgentResources).toHaveBeenCalledWith("agent-1", {
+      expectedVersion: 9,
+      bindings: [
+        {
+          id: "kept-inline",
+          type: "prompt",
+          mode: "include",
+          resourceId: null,
+          replacesResourceId: null,
+          inlinePromptBody: "Keep me.",
+          order: 3,
+        },
+      ],
+    });
+  });
+
+  it("toggles the clamped effective instructions block", async () => {
+    const { PromptTab } = await import("../prompt-tab.js");
+    const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    const clientDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => 600 });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 80 });
+    try {
+      contextMock.value = createContext({
+        config: config({
+          payload: {
+            kind: "claude-code",
+            prompt: {
+              append: "Team section.\n\nCustom section.",
+              sections: [
+                { scope: "team", name: "Team guide", body: "Team section." },
+                { scope: "agent", name: "", body: "Custom section." },
+              ],
+            },
+            model: "sonnet",
+            reasoningEffort: "medium",
+            mcpServers: [],
+            env: [],
+            gitRepos: [],
+            resourceSkills: [],
+          },
+        }),
+      });
+      agentResourceMocks.getAgentResources.mockResolvedValue(
+        agentResources({
+          effective: {
+            version: 9,
+            repos: [],
+            prompts: [
+              promptRow({ id: "team-guide", name: "Team guide", promptBody: "Team section.", order: 1 }),
+              promptRow({
+                id: "binding:inline-1:enabled",
+                bindingId: "inline-1",
+                source: "inline_prompt",
+                scope: "agent",
+                resourceId: null,
+                name: "Custom instructions",
+                promptBody: "Custom section.",
+                order: 2,
+              }),
+            ],
+            skills: [],
+            mcp: [],
+            unavailable: [],
+          },
+        }),
+      );
+
+      const container = await renderWithProviders(<PromptTab />);
+      await waitForText(container, "All instructions");
+      await waitForText(container, "Show all");
+      const toggle = buttonByText(container, "Show all");
+      expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+      await click(toggle);
+      expect(buttonByText(container, "Collapse")?.getAttribute("aria-expanded")).toBe("true");
+      await click(buttonByText(container, "Collapse"));
+      expect(buttonByText(container, "Show all")?.getAttribute("aria-expanded")).toBe("false");
+    } finally {
+      if (scrollDescriptor) Object.defineProperty(HTMLElement.prototype, "scrollHeight", scrollDescriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+      if (clientDescriptor) Object.defineProperty(HTMLElement.prototype, "clientHeight", clientDescriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+    }
   });
 });
 
