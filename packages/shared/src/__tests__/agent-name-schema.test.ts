@@ -75,6 +75,8 @@ describe("agent metadata guards", () => {
   });
 
   it("rejects user metadata that tries to write reserved runtime keys", () => {
+    expect(userAgentMetadataSchema.safeParse({ theme: "dark" }).success).toBe(true);
+
     const result = userAgentMetadataSchema.safeParse({
       runtimeSession: {
         routeId: "session-1",
