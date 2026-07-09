@@ -1,9 +1,15 @@
-import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
+import {
+  type Agent,
+  type AttachmentRef,
+  COMPOSER_ACCEPT_ATTRIBUTE,
+  extractMentions,
+  type MentionParticipant,
+} from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getNewChatDefaultCandidates } from "../../../api/agents.js";
-import { uploadImageAttachment } from "../../../api/attachments.js";
+import { uploadAttachment, uploadMimeFor } from "../../../api/attachments.js";
 import { type ImageRefContent, readFileAsBase64 } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
 import { createMeTaskChat } from "../../../api/me-chats.js";
@@ -17,12 +23,13 @@ import {
   MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
+import { FileChip } from "../../../components/ui/file-chip.js";
 import { clearDraft, type DraftSnapshot, loadDraft, newChatDraftScope, saveDraft } from "../../../lib/draft-store.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useDebouncedValue } from "../../../lib/use-debounced-value.js";
 import { useOrgAgents, useOrgAgentsSearch } from "../../../lib/use-org-agents.js";
-import { type PendingImage, usePendingImages } from "../../../lib/use-pending-images.js";
+import { type PendingAttachment, usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
 
 /**
@@ -51,17 +58,18 @@ import { cn } from "../../../lib/utils.js";
  *     in the room". This unifies entry points without making them
  *     mutually exclusive.
  *
- *   - Images attach via the Paperclip button, drag-drop, or paste —
- *     staged through `usePendingImages` (shared with the in-chat
- *     composer). Bytes are read and uploaded only on send, after the
- *     chat exists. An image-only send (empty body) is allowed; a group
- *     (2+ chips) still needs an `@` in the body so each file POST
- *     carries non-empty `metadata.mentions` and clears the server's
- *     per-message explicit-recipient enforcement check.
+ *   - Attachments enter via the Paperclip button, drag-drop, or paste —
+ *     staged through `usePendingAttachments` (shared with the in-chat
+ *     composer). Images keep the historical image content path; documents and
+ *     files ride generic `metadata.attachments` refs. Bytes are read and
+ *     uploaded only on send, after the chat exists. An attachment-only send
+ *     (empty body) is allowed; a group (2+ chips) still needs an `@` in the
+ *     body so the initial message carries non-empty `metadata.mentions` and
+ *     clears the server's per-message explicit-recipient enforcement check.
  *
- * On send: upload image attachments first, then create the task chat with one
+ * On send: upload attachments first, then create the task chat with one
  * initial text/file message. Empty body is allowed when there's ≥1 chip and
- * (a non-empty body or ≥1 image).
+ * (a non-empty body or ≥1 attachment).
  */
 
 export function NewChatDraft({
@@ -116,13 +124,15 @@ export function NewChatDraft({
   const pickerContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Image staging shared with the in-chat composer (same image/* +
+  // Attachment staging shared with the in-chat composer (same allowlist +
   // attachment-cap rules and object-URL lifecycle). Bytes are read and
   // uploaded only on send, after the chat is created — see `createMut` below.
-  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+  const { pendingAttachments, addFiles, removeAttachment, clearAttachments } = usePendingAttachments({
     onError: setError,
     onChange: () => setError(null),
   });
+  const pendingImages = useMemo(() => pendingAttachments.filter((att) => att.kind === "image"), [pendingAttachments]);
+  const pendingDocs = useMemo(() => pendingAttachments.filter((att) => att.kind !== "image"), [pendingAttachments]);
 
   // Auto-grow the textarea up to the CSS `max-height` cap (10.5rem ≈ 8
   // visible lines). Re-measure on every keystroke so paste and delete
@@ -408,15 +418,29 @@ export function NewChatDraft({
       participantIds,
       text,
       images,
+      docs,
       mentions,
     }: {
       participantIds: string[];
       text: string;
-      images: PendingImage[];
+      images: PendingAttachment[];
+      docs: PendingAttachment[];
       mentions: string[];
     }) => {
       const trimmed = text.trim();
       const contextParticipantAgentIds = participantIds.filter((id) => !mentions.includes(id));
+
+      const docRefs: AttachmentRef[] = [];
+      for (const doc of docs) {
+        const uploaded = await uploadAttachment(doc.file);
+        docRefs.push({
+          attachmentId: uploaded.id,
+          kind: doc.kind,
+          mimeType: uploadMimeFor(doc.file),
+          filename: doc.file.name,
+          size: doc.file.size,
+        });
+      }
 
       if (images.length > 0) {
         const attachments: ImageRefContent[] = [];
@@ -424,7 +448,7 @@ export function NewChatDraft({
           // Upload bytes to the org attachment store first; the returned id
           // is what every recipient fetches from GET /attachments/:id. The
           // message carries refs only — no inline base64.
-          const uploaded = await uploadImageAttachment(img.file);
+          const uploaded = await uploadAttachment(img.file);
           // Warm this tab's IndexedDB cache so the sending user renders the
           // image immediately on refetch instead of round-tripping the server.
           // Best-effort: the bytes are authoritative server-side, so a cache
@@ -454,6 +478,7 @@ export function NewChatDraft({
               ...(trimmed.length > 0 ? { caption: trimmed } : {}),
               attachments,
             },
+            ...(docRefs.length > 0 ? { metadata: { attachments: docRefs } } : {}),
             source: "web",
           },
         });
@@ -472,6 +497,7 @@ export function NewChatDraft({
         initialMessage: {
           format: "text",
           content: trimmed,
+          ...(docRefs.length > 0 ? { metadata: { attachments: docRefs } } : {}),
           source: "web",
         },
       });
@@ -485,7 +511,7 @@ export function NewChatDraft({
       clearDraft(draftScope);
       setDraft("");
       setChips([]);
-      clearImages();
+      clearAttachments();
       seededDefaultRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       onCreated(chatId);
@@ -498,24 +524,24 @@ export function NewChatDraft({
   const canSend = useMemo(() => {
     if (sending || createMut.isPending) return false;
     if (chips.length === 0) return false;
-    // Body OR at least one image — image-only sends are allowed (mirrors the
-    // in-chat composer's "text non-empty or has image" rule).
-    if (draft.trim().length === 0 && pendingImages.length === 0) return false;
-    // Groups still need an explicit `@` even for image-only sends: the
+    // Body OR at least one attachment — attachment-only sends are allowed
+    // (mirrors the in-chat composer's "text non-empty or has attachment" rule).
+    if (draft.trim().length === 0 && pendingAttachments.length === 0) return false;
+    // Groups still need an explicit `@` even for attachment-only sends: the
     // server's explicit-recipient enforcement runs per message regardless of format,
     // and group chats can't rely on the 1:1 auto-inject path.
     if (chips.length >= 2 && bodyMentions.length === 0) return false;
     return true;
-  }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length, pendingImages.length]);
+  }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length, pendingAttachments.length]);
 
   const sendBlockedReason = useMemo(() => {
     if (chips.length === 0) return "Add at least one participant";
-    if (draft.trim().length === 0 && pendingImages.length === 0) return null;
+    if (draft.trim().length === 0 && pendingAttachments.length === 0) return null;
     if (chips.length >= 2 && bodyMentions.length === 0) {
       return "Group chats need an @ to wake at least one participant";
     }
     return null;
-  }, [chips.length, draft, bodyMentions.length, pendingImages.length]);
+  }, [chips.length, draft, bodyMentions.length, pendingAttachments.length]);
 
   const handleSend = async (): Promise<void> => {
     if (!canSend) return;
@@ -539,7 +565,13 @@ export function NewChatDraft({
     setError(null);
     setSending(true);
     try {
-      await createMut.mutateAsync({ participantIds, text: draft, images: pendingImages, mentions: effectiveMentions });
+      await createMut.mutateAsync({
+        participantIds,
+        text: draft,
+        images: pendingImages,
+        docs: pendingDocs,
+        mentions: effectiveMentions,
+      });
     } finally {
       setSending(false);
     }
@@ -587,7 +619,7 @@ export function NewChatDraft({
             What's the task?
           </p>
 
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for attachment upload */}
           <div
             style={{
               borderRadius: 10,
@@ -598,7 +630,7 @@ export function NewChatDraft({
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-              addImages(Array.from(e.dataTransfer.files));
+              addFiles(Array.from(e.dataTransfer.files));
             }}
           >
             <ParticipantChips
@@ -614,53 +646,84 @@ export function NewChatDraft({
               onAdd={addChip}
               onRemove={removeChip}
             />
-            {/* Image preview row — between the chip row and the textarea. */}
-            {pendingImages.length > 0 && (
+            {/* Attachment preview row — between the chip row and the textarea. */}
+            {pendingAttachments.length > 0 && (
               <div
                 className="flex items-center"
                 style={{ gap: 6, padding: "0 var(--sp-2_5) var(--sp-1)", overflowX: "auto" }}
               >
-                {pendingImages.map((img) => (
-                  <div
-                    key={img.id}
-                    style={{
-                      position: "relative",
-                      flexShrink: 0,
-                      borderRadius: 4,
-                      border: "var(--hairline) solid var(--border)",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <img
-                      src={img.previewUrl}
-                      alt={img.file.name}
-                      style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeImage(img.id)}
-                      title="Remove image"
+                {pendingAttachments.map((att) =>
+                  att.kind === "image" && att.previewUrl ? (
+                    <div
+                      key={att.id}
                       style={{
-                        position: "absolute",
-                        top: 1,
-                        right: 1,
-                        width: 14,
-                        height: 14,
-                        borderRadius: "50%",
-                        background: "var(--color-overlay-scrim)",
-                        border: "none",
-                        color: "var(--bg-raised)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        cursor: "pointer",
-                        padding: 0,
+                        position: "relative",
+                        flexShrink: 0,
+                        borderRadius: 4,
+                        border: "var(--hairline) solid var(--border)",
+                        overflow: "hidden",
                       }}
                     >
-                      <X className="h-2 w-2" />
-                    </button>
-                  </div>
-                ))}
+                      <img
+                        src={att.previewUrl}
+                        alt={att.file.name}
+                        style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(att.id)}
+                        title="Remove image"
+                        aria-label={`Remove ${att.file.name}`}
+                        style={{
+                          position: "absolute",
+                          top: 1,
+                          right: 1,
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "var(--color-overlay-scrim)",
+                          border: "none",
+                          color: "var(--bg-raised)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          cursor: "pointer",
+                          padding: 0,
+                        }}
+                      >
+                        <X className="h-2 w-2" />
+                      </button>
+                    </div>
+                  ) : (
+                    <FileChip
+                      key={att.id}
+                      filename={att.file.name}
+                      trailing={
+                        <button
+                          type="button"
+                          onClick={() => removeAttachment(att.id)}
+                          title="Remove file"
+                          aria-label={`Remove ${att.file.name}`}
+                          style={{
+                            width: 14,
+                            height: 14,
+                            borderRadius: "50%",
+                            background: "var(--color-overlay-scrim)",
+                            border: "none",
+                            color: "var(--bg-raised)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            padding: 0,
+                          }}
+                        >
+                          <X className="h-2 w-2" />
+                        </button>
+                      }
+                    />
+                  ),
+                )}
               </div>
             )}
             <div style={{ position: "relative" }}>
@@ -685,7 +748,7 @@ export function NewChatDraft({
                   const files = Array.from(e.clipboardData.files);
                   if (files.length > 0) {
                     e.preventDefault();
-                    addImages(files);
+                    addFiles(files);
                   }
                 }}
                 placeholder={
@@ -754,8 +817,8 @@ export function NewChatDraft({
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={sending || createMut.isPending}
-                  title="Attach image"
-                  aria-label="Attach image"
+                  title="Attach file"
+                  aria-label="Attach file"
                   className="inline-flex items-center"
                   style={{
                     background: "none",
@@ -770,19 +833,19 @@ export function NewChatDraft({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept={COMPOSER_ACCEPT_ATTRIBUTE}
                   multiple
                   style={{ display: "none" }}
                   onChange={(e) => {
                     if (e.target.files) {
-                      addImages(Array.from(e.target.files));
+                      addFiles(Array.from(e.target.files));
                       e.target.value = "";
                     }
                   }}
                 />
               </span>
               <span className="flex items-center" style={{ gap: 8 }}>
-                {sending && pendingImages.length > 0 && (
+                {sending && pendingAttachments.length > 0 && (
                   <span className="mono text-caption" style={{ color: "var(--primary)" }}>
                     uploading…
                   </span>

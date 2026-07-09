@@ -44,7 +44,9 @@ const orgAgentsHookMocks = vi.hoisted(() => ({
 
 const attachmentMocks = vi.hoisted(() => ({
   fetchAttachmentBase64: vi.fn(),
+  uploadAttachment: vi.fn(),
   uploadImageAttachment: vi.fn(),
+  uploadMimeFor: vi.fn((file: File) => file.type || "application/octet-stream"),
 }));
 
 const chatMocks = vi.hoisted(() => ({
@@ -727,7 +729,8 @@ beforeEach(() => {
   agentMocks.getAgentSkills.mockResolvedValue({ skills: [{ name: "review", description: "Review a patch." }] });
   agentMocks.listAgents.mockResolvedValue({ items: ORG_AGENTS, nextCursor: null });
   attachmentMocks.fetchAttachmentBase64.mockResolvedValue({ base64: "image-base64", mimeType: "image/png" });
-  attachmentMocks.uploadImageAttachment.mockResolvedValue({ id: "uploaded-image", mimeType: "image/png", size: 42 });
+  attachmentMocks.uploadAttachment.mockResolvedValue({ id: "uploaded-image", mimeType: "image/png", size: 42 });
+  attachmentMocks.uploadImageAttachment.mockImplementation((file: File) => attachmentMocks.uploadAttachment(file));
   chatMocks.getChat.mockResolvedValue(chatDetail());
   chatMocks.listChatMessages.mockResolvedValue(BASE_MESSAGES);
   chatMocks.listChatOpenRequests.mockResolvedValue({ items: [] });
@@ -1422,7 +1425,7 @@ describe("ChatView", () => {
     await setValue(textarea, "@design image attached");
     await click(container.querySelector('button[aria-label="Send"]'));
     await waitForCondition(() => chatMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image send");
-    expect(attachmentMocks.uploadImageAttachment).toHaveBeenCalledWith(file);
+    expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(file);
     expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
       "chat-1",
       {
@@ -1991,7 +1994,7 @@ describe("ChatView", () => {
       () => chatMocks.sendFileMessageBatch.mock.calls.length > 0,
       "Expected image file-batch resolve",
     );
-    expect(attachmentMocks.uploadImageAttachment).toHaveBeenCalledWith(file);
+    expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(file);
     expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
       "chat-1",
       {
@@ -2002,6 +2005,46 @@ describe("ChatView", () => {
       { inReplyTo: "req-file", resolves: { request: "req-file", kind: "answered" } },
     );
     expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("resolves a blocking free-text question with an attached document via metadata refs", async () => {
+    attachmentMocks.uploadAttachment.mockResolvedValueOnce({
+      id: "11111111-1111-4111-8111-111111111111",
+      mimeType: "application/pdf",
+      size: 3,
+    });
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), freeTextDockMessages()),
+      "/",
+    );
+
+    await waitForText(container, "Reply");
+    const file = new File(["pdf"], "evidence.pdf", { type: "application/pdf" });
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("File input missing");
+    await changeFiles(fileInput, [file]);
+    await waitForText(container, "evidence.pdf");
+    await click(buttonByText(container, "Reply"));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected document resolve send");
+    expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(file);
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "", ["agent-1"], {
+      inReplyTo: "req-file",
+      resolves: { request: "req-file", kind: "answered" },
+      attachments: [
+        {
+          attachmentId: "11111111-1111-4111-8111-111111111111",
+          kind: "file",
+          mimeType: "application/pdf",
+          filename: "evidence.pdf",
+          size: 3,
+        },
+      ],
+    });
+    expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });

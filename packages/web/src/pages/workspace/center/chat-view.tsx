@@ -2246,9 +2246,9 @@ export function ChatView({
 
   // Resolve the blocking ask with the answer composed in the AskTakeover card.
   // Routed here (not through the composer's `sendMut`) because the card owns its
-  // own text + @mentions + staged images, and an image answer must go out as a
-  // `format="file"` message carrying `metadata.resolves` (the server's resolve
-  // gate is format-agnostic — it authorizes off sender == target).
+  // own text + @mentions + staged attachments, and an image answer must go out
+  // as a `format="file"` message carrying `metadata.resolves` (the server's
+  // resolve gate is format-agnostic — it authorizes off sender == target).
   //
   // Deliberately NON-optimistic: the card stays mounted until the server's
   // resolving reply lands (via the messages invalidate -> refetch -> request
@@ -2263,8 +2263,21 @@ export function ChatView({
     // Route to the asker PLUS anyone the free text @mentioned (deduped).
     const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
     const resolves: RequestResolution = { request: request.id, kind: "answered" };
+    const docs = answer.attachments ?? [];
     try {
       await ensureMentionedAgentsInvited(routedMentions);
+      const docRefs: AttachmentRef[] = [];
+      for (const doc of docs) {
+        const uploaded = await uploadAttachment(doc.file);
+        docRefs.push({
+          attachmentId: uploaded.id,
+          kind: doc.kind,
+          mimeType: uploadMimeFor(doc.file),
+          filename: doc.file.name,
+          size: doc.file.size,
+        });
+      }
+
       if (answer.images.length > 0) {
         const refs: ImageRefContent[] = [];
         for (const file of answer.images) {
@@ -2281,11 +2294,15 @@ export function ChatView({
         await sendFileMessageBatch(
           chatId,
           { ...(answer.content ? { caption: answer.content } : {}), attachments: refs },
-          { mentions: routedMentions },
+          { mentions: routedMentions, ...(docRefs.length > 0 ? { attachments: docRefs } : {}) },
           { inReplyTo: request.id, resolves },
         );
       } else {
-        await sendChatMessage(chatId, answer.content, routedMentions, { inReplyTo: request.id, resolves });
+        await sendChatMessage(chatId, answer.content, routedMentions, {
+          inReplyTo: request.id,
+          resolves,
+          ...(docRefs.length > 0 ? { attachments: docRefs } : {}),
+        });
       }
       queryClient.invalidateQueries({ queryKey: messagesQueryKey });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });

@@ -118,6 +118,9 @@ export function usePendingAttachments(
 
     setPendingAttachments((prev) => [...prev, ...staged]);
     optsRef.current.onChange?.();
+    if (rejectedTypes.length > 0) {
+      optsRef.current.onError?.(`Unsupported file type: ${rejectedTypes.join(", ")}`);
+    }
   }, []);
 
   const removeAttachment = useCallback((id: string) => {

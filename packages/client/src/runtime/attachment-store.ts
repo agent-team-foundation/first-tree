@@ -24,10 +24,21 @@ function sanitizeSegment(segment: string): string {
  * attachmentId prefix (added by the caller) guarantees uniqueness, so a
  * collision-forced rename here is harmless.
  */
+const MAX_SAFE_FILENAME_LENGTH = 200;
+const MAX_EXTENSION_LENGTH = 24;
+
 function sanitizeFilename(filename: string): string {
   const base = filename.split(/[/\\]/).pop() ?? filename;
   const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^\.+/, "");
-  return cleaned.length > 0 ? cleaned.slice(0, 200) : "file";
+  if (cleaned.length === 0) return "file";
+  if (cleaned.length <= MAX_SAFE_FILENAME_LENGTH) return cleaned;
+
+  const dot = cleaned.lastIndexOf(".");
+  const extension =
+    dot > 0 && dot < cleaned.length - 1 && cleaned.length - dot <= MAX_EXTENSION_LENGTH ? cleaned.slice(dot) : "";
+  if (extension.length === 0) return cleaned.slice(0, MAX_SAFE_FILENAME_LENGTH);
+
+  return `${cleaned.slice(0, MAX_SAFE_FILENAME_LENGTH - extension.length)}${extension}`;
 }
 
 function attachmentDir(chatId: string): string {

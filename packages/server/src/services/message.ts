@@ -1,5 +1,6 @@
 import {
   AGENT_FINAL_TEXT_METADATA_KEY,
+  attachmentRefsFromMetadata,
   CLI_BODY_ORIGIN_METADATA_KEY,
   CLI_BODY_ORIGINS,
   extractCaption,
@@ -98,9 +99,10 @@ const PLACEHOLDER_BODY_SENTINELS = new Set(["placeholder", "todo", "fixme", "tbd
  * fallback) surfaces as an error the caller must fix instead of a meaningless
  * message — for a `request`, a blocking ask card the target human must skip.
  */
-function validateTextBody(content: string, isRequest: boolean): void {
+function validateTextBody(content: string, isRequest: boolean, allowEmptyWithAttachments = false): void {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
+    if (!isRequest && allowEmptyWithAttachments) return;
     throw new BadRequestError(
       isRequest
         ? "An ask ('request') needs a non-empty body — the question/background IS the message content."
@@ -167,7 +169,10 @@ function allowsCliEscapedNewlineBody(data: SendMessage, metadata: Record<string,
 // Structural param (not `SendMessage`) so the edit path can reuse it against
 // the effective post-edit `{ format, content }`, where `format` is a plain
 // string off the stored row.
-function validateMessageContent(data: { format: string; content: unknown }): void {
+function validateMessageContent(
+  data: { format: string; content: unknown },
+  opts?: { hasAttachmentRefs?: boolean },
+): void {
   if (data.format === "file") {
     validateFileContent(data.content);
     return;
@@ -175,7 +180,7 @@ function validateMessageContent(data: { format: string; content: unknown }): voi
   // Non-string content (card / reference object shapes) is out of scope here;
   // only string-bearing bodies are guarded against empty / placeholder sends.
   if (typeof data.content === "string") {
-    validateTextBody(data.content, data.format === "request");
+    validateTextBody(data.content, data.format === "request", opts?.hasAttachmentRefs === true);
   }
 }
 
@@ -336,9 +341,11 @@ export function preflightMessageSendIntent(input: {
   const options = input.options ?? {};
   const { chatId, senderId, senderType, data, participants } = input;
 
-  validateMessageContent(data);
-
   const rawIncomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+  const hasAttachmentRefs = attachmentRefsFromMetadata(rawIncomingMeta).length > 0;
+
+  validateMessageContent(data, { hasAttachmentRefs });
+
   const allowEscapedNewlineBody = allowsCliEscapedNewlineBody(data, rawIncomingMeta);
 
   let effectiveContent: SendMessage["content"] = data.content;
@@ -357,7 +364,7 @@ export function preflightMessageSendIntent(input: {
   // what gets normalized and persisted, so guard it here too — before mention
   // normalization can salvage an empty body into a bare "@name".
   if (typeof effectiveContent === "string") {
-    validateTextBody(effectiveContent, data.format === "request");
+    validateTextBody(effectiveContent, data.format === "request", hasAttachmentRefs);
   }
 
   const incomingMeta = stripUntrustedMetadataKeys(rawIncomingMeta, options);
@@ -554,7 +561,7 @@ export async function sendMessage(
   data: SendMessage,
   options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
-  validateMessageContent(data);
+  validateMessageContent(data, { hasAttachmentRefs: attachmentRefsFromMetadata(data.metadata).length > 0 });
   return withSpan("inbox.enqueue", messageAttrs({ chatId, senderAgentId: senderId, source: data.source }), () =>
     sendMessageInner(db, chatId, senderId, data, options),
   );
@@ -1010,7 +1017,10 @@ export async function editMessage(
       senderType: senderRow.type,
       content: data.content,
     });
-    validateMessageContent({ format: data.format ?? msg.format, content: effectiveContent });
+    validateMessageContent(
+      { format: data.format ?? msg.format, content: effectiveContent },
+      { hasAttachmentRefs: attachmentRefsFromMetadata(msg.metadata ?? undefined).length > 0 },
+    );
     setClause.content = effectiveContent;
   }
 

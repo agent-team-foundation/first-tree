@@ -21,20 +21,20 @@
  *
  * The free-text answer surface mirrors the chat composer: it supports `@mention`
  * autocomplete (against chat speakers plus host-supplied inviteable agents) and
- * image attachments (paste / drop / file-picker), so answering an ask is as
+ * attachments (paste / drop / file-picker), so answering an ask is as
  * expressive as a normal message. The
  * readable answer is still plain text (`buildResolveAnswer`: selected option
  * labels join on one line, any typed note follows); the host turns the assembled
- * {content, mentions, images} into the resolving reply. This is the ONLY way to
- * resolve a question: the target human answers here, in the web UI; an agent can
- * only ask, never answer or close.
+ * {content, mentions, images, attachments} into the resolving reply. This is
+ * the ONLY way to resolve a question: the target human answers here, in the web
+ * UI; an agent can only ask, never answer or close.
  */
-import type { AskOption, AskRequest, MentionParticipant } from "@first-tree/shared";
-import { extractMentions } from "@first-tree/shared";
+import type { AskOption, AskRequest, AttachmentKind, MentionParticipant } from "@first-tree/shared";
+import { COMPOSER_ACCEPT_ATTRIBUTE, extractMentions } from "@first-tree/shared";
 import { AtSign, Paperclip, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
-import { usePendingImages } from "../../lib/use-pending-images.js";
+import { usePendingAttachments } from "../../lib/use-pending-attachments.js";
 import {
   detectMentionTrigger,
   MentionAutocompletePopover,
@@ -42,6 +42,7 @@ import {
   useMentionAutocomplete,
 } from "../mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../mention-highlight-overlay.js";
+import { FileChip } from "../ui/file-chip.js";
 import { Markdown } from "../ui/markdown.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
 
@@ -58,11 +59,20 @@ import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
  *   - `images` — staged image files to upload + attach; a non-empty list makes
  *     the resolving reply a `format="file"` message (which the server resolves
  *     just like a text answer — the resolve gate is format-agnostic).
+ *   - `attachments` — staged non-image files to upload as generic
+ *     `metadata.attachments`; omitted when empty so existing image-only hosts
+ *     keep their exact shape.
  */
+export type AskAnswerAttachment = {
+  file: File;
+  kind: AttachmentKind;
+};
+
 export type AskAnswer = {
   content: string;
   mentions: string[];
   images: File[];
+  attachments?: AskAnswerAttachment[];
 };
 
 /**
@@ -150,14 +160,16 @@ export function AskTakeover({
   // Keep the card (and its pinned footer) above the on-screen keyboard.
   const keyboardInset = useKeyboardInset();
 
-  // Staged image attachments — same hook (and same `image/*` + attachment-cap
-  // rules + object-URL lifecycle) the chat composer uses. A local validation
-  // error (oversized image) renders alongside any host send error below.
-  const [imageError, setImageError] = useState<string | null>(null);
-  const { pendingImages, addImages, removeImage } = usePendingImages({
-    onError: setImageError,
-    onChange: () => setImageError(null),
+  // Staged attachments — same hook (and same allowlist + attachment-cap rules
+  // + object-URL lifecycle) the chat composer uses. A local validation error
+  // renders alongside any host send error below.
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const { pendingAttachments, addFiles, removeAttachment } = usePendingAttachments({
+    onError: setAttachmentError,
+    onChange: () => setAttachmentError(null),
   });
+  const pendingImages = useMemo(() => pendingAttachments.filter((att) => att.kind === "image"), [pendingAttachments]);
+  const pendingDocs = useMemo(() => pendingAttachments.filter((att) => att.kind !== "image"), [pendingAttachments]);
 
   // Self-excluded mention projection for `@` resolution + the mirror overlay.
   const mentionParticipants = useMemo<MentionParticipant[]>(
@@ -214,9 +226,9 @@ export function AskTakeover({
     });
   };
 
-  // An attached image is itself an answer, so it lifts the "must select or type"
+  // An attachment is itself an answer, so it lifts the "must select or type"
   // gate even on a free-text ask with an empty box.
-  const canReply = (allRequiredAnswered(payload, selected, freeText) || pendingImages.length > 0) && !sending;
+  const canReply = (allRequiredAnswered(payload, selected, freeText) || pendingAttachments.length > 0) && !sending;
   // Memoized so the window-level keydown effect below has a stable dep (it would
   // otherwise re-bind the listener every render).
   const reply = useCallback(() => {
@@ -225,8 +237,9 @@ export function AskTakeover({
       content: buildResolveAnswer(payload, selected, freeText),
       mentions: extractMentions(freeText, mentionParticipants),
       images: pendingImages.map((p) => p.file),
+      ...(pendingDocs.length > 0 ? { attachments: pendingDocs.map((p) => ({ file: p.file, kind: p.kind })) } : {}),
     });
-  }, [canReply, onReply, payload, selected, freeText, mentionParticipants, pendingImages]);
+  }, [canReply, onReply, payload, selected, freeText, mentionParticipants, pendingImages, pendingDocs]);
 
   // Insert `@` at the caret (or over the selection) and refocus — the
   // autocomplete picks it up from the resulting value/cursor, same path as
@@ -358,13 +371,13 @@ export function AskTakeover({
         }}
         onSelect={(e) => setCursor(e.currentTarget.selectionStart ?? freeText.length)}
         onPaste={(e) => {
-          // No image attachments on the trial answer input — let text paste
+          // No attachments on the trial answer input — let text paste
           // fall through to the default handler.
           if (isTrial) return;
           const files = Array.from(e.clipboardData.files);
           if (files.length > 0) {
             e.preventDefault();
-            addImages(files);
+            addFiles(files);
           }
         }}
         onKeyDown={(e) => {
@@ -393,51 +406,80 @@ export function AskTakeover({
     </div>
   );
 
-  /** Staged-image thumbnails with a remove affordance — above the input. */
-  const renderImageTray = () =>
-    pendingImages.length > 0 ? (
+  /** Staged attachments with a remove affordance — above the input. */
+  const renderAttachmentTray = () =>
+    pendingAttachments.length > 0 ? (
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: "var(--sp-2)" }}>
-        {pendingImages.map((img) => (
-          <div
-            key={img.id}
-            style={{
-              position: "relative",
-              flexShrink: 0,
-              borderRadius: 4,
-              border: "var(--hairline) solid var(--border)",
-              overflow: "hidden",
-            }}
-          >
-            <img
-              src={img.previewUrl}
-              alt={img.file.name}
-              style={{ height: 44, width: "auto", display: "block", objectFit: "cover" }}
-            />
-            <button
-              type="button"
-              onClick={() => removeImage(img.id)}
-              aria-label="Remove image"
+        {pendingAttachments.map((att) =>
+          att.kind === "image" && att.previewUrl ? (
+            <div
+              key={att.id}
               style={{
-                position: "absolute",
-                top: 2,
-                right: 2,
-                width: 16,
-                height: 16,
-                borderRadius: "50%",
-                background: "var(--color-overlay-scrim)",
-                border: "none",
-                color: "var(--bg-raised)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-                padding: 0,
+                position: "relative",
+                flexShrink: 0,
+                borderRadius: 4,
+                border: "var(--hairline) solid var(--border)",
+                overflow: "hidden",
               }}
             >
-              <X className="h-2.5 w-2.5" />
-            </button>
-          </div>
-        ))}
+              <img
+                src={att.previewUrl}
+                alt={att.file.name}
+                style={{ height: 44, width: "auto", display: "block", objectFit: "cover" }}
+              />
+              <button
+                type="button"
+                onClick={() => removeAttachment(att.id)}
+                aria-label="Remove image"
+                style={{
+                  position: "absolute",
+                  top: 2,
+                  right: 2,
+                  width: 16,
+                  height: 16,
+                  borderRadius: "50%",
+                  background: "var(--color-overlay-scrim)",
+                  border: "none",
+                  color: "var(--bg-raised)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </div>
+          ) : (
+            <FileChip
+              key={att.id}
+              filename={att.file.name}
+              trailing={
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(att.id)}
+                  aria-label={`Remove ${att.file.name}`}
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: "var(--color-overlay-scrim)",
+                    border: "none",
+                    color: "var(--bg-raised)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  <X className="h-2 w-2" />
+                </button>
+              }
+            />
+          ),
+        )}
       </div>
     ) : null;
 
@@ -466,8 +508,8 @@ export function AskTakeover({
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          title="Attach image"
-          aria-label="Attach image"
+          title="Attach file"
+          aria-label="Attach file"
           style={{
             background: "none",
             border: "none",
@@ -483,12 +525,12 @@ export function AskTakeover({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={COMPOSER_ACCEPT_ATTRIBUTE}
           multiple
           style={{ display: "none" }}
           onChange={(e) => {
             if (e.target.files) {
-              addImages(Array.from(e.target.files));
+              addFiles(Array.from(e.target.files));
               e.target.value = "";
             }
           }}
@@ -559,9 +601,9 @@ export function AskTakeover({
           </div>
 
           {/* Answer surface — options + Other (or a single free-text box),
-              both with `@mention` + image attachments. Drop anywhere here to
-              stage images, matching the composer. */}
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload (keyboard users use the attach button) */}
+              both with `@mention` + attachments. Drop anywhere here to
+              stage attachments, matching the composer. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for attachment upload (keyboard users use the attach button) */}
           <div
             style={{
               padding: `var(--sp-4) ${padX} var(--sp-5)`,
@@ -569,10 +611,10 @@ export function AskTakeover({
             }}
             onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
             onDrop={(e) => {
-              // No drag-and-drop image attachments on the trial answer surface.
+              // No drag-and-drop attachments on the trial answer surface.
               if (isTrial) return;
               e.preventDefault();
-              addImages(Array.from(e.dataTransfer.files));
+              addFiles(Array.from(e.dataTransfer.files));
             }}
           >
             {options ? (
@@ -589,25 +631,25 @@ export function AskTakeover({
                   ))}
                 </div>
                 <div style={{ marginTop: "var(--sp-2)" }}>
-                  {renderImageTray()}
+                  {renderAttachmentTray()}
                   {renderAnswerInput("Other (type your own)…", 42)}
                   {renderInputToolbar()}
                 </div>
               </>
             ) : (
               <>
-                {renderImageTray()}
+                {renderAttachmentTray()}
                 {renderAnswerInput("Type your answer…", 110)}
                 {renderInputToolbar()}
               </>
             )}
 
-            {(imageError || error) && (
+            {(attachmentError || error) && (
               <p
                 className="mono text-label"
                 style={{ color: "var(--state-error)", padding: "var(--sp-2) var(--sp-0_5) 0" }}
               >
-                {imageError ?? error}
+                {attachmentError ?? error}
               </p>
             )}
           </div>
