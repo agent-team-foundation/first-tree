@@ -230,6 +230,20 @@ function makeDeliveryToken(): DeliveryToken {
   };
 }
 
+function sentMessageResponse() {
+  return {
+    id: "msg-runtime-notice",
+    chatId: "chat-app-server-extra",
+    senderId: AGENT_ID,
+    format: "text",
+    content: "notice",
+    metadata: {},
+    inReplyTo: null,
+    source: "api" as const,
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
 function makeContext(
   opts: {
     emitEvent?: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>;
@@ -682,6 +696,213 @@ describe("codex app-server handler extra branches", () => {
     );
 
     await handler.shutdown();
+  });
+
+  it("posts and consumes usage-limit turns, or retries when the notice cannot be delivered", async () => {
+    const successFake = new FakeAppServerClient();
+    const successToken = makeDeliveryToken();
+    const successHandler = makeHandler(successFake);
+    const successCtx = makeContext();
+    const successSendMessage = vi.fn<SessionContext["sdk"]["sendMessage"]>().mockResolvedValue(sentMessageResponse());
+    successCtx.sdk.sendMessage = successSendMessage;
+
+    const successStart = successHandler.start(makeMessage("m1", "first"), successCtx, successToken);
+    await waitFor(() => successFake.requests.some((request) => request.method === "turn/start"), "usage turn/start");
+    successFake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "failed",
+        error: { message: "usage exhausted", codexErrorInfo: "usageLimitExceeded" },
+        items: [],
+      },
+    });
+    await successStart;
+
+    expect(successSendMessage).toHaveBeenCalledWith(
+      "chat-app-server-extra",
+      expect.objectContaining({
+        source: "api",
+        format: "text",
+        purpose: "agent-final-text",
+        metadata: { runtimeNotice: true },
+      }),
+    );
+    expect(successToken.complete).toHaveBeenCalledWith([makeMessage("m1", "first")], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "usage_limit_notice_posted",
+    });
+    await successHandler.shutdown();
+
+    const failureFake = new FakeAppServerClient();
+    const failureToken = makeDeliveryToken();
+    const failureHandler = makeHandler(failureFake);
+    const failureCtx = makeContext();
+    failureCtx.sdk.sendMessage = vi.fn<SessionContext["sdk"]["sendMessage"]>(async () => {
+      throw new Error("chat write failed");
+    });
+
+    const failureStart = failureHandler.start(makeMessage("m2", "second"), failureCtx, failureToken);
+    await waitFor(
+      () => failureFake.requests.some((request) => request.method === "turn/start"),
+      "failed notice turn/start",
+    );
+    failureFake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "failed",
+        error: { message: "usage exhausted", codexErrorInfo: "usageLimitExceeded" },
+        items: [],
+      },
+    });
+    await failureStart;
+
+    expect(failureToken.retry).toHaveBeenCalledWith(
+      [makeMessage("m2", "second")],
+      "codex_usage_limit_notice_delivery_failed",
+    );
+    await failureHandler.shutdown();
+  });
+
+  it("consumes a turn when forwarding final text fails", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+    ctx.forwardResult = vi.fn(async () => {
+      throw new Error("forward sink failed");
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "forward failure turn/start");
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        error: null,
+        items: [{ type: "agentMessage", id: "agent-1", text: "final answer" }],
+      },
+    });
+    await startPromise;
+
+    expect(emitEvent).toHaveBeenCalledWith({
+      kind: "error",
+      payload: { source: "runtime", message: "forwardResult failed: forward sink failed" },
+    });
+    expect(token.complete).toHaveBeenCalledWith([makeMessage("m1", "first")], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "forward_failed",
+    });
+    await handler.shutdown();
+  });
+
+  it("retries turn/start responses that do not include a turn id", async () => {
+    const fake = new FakeAppServerClient();
+    fake.responders.set("turn/start", () => ({ turn: { status: "inProgress" } }));
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+
+    await expect(handler.start(makeMessage("m1", "first"), makeContext(), token)).resolves.toEqual({
+      sessionId: "thread-app-server",
+      route: { kind: "owned", mode: "processing" },
+    });
+
+    expect(token.retry).toHaveBeenCalledWith(
+      [makeMessage("m1", "first")],
+      "codex_app_server_turn_start_missing_id_unknown_custody",
+    );
+    expect(fake.shutdownCalls).toBe(1);
+    await handler.shutdown();
+  });
+
+  it("handles failed and interrupted terminal turns without structured errors", async () => {
+    const failedFake = new FakeAppServerClient();
+    const failedToken = makeDeliveryToken();
+    const failedLog = vi.fn<(message: string) => void>();
+    const failedHandler = makeHandler(failedFake);
+    const failedStart = failedHandler.start(makeMessage("m1", "first"), makeContext({ log: failedLog }), failedToken);
+    await waitFor(() => failedFake.requests.some((request) => request.method === "turn/start"), "failed turn/start");
+    failedFake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "failed",
+        error: null,
+        items: [
+          {
+            type: "mcpToolCall",
+            id: "mcp-ok",
+            status: "completed",
+            result: { structuredContent: { answer: 42 } },
+          },
+          { type: "mcpToolCall", id: "mcp-unknown", status: "completed", result: { content: ["raw"] } },
+          { type: "webSearch", id: "web-empty", query: 42 },
+          { type: "plan", id: "plan-empty", text: null },
+          { type: "unknownTool", id: "ignored" },
+        ],
+      },
+    });
+    await failedStart;
+
+    expect(failedToken.complete).toHaveBeenCalledWith([makeMessage("m1", "first")], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "unsafe_replay",
+    });
+    expect(failedLog.mock.calls.some(([entry]) => entry.includes("consuming provider stop"))).toBe(true);
+    await failedHandler.shutdown();
+
+    const interruptedFake = new FakeAppServerClient();
+    const interruptedToken = makeDeliveryToken();
+    const interruptedHandler = makeHandler(interruptedFake);
+    const interruptedStart = interruptedHandler.start(makeMessage("m2", "second"), makeContext(), interruptedToken);
+    await waitFor(
+      () => interruptedFake.requests.some((request) => request.method === "turn/start"),
+      "interrupted turn/start",
+    );
+    interruptedFake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-1", status: "interrupted", error: null, items: [] },
+    });
+    await interruptedStart;
+
+    expect(interruptedToken.retry).toHaveBeenCalledWith([makeMessage("m2", "second")], "codex_unknown_failure");
+    await interruptedHandler.shutdown();
+  });
+
+  it("suspends by retrying queued input, interrupting the active turn, and clearing app-server state", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const queuedToken = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "suspend turn/start");
+    handler.inject(makeMessage("m2", "queued"), queuedToken);
+
+    await handler.suspend();
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-1", status: "interrupted", error: null, items: [] },
+    });
+    await startPromise;
+
+    expect(queuedToken.retry).toHaveBeenCalledWith(makeMessage("m2", "queued"), "codex_suspend_before_terminal");
+    expect(fake.requests.find((request) => request.method === "turn/interrupt")).toMatchObject({
+      method: "turn/interrupt",
+      params: { threadId: "thread-app-server", turnId: "turn-1" },
+      timeoutMs: 2_000,
+    });
+    expect(fake.shutdownCalls).toBe(1);
   });
 
   it("retries queued work, aborts the active turn, and still shuts down when interrupt fails", async () => {
