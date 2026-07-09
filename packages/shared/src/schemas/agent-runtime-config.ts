@@ -541,7 +541,8 @@ const DEFAULT_BRANCH_NAMES: ReadonlySet<string> = new Set(["main", "master"]);
 export function deriveRepoShortLabel(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) return "";
-  const noQuery = trimmed.split(/[?#]/)[0] ?? "";
+  // `String.prototype.split` always yields at least one element.
+  const noQuery = trimmed.split(/[?#]/)[0] as string;
   const segments = noQuery.split(/[/:]/).filter(Boolean);
   const repo = (segments.pop() ?? "").replace(/\.git$/i, "");
   const owner = segments.pop() ?? "";

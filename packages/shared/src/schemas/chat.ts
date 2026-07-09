@@ -190,8 +190,13 @@ export const updateChatSchema = z
     // decisions belong in a `--request`, not here).
     description: z.string().trim().max(1500).nullable().optional(),
   })
-  .refine((v) => v.topic !== undefined || v.description !== undefined, {
-    message: "Provide at least one of `topic` or `description`.",
+  .superRefine((v, ctx) => {
+    if (v.topic === undefined && v.description === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide at least one of `topic` or `description`.",
+      });
+    }
   });
 export type UpdateChat = z.infer<typeof updateChatSchema>;
 
@@ -215,8 +220,14 @@ export const addParticipantSchema = z
     agentId: z.string().min(1).optional(),
     agentName: z.string().min(1).optional(),
   })
-  .refine((v) => (v.agentId === undefined) !== (v.agentName === undefined), {
-    message: "addParticipant requires exactly one of `agentId` or `agentName`",
+  .superRefine((v, ctx) => {
+    // Exactly one of agentId / agentName must be supplied (both or neither is 400).
+    if ((v.agentId === undefined) === (v.agentName === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "addParticipant requires exactly one of `agentId` or `agentName`",
+      });
+    }
   });
 export type AddParticipant = z.infer<typeof addParticipantSchema>;
 

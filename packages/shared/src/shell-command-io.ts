@@ -215,8 +215,8 @@ function tokenizeSimpleShell(command: string): TokenizeResult {
   };
 
   for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (ch === undefined) break;
+    // Index is always in-range for `i < command.length`.
+    const ch = command[i] as string;
 
     if (quote === "'") {
       if (ch === "'") {
@@ -340,8 +340,7 @@ function classifySimpleFileRead(commandName: string, tokens: ShellToken[]): Shel
   const paths: ShellToken[] = [];
   let afterDoubleDash = false;
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (!token) break;
+    const token = tokens[i] as ShellToken;
     const value = token.value;
     if (!afterDoubleDash && value === "--") {
       afterDoubleDash = true;
@@ -366,8 +365,7 @@ function classifySed(tokens: ShellToken[]): ShellIoClassification {
   let afterDoubleDash = false;
 
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (!token) break;
+    const token = tokens[i] as ShellToken;
     const value = token.value;
     if (!afterDoubleDash && value === "--") {
       afterDoubleDash = true;
@@ -401,8 +399,7 @@ function classifyGrep(tokens: ShellToken[]): ShellIoClassification {
   let afterDoubleDash = false;
 
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (!token) break;
+    const token = tokens[i] as ShellToken;
     const value = token.value;
     if (!afterDoubleDash && value === "--") {
       afterDoubleDash = true;
@@ -437,8 +434,7 @@ function classifyRipgrep(tokens: ShellToken[]): ShellIoClassification {
   let afterDoubleDash = false;
 
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (!token) break;
+    const token = tokens[i] as ShellToken;
     const value = token.value;
     if (!afterDoubleDash && value === "--") {
       afterDoubleDash = true;
@@ -477,8 +473,7 @@ function classifyFind(tokens: ShellToken[]): ShellIoClassification {
   let expressionStart = tokens.length;
 
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (!token) break;
+    const token = tokens[i] as ShellToken;
     const value = token.value;
     if (!afterDoubleDash && value === "--") {
       afterDoubleDash = true;
@@ -507,8 +502,7 @@ function classifyLs(tokens: ShellToken[]): ShellIoClassification {
   let afterDoubleDash = false;
 
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (!token) break;
+    const token = tokens[i] as ShellToken;
     const value = token.value;
     if (!afterDoubleDash && value === "--") {
       afterDoubleDash = true;
@@ -554,8 +548,8 @@ function classifyShellCommandIoInternal(command: string, wrapperDepth: number): 
   const tokenized = tokenizeSimpleShell(command);
   if (!tokenized.ok) return { supported: false, reason: tokenized.reason };
 
-  const commandToken = tokenized.tokens[0];
-  if (!commandToken) return { supported: false, reason: "empty" };
+  // `tokenizeSimpleShell` only returns ok with a non-empty tokens array.
+  const commandToken = tokenized.tokens[0] as ShellToken;
   if (commandToken.dynamic) return { supported: false, reason: "dynamic_path" };
 
   const commandName = commandBasename(commandToken.value);

@@ -85,8 +85,8 @@ export function identiconCells(seed: string, gridSize: number = DEFAULT_GRID_SIZ
   const cells: boolean[][] = Array.from({ length: gridSize }, () => new Array<boolean>(gridSize).fill(false));
   const half = Math.ceil(gridSize / 2);
   for (let y = 0; y < gridSize; y++) {
-    const row = cells[y];
-    if (!row) continue;
+    // `cells` is dense: one row per y in `0..gridSize-1`.
+    const row = cells[y] as boolean[];
     for (let x = 0; x < half; x++) {
       const on = rand() < FILL_RATE;
       row[x] = on;
@@ -128,8 +128,7 @@ export function identiconSvg(seed: string, options: IdenticonSvgOptions = {}): s
 
   let rects = "";
   for (let y = 0; y < gridSize; y++) {
-    const row = cells[y];
-    if (!row) continue;
+    const row = cells[y] as boolean[];
     for (let x = 0; x < gridSize; x++) {
       if (!row[x]) continue;
       rects += `<rect x="${coord(margin + x * block)}" y="${coord(margin + y * block)}" width="${coord(block)}" height="${coord(block)}"/>`;

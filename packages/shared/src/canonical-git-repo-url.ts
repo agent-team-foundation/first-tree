@@ -14,9 +14,9 @@ export function canonicalGitRepoUrl(value: string | null | undefined): string | 
 
   const scpLike = /^(?:[^@/\s]+@)?([^:]+):(.+)$/.exec(trimmed);
   if (scpLike && !trimmed.includes("://")) {
-    const host = scpLike[1];
-    const rawPath = scpLike[2];
-    if (!host || !rawPath) return null;
+    // Capture groups `([^:]+)` and `(.+)` each require ≥1 char, so host/rawPath are defined.
+    const host = scpLike[1] as string;
+    const rawPath = scpLike[2] as string;
     const path = normalizeGitRepoPath(rawPath);
     return path ? `${host.toLowerCase()}/${path}` : null;
   }
