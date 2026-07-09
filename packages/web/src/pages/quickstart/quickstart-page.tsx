@@ -155,6 +155,9 @@ export function QuickstartPage() {
       const created = await createMeTaskChat({
         mode: "task",
         topic: "Fix production scan blockers",
+        // Key the launcher on the repo so re-entering the fix link reuses this
+        // chat (and dedups with the onboarding path) instead of duplicating it.
+        scanFixRepoSlug: fixHandoff.repoSlug,
         initialRecipientAgentIds: [agent.uuid],
         initialRecipientNames: [],
         contextParticipantAgentIds: [],
@@ -179,7 +182,11 @@ export function QuickstartPage() {
 
   useEffect(() => {
     if (!fixHandoff || !settled || !growthLandingPagesEnabled || !meLoaded) return;
-    writeScanFixHandoffFlag({ repoUrl: fixHandoff.url, reportKey: fixHandoff.reportKey });
+    writeScanFixHandoffFlag({
+      repoUrl: fixHandoff.url,
+      reportKey: fixHandoff.reportKey,
+      repoSlug: fixHandoff.repoSlug,
+    });
     // Direct-chat eligibility is `shouldLeaveOnboarding` — the membership is
     // terminally done (past connect, has a personal agent, AND carries the
     // completion stamp). Its inverse gate, `shouldEnterOnboarding`, returns

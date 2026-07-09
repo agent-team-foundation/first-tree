@@ -15,6 +15,7 @@ import { createChat, listChatsForMember, resolveAgentIdsByNameInOrg } from "../.
 import { assertNoLandingCampaignTrialAgents } from "../../services/landing-campaigns/guards.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { scanFixKickoffKey } from "../../services/onboarding-kickoff.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -142,6 +143,12 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
         description: body.description ?? null,
         initialMessage: { ...body.initialMessage, source: "web" },
         source: "manual",
+        // Production-scan fix conversion: key the launcher on the repo so
+        // re-entering the fix link reuses it (and dedups with the onboarding
+        // path that carries the same key) instead of creating a duplicate.
+        ...(body.scanFixRepoSlug
+          ? { onboardingKickoffKey: scanFixKickoffKey(scope.humanAgentId, body.scanFixRepoSlug) }
+          : {}),
       });
       notifyRecipients(app.notifier, result.recipients, result.message.id);
       return reply.status(201).send({

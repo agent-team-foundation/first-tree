@@ -7,6 +7,12 @@ export type StartOnboardingChatArgs = {
   bootstrap: string;
   topic?: string;
   complete?: boolean;
+  /**
+   * Production-scan fix conversion: `owner/repo`. When set, the server keys the
+   * kickoff chat `<humanAgent>:scan-fix:<repoSlug>` so this fix launcher dedups
+   * with the already-onboarded direct path instead of duplicating it.
+   */
+  scanFixRepoSlug?: string;
 };
 
 export type StartOnboardingChatResult = {

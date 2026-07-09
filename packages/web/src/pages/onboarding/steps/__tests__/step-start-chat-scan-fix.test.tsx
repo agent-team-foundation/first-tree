@@ -44,7 +44,7 @@ const resolveAgentMock = vi.hoisted(() => ({
 
 const treeSetupChatMock = vi.hoisted(() => ({
   ensureStartChatRepos: vi.fn(async () => undefined),
-  startOnboardingChat: vi.fn(async (_args: { topic: string; bootstrap: string }) => "chat-1"),
+  startOnboardingChat: vi.fn(async (_args: { topic: string; bootstrap: string; scanFixRepoSlug?: string }) => "chat-1"),
 }));
 
 vi.mock("../../onboarding-flow.js", async () => {
@@ -128,8 +128,12 @@ function expectCall<T>(value: T | undefined): T {
 }
 
 describe("AdminStartChat — production-scan fix handoff", () => {
-  it("sends the scan-fix bootstrap and topic, and clears the flag once the chat exists", async () => {
-    writeScanFixHandoffFlag({ repoUrl: "https://github.com/acme/backend", reportKey: "acme-backend-20260101-abcdef" });
+  it("sends the scan-fix bootstrap and topic, threads the repo slug, and clears the flag once the chat exists", async () => {
+    writeScanFixHandoffFlag({
+      repoUrl: "https://github.com/acme/backend",
+      reportKey: "acme-backend-20260101-abcdef",
+      repoSlug: "acme/backend",
+    });
 
     const container = await renderStep();
     clickStart(container);
@@ -138,6 +142,9 @@ describe("AdminStartChat — production-scan fix handoff", () => {
     expect(treeSetupChatMock.startOnboardingChat).toHaveBeenCalledTimes(1);
     const call = expectCall(treeSetupChatMock.startOnboardingChat.mock.calls[0]?.[0]);
     expect(call.topic).toBe("Fix production scan blockers");
+    // The repo slug must thread all the way to start-chat so the server keys
+    // the onboarding-path launcher for cross-path dedup (guards a dropped hop).
+    expect(call.scanFixRepoSlug).toBe("acme/backend");
     expect(call.bootstrap).toContain(
       "Machine-readable findings: https://report.first-tree.ai/acme-backend-20260101-abcdef.json",
     );
