@@ -51,6 +51,13 @@ type SessionManagerInternals = {
   drainPendingQueue(): void;
   evictIfNeeded(): void;
   notifySessionState(chatId: string, state: SessionState): void;
+  buildSessionContext(chatId: string): SessionContext;
+  confirmSessionEventOrThrow(chatId: string, event: SessionEvent): Promise<void>;
+  resolveSelfFence(
+    log: (msg: string) => void,
+    chatId: string,
+  ): Promise<{ agentHome: string; singleRepoLocalPath?: string }>;
+  resolveChatOrgId(log: (msg: string) => void, chatId: string): Promise<string | null>;
   reaffirmRuntimeStates(): void;
   persistRegistry(): void;
 };
@@ -147,6 +154,7 @@ function makeManager(
     onRuntimeStateChange?: (state: TestRuntimeState) => void;
     onSessionRuntimeChange?: (chatId: string, state: TestRuntimeState) => void;
     onSessionEvent?: (chatId: string, event: SessionEvent) => void;
+    confirmSessionEvent?: (chatId: string, event: SessionEvent) => Promise<void>;
     workspaceRoot?: string;
     runtimeSessionTokenFile?: string;
   } = {},
@@ -185,6 +193,7 @@ function makeManager(
     onRuntimeStateChange: opts.onRuntimeStateChange,
     onSessionRuntimeChange: opts.onSessionRuntimeChange,
     onSessionEvent: opts.onSessionEvent,
+    confirmSessionEvent: opts.confirmSessionEvent,
   });
 }
 
@@ -1209,6 +1218,92 @@ describe("SessionManager edge coverage", () => {
     expect(runtimeChanges).not.toContain("working");
 
     internals(sm).reaffirmRuntimeStates();
+    await sm.shutdown();
+  });
+
+  it("covers session context transport updates and confirmed event channels", async () => {
+    const events: SessionEvent[] = [];
+    const sm = makeManager({
+      onSessionEvent: (_chatId, event) => events.push(event),
+    });
+    const nextSdk = mockSdk();
+    const nextCache = makeCache();
+
+    sm.updateTransport(nextSdk, nextCache);
+    sm.noteBindRecoveryComplete();
+
+    const ctx = internals(sm).buildSessionContext("chat-context");
+    expect(ctx.sdk).toBe(nextSdk);
+    await expect(ctx.formatFromHeader(makeMessage("chat-context"))).resolves.toContain("alice");
+
+    const event: SessionEvent = { kind: "error", payload: { source: "runtime", message: "boom" } };
+    if (!ctx.emitEventConfirmed) throw new Error("confirmed event callback missing");
+    await expect(ctx.emitEventConfirmed(event)).rejects.toThrow("confirmed session event channel unavailable");
+    expect(events).toEqual([event]);
+    await sm.shutdown();
+
+    const confirmSessionEvent = vi.fn<(chatId: string, event: SessionEvent) => Promise<void>>().mockResolvedValue();
+    const confirmed = makeManager({ confirmSessionEvent });
+    const confirmedCtx = internals(confirmed).buildSessionContext("chat-confirmed");
+    if (!confirmedCtx.emitEventConfirmed) throw new Error("confirmed event callback missing");
+    await confirmedCtx.emitEventConfirmed(event);
+    expect(confirmSessionEvent).toHaveBeenCalledWith("chat-confirmed", event);
+    await confirmed.shutdown();
+  });
+
+  it("resolves document self fences from runtime config and falls back on refresh failure", async () => {
+    const workspaceRoot = "/tmp/test-edge/fence-agent";
+    const config = runtimeConfig({
+      payload: {
+        ...runtimeConfig().payload,
+        gitRepos: [{ url: "https://github.com/acme/repo.git", localPath: "repo" }],
+      },
+    });
+    const sm = makeManager({ workspaceRoot, agentConfigCache: makeCache({ config }) });
+    const logs: string[] = [];
+
+    await expect(internals(sm).resolveSelfFence((msg) => logs.push(msg), "chat-fence")).resolves.toEqual({
+      agentHome: workspaceRoot,
+      singleRepoLocalPath: "source-repos/repo",
+    });
+    expect(logs).toEqual([]);
+    await sm.shutdown();
+
+    const failing = makeManager({
+      workspaceRoot,
+      agentConfigCache: makeCache({
+        refreshIfNewer: async () => {
+          throw new Error("config unavailable");
+        },
+      }),
+    });
+    await expect(internals(failing).resolveSelfFence((msg) => logs.push(msg), "chat-fence-fallback")).resolves.toEqual({
+      agentHome: workspaceRoot,
+    });
+    expect(logs.some((msg) => msg.includes("config unavailable"))).toBe(true);
+    await failing.shutdown();
+  });
+
+  it("resolves chat org ids with caching and degrades lookup failures to null", async () => {
+    const getChatDetail = vi.fn(async (chatId: string) => {
+      if (chatId === "chat-org") return { organizationId: "org-1" };
+      if (chatId === "chat-empty-org") return { organizationId: "" };
+      throw new Error("lookup failed");
+    });
+    const sdk = { ...mockSdk(), getChatDetail } as unknown as FirstTreeHubSDK;
+    const sm = makeManager({ sdk });
+    const logs: string[] = [];
+    const log = (msg: string): void => {
+      logs.push(msg);
+    };
+
+    await expect(internals(sm).resolveChatOrgId(log, "chat-org")).resolves.toBe("org-1");
+    await expect(internals(sm).resolveChatOrgId(log, "chat-org")).resolves.toBe("org-1");
+    expect(getChatDetail).toHaveBeenCalledTimes(1);
+
+    await expect(internals(sm).resolveChatOrgId(log, "chat-empty-org")).resolves.toBeNull();
+    await expect(internals(sm).resolveChatOrgId(log, "chat-fail")).resolves.toBeNull();
+    expect(logs.some((msg) => msg.includes("lookup failed"))).toBe(true);
     await sm.shutdown();
   });
 
