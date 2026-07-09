@@ -1564,6 +1564,34 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("limits inviteable non-participant mention candidates to three", async () => {
+    orgAgentsHookMocks.searchOnlyItems = Array.from({ length: 5 }, (_, index) =>
+      agent({
+        uuid: `agent-cap-${index + 1}`,
+        name: `cap-agent-${index + 1}`,
+        displayName: `Cap Agent ${index + 1}`,
+        managerId: "member-alice",
+      }),
+    );
+
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    await setValue(textarea, "Please @cap");
+    await waitForCondition(
+      () => container.querySelector<HTMLButtonElement>('button[title="@cap-agent-1"]') !== null,
+      "Expected matching inviteable mention candidates",
+    );
+
+    expect(container.querySelectorAll<HTMLButtonElement>('button[title^="@cap-agent-"]').length).toBe(3);
+    expect(container.querySelector<HTMLButtonElement>('button[title="@cap-agent-4"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("clears the mention tip when switching to another group chat", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, queryClient, root } = await renderDom(

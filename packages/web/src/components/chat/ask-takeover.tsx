@@ -100,6 +100,7 @@ export function AskTakeover({
   askerName,
   sending = false,
   mentionCandidates = [],
+  mentionAutocompleteCandidates = mentionCandidates,
   error,
   onMentionQueryChange,
   onMentionTextChange,
@@ -116,11 +117,14 @@ export function AskTakeover({
   payload: AskRequest;
   askerName?: string;
   sending?: boolean;
-  /** Candidates the free-text `@` autocomplete suggests + resolves against
-   *  (self-excluded chat speakers plus host-supplied inviteable agents, same
-   *  source as the composer). Empty → no autocomplete and every `@<token>`
-   *  stays plain text. */
+  /** Candidates the answer resolves against (self-excluded chat speakers plus
+   *  retained inviteable agents, same source as the composer). Empty → every
+   *  `@<token>` stays plain text. */
   mentionCandidates?: MentionCandidate[];
+  /** Capped candidate list shown by the free-text `@` autocomplete. Defaults
+   *  to `mentionCandidates` when the host does not need a separate display
+   *  projection. */
+  mentionAutocompleteCandidates?: MentionCandidate[];
   /** A host-side send failure to surface in the card (the composer is covered,
    *  so a failed resolve must show here or it looks like nothing happened). */
   error?: string;
@@ -190,7 +194,7 @@ export function AskTakeover({
   const mention = useMentionAutocomplete({
     value: freeText,
     cursor,
-    candidates: mentionCandidates,
+    candidates: mentionAutocompleteCandidates,
     disabled: sending,
     onSelect: (update, picked) => {
       onMentionSelect?.(picked);

@@ -103,6 +103,7 @@ import {
   detectMentionTrigger,
   MentionAutocompletePopover,
   type MentionCandidate,
+  rankCandidates,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../../../components/mention-highlight-overlay.js";
@@ -145,6 +146,7 @@ import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ChatSummary } from "./chat-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
+const MAX_INVITEABLE_MENTION_CANDIDATES = 3;
 const LANDING_TRIAL_CHAT_ENDED_PLACEHOLDER =
   'Your trial chat has ended. To keep using First Tree, click "Set up First Tree for your team" ' +
   "at the top of the page to create your team.";
@@ -3210,6 +3212,16 @@ export function ChatView({
     toInviteableMentionCandidate,
   ]);
 
+  const visibleInviteableMentionCandidates = useMemo(
+    () => rankCandidates(inviteableMentionCandidates, activeMentionQuery).slice(0, MAX_INVITEABLE_MENTION_CANDIDATES),
+    [activeMentionQuery, inviteableMentionCandidates],
+  );
+
+  const mentionAutocompleteCandidates = useMemo<MentionCandidate[]>(
+    () => [...inChatMentionCandidates, ...visibleInviteableMentionCandidates],
+    [inChatMentionCandidates, visibleInviteableMentionCandidates],
+  );
+
   const mentionCandidates = useMemo<MentionCandidate[]>(
     () => [...inChatMentionCandidates, ...inviteableMentionCandidates],
     [inChatMentionCandidates, inviteableMentionCandidates],
@@ -3391,7 +3403,7 @@ export function ChatView({
   const mention = useMentionAutocomplete({
     value: draft,
     cursor,
-    candidates: mentionCandidates,
+    candidates: mentionAutocompleteCandidates,
     disabled: landingCampaignChatLocked || sendMut.isPending || uploading,
     onSelect: (update, picked) => {
       autoPrimedDraftRef.current = false;
@@ -3530,6 +3542,7 @@ export function ChatView({
                 sending={askBusy}
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
+                mentionAutocompleteCandidates={mentionAutocompleteCandidates}
                 isTrial={isTrial}
                 onMentionQueryChange={setAskMentionQuery}
                 onMentionTextChange={setAskMentionText}
