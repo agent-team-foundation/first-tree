@@ -93,9 +93,12 @@ export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
  * BASE constant; the findings JSON expires ~30 days after the scan.
  *
  * `opening: "direct"` is the already-onboarded path (quickstart opens the task
- * chat itself): no "welcome aboard" greeting — the agent isn't being onboarded,
- * and the greeting-free shape keeps the welcome skill's launcher flow from
- * treating an already-dedicated fix chat as a launcher.
+ * chat itself): no "welcome aboard" greeting — the agent isn't being onboarded.
+ * Both openings drive the SAME welcome-skill fix launcher (fan the top blockers
+ * out into parallel, distinctly-named fix chats, or fix a lone blocker in
+ * place). The greeting only signals role: with it, the human is treated as an
+ * admin and may get a Context Tree build offer after value; the greeting-free
+ * direct path stays role-unclear and makes no admin-only offer.
  */
 export function buildScanFixBootstrap(
   agentDisplayName: string,

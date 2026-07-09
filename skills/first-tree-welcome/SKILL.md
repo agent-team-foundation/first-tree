@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.1.2
+version: 1.2.0
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -26,12 +26,13 @@ Two look-alikes that are NOT this launcher, and one that routes by shape:
   readiness scan") with a `Repository:` line, plus a `Machine-readable
   findings: https://report.first-tree.ai/<key>.json` line when the report key
   survived the handoff. Nothing needs re-scanning — never look for a scan
-  skill. Route by shape, exactly as "Production-scan fix handoff" below
-  specifies: opened with the onboarding greeting ("welcome aboard") → this
-  launcher with a pre-selected first task, spawn only once a readable findings
-  source exists; greeting-free fix brief → already the dedicated fix chat,
-  work here and do not spawn; no readable findings source → ask for the
-  report or a re-run, then stop.
+  skill. This is the launcher for a pre-selected fix: once a readable findings
+  source exists, handle the top blockers the way a normal first-task menu is
+  fanned out — several safe blockers become their own parallel fix chats, a
+  single one is just fixed in place (see "Production-scan fix handoff" below).
+  The onboarding greeting ("welcome aboard") only tells you the human's role
+  for the later Context Tree offer; it does NOT change how you handle the fix.
+  No readable findings source → ask for the report or a re-run, then stop.
 
 ## What This Is
 
@@ -168,19 +169,33 @@ When either shape matches:
    the findings cannot list the blockers it exists to fix. Step 3 applies only
    once a readable findings source exists (a shared report, a findings URL, or
    a fresh scan).
-3. **Launcher vs already-dedicated chat** (only with a readable findings
-   source — see step 2). If this chat opened with the
-   onboarding greeting ("welcome aboard"), it is the launcher: spin the work
-   into its own chat with `chat create` addressed to your own agent, topic
-   `Fix production scan blockers`, keeping this chat as the launcher (see
-   Spawning Task Chats). If the message arrived WITHOUT that greeting — a task
-   chat that already carries the fix brief — this chat IS the dedicated fix
-   chat: do the work here and do not spawn another. A spawned chat's task
-   brief must be self-contained: the repository URL, the findings JSON URL
-   (when present), fix blockers in severity order, what to do when access is
-   missing (diagnose the cause, then give the single narrowest recovery for it —
-   the narrowest GitHub access or a local path), and the
-   completion bar — a PR or a verified fix per blocker, with evidence.
+3. **Fix the blockers — fan out only when there are several** (only with a
+   readable findings source — see step 2). Triage the findings and take the
+   ones that are highest-leverage AND `confirmed` AND safe/bounded to fix
+   autonomously (a scoped change with a clear check — add an index, add
+   security headers, fix an N+1, add an error boundary). Then route by how many
+   such blockers there are:
+   - **Two or more** → this chat is the launcher: open one chat per blocker
+     (top ~4, bounded) with `chat create` addressed to your own agent (see
+     Spawning Task Chats), each with a **distinct, specific topic** naming that
+     one fix (`Fix: N+1 in orders list`, `Fix: add security response headers`) —
+     never reuse the launcher's own generic `Fix production scan blockers`
+     title, which would collide with it. Keep THIS chat as the launcher/map,
+     and say plainly which blockers you did not start.
+   - **Exactly one safe blocker** → do NOT fan out; fix it here, in this chat. A
+     lone blocker has no parallelism to show, and a launcher plus a single child
+     chat is pure overhead.
+   - **None safe to autofix** (everything left is a judgment call) → spawn
+     nothing; go straight to surfacing them (below).
+   **Never fan out — or autofix — a judgment call**: architectural or
+   auth/security-design findings (rate-limiting redesign, changing auth), or
+   low-`confidence` findings. Surface those in this chat for the user to decide.
+   Whether a fix runs in a spawned chat or here, its brief/target is
+   self-contained: the repository URL, the findings JSON URL (when present), the
+   specific finding(s) with their evidence and recommended fix, what to do when
+   access is missing (diagnose the cause, then the single narrowest recovery —
+   the narrowest GitHub access or a local path), and the completion bar — a
+   verified fix or PR for that blocker, with evidence.
 4. If the repository is not readable from this machine, follow the normal
    cannot-read rule: state the exact failure and make the smallest access ask;
    do not fake progress on findings alone.
@@ -306,12 +321,15 @@ it does not belong in this value-task list.)
 
 ## Spawning Task Chats
 
-Once the user picks, **do not do the work in this launcher chat**. Fan the
-selected work out into parallel chats — **one chat per task**: if the user picked
-the value bundle, open one chat for EACH task in it; if they picked individual
-value tasks, open one chat per picked task; if they picked the tree build, open
-one chat for it. (That per-task parallelism is the leverage the user is meant to
-feel.) Open each with:
+Once the user picks — or, for a production-scan fix launcher, once you have
+triaged the confirmed safe blockers (see "Production-scan fix handoff") — **do
+not do the work in this launcher chat**. Fan the selected work out into parallel
+chats — **one chat per task**: if the user picked the value bundle, open one chat
+for EACH task in it; if they picked individual value tasks, open one chat per
+picked task; if they picked the tree build, open one chat for it; for a scan-fix
+launcher, open one chat per confirmed safe blocker with a distinct, fix-specific
+topic. (That per-task parallelism is the leverage the user is meant to feel.)
+Open each with:
 
 `first-tree chat create --to <your-own-agent-name> --topic "<short task topic>" "<self-contained task brief>"`
 
@@ -393,8 +411,9 @@ was not picked up front. Offer it **once**, after value, on these conditions:
   **Reading role from the greeting**) and the team's Context Tree is still
   **missing or empty** (confirm by reading the target team's tree, not by
   trusting a binding).
-- **Trigger on the first verified result** — the moment a spawned value task
-  returns something the user can see work (a passing test, a review-ready PR, a
+- **Trigger on the first verified result** — the moment a value task returns
+  something the user can see work, whether it ran in a spawned chat or was fixed
+  in place (a passing test, a review-ready PR, a
   shipped doc), tie the offer to that win — not after everything finishes, and
   not before the first win.
 - **When the evidence warrants it** (per **Recommend, don't just list**), make
