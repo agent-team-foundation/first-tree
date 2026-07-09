@@ -40,10 +40,8 @@ describe("canonicalGitRepoUrl", () => {
       value: string,
     ): RegExpExecArray | null {
       if (value === "force-empty-scp-host") {
-        const match: RegExpExecArray = Object.assign(["force-empty-scp-host", "", "owner/repo"], {
-          index: 0,
-          input: value,
-        });
+        const match = /^([^:]*):(.*)$/.exec(":owner/repo");
+        if (!match) throw new Error("test fixture failed to build scp-like match");
         return match;
       }
       return Reflect.apply(originalExec, this, [value]);

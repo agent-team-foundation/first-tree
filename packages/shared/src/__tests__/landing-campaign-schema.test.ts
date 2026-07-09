@@ -76,7 +76,11 @@ describe("landing campaign metadata schemas", () => {
     };
 
     expect(parseLandingCampaignTrialChatMetadata(null)).toBeNull();
-    expect(parseLandingCampaignTrialChatMetadata({ landingCampaignTrial: { ...unlocked.landingCampaignTrial, state: "bad" } })).toBeNull();
+    expect(
+      parseLandingCampaignTrialChatMetadata({
+        landingCampaignTrial: { ...unlocked.landingCampaignTrial, state: "bad" },
+      }),
+    ).toBeNull();
     expect(isLandingCampaignTrialChatLocked(unlocked)).toBe(false);
     expect(
       isLandingCampaignTrialChatLocked({
