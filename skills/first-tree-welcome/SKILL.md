@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.2.0
+version: 1.2.1
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -27,8 +27,8 @@ Two look-alikes that are NOT this launcher, and one that routes by shape:
   findings: https://report.first-tree.ai/<key>.json` line when the report key
   survived the handoff. Nothing needs re-scanning — never look for a scan
   skill. This is the launcher for a pre-selected fix: once a readable findings
-  source exists, handle the top blockers the way a normal first-task menu is
-  fanned out — several safe blockers become their own parallel fix chats, a
+  source exists, handle the eligible blockers the way a normal first-task menu is
+  fanned out — several eligible blockers become their own parallel fix chats, a
   single one is just fixed in place (see "Production-scan fix handoff" below).
   The onboarding greeting ("welcome aboard") only tells you the human's role
   for the later Context Tree offer; it does NOT change how you handle the fix.
@@ -170,32 +170,46 @@ When either shape matches:
    once a readable findings source exists (a shared report, a findings URL, or
    a fresh scan).
 3. **Fix the blockers — fan out only when there are several** (only with a
-   readable findings source — see step 2). Triage the findings and take the
-   ones that are highest-leverage AND `confirmed` AND safe/bounded to fix
-   autonomously (a scoped change with a clear check — add an index, add
-   security headers, fix an N+1, add an error boundary). Then route by how many
-   such blockers there are:
-   - **Two or more** → this chat is the launcher: open one chat per blocker
-     (top ~4, bounded) with `chat create` addressed to your own agent (see
-     Spawning Task Chats), each with a **distinct, specific topic** naming that
-     one fix (`Fix: N+1 in orders list`, `Fix: add security response headers`) —
+   readable findings source — see step 2). Triage the findings into eligible
+   fix tasks. Eligible means the finding has concrete evidence in the report,
+   still applies after checking the current repo state, and is safe/bounded and
+   independently fixable (a scoped change with a clear check — add an index, add
+   security headers, fix an N+1, add an error boundary). Production-scan normally
+   reports 3-5 blockers, so this path should usually produce 3-5 parallel fix
+   chats when those blockers are eligible. Then route by how many eligible
+   blockers there are:
+   - **Two or more** → this chat is the launcher: open up to 5 eligible blockers
+     as active chats with `chat create` addressed to your own agent (see Spawning
+     Task Chats), each with a **distinct, specific topic** naming that one fix
+     (`Fix: N+1 in orders list`, `Fix: add security response headers`) —
      never reuse the launcher's own generic `Fix production scan blockers`
-     title, which would collide with it. Keep THIS chat as the launcher/map,
-     and say plainly which blockers you did not start.
-   - **Exactly one safe blocker** → do NOT fan out; fix it here, in this chat. A
-     lone blocker has no parallelism to show, and a launcher plus a single child
-     chat is pure overhead.
-   - **None safe to autofix** (everything left is a judgment call) → spawn
-     nothing; go straight to surfacing them (below).
-   **Never fan out — or autofix — a judgment call**: architectural or
-   auth/security-design findings (rate-limiting redesign, changing auth), or
-   low-`confidence` findings. Surface those in this chat for the user to decide.
-   Whether a fix runs in a spawned chat or here, its brief/target is
-   self-contained: the repository URL, the findings JSON URL (when present), the
-   specific finding(s) with their evidence and recommended fix, what to do when
-   access is missing (diagnose the cause, then the single narrowest recovery —
-   the narrowest GitHub access or a local path), and the completion bar — a
-   verified fix or PR for that blocker, with evidence.
+     title, which would collide with it. Two eligible blockers means two chats;
+     do not split or invent work just to reach three. If an unusual report has
+     more than five eligible blockers, start five active fix chats and list the
+     rest as queued in this launcher. Keep THIS chat as the launcher/map, and say
+     plainly which blockers you did not start.
+   - **Exactly one eligible blocker** → do NOT fan out; fix it here, in this
+     chat. A lone blocker has no parallelism to show, and a launcher plus a
+     single child chat is pure overhead.
+   - **None eligible to autofix** (everything left is a judgment call or stale)
+     → spawn nothing; go straight to surfacing them (below).
+   Do not split one blocker into implementation-step chats: code change, tests,
+   verification, and PR for that blocker belong in the same spawned fix chat.
+   **Never fan out — or autofix — a judgment call**: a finding that needs product, architecture, or security-design judgment (rate-limiting redesign,
+   changing auth), lacks concrete evidence, no longer matches the current repo,
+   or is already covered by existing code or an already-open PR. Surface those
+   in this chat for the user to decide or acknowledge.
+   Before any spawned fix starts changing code, verify the finding still applies
+   against the current repo. If it is already fixed or covered by existing code
+   or an already-open PR, report that and move to the next queued eligible
+   blocker rather than producing a duplicate fix. Whether a fix runs in a
+   spawned chat or here, its brief/target is self-contained: the repository URL,
+   the findings JSON URL (when present), the specific finding(s) with their
+   evidence and recommended fix, the instruction to verify the finding still
+   applies before changing code, what to do when access is missing (diagnose the
+   cause, then the single narrowest recovery — the narrowest GitHub access or a
+   local path), and the completion bar — a verified fix or PR for that blocker,
+   with evidence.
 4. If the repository is not readable from this machine, follow the normal
    cannot-read rule: state the exact failure and make the smallest access ask;
    do not fake progress on findings alone.
@@ -322,14 +336,15 @@ it does not belong in this value-task list.)
 ## Spawning Task Chats
 
 Once the user picks — or, for a production-scan fix launcher, once you have
-triaged the confirmed safe blockers (see "Production-scan fix handoff") — **do
+triaged the eligible blockers (see "Production-scan fix handoff") — **do
 not do the work in this launcher chat** (one exception: a scan-fix launcher with
-**exactly one** safe blocker fixes it in place, per that section). Fan the
+**exactly one** eligible blocker fixes it in place, per that section). Fan the
 selected work out into parallel chats — **one chat per task**: if the user picked
 the value bundle, open one chat for EACH task in it; if they picked individual
 value tasks, open one chat per picked task; if they picked the tree build, open
-one chat for it; for a scan-fix launcher with **two or more** safe blockers, open
-one chat per blocker with a distinct, fix-specific topic. (That per-task
+one chat for it; for a scan-fix launcher with **two or more** eligible blockers,
+open one chat per blocker, up to five active fix chats, with a distinct,
+fix-specific topic. (That per-task
 parallelism is the leverage the user is meant to feel.) Open each with:
 
 `first-tree chat create --to <your-own-agent-name> --topic "<short task topic>" "<self-contained task brief>"`
@@ -558,8 +573,8 @@ surface; involve the responsible admin.
   the ask — recommend it in a normal reply.)
 - Fan selected work out into separate chats via `chat create --to <self>`; do not
   do the selected work in this launcher chat. (Exception: a production-scan fix
-  launcher with exactly one safe blocker fixes it in place — see Production-scan
-  fix handoff.)
+  launcher with exactly one eligible blocker fixes it in place — see
+  Production-scan fix handoff.)
 - Every spawned chat's opening message is a self-contained task brief (task +
   context + how "done" is verified), because it is all the context the woken
   agent has and it reads as if the user sent it.
