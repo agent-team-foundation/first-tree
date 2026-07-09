@@ -1910,6 +1910,130 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(root);
   });
 
+  it("drives create-agent name, runtime, visibility, and submit actions", async () => {
+    authMock.value = { ...authMock.value, currentOrgHasPersonalAgent: false };
+    const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
+    const setAgentDisplayName = vi.fn();
+    const setVisibility = vi.fn();
+    const setSelectedRuntime = vi.fn();
+    const createAgent = vi.fn(async () => undefined);
+    const { flow, container, root } = await renderOnboardingDom(<StepCreateAgent />, {
+      activeStep: "create-agent",
+      agentDisplayName: "  Release Helper  ",
+      setAgentDisplayName,
+      visibility: "organization",
+      setVisibility,
+      createAgent,
+      computer: {
+        connectedClient: CLIENTS[0] ?? null,
+        capabilitiesLoaded: true,
+        okRuntimes: ["claude-code", "codex"],
+        selectedRuntime: "claude-code",
+        setSelectedRuntime,
+        cliCommand: "first-tree-dev login token",
+        tokenError: null,
+        retry: vi.fn(),
+      },
+    });
+    await waitForText("Choose your local coding agent", container);
+
+    const nameInput = container.querySelector<HTMLInputElement>("#onboarding-agent-name");
+    expect(nameInput).not.toBeNull();
+    if (!nameInput) return;
+    await setValue(nameInput, "New helper name");
+    expect(setAgentDisplayName).toHaveBeenCalledWith("New helper name");
+
+    const runtimeInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[name="onboarding-coding-agent"]'),
+    );
+    await click(runtimeInputs[1] ?? null);
+    expect(setSelectedRuntime).toHaveBeenCalledWith("codex");
+
+    const visibilityInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[name="onboarding-visibility"]'),
+    );
+    await click(visibilityInputs[1] ?? null);
+    expect(setVisibility).toHaveBeenCalledWith("private");
+
+    await click(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Create agent")) ?? null,
+    );
+    expect(createAgent).toHaveBeenCalledWith({
+      displayName: "Release Helper",
+      clientId: CLIENTS[0]?.id,
+      runtimeProvider: "claude-code",
+      visibility: "organization",
+      organizationId: flow.organizationId,
+    });
+    await unmountRoot(root);
+  });
+
+  it("handles create-agent timeout actions", async () => {
+    const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
+    const retryAgent = vi.fn(async () => undefined);
+    const finishLater = vi.fn(async () => undefined);
+    const { container, root } = await renderOnboardingDom(<StepCreateAgent />, {
+      activeStep: "create-agent",
+      agentPhase: "timeout",
+      retryAgent,
+      finishLater,
+    });
+    await waitForText("taking longer than usual", container);
+
+    await click(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Keep waiting")) ?? null,
+    );
+    await click(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("I'll finish later")) ??
+        null,
+    );
+
+    expect(retryAgent).toHaveBeenCalledTimes(1);
+    expect(finishLater).toHaveBeenCalledTimes(1);
+    await unmountRoot(root);
+  });
+
+  it("keeps the selected coding agent visible while disconnected and routes reconnect", async () => {
+    authMock.value = { ...authMock.value, currentOrgHasPersonalAgent: false };
+    const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
+    const goTo = vi.fn();
+    const setSelectedRuntime = vi.fn();
+    const { flow, container, root } = await renderOnboardingDom(<StepCreateAgent />, {
+      activeStep: "create-agent",
+      goTo,
+      computer: {
+        connectedClient: null,
+        capabilitiesLoaded: true,
+        okRuntimes: [],
+        selectedRuntime: "codex",
+        setSelectedRuntime,
+        cliCommand: "first-tree-dev login token",
+        tokenError: null,
+        retry: vi.fn(),
+      },
+    });
+    await waitForText("Not ready", container);
+    await waitForText("Codex", container);
+    const create = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Create agent"),
+    );
+    expect(create?.disabled).toBe(true);
+
+    const codingAgentInput = container.querySelector<HTMLInputElement>('input[name="onboarding-coding-agent"]');
+    expect(codingAgentInput?.disabled).toBe(true);
+    await act(async () => {
+      codingAgentInput?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(setSelectedRuntime).not.toHaveBeenCalled();
+
+    await click(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("reconnect it")) ?? null,
+    );
+    expect(goTo).toHaveBeenCalledWith(flow.sequence.indexOf("connect-computer"));
+    await unmountRoot(root);
+  });
+
   it("drives StepStartChat admin and invitee start flows", async () => {
     const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const findButton = (container: ParentNode, text: string): HTMLButtonElement | null =>
