@@ -3,8 +3,10 @@ import { resolveCliInvocation } from "./shared.js";
 import { renderSystemdUnit, systemdBackend } from "./systemd.js";
 import {
   renderWindowsSupervisorCmd,
+  renderWindowsSupervisorLauncherVbs,
   renderWindowsTaskXml,
   taskSchedulerBackend,
+  windowsSupervisorLauncherPath,
   windowsSupervisorLogPath,
   windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,
@@ -113,8 +115,10 @@ export {
   renderPlist,
   renderSystemdUnit,
   renderWindowsSupervisorCmd,
+  renderWindowsSupervisorLauncherVbs,
   renderWindowsTaskXml,
   resolveCliInvocation,
+  windowsSupervisorLauncherPath,
   windowsSupervisorLogPath,
   windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,

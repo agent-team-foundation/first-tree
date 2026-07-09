@@ -68,8 +68,8 @@ describe("Windows supervisor loop", () => {
     expect(spawnProcess).toHaveBeenCalledTimes(2);
     expect(spawnProcess).toHaveBeenNthCalledWith(
       1,
-      "first-tree-dev",
-      ["daemon", "start", "--no-interactive"],
+      process.env.ComSpec || "cmd.exe",
+      ["/d", "/s", "/c", '""first-tree-dev" "daemon" "start" "--no-interactive""'],
       expect.objectContaining({
         detached: false,
         env: expect.objectContaining({
@@ -79,6 +79,29 @@ describe("Windows supervisor loop", () => {
       }),
     );
     expect(readFileSync(windowsSupervisorLogPath(), "utf-8")).toContain("requested self-update restart");
+  });
+
+  it("routes extensionless npm bin shims through cmd.exe on Windows", async () => {
+    const spawnProcess = fakeSpawnFor([0]);
+
+    const code = await runWindowsSupervisorLoop({
+      platform: "win32",
+      invocation: { kind: "bin", program: "C:\\Users\\baixi\\AppData\\Roaming\\npm\\first-tree-staging" },
+      spawnProcess,
+      maxCycles: 1,
+    });
+
+    expect(code).toBe(0);
+    expect(spawnProcess).toHaveBeenCalledWith(
+      process.env.ComSpec || "cmd.exe",
+      [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Users\\baixi\\AppData\\Roaming\\npm\\first-tree-staging" "daemon" "start" "--no-interactive""',
+      ],
+      expect.objectContaining({ detached: false, windowsHide: true }),
+    );
   });
 
   it("re-resolves the daemon child invocation after exit 75", async () => {
