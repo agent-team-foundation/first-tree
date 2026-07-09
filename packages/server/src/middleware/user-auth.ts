@@ -100,7 +100,7 @@ function isAllowedAgentOutboxRequest(request: FastifyRequest, scope: { agentId: 
   const match = /^\/api\/v1\/agent\/chats\/([^/]+)\/messages$/.exec(pathname);
   if (!match) return false;
   try {
-    return decodeURIComponent(match[1] ?? "") === scope.chatId;
+    return decodeURIComponent(match[1] as string) === scope.chatId;
   } catch {
     return false;
   }

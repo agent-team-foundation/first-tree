@@ -689,4 +689,78 @@ describe("Agent client WS branch fakes", () => {
       expect.objectContaining({ organizationId: "org_1" }),
     );
   });
+
+  it("ignores session frames for agents that are no longer bound locally", async () => {
+    mockSuccessfulBindServices();
+    const { handler } = routeHarness(
+      queuedDb([
+        [{ id: "user_1", status: "active" }],
+        [{ userId: "user_1", retiredAt: null }],
+        [activeAgentRow()],
+        [activeAgentRow()],
+      ]),
+    );
+    const socket = new FakeSocket();
+    await bindAgent(socket, handler);
+
+    await emitMessage(socket, { type: "agent:unbind", agentId: "agent_1", ref: "unbind-1" });
+    await waitUntil(() => socket.sent.some((frame) => (frame as { type?: string }).type === "agent:unbound"));
+
+    const before = vi.mocked(activityService.upsertSessionState).mock.calls.length;
+    await emitMessage(socket, { type: "session:state", agentId: "agent_1", chatId: "chat_1", state: "active" });
+    await emitMessage(socket, {
+      type: "session:runtime",
+      agentId: "agent_1",
+      chatId: "chat_1",
+      runtimeState: "working",
+    });
+    await emitMessage(socket, {
+      type: "session:event",
+      agentId: "agent_1",
+      chatId: "chat_1",
+      event: { kind: "thinking", payload: {} },
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(vi.mocked(activityService.upsertSessionState).mock.calls.length).toBe(before);
+  });
+
+  it("skips deliver frames when the socket closes mid-send", async () => {
+    mockSuccessfulBindServices();
+    const { handler, notifier } = routeHarness(
+      queuedDb([
+        [{ id: "user_1", status: "active" }],
+        [{ userId: "user_1", retiredAt: null }],
+        [activeAgentRow()],
+        [activeAgentRow()],
+      ]),
+    );
+    const socket = new FakeSocket();
+    await bindAgent(socket, handler);
+
+    vi.spyOn(inboxService, "claimBacklogForPushFair").mockImplementationOnce(async () => {
+      // close after claim so sendInboxDeliverFrame sees non-OPEN
+      socket.readyState = socket.CLOSED;
+      return [inboxEntry({ id: 303 })] as never;
+    });
+    const pushHandler = (notifier.subscribe as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as
+      | ((messageId: string) => Promise<void>)
+      | undefined;
+    await pushHandler?.("msg_closed_send");
+    expect(socket.sent.some((f) => (f as { entryId?: number }).entryId === 303)).toBe(false);
+  });
+
+  it("re-schedules auth expiry when a second access token is accepted", async () => {
+    const { handler } = routeHarness(
+      queuedDb([[{ id: "user_1", status: "active" }], [{ id: "user_1", status: "active" }]]),
+    );
+    const socket = new FakeSocket();
+    await handler(socket, { headers: { "user-agent": "fake" }, ip: "127.0.0.1" });
+    const far = Math.floor(Date.now() / 1000) + 3600;
+    await emitMessage(socket, { type: "auth", token: await signAccess({ exp: far }) });
+    await waitUntil(() => socket.sent.some((frame) => (frame as { type?: string }).type === "server:welcome"));
+    // second auth with a different far-future exp clears and resets the timer branch
+    await emitMessage(socket, { type: "auth", token: await signAccess({ exp: far + 60 }) });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(socket.closes.length).toBe(0);
+  });
 });

@@ -634,13 +634,14 @@ function parseMarkdown(raw: string): ParsedMarkdown {
 function parseMarkdownFallback(raw: string): ParsedMarkdown {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
   if (!match) return { content: raw, data: {} };
-  const frontmatter = match[1] ?? "";
+  // Capture groups are always defined when the frontmatter / field regex matches.
+  const frontmatter = match[1] as string;
   const data: Record<string, unknown> = {};
   for (const line of frontmatter.split(/\r?\n/)) {
     const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.trim());
     if (!field) continue;
-    const key = field[1];
-    const value = field[2] ?? "";
+    const key = field[1] as string;
+    const value = field[2] as string;
     if (key === "title") {
       data.title = value.replace(/^["']|["']$/g, "");
       continue;
