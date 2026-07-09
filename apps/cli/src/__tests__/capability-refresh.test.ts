@@ -150,6 +150,25 @@ describe("CapabilityRefresher", () => {
     refresher.stop();
   });
 
+  it("uses default reprobe/revalidate/timer helpers when deps omit them", async () => {
+    const upload = vi.fn(async () => undefined);
+    const log = vi.fn();
+    // Intentionally omit reprobe/revalidate/setTimer/clearTimer so constructor
+    // default branches run (real timers are not exercised beyond construction).
+    const refresher = new CapabilityRefresher({
+      upload,
+      log,
+      initial: allOk(),
+      baseMs: BASE,
+      maxMs: MAX,
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (handle) => clearTimeout(handle),
+    });
+    await refresher.start();
+    expect(upload).toHaveBeenCalledTimes(1);
+    refresher.stop();
+  });
+
   // Regression (real-QA): the background poll must NOT clobber a provider's
   // pending browser-auth marker while an interactive runtime-auth login is in
   // flight — otherwise the web Connect panel vanishes ~30s in, before auth finishes.

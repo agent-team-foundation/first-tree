@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 /**
  * WSL2 + WSLg over-mounts a mode=755 tmpfs onto /run/user/$UID, hiding the
@@ -9,9 +9,6 @@ import { readFileSync } from "node:fs";
 export function isWslDbusOvermount(reason: string): boolean {
   if (process.platform !== "linux") return false;
   if (!/failed to connect to bus/i.test(reason)) return false;
-  try {
-    return /microsoft/i.test(readFileSync("/proc/version", "utf8"));
-  } catch {
-    return false;
-  }
+  if (!existsSync("/proc/version")) return false;
+  return /microsoft/i.test(readFileSync("/proc/version", "utf8"));
 }

@@ -135,15 +135,16 @@ function upsertManagedBlock(text: string, block: string): string {
 }
 
 function writeIdentityFile(path: string, identity: TreeIdentityContract): SyncAction {
-  const current = existsSync(path) ? readFileSync(path, "utf-8") : null;
-  const next = upsertManagedBlock(current ?? "", treeIdentityBlock(identity));
+  // Caller only invokes this for paths that already exist (see syncTreeIdentityFiles).
+  const current = readFileSync(path, "utf-8");
+  const next = upsertManagedBlock(current, treeIdentityBlock(identity));
 
   if (current === next) {
     return "unchanged";
   }
 
   writeFileSync(path, next);
-  return current === null ? "created" : "updated";
+  return "updated";
 }
 
 export function readManagedTreeIdentity(root: string): ManagedTreeIdentity | undefined {

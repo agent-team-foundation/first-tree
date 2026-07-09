@@ -2,6 +2,7 @@ import { FirstTreeHubSDK } from "@first-tree/client";
 import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
+import { errorMessage } from "../../core/error-message.js";
 import {
   CLI_USER_AGENT,
   ensureFreshAccessToken,
@@ -81,7 +82,7 @@ export function registerAgentPruneCommand(agent: Command): void {
             print.line(`  ✓ removed ${s.name}\n`);
             removed++;
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
+            const msg = errorMessage(err);
             print.line(`  ✗ ${s.name} (${msg.slice(0, 80)})\n`);
             failed++;
           }
@@ -89,7 +90,7 @@ export function registerAgentPruneCommand(agent: Command): void {
         print.line(`\n  ${removed} pruned${failed > 0 ? `, ${failed} failed (re-run to retry)` : ""}.\n\n`);
         if (failed > 0) process.exitCode = 1;
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("PRUNE_ERROR", msg);
       }
     });

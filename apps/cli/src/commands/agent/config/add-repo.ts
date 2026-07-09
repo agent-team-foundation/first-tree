@@ -55,7 +55,7 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
                 resourceId: matchingTeamResourceId,
                 repoRef: opts.ref,
                 repoLocalPath: opts.path,
-                order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
+                order: nextRepoOrder(removedOrders, remaining.length),
               }
             : {
                 type: "repo",
@@ -63,7 +63,7 @@ export function registerAgentConfigAddRepoCommand(config: Command): void {
                 agentExtraRepo: { url },
                 repoRef: opts.ref,
                 repoLocalPath: opts.path,
-                order: removedOrders.length > 0 ? Math.min(...removedOrders) : remaining.length + 1,
+                order: nextRepoOrder(removedOrders, remaining.length),
               },
         ],
       });
@@ -77,4 +77,9 @@ function safeCanonicalRepoUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function nextRepoOrder(removedOrders: number[], remainingCount: number): number {
+  if (removedOrders.length === 0) return remainingCount + 1;
+  return Math.min(...removedOrders);
 }

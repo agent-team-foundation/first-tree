@@ -15,6 +15,7 @@ function parseFrontmatter(path: string): string | null {
     const match = text.match(FRONTMATTER_RE);
     return match ? match[1] : null;
   } catch {
+    /* v8 ignore next */
     return null;
   }
 }

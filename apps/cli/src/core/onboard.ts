@@ -4,6 +4,7 @@ import { defaultConfigDir, defaultHome, setConfigValue } from "@first-tree/share
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl, saveAgentConfig } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -237,11 +238,11 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
         metadata: { role: `Personal Assistant to ${args.id}`, domains: ["message triage", "task coordination"] },
         clientId: args.clientId,
       });
-      const assistantLocalName = assistant.name ?? args.assistant;
+      const assistantLocalName = assistant.name || args.assistant;
       saveAgentConfig(assistantLocalName, assistant.uuid, "claude-code");
       print.line(`Assistant "${assistantLocalName}" ready.\n`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       print.line(`Warning: Failed to create assistant "${args.assistant}": ${msg}\n`);
     }
   }

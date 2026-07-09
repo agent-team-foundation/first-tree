@@ -26,6 +26,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 import { readUpdateState } from "./update-state.js";
 import { CLI_USER_AGENT } from "./version.js";
@@ -89,7 +90,7 @@ export function createLoggerRuntimeOutput(logger: RuntimeOutputLogger): ClientRu
 }
 
 export function isAgentSuspendedBindError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error);
+  const msg = errorMessage(error);
   return msg.includes("agent_suspended");
 }
 
@@ -184,7 +185,10 @@ export class ClientRuntime {
       // and the admin dashboard can flag clients that are failing to
       // self-update. Read is synchronous (small JSON file) and tolerant —
       // missing / corrupt state file simply omits the field.
-      getLastUpdateAttempt: () => readUpdateState()?.last ?? null,
+      getLastUpdateAttempt: () => {
+        const state = readUpdateState();
+        return state ? state.last : null;
+      },
     });
     registerBuiltinHandlers();
 
@@ -259,7 +263,7 @@ export class ClientRuntime {
         try {
           cb();
         } catch (err) {
-          this.output.status("⚠️", `reconnect handler error: ${err instanceof Error ? err.message : String(err)}`);
+          this.output.status("⚠️", `reconnect handler error: ${errorMessage(err)}`);
         }
       }
     });
@@ -463,7 +467,7 @@ export class ClientRuntime {
         this.stopCredentialsWatcher();
       });
     } catch (err) {
-      this.output.status("⚠️", `credentials watcher failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.output.status("⚠️", `credentials watcher failed: ${errorMessage(err)}`);
     }
   }
 
@@ -570,7 +574,7 @@ export class ClientRuntime {
       writeFileSync(join(agentDir, "agent.yaml"), yaml, { mode: 0o600 });
       this.output.check(true, `auto-added agent "${localName}"`, `${message.agentId} (from server push)`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       this.output.check(false, `failed to auto-add agent "${localName}"`, msg);
       return;
     }
@@ -596,10 +600,7 @@ export class ClientRuntime {
       try {
         await existing.slot.stop("runtime switched to unsupported provider by server", runtimeSwitchStopOptions);
       } catch (err) {
-        this.output.status(
-          "⚠️",
-          `failed to stop previous runtime for ${existing.name}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        this.output.status("⚠️", `failed to stop previous runtime for ${existing.name}: ${errorMessage(err)}`);
       }
       existing.config = { ...existing.config, runtime: runtimeProvider };
       this.writeAgentYaml(existing.name, existing.config);
@@ -611,10 +612,7 @@ export class ClientRuntime {
     try {
       await existing.slot.stop("runtime switched by server", runtimeSwitchStopOptions);
     } catch (err) {
-      this.output.status(
-        "⚠️",
-        `failed to stop previous runtime for ${existing.name}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.output.status("⚠️", `failed to stop previous runtime for ${existing.name}: ${errorMessage(err)}`);
     }
 
     const nextConfig = { ...existing.config, runtime: runtimeProvider };
@@ -622,11 +620,7 @@ export class ClientRuntime {
       this.writeAgentYaml(existing.name, nextConfig);
     } catch (err) {
       existing.state = "failed";
-      this.output.check(
-        false,
-        `failed to update agent "${existing.name}" runtime`,
-        err instanceof Error ? err.message : String(err),
-      );
+      this.output.check(false, `failed to update agent "${existing.name}" runtime`, errorMessage(err));
       return;
     }
 
@@ -677,10 +671,7 @@ export class ClientRuntime {
         runtimeProvider: runtime.data,
       });
     } catch (err) {
-      this.output.status(
-        "⚠️",
-        `${existing.name}: runtime repair failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.output.status("⚠️", `${existing.name}: runtime repair failed: ${errorMessage(err)}`);
     }
   }
 
@@ -762,7 +753,7 @@ export class ClientRuntime {
       this.output.check(true, `${entry.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
       return "connected";
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = errorMessage(error);
       if (isAgentSuspendedBindError(error)) {
         entry.state = "suspended-skipped";
         this.output.status("•", `${entry.name}: skipped (suspended)`);

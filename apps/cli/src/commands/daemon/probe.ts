@@ -3,6 +3,7 @@ import { clientConfigSchema, initConfig, resetConfig, resetConfigMeta } from "@f
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
+import { errorMessage } from "../../core/error-message.js";
 import {
   ensureFreshAccessToken,
   loadCredentials,
@@ -74,7 +75,7 @@ export function registerDaemonProbeCommand(daemon: Command): void {
         if (wantJson) print.result(capabilities);
         else print.line("  Uploaded to the server.\n\n");
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         // In JSON mode the envelope must reflect the real outcome: a failed
         // upload is `{ ok: false }`, not a success with the snapshot. (A caller
         // who only wants the local snapshot uses `--no-upload`.) In human mode

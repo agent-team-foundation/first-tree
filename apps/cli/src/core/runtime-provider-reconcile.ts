@@ -4,6 +4,7 @@ import { FirstTreeHubSDK } from "@first-tree/client";
 import type { ClientCapabilities, RuntimeProvider, SkillDescriptor } from "@first-tree/shared";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { cliFetch } from "./cli-fetch.js";
+import { errorMessage } from "./error-message.js";
 import { CLI_USER_AGENT } from "./version.js";
 
 type LogFn = (level: "info" | "warn", msg: string) => void;
@@ -58,7 +59,7 @@ export async function reconcileLocalRuntimeProviders(opts: {
       const raw = readFileSync(yamlPath, "utf-8");
       parsed = parseYaml(raw) ?? {};
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       opts.log?.("warn", `agent ${subdir.name}: cannot parse yaml — ${msg}`);
       continue;
     }
@@ -75,7 +76,7 @@ export async function reconcileLocalRuntimeProviders(opts: {
         `agent ${parsed.agentId}: yaml runtime "${parsed.runtime ?? "(unset)"}" → "${auth.runtimeProvider}" (server authoritative)`,
       );
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       opts.log?.("warn", `agent ${parsed.agentId}: failed to rewrite yaml — ${msg}`);
     }
   }

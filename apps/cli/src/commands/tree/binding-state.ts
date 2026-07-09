@@ -377,9 +377,10 @@ export function buildStableSourceId(
     return `${base}-${digest}`;
   }
 
-  const base = slugifyToken(sourceName || basename(options?.fallbackRoot ?? ""));
+  const fallbackRoot = options?.fallbackRoot ?? "";
+  const base = slugifyToken(sourceName.length > 0 ? sourceName : basename(fallbackRoot));
   const digest = createHash("sha1")
-    .update(options?.fallbackRoot ?? sourceName)
+    .update(fallbackRoot.length > 0 ? fallbackRoot : sourceName)
     .digest("hex")
     .slice(0, 8);
 
@@ -434,7 +435,7 @@ export function upsertWorkspaceMember(
   // address, breaking any downstream consumer that keys off the root binding.
   const mergedTree: BoundTreeReference = {
     ...tree,
-    entrypoint: current.tree?.entrypoint ?? tree.entrypoint,
+    entrypoint: current.tree?.entrypoint || tree.entrypoint,
   };
 
   writeSourceState(workspaceRoot, {

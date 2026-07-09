@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { errorMessage } from "../../core/error-message.js";
 import { isServiceSupported, isServiceUnitDriftDetected, refreshClientServiceUnitForUpdate } from "../../core/index.js";
 import { print } from "../../core/output.js";
 
@@ -58,7 +59,7 @@ export function registerDaemonRefreshUnitCommand(daemon: Command): void {
         const info = refreshClientServiceUnitForUpdate();
         print.line(`  refresh-unit: ${info.platform} unit rewritten at ${info.unitPath}\n`);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         print.line(`  refresh-unit: failed to rewrite service unit: ${msg}\n`);
         process.exit(1);
       }

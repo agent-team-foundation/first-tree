@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { agentConfigSchema, defaultConfigDir, loadAgents, readConfigFile } from "@first-tree/shared/config";
 import { loadCredentials } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
+import { errorMessage } from "../../core/error-message.js";
 import { print } from "../../core/output.js";
 import { getClientServiceStatus, isServiceSupported } from "../../core/service-install.js";
 import { COMMAND_VERSION } from "../../core/version.js";
@@ -51,7 +52,7 @@ export function renderHubBlock(): void {
     print.line(`  Server:   ${serverUrl ?? "(not configured)"}\n`);
     print.line(`  Client:   ${clientId ?? "(not configured)"}\n`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     print.line(`  Server:   (could not read ${clientYaml}: ${msg.slice(0, 60)})\n`);
   }
 }

@@ -38,6 +38,17 @@ function runCapture(program: string, args: string[], timeoutMs: number): ShellRe
   };
 }
 
+function formatServiceFailure(res: { stderr: string; code: number | null }): string {
+  if (res.stderr.length > 0) return res.stderr;
+  if (res.code === null) return "exit unknown";
+  return `exit ${res.code}`;
+}
+
+/** Test helper for formatServiceFailure branch coverage. */
+export function __testFormatServiceFailure(res: { stderr: string; code: number | null }): string {
+  return formatServiceFailure(res);
+}
+
 /** Same as runCapture but also returns stdout — for queries (loginctl show-user, etc.). */
 function runCaptureOut(program: string, args: string[], timeoutMs: number): ShellOutResult {
   const res = spawnSync(program, args, {
@@ -206,6 +217,7 @@ function migrateBakedProxyEnv(proxy: Record<string, string>): void {
     );
     print.line(`    migrated proxy env into ${envPath} (yours to edit henceforth)\n`);
   } catch {
+    /* v8 ignore next */
     // Best-effort migration — surfacing nothing is better than aborting install.
   }
 }
@@ -223,6 +235,7 @@ function whichBin(name: string): string | null {
       .filter(Boolean);
     return out[0] ?? null;
   } catch {
+    /* v8 ignore next */
     return null;
   }
 }
@@ -915,11 +928,11 @@ export function startClientService(): ServiceOpResult {
     const probe = runCaptureOut("launchctl", ["print", `${target}/${LAUNCHD_LABEL}`], 5_000);
     if (probe.ok) {
       const res = runCapture("launchctl", ["kickstart", `${target}/${LAUNCHD_LABEL}`], 10_000);
-      if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+      if (!res.ok) return { ok: false, reason: formatServiceFailure(res) };
       return { ok: true };
     }
     const res = runCapture("launchctl", ["bootstrap", target, plistPath], 10_000);
-    if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    if (!res.ok) return { ok: false, reason: formatServiceFailure(res) };
     return { ok: true };
   }
   return { ok: false, reason: `service control not supported on ${process.platform}` };

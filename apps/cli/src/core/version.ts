@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { channelConfig } from "./channel.js";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 
 /**
@@ -61,7 +62,7 @@ export function resolveCommandVersion(moduleUrl: string = import.meta.url): stri
       // this module exists to prevent.
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         print.line(`[${channelConfig.binName}] warning: could not read ${dir}/package.json: ${message}\n`);
       }
     }

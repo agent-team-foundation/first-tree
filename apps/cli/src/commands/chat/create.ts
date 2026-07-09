@@ -3,6 +3,7 @@ import type { MessageFormat } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
+import { errorMessage } from "../../core/error-message.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { guardInlineDescription, readStdin } from "./_shared/io.js";
 import { buildRequestMetadata } from "./_shared/request.js";
@@ -34,7 +35,7 @@ function handleCreateError(error: unknown): never {
     );
   }
   if (isUncertainNetworkError(error)) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     fail(
       "CREATE_RESULT_UNKNOWN",
       `The create request result is unknown (${message}). The chat may already exist. ` +
@@ -103,7 +104,8 @@ export function registerChatCreateCommand(chat: Command): void {
     .option("--multi-select", "Allow picking more than one option (with --request; requires --options)")
     .action(async (message: string | undefined, options: CreateOptions) => {
       try {
-        const to = options.to ?? [];
+        // Commander always supplies the --to accumulator default ([]).
+        const to = options.to;
         if (to.length === 0) {
           fail("NO_TARGET", "Pass at least one --to <name> recipient.", 2);
         }

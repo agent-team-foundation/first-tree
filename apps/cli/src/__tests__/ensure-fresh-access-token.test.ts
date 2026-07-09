@@ -191,6 +191,34 @@ describe("ensureFreshAccessToken — safety margin", () => {
     expect((err as { retryAfterMs: number }).retryAfterMs).toBeLessThanOrEqual(60_000);
   });
 
+  it("clamps past HTTP-date Retry-After values to zero milliseconds", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    await writeCredentials(stale);
+
+    const past = new Date(Date.now() - 120_000).toUTCString();
+    fetchMock.mockResolvedValue(new Response(null, { status: 429, headers: { "retry-after": past } }));
+
+    const { ensureFreshAccessToken, AuthRefreshRateLimitedError } = await import("../core/bootstrap.js");
+    const err = await ensureFreshAccessToken().catch((e) => e);
+    expect(err).toBeInstanceOf(AuthRefreshRateLimitedError);
+    expect((err as { retryAfterMs: number }).retryAfterMs).toBe(0);
+  });
+
+  it("treats access tokens without exp as fresh and malformed tokens as stale", async () => {
+    const noExp = makeJwt({ sub: "user-1" });
+    await writeCredentials(noExp);
+
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+    expect(await ensureFreshAccessToken()).toBe(noExp);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await writeCredentials("not.a.jwt");
+    const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ accessToken: refreshed })));
+    expect(await ensureFreshAccessToken()).toBe(refreshed);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
   // Regression for the original incident: server now sliding-windows refresh
   // tokens (rotates on every /auth/refresh), so the client MUST persist the
   // rotated token. Without this the cap never moves and the client still

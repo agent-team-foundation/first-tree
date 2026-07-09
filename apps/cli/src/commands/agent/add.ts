@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { defaultConfigDir, setConfigValue } from "@first-tree/shared/config";
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
+import { errorMessage } from "../../core/error-message.js";
 import { promptAddAgent } from "../../core/index.js";
 import { print } from "../../core/output.js";
 
@@ -33,7 +34,7 @@ export function registerAgentAddCommand(agent: Command): void {
           print.line("\n  Cancelled.\n");
           return;
         }
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         print.line(`  Error: ${msg}\n`);
         process.exit(1);
       }

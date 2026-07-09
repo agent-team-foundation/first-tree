@@ -19,7 +19,7 @@ export function registerAgentConfigSetEnvCommand(config: Command): void {
       const current = await getCurrent(serverUrl, adminToken, uuid);
       const remaining = current.payload.env.filter((e) => e.key !== key);
       const updated = await patchConfig(serverUrl, adminToken, uuid, current.version, {
-        env: [...remaining, { key, value, sensitive: opts.sensitive ?? false }],
+        env: [...remaining, { key, value, sensitive: opts.sensitive === true }],
       });
       success({ agentId: updated.agentId, version: updated.version, env: key });
     });

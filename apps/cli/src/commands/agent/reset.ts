@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { cliFetch } from "../../core/cli-fetch.js";
+import { errorMessage } from "../../core/error-message.js";
 import { print } from "../../core/output.js";
 
 export function registerAgentResetCommand(agent: Command): void {
@@ -22,7 +23,7 @@ export function registerAgentResetCommand(agent: Command): void {
         }
         print.line(`  Agent "${name}" reset to idle.\n`);
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("RESET_ERROR", msg);
       }
     });

@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { cliFetch } from "../../core/cli-fetch.js";
+import { errorMessage } from "../../core/error-message.js";
 import { print } from "../../core/output.js";
 
 export function registerAgentListCommand(agent: Command): void {
@@ -73,7 +74,7 @@ export function registerAgentListCommand(agent: Command): void {
           );
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("LIST_ERROR", msg);
       }
     });

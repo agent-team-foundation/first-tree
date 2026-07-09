@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { channelConfig } from "../../core/channel.js";
+import { errorMessage } from "../../core/error-message.js";
 import {
   getClientServiceStatus,
   installClientService,
@@ -72,7 +73,7 @@ export function registerDaemonEnsureServiceCommand(daemon: Command): void {
         }
         print.line(`  ensure-service: ${info.platform} service installed and running.\n`);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         print.line(`  ensure-service: failed to install/start service: ${msg}\n`);
         process.exit(1);
       }

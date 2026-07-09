@@ -112,7 +112,7 @@ function isInlineFragmentBinding(binding: AgentResourceBindingInput): boolean {
 function inlineFragmentText(bindings: ReadonlyArray<AgentResourceBindingInput>): string {
   return bindings
     .filter(isInlineFragmentBinding)
-    .map((binding) => binding.inlinePromptBody ?? "")
+    .map((binding) => binding.inlinePromptBody || "")
     .join("\n\n");
 }
 

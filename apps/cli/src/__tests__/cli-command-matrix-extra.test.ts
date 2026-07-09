@@ -402,6 +402,40 @@ describe("daemon utility commands", () => {
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
       "service installed but not running",
     );
+
+    // Empty-detail branch for "restarted but is not running".
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({ state: "active", platform: "systemd" })
+      .mockReturnValueOnce({ state: "inactive", platform: "systemd" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(true);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/first-tree.service",
+      state: "active",
+    });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: true });
+    await expect(runDaemon(["ensure-service"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "service restarted but is not running",
+    );
+
+    // Empty-detail branch for "installed but not running" + non-Error install throw.
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "inactive", platform: "systemd" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/first-tree.service",
+      state: "inactive",
+    });
+    await expect(runDaemon(["ensure-service"])).rejects.toMatchObject({ code: 1 });
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "inactive", platform: "systemd" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
+    coreMocks.installClientService.mockImplementationOnce(() => {
+      throw "service denied string";
+    });
+    await expect(runDaemon(["ensure-service"])).rejects.toMatchObject({ code: 1 });
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("service denied string");
   });
 });
 

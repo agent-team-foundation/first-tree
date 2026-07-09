@@ -8,6 +8,7 @@ import {
   type WorkspaceManifest,
   workspaceManifestSchema,
 } from "@first-tree/shared";
+import { errorMessage } from "./error-message.js";
 
 /**
  * Workspace-rooted layout simplification — runtime helpers.
@@ -128,7 +129,7 @@ export function readWorkspaceManifest(workspaceRoot: string): WorkspaceManifest 
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Failed to parse ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Failed to parse ${manifestPath}: ${errorMessage(error)}`);
   }
 
   return workspaceManifestSchema.parse(parsed);

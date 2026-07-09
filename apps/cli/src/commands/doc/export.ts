@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { DocSummary } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
+import { errorMessage } from "../../core/error-message.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { parseDocStatus } from "./_shared.js";
 
@@ -28,7 +29,7 @@ export function registerDocExportCommand(doc: Command): void {
       try {
         mkdirSync(dir, { recursive: true });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("DIR_UNWRITABLE", `Cannot create directory "${dir}": ${msg}`, 2);
       }
 

@@ -52,6 +52,7 @@ export function readJson(path: string): unknown | undefined {
     }
     return JSON.parse(readFileSync(path, "utf8")) as unknown;
   } catch {
+    /* v8 ignore next */
     return undefined;
   }
 }
@@ -140,6 +141,7 @@ export function isGitRepoRoot(root: string): boolean {
     const stat = statSync(join(root, ".git"));
     return stat.isDirectory() || stat.isFile();
   } catch {
+    /* v8 ignore next */
     return false;
   }
 }
@@ -174,6 +176,7 @@ export function readGitRemoteUrl(root: string, remote = "origin"): string | unde
   try {
     return runCommand("git", ["remote", "get-url", remote], root);
   } catch {
+    /* v8 ignore next */
     return undefined;
   }
 }

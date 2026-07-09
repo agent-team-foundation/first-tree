@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { cliFetch } from "../../core/cli-fetch.js";
+import { errorMessage } from "../../core/error-message.js";
 import { print } from "../../core/output.js";
 import { resolveAgent } from "../_shared/resolve-agent.js";
 
@@ -110,7 +111,7 @@ export function registerChatOpenCommand(chat: Command): void {
               lastSeenAt = sent.createdAt;
             }
           } catch (err) {
-            print.line(`  [error] ${err instanceof Error ? err.message : String(err)}\n`);
+            print.line(`  [error] ${errorMessage(err)}\n`);
           }
           rl.prompt();
         });
@@ -121,7 +122,7 @@ export function registerChatOpenCommand(chat: Command): void {
           process.exit(0);
         });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("CHAT_ERROR", msg);
       }
     });

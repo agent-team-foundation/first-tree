@@ -3,6 +3,7 @@ import { fail, success } from "../../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../../core/bootstrap.js";
 import { channelConfig } from "../../../core/channel.js";
 import { cliFetch } from "../../../core/cli-fetch.js";
+import { errorMessage } from "../../../core/error-message.js";
 import { print } from "../../../core/output.js";
 import { resolveAgent } from "../../_shared/resolve-agent.js";
 
@@ -37,7 +38,7 @@ export function registerAgentBindClientCommand(bind: Command): void {
         print.line(`  ✓ Bound "${target.name ?? target.uuid}" to client ${options.clientId}.\n`);
         success({ agentId: target.uuid, clientId: options.clientId });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("BIND_CLIENT_ERROR", msg);
       }
     });

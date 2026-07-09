@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import type { Command } from "commander";
 
 import { channelConfig } from "../../core/channel.js";
+import { errorMessage } from "../../core/error-message.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { readSourceBindingContract } from "./binding-contract.js";
 import { TREE_PROGRESS_FILE } from "./binding-state.js";
@@ -185,7 +186,7 @@ function runVerifyCommand(context: CommandContext): void {
       process.exitCode = 1;
     }
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(errorMessage(error));
     process.exitCode = 1;
   }
 }

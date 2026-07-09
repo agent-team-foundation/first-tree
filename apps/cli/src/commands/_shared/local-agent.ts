@@ -12,6 +12,7 @@ import { fail } from "../../cli/output.js";
 import { resolveSenderName } from "../../core/agent-messaging.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
+import { errorMessage } from "../../core/error-message.js";
 import { CLI_USER_AGENT } from "../../core/version.js";
 
 /**
@@ -79,7 +80,7 @@ export function resolveLocalAgent(
   try {
     serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = errorMessage(error);
     fail("MISSING_SERVER_URL", msg, 2);
   }
 
@@ -106,7 +107,7 @@ function resolveRuntimeSessionToken(): string | undefined {
     try {
       token = readFileSync(tokenFile, "utf8").trim();
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = errorMessage(err);
       fail(
         "RUNTIME_SESSION_TOKEN_FILE_UNREADABLE",
         `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file could not be read: ${detail}`,
@@ -134,7 +135,7 @@ export function handleSdkError(error: unknown): never {
   if (error instanceof TypeError && "cause" in error) {
     fail("CONNECTION_ERROR", `Cannot connect to server: ${error.message}`, 6);
   }
-  const msg = error instanceof Error ? error.message : String(error);
+  const msg = errorMessage(error);
   fail("UNKNOWN_ERROR", msg, 1);
 }
 

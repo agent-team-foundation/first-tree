@@ -15,6 +15,7 @@ import {
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import { channelConfig } from "../core/channel.js";
+import { errorMessage } from "../core/error-message.js";
 import {
   ClientRuntime,
   COMMAND_VERSION,
@@ -134,7 +135,11 @@ export function registerLoginCommand(program: Command): void {
             targetServerUrl: url,
             existingUserId: switchFrom.userId,
             targetUserId: newOwnerSub,
-            existingClientId: readActiveRootClientId(configDir) ?? rememberedOwner?.clientId,
+            existingClientId: (() => {
+              const active = readActiveRootClientId(configDir);
+              if (active) return active;
+              return rememberedOwner?.clientId;
+            })(),
             targetClientId: readRememberedLocalClientIdForAccount(url, newOwnerSub) ?? undefined,
             forceSwitch: options.forceSwitch === true,
           });
@@ -204,7 +209,7 @@ export function registerLoginCommand(program: Command): void {
             resolver: createApiNameResolver(config.server.url, () => ensureFreshAccessToken()),
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           print.status("⚠️", `agent-dir migration skipped: ${msg}`);
         }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
@@ -230,6 +235,8 @@ export function registerLoginCommand(program: Command): void {
         };
         process.on("SIGINT", () => void shutdown());
         process.on("SIGTERM", () => void shutdown());
+        // Hang until signal; intentionally never resolves in production.
+        /* v8 ignore next */
         await new Promise(() => {});
       } catch (error) {
         if ((error as { name?: string }).name === "ExitPromptError") {
@@ -243,10 +250,11 @@ export function registerLoginCommand(program: Command): void {
             rerunCommand: `${channelConfig.binName} login <code>`,
           });
         }
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         print.line(`  Error: ${msg}\n`);
         process.exit(1);
       } finally {
+        /* v8 ignore next 2 */
         resetConfig();
         resetConfigMeta();
       }

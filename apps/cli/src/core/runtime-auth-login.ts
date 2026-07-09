@@ -18,6 +18,7 @@ import {
   type PendingAuth,
   type RuntimeAuthFailureReason,
 } from "@first-tree/shared";
+import { errorMessage } from "./error-message.js";
 
 /**
  * Daemon-side orchestrator for an in-product runtime-auth login.
@@ -51,10 +52,6 @@ export type RuntimeAuthLoginDeps = {
   probeClaudeTui?: () => Promise<CapabilityEntry>;
   now?: () => number;
 };
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /** A terminal login failure to record on the provider entry. */
 type AuthFailure = { reason: RuntimeAuthFailureReason; message?: string };
@@ -150,7 +147,7 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
     try {
       await deps.setProviderEntry("codex", attachAuthError(await probeCodex(), failure, now()));
     } catch (err) {
-      deps.log("⚠️", `runtime-auth: codex re-probe ${label} failed: ${message(err)}`);
+      deps.log("⚠️", `runtime-auth: codex re-probe ${label} failed: ${errorMessage(err)}`);
     }
   };
 
@@ -174,8 +171,8 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
     // the web can offer a fallback link when the host browser does not auto-open.
     outcome = await runBrowserLogin({ binary: resolved.binary, onAuthUrl: (url) => void setPending(url) });
   } catch (err) {
-    deps.log("⚠️", `runtime-auth: codex login threw: ${message(err)}`);
-    await reflect("after login threw", { reason: "spawn-error", message: message(err) });
+    deps.log("⚠️", `runtime-auth: codex login threw: ${errorMessage(err)}`);
+    await reflect("after login threw", { reason: "spawn-error", message: errorMessage(err) });
     return;
   }
 
@@ -213,7 +210,7 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
         await deps.setProviderEntry("claude-code", attachAuthError(cc, failure, now()));
       }
     } catch (err) {
-      deps.log("⚠️", `runtime-auth: claude re-probe ${label} failed: ${message(err)}`);
+      deps.log("⚠️", `runtime-auth: claude re-probe ${label} failed: ${errorMessage(err)}`);
     }
   };
 
@@ -242,8 +239,8 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
       onAuthUrl: (url) => void setPending(url),
     });
   } catch (err) {
-    deps.log("⚠️", `runtime-auth: claude auth login threw: ${message(err)}`);
-    await reflect("after login threw", { reason: "spawn-error", message: message(err) });
+    deps.log("⚠️", `runtime-auth: claude auth login threw: ${errorMessage(err)}`);
+    await reflect("after login threw", { reason: "spawn-error", message: errorMessage(err) });
     return;
   }
 

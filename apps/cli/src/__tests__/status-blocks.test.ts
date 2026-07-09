@@ -162,9 +162,12 @@ describe("status block renderers", () => {
     expect(output()).toContain("refresh token EXPIRED");
 
     stderrSpy.mockClear();
-    credentialsMock.mockReturnValueOnce({ refreshToken: refreshTokenWithExp(now + 3600) });
+    // Re-sample "now" so multi-second suite runtime cannot collapse ~1h into ~0h.
+    credentialsMock.mockReturnValueOnce({
+      refreshToken: refreshTokenWithExp(Math.floor(Date.now() / 1000) + 3600),
+    });
     renderAuthBlock();
-    expect(output()).toContain("expires in ~1h");
+    expect(output()).toMatch(/expires in ~[01]h/);
 
     stderrSpy.mockClear();
     credentialsMock.mockReturnValueOnce({ refreshToken: refreshTokenWithExp(now + 5 * 86400) });

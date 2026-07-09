@@ -3,6 +3,7 @@ import type { ExecuteUpdateFn, RefreshUpdateTargetFn, UpdateLogger, UpdatePrompt
 import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 import {
   detectInstallMode,
@@ -325,7 +326,7 @@ function refreshServiceUnit(log: (level: "info" | "warn", message: string) => vo
       );
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     log(
       "warn",
       `warning: could not spawn 'daemon refresh-unit': ${msg}. If the supervisor restart fails, recover with ${recovery}.`,

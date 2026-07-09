@@ -5,6 +5,7 @@ import {
   revalidateCapabilities,
 } from "@first-tree/client";
 import type { CapabilityEntry, ClientCapabilities } from "@first-tree/shared";
+import { errorMessage } from "./error-message.js";
 
 const EMPTY_OMITTED_KEYS = new Set<string>();
 const VOLATILE_CAPABILITY_FIELDS = new Set(["detectedAt", "latencyMs"]);
@@ -135,7 +136,7 @@ export class CapabilityRefresher {
       try {
         await this.uploadIfChanged(this.snapshot);
       } catch (err) {
-        this.deps.log("⚠️", `capabilities upload skipped: ${message(err)}`);
+        this.deps.log("⚠️", `capabilities upload skipped: ${errorMessage(err)}`);
       }
     } else {
       void this.runRefresh("startup");
@@ -190,7 +191,7 @@ export class CapabilityRefresher {
     try {
       await this.uploadIfChanged(next);
     } catch (err) {
-      this.deps.log("⚠️", `capabilities upload skipped: ${message(err)}`);
+      this.deps.log("⚠️", `capabilities upload skipped: ${errorMessage(err)}`);
     }
     this.scheduleNext();
   }
@@ -272,7 +273,7 @@ export class CapabilityRefresher {
         if (providersToPreserve.size > 0) {
           const preserved: ClientCapabilities = { ...next };
           for (const provider of providersToPreserve) {
-            const owned = current[provider] ?? previous[provider];
+            const owned = current[provider] !== undefined ? current[provider] : previous[provider];
             if (owned) preserved[provider] = owned;
           }
           next = preserved;
@@ -296,7 +297,7 @@ export class CapabilityRefresher {
           uploadFailed = true;
           this.deps.log(
             "⚠️",
-            `capabilities upload skipped after ${Date.now() - refreshStartedAt}ms: ${message(uploadErr)}`,
+            `capabilities upload skipped after ${Date.now() - refreshStartedAt}ms: ${errorMessage(uploadErr)}`,
           );
         }
         // A reconnect, an observed state change, or a failed upload all warrant
@@ -306,7 +307,7 @@ export class CapabilityRefresher {
       } catch (probeErr) {
         this.deps.log(
           "⚠️",
-          `${effective} capability re-probe skipped after ${Date.now() - refreshStartedAt}ms: ${message(probeErr)}`,
+          `${effective} capability re-probe skipped after ${Date.now() - refreshStartedAt}ms: ${errorMessage(probeErr)}`,
         );
         // Keep polling on a transient probe failure so the daemon still converges.
       }
@@ -357,8 +358,4 @@ export class CapabilityRefresher {
     if (hasNonOkProvider(snap)) return true;
     return stableCapabilitySyncJson(snap) !== this.lastUploadedSyncJson;
   }
-}
-
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

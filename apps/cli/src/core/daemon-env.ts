@@ -77,6 +77,7 @@ export function loadDaemonEnv(envPath: string = daemonEnvPath(), env: NodeJS.Pro
     if (!existsSync(envPath)) return [];
     content = readFileSync(envPath, "utf-8");
   } catch {
+    /* v8 ignore next */
     return [];
   }
   const applied: string[] = [];

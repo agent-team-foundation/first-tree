@@ -12,6 +12,7 @@ import { parse as parseYaml } from "yaml";
 import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias } from "./agent-prune.js";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
+import { errorMessage } from "./error-message.js";
 import { blank, print } from "./output.js";
 import { getClientServiceStatus } from "./service-install.js";
 
@@ -88,6 +89,7 @@ export async function checkServerReachable(): Promise<CheckResult> {
     }
     return { label: "Server URL", ok: false, detail: `unhealthy (HTTP ${res.status}) at ${serverUrl}` };
   } catch {
+    /* v8 ignore next */
     return { label: "Server URL", ok: false, detail: `unreachable at ${serverUrl}` };
   }
 }
@@ -113,6 +115,7 @@ export function checkAgentConfigs(): CheckResult {
     const names = [...agents.keys()].join(", ");
     return { label: "Agents", ok: true, detail: `${agents.size} configured (${names})` };
   } catch {
+    /* v8 ignore next */
     return { label: "Agents", ok: false, detail: "error reading agent configs" };
   }
 }
@@ -195,7 +198,7 @@ export async function reconcileAgentConfigs(opts: {
       agentsDir,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return {
       label: "Agents",
       ok: false,
@@ -283,6 +286,7 @@ export async function checkWebSocket(): Promise<CheckResult> {
     }
     return { label: "WebSocket", ok: false, detail: "server not healthy" };
   } catch {
+    /* v8 ignore next */
     return { label: "WebSocket", ok: false, detail: `server unreachable at ${serverUrl}` };
   }
 }

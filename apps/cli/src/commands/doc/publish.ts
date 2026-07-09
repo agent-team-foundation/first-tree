@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import { slugFromFilename, titleFromMarkdown } from "../../core/doc-review.js";
+import { errorMessage } from "../../core/error-message.js";
 import { createSdk, handleSdkError, resolveLocalAgent } from "../_shared/local-agent.js";
 import { parseDocStatus } from "./_shared.js";
 
@@ -40,7 +41,7 @@ export function registerDocPublishCommand(doc: Command): void {
       try {
         content = readFileSync(file, "utf8");
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("FILE_UNREADABLE", `Cannot read "${file}": ${msg}`, 2);
       }
 

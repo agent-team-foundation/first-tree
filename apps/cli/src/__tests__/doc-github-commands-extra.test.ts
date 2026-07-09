@@ -649,6 +649,19 @@ describe("github command helpers and actions", () => {
     await subcommand(unfollowRoot, "unfollow").parseAsync(["owner/repo#1", "--chat", "chat_1"], { from: "user" });
     expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("Severed 2 lines");
     expect(sdk.unfollowGithubEntity).toHaveBeenCalledWith("chat_1", "owner/repo#1");
+
+    sdk.followGithubEntity.mockResolvedValueOnce({
+      ok: false,
+      conflict: { conflict: { chatId: "chat_other" } },
+    });
+    await expect(
+      subcommand(followRoot, "follow").parseAsync(["owner/repo#2", "--chat", "chat_1"], { from: "user" }),
+    ).rejects.toThrow(/ENTITY_FOLLOWED_ELSEWHERE/);
+    expect(String(outputMocks.fail.mock.calls.at(-1)?.[1] ?? "")).not.toContain('("');
+
+    sdk.unfollowGithubEntity.mockResolvedValueOnce({ removed: 1 });
+    await subcommand(unfollowRoot, "unfollow").parseAsync(["owner/repo#2", "--chat", "chat_1"], { from: "user" });
+    expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("Severed 1 line");
   });
 
   it("routes GitHub list and unfollow failures through the GitHub SDK error mapper", async () => {

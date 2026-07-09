@@ -3,6 +3,7 @@ import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
 import { cliFetch } from "../../core/cli-fetch.js";
+import { errorMessage } from "../../core/error-message.js";
 import { print } from "../../core/output.js";
 
 export function registerAgentCreateCommand(agent: Command): void {
@@ -60,7 +61,8 @@ export function registerAgentCreateCommand(agent: Command): void {
             }
             orgId = options.org;
           } else if (me.memberships.length === 1) {
-            orgId = me.memberships[0]?.organizationId ?? "";
+            // length === 1 guarantees the first membership exists.
+            orgId = me.memberships[0]!.organizationId;
           } else if (me.memberships.length === 0) {
             fail("NO_ORG", "You don't belong to any organization", 1);
           } else {
@@ -94,7 +96,7 @@ export function registerAgentCreateCommand(agent: Command): void {
           print.line(`  ✓ Config saved: ${agentDir}/agent.yaml\n`);
           print.line("  ✓ Agent ready — start the daemon on that machine to bind\n");
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = errorMessage(error);
           fail("CREATE_ERROR", msg);
         }
       },

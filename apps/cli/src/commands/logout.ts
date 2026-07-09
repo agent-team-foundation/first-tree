@@ -4,6 +4,7 @@ import { defaultConfigDir, defaultDataDir, defaultHome } from "@first-tree/share
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import { channelConfig } from "../core/channel.js";
+import { errorMessage } from "../core/error-message.js";
 import {
   cliFetch,
   ensureFreshAccessToken,
@@ -66,7 +67,9 @@ async function readErrorBody(res: Response): Promise<string> {
   if (!text) return "";
   try {
     const parsed = JSON.parse(text) as { error?: string; message?: string };
-    return parsed.error ?? parsed.message ?? text;
+    if (typeof parsed.error === "string" && parsed.error.length > 0) return parsed.error;
+    if (typeof parsed.message === "string" && parsed.message.length > 0) return parsed.message;
+    return text;
   } catch {
     return text;
   }
@@ -94,7 +97,7 @@ async function retireServerClientBeforePurge(opts: {
   try {
     accessToken = await ensureFreshAccessToken();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     print.line(`  Refusing to purge because credentials could not be refreshed: ${msg}\n\n`);
     fail("PURGE_CLIENT_RETIRE_FAILED", `Failed to retire client "${opts.clientId}" before purge.`, 1);
   }
@@ -133,7 +136,7 @@ async function stopForegroundClientRuntimesBeforeLogout(opts: {
       (runtime) => runtime.mode === "foreground",
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     if (opts.purge) {
       print.line(`  Could not inspect foreground daemon runtime markers: ${msg}\n\n`);
       print.line("  Refusing to purge First Tree local client state while a foreground daemon may still be running.\n");
@@ -145,7 +148,7 @@ async function stopForegroundClientRuntimesBeforeLogout(opts: {
   }
 
   for (const runtime of foreground) {
-    const command = runtime.command?.trim() ?? "";
+    const command = runtime.command ? runtime.command.trim() : "";
     if (!isTrustedForegroundDaemonCommand(command)) {
       const reason = command
         ? `pid ${runtime.pid} command no longer looks like a First Tree foreground daemon: ${command}`

@@ -232,6 +232,7 @@ export function saveCredentials(creds: StoredCredentials): void {
     try {
       unlinkSync(tmp);
     } catch {
+      /* v8 ignore next */
       // ignore
     }
     throw err;

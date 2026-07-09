@@ -855,5 +855,17 @@ describe("agent config command behavior", () => {
     );
     expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toContain("Diff (2 changes):");
     stdout.mockRestore();
+
+    const singlePatch = join(tempDir, "single-patch.json");
+    writeFileSync(singlePatch, JSON.stringify({ model: "opus" }));
+    const stdoutSingle = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    fetcherMocks.adminFetch.mockResolvedValueOnce({
+      current: config(),
+      next: { ...config().payload, model: "opus" },
+      diff: [{ op: "replace", path: "/model", before: "sonnet", after: "opus" }],
+    });
+    await runConfig(["dry-run", "nova", "--file", singlePatch]);
+    expect(stdoutSingle.mock.calls.map((call) => String(call[0])).join("")).toContain("Diff (1 change):");
+    stdoutSingle.mockRestore();
   });
 });

@@ -2,6 +2,7 @@ import type { FirstTreeHubSDK } from "@first-tree/client";
 import type { DocCommentStatus } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
+import { errorMessage } from "../../core/error-message.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { parseDocCommentStatus, parseVersionNumber, resolveDocBySlug } from "./_shared.js";
 
@@ -87,7 +88,7 @@ async function watchComments(
         process.stdout.write(`${JSON.stringify(comment)}\n`);
       }
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = errorMessage(error);
       process.stderr.write(`${JSON.stringify({ ok: false, error: { code: "WATCH_POLL_FAILED", message: msg } })}\n`);
     }
   }

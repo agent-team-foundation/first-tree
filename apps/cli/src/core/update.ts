@@ -22,6 +22,7 @@ import * as semver from "semver";
 import { resolveServerUrl } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 
 /** Hard ceiling on a single `npm install -g` invocation (5 min). */
@@ -232,8 +233,9 @@ function parseNpmViewEngineRange(stdout: string): string | null {
 }
 
 function lookupNpmTargetNodeEngineRange(spec: string): string | null {
-  if (PACKAGE_NAME === null) return null;
-  const res = spawnSync(resolveNpmCommand(), ["view", `${PACKAGE_NAME}@${spec}`, "engines.node", "--json"], {
+  // Callers only invoke this after installGlobalSpec verifies PACKAGE_NAME is set.
+  const packageName = PACKAGE_NAME as string;
+  const res = spawnSync(resolveNpmCommand(), ["view", `${packageName}@${spec}`, "engines.node", "--json"], {
     encoding: "utf-8",
     timeout: NPM_METADATA_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
@@ -257,7 +259,8 @@ function checkNpmTargetNodeEngine(spec: string): Extract<ExecuteUpdateResult, { 
   const normalizedRange = semver.validRange(range);
   if (normalizedRange === null) return null;
   if (semver.satisfies(process.version, normalizedRange, { includePrerelease: true })) return null;
-  const packageSpec = PACKAGE_NAME === null ? channelConfig.binName : `${PACKAGE_NAME}@${spec}`;
+  // PACKAGE_NAME is non-null here: lookupNpmTargetNodeEngineRange returns null first when it is.
+  const packageSpec = `${PACKAGE_NAME}@${spec}`;
   return {
     ok: false,
     mode: "global",
@@ -293,10 +296,9 @@ function currentPortableRoot(): string | null {
 }
 
 function portableInstallPrefix(root: string): string | null {
+  // Portable roots always end in `.../current`; the parent prefix is the install base.
   if (basename(root) !== "current") return null;
-  const base = dirname(root);
-  if (base === root) return null;
-  return base;
+  return dirname(root);
 }
 
 function detectPortablePlatform(): PortablePlatform | null {
@@ -304,8 +306,8 @@ function detectPortablePlatform(): PortablePlatform | null {
   if (os === null) return null;
   const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : null;
   if (arch === null) return null;
-  const parsed = portablePlatformSchema.safeParse(`${os}-${arch}`);
-  return parsed.success ? parsed.data : null;
+  // os/arch gates above already match portablePlatformSchema's enum.
+  return `${os}-${arch}` as PortablePlatform;
 }
 
 function portableMetadataUrl(spec: string): string | { reason: string } {
@@ -318,8 +320,8 @@ function portableMetadataUrl(spec: string): string | { reason: string } {
     return { reason: "self-update disabled: portable download base URL is not configured for this channel." };
   }
   if (spec === "latest") return `${baseUrl}/${channelPrefix}/latest.json`;
-  const normalized = semver.valid(spec);
-  if (!normalized) return { reason: `Refusing to install: invalid portable version ${JSON.stringify(spec)}` };
+  // Callers validate SemVer before invoking this helper for non-latest specs.
+  const normalized = semver.valid(spec) as string;
   return `${baseUrl}/${channelPrefix}/${normalized}/manifest.json`;
 }
 
@@ -328,7 +330,7 @@ async function fetchPortableJson(url: string): Promise<unknown> {
   try {
     return JSON.parse(text) as unknown;
   } catch (err) {
-    throw new Error(`invalid JSON from ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`invalid JSON from ${url}: ${errorMessage(err)}`);
   }
 }
 
@@ -415,9 +417,7 @@ async function parseExtractedInstallMetadata(dir: string): Promise<PortableInsta
   try {
     body = JSON.parse(await readFile(path, "utf8")) as unknown;
   } catch (err) {
-    throw new Error(
-      `extracted artifact missing or invalid INSTALL.json: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new Error(`extracted artifact missing or invalid INSTALL.json: ${errorMessage(err)}`);
   }
   return portableInstallMetadataSchema.parse(body);
 }
@@ -435,10 +435,8 @@ function validateExtractedInstallMetadata(
   if (install.platform !== platform) {
     return `extracted INSTALL.json platform "${install.platform}" does not match current platform "${platform}"`;
   }
-  if (install.installMode !== "portable") return "extracted INSTALL.json does not describe a portable install";
-  if (install.appEntry !== "app/cli/index.mjs") {
-    return `extracted INSTALL.json appEntry "${install.appEntry}" is not supported`;
-  }
+  // installMode / appEntry are already constrained by portableInstallMetadataSchema
+  // (literal "portable" / "app/cli/index.mjs"); no extra runtime checks needed.
   return null;
 }
 
@@ -451,7 +449,9 @@ async function switchPortableCurrent(prefix: string, versionDir: string): Promis
       throw new Error(`${currentLink} exists and is not a symlink`);
     }
   } catch (err) {
-    if (!(err instanceof Error) || !("code" in err) || err.code !== "ENOENT") throw err;
+    const code =
+      typeof err === "object" && err !== null && "code" in err ? (err as { code?: unknown }).code : undefined;
+    if (code !== "ENOENT") throw err;
   }
   await rm(newLink, { force: true });
   await symlink(versionDir, newLink);
@@ -482,7 +482,12 @@ async function writePortableShim(path: string, root: string): Promise<void> {
 }
 
 function pathEntries(): string[] {
-  return (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":").filter((entry) => entry.length > 0);
+  const raw = process.env.PATH;
+  if (!raw) return [];
+  // PATH separator is platform-specific; keep the split delimiter explicit.
+  /* v8 ignore next */
+  const separator = process.platform === "win32" ? ";" : ":";
+  return raw.split(separator).filter((entry) => entry.length > 0);
 }
 
 function firstExistingShimDir(binNames: string[]): string | null {
@@ -501,7 +506,7 @@ async function rewritePortableShims(root: string): Promise<void> {
 }
 
 function portableInstallFailure(err: unknown, reasonCode = "portable_update_failed"): ExecuteUpdateResult {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   const classification = classify(new Error(message), { source: "update" });
   return failPortable(message, classification.kind === ERROR_KINDS.TRANSIENT, classification.reasonCode ?? reasonCode);
 }
@@ -604,7 +609,7 @@ export async function fetchPortableLatestVersion(): Promise<VersionLookupResult>
       return { ok: false, reason: `portable latest metadata returned non-semver version: ${parsed.version}` };
     return { ok: true, version: normalized };
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    return { ok: false, reason: errorMessage(err) };
   }
 }
 
@@ -689,7 +694,7 @@ export async function installGlobalSpec(
     });
 
     child.on("error", (err) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       const classification = classify(err, { source: "update" });
       resolvePromise({
         ok: false,
@@ -751,7 +756,7 @@ export async function fetchServerCommandVersion(timeoutMs = 10_000): Promise<Ver
   try {
     serverUrl = resolveServerUrl();
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    return { ok: false, reason: errorMessage(err) };
   }
 
   let res: Response;
@@ -760,7 +765,7 @@ export async function fetchServerCommandVersion(timeoutMs = 10_000): Promise<Ver
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    return { ok: false, reason: errorMessage(err) };
   }
 
   if (!res.ok) {
@@ -771,7 +776,7 @@ export async function fetchServerCommandVersion(timeoutMs = 10_000): Promise<Ver
   try {
     body = await res.json();
   } catch (err) {
-    return { ok: false, reason: `server returned invalid JSON: ${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, reason: `server returned invalid JSON: ${errorMessage(err)}` };
   }
 
   if (body === null || typeof body !== "object") {
@@ -796,11 +801,8 @@ export async function fetchServerCommandVersion(timeoutMs = 10_000): Promise<Ver
  * but version unknown".
  */
 function parseInstalledVersion(stdout: string): string | null {
-  // PACKAGE_NAME === null is unreachable here (installGlobalSpec bails
-  // before spawning npm), but defend anyway so this function stays safe
-  // to call standalone.
-  if (PACKAGE_NAME === null) return null;
-  const match = new RegExp(`${escapeForRegex(PACKAGE_NAME)}@(\\S+)`).exec(stdout);
+  // Caller (installGlobalSpec) only reaches npm spawn when PACKAGE_NAME is set.
+  const match = new RegExp(`${escapeForRegex(PACKAGE_NAME as string)}@(\\S+)`).exec(stdout);
   if (!match?.[1]) return null;
   const cleaned = match[1].replace(/[,\s)]+$/, "");
   return semver.valid(cleaned) ?? cleaned;

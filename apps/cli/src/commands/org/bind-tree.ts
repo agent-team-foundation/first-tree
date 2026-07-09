@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
+import { errorMessage } from "../../core/error-message.js";
 import { print } from "../../core/output.js";
 
 export function registerOrgBindTreeCommand(org: Command): void {
@@ -52,7 +53,7 @@ export function registerOrgBindTreeCommand(org: Command): void {
         print.status("•", `Bound organization to context-tree at ${url}`);
         success({ orgId, repo: url });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         fail("UNEXPECTED", msg, 1);
       }
     });
@@ -70,7 +71,7 @@ async function resolveDefaultOrgId(serverUrl: string, accessToken: string): Prom
     memberships?: Array<{ organizationId: string }>;
     defaultOrganizationId?: string | null;
   };
-  const memberships = me.memberships ?? [];
+  const memberships = Array.isArray(me.memberships) ? me.memberships : [];
   if (me.defaultOrganizationId && memberships.some((m) => m.organizationId === me.defaultOrganizationId)) {
     return me.defaultOrganizationId;
   }

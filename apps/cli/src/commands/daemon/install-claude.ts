@@ -29,7 +29,8 @@ export function registerDaemonInstallClaudeCommand(daemon: Command): void {
     .option("--json", "Emit the post-install capability snapshot as a machine-readable JSON envelope")
     .action(async (options: { spec?: string; json?: boolean }) => {
       const wantJson = options.json === true || isJsonMode();
-      const spec = options.spec ?? "latest";
+      // Commander default for --spec is "latest".
+      const spec = options.spec as string;
 
       if (!wantJson) print.line(`\n  Installing native Claude Code runtime (@anthropic-ai/claude-code@${spec})...\n\n`);
       const result = await installClaudeRuntime(spec);

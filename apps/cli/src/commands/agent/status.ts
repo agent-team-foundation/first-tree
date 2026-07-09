@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { cliFetch } from "../../core/cli-fetch.js";
+import { errorMessage } from "../../core/error-message.js";
 import { print } from "../../core/output.js";
 
 export function registerAgentStatusCommand(agent: Command): void {
@@ -98,7 +99,7 @@ export function registerAgentStatusCommand(agent: Command): void {
           print.line("\n");
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("STATUS_ERROR", msg);
       }
     });

@@ -5,6 +5,7 @@ import { input, password, select } from "@inquirer/prompts";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
+import { errorMessage } from "./error-message.js";
 
 /**
  * Check if interactive mode is available.
@@ -92,7 +93,7 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
   try {
     serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     throw new Error(`${msg} Run \`${channelConfig.binName} login <code>\` or set FIRST_TREE_SERVER_URL.`);
   }
 
@@ -162,11 +163,7 @@ function findEnvVar(schema: Record<string, unknown>, dotPath: string): string | 
   for (const part of parts) {
     if (current === null || current === undefined || typeof current !== "object") return undefined;
     const obj = current as Record<string, unknown>;
-    if (obj._tag === "optional") {
-      current = (obj.shape as Record<string, unknown>)[part];
-    } else {
-      current = obj[part];
-    }
+    current = obj._tag === "optional" ? (obj.shape as Record<string, unknown>)[part] : obj[part];
   }
   if (typeof current === "object" && current !== null && "_tag" in current) {
     const field = current as { _tag: string; options?: { env?: string } };
@@ -179,8 +176,7 @@ function setNestedByDot(obj: Record<string, unknown>, dotPath: string, value: un
   const parts = dotPath.split(".");
   let current = obj;
   for (let i = 0; i < parts.length - 1; i++) {
-    const key = parts[i];
-    if (key === undefined) continue;
+    const key = parts[i] as string;
     if (!(key in current) || typeof current[key] !== "object" || current[key] === null) {
       current[key] = {};
     }

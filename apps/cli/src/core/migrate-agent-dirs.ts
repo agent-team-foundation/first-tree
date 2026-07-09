@@ -4,6 +4,7 @@ import { migrateLegacyRuntimeLayout } from "@first-tree/client";
 import { parse as parseYaml } from "yaml";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 
 /**
@@ -133,13 +134,14 @@ function migrateWorkspaceRuntimeDir(
   try {
     if (!statSync(workspacePath).isDirectory()) return;
   } catch {
+    /* v8 ignore next */
     return;
   }
 
   try {
     migrateLegacyRuntimeLayout(workspacePath);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     log("⚠️", `agent-dir migration: runtime-dir migration failed for "${agentName}": ${msg}`);
     result.errors += 1;
   }
@@ -179,7 +181,7 @@ export async function migrateLocalAgentDirs(opts: {
       }
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     log("⚠️", `agent-dir migration: unable to enumerate ${agentsDir}: ${msg}`);
     return { ...result, errors: result.errors + 1 };
   }
@@ -212,7 +214,7 @@ export async function migrateLocalAgentDirs(opts: {
       // A network blip here shouldn't block startup — leave the dir alone
       // and continue with the rest. The next start attempts the rename
       // again; idempotent design means we don't leave the layout wedged.
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       const hint = msg.includes("403") ? " (likely a non-admin account — migration skipped)" : "";
       log("⚠️", `agent-dir migration: failed to resolve "${dirName}" (${agentId}): ${msg}${hint}`);
       result.errors += 1;
@@ -247,7 +249,7 @@ export async function migrateLocalAgentDirs(opts: {
       finalDirNames.delete(dirName);
       finalDirNames.add(serverName);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       log("⚠️", `agent-dir migration: config dir rename failed for "${dirName}": ${msg}`);
       result.errors += 1;
       continue;
@@ -269,7 +271,7 @@ export async function migrateLocalAgentDirs(opts: {
           renameSync(oldWorkspace, newWorkspace);
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         log("⚠️", `agent-dir migration: workspace rename failed for "${dirName}": ${msg}`);
         result.errors += 1;
       }
@@ -290,7 +292,7 @@ export async function migrateLocalAgentDirs(opts: {
           renameSync(oldSessions, newSessions);
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         log("⚠️", `agent-dir migration: sessions rename failed for "${dirName}": ${msg}`);
         result.errors += 1;
       }

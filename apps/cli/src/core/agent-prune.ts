@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { defaultConfigDir, defaultDataDir } from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { errorMessage } from "./error-message.js";
 
 /**
  * Why a local alias is no longer usable from this client. Surfaced to
@@ -99,13 +100,14 @@ export async function findStaleAliases(opts: {
       const raw = parseYaml(readFileSync(yamlPath, "utf-8")) as unknown;
       const parsed = minimalAgentYamlSchema.safeParse(raw);
       if (!parsed.success) {
-        const issue = parsed.error.issues[0]?.message ?? "schema error";
+        const firstIssue = parsed.error.issues[0];
+        const issue = firstIssue !== undefined ? firstIssue.message : "schema error";
         stale.push({ name: entry, agentId: null, reason: { kind: "unreadable", error: issue } });
         continue;
       }
       agentId = parsed.data.agentId;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       stale.push({ name: entry, agentId: null, reason: { kind: "unreadable", error: msg } });
       continue;
     }

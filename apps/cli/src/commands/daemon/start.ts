@@ -25,6 +25,7 @@ import type { Command } from "commander";
 import { CLIENT_SENTRY_DSN, GIT_SHA } from "../../build-info.js";
 import { fail } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
+import { errorMessage } from "../../core/error-message.js";
 import {
   CapabilityRefresher,
   ClientRuntime,
@@ -238,7 +239,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
             log: writeStatus,
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           writeStatus("⚠️", `agent-dir migration skipped: ${msg}`);
         }
 
@@ -256,7 +257,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
             log: (level, msg) => writeStatus(level === "warn" ? "⚠️" : "•", msg),
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           writeStatus("⚠️", `runtime-provider reconcile skipped: ${msg}`);
         }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
@@ -371,7 +372,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
               const pinned = await listPinnedAgents({ serverUrl: config.server.url, accessToken });
               pinnedByAgentId = new Map(pinned.map((agent) => [agent.agentId, agent]));
             } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
+              const msg = errorMessage(err);
               writeStatus("⚠️", `skills upload pin check skipped: ${msg}`);
             }
             await Promise.all(
@@ -399,14 +400,14 @@ export function registerDaemonStartCommand(daemon: Command): void {
                     skills,
                   });
                 } catch (err) {
-                  const msg = err instanceof Error ? err.message : String(err);
+                  const msg = errorMessage(err);
                   writeStatus("⚠️", `skills upload for ${name} skipped: ${msg}`);
                 }
               }),
             );
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           writeStatus("⚠️", `skills upload skipped: ${msg}`);
         }
 
@@ -427,7 +428,8 @@ export function registerDaemonStartCommand(daemon: Command): void {
         process.on("SIGINT", () => void shutdown());
         process.on("SIGTERM", () => void shutdown());
 
-        // Keep process alive
+        // Keep process alive until signal handlers exit.
+        /* v8 ignore next */
         await new Promise(() => {});
       } catch (error) {
         if (error instanceof ClientUserMismatchError) {
@@ -454,13 +456,14 @@ export function registerDaemonStartCommand(daemon: Command): void {
             output: daemonOutput ?? undefined,
           });
         }
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         captureClientException(error, { command: "daemon start" });
         unregisterRuntimeMarker?.();
         unregisterRuntimeMarker = null;
         await flushClientSentry();
         writeErrorAndExit(`Error: ${msg}`);
       } finally {
+        /* v8 ignore next 3 */
         unregisterRuntimeMarker?.();
         // Reset singleton so other commands can reinit
         resetConfig();

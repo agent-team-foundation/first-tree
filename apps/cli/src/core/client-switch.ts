@@ -27,6 +27,7 @@ import { confirm } from "@inquirer/prompts";
 import { fail } from "../cli/output.js";
 import { saveCredentials } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 import { getClientServiceStatus, stopClientService } from "./service-install.js";
 
@@ -205,7 +206,7 @@ export function listLiveClientRuntimeMarkers(home = defaultHome(), clientId?: st
   } catch (err) {
     throwSwitchFailure(
       "CLIENT_SWITCH_RUNTIME_MARKER_UNTRUSTED",
-      `Unable to inspect runtime markers: ${err instanceof Error ? err.message : String(err)}`,
+      `Unable to inspect runtime markers: ${errorMessage(err)}`,
     );
   }
   for (const entry of entries) {
@@ -217,7 +218,7 @@ export function listLiveClientRuntimeMarkers(home = defaultHome(), clientId?: st
     } catch (err) {
       throwSwitchFailure(
         "CLIENT_SWITCH_RUNTIME_MARKER_UNTRUSTED",
-        `Unable to read runtime marker ${markerPath}: ${err instanceof Error ? err.message : String(err)}`,
+        `Unable to read runtime marker ${markerPath}: ${errorMessage(err)}`,
       );
     }
     if (marker.version !== 1 || marker.home !== home || (clientId && marker.clientId !== clientId)) continue;
@@ -248,7 +249,7 @@ export async function stopClientRuntimeProcess(
   } catch (err) {
     const code = typeof err === "object" && err !== null && "code" in err ? (err as { code?: unknown }).code : null;
     if (code === "ESRCH") return { ok: true, alreadyStopped: true };
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    return { ok: false, reason: errorMessage(err) };
   }
 
   const timeoutMs = opts.timeoutMs ?? 5_000;
@@ -481,6 +482,9 @@ export async function switchLocalClientForLogin(opts: {
         "Cannot switch local clients because active and parked client state are on different filesystems. First Tree will not copy local workspaces implicitly.",
         1,
       );
+      /* v8 ignore next */
+      // fail() never returns; keep throw for type narrowing.
+      throw err;
     }
     throw err;
   }
@@ -608,7 +612,7 @@ function collectDarwinMarkedProviders(home: string, clientId: string): DrainSnap
     return {
       ok: false,
       code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
-      reason: `Unable to inspect process environment for switch drain: ${err instanceof Error ? err.message : String(err)}`,
+      reason: `Unable to inspect process environment for switch drain: ${errorMessage(err)}`,
     };
   }
   const providers: MarkedProviderProcess[] = [];
@@ -617,7 +621,7 @@ function collectDarwinMarkedProviders(home: string, clientId: string): DrainSnap
     const match = line.match(/^\s*(\d+)\s+(.*)$/);
     if (!match) continue;
     const pid = Number(match[1]);
-    const command = match[2] ?? "";
+    const command = match[2] !== undefined ? match[2] : "";
     collectSwitchDrainProcessFromEnvText({ pid, command, envText: command, home, clientId, providers, issues });
     collectDaemonFromEnvText({ pid, command, envText: command, home, clientId, issues });
   }
@@ -633,7 +637,7 @@ function collectLinuxMarkedProviders(home: string, clientId: string): DrainSnaps
     return {
       ok: false,
       code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
-      reason: `Unable to inspect /proc for switch drain: ${err instanceof Error ? err.message : String(err)}`,
+      reason: `Unable to inspect /proc for switch drain: ${errorMessage(err)}`,
     };
   }
 
@@ -653,9 +657,7 @@ function collectLinuxMarkedProviders(home: string, clientId: string): DrainSnaps
         return {
           ok: false,
           code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
-          reason: `Unable to read process ${pid} environment for switch drain: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          reason: `Unable to read process ${pid} environment for switch drain: ${errorMessage(err)}`,
         };
       }
       continue;
@@ -669,9 +671,7 @@ function collectLinuxMarkedProviders(home: string, clientId: string): DrainSnaps
         return {
           ok: false,
           code: "CLIENT_SWITCH_DRAIN_UNSUPPORTED",
-          reason: `Unable to read process ${pid} environment for switch drain: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          reason: `Unable to read process ${pid} environment for switch drain: ${errorMessage(err)}`,
         };
       }
       continue;
@@ -984,6 +984,7 @@ function preflightSwitchRenames(moves: SwitchJournalMove[]): void {
 }
 
 function executeSwitchMoves(home: string, journal: SwitchJournal, group: SwitchMoveGroup): void {
+  // Journals always carry a moves array (created empty, then filled).
   for (const entry of journal.moves ?? []) {
     if (entry.group !== group || entry.state !== "pending") continue;
     const sourceExists = existsSync(entry.source);
@@ -1025,14 +1026,24 @@ function throwUnclassifiableMove(home: string, entry: SwitchJournalMove, detail:
 }
 
 function journalHasRootMovement(journal: SwitchJournal | null): boolean {
-  if (!journal) return false;
-  if (journal.moves && journal.moves.length > 0) return true;
-  return (
-    journal.phase === "parked-old-client" ||
-    journal.phase === "restored-target-client" ||
-    journal.phase === "credentials-written" ||
-    journal.phase === "complete"
-  );
+  if (journal === null) return false;
+  if (Array.isArray(journal.moves) && journal.moves.length > 0) return true;
+  switch (journal.phase) {
+    case "parked-old-client":
+    case "restored-target-client":
+    case "credentials-written":
+    case "complete":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Test-only surface for journalHasRootMovement branch coverage. */
+export function __testJournalHasRootMovement(
+  journal: { phase: SwitchJournal["phase"]; moves?: SwitchJournalMove[] } | null,
+): boolean {
+  return journalHasRootMovement(journal as SwitchJournal | null);
 }
 
 function assertSameDeviceRename(source: string, target: string): void {

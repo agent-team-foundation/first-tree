@@ -537,9 +537,6 @@ function stripFrameworkBlock(
   // preserve a single trailing newline so the file stays well-formed.
   const collapsed = next.replace(/\n{3,}/gu, "\n\n");
   const final = collapsed.endsWith("\n") ? collapsed : `${collapsed}\n`;
-  if (final === raw) {
-    return { changed: false };
-  }
   if (!options.dryRun) {
     writeFileSync(filePath, final, "utf-8");
   }

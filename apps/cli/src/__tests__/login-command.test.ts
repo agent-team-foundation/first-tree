@@ -674,6 +674,15 @@ describe("login command", { timeout: 60_000 }, () => {
       "process.exit",
     );
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("expired token");
+
+    stderrMock.mockClear();
+    exitMock.mockClear();
+    // Exchange failure without a structured error body falls back to HTTP status text.
+    cliFetchMock.mockResolvedValueOnce(response(502, {}));
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"])).rejects.toThrow(
+      "process.exit",
+    );
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Token exchange failed (HTTP 502)");
   });
 
   it("rejects exchanged access tokens without an owner subject", async () => {
@@ -796,6 +805,14 @@ describe("login command", { timeout: 60_000 }, () => {
     await expect(runLogin(["login", jwt({ iss: "http://hub.test" })])).rejects.toThrow("process.exit");
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
       "agent-dir migration skipped: offline",
+    );
+
+    stderrMock.mockClear();
+    exitMock.mockClear();
+    migrateLocalAgentDirsMock.mockRejectedValueOnce("migration-string-failure");
+    await expect(runLogin(["login", jwt({ iss: "http://hub.test" })])).rejects.toThrow("process.exit");
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "agent-dir migration skipped: migration-string-failure",
     );
 
     stderrMock.mockClear();

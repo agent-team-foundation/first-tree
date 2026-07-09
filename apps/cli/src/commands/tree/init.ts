@@ -5,6 +5,7 @@ import { contextTreeInstallationInfoResponseSchema } from "@first-tree/shared";
 import type { Command } from "commander";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
+import { errorMessage } from "../../core/error-message.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import {
   memberNodeContent,
@@ -53,7 +54,9 @@ function slugifyRepoBase(value: string): string {
  */
 export function defaultRepoName(title: string): string {
   const maxBaseLength = GITHUB_REPO_NAME_MAX_LENGTH - REPO_SUFFIX.length;
-  const base = slugifyRepoBase(title).slice(0, maxBaseLength).replace(/-+$/gu, "") || "team";
+  // slugifyRepoBase never returns empty (falls back to "team"), and maxBaseLength
+  // always leaves room for that fallback after trailing-dash trim.
+  const base = slugifyRepoBase(title).slice(0, maxBaseLength).replace(/-+$/gu, "");
   return `${base}${REPO_SUFFIX}`;
 }
 
@@ -457,7 +460,7 @@ async function runInitCommand(context: CommandContext): Promise<void> {
       coverage,
     });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(errorMessage(error));
     process.exitCode = 1;
   }
 }

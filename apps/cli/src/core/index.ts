@@ -63,6 +63,8 @@ export {
   runtimeProviderCheck,
   runtimeProviderChecks,
 } from "./doctor.js";
+// Shared error formatting
+export { errorMessage } from "./error-message.js";
 export type { InstallClaudeResult } from "./install-claude-runtime.js";
 export { installClaudeRuntime } from "./install-claude-runtime.js";
 export type { InstallCodexResult } from "./install-codex-runtime.js";

@@ -384,9 +384,28 @@ describe("agent lifecycle CLI commands", () => {
     expect(process.exitCode).toBe(1);
     process.exitCode = undefined;
 
+    coreMocks.findStaleAliases.mockResolvedValueOnce([
+      {
+        name: "solo",
+        agentId: "00000000-0000-0000-0000-00000000solo",
+        reason: { kind: "unowned" },
+      },
+    ]);
+    coreMocks.removeLocalAgent.mockImplementationOnce(() => {
+      throw "EPERM-string";
+    });
+    await runAgent(["prune", "--yes"]);
+    const singularOut = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(singularOut).toContain("1 stale alias");
+    expect(singularOut).toContain("EPERM-string");
+    process.exitCode = undefined;
+
     coreMocks.findStaleAliases.mockResolvedValueOnce([]);
     await runAgent(["prune", "--yes"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No stale agent aliases");
+
+    coreMocks.findStaleAliases.mockRejectedValueOnce("prune-string-failure");
+    await expect(runAgent(["prune", "--yes"])).rejects.toMatchObject({ code: "PRUNE_ERROR", exitCode: 1 });
 
     configMocks.resolveConfigReadonly.mockReturnValueOnce({ client: {} });
     await expect(runAgent(["prune", "--yes"])).rejects.toMatchObject({ code: "PRUNE_ERROR", exitCode: 1 });
@@ -401,6 +420,22 @@ describe("agent lifecycle CLI commands", () => {
     promptMocks.confirm.mockRejectedValueOnce(new Error("prompt closed"));
     await runAgent(["prune"]);
     expect(coreMocks.removeLocalAgent).not.toHaveBeenCalled();
+
+    // Singular wording on the interactive confirmation prompt.
+    coreMocks.findStaleAliases.mockResolvedValueOnce([
+      {
+        name: "solo",
+        agentId: "00000000-0000-0000-0000-00000000solo",
+        reason: { kind: "unowned" },
+      },
+    ]);
+    promptMocks.confirm.mockResolvedValueOnce(true);
+    await runAgent(["prune"]);
+    expect(promptMocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("1 stale alias"),
+      }),
+    );
   });
 });
 
@@ -1133,6 +1168,41 @@ describe("logout and upgrade commands", () => {
     });
     coreMocks.restartClientService.mockReturnValueOnce({ ok: false, reason: "restart denied" });
     await expect(runTopLevel(registerUpgradeCommand, ["upgrade"])).rejects.toMatchObject({ code: 1 });
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active" });
+    coreMocks.installClientService.mockImplementationOnce(() => {
+      throw "unit string denied";
+    });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: true });
+    await runTopLevel(registerUpgradeCommand, ["upgrade"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("unit string denied");
+
+    coreMocks.installGlobalSpec.mockResolvedValueOnce({
+      ok: true,
+      mode: "global",
+      installedVersion: null,
+    });
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "not-installed" });
+    await runTopLevel(registerUpgradeCommand, ["upgrade"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Installed 99.0.0");
+
+    coreMocks.detectInstallMode.mockReturnValue("portable");
+    coreMocks.fetchServerCommandVersion.mockResolvedValueOnce({ ok: true, version: "102.0.0" });
+    coreMocks.installPortableSpec.mockResolvedValueOnce({
+      ok: true,
+      mode: "portable",
+      installedVersion: "102.0.0",
+    });
+    await runTopLevel(registerUpgradeCommand, ["upgrade", "--no-restart"]);
+    expect(coreMocks.installPortableSpec).toHaveBeenCalledWith("102.0.0");
+
+    // Invalid COMMAND_VERSION forces the "current is not semver" compare path.
+    coreMocks.COMMAND_VERSION = "not-a-semver";
+    coreMocks.detectInstallMode.mockReturnValue("global");
+    coreMocks.fetchServerCommandVersion.mockResolvedValueOnce({ ok: true, version: "1.0.0" });
+    await runTopLevel(registerUpgradeCommand, ["upgrade", "--check"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Upgrade available");
+    coreMocks.COMMAND_VERSION = "0.5.0";
 
     coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active" });
     coreMocks.restartClientService.mockReturnValueOnce({ ok: true });

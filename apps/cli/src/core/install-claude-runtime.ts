@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { classify, ERROR_KINDS, getChildProcessRegistry } from "@first-tree/client";
+import { errorMessage } from "./error-message.js";
 import { print } from "./output.js";
 
 /**
@@ -31,8 +32,7 @@ function isSafeInstallSpec(spec: string): boolean {
 function resolveNpmCommand(): string {
   const binName = process.platform === "win32" ? "npm.cmd" : "npm";
   const sibling = join(dirname(process.execPath), binName);
-  if (existsSync(sibling)) return sibling;
-  return "npm";
+  return existsSync(sibling) ? sibling : binName;
 }
 
 function parseInstalledVersion(stdout: string): string | null {
@@ -81,7 +81,7 @@ export async function installClaudeRuntime(spec = "latest"): Promise<InstallClau
     });
 
     child.on("error", (err) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       const classification = classify(err, { source: "update" });
       resolvePromise({
         ok: false,

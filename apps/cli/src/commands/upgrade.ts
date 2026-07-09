@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import * as semver from "semver";
 import { channelConfig } from "../core/channel.js";
+import { errorMessage } from "../core/error-message.js";
 import {
   COMMAND_VERSION,
   detectInstallMode,
@@ -49,11 +50,9 @@ export function registerUpgradeCommand(program: Command): void {
       }
       if (mode === "npx") {
         print.line("\n  Not launched from a global npm install — cannot self-upgrade.\n");
-        // PACKAGE_NAME is never null in this branch: dev channel (null
-        // pkg) short-circuits to mode==="source" above. Defend anyway so
-        // the message stays readable if that contract ever changes.
-        const installHint = PACKAGE_NAME ?? binName;
-        print.line(`  Install globally first:  npm i -g ${installHint}\n\n`);
+        // PACKAGE_NAME is non-null here: dev channel (null pkg) short-circuits
+        // to mode==="source" above via detectInstallMode.
+        print.line(`  Install globally first:  npm i -g ${PACKAGE_NAME as string}\n\n`);
         return;
       }
 
@@ -148,7 +147,7 @@ export function registerUpgradeCommand(program: Command): void {
       try {
         installClientService();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         print.line(`  warning: unit-file refresh failed: ${msg}\n`);
         print.line("  Continuing with restart against the old unit.\n");
       }

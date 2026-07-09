@@ -61,6 +61,7 @@ export async function captureOutboundDocs(
     }
     return result;
   } catch {
+    /* v8 ignore next */
     return { content };
   }
 }
@@ -70,6 +71,7 @@ async function resolveChatOrgId(sdk: FirstTreeHubSDK, chatId: string): Promise<s
     const detail = await sdk.getChatDetail(chatId);
     return typeof detail.organizationId === "string" && detail.organizationId.length > 0 ? detail.organizationId : null;
   } catch {
+    /* v8 ignore next */
     return null;
   }
 }

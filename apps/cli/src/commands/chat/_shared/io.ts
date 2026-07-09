@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { fail } from "../../../cli/output.js";
 import { channelConfig } from "../../../core/channel.js";
+import { errorMessage } from "../../../core/error-message.js";
 import { print } from "../../../core/output.js";
 
 const MAX_STDIN_BYTES = 5 * 1024 * 1024;
@@ -59,7 +60,7 @@ export async function readMessageBody(spec: string): Promise<string | null> {
     return fail("MESSAGE_FILE_TOO_LARGE", `--message-file exceeds the ${MAX_STDIN_BYTES}-byte limit: ${spec}`, 2);
   }
   const buf = await readFile(spec).catch((err: unknown) => {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = errorMessage(err);
     return fail("MESSAGE_FILE_UNREADABLE", `--message-file could not be read: ${detail}`, 2);
   });
   return buf.toString("utf-8");

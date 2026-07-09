@@ -12,9 +12,9 @@ export function registerAgentWorkspaceCleanCommand(workspace: Command): void {
     .command("clean [agent-name]")
     .description("Remove stale workspace directories (older than TTL with no active session)")
     .option("--ttl <days>", "TTL in days", String(DEFAULT_WORKSPACE_TTL_MS / (24 * 60 * 60 * 1000)))
-    .action((agentName?: string, options?: { ttl: string }) => {
-      const defaultDays = DEFAULT_WORKSPACE_TTL_MS / (24 * 60 * 60 * 1000);
-      const ttlMs = Number.parseInt(options?.ttl ?? String(defaultDays), 10) * 24 * 60 * 60 * 1000;
+    .action((agentName: string | undefined, options: { ttl: string }) => {
+      // Commander always supplies the --ttl default ("7").
+      const ttlMs = Number.parseInt(options.ttl, 10) * 24 * 60 * 60 * 1000;
       const workspacesDir = join(defaultDataDir(), "workspaces");
 
       if (!existsSync(workspacesDir)) {

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { planMarkdownImport, titleFromMarkdown } from "../../core/doc-review.js";
+import { errorMessage } from "../../core/error-message.js";
 import { createSdk } from "../_shared/local-agent.js";
 import { parseDocStatus } from "./_shared.js";
 
@@ -35,7 +36,7 @@ export function registerDocImportCommand(doc: Command): void {
           .map((entry) => join(dir, entry.name))
           .sort();
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         fail("DIR_UNREADABLE", `Cannot read directory "${dir}": ${msg}`, 2);
       }
 
@@ -70,7 +71,7 @@ export function registerDocImportCommand(doc: Command): void {
         } catch (error) {
           // Fail fast, but never lose the progress report: publishes are
           // idempotent, so fixing the cause and re-running resumes cleanly.
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = errorMessage(error);
           const done =
             imported.length > 0 ? imported.map((entry) => `${entry.slug}@v${entry.version}`).join(", ") : "none";
           fail(

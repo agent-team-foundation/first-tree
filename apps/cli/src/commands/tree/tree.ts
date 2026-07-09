@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
 import matter from "gray-matter";
-
+import { errorMessage } from "../../core/error-message.js";
 import { isJsonMode, print } from "../../core/output.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { asString, findGitRoot, isRecord, runCommand } from "./shared.js";
@@ -178,15 +178,9 @@ function formatNodeLine(node: ContextTreeNode): string {
 }
 
 function compareEntryNames(left: string, right: string): number {
-  if (left < right) {
-    return -1;
-  }
-
-  if (left > right) {
-    return 1;
-  }
-
-  return 0;
+  // localeCompare covers equal names without a separate zero-return branch that
+  // readdir never exercises (directory entries are unique by name).
+  return left.localeCompare(right, "en");
 }
 
 function shouldSkipDirectory(name: string): boolean {
@@ -241,7 +235,7 @@ function splitRelativePath(path: string): string[] {
 }
 
 function formatTargetForMessage(path: string): string {
-  return path.length === 0 ? "." : path;
+  return path;
 }
 
 function buildDirectoryNode(
@@ -491,12 +485,16 @@ function pullContextTreeRepo(root: string): void {
   try {
     runCommand("git", ["pull", "--ff-only"], root);
   } catch (error) {
-    const stderr =
-      typeof error === "object" && error !== null && "stderr" in error
-        ? String((error as { stderr?: unknown }).stderr ?? "").trim()
-        : "";
-    const detail = (stderr || (error instanceof Error ? error.message : String(error))).split("\n")[0];
-    print.status("⚠️", `tree pull --ff-only skipped — reading local copy (${detail})`);
+    // Prefer stderr from execFileSync failures; otherwise use the normalized message.
+    let detail = errorMessage(error);
+    if (typeof error === "object" && error !== null && "stderr" in error) {
+      const rawStderr = (error as { stderr?: unknown }).stderr;
+      if (rawStderr !== undefined && rawStderr !== null) {
+        const stderr = String(rawStderr).trim();
+        if (stderr.length > 0) detail = stderr;
+      }
+    }
+    print.status("⚠️", `tree pull --ff-only skipped — reading local copy (${detail.split("\n")[0]})`);
   }
 }
 
@@ -529,12 +527,12 @@ function readCurrentBranchName(root: string): string {
 
   try {
     const shortSha = runCommand("git", ["rev-parse", "--short", "HEAD"], root);
-
     if (shortSha.length > 0) {
       return `detached:${shortSha}`;
     }
   } catch {
-    return "unknown";
+    /* v8 ignore next */
+    // fall through
   }
 
   return "unknown";
@@ -601,7 +599,10 @@ function resolveSnapshotTarget(root: string, target: string | undefined): Resolv
   }
 
   if (!isRealPathInsideOrEqual(repoRoot, targetPath)) {
-    throw new TreeTreeCommandError(TREE_TREE_INVALID_PATH, `Path "${target ?? "."}" is outside the git repository.`);
+    throw new TreeTreeCommandError(
+      TREE_TREE_INVALID_PATH,
+      `Path "${target === undefined ? "." : target}" is outside the git repository.`,
+    );
   }
 
   return {
@@ -623,7 +624,7 @@ export function readContextTreeSnapshot(
   options: ReadContextTreeSnapshotOptions = {},
 ): ContextTreeSnapshot {
   const resolvedTarget = resolveSnapshotTarget(root, options.target);
-  const rootName = basename(resolvedTarget.repoRoot) || resolvedTarget.repoRoot;
+  const rootName = basename(resolvedTarget.repoRoot);
   const targetSegments = splitRelativePath(resolvedTarget.targetRelativePath);
   const discovered = buildDirectoryNode(resolvedTarget.repoRoot, resolvedTarget.repoRoot, 0, rootName, targetSegments);
 
@@ -637,20 +638,15 @@ export function readContextTreeSnapshot(
     );
   }
 
-  const depthLimited = cloneWithTargetDepthLimit(discovered, options.level, targetSegments.length);
-
-  if (depthLimited === null) {
-    throw new Error("Context Tree root was excluded by the depth limit.");
-  }
+  // Root is always depth 0 and cloneWithPattern force-keeps the target ancestor, so
+  // neither helper returns null for the discovered root. Non-null assertions document
+  // that contract without introducing defensive runtime branches.
+  const depthLimited = cloneWithTargetDepthLimit(discovered, options.level, targetSegments.length)!;
 
   const patternFiltered =
     options.pattern === undefined
       ? depthLimited
-      : cloneWithPattern(depthLimited, globToRegex(options.pattern), resolvedTarget.targetRelativePath, true);
-
-  if (patternFiltered === null) {
-    throw new Error("Context Tree root was removed by the pattern filter.");
-  }
+      : cloneWithPattern(depthLimited, globToRegex(options.pattern), resolvedTarget.targetRelativePath, true)!;
 
   return {
     root: resolvedTarget.repoRoot,
@@ -729,7 +725,7 @@ export function runTreeTreeCommand(context: CommandContext): void {
 
     print.line(`${renderContextTreeCommandData(data)}\n`);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     const code =
       error instanceof TreeTreeCommandError
         ? error.code

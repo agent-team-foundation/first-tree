@@ -157,6 +157,16 @@ describe("tree identity files", () => {
   it("prefers a managed identity over tree state but falls back to tree state when absent", () => {
     const root = makeTempDir();
     writeTreeState(root, {
+      treeId: "tree_1",
+      treeMode: "shared",
+      treeRepoName: "state-tree-unpublished",
+    });
+    expect(readTreeIdentityContract(root)).toEqual({
+      treeMode: "shared",
+      treeRepoName: "state-tree-unpublished",
+    });
+
+    writeTreeState(root, {
       published: { remoteUrl: "https://github.com/acme/state-tree" },
       treeId: "tree_1",
       treeMode: "shared",
