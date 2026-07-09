@@ -643,15 +643,9 @@ not belong in the tree.
 
 ### Content Classes And Authority
 
-- **Normal content** — root/domain \`NODE.md\` files and regular domain
-  leaves. It states current durable truth. When a decision changes, rewrite or
-  remove the old claim instead of preserving competing versions side by side.
-- **Archive/supporting content** — proposals, meetings, explorations, and other
-  raw material such as \`raw-context/\`. It is evidence, not canonical truth:
-  read it only when the user asks, the source is archive/proposal material, or
-  the task needs archive context. Normal content must not require this class.
-- **Member content** — responsibility, ownership, and review scope such as \`members/<id>/NODE.md\`.
-  Use it to route or validate *Who*, not as a substitute for normal decision/constraint nodes.
+- **Normal content** — root/domain \`NODE.md\` and regular domain leaves. It states current durable truth; when a decision changes, rewrite or remove old claims.
+- **Archive/supporting content** — proposals, meetings, explorations, and raw material such as \`raw-context/\`. It is evidence, not canonical truth: read it only when asked, when the source is archive/proposal material, or when the task needs archive context. Normal content must not require this class.
+- **Member content** — responsibility, ownership, and review scope such as \`members/<id>/NODE.md\`. Use it to route or validate *Who*, not as a substitute for normal decision/constraint nodes.
 
 ### Code vs Tree Drift Authority
 
