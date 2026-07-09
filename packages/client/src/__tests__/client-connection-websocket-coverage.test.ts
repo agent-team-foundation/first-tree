@@ -336,6 +336,36 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     ]);
   });
 
+  it("presents the current runtime session token when binding", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection);
+    let currentToken = "runtime-token-file-1";
+    connection.setRuntimeSessionTokenProvider("agent-1", () => currentToken);
+
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(socket, socket.sent.length - 1);
+    expect(bindFrame).toMatchObject({
+      type: "agent:bind",
+      agentId: "agent-1",
+      currentRuntimeSessionToken: "runtime-token-file-1",
+    });
+
+    socket.emitMessage({
+      type: "agent:bound",
+      ref: bindFrame.ref,
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+    });
+    const bound = await bindPromise;
+    expect(bound.runtimeSessionToken).toBeUndefined();
+    expect(bound.sdk.runtimeSessionToken).toBe("runtime-token-file-1");
+
+    currentToken = "runtime-token-file-2";
+    expect(bound.sdk.runtimeSessionToken).toBe("runtime-token-file-2");
+  });
+
   it("sends confirmed session events and settles on accepted or rejected frames", async () => {
     const connection = await makeConnection();
     const internal = priv(connection);

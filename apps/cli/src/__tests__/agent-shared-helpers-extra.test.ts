@@ -118,7 +118,7 @@ describe("local agent shared helpers", () => {
     );
   });
 
-  it("passes the runtime session token from the agent subprocess env into the SDK", async () => {
+  it("ignores the runtime session token value from the agent subprocess env", async () => {
     const { createSdk } = await import("../commands/_shared/local-agent.js");
 
     process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "runtime-token-1";
@@ -127,7 +127,7 @@ describe("local agent shared helpers", () => {
     expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "agent-1",
-        runtimeSessionToken: "runtime-token-1",
+        runtimeSessionToken: undefined,
       }),
     );
   });
@@ -154,7 +154,7 @@ describe("local agent shared helpers", () => {
     }
   });
 
-  it("fails clearly instead of falling back when the runtime session token file is missing", async () => {
+  it("uses token-less mode when the runtime session token file is missing", async () => {
     const dir = mkdtempSync(join(tmpdir(), "first-tree-token-"));
     try {
       const tokenFile = join(dir, "missing.token");
@@ -163,19 +163,20 @@ describe("local agent shared helpers", () => {
       process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "stale-runtime-token";
       process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
 
-      expect(() => createSdk("nova")).toThrow();
-      expect(outputMocks.fail).toHaveBeenLastCalledWith(
-        "RUNTIME_SESSION_TOKEN_FILE_UNREADABLE",
-        expect.stringContaining(tokenFile),
-        2,
+      expect(() => createSdk("nova")).not.toThrow();
+      expect(outputMocks.fail).not.toHaveBeenCalled();
+      expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          runtimeSessionToken: undefined,
+        }),
       );
-      expect(clientMocks.FirstTreeHubSDK).not.toHaveBeenCalled();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("fails clearly instead of falling back when the runtime session token file is empty", async () => {
+  it("uses token-less mode when the runtime session token file is empty", async () => {
     const dir = mkdtempSync(join(tmpdir(), "first-tree-token-"));
     try {
       const tokenFile = join(dir, "runtime.token");
@@ -185,13 +186,14 @@ describe("local agent shared helpers", () => {
       process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "stale-runtime-token";
       process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
 
-      expect(() => createSdk("nova")).toThrow();
-      expect(outputMocks.fail).toHaveBeenLastCalledWith(
-        "RUNTIME_SESSION_TOKEN_FILE_EMPTY",
-        `FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE is set to "${tokenFile}", but the file is empty.`,
-        2,
+      expect(() => createSdk("nova")).not.toThrow();
+      expect(outputMocks.fail).not.toHaveBeenCalled();
+      expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          runtimeSessionToken: undefined,
+        }),
       );
-      expect(clientMocks.FirstTreeHubSDK).not.toHaveBeenCalled();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

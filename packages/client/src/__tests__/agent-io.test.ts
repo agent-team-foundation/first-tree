@@ -460,7 +460,7 @@ describe("buildAgentEnv", () => {
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
   });
 
-  it("injects the runtime session token without persisting it in agent config", () => {
+  it("does not inject the runtime session token value into agent subprocess env", () => {
     const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
       sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
       agent: {
@@ -475,7 +475,7 @@ describe("buildAgentEnv", () => {
       chatId: "chat-1",
     });
 
-    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBeUndefined();
   });
 
   it("injects a stable runtime session token file for long-lived child CLI calls", () => {
@@ -494,7 +494,7 @@ describe("buildAgentEnv", () => {
       runtimeSessionTokenFile: "/tmp/runtime-session-token",
     });
 
-    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBeUndefined();
     expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBe("/tmp/runtime-session-token");
   });
 

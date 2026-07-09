@@ -32,7 +32,7 @@ import {
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
 import { classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
-import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
+import { type AccessTokenProvider, FirstTreeHubSDK, type RuntimeSessionTokenProvider } from "./sdk.js";
 
 /**
  * Per-agent bind retry bookkeeping (Bug 5). A failed `agent:bind` no longer
@@ -136,7 +136,7 @@ export type BoundAgent = {
    */
   displayName: string;
   agentType: string;
-  /** Ephemeral token returned by the current successful WS `agent:bind`. */
+  /** Token returned by a minting WS `agent:bind`; omitted when the server reused the current owner-client token. */
   runtimeSessionToken?: string;
   sdk: FirstTreeHubSDK;
 };
@@ -469,6 +469,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private readonly authLogger: pino.Logger;
 
   private readonly boundAgents = new Map<string, BoundAgent>();
+  private readonly runtimeSessionTokenProviders = new Map<string, RuntimeSessionTokenProvider>();
 
   /** Agents scheduled to rebind automatically on every reconnect. */
   private readonly desiredBindings = new Map<
@@ -517,6 +518,27 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     // (AgentRuntime / ClientRuntime) attach their own listeners for logging —
     // this one is the fallback for raw-SDK users who don't.
     this.on("error", () => {});
+  }
+
+  setRuntimeSessionTokenProvider(agentId: string, provider: RuntimeSessionTokenProvider): void {
+    this.runtimeSessionTokenProviders.set(agentId, provider);
+  }
+
+  clearRuntimeSessionTokenProvider(agentId: string, provider?: RuntimeSessionTokenProvider): void {
+    if (provider && this.runtimeSessionTokenProviders.get(agentId) !== provider) return;
+    this.runtimeSessionTokenProviders.delete(agentId);
+  }
+
+  private resolveRuntimeSessionToken(agentId: string): string | undefined {
+    const provider = this.runtimeSessionTokenProviders.get(agentId);
+    if (!provider) return undefined;
+    try {
+      const token = provider()?.trim();
+      return token || undefined;
+    } catch (err) {
+      this.wsLogger.warn({ err, agentId }, "runtime session token provider failed");
+      return undefined;
+    }
   }
 
   get isConnected(): boolean {
@@ -1081,6 +1103,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private sendBind(agentId: string, runtimeType: string, runtimeVersion?: string): Promise<BoundAgent> {
     return new Promise<BoundAgent>((resolve, reject) => {
       const ref = randomUUID().slice(0, 12);
+      const currentRuntimeSessionToken = this.resolveRuntimeSessionToken(agentId);
       this.pendingBinds.set(ref, { agentId, runtimeType, runtimeVersion, resolve, reject });
       this.ws?.send(
         JSON.stringify({
@@ -1089,6 +1112,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           agentId,
           runtimeType,
           runtimeVersion,
+          ...(currentRuntimeSessionToken ? { currentRuntimeSessionToken } : {}),
         }),
       );
     });
@@ -1419,7 +1443,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           serverUrl: this.serverUrl,
           getAccessToken: this.getAccessToken,
           agentId,
-          runtimeSessionToken,
+          runtimeSessionToken: () =>
+            this.runtimeSessionTokenProviders.has(agentId)
+              ? this.resolveRuntimeSessionToken(agentId)
+              : runtimeSessionToken,
           userAgent: this.userAgent,
         });
         const agent: BoundAgent = {
