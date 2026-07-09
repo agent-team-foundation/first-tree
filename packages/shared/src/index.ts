@@ -158,6 +158,14 @@ export {
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";
 export {
+  COMPOSER_ACCEPT_ATTRIBUTE,
+  classifyComposerUpload,
+  OFFICE_EXTENSIONS,
+  OFFICE_MIME_TO_EXTENSION,
+  TEXT_NATIVE_EXTENSIONS,
+  type UploadClassification,
+} from "./schemas/attachment-classification.js";
+export {
   ATTACHMENT_KINDS,
   type AttachmentKind,
   type AttachmentRef,
