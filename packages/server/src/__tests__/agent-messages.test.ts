@@ -57,6 +57,28 @@ describe("Agent Messages API", () => {
     expect(editRes.json().createdAt).toEqual(expect.any(String));
   });
 
+  it("rejects agent edits that would persist escaped multiline markdown", async () => {
+    const app = getApp();
+    const { a1, a2, chatId } = await setupChat(app);
+
+    const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "markdown",
+      content: "Original",
+      metadata: { mentions: [a2.agent.uuid] },
+    });
+    expect(sendRes.statusCode).toBe(201);
+
+    const editRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}/messages/${sendRes.json().id}`, {
+      format: "markdown",
+      content: "line1\\n\\nline2\\n\\nline3",
+    });
+    expect(editRes.statusCode).toBe(400);
+
+    const listRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}/messages`);
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json().items[0].content).toBe(`@${a2.agent.name} Original`);
+  });
+
   it("creates inbox entries for recipient (fan-out)", async () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);

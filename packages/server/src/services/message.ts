@@ -129,6 +129,27 @@ function validateAgentTextEncoding(content: string): void {
   );
 }
 
+function normalizeNonHumanTextContent(input: {
+  chatId: string;
+  senderId: string;
+  senderType: string;
+  content: unknown;
+}): unknown {
+  if (input.senderType === "human" || typeof input.content !== "string") return input.content;
+
+  let textContent = input.content;
+  const unwrapped = maybeUnwrapDoubleEncoded(textContent);
+  if (unwrapped !== null) {
+    log.warn(
+      { metric: "double_encoded_content_unwrapped_total", chatId: input.chatId, senderId: input.senderId },
+      "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
+    );
+    textContent = unwrapped;
+  }
+  validateAgentTextEncoding(textContent);
+  return textContent;
+}
+
 // Structural param (not `SendMessage`) so the edit path can reuse it against
 // the effective post-edit `{ format, content }`, where `format` is a plain
 // string off the stored row.
@@ -304,19 +325,12 @@ export function preflightMessageSendIntent(input: {
   validateMessageContent(data);
 
   let effectiveContent: SendMessage["content"] = data.content;
-  if (senderType !== "human" && typeof effectiveContent === "string") {
-    let textContent = effectiveContent;
-    const unwrapped = maybeUnwrapDoubleEncoded(textContent);
-    if (unwrapped !== null) {
-      log.warn(
-        { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
-        "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
-      );
-      textContent = unwrapped;
-      effectiveContent = textContent;
-    }
-    validateAgentTextEncoding(textContent);
-  }
+  effectiveContent = normalizeNonHumanTextContent({
+    chatId,
+    senderId,
+    senderType,
+    content: effectiveContent,
+  }) as SendMessage["content"];
 
   // Re-validate the UNWRAPPED body. `validateMessageContent(data)` above checked
   // the raw `data.content`, but for a non-human sender a double-encoded string
@@ -967,10 +981,19 @@ export async function editMessage(
   if (data.content !== undefined) {
     // An edit can replace the body of any message — including an already-open
     // `format=request` ask whose format is frozen above. Reuse the send-path
-    // guard against the effective post-edit `{ format, content }` so an edit
-    // can't turn a live message into an empty / placeholder blocking card.
-    validateMessageContent({ format: data.format ?? msg.format, content: data.content });
-    setClause.content = data.content;
+    // guards against the effective post-edit `{ format, content }` so an edit
+    // can't turn a live message into an empty / placeholder blocking card or an
+    // agent-authored escaped-newline body.
+    const [senderRow] = await db.select({ type: agents.type }).from(agents).where(eq(agents.uuid, senderId)).limit(1);
+    if (!senderRow) throw new NotFoundError(`Sender agent "${senderId}" not found`);
+    const effectiveContent = normalizeNonHumanTextContent({
+      chatId,
+      senderId,
+      senderType: senderRow.type,
+      content: data.content,
+    });
+    validateMessageContent({ format: data.format ?? msg.format, content: effectiveContent });
+    setClause.content = effectiveContent;
   }
 
   // Track edit in metadata
