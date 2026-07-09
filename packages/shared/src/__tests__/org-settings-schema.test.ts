@@ -73,6 +73,18 @@ describe("org settings schemas", () => {
     expect(orgContextTreeFeaturesStorageSchema.parse({})).toEqual({
       contextReviewer: { enabled: false, agentUuid: null },
     });
+    expect(
+      orgContextTreeFeaturesStorageSchema.parse({
+        contextReviewer: { enabled: true, agentUuid: "agent-1" },
+      }),
+    ).toEqual({
+      contextReviewer: { enabled: true, agentUuid: "agent-1" },
+    });
+    expect(() =>
+      orgContextTreeFeaturesStorageSchema.parse({
+        contextReviewer: { enabled: true, agentUuid: null },
+      }),
+    ).toThrow("agentUuid is required");
     expect(orgContextTreeFeaturesOutputSchema.parse({})).toEqual({
       contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null },
     });

@@ -4,6 +4,7 @@ import {
   capabilityEntrySchema,
   clientCapabilitiesSchema,
   DEFAULT_RUNTIME_PROVIDER,
+  isRuntimeProviderEnabled,
   RUNTIME_PROVIDERS,
   runtimeProviderSchema,
   updateClientCapabilitiesSchema,
@@ -38,6 +39,13 @@ describe("runtimeProviderSchema", () => {
 
   it("DEFAULT_RUNTIME_PROVIDER is claude-code (existing rows pre-0026 have no kind)", () => {
     expect(DEFAULT_RUNTIME_PROVIDER).toBe("claude-code");
+  });
+
+  it("marks temporarily disabled providers as unavailable for selection", () => {
+    expect(isRuntimeProviderEnabled("claude-code")).toBe(true);
+    expect(isRuntimeProviderEnabled("codex")).toBe(true);
+    expect(isRuntimeProviderEnabled("claude-code-tui")).toBe(false);
+    expect(isRuntimeProviderEnabled("future-provider")).toBe(true);
   });
 });
 

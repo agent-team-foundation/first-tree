@@ -153,6 +153,163 @@ function malformedProviderRetryEvent(): SessionEvent {
 }
 
 describe("InboxDeliveryCoordinator additional delivery coverage", () => {
+  it("returns recovering while recovery debt is outstanding and ignores completions without entry ids", async () => {
+    const { logger, records } = recordingLogger();
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry: mockAckEntry(),
+      onWorkChanged: vi.fn(),
+      log: logger,
+    });
+    const entry = mockEntry({ id: 10, chatId: "chat-recovery-required", messageId: "msg-recovery-required" });
+    const next = mockEntry({ id: 11, chatId: "chat-recovery-required", messageId: "msg-recovery-next" });
+    const message = toSessionMessage(entry);
+
+    expect(coordinator.receive(entry).kind).toBe("deliver");
+    coordinator.retryTurn("chat-recovery-required", message, "provider_retry");
+
+    await vi.waitFor(() => expect(coordinator.snapshot("chat-recovery-required").recoveryDebt).toBe("required"));
+    expect(coordinator.receive(next)).toEqual({ kind: "recovering" });
+
+    await coordinator.finishTurn(
+      "chat-recovery-required",
+      { ...message, inboxEntryId: undefined },
+      {
+        status: "success",
+        terminal: true,
+      },
+    );
+    expect(
+      records.some(
+        (record) =>
+          typeof record.msg === "string" &&
+          record.msg.includes("turn completion ignored because no inboxEntryId was provided"),
+      ),
+    ).toBe(true);
+  });
+
+  it("deduplicates in-flight message redelivery and reports settled versus lost ownership", async () => {
+    const ackEntry = mockAckEntry();
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry,
+      onWorkChanged: vi.fn(),
+      log: silentLogger(),
+    });
+    const first = mockEntry({ id: 20, chatId: "chat-dedup", messageId: "msg-same" });
+    const duplicateMessage = mockEntry({ id: 21, chatId: "chat-dedup", messageId: "msg-same" });
+    const message = toSessionMessage(first);
+
+    const decision = coordinator.receive(first);
+    expect(decision.kind).toBe("deliver");
+    expect(coordinator.receive(duplicateMessage)).toEqual({ kind: "duplicate-in-flight" });
+    expect(coordinator.markOwned({ chatId: "chat-dedup", entryId: 999, messageId: "missing" })).toBe("lost");
+
+    await coordinator.finishTurn("chat-dedup", message, { status: "success", terminal: true });
+
+    expect(ackEntry).toHaveBeenCalledWith(20);
+    expect(coordinator.markOwned({ chatId: "chat-dedup", entryId: 20, messageId: "msg-same" })).toBe("settled");
+  });
+
+  it("blocks ACK-through when a completion skips a non-terminal prefix", async () => {
+    const { logger, records } = recordingLogger();
+    const ackEntry = mockAckEntry();
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry,
+      onWorkChanged: vi.fn(),
+      log: logger,
+    });
+    const first = mockEntry({ id: 30, chatId: "chat-prefix-gap", messageId: "msg-prefix-first" });
+    const second = mockEntry({ id: 31, chatId: "chat-prefix-gap", messageId: "msg-prefix-second" });
+
+    expect(coordinator.receive(first).kind).toBe("deliver");
+    expect(coordinator.receive(second).kind).toBe("deliver");
+    await coordinator.finishTurn("chat-prefix-gap", toSessionMessage(second), { status: "success", terminal: true });
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(coordinator.snapshot("chat-prefix-gap")).toMatchObject({
+      entries: [
+        { entryId: 30, messageId: "msg-prefix-first", phase: "open" },
+        { entryId: 31, messageId: "msg-prefix-second", phase: "terminal" },
+      ],
+      recoveryDebt: "required",
+    });
+    expect(
+      records.some(
+        (record) =>
+          typeof record.msg === "string" &&
+          record.msg.includes("ACK-through blocked because delivery prefix has non-terminal entries"),
+      ),
+    ).toBe(true);
+  });
+
+  it("logs untracked ACK-through attempts without mutating the active ledger", async () => {
+    const { logger, records } = recordingLogger();
+    const ackEntry = mockAckEntry();
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry,
+      onWorkChanged: vi.fn(),
+      log: logger,
+    });
+    const entry = mockEntry({ id: 40, chatId: "chat-untracked-ack", messageId: "msg-present" });
+    const untrackedMessage: SessionMessage = {
+      ...toSessionMessage(entry),
+      id: "msg-missing",
+      inboxEntryId: 999,
+    };
+
+    expect(coordinator.receive(entry).kind).toBe("deliver");
+    await coordinator.finishTurn("chat-untracked-ack", untrackedMessage, { status: "success", terminal: true });
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(coordinator.snapshot("chat-untracked-ack").entries).toEqual([
+      { entryId: 40, messageId: "msg-present", phase: "open" },
+    ]);
+    expect(
+      records.some(
+        (record) =>
+          typeof record.msg === "string" && record.msg.includes("attempt completion ignored for untracked inbox entry"),
+      ),
+    ).toBe(true);
+  });
+
+  it("acks terminal prefixes before suspending or terminating non-terminal tails", async () => {
+    const ackEntry = vi
+      .fn<(entryId: number) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("hold terminal entry"))
+      .mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const coordinator = new InboxDeliveryCoordinator({
+      ackEntry,
+      recoverChat,
+      onWorkChanged: vi.fn(),
+      log: silentLogger(),
+    });
+    const first = mockEntry({ id: 50, chatId: "chat-terminal-prefix", messageId: "msg-terminal" });
+    const second = mockEntry({ id: 51, chatId: "chat-terminal-prefix", messageId: "msg-tail" });
+
+    expect(coordinator.receive(first).kind).toBe("deliver");
+    await coordinator.finishTurn("chat-terminal-prefix", toSessionMessage(first), {
+      status: "success",
+      terminal: true,
+    });
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-terminal-prefix"));
+    expect(coordinator.snapshot("chat-terminal-prefix").entries).toEqual([
+      { entryId: 50, messageId: "msg-terminal", phase: "terminal" },
+    ]);
+
+    expect(coordinator.receive(second).kind).toBe("deliver");
+    await coordinator.prepareSuspend("chat-terminal-prefix", "operator_suspend");
+
+    expect(ackEntry).toHaveBeenNthCalledWith(2, 50);
+    expect(recoverChat).toHaveBeenCalledTimes(2);
+    expect(coordinator.snapshot("chat-terminal-prefix")).toMatchObject({ entries: [], recoveryDebt: "none" });
+
+    expect(coordinator.takeRecoveryActivationReady("chat-terminal-prefix")).toBe(true);
+    expect(coordinator.receive(second).kind).toBe("deliver");
+    await coordinator.drainForTerminate("chat-terminal-prefix");
+    expect(recoverChat).toHaveBeenCalledTimes(3);
+    expect(coordinator.snapshot("chat-terminal-prefix").recoveryDebt).toBe("none");
+  });
+
   it("retains terminal ledger entries after ACK failure and re-ACKs terminal redelivery", async () => {
     const { logger, records } = recordingLogger();
     const ackEntry = vi

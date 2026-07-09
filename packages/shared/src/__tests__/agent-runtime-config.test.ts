@@ -283,6 +283,8 @@ describe("agent runtime config — git repo localPath safety", () => {
     expect(normalizeRepoLocalPath(" repos/repo")).toBe(" repos/repo");
     expect(normalizeRepoLocalPath("repos//repo")).toBe("repos//repo");
     expect(normalizeRepoLocalPath("repos\\repo")).toBe("repos\\repo");
+    expect(normalizeRepoLocalPath("repos/\u0000repo")).toBe("repos/\u0000repo");
+    expect(normalizeRepoLocalPath("repos\\legacy/repo")).toBe("repos\\legacy/repo");
   });
 
   it("preserves derived repo local path behavior for repo URLs", () => {
@@ -323,6 +325,30 @@ describe("agent runtime config — git repo localPath safety", () => {
     expect(deriveRepoShortLabel("https://github.com/acme/repo.git?ref=dev")).toBe("acme/repo");
     expect(deriveRepoShortLabel("repo")).toBe("repo");
     expect(deriveRepoShortLabel("   ")).toBe("");
+  });
+
+  it("handles missing short-label split results defensively", () => {
+    const originalSplit = String.prototype.split;
+    const splitSpy = vi.spyOn(String.prototype, "split").mockImplementation(function (
+      this: string,
+      separator: string | RegExp | { [Symbol.split](string: string, limit?: number): string[] },
+      limit?: number,
+    ) {
+      if (this.toString() === "force-empty-short-query" && String(separator) === "/[?#]/") {
+        return [];
+      }
+      if (this.toString() === "force-empty-short-segments" && String(separator) === "/[/:]/") {
+        return [];
+      }
+      return Reflect.apply(originalSplit, this, [separator, limit]);
+    });
+
+    try {
+      expect(deriveRepoShortLabel("force-empty-short-query")).toBe("");
+      expect(deriveRepoShortLabel("force-empty-short-segments")).toBe("");
+    } finally {
+      splitSpy.mockRestore();
+    }
   });
 
   it("formats a repo coordinate, hiding default branch and default path", () => {
