@@ -19,7 +19,7 @@ import {
 } from "@first-tree/shared";
 import { inferChannelFromVersion } from "@first-tree/shared/channel";
 import * as semver from "semver";
-import { resolveServerUrl } from "./bootstrap.js";
+import { resolveServerUrl, ServerUrlNotConfiguredError } from "./bootstrap.js";
 import { channelConfig } from "./channel.js";
 import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
@@ -30,7 +30,10 @@ const NPM_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const NPM_METADATA_TIMEOUT_MS = 10 * 1000;
 
 export type InstallMode = "global" | "npx" | "source" | "portable";
-export type VersionLookupResult = { ok: true; version: string } | { ok: false; reason: string };
+export type VersionLookupFailureCode = "server_url_not_configured";
+export type VersionLookupResult =
+  | { ok: true; version: string }
+  | { ok: false; reason: string; reasonCode?: VersionLookupFailureCode };
 
 type PortableMetadataIdentity = {
   channel: string;
@@ -615,10 +618,10 @@ export async function fetchPortableLatestVersion(): Promise<VersionLookupResult>
  * that (so the UpdateManager can attempt the restart itself while this
  * function remains side-effect-scoped).
  *
- * Why both shapes exist: the auto-update path and the default manual
- * `upgrade` command receive an exact target version from the server and MUST
- * install that exact version. The explicit `upgrade --latest` escape hatch keeps the dist-tag form for
- * operators who want the freshest package directly from npm.
+ * Why both shapes exist: managed update paths usually receive an exact target
+ * version from the server and MUST install that exact version. The dist-tag
+ * form remains for default `upgrade` fallback before server URL configuration
+ * and for hidden compatibility with older operator scripts.
  */
 export async function installGlobalSpec(
   spec: string,
@@ -733,9 +736,10 @@ export async function installGlobalSpec(
 }
 
 /**
- * Back-compat shim: install `<pkg>@latest`. Used by
- * `upgrade --latest`; managed update paths prefer
- * `installGlobalSpec` with the server-advertised target version.
+ * Back-compat shim: install `<pkg>@latest`. Used by default `upgrade` fallback
+ * before server URL configuration and by the hidden `upgrade --latest`
+ * compatibility path; managed update paths prefer `installGlobalSpec` with the
+ * server-advertised target version.
  */
 export async function installGlobalLatest(options?: InstallGlobalSpecOptions): Promise<ExecuteUpdateResult> {
   return installGlobalSpec("latest", options);
@@ -751,7 +755,11 @@ export async function fetchServerCommandVersion(timeoutMs = 10_000): Promise<Ver
   try {
     serverUrl = resolveServerUrl();
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+      ...(err instanceof ServerUrlNotConfiguredError ? { reasonCode: "server_url_not_configured" as const } : {}),
+    };
   }
 
   let res: Response;
