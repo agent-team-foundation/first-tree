@@ -64,11 +64,12 @@ export function useOrgAgents(options?: {
  */
 export function useOrgAgentsSearch(
   query: string,
-  options?: { addressableOnly?: boolean },
+  options?: { addressableOnly?: boolean; enabled?: boolean },
 ): UseQueryResult<PaginatedAgents> {
   const trimmed = query.trim();
   const addressableOnly = options?.addressableOnly ?? false;
-  const unfiltered = useOrgAgents({ addressableOnly });
+  const enabled = options?.enabled ?? true;
+  const unfiltered = useOrgAgents({ addressableOnly, enabled });
   const search = useQuery({
     queryKey: ["agents", "org-list", { addressableOnly }, "search", trimmed],
     queryFn: () => listAgents({ limit: 100, query: trimmed, addressableOnly }),
@@ -76,7 +77,7 @@ export function useOrgAgentsSearch(
     // same term doesn't re-hit the server; expire fast enough that a newly
     // added agent shows up under search within a reasonable window.
     staleTime: 10_000,
-    enabled: trimmed.length > 0,
+    enabled: enabled && trimmed.length > 0,
   });
   return trimmed.length > 0 ? search : unfiltered;
 }

@@ -288,6 +288,17 @@ describe("rankCandidates", () => {
     ]);
   });
 
+  it("empty query: joined chat agents stay above inviteable agents, with normal grouping inside each bucket", () => {
+    const input = [
+      cand({ agentId: "invite-mine", displayName: "Alpha Invite", managedByMe: true, inChat: false }),
+      cand({ agentId: "joined-other", displayName: "Zulu Joined", managedByMe: false, inChat: true }),
+      cand({ agentId: "joined-mine", displayName: "Bravo Joined", managedByMe: true, inChat: true }),
+      cand({ agentId: "invite-other", displayName: "Able Invite", managedByMe: false, inChat: false }),
+    ];
+    const result = rankCandidates(input, "");
+    expect(result.map((c) => c.agentId)).toEqual(["joined-mine", "joined-other", "invite-mine", "invite-other"]);
+  });
+
   it("non-empty query: returns every match, uncapped", () => {
     // Same no-cap guarantee on the typed path: a substring shared by more
     // than eight agents must surface them all, not silently truncate at 8.
@@ -296,6 +307,15 @@ describe("rankCandidates", () => {
     );
     const result = rankCandidates(input, "team");
     expect(result).toHaveLength(12);
+  });
+
+  it("non-empty query: equal-score joined matches stay above inviteable matches", () => {
+    const input = [
+      cand({ agentId: "invite", name: "alpha-invite", displayName: "Alpha Invite", inChat: false }),
+      cand({ agentId: "joined", name: "alpha-joined", displayName: "Zulu Joined", inChat: true }),
+    ];
+    const result = rankCandidates(input, "alpha");
+    expect(result.map((c) => c.agentId)).toEqual(["joined", "invite"]);
   });
 });
 
