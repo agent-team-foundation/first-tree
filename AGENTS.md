@@ -94,6 +94,11 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 - CLI business logic belongs in `core/`; command files should stay thin and call `core/*`. Wire commands in `cli/index.ts`, and export public helpers from both `core/index.ts` and `src/index.ts`.
 - Config changes belong in `shared/src/config/`.
 
+## Testing & QA
+
+- Route each check to its layer, in the same PR as the behavior: deterministic behavior -> product tests (Vitest per package; `pnpm test` before a PR); agent-skill regression -> `@first-tree/skill-evals`; judgment / live / cross-surface validation -> `@first-tree/qa` cases (`packages/qa/cases/`, prose prompts, not executable specs). If a check can be made stable, it belongs in product tests.
+- Before a PR, self-check QA risk. If the change touches a cross-surface, runtime, provider/auth, WS/inbox, or boot/health path: find or add a matching case under `packages/qa/cases/` and flag in the PR that formal QA is warranted. Formal QA (isolated Docker + git-worktree run, result of record) is human-requested, not a CI gate or auto runner; follow `packages/qa/AGENTS.md` when asked to run it.
+
 ## Git Conventions
 
 - Branching: trunk-based; feature branch -> PR -> squash merge -> main.
