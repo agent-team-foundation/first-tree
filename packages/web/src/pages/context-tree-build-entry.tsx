@@ -1,35 +1,19 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Github, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { listManagedAgents, type ManagedAgent } from "../api/agents.js";
-import { ApiError } from "../api/client.js";
 import { listOrgGithubRepos } from "../api/github.js";
-import { getGithubAppInstallation, getGithubAppInstallUrl } from "../api/github-app.js";
+import { getGithubAppInstallation } from "../api/github-app.js";
 import { listTeamResourcesForOrg } from "../api/resources.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Select } from "../components/ui/select.js";
 import { COPY } from "./onboarding/copy.js";
-import { FlowHint, RepoTokenPicker, StatusRow } from "./onboarding/flow-ui.js";
+import { FlowHint, RepoTokenPicker } from "./onboarding/flow-ui.js";
 import type { TreeBindingPlan } from "./onboarding/onboarding-flow.js";
 import { startChatErrorMessage } from "./onboarding/provision-tree.js";
 import { ensureStartChatRepos, startTreeSetupChat } from "./onboarding/tree-setup-chat.js";
-
-/**
- * Per-tab marker set when the user kicks off a GitHub App install from this
- * card, so a return render shows "waiting for GitHub" + a deliberate re-mint.
- * Distinct key from the onboarding step so the two flows never cross. Same
- * install-popup discipline as the onboarding connect-code step (see
- * steps/step-connect-code.tsx) — kept as a small local copy on purpose so the
- * critical first-run path stays untouched.
- */
-const INSTALL_ATTEMPT_KEY = "context-build:install-attempt";
-const INSTALL_OWNER_HINT = {
-  pre: "Only ",
-  emphasis: "a GitHub org owner",
-  post: " can install First Tree. If that's not you, GitHub will ask an owner to approve access first.",
-};
 
 /**
  * The team's single "build your Context Tree" action, on the Context tab.
@@ -39,10 +23,11 @@ const INSTALL_OWNER_HINT = {
  * server-side provisioning. This replaced the standalone `/build-tree` wizard
  * page — there is one build home.
  *
- * When no code is connected yet, the connect + repo pick happens INLINE here
- * (install the GitHub App, then choose from the repos it grants) instead of
- * bouncing to Settings — the team already grants those repos, so sending the
- * user off to retype a URL was busywork.
+ * When GitHub isn't connected yet, this card links to Settings → GitHub — the
+ * single place that installs the App and connects it to the team (binding is an
+ * explicit connect action that only lives there). Once connected, the user
+ * returns here to pick a repo and build; the card advances on its own via the
+ * installed poll below.
  *
  * Admin-only (the caller gates on role + setup status). It never edits the tree
  * in the tab; it just launches the chat where the agent does, so it does not
@@ -182,10 +167,9 @@ export function ContextTreeBuildEntry({
 }
 
 /**
- * Inline "connect your code" for the no-repo state: install the GitHub App (if
- * needed) in a popup, then pick from the repos the team's installation grants —
- * the same install + pick the onboarding connect-code step does, surfaced here
- * so the user never leaves the Context tab to wire up a repo.
+ * The no-repo state on the Context tab. When GitHub isn't connected yet it links
+ * to Settings → GitHub (the one place that installs + connects the App); once
+ * connected it picks from the repos the team's installation grants and builds.
  */
 function ConnectAndPickRepos({
   organizationId,
@@ -207,14 +191,10 @@ function ConnectAndPickRepos({
   const [selectedRepoUrls, setSelectedRepoUrls] = useState<string[]>([]);
   const [grantCheckError, setGrantCheckError] = useState<string | null>(null);
   const [checkingGrant, setCheckingGrant] = useState(false);
-  const [redirecting, setRedirecting] = useState(false);
-  const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
-  const [attempted, setAttempted] = useState(
-    () => typeof window !== "undefined" && !!window.sessionStorage.getItem(INSTALL_ATTEMPT_KEY),
-  );
 
-  // Poll for the installation until it appears: the popup installs on GitHub and
-  // self-closes, and this card advances on its own once the row shows up.
+  // Poll for the team's installation: connecting happens on Settings → GitHub,
+  // so once the user connects there and returns, this card advances on its own
+  // to the repo pick the moment the bound installation shows up.
   const installQuery = useQuery({
     queryKey: ["context-build", "installation", organizationId],
     queryFn: () => getGithubAppInstallation(organizationId ?? ""),
@@ -222,10 +202,6 @@ function ConnectAndPickRepos({
     refetchInterval: (query) => (query.state.data ? false : 4000),
   });
   const installed = !!installQuery.data;
-
-  useEffect(() => {
-    if (installed && typeof window !== "undefined") window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
-  }, [installed]);
 
   // The pickable repos come from the App installation's grant (server-minted
   // token), not the caller's personal repos — so only repos the agent can
@@ -237,46 +213,6 @@ function ConnectAndPickRepos({
   });
   const loadFailed = !!reposQuery.error;
   const hasPickableRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
-
-  const handleConnect = async (): Promise<void> => {
-    if (!organizationId) return;
-    setInstallError(null);
-    setRedirecting(true);
-    // Open the popup synchronously inside the click gesture so the browser doesn't
-    // treat the post-await open as a blocked popup; fill its location once the
-    // install URL is minted. GitHub installs in that tab and lands it on
-    // /onboarding/connected to self-close, while this card keeps polling above.
-    const installTab = window.open("", "_blank");
-    // Popup path lands the new tab on the self-closing /onboarding/connected
-    // page; the popup-blocked full-redirect must return THIS tab to the card to
-    // finish the inline pick. Both targets are on the server's post-install
-    // allowlist (ALLOWED_POST_INSTALL_NEXT) — "/context" is the card's route, so
-    // an off-allowlist value isn't silently bounced to /settings/github.
-    const postInstallNext = installTab ? "/onboarding/connected" : "/context";
-    try {
-      const url = await getGithubAppInstallUrl(organizationId, postInstallNext);
-      window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, String(Date.now()));
-      setAttempted(true);
-      if (installTab) installTab.location.href = url;
-      else window.location.assign(url); // popup blocked — fall back to a full redirect
-      setRedirecting(false);
-    } catch (err) {
-      installTab?.close();
-      setRedirecting(false);
-      if (err instanceof ApiError && err.status === 503) setInstallError("not_configured");
-      else if (err instanceof ApiError && err.status === 403) setInstallError("not_admin");
-      else setInstallError("generic");
-    }
-  };
-
-  // Deliberate re-mint after a stuck install: a fresh URL overwrites the
-  // oauth-state nonce cookie, so retry is an explicit action — never an auto
-  // re-click while the first popup may still be mid-flow.
-  const handleStartOver = (): void => {
-    window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
-    setAttempted(false);
-    setInstallError(null);
-  };
 
   const toggleRepo = (cloneUrl: string): void => {
     setGrantCheckError(null);
@@ -316,47 +252,26 @@ function ConnectAndPickRepos({
     }
   };
 
-  // ── Not connected yet ──────────────────────────────────────────────────
+  // ── GitHub not connected yet → point at Settings ───────────────────────
+  // Install + connect both live on Settings → GitHub (binding an installation to
+  // the team is an explicit connect action that only exists there). Link out
+  // with `from=context` so Settings can offer a "back to building" return once
+  // connected; this card then advances on its own via the installed poll above.
   if (!installed) {
-    // The two install errors that can't be fixed here (App not set up on this
-    // server / caller isn't an org admin) share one message — building needs the
-    // App and only an org owner can install it, so there's no inline way forward.
-    if (installError === "not_configured" || installError === "not_admin") {
-      return <FlowHint>{COPY.connectCode.cantConnectRecovery}</FlowHint>;
-    }
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
         <div className="flex">
-          <Button
-            type="button"
-            variant="cta"
-            onClick={() => void handleConnect()}
-            disabled={redirecting || attempted || !organizationId}
-          >
-            <Github className="h-4 w-4" />
-            <span>{COPY.connectCode.cta}</span>
+          <Button asChild variant="cta">
+            <Link to="/settings/github?from=context">
+              <Github className="h-4 w-4" aria-hidden />
+              <span>{COPY.connectCode.connectInSettings}</span>
+              <ArrowRight className="h-4 w-4" aria-hidden />
+            </Link>
           </Button>
         </div>
         <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-          {INSTALL_OWNER_HINT.pre}
-          <span className="font-medium" style={{ color: "var(--fg-3)" }}>
-            {INSTALL_OWNER_HINT.emphasis}
-          </span>
-          {INSTALL_OWNER_HINT.post}
+          {COPY.connectCode.connectInSettingsHint}
         </p>
-        {installError === "generic" && (
-          <FlowHint tone="error" role="alert">
-            {COPY.errors.generic}
-          </FlowHint>
-        )}
-        {attempted ? (
-          <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
-            <StatusRow state="waiting" label={COPY.connectCode.waiting} />
-            <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleStartOver}>
-              {COPY.connectCode.restartInstall}
-            </Button>
-          </div>
-        ) : null}
       </div>
     );
   }

@@ -58,6 +58,7 @@ describe("server config", () => {
     expect(fieldSchema.parse("  org_123  ")).toBe("org_123");
     expect(fieldSchema.parse("")).toBeUndefined();
     expect(fieldSchema.parse("   ")).toBeUndefined();
+    expect(fieldSchema.parse(undefined)).toBeUndefined();
   });
 
   it("keeps growth landing pages disabled by default and enables them via env", async () => {

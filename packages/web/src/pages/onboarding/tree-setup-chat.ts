@@ -49,6 +49,8 @@ export async function startOnboardingChat(args: {
   treeBindingPlan: TreeBindingPlan | "none";
   joinPath?: "invite";
   complete?: boolean;
+  /** Production-scan fix conversion `owner/repo` — keys the launcher for dedup. */
+  scanFixRepoSlug?: string;
 }): Promise<string> {
   // Create-or-reuse the start-chat target and send the bootstrap in one idempotent
   // server call. First-chat paths can let the server stamp completion after the
@@ -60,6 +62,7 @@ export async function startOnboardingChat(args: {
     bootstrap: args.bootstrap,
     topic: args.topic,
     complete: args.complete,
+    ...(args.scanFixRepoSlug ? { scanFixRepoSlug: args.scanFixRepoSlug } : {}),
   });
   void reportOnboardingEvent("kickoff_chat_started", {
     agentUuid: args.agent.uuid,

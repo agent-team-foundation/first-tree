@@ -6,6 +6,21 @@ import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "./chat.js";
 
+/**
+ * Idempotency key for a production-scan fix launcher, shared by BOTH entry
+ * paths so re-entering the fix link cannot create a second launcher:
+ * the not-yet-onboarded path (`POST /me/onboarding/kickoff`) and the
+ * already-onboarded direct path (`POST /orgs/:orgId/chats` task mode) both
+ * compose it from the same `members.agentId` and repo slug, so the shared
+ * `chats.onboarding_kickoff_key` unique constraint dedups them.
+ */
+export function scanFixKickoffKey(humanAgentId: string, repoSlug: string): string {
+  // GitHub owner/repo are case-insensitive, and the two paths derive the slug
+  // from separate parses of the fix link — lowercasing here (the single shared
+  // composition point) keeps the key identical even if the URLs differ in case.
+  return `${humanAgentId}:scan-fix:${repoSlug.toLowerCase()}`;
+}
+
 export type KickoffOnboardingArgs = {
   /** The membership whose completion is stamped once the chat exists. */
   memberId: string;

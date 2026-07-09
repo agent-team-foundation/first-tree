@@ -278,6 +278,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
       JSON.stringify({
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
+        repoSlug: "acme/backend",
       }),
     );
   });
@@ -302,6 +303,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
       mode: "task",
       topic: "Fix production scan blockers",
       initialRecipientAgentIds: ["agent-dev-1"],
+      // The key new hop: the direct path carries the repo slug so the server
+      // keys this launcher for cross-path dedup.
+      scanFixRepoSlug: "acme/backend",
     });
     expect(body?.initialMessage).toMatchObject({ format: "text", source: "web" });
     expect(body?.initialMessage.content).toContain(
@@ -350,6 +354,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
       JSON.stringify({
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
+        repoSlug: "acme/backend",
       }),
     );
   });
@@ -388,6 +393,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
       JSON.stringify({
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
+        repoSlug: "acme/backend",
       }),
     );
     const retryBtn = [...container.querySelectorAll("button")].find((button) =>
@@ -414,6 +420,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
       JSON.stringify({
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
+        repoSlug: "acme/backend",
       }),
     );
     const retryBtn = [...container.querySelectorAll("button")].find((button) =>
@@ -438,7 +445,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
     expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
-      JSON.stringify({ repoUrl: "https://github.com/acme/backend", reportKey: null }),
+      JSON.stringify({ repoUrl: "https://github.com/acme/backend", reportKey: null, repoSlug: "acme/backend" }),
     );
   });
 });

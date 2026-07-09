@@ -61,6 +61,15 @@ export const createTaskChatSchema = z
     contextParticipantAgentIds: z.array(z.string().min(1)).default([]),
     contextParticipantNames: z.array(z.string().min(1)).default([]),
     initialMessage: sendMessageSchema,
+    // Production-scan fix conversion (already-onboarded direct path). When set,
+    // this task chat is keyed `<humanAgent>:scan-fix:<repoSlug>` so re-entering
+    // the fix link reuses the same launcher instead of creating a duplicate,
+    // and it dedups with the onboarding-path kickoff that carries the same key.
+    scanFixRepoSlug: z
+      .string()
+      .max(200)
+      .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/)
+      .optional(),
   })
   .refine((v) => v.initialRecipientAgentIds.length > 0 || v.initialRecipientNames.length > 0, {
     message: "task chat creation requires at least one initial recipient",

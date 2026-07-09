@@ -13,12 +13,14 @@ import {
   renderPlist,
   renderSystemdUnit,
   renderWindowsSupervisorCmd,
+  renderWindowsSupervisorLauncherVbs,
   renderWindowsTaskXml,
   resolveCliInvocation,
   restartClientService,
   startClientService,
   stopClientService,
   uninstallClientService,
+  windowsSupervisorLauncherPath,
   windowsSupervisorLogPath,
   windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,
@@ -92,6 +94,29 @@ function windowsProcessIdentityJson(
   });
 }
 
+function windowsProcessListJson(
+  processes: Array<{
+    pid: number;
+    commandLine?: string;
+    creationTimeUtc?: string;
+    executablePath?: string;
+    name?: string;
+  }>,
+): string {
+  return JSON.stringify(
+    processes.map((process) => ({
+      ProcessId: process.pid,
+      ParentProcessId: 1234,
+      Name: process.name ?? "node.exe",
+      CommandLine:
+        process.commandLine ??
+        '"node.exe" "C:\\Users\\gandy\\AppData\\Roaming\\npm\\node_modules\\first-tree-dev\\dist\\cli\\index.mjs" "daemon" "supervise"',
+      ExecutablePath: process.executablePath ?? "C:\\Program Files\\nodejs\\node.exe",
+      CreationTimeUtc: process.creationTimeUtc ?? "2026-01-02T00:00:00.0000000Z",
+    })),
+  );
+}
+
 let home: string;
 
 beforeEach(() => {
@@ -141,6 +166,20 @@ describe("service install helpers", () => {
     expect(() => resolveCliInvocation()).toThrow("Cannot resolve CLI entry point");
   });
 
+  it("uses the Windows cmd shim when where returns npm's extensionless shell shim first", () => {
+    setPlatform("win32");
+    const npmBinDir = join(home, "npm");
+    const extensionlessShim = join(npmBinDir, channelConfig.binName);
+    const cmdShim = `${extensionlessShim}.cmd`;
+    mkdirSync(npmBinDir, { recursive: true });
+    writeFileSync(extensionlessShim, '#!/bin/sh\nexec node cli.mjs "$@"\n');
+    writeFileSync(cmdShim, "@ECHO off\r\nnode cli.mjs %*\r\n");
+
+    execFileSyncMock.mockReturnValueOnce(`${extensionlessShim}\r\n${cmdShim}\r\n`);
+
+    expect(resolveCliInvocation()).toEqual({ kind: "bin", program: cmdShim });
+  });
+
   it("renders service templates with escaped values and quoted shell arguments", () => {
     const plist = renderPlist("/tmp/First & Tree");
     expect(plist).toContain("<string>/tmp/First &amp; Tree</string>");
@@ -173,8 +212,12 @@ describe("service install helpers", () => {
     expect(windowsWrapper).toContain(`>>"${windowsSupervisorWrapperLogPath()}" 2>&1`);
     expect(windowsWrapper).not.toContain(`>>"${windowsSupervisorLogPath()}"`);
     expect(windowsWrapper).toContain(" 2>&1");
-    const taskXml = renderWindowsTaskXml("C:\\First Tree\\supervisor.cmd", "ACME\\gandy & team");
+    const windowsLauncher = renderWindowsSupervisorLauncherVbs("C:\\First Tree\\supervisor.cmd");
+    expect(windowsLauncher).toContain('shell.Run("""C:\\First Tree\\supervisor.cmd""", 0, True)');
+    const taskXml = renderWindowsTaskXml("C:\\First Tree\\supervisor.vbs", "ACME\\gandy & team");
     expect(taskXml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
+    expect(taskXml).toContain("wscript.exe");
+    expect(taskXml).toContain("&quot;C:\\First Tree\\supervisor.vbs&quot;");
     expect(taskXml).toContain("<LogonTrigger>");
     expect(taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(taskXml).toContain("ACME\\gandy &amp; team");
@@ -323,7 +366,16 @@ describe("service install helpers", () => {
 
     setPlatform("win32");
     spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: "Ready", stderr: "" });
+    spawnSyncMock.mockImplementation((program: string, args: string[]) => {
+      const command = args.join(" ");
+      if (program === "powershell.exe" && command.includes("Get-ScheduledTask")) {
+        return { status: 0, stdout: "Ready", stderr: "" };
+      }
+      if (program === "powershell.exe" && command.includes("Get-CimInstance Win32_Process")) {
+        return { status: 0, stdout: "[]", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
     expect(startClientService()).toEqual({ ok: true });
     expect(stopClientService()).toEqual({ ok: true });
     expect(restartClientService()).toEqual({ ok: true });
@@ -590,7 +642,8 @@ describe("service install helpers", () => {
     expect(isServiceUnitDriftDetected()).toBe(true);
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
-      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
+      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "[]", stderr: "" });
     expect(refreshClientServiceUnitForUpdate()).toMatchObject({ platform: "task-scheduler" });
   });
 
@@ -675,6 +728,7 @@ describe("service install helpers", () => {
 
     const info = installClientService();
     const wrapper = readFileSync(windowsSupervisorWrapperPath(), "utf-8");
+    const launcher = readFileSync(windowsSupervisorLauncherPath(), "utf-8");
     const { raw: xmlRaw, xml } = readWindowsTaskXmlFixture(windowsTaskXmlPath());
 
     expect(info).toMatchObject({
@@ -685,8 +739,12 @@ describe("service install helpers", () => {
     });
     expect(wrapper).toContain(`set "FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}"`);
     expect(wrapper).toContain('"daemon" "supervise"');
+    expect(launcher).toContain(`shell.Run("""${windowsSupervisorWrapperPath()}""", 0, True)`);
     expect([...xmlRaw.subarray(0, 2)]).toEqual([0xff, 0xfe]);
     expect(xml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
+    expect(xml).toContain("wscript.exe");
+    expect(xml).toContain(`${channelConfig.launchdLabel}-supervisor.vbs`);
+    expect(xml).not.toContain(`${channelConfig.launchdLabel}-supervisor.cmd</Command>`);
     expect(xml).toContain("<LogonTrigger>");
     expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
@@ -810,7 +868,8 @@ describe("service install helpers", () => {
       .mockReturnValueOnce({ status: 0, stdout: windowsProcessIdentityJson(4321), stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
-      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
+      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "[]", stderr: "" });
 
     try {
       expect(stopClientService()).toEqual({ ok: true });
@@ -837,6 +896,7 @@ describe("service install helpers", () => {
             expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
           ]),
         ],
+        ["powershell.exe", expect.arrayContaining([expect.stringContaining("Get-CimInstance Win32_Process")])],
       ]);
     } finally {
       killSpy.mockRestore();
@@ -874,7 +934,8 @@ describe("service install helpers", () => {
       .mockReturnValueOnce({ status: 0, stdout: windowsProcessIdentityJson(5432), stderr: "" })
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "FEHLER: Prozess wurde nicht gefunden" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
-      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" });
+      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "[]", stderr: "" });
 
     try {
       expect(stopClientService()).toEqual({ ok: true });
@@ -901,6 +962,7 @@ describe("service install helpers", () => {
             expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
           ]),
         ],
+        ["powershell.exe", expect.arrayContaining([expect.stringContaining("Get-CimInstance Win32_Process")])],
       ]);
     } finally {
       killSpy.mockRestore();
@@ -1009,6 +1071,83 @@ describe("service install helpers", () => {
       expect(existsSync(windowsSupervisorStopIntentPath())).toBe(false);
     } finally {
       killSpy.mockRestore();
+    }
+  });
+
+  it("keeps Windows stop intent when a no-marker stop leaves a supervisor process behind", () => {
+    setPlatform("win32");
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(6001);
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "Running", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "Ready", stderr: "" })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: windowsProcessListJson([{ pid: 7777 }]),
+        stderr: "",
+      });
+
+    try {
+      expect(stopClientService()).toEqual({
+        ok: false,
+        reason: expect.stringContaining("supervisor process still running after task end"),
+      });
+      expect(existsSync(windowsSupervisorStopIntentPath())).toBe(true);
+      expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+        ["schtasks.exe", ["/End", "/TN", windowsTaskName()]],
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+        ["powershell.exe", expect.arrayContaining([expect.stringContaining("Get-CimInstance Win32_Process")])],
+      ]);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("keeps Windows stop intent when the task is missing but a supervisor process remains", () => {
+    setPlatform("win32");
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(6001);
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 3, stdout: "", stderr: "" })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: windowsProcessListJson([{ pid: 8888 }]),
+        stderr: "",
+      })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: windowsProcessListJson([{ pid: 8888 }]),
+        stderr: "",
+      });
+
+    try {
+      expect(stopClientService()).toEqual({
+        ok: false,
+        reason: expect.stringContaining("supervisor process still running after task end"),
+      });
+      expect(existsSync(windowsSupervisorStopIntentPath())).toBe(true);
+      expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+        [
+          "powershell.exe",
+          expect.arrayContaining([
+            expect.stringContaining("Get-ScheduledTask -TaskPath '\\FirstTree\\' -TaskName 'first-tree-dev'"),
+          ]),
+        ],
+        ["powershell.exe", expect.arrayContaining([expect.stringContaining("Get-CimInstance Win32_Process")])],
+        ["powershell.exe", expect.arrayContaining([expect.stringContaining("Get-CimInstance Win32_Process")])],
+      ]);
+    } finally {
+      dateNowSpy.mockRestore();
     }
   });
 

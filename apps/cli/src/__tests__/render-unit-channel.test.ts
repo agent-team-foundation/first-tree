@@ -7,7 +7,9 @@ import {
   renderPlist,
   renderSystemdUnit,
   renderWindowsSupervisorCmd,
+  renderWindowsSupervisorLauncherVbs,
   renderWindowsTaskXml,
+  windowsSupervisorLauncherPath,
   windowsSupervisorLogPath,
   windowsSupervisorWrapperLogPath,
 } from "../core/service-install.js";
@@ -162,8 +164,8 @@ describe("renderLaunchdWrapper — launcher script execs the resolved CLI", () =
 });
 
 describe("renderWindowsTaskXml — channel identity baked into Task Scheduler text", () => {
-  const wrapperPath = join(defaultHome(), "service", `${channelConfig.launchdLabel}-supervisor.cmd`);
-  const taskXml = renderWindowsTaskXml(wrapperPath, "ACME\\developer");
+  const launcherPath = join(defaultHome(), "service", `${channelConfig.launchdLabel}-supervisor.vbs`);
+  const taskXml = renderWindowsTaskXml(launcherPath, "ACME\\developer");
 
   it("declares the UTF-16 encoding used for the imported task XML file", () => {
     expect(taskXml).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u);
@@ -175,10 +177,23 @@ describe("renderWindowsTaskXml — channel identity baked into Task Scheduler te
     expect(taskXml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
   });
 
-  it("launches the channel-specific supervisor wrapper and avoids RestartOnFailure", () => {
-    expect(taskXml).toContain(wrapperPath);
-    expect(taskXml).toContain(`${channelConfig.launchdLabel}-supervisor.cmd`);
+  it("launches a hidden script host launcher and avoids RestartOnFailure", () => {
+    expect(taskXml).toContain("wscript.exe");
+    expect(taskXml).toContain(launcherPath);
+    expect(taskXml).toContain(`${channelConfig.launchdLabel}-supervisor.vbs`);
+    expect(taskXml).not.toContain(`${channelConfig.launchdLabel}-supervisor.cmd`);
     expect(taskXml).not.toContain("RestartOnFailure");
+  });
+});
+
+describe("renderWindowsSupervisorLauncherVbs — hidden launcher wraps the supervisor cmd", () => {
+  it("runs the cmd wrapper hidden and waits for its exit code", () => {
+    const wrapperPath = join(defaultHome(), "service", `${channelConfig.launchdLabel}-supervisor.cmd`);
+    const launcher = renderWindowsSupervisorLauncherVbs(wrapperPath);
+
+    expect(windowsSupervisorLauncherPath()).toContain(`${channelConfig.launchdLabel}-supervisor.vbs`);
+    expect(launcher).toContain('Set shell = CreateObject("WScript.Shell")');
+    expect(launcher).toContain(`shell.Run("""${wrapperPath}""", 0, True)`);
   });
 });
 

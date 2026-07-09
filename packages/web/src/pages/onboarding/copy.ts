@@ -106,6 +106,11 @@ export const COPY = {
     // 3" read as confusing progress-within-progress. `phases` is gone.)
     cta: "Install First Tree on GitHub",
     waiting: "Waiting for GitHub…",
+    // Context-tab build entry sends GitHub install + connect to Settings → GitHub
+    // (the single place that binds an installation to the team) rather than doing
+    // it inline, so the whole flow lives in one place. See context-tree-build-entry.tsx.
+    connectInSettings: "Connect GitHub in Settings",
+    connectInSettingsHint: "Install and connect there, then come back to build.",
     /** Post-install confirmation. The account a GitHub App is installed on is
         set by whoever's github.com session was active at install time — which
         is NOT necessarily the account the user signed into First Tree with. So

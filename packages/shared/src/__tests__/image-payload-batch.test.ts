@@ -84,6 +84,8 @@ describe("image-payload — batch schemas", () => {
       expect(isImageBatchRefContent({ caption: "hi", attachments: [SAMPLE_REF] })).toBe(true);
       expect(isImageBatchRefContent({ attachments: [SAMPLE_REF, SAMPLE_REF] })).toBe(true);
       expect(isImageBatchRefContent(SAMPLE_REF)).toBe(false);
+      expect(isImageBatchRefContent(null)).toBe(false);
+      expect(isImageBatchRefContent("hello")).toBe(false);
       expect(isImageBatchRefContent({ attachments: [] })).toBe(false);
       expect(isImageBatchRefContent({ attachments: [SAMPLE_REF, { imageId: "x" }] })).toBe(false);
     });

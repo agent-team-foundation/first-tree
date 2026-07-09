@@ -1,5 +1,4 @@
 import {
-  type Agent,
   type AttachmentRef,
   attachmentRefsFromMetadata,
   type CapabilityEntry,
@@ -17,7 +16,6 @@ import {
   parseProviderRetryEventMessage,
   type RequestResolution,
   type RuntimeProvider,
-  scanMentionTokens,
   statusReasonFromProviderRetryEvent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -75,7 +73,6 @@ import {
   sendFileMessageBatch,
 } from "../../../api/chats.js";
 import { getImage, putImage } from "../../../api/image-store.js";
-import { addMeChatParticipants } from "../../../api/me-chats.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
@@ -107,7 +104,6 @@ import {
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
-  detectMentionTrigger,
   MentionAutocompletePopover,
   type MentionCandidate,
   useMentionAutocomplete,
@@ -138,8 +134,7 @@ import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-nam
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
-import { useDebouncedValue } from "../../../lib/use-debounced-value.js";
-import { useOrgAgents, useOrgAgentsSearch } from "../../../lib/use-org-agents.js";
+import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
 import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js";
@@ -1468,8 +1463,6 @@ export function ChatView({
   // `askError` surfaces a send failure IN the card (the composer is covered).
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
-  const [askMentionQuery, setAskMentionQuery] = useState<string | null>(null);
-  const [askMentionText, setAskMentionText] = useState("");
   const { pendingAttachments, addFiles, removeAttachment, clearAttachments } = usePendingAttachments({
     onError: setUploadError,
     // Dismiss a stale upload error (e.g. "file too large") the moment the
@@ -1763,22 +1756,15 @@ export function ChatView({
 
   /** Org-wide agent list, consumed by `managedByMeMap` for picker
    *  grouping and by the identity-map hooks (`useAgentIdentityMap` etc.)
-   *  that drive chip / avatar rendering. The composer `@` autocomplete
-   *  uses a separate addressable search below so unjoined agents can be
-   *  invited by mention without being capped at the 100-row first page.
+   *  that drive chip / avatar rendering. The `@` autocomplete is
+   *  membership-scoped (`mentionCandidates` below) and does NOT read
+   *  from this list — inviting a new agent goes through the `[+]`
+   *  button, which owns its own server-search via `useOrgAgentsSearch`
+   *  (issue 494) and is therefore not capped at the 100-row first page.
    *
    *  Shared single React Query cache, one HTTP fetch per refetch tick.
    *  See issue 495. */
   const { data: orgAgentsPage } = useOrgAgents();
-
-  const activeMentionTrigger = useMemo(() => detectMentionTrigger(draft, cursor), [draft, cursor]);
-  const activeMentionSurface = askMentionQuery !== null || activeMentionTrigger !== null;
-  const activeMentionQuery = askMentionQuery ?? activeMentionTrigger?.query ?? "";
-  const debouncedMentionQuery = useDebouncedValue(activeMentionQuery ?? "", 200);
-  const { data: mentionAgentsPage } = useOrgAgentsSearch(debouncedMentionQuery, {
-    addressableOnly: true,
-    enabled: activeMentionSurface && !readOnly,
-  });
 
   /**
    * Optimistic-update helpers for the messages cache. Wrap setQueryData so
@@ -2051,13 +2037,6 @@ export function ChatView({
     // by the target human's answer in the AskTakeover (an agent cannot resolve).
     const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
 
-    try {
-      await ensureMentionedAgentsInvited(routedMentions);
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Failed to invite mentioned agents");
-      return;
-    }
-
     if (images.length > 0 || docs.length > 0) {
       setUploading(true);
       setUploadError(null);
@@ -2265,7 +2244,6 @@ export function ChatView({
     const resolves: RequestResolution = { request: request.id, kind: "answered" };
     const docs = answer.attachments ?? [];
     try {
-      await ensureMentionedAgentsInvited(routedMentions);
       const docRefs: AttachmentRef[] = [];
       for (const doc of docs) {
         const uploaded = await uploadAttachment(doc.file);
@@ -3186,21 +3164,16 @@ export function ChatView({
     return m;
   }, [orgAgentsPage?.items, myMemberId]);
 
-  const chatParticipantIdSet = useMemo(
-    () => new Set((chatDetail?.participants ?? []).map((p) => p.agentId)),
-    [chatDetail?.participants],
-  );
-  const activeMentionTokenSet = useMemo(() => {
-    const tokens = new Set(scanMentionTokens(draft));
-    for (const token of scanMentionTokens(askMentionText)) tokens.add(token);
-    return tokens;
-  }, [draft, askMentionText]);
-
-  // In-chat mention candidates: agents currently in THIS chat (minus
-  // self). This stays the authoritative source for rendering historical
-  // mention chips, because chat membership is the scoped disclosure
-  // boundary for private agents and message rendering.
-  const inChatMentionCandidates = useMemo<MentionCandidate[]>(() => {
+  // Mention autocomplete candidates: strictly the agents currently in
+  // THIS chat (minus self). Driving the `@` popover and `extractMentions`
+  // off membership — instead of org-wide discovery — keeps the picker
+  // focused on the people who'll actually receive the message. To pull
+  // a new agent into the conversation, use the ParticipantsHeader `[+]`
+  // button (`AddParticipantDropdown` — owns its own search). Any
+  // participant without a slug (`name`) is skipped — mentions need one.
+  // Private agents in the chat surface here because membership, not
+  // discovery, is the source of truth.
+  const mentionCandidates = useMemo<MentionCandidate[]>(() => {
     const out: MentionCandidate[] = [];
     for (const p of chatDetail?.participants ?? []) {
       if (p.agentId === myAgentId) continue;
@@ -3210,104 +3183,20 @@ export function ChatView({
         agentId: p.agentId,
         name: ident.name,
         displayName: ident.displayName,
-        inChat: true,
         managedByMe: managedByMeMap.get(p.agentId) ?? false,
+        avatarImageUrl: ident.avatarImageUrl ?? null,
+        avatarColorToken: ident.avatarColorToken ?? null,
       });
     }
     return out;
   }, [chatDetail?.participants, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
-  const toInviteableMentionCandidate = useCallback(
-    (a: Agent): MentionCandidate | null => {
-      if (a.status === "suspended") return null;
-      if (myAgentId && a.uuid === myAgentId) return null;
-      if (chatParticipantIdSet.has(a.uuid)) return null;
-      if (!a.name) return null;
-      return {
-        agentId: a.uuid,
-        name: a.name,
-        displayName: a.displayName,
-        inChat: false,
-        managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
-      };
-    },
-    [chatParticipantIdSet, myAgentId, myMemberId],
-  );
-
-  const [retainedInviteableMentionCandidates, setRetainedInviteableMentionCandidates] = useState<MentionCandidate[]>(
-    [],
-  );
-
-  const retainInviteableMentionCandidate = useCallback(
-    (candidate: MentionCandidate) => {
-      if (candidate.inChat !== false || chatParticipantIdSet.has(candidate.agentId)) return;
-      setRetainedInviteableMentionCandidates((prev) => {
-        const nextById = new Map(prev.map((c) => [c.agentId, c]));
-        nextById.set(candidate.agentId, candidate);
-        return [...nextById.values()];
-      });
-    },
-    [chatParticipantIdSet],
-  );
-
-  useEffect(() => {
-    setRetainedInviteableMentionCandidates((prev) => {
-      const nextById = new Map<string, MentionCandidate>();
-      for (const c of prev) {
-        if (!c.name) continue;
-        if (chatParticipantIdSet.has(c.agentId)) continue;
-        if (activeMentionTokenSet.has(c.name.toLowerCase())) nextById.set(c.agentId, c);
-      }
-      for (const a of mentionAgentsPage?.items ?? []) {
-        const c = toInviteableMentionCandidate(a);
-        if (!c?.name) continue;
-        if (activeMentionTokenSet.has(c.name.toLowerCase())) nextById.set(c.agentId, c);
-      }
-      const next = [...nextById.values()];
-      if (
-        next.length === prev.length &&
-        next.every((candidate, index) => {
-          const old = prev[index];
-          return (
-            old?.agentId === candidate.agentId &&
-            old.name === candidate.name &&
-            old.displayName === candidate.displayName &&
-            old.managedByMe === candidate.managedByMe
-          );
-        })
-      ) {
-        return prev;
-      }
-      return next;
-    });
-  }, [chatParticipantIdSet, activeMentionTokenSet, mentionAgentsPage?.items, toInviteableMentionCandidate]);
-
-  // Inviteable mention candidates: visible/addressable org agents that
-  // are not yet speakers in this chat. Picking one inserts the same
-  // `@name` literal as an in-chat mention; handleSend invites them before
-  // delivering the message so the server's speaker-only routing contract
-  // remains intact.
-  const inviteableMentionCandidates = useMemo<MentionCandidate[]>(() => {
-    const byId = new Map<string, MentionCandidate>();
-    for (const a of mentionAgentsPage?.items ?? []) {
-      const c = toInviteableMentionCandidate(a);
-      if (c) byId.set(c.agentId, c);
-    }
-    for (const c of retainedInviteableMentionCandidates) {
-      if (!chatParticipantIdSet.has(c.agentId)) byId.set(c.agentId, c);
-    }
-    return [...byId.values()];
-  }, [
-    chatParticipantIdSet,
-    mentionAgentsPage?.items,
-    retainedInviteableMentionCandidates,
-    toInviteableMentionCandidate,
-  ]);
-
-  const mentionCandidates = useMemo<MentionCandidate[]>(
-    () => [...inChatMentionCandidates, ...inviteableMentionCandidates],
-    [inChatMentionCandidates, inviteableMentionCandidates],
-  );
+  // The `[+]` participant picker (chat header + right-sidebar) owns its
+  // search input and fetches candidates directly via
+  // `useOrgAgentsSearch`, so this view no longer composes a union of
+  // chat participants + org-list for it. Pre-issue 494 the picker
+  // sourced an in-memory list capped at 100 rows; the server-side search
+  // model bypasses that cap, which is the whole point of issue 494.
 
   /**
    * "Needs explicit @mention" guard: a real group (3+ speakers), OR a 1-on-1
@@ -3401,23 +3290,24 @@ export function ChatView({
     [mentionCandidates],
   );
   // Rendered-message variant of the projection above: the rehype plugin
-  // resolves `@<name>` tokens only against in-chat membership, and it MUST
-  // include the viewer themselves so chips that target them flip to the
-  // `.mention-chip.is-self` attention tone. `mentionCandidates` now also
-  // includes inviteable org agents for the composer, so rendering derives
-  // from `inChatMentionCandidates` instead. Source the viewer's slug from
-  // the speaker-only `chatParticipantById` map — NOT from the org-identity
-  // fallback in `chatScopedAgentIdentity` — so a non-speaker watcher
-  // viewing the chat doesn't get their org-wide name pushed into the
-  // resolver, which would paint chips that the server would never
+  // resolves `@<name>` tokens against this list, and it MUST include the
+  // viewer themselves so chips that target them flip to the
+  // `.mention-chip.is-self` attention tone. `mentionCandidates` deliberately
+  // excludes self (the composer's `@` autocomplete should not suggest you
+  // `@` yourself, and `draftMentions` / `MentionHighlightOverlay` keep
+  // that self-exclusive semantics), so we append the viewer here in a
+  // separate projection used only by rendered messages. Source the viewer's
+  // slug from the speaker-only `chatParticipantById` map — NOT from the
+  // org-identity fallback in `chatScopedAgentIdentity` — so a non-speaker
+  // watcher viewing the chat doesn't get their org-wide name pushed into
+  // the resolver, which would paint chips that the server would never
   // actually route to them.
   const renderMentionParticipants = useMemo<MentionParticipant[]>(() => {
-    const inChatParticipants = inChatMentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
-    if (!myAgentId) return inChatParticipants;
+    if (!myAgentId) return mentionParticipants;
     const selfParticipant = chatParticipantById.get(myAgentId);
-    if (!selfParticipant?.name) return inChatParticipants;
-    return [...inChatParticipants, { agentId: myAgentId, name: selfParticipant.name }];
-  }, [inChatMentionCandidates, myAgentId, chatParticipantById]);
+    if (!selfParticipant?.name) return mentionParticipants;
+    return [...mentionParticipants, { agentId: myAgentId, name: selfParticipant.name }];
+  }, [mentionParticipants, myAgentId, chatParticipantById]);
   const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
 
   /**
@@ -3446,16 +3336,6 @@ export function ChatView({
   const effectiveSendMentions = useMemo(
     () => (peerAgentId ? [...new Set([...draftMentions, peerAgentId])] : draftMentions),
     [draftMentions, peerAgentId],
-  );
-
-  const ensureMentionedAgentsInvited = useCallback(
-    async (mentions: string[]): Promise<void> => {
-      const missingParticipantIds = [...new Set(mentions)].filter((id) => !chatParticipantIdSet.has(id));
-      if (missingParticipantIds.length === 0) return;
-      await addMeChatParticipants(chatId, { participantIds: missingParticipantIds });
-      void queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
-    },
-    [chatId, chatParticipantIdSet, queryClient],
   );
 
   // Group-chat mention gate, shared by the send button (dimming / title) and
@@ -3487,9 +3367,8 @@ export function ChatView({
     cursor,
     candidates: mentionCandidates,
     disabled: landingCampaignChatLocked || sendMut.isPending || uploading,
-    onSelect: (update, picked) => {
+    onSelect: (update) => {
       autoPrimedDraftRef.current = false;
-      retainInviteableMentionCandidate(picked);
       setDraft(update.text);
       setCursor(update.cursor);
       // Defer so React has committed the new value before we move the
@@ -3625,9 +3504,6 @@ export function ChatView({
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
                 isTrial={isTrial}
-                onMentionQueryChange={setAskMentionQuery}
-                onMentionTextChange={setAskMentionText}
-                onMentionSelect={retainInviteableMentionCandidate}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}

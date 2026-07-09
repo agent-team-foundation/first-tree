@@ -100,7 +100,7 @@ describe("runtime notice formatting", () => {
 
   it("formats remaining Claude provider-turn categories", () => {
     const cases: Array<[ProviderRetryEventPayload["category"], string]> = [
-      ["transient_transport", "Anthropic connection failed"],
+      ["transient_transport", "custom ANTHROPIC_BASE_URL"],
       ["configuration", "runtime configuration is invalid"],
       ["deterministic_input", "Anthropic rejected this request as invalid"],
       ["capability", "runtime is not launchable"],

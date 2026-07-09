@@ -15,6 +15,8 @@ import type { ServiceInfo, ServiceOpResult, ServiceState, SupervisorBackend } fr
 import {
   clearWindowsSupervisorStopIntent,
   renderWindowsSupervisorCmd,
+  renderWindowsSupervisorLauncherVbs,
+  windowsSupervisorLauncherPath,
   windowsSupervisorLogPath,
   windowsSupervisorStopIntentPath,
   windowsSupervisorWrapperLogPath,
@@ -49,6 +51,7 @@ type WindowsProcessIdentity = {
   commandLine: string;
   creationTimeUtc: string;
   executablePath: string;
+  name?: string;
   parentProcessId: number | null;
   processId: number;
 };
@@ -63,6 +66,7 @@ type KillRuntimeMarkerResult =
   | { ok: true; detail?: string; killAttempted: boolean }
   | { ok: false; reason: string; killAttempted: boolean };
 type TrustedMarkersForStopResult = { ok: true; markers: LiveServiceRuntimeMarker[] } | { ok: false; reason: string };
+type SupervisorProcessListResult = { ok: true; processes: WindowsProcessIdentity[] } | { ok: false; reason: string };
 
 const POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"] as const;
 const PID_REUSE_CREATION_TOLERANCE_MS = 5_000;
@@ -104,7 +108,12 @@ function currentWindowsUserId(): string {
   return domain && username ? `${domain}\\${username}` : username;
 }
 
-export function renderWindowsTaskXml(wrapperPath: string, userId = currentWindowsUserId()): string {
+function windowsScriptHostPath(): string {
+  const root = (process.env.SystemRoot?.trim() || "C:\\Windows").replace(/[\\/]+$/u, "");
+  return `${root}\\System32\\wscript.exe`;
+}
+
+export function renderWindowsTaskXml(launcherPath: string, userId = currentWindowsUserId()): string {
   const taskName = `${channelConfig.displayName} Client`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -146,7 +155,8 @@ export function renderWindowsTaskXml(wrapperPath: string, userId = currentWindow
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${escapeXml(wrapperPath)}</Command>
+      <Command>${escapeXml(windowsScriptHostPath())}</Command>
+      <Arguments>${escapeXml(`"${launcherPath}"`)}</Arguments>
     </Exec>
   </Actions>
 </Task>
@@ -175,9 +185,11 @@ function writeWindowsSupervisorFiles(): { wrapperPath: string; xmlPath: string }
   ensureLogDir();
   mkdirSync(dirname(windowsSupervisorWrapperPath()), { recursive: true, mode: 0o700 });
   const wrapperPath = windowsSupervisorWrapperPath();
+  const launcherPath = windowsSupervisorLauncherPath();
   const xmlPath = windowsTaskXmlPath();
   writeFileSync(wrapperPath, renderWindowsSupervisorCmd(invocation), { mode: 0o755 });
-  writeFileSync(xmlPath, encodeWindowsTaskXml(renderWindowsTaskXml(wrapperPath)), { mode: 0o600 });
+  writeFileSync(launcherPath, renderWindowsSupervisorLauncherVbs(wrapperPath), { mode: 0o755 });
+  writeFileSync(xmlPath, encodeWindowsTaskXml(renderWindowsTaskXml(launcherPath)), { mode: 0o600 });
   return { wrapperPath, xmlPath };
 }
 
@@ -250,10 +262,30 @@ function parseWindowsProcessIdentity(stdout: string): WindowsProcessIdentity | n
   return {
     processId,
     parentProcessId: valueAsNumber(record.ParentProcessId),
+    name: valueAsString(record.Name),
     commandLine: valueAsString(record.CommandLine),
     executablePath: valueAsString(record.ExecutablePath),
     creationTimeUtc: valueAsString(record.CreationTimeUtc),
   };
+}
+
+function parseWindowsProcessIdentityList(stdout: string): WindowsProcessIdentity[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const records = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object" ? [parsed] : null;
+  if (!records) return null;
+  const processes: WindowsProcessIdentity[] = [];
+  for (const record of records) {
+    const stdout = JSON.stringify(record);
+    const identity = parseWindowsProcessIdentity(stdout);
+    if (!identity) return null;
+    processes.push(identity);
+  }
+  return processes;
 }
 
 function queryWindowsProcessIdentity(pid: number): WindowsProcessIdentityResult {
@@ -262,7 +294,7 @@ function queryWindowsProcessIdentity(pid: number): WindowsProcessIdentityResult 
     `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction SilentlyContinue`,
     "if ($null -eq $p) { exit 3 }",
     "$creation = if ($null -eq $p.CreationDate) { $null } else { $p.CreationDate.ToUniversalTime().ToString('o') }",
-    "$item = [PSCustomObject]@{ ProcessId = $p.ProcessId; ParentProcessId = $p.ParentProcessId; CommandLine = $p.CommandLine; ExecutablePath = $p.ExecutablePath; CreationTimeUtc = $creation }",
+    "$item = [PSCustomObject]@{ ProcessId = $p.ProcessId; ParentProcessId = $p.ParentProcessId; Name = $p.Name; CommandLine = $p.CommandLine; ExecutablePath = $p.ExecutablePath; CreationTimeUtc = $creation }",
     "[Console]::Out.Write(($item | ConvertTo-Json -Compress))",
   ].join("; ");
   const res = runCaptureOut("powershell.exe", [...POWERSHELL_ARGS, script], 5_000);
@@ -276,6 +308,67 @@ function queryWindowsProcessIdentity(pid: number): WindowsProcessIdentityResult 
     return { status: "unknown", reason: `process query returned pid ${identity.processId} for pid ${pid}` };
   }
   return { status: "present", identity };
+}
+
+function listLiveWindowsSupervisorProcesses(): SupervisorProcessListResult {
+  const needles = [windowsSupervisorLauncherPath(), windowsSupervisorWrapperPath()];
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$needles = @(${needles.map((needle) => `'${escapePowerShellSingleQuoted(needle)}'`).join(", ")})`,
+    `$channel = '${escapePowerShellSingleQuoted(channelConfig.binName.toLowerCase())}'`,
+    "$self = $PID",
+    "$items = @(Get-CimInstance Win32_Process | Where-Object {",
+    "  if ($_.ProcessId -eq $self) { $false } else {",
+    "    $cmd = [string]$_.CommandLine;",
+    "    $exe = [string]$_.ExecutablePath;",
+    '    $text = "$cmd $exe";',
+    "    $lower = $text.ToLowerInvariant();",
+    "    $matchedPath = $false;",
+    "    foreach ($needle in $needles) { if ($text.Contains($needle)) { $matchedPath = $true; break } }",
+    "    $matchedPath -or ($lower.Contains($channel) -and $lower.Contains('daemon') -and $lower.Contains('supervise'))",
+    "  }",
+    "} | ForEach-Object {",
+    "  $creation = if ($null -eq $_.CreationDate) { $null } else { $_.CreationDate.ToUniversalTime().ToString('o') }",
+    "  [PSCustomObject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; CommandLine = $_.CommandLine; ExecutablePath = $_.ExecutablePath; CreationTimeUtc = $creation }",
+    "})",
+    "[Console]::Out.Write(($items | ConvertTo-Json -Compress))",
+  ].join("; ");
+  const res = runCaptureOut("powershell.exe", [...POWERSHELL_ARGS, script], 5_000);
+  if (!res.ok) {
+    return { ok: false, reason: res.stderr || `powershell exit ${res.code ?? "unknown"}` };
+  }
+  if (!res.stdout.trim()) return { ok: true, processes: [] };
+  const processes = parseWindowsProcessIdentityList(res.stdout);
+  if (!processes) return { ok: false, reason: "supervisor process query returned malformed JSON" };
+  return { ok: true, processes };
+}
+
+function summarizeSupervisorProcesses(processes: WindowsProcessIdentity[]): string {
+  return processes
+    .slice(0, 3)
+    .map((process) => {
+      const command = `${process.name ?? "process"} pid=${process.processId} ${process.commandLine}`.trim();
+      return command.length > 180 ? `${command.slice(0, 180)}...` : command;
+    })
+    .join("; ");
+}
+
+function waitForNoWindowsSupervisorProcesses(timeoutMs: number): ServiceOpResult {
+  const deadline = Date.now() + timeoutMs;
+  let lastProcesses: WindowsProcessIdentity[] = [];
+  while (Date.now() <= deadline) {
+    const live = listLiveWindowsSupervisorProcesses();
+    if (!live.ok) {
+      return { ok: false, reason: `unable to verify supervisor process cleanup: ${live.reason}` };
+    }
+    if (live.processes.length === 0) return { ok: true };
+    lastProcesses = live.processes;
+    sleepSync(200);
+  }
+  return {
+    ok: false,
+    reason: `supervisor process still running after task end: ${summarizeSupervisorProcesses(lastProcesses)}`,
+  };
 }
 
 function looksLikeFirstTreeDaemonStart(command: string): boolean {
@@ -360,9 +453,18 @@ function statusFromTaskAndMarkers(): ServiceInfo {
   const markers = listLiveServiceRuntimeMarkers();
   if (!markers.ok) return windowsInfo("unknown", undefined, markers.reason);
 
+  const residual =
+    markers.markers.length === 0 && (task.state === "missing" || task.state === "not-running")
+      ? listLiveWindowsSupervisorProcesses()
+      : { ok: true as const, processes: [] };
+  if (!residual.ok) return windowsInfo("unknown", undefined, residual.reason);
+
   if (task.state === "missing") {
     if (markers.markers.length > 0) {
       return windowsInfo("unknown", undefined, "task missing but service runtime marker is live");
+    }
+    if (residual.processes.length > 0) {
+      return windowsInfo("unknown", undefined, "task missing but supervisor process is still live");
     }
     return windowsInfo("not-installed");
   }
@@ -384,6 +486,9 @@ function statusFromTaskAndMarkers(): ServiceInfo {
 
   if (markers.markers.length > 0) {
     return windowsInfo("unknown", undefined, "task not running but service runtime marker is live");
+  }
+  if (residual.processes.length > 0) {
+    return windowsInfo("unknown", undefined, "task not running but supervisor process is still live");
   }
   return windowsInfo("inactive", undefined, task.detail ?? "task registered");
 }
@@ -478,10 +583,12 @@ function refreshWindowsTaskSchedulerForUpdate(): ServiceInfo {
 function windowsTaskSchedulerDriftDetected(): boolean {
   const invocation = resolveCliInvocation();
   const wrapperPath = windowsSupervisorWrapperPath();
+  const launcherPath = windowsSupervisorLauncherPath();
   const wrapperDrift = readFileOrFlagDrift(wrapperPath, renderWindowsSupervisorCmd(invocation));
-  const xmlDrift = readWindowsTaskXmlOrFlagDrift(windowsTaskXmlPath(), renderWindowsTaskXml(wrapperPath));
+  const launcherDrift = readFileOrFlagDrift(launcherPath, renderWindowsSupervisorLauncherVbs(wrapperPath));
+  const xmlDrift = readWindowsTaskXmlOrFlagDrift(windowsTaskXmlPath(), renderWindowsTaskXml(launcherPath));
   const taskMissing = taskState().state === "missing";
-  return taskMissing || wrapperDrift || xmlDrift;
+  return taskMissing || wrapperDrift || launcherDrift || xmlDrift;
 }
 
 function startWindowsTaskSchedulerService(): ServiceOpResult {
@@ -497,6 +604,14 @@ function startWindowsTaskSchedulerService(): ServiceOpResult {
       reason: "service runtime marker is live without a running task; run daemon stop before starting again",
     };
   }
+  const residual = listLiveWindowsSupervisorProcesses();
+  if (!residual.ok) return { ok: false, reason: residual.reason };
+  if (residual.processes.length > 0) {
+    return {
+      ok: false,
+      reason: "supervisor process is live without a running task; run daemon stop and wait before starting again",
+    };
+  }
   clearWindowsSupervisorStopIntent();
   return runTask();
 }
@@ -504,6 +619,13 @@ function startWindowsTaskSchedulerService(): ServiceOpResult {
 function stopWindowsTaskSchedulerService(): ServiceOpResult {
   const task = taskState();
   if (task.state === "missing") {
+    const residual = listLiveWindowsSupervisorProcesses();
+    if (!residual.ok) return { ok: false, reason: residual.reason };
+    if (residual.processes.length > 0) {
+      writeWindowsSupervisorStopIntent();
+      const stopped = waitForNoWindowsSupervisorProcesses(5_000);
+      if (!stopped.ok) return stopped;
+    }
     clearWindowsSupervisorStopIntent();
     return { ok: true, detail: "not running" };
   }
@@ -536,6 +658,9 @@ function stopWindowsTaskSchedulerService(): ServiceOpResult {
       reason: after.detail ? `task did not stop: ${after.detail}` : "task did not stop",
     };
   }
+
+  const residual = waitForNoWindowsSupervisorProcesses(5_000);
+  if (!residual.ok) return residual;
   clearWindowsSupervisorStopIntent();
 
   if (task.state === "running" && markers.markers.length === 0) {
@@ -564,6 +689,7 @@ function uninstallWindowsTaskScheduler(): ServiceInfo {
     throw new Error(`schtasks /Delete failed: ${windowsNativeFailureDetail(res)}`);
   }
   rmSync(windowsSupervisorWrapperPath(), { force: true });
+  rmSync(windowsSupervisorLauncherPath(), { force: true });
   rmSync(windowsTaskXmlPath(), { force: true });
   rmSync(windowsSupervisorStopIntentPath(), { force: true });
   return windowsInfo("not-installed", undefined, stopped.ok ? undefined : stopped.reason);
@@ -584,6 +710,8 @@ export const taskSchedulerBackend: SupervisorBackend = {
 
 export {
   renderWindowsSupervisorCmd,
+  renderWindowsSupervisorLauncherVbs,
+  windowsSupervisorLauncherPath,
   windowsSupervisorLogPath,
   windowsSupervisorWrapperLogPath,
   windowsSupervisorWrapperPath,

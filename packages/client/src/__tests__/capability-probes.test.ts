@@ -21,6 +21,18 @@ import { MAX_ERROR_LENGTH, truncateError } from "../runtime/capabilities/detect.
 import { commandFailureDigest, runCommand, verifyLaunchable } from "../runtime/capabilities/launch-probe.js";
 import type { CodexExecutableVerification } from "../runtime/codex-binary.js";
 
+const originalPlatform = process.platform;
+const originalArch = process.arch;
+
+function setProcessTarget(platform: NodeJS.Platform, arch: NodeJS.Architecture): void {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  Object.defineProperty(process, "arch", { configurable: true, value: arch });
+}
+
+afterEach(() => {
+  setProcessTarget(originalPlatform, originalArch);
+});
+
 /**
  * Install-only capability probes — the contract under test:
  *
@@ -458,6 +470,88 @@ describe("resolveBundledCodexBinary / resolveCodexRuntimeBinary (real node_modul
       expect(res.runtimePath).toBeNull();
     }
   });
+
+  it("reports unsupported codex targets before attempting SDK resolution", async () => {
+    setProcessTarget("linux", "ia32");
+
+    const res = await resolveBundledCodexBinary();
+
+    expect(res).toEqual({ ok: false, error: "unsupported platform for codex: linux (ia32)" });
+  });
+
+  it.each([
+    ["darwin", "arm64", "@openai/codex-darwin-arm64"],
+    ["win32", "x64", "@openai/codex-win32-x64"],
+  ] as const)("maps %s/%s to the matching optional package", async (platform, arch, expectedPackage) => {
+    setProcessTarget(platform, arch);
+    vi.resetModules();
+    vi.doMock("node:module", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:module")>();
+      return {
+        ...actual,
+        createRequire: (anchor: string | URL) => ({
+          resolve: (specifier: string) => {
+            if (specifier === "@openai/codex/package.json") {
+              return "/virtual/node_modules/@openai/codex/package.json";
+            }
+            throw new Error(`missing ${specifier} from ${String(anchor)}`);
+          },
+        }),
+      };
+    });
+    const mod = await import("../runtime/capabilities/codex.js");
+
+    const res = await mod.resolveBundledCodexBinary();
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain(expectedPackage);
+      expect(res.error).toContain("unable to locate codex CLI binaries");
+    }
+
+    vi.doUnmock("node:module");
+    vi.resetModules();
+  });
+
+  it("reports a missing bundled binary after the optional vendor package resolves", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ft-codex-empty-vendor-"));
+    try {
+      setProcessTarget("linux", "x64");
+      vi.resetModules();
+      vi.doMock("node:module", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("node:module")>();
+        return {
+          ...actual,
+          createRequire: (anchor: string | URL) => ({
+            resolve: (specifier: string) => {
+              if (specifier === "@openai/codex/package.json") {
+                return join(root, "node_modules", "@openai", "codex", "package.json");
+              }
+              if (specifier === "@openai/codex-linux-x64/package.json") {
+                return join(root, "node_modules", "@openai", "codex-linux-x64", "package.json");
+              }
+              throw new Error(`unexpected ${specifier} from ${String(anchor)}`);
+            },
+          }),
+        };
+      });
+      const vendorRoot = join(root, "node_modules", "@openai", "codex-linux-x64", "vendor");
+      mkdirSync(join(vendorRoot, "x86_64-unknown-linux-musl"), { recursive: true });
+      const mod = await import("../runtime/capabilities/codex.js");
+
+      const res = await mod.resolveBundledCodexBinary();
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error).toContain("codex binary not found under");
+        expect(res.error).toContain("x86_64-unknown-linux-musl");
+      }
+    } finally {
+      vi.doUnmock("node:module");
+      vi.resetModules();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 /**
@@ -505,6 +599,15 @@ describe("resolveBundledBinaryInPackageRoot (SDK resolveNativePackage parity)", 
 
   it("returns null when neither layout resolves", () => {
     expect(resolveBundledBinaryInPackageRoot(root)).toBeNull();
+  });
+
+  it("uses the Windows executable name when resolving bundled layouts", () => {
+    setProcessTarget("win32", "x64");
+    mkdirSync(join(root, "bin"), { recursive: true });
+    writeExecutable(join(root, "bin", "codex.exe"));
+    writeFileSync(join(root, "codex-package.json"), "{}");
+
+    expect(resolveBundledBinaryInPackageRoot(root)).toBe(join(root, "bin", "codex.exe"));
   });
 });
 

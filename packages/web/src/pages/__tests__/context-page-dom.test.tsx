@@ -591,30 +591,27 @@ describe("ContextPage DOM behavior", () => {
       contextStatus: { label: "Not configured", detail: null, severity: "warning" },
     });
 
-  it("installs the GitHub App inline for a no-repo admin instead of bouncing to Resources", async () => {
+  it("links to Settings → GitHub for a no-repo admin instead of installing inline or bouncing to Resources", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
     agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
     resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
     githubAppMocks.getGithubAppInstallation.mockResolvedValue(null); // GitHub not connected yet
-    const fakeTab = { location: { href: "" }, close: vi.fn() };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
     const { ContextPage } = await import("../context.js");
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
 
     const { container, root } = await renderDom(<ContextPage />);
-    // No repo connected → the inline install CTA, NOT a bounce to /settings/resources.
-    await waitForText(container, "Install First Tree on GitHub");
+    // No GitHub connection → a link to the single connect place (Settings → GitHub),
+    // NOT an inline install and NOT a bounce to /settings/resources.
+    await waitForText(container, "Connect GitHub in Settings");
+    expect(container.textContent).not.toContain("Install First Tree on GitHub");
     expect(container.textContent).not.toContain("Create private GitHub repo");
     expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
 
-    // Clicking it mints the install URL into a popup and stays on the page.
-    await click(buttonByText(container, "Install First Tree on GitHub"));
-    await flush();
-    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
-    expect(fakeTab.location.href).toContain("installations/new");
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
+    // The CTA is a link carrying the `from=context` return marker so Settings can
+    // hand the user back to building once connected — no inline install machinery.
+    expect(container.querySelector('a[href="/settings/github?from=context"]')).not.toBeNull();
+    expect(githubAppMocks.getGithubAppInstallUrl).not.toHaveBeenCalled();
 
-    openSpy.mockRestore();
     await act(async () => root.unmount());
   });
 
@@ -853,58 +850,6 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => root.unmount());
   });
 
-  it("surfaces install failures and lets the user start a stuck install over", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue(null);
-    githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new Error("network failed"));
-    const fakeTab = { location: { href: "" }, close: vi.fn() };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
-    const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-
-    const { container, root } = await renderDom(<ContextTreeBuildEntry />);
-    await waitForText(container, "Install First Tree on GitHub");
-    await click(buttonByText(container, "Install First Tree on GitHub"));
-    await waitForText(container, "Something went wrong. Try again in a moment.");
-    expect(fakeTab.close).toHaveBeenCalled();
-    await act(async () => root.unmount());
-    openSpy.mockRestore();
-
-    window.sessionStorage.setItem("context-build:install-attempt", "1");
-    const stuck = await renderDom(<ContextTreeBuildEntry />);
-    await waitForText(stuck.container, "Waiting for GitHub");
-    await click(buttonByText(stuck.container, "Didn't work? Start over"));
-    await waitForCondition(
-      () => !stuck.container.textContent?.includes("Waiting for GitHub"),
-      "Expected install waiting state to clear",
-    );
-    expect(window.sessionStorage.getItem("context-build:install-attempt")).toBeNull();
-    await act(async () => stuck.root.unmount());
-  });
-
-  it("shows the owner recovery copy for non-inline-fixable install failures", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue(null);
-    const { ApiError } = await import("../../api/client.js");
-    const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-
-    for (const status of [503, 403]) {
-      githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(status, "blocked"));
-      const fakeTab = { location: { href: "" }, close: vi.fn() };
-      const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
-      const { container, root } = await renderDom(<ContextTreeBuildEntry />);
-      await waitForText(container, "Install First Tree on GitHub");
-      await click(buttonByText(container, "Install First Tree on GitHub"));
-      await waitForText(container, "Building your team's Context Tree needs First Tree connected to GitHub");
-      expect(fakeTab.close).toHaveBeenCalled();
-      openSpy.mockRestore();
-      await act(async () => root.unmount());
-    }
-  });
-
   it("resets the build button and shows an error when tree setup chat kickoff fails", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
     agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
@@ -920,30 +865,6 @@ describe("ContextPage DOM behavior", () => {
     await waitForText(container, "tree setup unavailable");
     expect(buttonByText(container, "Build your Context Tree")?.hasAttribute("disabled")).toBe(false);
 
-    await act(async () => root.unmount());
-  });
-
-  it("returns to the allowlisted /context route when the install popup is blocked", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue(null);
-    // Popup blocked → window.open returns null → full-page redirect. The post-
-    // install `next` must be the allowlisted "/context" (not the raw pathname),
-    // or the server bounces the user to /settings/github after install.
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
-    const assignSpy = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "Install First Tree on GitHub");
-    await click(buttonByText(container, "Install First Tree on GitHub"));
-    await flush();
-    expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/context");
-
-    openSpy.mockRestore();
-    assignSpy.mockRestore();
     await act(async () => root.unmount());
   });
 

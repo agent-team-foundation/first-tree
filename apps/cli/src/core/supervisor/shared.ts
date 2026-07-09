@@ -184,6 +184,14 @@ function whichBin(name: string): string | null {
   }
 }
 
+function normalizeWindowsCliBin(bin: string): string {
+  if (process.platform !== "win32") return bin;
+  if (/\.(?:cmd|bat|exe)$/iu.test(bin)) return bin;
+
+  const cmdShim = `${bin}.cmd`;
+  return existsSync(cmdShim) ? cmdShim : bin;
+}
+
 /**
  * Resolve how the service should launch the CLI.
  *
@@ -207,11 +215,12 @@ function whichBin(name: string): string | null {
 export function resolveCliInvocation(): ResolvedBinary {
   const bin = whichBin(channelConfig.binName);
   if (bin && isAbsolute(bin)) {
+    const serviceBin = normalizeWindowsCliBin(bin);
     try {
       // Resolve symlinks so launchd records a stable path.
-      return { kind: "bin", program: realpathSync(bin) };
+      return { kind: "bin", program: realpathSync(serviceBin) };
     } catch {
-      return { kind: "bin", program: bin };
+      return { kind: "bin", program: serviceBin };
     }
   }
 
