@@ -12,8 +12,9 @@ unknown: 1
 not a field
 ---
 body text`);
-    expect(parsed.data.title).toBe("");
-    expect(parsed.data.owners).toEqual(["a", "b"]);
+    const data = parsed.data as Record<string, unknown>;
+    expect(data.title).toBe("");
+    expect(data.owners).toEqual(["a", "b"]);
     expect(parsed.content).toContain("body text");
 
     // no frontmatter
