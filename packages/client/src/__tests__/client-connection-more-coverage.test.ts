@@ -223,6 +223,19 @@ describe("ClientConnection — additional branch coverage", () => {
     });
     socket.emitMessage({ type: "inbox:ack:accepted", entryId: 101, ref: "wrong-ref", disposition: "acked" });
     socket.emitMessage({
+      type: "inbox:ack:accepted",
+      entryId: "bad",
+      ref: ackFrame.ref,
+      disposition: "acked",
+    });
+    socket.emitMessage({
+      type: "inbox:recover:accepted",
+      ref: recoverFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-1",
+      resetCount: "bad",
+    });
+    socket.emitMessage({
       type: "inbox:recover:accepted",
       ref: recoverFrame.ref,
       agentId: "agent-1",
@@ -235,6 +248,29 @@ describe("ClientConnection — additional branch coverage", () => {
     expect(commands).toEqual([]);
     expect(pins).toEqual([]);
     expect(runtimeAuthStarts).toEqual([]);
+
+    const deliveredFrame = {
+      type: "inbox:deliver",
+      entryId: 102,
+      inboxId: "inbox-agent-1",
+      chatId: "chat-1",
+      message: {
+        id: "message-1",
+        chatId: "chat-1",
+        senderId: "agent-sender",
+        format: "text",
+        content: "hello",
+        metadata: {},
+        inReplyTo: null,
+        source: null,
+        createdAt: "2026-07-10T00:00:00.000Z",
+        configVersion: 1,
+        recipientMode: "full",
+        precedingMessages: [],
+      },
+    };
+    socket.emitMessage(deliveredFrame);
+    expect(delivered).toEqual([{ agentId: "inbox-agent-1", frame: deliveredFrame }]);
 
     socket.emitMessage({
       type: "session:event:accepted",
@@ -413,6 +449,56 @@ describe("ClientConnection — additional branch coverage", () => {
     await connectingConnection.disconnect();
 
     expect(connectingSocket.terminate).toHaveBeenCalledOnce();
+  });
+
+  it("rejects every pending operation during disconnect", async () => {
+    const connection = await makeConnection({ clientId: "client_disconnect_pending" });
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, {
+      wsInboxAckConfirm: true,
+      wsSessionEventConfirm: true,
+    });
+    await bindAgent(connection, socket);
+
+    const pendingBind = internal.sendBind("agent-2", "codex");
+    const pendingAck = connection.sendInboxAck(404, "agent-1");
+    const pendingRecover = connection.sendInboxRecover("agent-1", "chat-disconnect");
+    const pendingEvent = connection.reportSessionEventConfirmed(
+      "agent-1",
+      "chat-disconnect",
+      sessionEvent("disconnect"),
+    );
+    const rejections = [pendingBind, pendingAck, pendingRecover, pendingEvent].map((pending) =>
+      expect(pending).rejects.toThrow("Client disconnected"),
+    );
+
+    await connection.disconnect();
+
+    await Promise.all(rejections);
+  });
+
+  it("rejects unavailable operations and falls back before reporting unsupported confirmation", async () => {
+    const connection = await makeConnection({ clientId: "client_unavailable_operations" });
+
+    connection.clearPaused();
+    expect(connection.isPaused()).toBe(false);
+    await expect(connection.sendInboxRecover("agent-1", "chat-unavailable")).rejects.toThrow("socket not bound");
+    await expect(connection.bindAgent("agent-1", "codex")).rejects.toThrow("Client not connected");
+
+    const socket = await openRegisteredConnection(connection);
+    await bindAgent(connection, socket);
+    const sentBeforeReport = socket.sent.length;
+
+    await expect(
+      connection.reportSessionEventConfirmed("agent-1", "chat-legacy", sessionEvent("legacy")),
+    ).rejects.toThrow("confirmation unsupported by server");
+    expect(parseSent(socket, sentBeforeReport)).toMatchObject({
+      type: "session:event",
+      agentId: "agent-1",
+      chatId: "chat-legacy",
+    });
+
+    priv(connection).clearTimers();
   });
 
   it("covers legacy inbox acks, duplicate confirmed acks, and rejection confirmations", async () => {
