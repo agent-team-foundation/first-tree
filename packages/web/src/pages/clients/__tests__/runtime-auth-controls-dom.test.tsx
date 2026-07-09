@@ -57,9 +57,10 @@ async function render(element: ReactElement): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  queryClient = createClient();
+  const client = createClient();
+  queryClient = client;
   await act(async () => {
-    root?.render(<QueryClientProvider client={queryClient}>{element}</QueryClientProvider>);
+    root?.render(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
   });
   return container;
 }
@@ -198,7 +199,7 @@ describe("RuntimeAuthControls", () => {
       vi.advanceTimersByTime(3000);
     });
 
-    expect(invalidate.mock.calls.filter(([arg]) => arg.queryKey?.[0] === "clients")).toHaveLength(2);
+    expect(invalidate.mock.calls.filter(([arg]) => arg?.queryKey?.[0] === "clients")).toHaveLength(2);
     expect(onStarted).toHaveBeenCalledTimes(2);
   });
 

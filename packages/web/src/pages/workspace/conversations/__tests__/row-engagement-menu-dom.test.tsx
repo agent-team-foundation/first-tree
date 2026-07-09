@@ -37,9 +37,10 @@ async function render(element: ReactElement): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  queryClient = createClient();
+  const client = createClient();
+  queryClient = client;
   await act(async () => {
-    root?.render(<QueryClientProvider client={queryClient}>{element}</QueryClientProvider>);
+    root?.render(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
   });
   return container;
 }
