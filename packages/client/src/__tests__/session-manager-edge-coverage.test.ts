@@ -4,13 +4,16 @@ import { join } from "node:path";
 import type {
   AgentRuntimeConfig,
   InboxEntryWithMessage,
+  ProviderRetryEventPayload,
   RuntimeState,
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
+import { encodeProviderRetryEventMessage } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
-import type { DeliveryDecision, DeliveryWork } from "../runtime/inbox-delivery-coordinator.js";
+import type { DeliveryDecision, DeliveryRouteOwnership, DeliveryWork } from "../runtime/inbox-delivery-coordinator.js";
+import type { SubprocessProbe } from "../runtime/process-tree-probe.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
@@ -27,7 +30,12 @@ type SessionRecord = {
   retryNextAt: number | null;
   retryTimer: ReturnType<typeof setTimeout> | null;
   lastRetryReason: string | null;
+  lastRetryCategory: string | null;
+  lastRetryScope: "session_start" | "session_resume" | null;
+  lastRetryRawError: string | null;
   startMessage: SessionMessage | null;
+  retryQueuedMessages: SessionMessage[];
+  pendingRuntimeFailureNotice: ProviderRetryEventPayload | null;
   retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
 };
 
@@ -35,9 +43,11 @@ type SessionManagerInternals = {
   sessions: Map<string, SessionRecord>;
   evictedMappings: Map<string, { claudeSessionId: string; lastActivity: number }>;
   pendingQueue: Array<{ message: SessionMessage | null; chatId: string; deliveryKind: string }>;
+  sessionRuntimeStates: Map<string, RuntimeState>;
+  currentTrigger: Map<string, { messageId: string; senderId: string }>;
   inboxDelivery: {
     receive(entry: InboxEntryWithMessage): DeliveryDecision;
-    markOwned(work: DeliveryWork): boolean;
+    markOwned(work: DeliveryWork): DeliveryRouteOwnership;
     markProcessingStarted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void;
     prepareOperatorSuspend(chatId: string): Promise<void>;
     hasRecoveryDebt(chatId: string): boolean;
@@ -47,10 +57,19 @@ type SessionManagerInternals = {
   routeMessage(chatId: string, message: SessionMessage): Promise<void>;
   resumeSession(entry: SessionRecord, message: SessionMessage | null | undefined): Promise<void>;
   runRetry(chatId: string): Promise<void>;
+  abortUnownedRoute(entry: SessionRecord, reason: string): void;
+  ensureContextTreeBinding(): Promise<void>;
+  markRouteOwned(
+    chatId: string,
+    message: SessionMessage,
+    receipt: { kind: "owned"; mode: "queued" },
+  ): DeliveryRouteOwnership;
   triggerImmediateRetry(chatId: string): void;
   drainPendingQueue(): void;
   evictIfNeeded(): void;
   notifySessionState(chatId: string, state: SessionState): void;
+  projectSessionRuntime(chatId: string, opts?: { drainPendingOnIdle?: boolean }): void;
+  recomputeRuntimeState(): void;
   buildSessionContext(chatId: string): SessionContext;
   confirmSessionEventOrThrow(chatId: string, event: SessionEvent): Promise<void>;
   resolveSelfFence(
@@ -150,6 +169,8 @@ function makeManager(
     maxSessions?: number;
     sdk?: FirstTreeHubSDK;
     agentConfigCache?: ReturnType<typeof makeCache>;
+    log?: ReturnType<typeof silentLogger>;
+    subprocessProbe?: SubprocessProbe;
     onStateChange?: (chatId: string, state: SessionState) => void;
     onRuntimeStateChange?: (state: TestRuntimeState) => void;
     onSessionRuntimeChange?: (chatId: string, state: TestRuntimeState) => void;
@@ -171,6 +192,7 @@ function makeManager(
   return new SessionManager({
     session: { ...sessionConfig, max_sessions: opts.maxSessions ?? sessionConfig.max_sessions },
     concurrency: opts.concurrency ?? 5,
+    subprocessProbe: opts.subprocessProbe,
     handlerFactory,
     handlerConfig: { workspaceRoot: opts.workspaceRoot ?? "/tmp/test-edge/agent-a" },
     agentIdentity: {
@@ -183,7 +205,7 @@ function makeManager(
       metadata: {},
     },
     sdk: opts.sdk ?? mockSdk(),
-    log: silentLogger(),
+    log: opts.log ?? silentLogger(),
     registryPath: opts.registryPath,
     agentConfigCache: opts.agentConfigCache,
     runtimeSessionTokenFile: opts.runtimeSessionTokenFile,
@@ -238,7 +260,12 @@ function makeSessionRecord(chatId: string, overrides: Partial<SessionRecord> = {
     retryNextAt: null,
     retryTimer: null,
     lastRetryReason: null,
+    lastRetryCategory: null,
+    lastRetryScope: null,
+    lastRetryRawError: null,
     startMessage: makeMessage(chatId),
+    retryQueuedMessages: [],
+    pendingRuntimeFailureNotice: null,
     retryFromEvicted: null,
     ...overrides,
   };
@@ -246,6 +273,7 @@ function makeSessionRecord(chatId: string, overrides: Partial<SessionRecord> = {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -1349,5 +1377,416 @@ describe("SessionManager edge coverage", () => {
       true,
     );
     await sm.shutdown();
+  });
+
+  it("reaffirms active runtime states on the jittered timer and recomputes blocked/error aggregates", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const sessionRuntimeChanges: Array<{ chatId: string; state: RuntimeState }> = [];
+    const aggregateChanges: RuntimeState[] = [];
+    const sm = makeManager({
+      onSessionRuntimeChange: (chatId, state) => sessionRuntimeChanges.push({ chatId, state }),
+      onRuntimeStateChange: (state) => aggregateChanges.push(state),
+    });
+    const i = internals(sm);
+    i.sessions.set("chat-working", makeSessionRecord("chat-working", { status: "active" }));
+    i.sessions.set("chat-error", makeSessionRecord("chat-error", { status: "errored" }));
+    i.sessions.set("chat-idle", makeSessionRecord("chat-idle", { status: "active" }));
+    i.sessionRuntimeStates.set("chat-working", "working");
+    i.sessionRuntimeStates.set("chat-error", "error");
+    i.sessionRuntimeStates.set("chat-idle", "idle");
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(sessionRuntimeChanges).toEqual([
+      { chatId: "chat-working", state: "working" },
+      { chatId: "chat-error", state: "error" },
+    ]);
+
+    i.sessionRuntimeStates.clear();
+    i.sessionRuntimeStates.set("chat-working", "working");
+    i.sessionRuntimeStates.set("chat-blocked", "blocked");
+    i.recomputeRuntimeState();
+    i.sessionRuntimeStates.set("chat-error", "error");
+    i.recomputeRuntimeState();
+
+    expect(aggregateChanges).toContain("blocked");
+    expect(aggregateChanges).toContain("error");
+    await sm.shutdown();
+  });
+
+  it("eagerly fetches valid image batches and logs failed attachment downloads", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ft-session-images-"));
+    vi.stubEnv("FIRST_TREE_HOME", home);
+    const fetchAttachment = vi
+      .fn<(params: { id: string }) => Promise<{ bytes: Buffer }>>()
+      .mockResolvedValueOnce({ bytes: Buffer.from("png bytes") })
+      .mockRejectedValueOnce(new Error("blob missing"));
+    const sdk = { ...mockSdk(), fetchAttachment } as unknown as FirstTreeHubSDK;
+    const started = handler();
+    const sm = makeManager({ handlers: [started], sdk });
+    const base = mockEntry({ id: 501, chatId: "chat-images", messageId: "msg-images" });
+    const entry = {
+      ...base,
+      message: {
+        ...base.message,
+        format: "file",
+        content: {
+          caption: "two images",
+          attachments: [
+            {
+              imageId: "11111111-1111-4111-8111-111111111111",
+              mimeType: "image/png",
+              filename: "first.png",
+            },
+            {
+              imageId: "22222222-2222-4222-8222-222222222222",
+              mimeType: "image/jpeg",
+              filename: "second.jpg",
+            },
+          ],
+        },
+      },
+    } as InboxEntryWithMessage;
+
+    await sm.dispatch(entry);
+
+    expect(fetchAttachment).toHaveBeenCalledTimes(2);
+    expect(fetchAttachment).toHaveBeenNthCalledWith(1, { id: "11111111-1111-4111-8111-111111111111" });
+    expect(
+      readFileSync(
+        join(home, "data", "chats", "chat-images", "images", "11111111-1111-4111-8111-111111111111.png"),
+        "utf8",
+      ),
+    ).toBe("png bytes");
+    expect(started.start).toHaveBeenCalledTimes(1);
+
+    const singleBase = mockEntry({ id: 502, chatId: "chat-images", messageId: "msg-image-existing" });
+    await sm.dispatch({
+      ...singleBase,
+      message: {
+        ...singleBase.message,
+        format: "file",
+        content: {
+          imageId: "11111111-1111-4111-8111-111111111111",
+          mimeType: "image/png",
+          filename: "first.png",
+        },
+      },
+    } as InboxEntryWithMessage);
+
+    expect(fetchAttachment).toHaveBeenCalledTimes(2);
+    expect(started.inject).toHaveBeenCalledTimes(1);
+    await sm.shutdown();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("retries consumed error completions when runtime notice delivery and failure-event emit both fail", async () => {
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockRejectedValue(new Error("notice store offline"));
+    const sdk = { ...mockSdk(), sendMessage } as unknown as FirstTreeHubSDK;
+    let capturedToken: Parameters<AgentHandler["start"]>[2] | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const started = handler({
+      async start(message, _ctx, token) {
+        capturedMessage = message;
+        capturedToken = token;
+        return "runtime-notice-session";
+      },
+    });
+    const sm = makeManager({
+      handlers: [started],
+      ackEntry,
+      recoverChat,
+      sdk,
+      onSessionEvent: () => {
+        throw new Error("event stream closed");
+      },
+    });
+
+    await sm.dispatch(mockEntry({ id: 502, chatId: "chat-notice-emit-fail", messageId: "msg-notice-emit-fail" }));
+    const entry = internals(sm).sessions.get("chat-notice-emit-fail");
+    if (!entry || !capturedMessage || !capturedToken) throw new Error("delivery was not captured");
+    entry.pendingRuntimeFailureNotice = {
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "provider_turn",
+      category: "credential",
+      reasonCode: "provider_credential_required",
+      replaySafety: "provider_entered",
+      userSeverity: "error",
+      messagePreview: "auth expired",
+    };
+
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_failed",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(ackEntry).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-notice-emit-fail"));
+    await sm.shutdown();
+  });
+
+  it("retries and rethrows admission failures after local custody is still open", async () => {
+    const sm = makeManager();
+    internals(sm).ensureContextTreeBinding = vi.fn().mockRejectedValue(new Error("tree resolver failed"));
+
+    await expect(
+      sm.dispatch(mockEntry({ id: 504, chatId: "chat-admission-fail", messageId: "msg-admission-fail" })),
+    ).rejects.toThrow("tree resolver failed");
+
+    expect(internals(sm).inboxDelivery.hasRecoveryDebt("chat-admission-fail")).toBe(true);
+    await sm.shutdown();
+  });
+
+  it("logs resilience emit failures when slot queuing cannot notify listeners", async () => {
+    const sm = makeManager({
+      concurrency: 1,
+      onSessionEvent: () => {
+        throw new Error("event sink unavailable");
+      },
+    });
+    internals(sm)._activeCount = 1;
+
+    await internals(sm).routeMessage("chat-queue-emit-fail", makeMessage("chat-queue-emit-fail"));
+
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queue-emit-fail")).toBe(true);
+    await sm.shutdown();
+  });
+
+  it("logs second-stage suspend cleanup failures when the suspend warning path itself throws", async () => {
+    const log = silentLogger();
+    const warn = vi
+      .spyOn(log, "warn")
+      .mockImplementationOnce(() => {
+        throw new Error("warn transport failed");
+      })
+      .mockImplementation(() => undefined);
+    const sm = makeManager({
+      handlers: [handler({ suspend: vi.fn().mockRejectedValue(new Error("suspend failed")) })],
+      log,
+    });
+
+    await sm.dispatch(mockEntry({ id: 505, chatId: "chat-suspend-log-fail", messageId: "msg-suspend-log-fail" }));
+    await sm.handleCommand("chat-suspend-log-fail", "session:suspend");
+    const suspending = internals(sm).sessions.get("chat-suspend-log-fail")?.suspending;
+    if (suspending) await suspending;
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    await sm.shutdown();
+  });
+
+  it("cleans up unowned routes and logs asynchronous unowned shutdown failures", async () => {
+    const badShutdown = vi.fn().mockRejectedValue(new Error("shutdown failed"));
+    const sm = makeManager();
+    const i = internals(sm);
+    const record = makeSessionRecord("chat-unowned", {
+      status: "active",
+      handler: handler({ shutdown: badShutdown }),
+    });
+    i.sessions.set("chat-unowned", record);
+    i._activeCount = 1;
+
+    i.abortUnownedRoute(record, "test_unowned_route");
+
+    expect(i.sessions.has("chat-unowned")).toBe(false);
+    expect(sm.activeCount).toBe(0);
+    await vi.waitFor(() => expect(badShutdown).toHaveBeenCalledWith("test_unowned_route"));
+    await sm.shutdown();
+  });
+
+  it("aborts lost ownership receipts from start, resume, and retry routing branches", async () => {
+    const makeOwnedReceipt = (sessionId: string) => ({ sessionId, route: { kind: "owned", mode: "queued" } as const });
+
+    const startHandler = handler({ start: vi.fn().mockResolvedValue(makeOwnedReceipt("start-lost")) });
+    const startManager = makeManager({ handlers: [startHandler] });
+    internals(startManager).markRouteOwned = vi.fn(() => "lost");
+    await internals(startManager).routeMessage("chat-start-lost", makeMessage("chat-start-lost"));
+    expect(internals(startManager).sessions.has("chat-start-lost")).toBe(false);
+    await startManager.shutdown();
+
+    const evictedHandler = handler({ resume: vi.fn().mockResolvedValue(makeOwnedReceipt("evicted-lost")) });
+    const evictedManager = makeManager({ handlers: [evictedHandler] });
+    internals(evictedManager).evictedMappings.set("chat-evicted-lost", {
+      claudeSessionId: "old-evicted",
+      lastActivity: 1,
+    });
+    internals(evictedManager).markRouteOwned = vi.fn(() => "lost");
+    await internals(evictedManager).routeMessage("chat-evicted-lost", makeMessage("chat-evicted-lost"));
+    expect(internals(evictedManager).sessions.has("chat-evicted-lost")).toBe(false);
+    await evictedManager.shutdown();
+
+    const suspendedRecord = makeSessionRecord("chat-resume-lost", {
+      status: "suspended",
+      handler: handler({ resume: vi.fn().mockResolvedValue(makeOwnedReceipt("resume-lost")) }),
+    });
+    const resumeManager = makeManager();
+    internals(resumeManager).sessions.set("chat-resume-lost", suspendedRecord);
+    internals(resumeManager).markRouteOwned = vi.fn(() => "lost");
+    await internals(resumeManager).resumeSession(suspendedRecord, makeMessage("chat-resume-lost"));
+    expect(internals(resumeManager).sessions.has("chat-resume-lost")).toBe(false);
+    await resumeManager.shutdown();
+
+    const retryResumeHandler = handler({ resume: vi.fn().mockResolvedValue(makeOwnedReceipt("retry-resume-lost")) });
+    const retryResumeManager = makeManager({ handlers: [retryResumeHandler] });
+    internals(retryResumeManager).sessions.set(
+      "chat-retry-resume-lost",
+      makeSessionRecord("chat-retry-resume-lost", {
+        retryAttempt: 1,
+        status: "suspended",
+        claudeSessionId: "previous-retry",
+      }),
+    );
+    internals(retryResumeManager).markRouteOwned = vi.fn(() => "lost");
+    await internals(retryResumeManager).runRetry("chat-retry-resume-lost");
+    expect(internals(retryResumeManager).sessions.has("chat-retry-resume-lost")).toBe(false);
+    await retryResumeManager.shutdown();
+
+    const retryStartHandler = handler({ start: vi.fn().mockResolvedValue(makeOwnedReceipt("retry-start-lost")) });
+    const retryStartManager = makeManager({ handlers: [retryStartHandler] });
+    internals(retryStartManager).sessions.set(
+      "chat-retry-start-lost",
+      makeSessionRecord("chat-retry-start-lost", {
+        retryAttempt: 1,
+        status: "suspended",
+        claudeSessionId: "",
+      }),
+    );
+    internals(retryStartManager).markRouteOwned = vi.fn(() => "lost");
+    await internals(retryStartManager).runRetry("chat-retry-start-lost");
+    expect(internals(retryStartManager).sessions.has("chat-retry-start-lost")).toBe(false);
+    await retryStartManager.shutdown();
+  });
+
+  it("drains active and control pending queue branches, including asynchronous requeue failures", async () => {
+    const activeManager = makeManager();
+    const activeInternals = internals(activeManager);
+    activeInternals.sessions.set("chat-active-drain", makeSessionRecord("chat-active-drain", { status: "active" }));
+    activeInternals.pendingQueue.push({
+      chatId: "chat-active-drain",
+      message: null,
+      deliveryKind: "control",
+    });
+    activeInternals.pendingQueue.push({
+      chatId: "chat-active-drain",
+      message: makeMessage("chat-active-drain"),
+      deliveryKind: "fresh",
+    });
+    activeInternals.routeMessage = vi.fn().mockRejectedValue(new Error("active drain failed"));
+
+    activeInternals.drainPendingQueue();
+    await vi.waitFor(() => expect(activeInternals.routeMessage).toHaveBeenCalledTimes(1));
+    expect(activeInternals.pendingQueue.some((item) => item.chatId === "chat-active-drain")).toBe(true);
+    await activeManager.shutdown();
+
+    const activeInboxManager = makeManager();
+    const activeInboxInternals = internals(activeInboxManager);
+    activeInboxInternals.sessions.set(
+      "chat-active-inbox-drain",
+      makeSessionRecord("chat-active-inbox-drain", { status: "active" }),
+    );
+    const activeInboxEntry = mockEntry({
+      id: 999,
+      chatId: "chat-active-inbox-drain",
+      messageId: "msg-chat-active-inbox-drain",
+    });
+    activeInboxInternals.inboxDelivery.receive(activeInboxEntry);
+    activeInboxInternals.pendingQueue.push({
+      chatId: "chat-active-inbox-drain",
+      message: { ...makeMessage("chat-active-inbox-drain"), inboxEntryId: 999 },
+      deliveryKind: "fresh",
+    });
+    activeInboxInternals.routeMessage = vi.fn().mockRejectedValue(new Error("active inbox drain failed"));
+
+    activeInboxInternals.drainPendingQueue();
+    await vi.waitFor(() => expect(activeInboxInternals.routeMessage).toHaveBeenCalledTimes(1));
+    expect(activeInboxInternals.pendingQueue.some((item) => item.chatId === "chat-active-inbox-drain")).toBe(false);
+    await activeInboxManager.shutdown();
+
+    const controlManager = makeManager();
+    const controlInternals = internals(controlManager);
+    const suspended = makeSessionRecord("chat-control-drain", { status: "suspended" });
+    controlInternals.sessions.set("chat-control-drain", suspended);
+    controlInternals.pendingQueue.push({
+      chatId: "chat-control-drain",
+      message: null,
+      deliveryKind: "control",
+    });
+    controlInternals.resumeSession = vi.fn().mockRejectedValue(new Error("control resume failed"));
+
+    controlInternals.drainPendingQueue();
+    await vi.waitFor(() =>
+      expect(controlInternals.resumeSession).toHaveBeenCalledWith(suspended, undefined, "control"),
+    );
+    expect(controlInternals.pendingQueue.some((item) => item.chatId === "chat-control-drain")).toBe(true);
+    await controlManager.shutdown();
+  });
+
+  it("logs retry queued inject failures after a transient retry succeeds", async () => {
+    const retryHandler = handler({
+      resume: vi.fn().mockResolvedValue("retry-resumed"),
+      inject: vi.fn(() => {
+        throw new Error("queued inject failed");
+      }),
+    });
+    const sm = makeManager({ handlers: [retryHandler] });
+    const retrying = makeSessionRecord("chat-retry-inject-fail", {
+      retryAttempt: 1,
+      status: "suspended",
+      claudeSessionId: "previous-session",
+    });
+    retrying.retryQueuedMessages.push(makeMessage("chat-retry-inject-fail"));
+    internals(sm).sessions.set("chat-retry-inject-fail", retrying);
+
+    await internals(sm).runRetry("chat-retry-inject-fail");
+
+    expect(retryHandler.inject).toHaveBeenCalledTimes(1);
+    await sm.shutdown();
+  });
+
+  it("evicts idle active sessions with live subprocesses only after no better candidate exists", async () => {
+    const subprocessProbe: SubprocessProbe = {
+      hasLiveSubprocess: vi.fn((chatId: string) => chatId === "chat-live-subprocess"),
+      stop: vi.fn(),
+    };
+    const sm = makeManager({ maxSessions: 1, subprocessProbe });
+    const i = internals(sm);
+    i.sessions.set(
+      "chat-live-subprocess",
+      makeSessionRecord("chat-live-subprocess", {
+        status: "active",
+        lastActivity: 1,
+      }),
+    );
+
+    i.evictIfNeeded();
+
+    expect(i.evictedMappings.has("chat-live-subprocess")).toBe(true);
+    await sm.shutdown();
+
+    const noCandidate = makeManager({ maxSessions: 1 });
+    const noCandidateInternals = internals(noCandidate);
+    noCandidateInternals.sessions.set(
+      "chat-working-only",
+      makeSessionRecord("chat-working-only", {
+        status: "active",
+        lastActivity: 1,
+      }),
+    );
+    const entry = mockEntry({ id: 503, chatId: "chat-working-only", messageId: "msg-working-only" });
+    const decision = noCandidateInternals.inboxDelivery.receive(entry);
+    if (decision.kind !== "deliver") throw new Error("expected working delivery");
+    noCandidateInternals.inboxDelivery.markOwned(decision.work);
+    noCandidateInternals.inboxDelivery.markProcessingStarted("chat-working-only", messageFromEntry(entry));
+
+    noCandidateInternals.evictIfNeeded();
+
+    expect(noCandidateInternals.sessions.has("chat-working-only")).toBe(true);
+    await noCandidate.shutdown();
   });
 });
