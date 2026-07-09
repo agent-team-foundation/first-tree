@@ -78,13 +78,15 @@ vi.mock("../runtime/bootstrap.js", () => ({
 }));
 
 vi.mock("../runtime/chat-context.js", () => ({
-  fetchChatContext: vi.fn(async (): Promise<ChatContext> => ({
-    chatId: "chat-item",
-    title: "items",
-    topic: null,
-    description: null,
-    participants: [],
-  })),
+  fetchChatContext: vi.fn(
+    async (): Promise<ChatContext> => ({
+      chatId: "chat-item",
+      title: "items",
+      topic: null,
+      description: null,
+      participants: [],
+    }),
+  ),
 }));
 
 import { createCodexSdkHandler } from "../handlers/codex/sdk.js";
@@ -103,13 +105,15 @@ function makeMessage(id: string, content: string): SessionMessage {
   };
 }
 
-function makeContext(opts: {
-  emitEvent?: SessionContext["emitEvent"];
-  finishTurn?: SessionContext["finishTurn"];
-  retryTurn?: SessionContext["retryTurn"];
-  failSessionForRecovery?: SessionContext["failSessionForRecovery"];
-  log?: SessionContext["log"];
-} = {}): SessionContext {
+function makeContext(
+  opts: {
+    emitEvent?: SessionContext["emitEvent"];
+    finishTurn?: SessionContext["finishTurn"];
+    retryTurn?: SessionContext["retryTurn"];
+    failSessionForRecovery?: SessionContext["failSessionForRecovery"];
+    log?: SessionContext["log"];
+  } = {},
+): SessionContext {
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   return {
     agent: {

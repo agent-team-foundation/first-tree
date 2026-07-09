@@ -25,9 +25,7 @@ describe("SourceIcon", () => {
       </>,
     );
 
-    const labels = Array.from(h.container.querySelectorAll("[role='img']")).map((el) =>
-      el.getAttribute("aria-label"),
-    );
+    const labels = Array.from(h.container.querySelectorAll("[role='img']")).map((el) => el.getAttribute("aria-label"));
     expect(labels).toEqual([
       "Human-created chat",
       "Agent-created task",

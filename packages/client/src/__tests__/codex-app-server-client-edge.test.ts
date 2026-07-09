@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
   CodexAppServerRpcError,
-  CodexAppServerTransportError,
+  type CodexAppServerTransportError,
   isCodexAppServerTransientError,
   smokeCodexAppServer,
 } from "../handlers/codex/app-server/client.js";

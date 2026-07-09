@@ -96,7 +96,7 @@ describe("CapabilityMatrix + ClientRow", () => {
             client={client({ status: "disconnected", connectedAt: null })}
             boundAgents={agents}
             isExpanded
-            agentName={(id) => (id === "agent-1" ? "Nova" : id ?? "")}
+            agentName={(id) => (id === "agent-1" ? "Nova" : (id ?? ""))}
             onToggle={onToggle}
             onDisconnect={onDisconnect}
             onRetire={onRetire}
@@ -128,7 +128,9 @@ describe("CapabilityMatrix + ClientRow", () => {
       const disconnect = Array.from(document.body.querySelectorAll("button")).find((b) =>
         b.textContent?.includes("Disconnect"),
       );
-      const retire = Array.from(document.body.querySelectorAll("button")).find((b) => b.textContent?.includes("Retire"));
+      const retire = Array.from(document.body.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Retire"),
+      );
       await act(async () => {
         reconnect?.click();
         disconnect?.click();

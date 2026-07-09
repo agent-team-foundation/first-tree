@@ -251,8 +251,9 @@ describe("DocPage", () => {
     renderDocPage();
     await waitForSettled(h, () => expect(h.container.textContent).toContain("We rename chats by slug."));
 
-    const wrap = h.container.querySelector<HTMLDivElement>("div[style*='position: relative']")
-      ?? h.container.querySelector<HTMLDivElement>("div.flex > div");
+    const wrap =
+      h.container.querySelector<HTMLDivElement>("div[style*='position: relative']") ??
+      h.container.querySelector<HTMLDivElement>("div.flex > div");
     expect(wrap).not.toBeNull();
     if (!wrap) return;
 

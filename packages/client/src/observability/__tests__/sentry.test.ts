@@ -5,9 +5,7 @@ const sentryMocks = vi.hoisted(() => ({
   init: vi.fn(),
   setTag: vi.fn(),
   isEnabled: vi.fn(() => false),
-  withScope: vi.fn((cb: (scope: { setContext: ReturnType<typeof vi.fn> }) => unknown) =>
-    cb({ setContext: vi.fn() }),
-  ),
+  withScope: vi.fn((cb: (scope: { setContext: ReturnType<typeof vi.fn> }) => unknown) => cb({ setContext: vi.fn() })),
   captureException: vi.fn(() => "event-id"),
   flush: vi.fn(async () => true),
 }));
@@ -304,9 +302,7 @@ describe("initClientSentry / captureClientException / flushClientSentry", () => 
     sentryMocks.isEnabled.mockReturnValue(true);
     const setContext = vi.fn();
     sentryMocks.withScope.mockImplementationOnce((cb) => cb({ setContext }));
-    expect(captureClientException(new Error("boom"), { workspacePath: "/tmp/ws", token: "secret" })).toBe(
-      "event-id",
-    );
+    expect(captureClientException(new Error("boom"), { workspacePath: "/tmp/ws", token: "secret" })).toBe("event-id");
     expect(setContext).toHaveBeenCalledWith(
       "first_tree",
       expect.objectContaining({

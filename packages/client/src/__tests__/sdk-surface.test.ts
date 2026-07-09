@@ -494,8 +494,9 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(
       sdk.publishDoc({ slug: "plan", title: "Plan", content: "# hi", project: "alpha" }),
     ).resolves.toMatchObject({ id: "doc-1" });
-    await expect(sdk.listDocs({ slug: "plan", project: "alpha", status: "draft", limit: 5, cursor: "c0" })).resolves
-      .toMatchObject({ nextCursor: null });
+    await expect(
+      sdk.listDocs({ slug: "plan", project: "alpha", status: "draft", limit: 5, cursor: "c0" }),
+    ).resolves.toMatchObject({ nextCursor: null });
     await expect(sdk.getDoc("doc-1", { version: 2 })).resolves.toMatchObject({ id: "doc-1" });
     await expect(sdk.setDocStatus("doc-1", "published")).resolves.toMatchObject({ status: "published" });
     await expect(sdk.listDocComments("doc-1", { status: "open", versionNumber: 1 })).resolves.toMatchObject({
@@ -537,21 +538,25 @@ describe("FirstTreeHubSDK public surface", () => {
       }),
     ]);
 
-    const withDate = await makeSdk().listChats().then(
-      () => {
-        throw new Error("expected rejection");
-      },
-      (err: unknown) => err as SdkError,
-    );
+    const withDate = await makeSdk()
+      .listChats()
+      .then(
+        () => {
+          throw new Error("expected rejection");
+        },
+        (err: unknown) => err as SdkError,
+      );
     expect(withDate.retryAfter).toBe(future);
     expect(withDate.retryAfterMs).toBeGreaterThan(0);
 
-    const invalid = await makeSdk().listChats().then(
-      () => {
-        throw new Error("expected rejection");
-      },
-      (err: unknown) => err as SdkError,
-    );
+    const invalid = await makeSdk()
+      .listChats()
+      .then(
+        () => {
+          throw new Error("expected rejection");
+        },
+        (err: unknown) => err as SdkError,
+      );
     expect(invalid.retryAfter).toBe("not-a-date");
     expect(invalid.retryAfterMs).toBeUndefined();
   });

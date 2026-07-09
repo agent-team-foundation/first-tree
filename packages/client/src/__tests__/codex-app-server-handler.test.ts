@@ -2302,9 +2302,9 @@ describe("codex app-server item + notification coverage", () => {
     failTurn(fake, "turn-1", { message: "HTTP 500 Internal Server Error from provider" });
     await startPromise;
 
-    const errorEvents = emitEvent.mock.calls
-      .map(([e]) => e)
-      .filter((e) => e.kind === "error") as Array<Extract<SessionEvent, { kind: "error" }>>;
+    const errorEvents = emitEvent.mock.calls.map(([e]) => e).filter((e) => e.kind === "error") as Array<
+      Extract<SessionEvent, { kind: "error" }>
+    >;
     expect(errorEvents.some((e) => e.payload.message.includes("500"))).toBe(true);
     await handler.shutdown();
   });

@@ -35,7 +35,9 @@ describe("docs API wrappers", () => {
     const docs = await import("../docs.js");
 
     apiMock.get.mockResolvedValueOnce({ items: [{ id: "doc-1", slug: "plan" }], nextCursor: null });
-    await expect(docs.listDocs({ slug: "plan", project: "ft", status: "draft", limit: 5, cursor: "c1" })).resolves.toEqual({
+    await expect(
+      docs.listDocs({ slug: "plan", project: "ft", status: "draft", limit: 5, cursor: "c1" }),
+    ).resolves.toEqual({
       items: [{ id: "doc-1", slug: "plan" }],
       nextCursor: null,
     });

@@ -33,7 +33,13 @@ function makeChild(): FakeChild {
   return child;
 }
 
-function queueChild(outcome: { code?: number | null; stdout?: string; stderr?: string; error?: Error; hangMs?: number }) {
+function queueChild(outcome: {
+  code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  error?: Error;
+  hangMs?: number;
+}) {
   spawnMock.mockImplementationOnce(() => {
     const child = makeChild();
     if (outcome.hangMs !== undefined) {
@@ -95,9 +101,7 @@ describe("tmux-session spawn helpers", () => {
 
   it("newSession throws when tmux fails", async () => {
     queueChild({ code: 1, stderr: "no server" });
-    await expect(
-      newSession({ name: "x", cwd: "/tmp", command: "claude" }),
-    ).rejects.toThrow(/tmux .* failed/);
+    await expect(newSession({ name: "x", cwd: "/tmp", command: "claude" })).rejects.toThrow(/tmux .* failed/);
   });
 
   it("pasteText load/paste/enter and cleans buffer on failure", async () => {

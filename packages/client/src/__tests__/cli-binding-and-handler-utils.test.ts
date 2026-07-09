@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentContextTreeBinding } from "../runtime/bootstrap.js";
 import { getCliBinding, resetCliBindingForTest, setCliBinding } from "../runtime/cli-binding.js";
 import { noopDeliveryToken } from "../runtime/handler.js";
-import { resolveAgentContextTreeBinding } from "../runtime/bootstrap.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
 describe("cli-binding", () => {

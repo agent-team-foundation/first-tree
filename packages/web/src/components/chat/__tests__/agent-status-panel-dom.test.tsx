@@ -98,16 +98,7 @@ describe("AgentStatusPanel DOM", () => {
       mk("agent-2", { engagement: "suspended" }),
     ]);
     const { AgentStatusPanel } = await import("../agent-status-panel.js");
-    h.render(
-      wrap(
-        <AgentStatusPanel
-          chatId="chat-1"
-          agents={agents}
-          canManage={() => true}
-          compact={false}
-        />,
-      ),
-    );
+    h.render(wrap(<AgentStatusPanel chatId="chat-1" agents={agents} canManage={() => true} compact={false} />));
     await waitFor(h, "Nova");
     expect(h.container.textContent).toContain("Codex");
 
@@ -141,10 +132,7 @@ describe("AgentStatusPanel DOM", () => {
     ]);
     const { AgentStatusPanel } = await import("../agent-status-panel.js");
     h.render(
-      wrap(
-        <AgentStatusPanel chatId="chat-1" agents={agents} canManage={() => false} compact />,
-        new Set(["agent-1"]),
-      ),
+      wrap(<AgentStatusPanel chatId="chat-1" agents={agents} canManage={() => false} compact />, new Set(["agent-1"])),
     );
     await waitFor(h, "Nova");
     const manageButtons = Array.from(h.container.querySelectorAll("button")).filter((b) =>

@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDomHarness, type DomHarness } from "../../../../test-utils/dom-harness.js";
 import { ToastProvider } from "../../../../components/ui/toast.js";
+import { createDomHarness, type DomHarness } from "../../../../test-utils/dom-harness.js";
 
 const NOW = "2026-05-28T12:00:00.000Z";
 
@@ -244,9 +244,7 @@ describe("ChatView message body coverage", () => {
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
       await h.flush();
       await act(async () => {
-        textarea.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, metaKey: true }),
-        );
+        textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, metaKey: true }));
       });
       await h.flush();
     }

@@ -89,9 +89,7 @@ describe("StepCreateAgent", () => {
     h.render(<StepCreateAgent />);
     await h.flush();
 
-    const keep = Array.from(h.container.querySelectorAll("button")).find((b) =>
-      /wait|keep/i.test(b.textContent ?? ""),
-    );
+    const keep = Array.from(h.container.querySelectorAll("button")).find((b) => /wait|keep/i.test(b.textContent ?? ""));
     const later = Array.from(h.container.querySelectorAll("button")).find((b) =>
       /later|finish/i.test(b.textContent ?? ""),
     );

@@ -335,7 +335,10 @@ describe("workspace-only sandbox", () => {
 
   it("createWorkspaceOnlySpawnProcess rejects non-linux and missing bwrap", () => {
     if (process.platform === "linux") {
-      const spawn = createWorkspaceOnlySpawnProcess({ workspaceRoot: workspace, sandboxBinary: "definitely-not-bwrap-xyz" });
+      const spawn = createWorkspaceOnlySpawnProcess({
+        workspaceRoot: workspace,
+        sandboxBinary: "definitely-not-bwrap-xyz",
+      });
       expect(() =>
         spawn("/bin/true", [], {
           cwd: workspace,

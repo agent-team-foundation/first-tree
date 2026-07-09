@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
-import { LiveTurnAgentsContext } from "../live-turn-context.js";
 import { ComposeStatusBar } from "../compose-status-bar.js";
+import { LiveTurnAgentsContext } from "../live-turn-context.js";
 
 const statusMocks = vi.hoisted(() => ({
   fetchChatAgentStatuses: vi.fn(),
