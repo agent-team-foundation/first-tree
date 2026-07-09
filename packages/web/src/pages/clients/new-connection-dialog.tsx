@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type ConnectTokenResponse, generateConnectToken, type HubClient, listClients } from "../../api/activity.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { ConnectCommandPanel, type ConnectPhase } from "../../components/connect-command-panel.js";
-import { ConnectStuckPanel, STUCK_AFTER_MS } from "../../components/connect-stuck-panel.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { runVisibilityAwareInterval } from "../../lib/visibility-interval.js";
@@ -69,8 +68,6 @@ const TOKEN_EXPIRY_BUFFER_MS = 2_000;
  *                         re-pairing a machine that already has a client_id
  *                         row (status flips disconnected→connected, id is
  *                         reused) is still detected.
- *                         A `STUCK_AFTER_MS` timer surfaces the recovery
- *                         panel for users who hit the install/firewall wall.
  *                         A token-expiry timer flips to phase=error once the
  *                         server-issued token can no longer be exchanged.
  *   3. phase="success"  → brief hold (~1.2s), then close + invalidate
@@ -118,7 +115,6 @@ export function NewConnectionDialog({
   const [token, setToken] = useState<ConnectTokenResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [arrivedHostname, setArrivedHostname] = useState<string | null>(null);
-  const [stuck, setStuck] = useState(false);
   const openedAtRef = useRef<number>(0);
   // Tracks whether a mint cycle owned by *this* call is still relevant.
   // Bumped on every new mint (open and regenerate). Stale async settlements
@@ -128,7 +124,6 @@ export function NewConnectionDialog({
   /** Generate a fresh connect token and arm the waiting loop. */
   const mintToken = useCallback(async () => {
     const cycle = ++mintCycleRef.current;
-    setStuck(false);
     setArrivedHostname(null);
     setPhase("loading");
     setToken(null);
@@ -171,7 +166,6 @@ export function NewConnectionDialog({
       setToken(null);
       setErrorMessage(null);
       setArrivedHostname(null);
-      setStuck(false);
       openedAtRef.current = 0;
       return;
     }
@@ -228,19 +222,6 @@ export function NewConnectionDialog({
     return () => window.clearTimeout(handle);
   }, [open, token, phase]);
 
-  // 2c. Stuck recovery: if the waiting phase drags past STUCK_AFTER_MS,
-  //     surface the same recovery panel onboarding shows. Resets the
-  //     moment we leave waiting (success or error) so a Regenerate that
-  //     also stalls re-arms the panel cleanly.
-  useEffect(() => {
-    if (!open || phase !== "waiting") {
-      setStuck(false);
-      return;
-    }
-    const handle = window.setTimeout(() => setStuck(true), STUCK_AFTER_MS);
-    return () => window.clearTimeout(handle);
-  }, [open, phase]);
-
   // 3. On success: brief hold so the user sees the green confirmation, then close.
   useEffect(() => {
     if (phase !== "success") return;
@@ -258,7 +239,7 @@ export function NewConnectionDialog({
           <DialogTitle>{titleOverride ?? "Connect computer"}</DialogTitle>
           <DialogDescription>
             {descriptionOverride ??
-              "Run this command on the machine you want to pair with First Tree. If the CLI isn't installed yet, the command includes the install step."}
+              "Run this command in your terminal to pair with First Tree. It will install or upgrade to the latest First Tree client."}
           </DialogDescription>
         </DialogHeader>
 
@@ -274,8 +255,6 @@ export function NewConnectionDialog({
           errorContent={errorMessage}
           copyButtonPlacement="bottom"
         />
-
-        {stuck && phase === "waiting" && <ConnectStuckPanel />}
 
         <div className="flex justify-end" style={{ gap: "var(--sp-2)" }}>
           {phase === "error" && (

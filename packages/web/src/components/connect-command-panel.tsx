@@ -1,5 +1,5 @@
 import { Check, Copy } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useCopyFeedback } from "../lib/use-copy-feedback.js";
 import { Button } from "./ui/button.js";
 
@@ -8,7 +8,7 @@ export type ConnectPhase = "loading" | "waiting" | "success" | "error";
 type ConnectCommandPanelProps = {
   /** Full command to display + copy. `null` shows the "Generating token…" placeholder. */
   command: string | null;
-  /** Optional expiry hint shown after the command (e.g. `# expires in 10m`). */
+  /** Token TTL in seconds; drives the live `expires in Xm:XXs` countdown next to the Copy button. */
   expiresInSeconds?: number;
   /** Drives the inline status row below the command. */
   phase: ConnectPhase;
@@ -20,8 +20,6 @@ type ConnectCommandPanelProps = {
   successContent?: ReactNode;
   /** Content of the red error row. Omit to skip. */
   errorContent?: ReactNode;
-  /** Caption under the command block. Default: `Single-use · regenerates the previous one.`. */
-  caption?: ReactNode;
   /**
    * Where to place the Copy button relative to the command block.
    * `"right"` (default) is compact and matches the `/clients` Connect computer
@@ -33,19 +31,14 @@ type ConnectCommandPanelProps = {
 };
 
 /**
- * Shared panel for "run this CLI command on the machine you want to pair"
- * surfaces. Used by the onboarding flow's connect step and the
- * `Connect computer` modal on /clients — both render the same code block,
- * Copy button, and yellow→green status rows so the visual vocabulary stays
- * unified across the app.
+ * Panel for "run this CLI command to pair a computer" surfaces — today the
+ * `Connect computer` / re-auth dialog on /clients. Renders the code block,
+ * the Copy button with a live expiry countdown beside it, and the
+ * yellow→green→red status rows.
  *
  * Polling and end-state semantics are intentionally NOT in this component:
- *   - Onboarding polls `/me` for onboardingStep to advance, then transitions
- *     to a different step (no green row needed).
- *   - The `/clients` modal polls `/clients` for a new id and shows the
- *     green row briefly before auto-closing.
- *
- * The host owns the phase machine; this panel just renders it.
+ * the host owns the phase machine (mint, arrival polling, token expiry);
+ * this panel just renders it.
  */
 export function ConnectCommandPanel({
   command,
@@ -55,7 +48,6 @@ export function ConnectCommandPanel({
   waitingText = "Waiting for your computer to connect…",
   successContent,
   errorContent,
-  caption = "Single-use · regenerates the previous one.",
   copyButtonPlacement = "right",
 }: ConnectCommandPanelProps) {
   // Shared copy → transient-feedback machine. This panel only surfaces the
@@ -67,8 +59,6 @@ export function ConnectCommandPanel({
     if (!command) return;
     void copy(command);
   };
-
-  const expiryMinutes = expiresInSeconds !== undefined ? Math.max(1, Math.round(expiresInSeconds / 60)) : null;
 
   const commandBlock = (
     <pre
@@ -88,29 +78,26 @@ export function ConnectCommandPanel({
       }}
       title={command ?? ""}
     >
-      {command ? (
-        <>
-          {command}
-          {expiryMinutes !== null && <span style={{ color: "var(--fg-4)" }}> # expires in {expiryMinutes}m</span>}
-        </>
-      ) : (
-        "Generating token…"
-      )}
+      {command ?? "Generating token…"}
     </pre>
   );
 
   const copyButton = (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={handleCopy}
-      disabled={!command}
-      style={{ alignSelf: "flex-start" }}
-    >
+    <Button type="button" variant="outline" size="sm" onClick={handleCopy} disabled={!command}>
       {status === "copied" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       {status === "copied" ? copyLabel.done : copyLabel.idle}
     </Button>
+  );
+
+  // The countdown keys on the command so a regenerated token restarts the
+  // count from its own TTL (expiresIn alone is usually the same number).
+  const copyRow = (
+    <div className="flex items-center" style={{ gap: "var(--sp-2_5)", alignSelf: "flex-start" }}>
+      {copyButton}
+      {command && phase === "waiting" && expiresInSeconds !== undefined && (
+        <ExpiryTicker key={command} expiresInSeconds={expiresInSeconds} />
+      )}
+    </div>
   );
 
   return (
@@ -118,21 +105,13 @@ export function ConnectCommandPanel({
       {copyButtonPlacement === "right" ? (
         <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
           {commandBlock}
-          {copyButton}
+          {copyRow}
         </div>
       ) : (
         <>
           {commandBlock}
-          {copyButton}
+          {copyRow}
         </>
-      )}
-
-      {/* Gate the caption on a present command so the "Single-use · regenerates"
-          line never renders over the "Generating token…" placeholder. */}
-      {caption && command && (
-        <p className="text-label" style={{ color: "var(--fg-4)", margin: 0 }}>
-          {caption}
-        </p>
       )}
 
       <ConnectStatusRow
@@ -211,6 +190,33 @@ export function ConnectStatusRow({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Live `expires in Xm:XXs` countdown shown beside the Copy button while the
+ * host is waiting for the computer to connect. The deadline is stamped on
+ * mount, so the host remounts it per token (`key={command}`) to restart the
+ * count for a regenerated token. Purely informational — the host owns the
+ * actual expiry transition (its own timer flips the phase to `error`).
+ */
+function ExpiryTicker({ expiresInSeconds }: { expiresInSeconds: number }) {
+  const [remaining, setRemaining] = useState(expiresInSeconds);
+
+  useEffect(() => {
+    const deadline = Date.now() + expiresInSeconds * 1_000;
+    const handle = window.setInterval(() => {
+      setRemaining(Math.max(0, Math.round((deadline - Date.now()) / 1_000)));
+    }, 1_000);
+    return () => window.clearInterval(handle);
+  }, [expiresInSeconds]);
+
+  const minutes = Math.floor(remaining / 60);
+  const seconds = remaining % 60;
+  return (
+    <span className="text-label" style={{ color: "var(--fg-4)", fontVariantNumeric: "tabular-nums" }}>
+      expires in {minutes}m:{String(seconds).padStart(2, "0")}s
+    </span>
   );
 }
 

@@ -207,12 +207,6 @@ export const COPY = {
     // implied — a detected agent just shows up). Problem + fix only.
     noRuntime: "No coding agent found yet. Install one (like Claude Code) and sign in.",
     detecting: "Looking for coding agents on it…",
-    stuckTitle: "Taking a while? A few common reasons:",
-    stuckReasons: [
-      "If you saw “command not found”, your computer needs Node.js first — it's a free install. Get it, then run the command again.",
-      "Make sure you ran it on the computer where your coding agent is installed.",
-      "A company firewall or VPN can sometimes block the connection.",
-    ],
     nodeLinkLabel: "Install Node.js (free)",
     nodeUrl: "https://nodejs.org",
     /** Token-mint failure (POST /me/connect-tokens threw, after silent retries).

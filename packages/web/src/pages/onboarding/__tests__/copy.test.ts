@@ -44,7 +44,6 @@ describe("onboarding vocabulary (connect-agent reframe)", () => {
       cc.connected,
       cc.noRuntime,
       cc.detecting,
-      ...cc.stuckReasons,
       cc.tokenErrorTitle,
       ca.subtitle,
       ca.nameLabel,
