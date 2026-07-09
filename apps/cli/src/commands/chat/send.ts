@@ -1,4 +1,4 @@
-import type { MessageFormat } from "@first-tree/shared";
+import { CLI_BODY_ORIGIN_METADATA_KEY, CLI_BODY_ORIGINS, type MessageFormat } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
@@ -127,6 +127,11 @@ export function registerChatSendCommand(chat: Command): void {
           } catch {
             fail("INVALID_METADATA", "Metadata must be valid JSON.", 2);
           }
+          if (metadata && typeof metadata === "object" && CLI_BODY_ORIGIN_METADATA_KEY in metadata) {
+            metadata = Object.fromEntries(
+              Object.entries(metadata).filter(([key]) => key !== CLI_BODY_ORIGIN_METADATA_KEY),
+            );
+          }
         }
 
         const sdk = createSdk(options.agent);
@@ -136,14 +141,24 @@ export function registerChatSendCommand(chat: Command): void {
         // attachment store and attaching generic refs. Pure pass-through
         // outside an agent session.
         const captured = await captureOutboundDocs(content ?? "", { sdk, chatId });
+        const cliBodyOrigin =
+          options.messageFile !== undefined
+            ? CLI_BODY_ORIGINS.MESSAGE_FILE
+            : inlineBody === undefined
+              ? CLI_BODY_ORIGINS.STDIN
+              : undefined;
+        const metadataWithBodyOrigin =
+          cliBodyOrigin !== undefined
+            ? { ...(metadata ?? {}), [CLI_BODY_ORIGIN_METADATA_KEY]: cliBodyOrigin }
+            : metadata;
         const outboundMetadata =
           captured.attachments || captured.documentContext
             ? {
-                ...(metadata ?? {}),
+                ...(metadataWithBodyOrigin ?? {}),
                 ...(captured.attachments ? { attachments: captured.attachments } : {}),
                 ...(captured.documentContext ? { documentContext: captured.documentContext } : {}),
               }
-            : metadata;
+            : metadataWithBodyOrigin;
 
         const result = await sdk.sendMessage(chatId, {
           format: options.format,

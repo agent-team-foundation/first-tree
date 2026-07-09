@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 
+import { CLI_BODY_ORIGIN_METADATA_KEY, CLI_BODY_ORIGINS } from "@first-tree/shared";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { looksLikeEscapedNewlineBody } from "../commands/chat/_shared/io.js";
@@ -194,6 +195,12 @@ describe("chat send escaped-newline guard — intercept then self-correct", () =
     await runChatSend(["nova"]);
 
     const sdk = localAgentMocks.createSdk.mock.results.at(-1)?.value;
-    expect(sdk.sendMessage).toHaveBeenCalledWith("chat-env", expect.objectContaining({ content: escapedBody }));
+    expect(sdk.sendMessage).toHaveBeenCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        content: escapedBody,
+        metadata: expect.objectContaining({ [CLI_BODY_ORIGIN_METADATA_KEY]: CLI_BODY_ORIGINS.STDIN }),
+      }),
+    );
   });
 });

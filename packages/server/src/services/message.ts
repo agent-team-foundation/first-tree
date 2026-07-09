@@ -1,10 +1,13 @@
 import {
   AGENT_FINAL_TEXT_METADATA_KEY,
+  CLI_BODY_ORIGIN_METADATA_KEY,
+  CLI_BODY_ORIGINS,
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
+  MESSAGE_SOURCES,
   RUNTIME_NOTICE_METADATA_KEY,
   requestResolutionSchema,
   type SendMessage,
@@ -45,10 +48,14 @@ function stripUntrustedMetadataKeys(
 ): Record<string, unknown> {
   const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;
   const shouldStripAddressedAgentIds = ADDRESSED_AGENT_IDS_METADATA_KEY in meta;
-  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds) return meta;
+  const shouldStripCliBodyOrigin = CLI_BODY_ORIGIN_METADATA_KEY in meta;
+  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds && !shouldStripCliBodyOrigin) return meta;
   return Object.fromEntries(
     Object.entries(meta).filter(
-      ([key]) => key !== ADDRESSED_AGENT_IDS_METADATA_KEY && (options.allowSystemSender || key !== "systemSender"),
+      ([key]) =>
+        key !== ADDRESSED_AGENT_IDS_METADATA_KEY &&
+        key !== CLI_BODY_ORIGIN_METADATA_KEY &&
+        (options.allowSystemSender || key !== "systemSender"),
     ),
   );
 }
@@ -134,6 +141,7 @@ function normalizeNonHumanTextContent(input: {
   senderId: string;
   senderType: string;
   content: unknown;
+  allowEscapedNewlineBody?: boolean;
 }): unknown {
   if (input.senderType === "human" || typeof input.content !== "string") return input.content;
 
@@ -146,8 +154,14 @@ function normalizeNonHumanTextContent(input: {
     );
     textContent = unwrapped;
   }
-  validateAgentTextEncoding(textContent);
+  if (!input.allowEscapedNewlineBody) validateAgentTextEncoding(textContent);
   return textContent;
+}
+
+function allowsCliEscapedNewlineBody(data: SendMessage, metadata: Record<string, unknown>): boolean {
+  if (data.source !== MESSAGE_SOURCES.CLI) return false;
+  const bodyOrigin = metadata[CLI_BODY_ORIGIN_METADATA_KEY];
+  return bodyOrigin === CLI_BODY_ORIGINS.STDIN || bodyOrigin === CLI_BODY_ORIGINS.MESSAGE_FILE;
 }
 
 // Structural param (not `SendMessage`) so the edit path can reuse it against
@@ -324,12 +338,16 @@ export function preflightMessageSendIntent(input: {
 
   validateMessageContent(data);
 
+  const rawIncomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+  const allowEscapedNewlineBody = allowsCliEscapedNewlineBody(data, rawIncomingMeta);
+
   let effectiveContent: SendMessage["content"] = data.content;
   effectiveContent = normalizeNonHumanTextContent({
     chatId,
     senderId,
     senderType,
     content: effectiveContent,
+    allowEscapedNewlineBody,
   }) as SendMessage["content"];
 
   // Re-validate the UNWRAPPED body. `validateMessageContent(data)` above checked
@@ -342,7 +360,7 @@ export function preflightMessageSendIntent(input: {
     validateTextBody(effectiveContent, data.format === "request");
   }
 
-  const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
+  const incomingMeta = stripUntrustedMetadataKeys(rawIncomingMeta, options);
   validateDocumentContext(incomingMeta);
   if (incomingMeta.resolves !== undefined && !requestResolutionSchema.safeParse(incomingMeta.resolves).success) {
     throw new BadRequestError(

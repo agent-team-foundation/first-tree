@@ -32,6 +32,19 @@ export const MESSAGE_SOURCES = {
 export const messageSourceSchema = z.enum(["web", "cli", "github", "api"]);
 export type MessageSource = z.infer<typeof messageSourceSchema>;
 
+/**
+ * Send-time-only marker set by the CLI for body channels that intentionally
+ * bypass inline shell-shape guards. The server may use it with source="cli" to
+ * preserve the stdin/message-file escape hatch for literal `\n` text, but must
+ * strip it before storage so user metadata cannot become a durable trust flag.
+ */
+export const CLI_BODY_ORIGIN_METADATA_KEY = "cliBodyOrigin";
+export const CLI_BODY_ORIGINS = {
+  STDIN: "stdin",
+  MESSAGE_FILE: "message-file",
+} as const;
+export type CliBodyOrigin = (typeof CLI_BODY_ORIGINS)[keyof typeof CLI_BODY_ORIGINS];
+
 export const MESSAGE_FORMATS = {
   TEXT: "text",
   MARKDOWN: "markdown",

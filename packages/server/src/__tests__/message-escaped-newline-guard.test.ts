@@ -1,3 +1,4 @@
+import { CLI_BODY_ORIGIN_METADATA_KEY, CLI_BODY_ORIGINS } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { messages } from "../db/schema/messages.js";
@@ -63,6 +64,22 @@ describe("sendMessage escaped-newline guard", () => {
     });
 
     expect(result.message.content).toBe(body);
+  });
+
+  it("preserves the CLI stdin/message-file escape hatch for intentional literal backslash-n text", async () => {
+    const { app, sender, peer, chat } = await setupAgentChat(crypto.randomUUID().slice(0, 6));
+    const body = "This message intentionally documents literal \\n\\n separators.";
+
+    const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "cli",
+      format: "markdown",
+      content: body,
+      metadata: { [CLI_BODY_ORIGIN_METADATA_KEY]: CLI_BODY_ORIGINS.STDIN },
+      receiverNames: [peer.agent.name ?? ""],
+    });
+
+    expect(result.message.content).toBe(body);
+    expect(result.message.metadata).not.toHaveProperty(CLI_BODY_ORIGIN_METADATA_KEY);
   });
 
   it("leaves human-authored literal backslash-n prose alone", async () => {
