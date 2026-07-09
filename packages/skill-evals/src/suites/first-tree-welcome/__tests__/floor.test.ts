@@ -166,4 +166,21 @@ describe("first-tree-welcome floor invariants", () => {
     expect(briefing).not.toContain("onboarding welcome / intro / value-first first chat");
     expect(briefing).not.toContain("onboarding system messages ask for welcome");
   });
+
+  it("keeps production-scan fix fan-out aligned with the scan's 3-5 blocker contract", () => {
+    expect(skillMarkdown).toContain("up to 5 eligible blockers");
+    expect(skillMarkdown).toMatch(/Production-scan normally\s+reports 3-5 blockers/);
+    expect(skillMarkdown).toContain("Do not split one blocker into implementation-step chats");
+    expect(skillMarkdown).toContain("verify the finding still applies");
+    expect(skillMarkdown).toContain("covered by existing code or an already-open PR");
+    expect(skillMarkdown).not.toContain("top ~4");
+  });
+
+  it("does not depend on production-scan confidence fields that ps-1 reports do not emit", () => {
+    expect(skillMarkdown).toContain("Eligible means the finding has concrete evidence");
+    expect(skillMarkdown).toContain("needs product, architecture, or security-design judgment");
+    expect(skillMarkdown).not.toContain("highest-leverage AND `confirmed`");
+    expect(skillMarkdown).not.toContain("low-`confidence` findings");
+    expect(skillMarkdown).not.toContain("triaged the confirmed safe blockers");
+  });
 });
