@@ -954,9 +954,10 @@ function cleanCommitSubject(subject: string | null): string | null {
     .trim()
     .replace(/^(feat|fix|docs|chore|refactor|test|style|perf|ci|build)(\([^)]+\))?:\s*/i, "")
     .replace(/\s+/g, " ");
+  // Generic single-word subjects like "merge"/"wip" are shorter than 12 chars
+  // and already filtered by the minimum-length guard above.
   if (cleaned.length < 12) return null;
   if (cleaned.length > 140) return `${cleaned.slice(0, 137)}...`;
-  if (/^(merge|wip|update|updated|change|changes)$/i.test(cleaned)) return null;
   return cleaned;
 }
 
@@ -1260,6 +1261,7 @@ export const contextTreeSnapshotTestInternals = {
   addRemovedGhostNodes,
   buildWriteEvents,
   parsePrNumber,
+  cleanCommitSubject,
   buildTreeFromRawFiles(files: Array<{ relativePath: string; raw: string }>): TreeBuildResult {
     return buildTree(files.map((file) => ({ relativePath: file.relativePath, parsed: parseMarkdown(file.raw) })));
   },
@@ -1277,4 +1279,6 @@ export const contextTreeSnapshotTestInternals = {
   readDiffEntries,
   redactSecret,
   resolveContextTreeRoot,
+  toPosix,
+  dirNodeId,
 };
