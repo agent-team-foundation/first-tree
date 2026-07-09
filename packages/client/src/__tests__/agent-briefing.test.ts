@@ -352,7 +352,7 @@ describe("buildAgentBriefing — Working in First Tree hard rules", () => {
 });
 
 describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () => {
-  it("keeps chat ask dependency routing and self-sufficient body schema", () => {
+  it("keeps chat ask dependency routing and self-sufficient body requirements", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const asking = briefing.slice(briefing.indexOf("## Asking Humans"));
 
@@ -368,6 +368,10 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(asking).toContain("Why this question exists");
     expect(asking).toContain("Recent context");
     expect(asking).toContain("**The question**");
+    expect(asking).toContain("required content dimensions, not mandatory headings");
+    expect(asking).toContain("more specific agent/task/workflow template");
+    expect(asking).toContain("preserve that template");
+    expect(asking).not.toContain("include exactly these sections");
     expect(asking).toContain("--options");
     expect(asking).toContain("--multi-select");
     expect(asking).toContain("human resolves");

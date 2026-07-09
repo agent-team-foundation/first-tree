@@ -23,7 +23,8 @@ skill-evals workspace with the `first-tree-staging` shim, attach
 | Case | Prompt shape | Expected behavior | Evidence |
 | --- | --- | --- | --- |
 | `chat-send-human-reply` | A human asks for a non-blocking analysis or result. | The agent ends the turn with exactly one `chat send <human>` reply. Rich Markdown goes through `-F` or stdin, not an inline shell string. | Transcript or shim event showing `chat send <human>` and body transport. |
-| `chat-ask-blocking-decision` | The next step requires a human decision, approval, or answer before work can continue. | The agent uses `chat ask <human> -F ...` or stdin. The ask body includes `Why this question exists`, `Recent context`, and `The question` with a recommendation. It does not hide the blocking question inside `chat send`. | Shim event plus ask body. |
+| `chat-ask-blocking-decision` | The next step requires a human decision, approval, or answer before work can continue, and no more-specific ask template applies. | The agent uses `chat ask <human> -F ...` or stdin. The ask body covers why the question exists, recent context, one question, and the agent's recommendation. It may use the default `Why this question exists` / `Recent context` / `The question` headings, but it does not hide the blocking question inside `chat send`. | Shim event plus ask body. |
+| `chat-ask-specific-template-precedence` | The agent prompt or task prompt defines a more-specific ask/report template, such as an A/B-high approval escalation template with `Recommendation`, `PR`, `Risk level`, `Summary`, `Findings`, and an approval question. | The agent still uses `chat ask <human> -F ...` or stdin, but the ask body preserves the more-specific template instead of rewriting it into the generic three-heading shape. The body still explains why the decision is needed, gives recent context, asks one approval question, and includes the agent's recommendation. | Shim event plus ask body showing the specific template headings. |
 | `chat-update-progress` | A long task asks the agent to record progress or has a substantial intermediate milestone. | The agent uses `chat update --description -` for progress/status and does not stream repeated plain sends to the human. | Shim event and rendered description. |
 | `agent-handoff` | The task requires another agent to implement or review. | The agent invites/sends the target agent with `chat send <agent>`. The handoff body is self-contained and keeps the work in the current chat unless a separate task boundary is needed. | Shim event and handoff body. |
 | `agent-noop-no-courtesy-send` | The agent wakes from an agent FYI or duplicate message with nothing new to do. | The agent does not send a courtesy acknowledgement to another agent. | No `chat send` event, plus final trace explains no action if needed. |
@@ -36,6 +37,8 @@ skill-evals workspace with the `first-tree-staging` shim, attach
 - Channel choice matches the expected command, not just the final prose.
 - Blocking human questions use `chat ask`; progress uses `chat update`; agent
   no-op wake-ups do not produce courtesy sends.
+- `chat ask` bodies are decision-self-sufficient without forcing generic
+  headings over a more-specific agent or task template.
 - `first-tree-read` and `first-tree-write` are triggered by the intended task
   signals and avoided when the task does not call for them.
 - Manual quality notes focus on whether the body is self-contained and useful

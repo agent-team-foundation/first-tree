@@ -589,14 +589,17 @@ decision is genuinely the user's to make and cannot be settled from the
 request, code, durable records, or a reasonable default. Do NOT manufacture
 progress or permission checks ("is the plan ready?", "can I continue?", "does this look right?"). Earlier answers settle a case only when you can cite them; inferred preference is not evidence. Ask volume should fall as you learn. \`chat ask\` is human-directed; reach agents with \`chat send\`.
 
-The message **body IS the ask** and must be decision-self-sufficient. Assume
-the human remembers none of the chat and may see the ask alone. Unpack every
-compressed reference and include exactly these sections:
+The message **body IS the ask** and must be decision-self-sufficient: the
+human may see it alone, so unpack compressed references and cover these inputs:
 
 1. **Why this question exists** — what forced the fork and why you cannot settle it.
 2. **Recent context** — a short recap of the last relevant rounds.
 3. **The question** — one question plus your recommendation, phrased by user
    consequence rather than implementation label.
+
+These are required content dimensions, not mandatory headings. Use this
+three-part shape only when no more specific agent/task/workflow template
+applies; otherwise preserve that template while covering the same inputs.
 
 Prefer a free-text answer; omit \`--options\` by default. Add \`--options\`
 (2-4 short \`{label, description, preview?}\` entries) only when each choice
