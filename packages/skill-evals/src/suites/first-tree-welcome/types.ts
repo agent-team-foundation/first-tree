@@ -2,12 +2,13 @@ import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
-export type WelcomeRole = "admin" | "invitee";
-export type WelcomeChatScenario = "onboarding" | "team-onboarding" | "tree-setup";
+export type WelcomeRole = "admin" | "invitee" | "unclear";
+export type WelcomeChatScenario = "onboarding" | "ordinary" | "scan-fix" | "team-onboarding" | "tree-setup";
 export type WelcomeRepoState = "none" | "local-readable" | "selected-readable" | "selected-auth-fails" | "unknown";
 export type WelcomeTreeState = "none" | "empty" | "populated" | "unknown";
 export type WelcomeGithubAppState = "installed" | "missing" | "unknown";
 export type WelcomeTreeSetupChatState = "absent" | "exists" | "promised";
+export type WelcomeActivationExpectation = "auto-ignore" | "auto-trigger" | "preloaded";
 
 export type WelcomeExpectedAction =
   | "route_to_tree_skill"
@@ -20,6 +21,8 @@ export type WelcomeExpectedAction =
   | "offer_bounded_first_tasks_from_repo_and_tree"
   | "offer_repo_value_without_claiming_tree_ready"
   | "offer_invitee_value_without_admin_setup"
+  | "handle_scan_fix_handoff"
+  | "respond_without_welcome"
   | "give_evidence_value_or_ask_for_input";
 
 export type FirstTreeWelcomeFixture = {
@@ -33,6 +36,7 @@ export type FirstTreeWelcomeFixture = {
 
 export type FirstTreeWelcomeExpected = {
   action: WelcomeExpectedAction;
+  activation: WelcomeActivationExpectation;
   evidenceSnippets?: readonly string[];
   requiredResponseHints: readonly string[];
   taskOptionHints?: readonly string[];
@@ -89,6 +93,7 @@ export type EvalMetrics = {
   forbiddenSideEffectHits: readonly string[];
   firstTreeArgv: readonly (readonly string[])[];
   fixtureValidationOk: boolean;
+  repoAccessCheckedObserved: boolean;
   repoEvidenceReadObserved: boolean;
   runnerExitCode: number | null;
   skillFileReadObserved: boolean;
@@ -101,6 +106,7 @@ export type EvalMetrics = {
 export type CaseRunSummary = {
   caseId: string;
   driftNote: string | null;
+  expectedActivation: WelcomeActivationExpectation;
   expectedAction: WelcomeExpectedAction;
   firstResponseLatencyMs: number | null;
   fixtureValidation: FixtureValidation;

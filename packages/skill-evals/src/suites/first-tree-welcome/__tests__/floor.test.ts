@@ -32,7 +32,48 @@ describe("first-tree-welcome floor invariants", () => {
 
     expect(periodicCases).toHaveLength(10);
     expect(periodicCases.every((evalCase) => evalCase.status === "implemented")).toBe(true);
+    expect(
+      periodicCases.every((evalCase) => (evalCase.expected as { activation?: unknown }).activation === "preloaded"),
+    ).toBe(true);
     expect(periodicCases.some((evalCase) => hasTag(evalCase, "catch-all"))).toBe(false);
+  });
+
+  it("runs exact positive and negative routing shapes as model-backed gate cases", () => {
+    const liveGateCases = cases.filter(
+      (evalCase) => evalCase.tier === "gate" && evalCase.status === "implemented",
+    ) as Array<{
+      expected: { activation?: string };
+      id: string;
+      prompt?: string;
+    }>;
+    const byId = new Map(liveGateCases.map((evalCase) => [evalCase.id, evalCase]));
+
+    const admin = byId.get("first-tree-welcome-admin-trigger");
+    expect(admin?.expected.activation).toBe("auto-trigger");
+    expect(admin?.prompt).toContain("welcome aboard");
+    expect(admin?.prompt).toContain("Please help me get started with First Tree");
+
+    const invitee = byId.get("first-tree-welcome-invitee-trigger");
+    expect(invitee?.expected.activation).toBe("auto-trigger");
+    expect(invitee?.prompt).toContain("welcome aboard");
+    expect(invitee?.prompt).toContain("Please help me get settled into this team on First Tree");
+
+    const scanFix = byId.get("first-tree-welcome-scan-fix-direct-trigger");
+    expect(scanFix?.expected.activation).toBe("auto-trigger");
+    expect(scanFix?.prompt).toContain("fix the launch blockers found by my production readiness scan");
+    expect(scanFix?.prompt).not.toContain("welcome aboard");
+
+    const ordinary = byId.get("first-tree-welcome-ordinary-chat-no-trigger");
+    expect(ordinary?.expected.activation).toBe("auto-ignore");
+    expect(ordinary?.prompt).not.toContain("welcome aboard");
+    expect(ordinary?.prompt).not.toContain("Please help me get started with First Tree");
+    expect(ordinary?.prompt).not.toContain("Please help me get settled into this team on First Tree");
+    expect(ordinary?.prompt).not.toContain("fix the launch blockers found by my production readiness scan");
+
+    const treeSetup = byId.get("first-tree-welcome-tree-setup-no-trigger");
+    expect(treeSetup?.expected.activation).toBe("auto-ignore");
+    expect(treeSetup?.prompt).not.toContain("welcome aboard");
+    expect(treeSetup?.prompt).not.toContain("fix the launch blockers found by my production readiness scan");
   });
 
   it("flags an implemented row whose action has no casePassed branch (orphan)", () => {
@@ -45,6 +86,24 @@ describe("first-tree-welcome floor invariants", () => {
           : evalCase,
     );
     expect(validateFloor(broken).some((error) => error.includes("orphan"))).toBe(true);
+  });
+
+  it("rejects an auto-trigger routing case without an exact kickoff opener", () => {
+    const broken = cases.map((evalCase) =>
+      evalCase.id === "first-tree-welcome-admin-trigger" ? { ...evalCase, prompt: "Welcome the user." } : evalCase,
+    );
+
+    expect(validateFloor(broken).some((error) => error.includes("does not match an exact welcome kickoff"))).toBe(true);
+  });
+
+  it("rejects a periodic matrix row that claims automatic activation", () => {
+    const broken = cases.map((evalCase) =>
+      evalCase.tier === "periodic"
+        ? { ...evalCase, expected: { ...(evalCase.expected as Record<string, unknown>), activation: "auto-trigger" } }
+        : evalCase,
+    );
+
+    expect(validateFloor(broken).some((error) => error.includes("periodic matrix rows must use preloaded"))).toBe(true);
   });
 
   it("flags an implemented periodic row whose action has no casePassed branch (orphan)", () => {
@@ -133,6 +192,12 @@ describe("first-tree-welcome floor invariants", () => {
       expect(skillMarkdown, `skill should reference the real kickoff opener: "${opener}"`).toContain(opener);
       expect(bootstrapProse, `bootstrap-prose.ts should still ship the kickoff opener: "${opener}"`).toContain(opener);
     }
+
+    const description = skillMarkdown.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+    expect(description).toContain('"welcome aboard" together with either');
+    expect(description).toContain('or explicitly asks to "fix the launch blockers');
+    expect(description).not.toContain("natural opening messages");
+    expect(skillMarkdown).toContain("Do not infer onboarding from the chat being new or from a generic greeting.");
   });
 
   it("keeps the OpenAI/Codex routing metadata description in sync with SKILL.md", () => {
@@ -153,18 +218,22 @@ describe("first-tree-welcome floor invariants", () => {
     expect(yamlDescription).toContain("repo scans");
   });
 
-  it("hardens both agent-briefing welcome skill-map rows with the scan / tree-setup exclusion", () => {
+  it("keeps both agent-briefing welcome rows on exact kickoff shapes", () => {
     // agent-briefing.ts ships TWO `first-tree-welcome` "Load when" rows (the
     // tree-less and tree-bound briefing variants) — routing hints the agent
     // reads. If either omits the scan / tree-setup exclusion it can misroute a
     // scan-first chat into the welcome launcher. Bind both so neither drifts back
     // to an un-hardened hint.
     const briefing = readFileSync(join(process.cwd(), "../client/src/runtime/agent-briefing.ts"), "utf8");
-    const hardenedRows = briefing.match(/first-tree-welcome.*not a repo scan or tree setup chat/g) ?? [];
-    expect(hardenedRows.length, "both welcome skill-map rows must carry the scan/tree-setup exclusion").toBe(2);
+    const exactKickoffRows =
+      briefing.match(
+        /first-tree-welcome.*"welcome aboard" plus either "Please help me get started with First Tree" or "Please help me get settled into this team on First Tree".*explicitly asking to "fix the launch blockers found by my production readiness scan"/g,
+      ) ?? [];
+    expect(exactKickoffRows.length, "both welcome skill-map rows must require an exact kickoff shape").toBe(2);
     // The retired un-hardened hints must be gone.
     expect(briefing).not.toContain("onboarding welcome / intro / value-first first chat");
     expect(briefing).not.toContain("onboarding system messages ask for welcome");
+    expect(briefing).not.toContain('a natural welcome / "help me get started"');
   });
 
   it("keeps production-scan fix fan-out aligned with the scan's 3-5 blocker contract", () => {
