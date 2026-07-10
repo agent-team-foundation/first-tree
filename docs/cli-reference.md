@@ -14,23 +14,29 @@ human-friendly index over them.
 
 ## Install
 
+Production:
+
 ```bash
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
-~/.local/bin/first-tree --version
+~/.local/bin/first-tree login <connect-code>
 ```
 
-The default public install path is portable and bundles Node.js. The binary
-lives at `first-tree`; the short alias `ft` is also installed.
-
-The npm global install path remains supported for operators and fallback
-installs:
+Staging:
 
 ```bash
-npm install -g first-tree
-first-tree --version
+curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+~/.local/bin/first-tree-staging login <connect-code>
 ```
 
-npm mode uses your system Node.js runtime and requires Node.js ≥ 22.13.
+The public shell installers support macOS and Linux and bundle Node.js. They
+install channel-specific binaries under `~/.local/bin`: `first-tree` / `ft`
+for production and `first-tree-staging` / `fts` for staging. The full path in
+the login command works immediately, before the current shell reloads `PATH`.
+
+For self-hosted deployments, use the two-line command returned by the web
+console. It includes the server and portable download-base overrides when
+needed. Development builds continue to use `scripts/dev-install.sh` and
+`first-tree-dev login <connect-code>`.
 
 ## Global flags
 
@@ -164,8 +170,8 @@ the new bits, then restart the client service. If no server URL is configured
 yet, `upgrade` falls back to the current channel's latest release data directly
 so the update path still works before login/config. Portable installs download
 the channel manifest and verified tarball, including the bundled Node.js
-runtime. npm installs run `npm install -g` against the channel package and keep
-using the system Node.js runtime.
+runtime. Existing npm-mode installs retain their package-manager update path
+and continue using the system Node.js runtime.
 
 | Flag | Effect |
 |---|---|
@@ -173,15 +179,15 @@ using the system Node.js runtime.
 | `--no-restart` | Install the new version and refresh the supervisor definition, but leave the running service alone. Used for staged rollouts. |
 
 Refusing to run from a source checkout (anywhere under a `.git`
-ancestor) is intentional — keeps a dev build from accidentally
-`npm i -g`-overwriting a prod global. For local development use
+ancestor) is intentional — it keeps a dev build from accidentally overwriting
+a hosted-channel installation. For local development use
 `scripts/dev-install.sh` (see [docs/development/local-dev-isolation.md](development/local-dev-isolation.md)).
 
-In npm mode, `upgrade` checks the target package's `engines.node` metadata
-before install when npm can provide it. If the target requires a newer Node.js
-than the current process is running, the command fails before install with a
-system-Node upgrade hint and a portable-install migration hint. npm-mode
-updates do not replace Node.js themselves.
+For an existing npm-mode installation, `upgrade` checks the target package's
+`engines.node` metadata before install when npm can provide it. If the target
+requires a newer Node.js than the current process is running, the command fails
+before install with a system-Node upgrade hint and a shell-installer migration
+hint. npm-mode updates do not replace Node.js themselves.
 
 ---
 
@@ -851,6 +857,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
 | `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used to stamp the issuer on short connect codes and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
+| `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL` | Base URL for the prod/staging portable installer and artifact mirror. Do not include a channel suffix; the server appends the channel's `publicInstallerPath` (for example, `prod/install.sh`). | `https://download.first-tree.ai/releases` |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |

@@ -1,7 +1,13 @@
-import type { AgentType, ClientCapabilities, RuntimeAuthMethod, RuntimeProvider } from "@first-tree/shared";
+import type {
+  AgentType,
+  ClientCapabilities,
+  ConnectTokenResponse,
+  RuntimeAuthMethod,
+  RuntimeProvider,
+} from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
-export type { AgentType };
+export type { AgentType, ConnectTokenResponse };
 
 export type RuntimeAgent = {
   agentId: string;
@@ -119,35 +125,6 @@ export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }>
   // owning org — no `withOrg` needed.
   return api.post(`/agents/${encodeURIComponent(agentId)}/reset-activity`);
 }
-
-export type ConnectTokenResponse = {
-  /** Opaque short code for `<binName> login <code>`. */
-  token: string;
-  expiresIn: number;
-  /** `<binName> login <code>` — channel-aware bin name. */
-  command: string;
-  /**
-   * Full bootstrap line: `npm install -g <pkg>\n<binName> login <code>`
-   * for prod/staging; just `<binName> login <code>` for dev (no published
-   * package). The token segment is the short code.
-   */
-  bootstrapCommand: string;
-  /**
-   * Bare npm package name. `null` for dev (no published package — UI
-   * suppresses the `npm install -g` step).
-   */
-  npmSpec: string | null;
-  /** Bootstrap install method selected by the server. */
-  installMethod: "npm" | "portable" | "source";
-  /** Installer URL when `installMethod` is `portable`; never contains tokens. */
-  installerUrl: string | null;
-  /**
-   * Bin name to invoke after install — `first-tree` / `first-tree-staging`
-   * / `first-tree-dev` depending on this server's channel. Use instead of
-   * hardcoded `"first-tree"` strings in command-line UX.
-   */
-  binName: string;
-};
 
 export function generateConnectToken(): Promise<ConnectTokenResponse> {
   return api.post<ConnectTokenResponse>("/me/connect-tokens");

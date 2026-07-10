@@ -34,7 +34,6 @@ const baseConfig: Config = {
   auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
   trustProxy: false,
   connectBootstrap: {
-    method: "npm",
     portableDownloadBaseUrl: "https://download.first-tree.ai/releases",
   },
   observability: { logging: { level: "error", format: "json", bridgeToSpanLevel: "off" } },

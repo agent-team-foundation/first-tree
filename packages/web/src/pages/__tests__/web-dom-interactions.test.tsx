@@ -27,7 +27,6 @@ const activityMocks = vi.hoisted(() => ({
 const agentApiMocks = vi.hoisted(() => ({
   checkAgentNameAvailability: vi.fn(),
   createAgent: vi.fn(),
-  getAgent: vi.fn(),
   getNewChatDefaultCandidates: vi.fn(),
   listAgents: vi.fn(),
   listManagedAgents: vi.fn(),
@@ -205,6 +204,8 @@ vi.mock("../../lib/visibility-interval.js", () => ({
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
+const PROD_INSTALLER_URL = "https://download.first-tree.ai/releases/prod/install.sh";
+const PROD_BOOTSTRAP_COMMAND = `curl -fsSL ${PROD_INSTALLER_URL} | sh\n~/.local/bin/first-tree login connect-token`;
 
 const AGENT_NAMES: Record<string, string> = {
   "agent-1": "Nova",
@@ -630,7 +631,7 @@ beforeEach(() => {
     expiresIn: 600,
     command: "first-tree-dev login connect-token",
     bootstrapCommand: "first-tree-dev login connect-token",
-    npmSpec: null,
+    installerUrl: null,
     binName: "first-tree-dev",
   });
   activityMocks.disconnectClient.mockResolvedValue({ disconnected: true, agentIds: ["agent-1"] });
@@ -639,7 +640,6 @@ beforeEach(() => {
   agentApiMocks.createAgent.mockResolvedValue(
     agent({ uuid: "agent-created", name: "deploy-bot", displayName: "Deploy Bot" }),
   );
-  agentApiMocks.getAgent.mockResolvedValue(agent({ clientId: "client-bound" }));
   agentApiMocks.getNewChatDefaultCandidates.mockResolvedValue({
     agent: agent({ uuid: "agent-1" }),
   });
@@ -809,10 +809,10 @@ beforeEach(() => {
   clientApiMocks.post.mockResolvedValue({
     token: "connect-token",
     expiresIn: 600,
-    command: "first-tree-dev login connect-token",
-    bootstrapCommand: "first-tree-dev login connect-token",
-    npmSpec: null,
-    binName: "first-tree-dev",
+    command: "first-tree login connect-token",
+    bootstrapCommand: PROD_BOOTSTRAP_COMMAND,
+    installerUrl: PROD_INSTALLER_URL,
+    binName: "first-tree",
   });
 });
 
@@ -857,9 +857,9 @@ describe("web DOM interaction coverage", () => {
     await renderDom(<NewAgentDialog open onOpenChange={() => undefined} onCreated={() => undefined} />);
 
     await waitForText("No computer connected yet.");
-    await waitForText("first-tree-dev login connect-token");
+    await waitForText("~/.local/bin/first-tree login connect-token");
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Copy") ?? null);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree-dev login connect-token");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(PROD_BOOTSTRAP_COMMAND);
   });
 
   it("renders ClientsPage admin groups, member empty state, and fallback banner", async () => {
@@ -1467,53 +1467,6 @@ describe("web DOM interaction coverage", () => {
     authMock.value = { ...authMock.value, onboardingCompletedAt: "2026-05-02T00:00:00.000Z" };
     const completed = await renderDom(<SettingsOnboardingPage />);
     expect(completed.container.textContent).toBe("");
-  });
-
-  it("builds LastStepModal command, copies it, skips install on dev, and fires onBound", async () => {
-    const { LastStepModal } = await import("../../components/last-step-modal.js");
-    const onBound = vi.fn();
-    const onClose = vi.fn();
-
-    const unboundAgent = { ...agent({ name: "deploy bot", uuid: "agent-new" }), clientId: null };
-    const modal = await renderDom(<LastStepModal agent={unboundAgent} open onClose={onClose} onBound={onBound} />);
-    await waitForText("first-tree-dev agent add", document.body);
-    expect(document.body.textContent).toContain(
-      "first-tree-dev agent add 'deploy bot' --agent-id agent-new && first-tree-dev login connect-token",
-    );
-    expect(document.body.textContent).not.toContain("npm install -g");
-    await click(document.body.querySelector("button"));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "first-tree-dev agent add 'deploy bot' --agent-id agent-new && first-tree-dev login connect-token",
-    );
-    await waitForText("Waiting for your computer to connect", document.body);
-    for (let index = 0; index < 20 && onBound.mock.calls.length === 0; index += 1) {
-      await flush();
-    }
-    expect(onBound).toHaveBeenCalledWith(expect.objectContaining({ clientId: "client-bound" }));
-    await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("Skip for now")) ??
-        null,
-    );
-    expect(onClose).toHaveBeenCalled();
-    await unmountRoot(modal.root);
-
-    activityMocks.generateConnectToken.mockResolvedValueOnce({
-      token: "prod-token",
-      expiresIn: 600,
-      command: "first-tree login prod-token",
-      bootstrapCommand: "npm install -g first-tree\nfirst-tree login prod-token",
-      npmSpec: "first-tree",
-      binName: "first-tree",
-    });
-    await renderDom(
-      <LastStepModal
-        agent={agent({ clientId: "client-1", name: "nova" })}
-        open
-        onClose={() => undefined}
-        onBound={() => undefined}
-      />,
-    );
-    await waitForText("npm install -g first-tree", document.body);
   });
 
   it("switches orgs and opens setup actions from the TeamSwitcher, and signs out from the UserMenu", async () => {

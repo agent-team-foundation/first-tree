@@ -200,10 +200,6 @@ export const COPY = {
       count === 1 ? "Coding agent on this computer" : "Coding agents on this computer",
     // Bridge below the detected-agents list → the next step (create-agent).
     detectedBridge: "Next, create your first agent.",
-    // Stuck recovery (replaces the Need-help disclosure): ONE line, Node.js the
-    // #1 cause of "command not found". `nodeLinkLabel` is the inline link.
-    stuckNodePre: "“command not found”? → ",
-    stuckNodePost: ", re-run.",
     waiting: "Waiting for your computer…",
     connected: "connected",
     // One line: the "✓ <host> connected" row above already says the computer is
@@ -212,8 +208,6 @@ export const COPY = {
     // implied — a detected agent just shows up). Problem + fix only.
     noRuntime: "No coding agent found yet. Install one (like Claude Code) and sign in.",
     detecting: "Looking for coding agents on it…",
-    nodeLinkLabel: "Install Node.js (free)",
-    nodeUrl: "https://nodejs.org",
     /** Token-mint failure (POST /me/connect-tokens threw, after silent retries).
         Calm + recoverable: the auto-retry handles transient blips, so by the
         time this shows it's worth a manual Try again. */

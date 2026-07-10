@@ -15,12 +15,10 @@ everything online.
 
 ## Prerequisites
 
-- **The CLI**. Prefer the portable command shown in the web console's
-  *Computers → New Connection* dialog; it bundles Node.js. For headless
-  production installs, the portable installer has this shape:
-  `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh`.
-- **Node.js** ≥ 22.13 only when you choose the npm fallback path
-  (`npm install -g first-tree`).
+- **A macOS or Linux machine** where the CLI and agent runtime will run.
+- **The CLI**. Use the two-line, channel-aware shell installer command shown in
+  the web console's *Computers → New Connection* dialog. The installer bundles
+  Node.js, so Node does not need to be installed separately.
 - **A connect code** — generated from the web console's *Computers → New
   Connection* dialog. New codes are short, single-use strings. The CLI uses
   its channel default server URL unless `FIRST_TREE_SERVER_URL` is set; connect
@@ -28,23 +26,45 @@ everything online.
 - **A server you can reach** — either the hosted SaaS or a locally
   running server.
 
+Hosted production and staging use these commands respectively:
+
+```bash
+# Production
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-code>
+
+# Staging
+curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+~/.local/bin/first-tree-staging login <connect-code>
+```
+
+Use the exact command from the web console for self-hosted deployments. It
+includes the server and download-base overrides when they differ from the
+hosted channel defaults. The explicit `~/.local/bin` path works before the
+current shell reloads its `PATH`.
+
+Local development continues to use the source checkout:
+
+```bash
+./scripts/dev-install.sh
+first-tree-dev login <connect-code>
+```
+
 ## End-to-end flow
 
 ```bash
-FT_BIN=<binName> # first-tree, first-tree-staging, or first-tree-dev
-
-# 1. Sign this machine in. Persists credentials and installs the
-#    background daemon on macOS / Linux.
-$FT_BIN login <connect-code>
+# 1. Run the channel-aware install/login command above. It persists credentials
+#    and installs the background daemon on macOS / Linux.
+FT_BIN="$HOME/.local/bin/first-tree" # Use first-tree-staging for staging.
 
 # 2. Create the agent record on the server and bind it to this client.
 #    The same JWT signs every request — no per-agent token.
-$FT_BIN agent create alice \
+"$FT_BIN" agent create alice \
   --type human \
-  --client-id "$($FT_BIN config get client.id | awk '{print $2}')"
+  --client-id "$("$FT_BIN" config get client.id | awk '{print $2}')"
 
 # 3. Start the daemon (no-op if `login` already started it).
-$FT_BIN daemon start
+"$FT_BIN" daemon start
 ```
 
 `--type` accepts `human` or `agent`. The `client-id` argument is required

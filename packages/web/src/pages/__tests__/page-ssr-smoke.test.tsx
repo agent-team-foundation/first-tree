@@ -750,7 +750,8 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
       okRuntimes: ["claude-code", "codex"],
       selectedRuntime: "claude-code",
       setSelectedRuntime: () => undefined,
-      cliCommand: "npm install -g first-tree\nfirst-tree login connect-token",
+      cliCommand:
+        "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n~/.local/bin/first-tree login connect-token",
       tokenError: null,
       retry: () => undefined,
     },
@@ -1238,7 +1239,7 @@ describe("page SSR smoke coverage", () => {
 
     const html = renderPage(
       <>
-        <CommandBox command="npm install -g first-tree\nfirst-tree login token" />
+        <CommandBox command="curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n~/.local/bin/first-tree login token" />
         <FlowNote tone="info">Heads up</FlowNote>
         <StatusRow state="waiting" label="Waiting now" />
         <StatusRow state="ok" label="Connected now" />

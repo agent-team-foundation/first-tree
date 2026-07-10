@@ -208,8 +208,6 @@ describe("Connect code bootstrap", () => {
       token: string;
       command: string;
       bootstrapCommand: string;
-      npmSpec: string | null;
-      installMethod: string;
       installerUrl: string | null;
       binName: string;
     }>();
@@ -217,16 +215,14 @@ describe("Connect code bootstrap", () => {
     expect(body.token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
     expect(body.token).not.toContain("/");
 
-    // Default test config runs channel=dev (server default) — dev has no
-    // published package, so npmSpec is null and bootstrapCommand collapses
-    // to just the login line. binName follows the channel: dev →
-    // first-tree-dev.
+    // Default test config runs channel=dev (server default), so the source-only
+    // bootstrap collapses to the login line. binName follows the channel.
     expect(body.binName).toBe("first-tree-dev");
     expect(body.command).toBe(`first-tree-dev login ${body.token}`);
-    expect(body.npmSpec).toBeNull();
-    expect(body.installMethod).toBe("source");
     expect(body.installerUrl).toBeNull();
     expect(body.bootstrapCommand).toBe(body.command);
+    expect(body).not.toHaveProperty("npmSpec");
+    expect(body).not.toHaveProperty("installMethod");
   });
 });
 

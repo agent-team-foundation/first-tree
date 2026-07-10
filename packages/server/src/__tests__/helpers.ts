@@ -167,7 +167,6 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     },
     trustProxy: false,
     connectBootstrap: {
-      method: "npm",
       portableDownloadBaseUrl: "https://download.first-tree.ai/releases",
       ...opts.connectBootstrap,
     },

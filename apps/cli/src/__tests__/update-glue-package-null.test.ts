@@ -45,7 +45,8 @@ describe("update glue package-name fallback", () => {
     await expect(
       createExecuteUpdate({ managed: false })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
     ).resolves.toEqual({ installed: false });
-    expect(output()).toContain("npm i -g first-tree-dev");
+    expect(output()).toContain("./scripts/dev-install.sh");
+    expect(output()).not.toContain("npm i -g");
 
     printLineMock.mockClear();
     updateStateMocks.isLoopGuarded.mockReturnValueOnce(true);

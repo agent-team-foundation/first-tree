@@ -57,6 +57,8 @@ vi.mock("../../lib/visibility-interval.js", () => ({
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
+const PROD_BOOTSTRAP_COMMAND =
+  "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n~/.local/bin/first-tree login old-token";
 
 let root: Root | null = null;
 
@@ -238,6 +240,8 @@ beforeEach(() => {
     expiresIn: 600,
     command: "first-tree-dev login connect-token",
     bootstrapCommand: "first-tree-dev login connect-token",
+    installerUrl: null,
+    binName: "first-tree-dev",
   });
   authMock.value.refreshMe.mockClear();
 });
@@ -373,8 +377,10 @@ describe("NewAgentDialog extra branches", () => {
     clientMocks.post.mockResolvedValueOnce({
       token: "old-token",
       expiresIn: 600,
-      command: "first-tree-dev login old-token",
-      bootstrapCommand: "npm install -g first-tree-dev\nfirst-tree-dev login old-token",
+      command: "first-tree login old-token",
+      bootstrapCommand: PROD_BOOTSTRAP_COMMAND,
+      installerUrl: "https://download.first-tree.ai/releases/prod/install.sh",
+      binName: "first-tree",
     });
 
     const container = await renderDom(
@@ -382,12 +388,18 @@ describe("NewAgentDialog extra branches", () => {
     );
 
     await waitForText(container, "No computer connected yet.");
-    await waitForText(container, "npm install -g first-tree-dev");
-    await waitForText(container, "first-tree-dev login old-token");
+    await waitForText(container, "https://download.first-tree.ai/releases/prod/install.sh");
+    await waitForText(container, "~/.local/bin/first-tree login old-token");
+    const renderedCommand = document.body.querySelector("pre code");
+    expect(renderedCommand?.textContent).toBe(PROD_BOOTSTRAP_COMMAND);
+    expect(renderedCommand?.textContent?.split("\n")).toEqual([
+      "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh",
+      "~/.local/bin/first-tree login old-token",
+    ]);
     await click(buttonByText(document.body, "Copy"));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "npm install -g first-tree-dev\nfirst-tree-dev login old-token",
-    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(PROD_BOOTSTRAP_COMMAND);
+    expect(document.body.textContent).not.toContain("npm install");
+    expect(document.body.textContent).not.toContain("Node.js");
     expect(document.body.textContent).toContain("Copied");
   });
 
