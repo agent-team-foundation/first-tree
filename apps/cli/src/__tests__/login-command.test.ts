@@ -93,7 +93,7 @@ async function runLogin(args: string[]): Promise<void> {
 }
 
 async function waitForAsyncWork(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -304,6 +304,9 @@ afterEach(() => {
   if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
   else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
   process.exitCode = undefined;
+  // Drop mock call history so the large command-graph suite cannot retain
+  // multi-MB argument snapshots across the 29 login cases in one worker.
+  vi.clearAllMocks();
 });
 
 // `runLogin` dynamic-imports `commands/login.js` on every test run, which

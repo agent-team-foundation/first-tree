@@ -14,6 +14,25 @@ function message(format: SendMessage["format"], content: unknown): SendMessage {
   return { format, content, source: "web" } as SendMessage;
 }
 
+function messageWithAttachment(format: SendMessage["format"], content: unknown): SendMessage {
+  return {
+    format,
+    content,
+    source: "web",
+    metadata: {
+      attachments: [
+        {
+          attachmentId: "11111111-1111-4111-8111-111111111111",
+          kind: "file",
+          mimeType: "text/csv",
+          filename: "evidence.csv",
+          size: 7,
+        },
+      ],
+    },
+  } as SendMessage;
+}
+
 describe("sendMessage — empty / placeholder body is rejected fail-closed", () => {
   it("rejects an empty string body", async () => {
     await expect(sendMessage(stubDb, "chat-1", "sender-1", message("text", ""))).rejects.toThrow(BadRequestError);
@@ -43,6 +62,20 @@ describe("sendMessage — empty / placeholder body is rejected fail-closed", () 
 
   it("rejects an empty ask ('request') body — the body IS the question", async () => {
     await expect(sendMessage(stubDb, "chat-1", "sender-1", message("request", "   "))).rejects.toThrow(BadRequestError);
+  });
+
+  it("allows an empty text body when a document attachment ref carries the content", async () => {
+    // The content guard should pass and then the stub DB should fail later;
+    // this proves the empty-body rejection did not fire.
+    await expect(sendMessage(stubDb, "chat-1", "sender-1", messageWithAttachment("text", ""))).rejects.not.toThrow(
+      BadRequestError,
+    );
+  });
+
+  it("still rejects an empty ask body even when an attachment ref is present", async () => {
+    await expect(sendMessage(stubDb, "chat-1", "sender-1", messageWithAttachment("request", ""))).rejects.toThrow(
+      BadRequestError,
+    );
   });
 
   it("rejects a placeholder ask ('request') body", async () => {
