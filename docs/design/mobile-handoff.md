@@ -15,7 +15,7 @@ decisions.
 ## Product Decisions To Preserve
 
 - Mobile is the daily work surface, not a compressed desktop console.
-- Primary tabs are `Today`, `Chat`, `Team`, and `Me`.
+- Primary tabs are `Now`, `Chat`, `Team`, and `Me`.
 - `Team` includes humans and agents together.
 - Desktop remains the place for agent creation, runtime configuration, context
   tree setup, integrations, resources, and dense admin tables.
@@ -33,7 +33,7 @@ Added:
 - `packages/web/src/pages/mobile/data.ts`
 - `packages/web/src/pages/mobile/components.tsx`
 - `packages/web/src/pages/mobile/shell.tsx`
-- `packages/web/src/pages/mobile/today.tsx`
+- `packages/web/src/pages/mobile/now.tsx`
 - `packages/web/src/pages/mobile/chat.tsx`
 - `packages/web/src/pages/mobile/team.tsx`
 - `--mobile-tabbar-height` in `packages/web/src/index.css`
@@ -43,7 +43,7 @@ The current files implement:
 - a mobile chat attention projection from existing `MeChatRow` data
 - a safe-area-aware mobile shell component
 - mobile top bar and bottom tab bar components
-- Today screen backed by `listMeChats`
+- Now screen backed by `listMeChats`
 - Chat list/detail wrapper backed by existing chat APIs and `CenterPanel`
 - Team roster backed by existing agent/member APIs
 
@@ -99,8 +99,8 @@ pnpm build-script approvals are already configured.
        </PulseProvider>
      }
    >
-     <Route path="m" element={<Navigate to="/m/today" replace />} />
-     <Route path="m/today" element={<MobileTodayPage />} />
+     <Route path="m" element={<Navigate to="/m/now" replace />} />
+     <Route path="m/now" element={<MobileNowPage />} />
      <Route path="m/chat" element={<MobileChatPage />} />
      <Route path="m/team" element={<MobileTeamPage />} />
      <Route path="m/me" element={<MobileMePage />} />
@@ -113,10 +113,10 @@ pnpm build-script approvals are already configured.
 
    - `mobileChatSignal` ranks needs-answer before failed, unread, working, and
      recent chats.
-   - `/m` redirects to `/m/today`.
-   - `/m/today`, `/m/chat`, `/m/team`, and `/m/me` render under auth.
+   - `/m` redirects to `/m/now`.
+   - `/m/now`, `/m/chat`, `/m/team`, and `/m/me` render under auth.
    - chat detail hides the mobile bottom tabs when `?c=` is present.
-   - Today and Chat empty/error/loading states render without throwing.
+   - Now and Chat empty/error/loading states render without throwing.
 
 4. QA mobile layout in browser.
 
@@ -148,11 +148,11 @@ pnpm build-script approvals are already configured.
 The first phase is done when an authenticated phone-width user can:
 
 - open `/m`
-- land in Today
+- land in Now
 - see attention work from active chats
 - open chat list
 - open an existing chat
-- start a draft chat from Today, Chat, or Team
+- start a draft chat from Now, Chat, or Team
 - view humans and agents in Team
 - reach account/team controls in Me
 

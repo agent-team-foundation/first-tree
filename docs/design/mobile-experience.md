@@ -28,7 +28,7 @@ dedicated mobile interaction model.
 
 The mobile app has four primary tabs:
 
-- `Today`: attention queue and current work.
+- `Now`: attention queue and current work.
 - `Chat`: conversation list and full-screen chat detail.
 - `Team`: humans and agents in one roster.
 - `Me`: account, team switching, sign-out, theme, and personal settings.
@@ -41,8 +41,8 @@ Humans and agents are peers in the mobile roster.
 
 Mobile uses explicit `/m/*` routes inside the existing React web app:
 
-- `/m` redirects to `/m/today`.
-- `/m/today` shows the attention queue.
+- `/m` redirects to `/m/now`.
+- `/m/now` shows the attention queue.
 - `/m/chat` shows the mobile conversation list.
 - `/m/chat?c=<chatId>` shows chat detail.
 - `/m/chat?c=draft&with=<agentId>` starts a targeted draft chat.
@@ -97,8 +97,8 @@ web package rather than overloading the desktop `Layout`:
 
 - `MobileShell`: route outlet, top bar, bottom tabs, safe-area management.
 - `MobileTopBar`: current screen title, team anchor, compact actions.
-- `MobileBottomTabs`: Today, Chat, Team, Me with unread/attention badges.
-- `MobileTodayPage`: attention-first work queue from existing chat rows.
+- `MobileBottomTabs`: Now, Chat, Team, Me with unread/attention badges.
+- `MobileNowPage`: attention-first work queue from existing chat rows.
 - `MobileAttentionCard`: one actionable work item with status, title, summary,
   and primary action.
 - `MobileChatPage`: list/detail router backed by `?c=`.
@@ -136,9 +136,9 @@ Desktop surfaces should not be reused as primary mobile UI:
 
 ## Interaction Models
 
-### Today
+### Now
 
-Today is not a generic dashboard. It is an action queue sorted by urgency:
+Now is not a generic dashboard. It is an action queue sorted by urgency:
 
 1. open agent questions
 2. failed or blocked work
@@ -188,7 +188,7 @@ Mobile ships inside `packages/web` as a separate shell:
 ```text
 packages/web/src/pages/mobile/
   shell.tsx
-  today.tsx
+  now.tsx
   chat.tsx
   team.tsx
   me.tsx
@@ -221,7 +221,7 @@ The first phase must make the mobile product visible and usable:
 
 - add authenticated `/m/*` routes
 - add mobile shell with safe-area-aware top and bottom chrome
-- implement Today from existing chat rows
+- implement Now from existing chat rows
 - implement Chat list/detail routing
 - implement Team roster with humans and agents
 - implement Me account controls
@@ -229,7 +229,7 @@ The first phase must make the mobile product visible and usable:
 - add route and projection tests for the new mobile surface
 
 First phase is complete only when a phone-width viewport can navigate through
-Today, Chat, Team, and Me without horizontal overflow, hover-only controls, or
+Now, Chat, Team, and Me without horizontal overflow, hover-only controls, or
 composer/tab overlap.
 
 ## QA Gate
