@@ -125,13 +125,7 @@ describe("scanBareDocPathTokens", () => {
   });
 
   it("keeps real fences skipped after a backtick-containing pseudo-fence line", () => {
-    const text = [
-      "```docs/inline.md``` as inline code",
-      "```",
-      "docs/fenced.md",
-      "```",
-      "docs/after.md",
-    ].join("\n");
+    const text = ["```docs/inline.md``` as inline code", "```", "docs/fenced.md", "```", "docs/after.md"].join("\n");
     const matches = scanBareDocPathTokens(text);
     expect(matches.map((m) => m.raw)).toEqual(["docs/inline.md", "docs/after.md"]);
     expect(matches[0]?.enclosingCodeSpan).toBeDefined();
