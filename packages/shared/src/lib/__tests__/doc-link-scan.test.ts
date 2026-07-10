@@ -97,6 +97,26 @@ describe("scanBareDocPathTokens", () => {
     expect(tokens(text)).toEqual(["docs/after.md"]);
   });
 
+  it("supports tilde-opened fences and does not close them on backtick markers", () => {
+    const text = ["~~~", "docs/fenced.md", "```", "docs/still-fenced.md", "~~~", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("recognizes opening fences indented up to three spaces", () => {
+    const text = ["   ```", "docs/fenced.md", "   ```", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("treats a four-space fence marker as indented code, not a fence opener", () => {
+    const text = ["    ```", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("skips fenced blocks whose opening fence carries an info string", () => {
+    const text = ["```ts", 'const doc = "docs/fenced.md";', "```", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
   it("ignores indented (4-space / tab) code blocks", () => {
     expect(tokens("    docs/indented.md")).toEqual([]);
     expect(tokens("\tdocs/tabbed.md")).toEqual([]);
