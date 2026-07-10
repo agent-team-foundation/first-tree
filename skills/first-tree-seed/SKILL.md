@@ -1,9 +1,9 @@
 ---
 name: first-tree-seed
-version: 0.2.4
+version: 0.2.5
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Bootstrap a team's Context Tree from its connected source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Reads the sources, proposes an initial top-level + second-level domain structure for the user to approve, then drafts initial leaf content — each as a reviewable PR. Refuses a tree that already has domain structure: send incremental, source-driven writes to `first-tree-write`, and broad maintenance / drift-audit to a focused task.
+description: Bootstrap a team's Context Tree from readable source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or GitHub URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR is merged.
 ---
 
 # First Tree — Seed
@@ -12,7 +12,7 @@ Read this skill **before** drafting the first content into a Context Tree
 that has no domain structure yet. It owns the bootstrap from "the tree has
 no domain structure — either none exists, or a bound-but-empty one" to "the
 tree has real top + second level structure plus initial leaf nodes drawn
-from the bound source repos". It first resolves the tree's state, then — for
+from readable source repos". It first resolves the tree's state, then — for
 a tree that needs building — creates the repo with `first-tree tree init`
 when none exists (see *Resolve the tree's state*). Every subsequent write —
 one PR at a time, one decision at a time — belongs to `first-tree-write`,
@@ -23,12 +23,14 @@ not here.
 | Use `first-tree-seed`                                                 | Use a different skill                                                                                |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | The team has no tree yet, **or** a bound tree with no domain structure (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental source-driven write)       |
-| First content pass on the bound sources                               | Broad maintenance or drift-audit work on an existing tree                                            |
+| First content pass on resolved readable sources                       | Broad maintenance or drift-audit work on an existing tree                                            |
 | Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
 
-The skill is **single-shot per tree**: once the tree has domain structure,
-*Resolve the tree's state* (state C below) refuses and routes further work
-through `first-tree-write` or a focused maintenance task.
+The skill is **single-shot per tree setup**: once the tree has domain
+structure, a new or unrelated seed request refuses and routes further work
+through `first-tree-write` or a focused maintenance task. The one exception is
+the verified Phase 2 continuation from this setup chat after its Phase 1 PR was
+merged; that is completion of the same seed, not a second seed.
 
 ## Required Reading
 
@@ -50,23 +52,40 @@ accordingly: create it when none exists, fill it when it is bound but empty,
 and refuse when it already has domain structure (state C below), routing
 that work to `first-tree-write` or a focused maintenance task.
 
+**Check for a Phase 2 continuation before classifying state C.** Continue the
+same seed into Phase 2 only when all of these are true:
+
+1. this setup chat's visible history contains the Phase 1 proposal, user
+   approval, and the Phase 1 PR handoff;
+2. the current user message explicitly says that PR was merged or asks to
+   continue after merging it; and
+3. a fresh fetch confirms the approved top-level structure exists on the tree
+   repo's default branch while Phase 2 has not already completed.
+
+When all three hold, re-resolve the same readable sources and enter Phase 2
+through its trigger below even though domain directories now exist. Otherwise
+apply A/B/C normally. Never infer continuation from node names, a chat title,
+or a populated tree alone.
+
 **A — No tree yet.** The workspace is not bound to a tree: either
 `<workspaceRoot>/.first-tree/workspace.json` has no non-empty `tree`
 field, or the team has no `context_tree` binding. This is the
-agent-driven creation path — create the tree with the user's local `gh`:
+agent-driven creation path. First resolve readable sources using the section
+below, because owner placement depends on them; then create the tree with the
+user's local `gh`:
 
 ```bash
 first-tree tree init --title "<team display name>" --owner "<source-repo-owner>" --dir "<workspaceRoot>/<manifest.tree>"
 ```
 
 **Home the tree beside its source — pass `--owner`.** Set
-`<source-repo-owner>` to the account that owns the team's **main bound
+`<source-repo-owner>` to the account that owns the team's **main resolved
 source repo** — an **org or a personal account alike**. Derive it from the
-source clone's **remote URL, not its directory name**: resolve
+source's **remote URL, not its directory name**: for a declared source resolve
 `<source-clone>` from the manifest
 (`<workspaceRoot>/<sourcesRoot>/<source>`, per *Materialize source read
-worktrees* below), run `git -C <source-clone> remote get-url origin` (or
-use the declared source repo URL from your briefing when present), and take
+worktrees* below); for an explicit local repo use that repo; then run
+`git -C <source> remote get-url origin` (or use the explicit GitHub URL) and take
 the `<owner>` segment of that URL (e.g. `acme` in `github.com/acme/app`, or
 `alice` in `github.com/alice/app`). **`manifest.sources` holds directory
 names (e.g. `first-tree`), not owners** — passing a source *name* as
@@ -136,18 +155,21 @@ clone exactly where Phase 1 (and the runtime) expect it. If the manifest
 carries no tree name yet (a fully unbound workspace), use the conventional
 `<workspaceRoot>/context-tree`.
 
-**Surface App coverage after creating the tree — recommend, never block.**
+**Delay App coverage guidance until there is a reviewable milestone — recommend,
+never block.**
 A newly created tree is only visible to the team's web view and the
 Context Tree reviewer once the First Tree GitHub App can read its repo.
 `tree init` creates and binds the tree either way and prints a coverage
-line; make that outcome loud, never gate on it — the tree is built and
-bound, so proceed to Phase 1 regardless of coverage.
+line; capture the result but do not interrupt source resolution, structure
+review, or Phase 1 work with an installation detour. The tree is built and
+bound, so proceed regardless of coverage.
 
-**When `tree init` reports the repo is not covered**, leave a prominent
-message for the admin (a `chat send` to them, not a line buried in tool
-output) stating the consequence — "your Context Tree is built and bound, but
-the web view and PR reviewer won't see it until the First Tree App can read
-its repo" — plus the next step for the case it reports:
+**After the Phase 1 PR is open**, or earlier only when the next requested
+operation actually needs Cloud snapshot/reviewer access, surface an uncovered
+repo once in the setup chat. State the capability consequence — "your Context
+Tree is built and bound, but the web view and PR reviewer won't see it until
+the First Tree App can read its repo" — and relay only a recovery URL returned
+by `tree init` or another authoritative command:
 
 - **A selected-repositories install that excludes the new repo:** `tree init`
   prints a GitHub installation-settings URL — an absolute `https://` link, so
@@ -180,7 +202,8 @@ exist: **extend** the root `NODE.md` index and the `members/` tree rather
 than recreating them (a bootstrap root node / members index is expected,
 not a conflict).
 
-**C — Already seeded.** The tree has one or more **top-level domain
+**C — Already seeded.** Outside the verified Phase 2 continuation above, the
+tree has one or more **top-level domain
 directories** — any directory directly under `<workspaceRoot>/<manifest.tree>/`
 other than `.git/`, `.first-tree/`, `.github/`, `members/`, and
 dotfile-prefixed dirs. Refuse with a one-line explanation pointing at
@@ -188,7 +211,38 @@ dotfile-prefixed dirs. Refuse with a one-line explanation pointing at
 focused maintenance scope. Do **not** delete nodes to force a re-seed —
 that is human-owned.
 
-**In every state, also require all declared sources on disk.** Each source
+### Resolve readable sources
+
+Use one ordered source-resolution rule and call its result
+`resolvedSources` throughout both phases:
+
+1. **A non-empty `manifest.sources` is authoritative.** Require every declared
+   source on disk. Do not let a URL or local path supplied in chat hide a
+   half-provisioned declared workspace.
+2. **An empty or absent `manifest.sources` is valid.** Use an explicit local
+   project folder or GitHub repository URL already supplied in this setup chat.
+   If neither exists, ask the user for exactly one of them and stop until they
+   answer. Do not send them to Settings and do not make GitHub App installation
+   a prerequisite.
+3. **Validate before reading.** A local folder must exist, be readable, and be
+   a Git repository. A GitHub URL must be a repository URL that host `gh` or
+   `git` can access; materialize a task-local read checkout under the workspace
+   `worktrees/` directory. These reads do not register team resources or mutate
+   the source repo.
+
+For a local non-bare repository, read it in place without modifying it. For a
+local bare repository, follow the worktree protocol below. For a GitHub URL,
+clone/fetch it into task-local read storage, then read its default branch.
+Private URLs may rely on the user's existing `gh`/git credentials; if access
+fails, report that exact credential/access gap rather than asking for the First
+Tree GitHub App.
+
+When state A needs `--owner`, parse the owner from each resolved source's
+GitHub remote. If a local repo has no GitHub remote, ask which GitHub account
+should host the tree; never guess from its directory name. Revalidate the same
+`resolvedSources` before Phase 2 so a later turn cannot silently switch inputs.
+
+**For declared sources, require every clone on disk.** Each source
 clone lives at `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>`
 — the runtime writes `sourcesRoot: "source-repos"`, so the path is
 `<workspaceRoot>/source-repos/<name>` (a legacy flat manifest omits
@@ -196,7 +250,7 @@ clone lives at `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>`
 must exist (each is a **bare** clone — see *Materialize source read
 worktrees* below). A missing source means the workspace is
 half-provisioned; surface to the user and stop. Do not seed from a partial
-workspace.
+workspace. The resulting declared clones become `resolvedSources`.
 
 ### Materialize source read worktrees
 
@@ -222,7 +276,7 @@ git -C <source-clone> fetch origin
 git -C <source-clone> worktree add <workspaceRoot>/worktrees/seed-<source> origin/main
 ```
 
-Every "read every bound source" / Tier 0–2 scan in Phase 1 operates on
+Every "read every resolved source" / Tier 0–2 scan in Phase 1 operates on
 these read worktrees, not the bare clone paths. Remove them
 (`git -C <source-clone> worktree remove <path>`) once both PRs are open.
 
@@ -234,7 +288,7 @@ refuses before reaching them.
 
 ```
 Phase 1 — Structure  (~3–10 min, main agent only)
-  └─ Tiered structural read of every bound source
+  └─ Tiered structural read of every resolved source
   └─ Propose top + second-level domain skeleton
   └─ User approves checklist
   └─ Create NODE.md stubs + members/<owner> + raw-context
@@ -261,7 +315,7 @@ structural decisions.
 
 **Goal:** produce a top + second-level domain skeleton that reflects
 the team's concern axes (not the codebase's directory layout), drawn
-from observable signals across all bound source repos.
+from observable signals across all resolved source repos.
 
 ### Tiered exploration
 
@@ -270,7 +324,7 @@ tier left a specific question unanswered.
 
 | Tier | Action                                                                                                                                                                                                                                                                                                            | Cost                  | Yields                                                                                  |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
-| 0    | Filesystem walk over every bound source's read worktree (see *Materialize source read worktrees*): **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
+| 0    | Filesystem walk over every resolved source checkout (including declared bare-source read worktrees): **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
 | 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` (skip silently on **any** failure — 4xx, missing token, no network, no `gh` binary; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
 | 2    | Surgical content read of a **specific** file that Tier 0+1 left ambiguous (e.g. `packages/foo/` exists, README is empty → read `packages/foo/src/index.ts` head 30 lines). Triggered per uncertainty, not as a blanket sweep.                                                                                       | 1–3 min per question, 0 if not needed | answer one structural question |
 
@@ -296,7 +350,7 @@ Aggregate observations across all sources, then abstract:
   when the directory of the same name happens to exist.
 - **No archetype templates.** Do not load a pre-baked "SaaS default"
   or "OSS default" set. Every candidate must be justified by a
-  signal observed in the bound sources. A domain that the sources do
+  signal observed in the resolved sources. A domain that the sources do
   not motivate is a domain that does not belong.
 - **Second-level domain candidates** under each top-level emerge from
   the same observations. For `system/`, package boundaries and docs
@@ -433,7 +487,7 @@ domains:                   # non-empty; default = the list of top-level domains 
 Notes on defaults:
 
 - **Primary owner** = the most-active recent contributor across the
-  bound sources, computed from `git log --since='6 months ago'
+  resolved sources, computed from `git log --since='6 months ago'
   --format='%aN <%aE>' | sort | uniq -c | sort -rn | head -1`. Use
   the GitHub handle when `gh repo view` resolves the email; fall
   back to the `%aN` author name otherwise. Compute this **during
@@ -474,19 +528,21 @@ Notes on defaults:
 ## Phase 2 — Content
 
 **Goal:** populate each approved top-level domain with initial leaf
-nodes drawn from a real read of the bound source code, under a time
+nodes drawn from a real read of the resolved source code, under a time
 budget, with explicit coverage reports surfacing what was and was not
 extracted.
 
 ### Trigger
 
-The user **re-pings the chat** after merging PR1 — that ping is the
+The user **re-pings this setup chat** after merging PR1 — that ping is the
 only sanctioned start signal. The agent does **not** poll the remote,
 the inbox, or any other source between phases; the seed skill is not
-running between PR1 and PR2. When the ping arrives, run a fresh
-self-check that PR1's structure is actually on the tree's default
-branch before dispatching sub-agents — protects against the case
-where the user pinged before merging, or merged a different branch.
+running between PR1 and PR2. This is the Phase 2 continuation checked before
+normal state C refusal. When the ping arrives, re-resolve the same sources and
+run a fresh self-check that PR1's structure is actually on the tree's default
+branch before dispatching sub-agents — protects against the case where the
+user pinged before merging, merged a different branch, or changed the source
+input between turns.
 Resolve the default branch name dynamically rather than hard-coding
 `main` (some tree repos use `master` / `trunk`):
 
@@ -619,7 +675,7 @@ Each sub-agent receives:
 - The path of its assigned subtree (e.g. `<tree>/system/`).
 - The Phase 1 stub it inherits (NODE.md text + the second-level
   entries already laid out, if any).
-- The list of bound sources and their on-disk paths.
+- The list of resolved sources and their on-disk paths.
 - The time budget (default 15 minutes wall-clock; the main agent
   may set a lower budget for thin domains).
 - The hard rules from `first-tree-write` (loaded by reference).
@@ -762,9 +818,11 @@ explicit scope.
 
 A user may merge PR1 and then never come back for Phase 2 (life
 happens, the team is busy, the kickoff agent crashed). The tree
-ends up with real structure but zero leaves. **This is not a
-re-seed condition** — resolving the tree's state sees an already-seeded
-tree (`<tree>/<domain>/NODE.md` files exist, state C) and refuses. Instead:
+ends up with real structure but zero leaves. **This is not a new
+re-seed condition.** A later explicit continuation in the same setup chat can
+still complete Phase 2 after the three continuation checks pass. An unrelated
+future seed request sees an already-seeded tree (`<tree>/<domain>/NODE.md`
+files exist, state C) and refuses. For that unrelated path:
 
 - Future writes go through `first-tree-write` one source at a
   time, exactly as they would on any other live tree.
@@ -820,8 +878,9 @@ make them visible at the seed-specific surface.
 - Generate content beyond what the signals support. If a candidate
   domain has weak evidence and the user does not opt it in, leave it
   out.
-- Run twice on the same tree. Once the tree has domain structure (state C),
-  hand off to `first-tree-write` or a focused maintenance task.
+- Start a second seed on the same tree. Once the tree has domain structure,
+  only the verified same-setup-chat Phase 2 continuation remains in scope;
+  other work hands off to `first-tree-write` or a focused maintenance task.
 
 ## References
 

@@ -63,79 +63,21 @@ describe("start-chat bootstrap prose", () => {
     expect(message).not.toContain("host gh");
   });
 
-  it("builds slim tree setup instructions that inspect a bound tree before choosing seed or write", () => {
-    const message = buildTreeSetupBootstrap(["https://github.com/acme/app"], {
-      treeBindingPlan: "useBoundTree",
-      treeUrl: "https://github.com/acme/context",
-    });
+  it("builds one chat-first tree setup brief independent of App, binding, or repo catalog state", () => {
+    const message = buildTreeSetupBootstrap();
 
-    expect(message).toContain("This chat sets up team context for future agent work.");
-    expect(message).toContain("Source code:");
-    expect(message).toContain("- https://github.com/acme/app");
-    expect(message).toContain("Context Tree: https://github.com/acme/context");
-    expect(message).toContain("This setup helps future agents understand the team's code, decisions, and conventions.");
-    expect(message).toContain("The first task chat stays separate.");
-    expect(message).toContain("Read the bound tree first.");
-    expect(message).toContain("first-tree-seed");
-    expect(message).toContain("first-tree-read");
-    expect(message).toContain("first-tree-write");
-    expect(message).not.toContain("First Tree opened");
-    expect(message).not.toContain("First response requirements:");
-    expect(message).not.toContain("Do not impersonate");
-    expect(message).not.toContain("first-tree-context");
-    expect(message).not.toContain("bind the repo to that existing tree");
-    expect(message).not.toContain("PR back to the source");
-    expect(message).not.toContain("My source repo");
-    expect(message).not.toContain("My team's Context Tree");
-  });
-
-  it("builds plural create-binding tree setup instructions without a tree URL", () => {
-    const message = buildTreeSetupBootstrap(["https://github.com/acme/web", "https://github.com/acme/api"], {
-      treeBindingPlan: "createBinding",
-      treeUrl: null,
-    });
-
-    expect(message).toContain("Source code:");
-    expect(message).toContain("- https://github.com/acme/web");
-    expect(message).toContain("- https://github.com/acme/api");
-    expect(message).toContain("resolved by First Tree Cloud");
-    expect(message).toContain("first-tree-seed");
-    expect(message).not.toContain("Host the new tree");
-    expect(message).not.toContain("record its URL");
-    expect(message).not.toContain("create a brand-new Context Tree");
-    expect(message).not.toContain("ask me which owner");
-  });
-
-  it("builds agent-seed tree setup as visible user-voice text with no skill name", () => {
-    const message = buildTreeSetupBootstrap(["https://github.com/acme/web", "https://github.com/acme/api"], {
-      treeBindingPlan: "agentSeed",
-      treeUrl: null,
-    });
-
-    expect(message).toContain("Let's set up our team's shared context.");
-    expect(message).toContain("Please build out our Context Tree from our connected code");
-    expect(message).toContain("propose an initial structure for me to review");
-    expect(message).toContain("Connected code:");
-    expect(message).toContain("- https://github.com/acme/web");
-    expect(message).toContain("- https://github.com/acme/api");
-    // Visible user-voice task text — no skill names or operational directives.
+    expect(message).toContain("Let's build or finish our team's Context Tree.");
+    expect(message).toContain("inspect the actual tree state and any source code already readable");
+    expect(message).toContain("local project folder path or GitHub repository URL");
+    expect(message).toContain("top- and second-level domain structure for my review");
+    expect(message).toContain("Use this same chat to continue after approval");
+    expect(message).toContain("never restart a populated tree");
+    expect(message).not.toContain("GitHub App");
+    expect(message).not.toContain("Connected code:");
+    expect(message).not.toContain("Context Tree:");
     expect(message).not.toContain("first-tree-seed");
     expect(message).not.toContain("first-tree-read");
     expect(message).not.toContain("first-tree-write");
-    expect(message).not.toContain("Operational note");
-    // No binding yet → no Context Tree hint line.
-    expect(message).not.toContain("Context Tree:");
-  });
-
-  it("includes the tree URL as a hint for agent-seed setup when a binding already exists", () => {
-    const message = buildTreeSetupBootstrap(["https://github.com/acme/web"], {
-      treeBindingPlan: "agentSeed",
-      treeUrl: "https://github.com/acme/context",
-    });
-
-    expect(message).toContain("Please build out our Context Tree from our connected code");
-    expect(message).toContain("Context Tree: https://github.com/acme/context");
-    expect(message).not.toContain("first-tree-seed");
   });
 
   it("builds a value-first joining-teammate welcome without a raw tree URL or jargon", () => {

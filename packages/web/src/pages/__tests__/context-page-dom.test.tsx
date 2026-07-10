@@ -429,117 +429,6 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => disconnected.root.unmount());
   });
 
-  it("shows an admin the add-repo-to-App recovery CTA when a bound tree repo is unreadable", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
-      installationId: 7,
-      accountLogin: "acme",
-      accountType: "Organization",
-      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
-      suspended: false,
-      permissions: {},
-      events: [],
-    });
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
-      snapshot({
-        repo: "https://github.com/acme/context-tree",
-        branch: "main",
-        snapshotStatus: "unavailable",
-        // Server probed and confirmed the App can't read the repo.
-        recoveryAction: "manage_github_app_installation",
-        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
-      }),
-    );
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "Add repo to the GitHub App");
-    const cta = [...container.querySelectorAll("a")].find((anchor) =>
-      anchor.textContent?.includes("Add repo to the GitHub App"),
-    );
-    expect(cta?.getAttribute("href")).toBe("https://github.com/organizations/acme/settings/installations/7");
-    expect(cta?.getAttribute("target")).toBe("_blank");
-    // Security: external target must not leak the opener.
-    expect(cta?.getAttribute("rel")).toBe("noreferrer");
-    expect(container.textContent).toContain("First Tree can't read this repo yet.");
-    await act(async () => root.unmount());
-  });
-
-  it("keeps the generic copy and shows no CTA for a non-coverage unavailable cause", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    const { ContextPage } = await import("../context.js");
-    // Unavailable but NOT a GitHub App coverage gap (e.g. bad branch / transient
-    // clone): the server leaves recoveryAction unset, so the admin sees the
-    // generic sync copy and no misdirecting "Add repo" CTA, and the admin-only
-    // installation endpoint is never fetched.
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
-      snapshot({
-        repo: "https://github.com/acme/context-tree",
-        branch: "main",
-        snapshotStatus: "unavailable",
-        recoveryAction: null,
-        contextStatus: { label: "Sync failed", detail: "Invalid branch", severity: "error" },
-      }),
-    );
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "First Tree cannot read the team Context Tree yet.");
-    expect(
-      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Add repo to the GitHub App")),
-    ).toBe(false);
-    expect(container.textContent).not.toContain("Ask an admin to add it to the GitHub App");
-    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
-    await act(async () => root.unmount());
-  });
-
-  it("shows an admin the problem without a dead button when the manage URL never resolves", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    // Coverage gap confirmed by the server, but the manage-URL fetch resolves to
-    // null (e.g. the installation row raced away): the button must not render,
-    // and the copy must not dangle an "add it" instruction with nothing to click.
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue(null);
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
-      snapshot({
-        repo: "https://github.com/acme/context-tree",
-        branch: "main",
-        snapshotStatus: "unavailable",
-        recoveryAction: "manage_github_app_installation",
-        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
-      }),
-    );
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "First Tree can't read this repo yet.");
-    expect(
-      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Add repo to the GitHub App")),
-    ).toBe(false);
-    await act(async () => root.unmount());
-  });
-
-  it("directs a member to ask an admin (no CTA, no admin-only fetch) when the App can't read the repo", async () => {
-    authMock.value = { organizationId: "org-1", role: "member" };
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
-      snapshot({
-        repo: "https://github.com/acme/context-tree",
-        branch: "main",
-        snapshotStatus: "unavailable",
-        recoveryAction: "manage_github_app_installation",
-        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
-      }),
-    );
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "Ask an admin to add it to the GitHub App.");
-    expect(
-      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Add repo to the GitHub App")),
-    ).toBe(false);
-    // The manage-URL endpoint is admin-only; a member must never trigger it.
-    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
-    await act(async () => root.unmount());
-  });
-
   const treeAgent = {
     uuid: "agent-1",
     name: "agent-1",
@@ -561,28 +450,6 @@ describe("ContextPage DOM behavior", () => {
     inboxId: "inbox-agent-2",
     clientId: "client-agent-2",
   };
-  const grantedRepo = {
-    fullName: "acme/acme-web",
-    cloneUrl: "https://github.com/acme/acme-web.git",
-    htmlUrl: "https://github.com/acme/acme-web",
-    private: true,
-    defaultBranch: "main",
-    pushedAt: null,
-  };
-  const grantedApiRepo = {
-    fullName: "acme/api",
-    cloneUrl: "https://github.com/acme/api.git",
-    htmlUrl: "https://github.com/acme/api",
-    private: false,
-    defaultBranch: "main",
-    pushedAt: null,
-  };
-  const recommendedRepoResource = {
-    id: "repo-1",
-    type: "repo",
-    defaultEnabled: "recommended",
-    payload: { url: "https://github.com/acme/acme-web.git" },
-  };
   const unavailableSnapshot = () =>
     snapshot({
       repo: null,
@@ -591,298 +458,122 @@ describe("ContextPage DOM behavior", () => {
       contextStatus: { label: "Not configured", detail: null, severity: "warning" },
     });
 
-  it("links to Settings → GitHub for a no-repo admin instead of installing inline or bouncing to Resources", async () => {
+  it("routes a bound-tree sync failure to the setup chat without an App-install gate", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
     agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue(null); // GitHub not connected yet
+    onboardingEventMocks.postTreeSetupStartChat.mockResolvedValue({ chatId: "chat-tree-recovery" });
     const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
-
-    const { container, root } = await renderDom(<ContextPage />);
-    // No GitHub connection → a link to the single connect place (Settings → GitHub),
-    // NOT an inline install and NOT a bounce to /settings/resources.
-    await waitForText(container, "Connect GitHub in Settings");
-    expect(container.textContent).not.toContain("Install First Tree on GitHub");
-    expect(container.textContent).not.toContain("Create private GitHub repo");
-    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
-
-    // The CTA is a link carrying the `from=context` return marker so Settings can
-    // hand the user back to building once connected — no inline install machinery.
-    expect(container.querySelector('a[href="/settings/github?from=context"]')).not.toBeNull();
-    expect(githubAppMocks.getGithubAppInstallUrl).not.toHaveBeenCalled();
-
-    await act(async () => root.unmount());
-  });
-
-  it("lists the granted repos inline for a connected no-repo admin (no settings bounce)", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
-      installationId: 7,
-      accountLogin: "acme",
-      accountType: "Organization",
-      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
-      suspended: false,
-      permissions: {},
-      events: [],
-    });
-    githubMocks.listOrgGithubRepos.mockResolvedValue([
-      {
-        fullName: "acme/acme-web",
-        cloneUrl: "https://github.com/acme/acme-web.git",
-        htmlUrl: "https://github.com/acme/acme-web",
-        private: true,
-        defaultBranch: "main",
-        pushedAt: null,
-      },
-    ]);
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
-
-    const { container, root } = await renderDom(<ContextPage />);
-    // Connected → the repos the App grants are listed inline for the user to pick.
-    await waitForText(container, "Repos your agent can use");
-    await waitForText(container, "acme-web");
-    // The build CTA only appears after a repo is picked, and the user is never
-    // routed away to a settings page to wire up a repo.
-    expect(buttonByText(container, "Build your Context Tree")).toBeNull();
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
-
-    // Picking a repo reveals the build CTA (inline pick → build wiring) without
-    // navigating anywhere — the actual kickoff mechanics are covered by the
-    // bound-tree recovery test below, which shares handleBuild.
-    await click(container.querySelector('input[type="checkbox"]'));
-    await waitForText(container, "Build your Context Tree");
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
-    await click(buttonByText(container, "Clear all"));
-    await waitForCondition(
-      () => buttonByText(container, "Build your Context Tree") === null,
-      "Expected clearing selected repos to hide the build CTA",
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "unavailable",
+        recoveryAction: "manage_github_app_installation",
+        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
+      }),
     );
 
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Work on this in chat");
+    expect(container.textContent).toContain("Open a chat with your agent to inspect the tree and this sync issue.");
+    expect(container.textContent).not.toContain("GitHub App");
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+
+    await click(buttonByText(container, "Work on this in chat"));
+    await waitForCondition(
+      () => onboardingEventMocks.postTreeSetupStartChat.mock.calls.length === 1,
+      "Expected the recovery setup chat to open",
+    );
+    expect(onboardingEventMocks.postTreeSetupStartChat).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      agentUuid: "agent-1",
+      bootstrap: expect.stringContaining("local project folder path or GitHub repository URL"),
+      topic: "Set up shared context",
+    });
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-tree-recovery");
+
     await act(async () => root.unmount());
   });
 
-  it("starts the tree setup chat for selected repos and the chosen builder agent", async () => {
+  it("opens tree setup directly for a no-tree admin and lets them choose the agent", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
     agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent, secondTreeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValueOnce([]).mockResolvedValueOnce([recommendedRepoResource]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
-      installationId: 7,
-      accountLogin: "acme",
-      accountType: "Organization",
-      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
-      suspended: false,
-      permissions: {},
-      events: [],
-    });
-    githubMocks.listOrgGithubRepos.mockResolvedValue([grantedRepo]);
     onboardingEventMocks.postTreeSetupStartChat.mockResolvedValue({ chatId: "chat-tree-success" });
     const { ContextPage } = await import("../context.js");
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
 
     const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "acme-web");
-    await click(container.querySelector('input[type="checkbox"]'));
-    await waitForText(container, "Which agent builds the tree?");
+    await waitForText(container, "Build your Context Tree");
+    expect(container.textContent).toContain("Share a local project folder or GitHub repository URL there.");
     expect(container.textContent).toContain("backup-agent");
+    expect(resourceApiMocks.listTeamResourcesForOrg).not.toHaveBeenCalled();
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+    expect(githubMocks.listOrgGithubRepos).not.toHaveBeenCalled();
 
-    await click(container.querySelector('button[aria-label="Agent that builds the Context Tree"]'));
+    await click(container.querySelector('button[aria-label="Agent for the Context Tree chat"]'));
     await click(
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Tree Agent") ?? null,
     );
     await click(buttonByText(container, "Build your Context Tree"));
 
     await waitForCondition(
-      () => onboardingEventMocks.postTreeSetupStartChat.mock.calls.length > 0,
+      () => onboardingEventMocks.postTreeSetupStartChat.mock.calls.length === 1,
       "Expected tree setup chat kickoff",
     );
-    expect(resourceApiMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {
-      type: "repo",
-      name: "acme/acme-web",
-      defaultEnabled: "recommended",
-      payload: { url: "https://github.com/acme/acme-web.git" },
+    expect(onboardingEventMocks.postTreeSetupStartChat).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      agentUuid: "agent-1",
+      bootstrap: expect.stringContaining("Use this same chat to continue after approval"),
+      topic: "Set up shared context",
     });
-    expect(onboardingEventMocks.postTreeSetupStartChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        organizationId: "org-1",
-        agentUuid: "agent-1",
-        topic: "Set up shared context",
-        complete: true,
-      }),
-    );
+    expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-tree-success");
 
     await act(async () => root.unmount());
   });
 
-  it("re-checks the current GitHub App grant before registering an inline-picked repo", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
-      installationId: 7,
-      accountLogin: "acme",
-      accountType: "Organization",
-      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
-      suspended: false,
-      permissions: {},
-      events: [],
-    });
-    githubMocks.listOrgGithubRepos
-      .mockResolvedValueOnce([
-        {
-          fullName: "acme/acme-web",
-          cloneUrl: "https://github.com/acme/acme-web.git",
-          htmlUrl: "https://github.com/acme/acme-web",
-          private: true,
-          defaultBranch: "main",
-          pushedAt: null,
-        },
-      ])
-      .mockResolvedValueOnce([]);
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "acme-web");
-    await click(container.querySelector('input[type="checkbox"]'));
-    await waitForText(container, "Build your Context Tree");
-    await click(buttonByText(container, "Build your Context Tree"));
-
-    await waitForText(container, "The selected source repo is no longer available to First Tree");
-    expect(githubMocks.listOrgGithubRepos).toHaveBeenCalledWith("org-1");
-    expect(githubMocks.listOrgGithubRepos.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
-
-    await act(async () => root.unmount());
-  });
-
-  it("keeps still-granted repos selected when only part of the GitHub App grant is revoked", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
-      installationId: 7,
-      accountLogin: "acme",
-      accountType: "Organization",
-      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
-      suspended: false,
-      permissions: {},
-      events: [],
-    });
-    githubMocks.listOrgGithubRepos
-      .mockResolvedValueOnce([grantedRepo, grantedApiRepo])
-      .mockResolvedValueOnce([grantedRepo])
-      .mockResolvedValue([grantedRepo]);
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "acme-web");
-    await waitForText(container, "api");
-    const repoInputs = [...container.querySelectorAll('input[type="checkbox"]')];
-    await click(repoInputs[0] ?? null);
-    await click(repoInputs[1] ?? null);
-    await waitForText(container, "2 selected");
-    await click(buttonByText(container, "Build your Context Tree"));
-
-    await waitForText(container, "Some selected source repos are no longer available to First Tree");
-    expect(container.textContent).toContain("1 selected");
-    expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
-
-    await act(async () => root.unmount());
-  });
-
-  it("surfaces GitHub grant check failures before writing repo resources", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
-      installationId: 7,
-      accountLogin: "acme",
-      accountType: "Organization",
-      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
-      suspended: false,
-      permissions: {},
-      events: [],
-    });
-    githubMocks.listOrgGithubRepos.mockResolvedValueOnce([grantedRepo]).mockRejectedValueOnce(new Error("GitHub down"));
-    const { ContextPage } = await import("../context.js");
-    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
-
-    const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "acme-web");
-    await click(container.querySelector('input[type="checkbox"]'));
-    await waitForText(container, "Build your Context Tree");
-    await click(buttonByText(container, "Build your Context Tree"));
-
-    await waitForText(container, "Couldn't check your repositories with GitHub just now");
-    expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
-
-    await act(async () => root.unmount());
-  });
-
-  it("retries repo loading after a connected GitHub App query fails", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
-      installationId: 7,
-      accountLogin: "acme",
-      accountType: "Organization",
-      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
-      suspended: false,
-      permissions: {},
-      events: [],
-    });
-    githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([grantedRepo]);
-    const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-
-    const { container, root } = await renderDom(<ContextTreeBuildEntry />);
-    await waitForText(container, "Couldn't load your team's repos");
-    await click(buttonByText(container, "Try again"));
-    await waitForText(container, "acme-web");
-
-    await act(async () => root.unmount());
-  });
-
-  it("resets the build button and shows an error when tree setup chat kickoff fails", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
-    onboardingEventMocks.postTreeSetupStartChat.mockRejectedValueOnce(new Error("tree setup unavailable"));
-    const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-
-    const { container, root } = await renderDom(
-      <ContextTreeBuildEntry treeBindingPlan="useBoundTree" detectedTreeUrl="https://github.com/acme/context-tree" />,
-    );
-    await waitForText(container, "Build your Context Tree");
-    await click(buttonByText(container, "Build your Context Tree"));
-    await waitForText(container, "tree setup unavailable");
-    expect(buttonByText(container, "Build your Context Tree")?.hasAttribute("disabled")).toBe(false);
-
-    await act(async () => root.unmount());
-  });
-
-  it("routes a no-tree admin without an active agent into onboarding before tree build", async () => {
-    authMock.value = { organizationId: "org-1", role: "admin" };
-    agentApiMocks.listManagedAgents.mockResolvedValue([]);
-    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([
-      { id: "repo-1", type: "repo", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/web" } },
-    ]);
+  it("keeps unavailable member states admin-owned and does not query setup dependencies", async () => {
+    authMock.value = { organizationId: "org-1", role: "member" };
     const { ContextPage } = await import("../context.js");
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
       snapshot({
-        repo: null,
-        branch: null,
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
         snapshotStatus: "unavailable",
-        contextStatus: { label: "Not configured", detail: null, severity: "warning" },
+        recoveryAction: "manage_github_app_installation",
+        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
       }),
     );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Ask an admin to inspect this Context Tree sync issue.");
+    expect(buttonByText(container, "Work on this in chat")).toBeNull();
+    expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("resets the chat button and surfaces kickoff failures", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    agentApiMocks.listManagedAgents.mockResolvedValue([treeAgent]);
+    onboardingEventMocks.postTreeSetupStartChat.mockRejectedValueOnce(new Error("tree setup unavailable"));
+    const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
+
+    const { container, root } = await renderDom(<ContextTreeBuildEntry intent="recover" />);
+    await waitForText(container, "Work on this in chat");
+    await click(buttonByText(container, "Work on this in chat"));
+    await waitForText(container, "tree setup unavailable");
+    expect(buttonByText(container, "Work on this in chat")?.hasAttribute("disabled")).toBe(false);
+
+    await act(async () => root.unmount());
+  });
+
+  it("routes a no-tree admin without an active agent into onboarding", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    agentApiMocks.listManagedAgents.mockResolvedValue([]);
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailableSnapshot());
 
     const { container, root } = await renderDom(<ContextPage />);
     await waitForText(container, "Create an agent for your team first");

@@ -21,8 +21,9 @@ chats and the adjacent campaign quickstart handoff.
   key; it returns `410 campaign_kickoff_moved` when landing campaigns are enabled
   and `404 feature_disabled` when they are disabled.
 - The first-chat endpoint does not accept the retired `kind` discriminator.
-- `POST /api/v1/me/onboarding/tree-setup/kickoff` is the only tree setup
-  kickoff entry. It uses the org-level `tree-setup` idempotency key.
+- `POST /api/v1/orgs/:orgId/context-tree/setup-chat` is the only Context Tree
+  setup kickoff entry. It requires an org admin, uses the org-level `tree-setup`
+  idempotency key, and never stamps onboarding completion.
 - A `/me/onboarding/kickoff` request carrying `scanFixRepoSlug` (`owner/repo`)
   is a production-scan fix conversion arriving via onboarding. It keys the
   kickoff chat `<humanAgent>:scan-fix:<repoSlug>` instead of the default

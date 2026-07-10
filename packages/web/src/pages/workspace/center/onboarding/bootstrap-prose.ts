@@ -5,15 +5,13 @@
  * `first-tree-seed`), and those skills own the concrete flow.
  *
  * Work/intro chats are value-first. Tree setup chats are separate and resilient:
- * Cloud owns creating/adopting the minimum tree repo binding, while the agent
- * reads the actual bound tree content and chooses seed vs read/write from that
- * evidence. A mere binding does not imply a populated tree.
+ * the agent reads the actual tree and source state, asks for a local path or
+ * GitHub URL when necessary, and chooses seed vs read/write from that evidence.
+ * A mere binding does not imply a populated tree.
  *
  * Single source of truth: only the start-chat step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
-
-export type TreeSetupBootstrapPlan = "agentSeed" | "useBoundTree" | "createBinding";
 
 function formatSourceList(sourceUrls: readonly string[], heading: string): string[] {
   return [heading, ...sourceUrls.map((u) => `- ${u}`)];
@@ -40,37 +38,15 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [`${agentDisplayName}, welcome aboard.`, "", "Please help me get started with First Tree."].join("\n");
 }
 
-export function buildTreeSetupBootstrap(
-  sourceUrls: readonly string[],
-  opts: { treeBindingPlan: TreeSetupBootstrapPlan; treeUrl: string | null },
-): string {
-  if (opts.treeBindingPlan === "agentSeed") {
-    // Visible, user-voice task text (onboarding kickoff contract: no skill names
-    // / hidden directives). The agent reaches first-tree-seed from the tree-less
-    // family map + skill descriptions, and seed adapts to the tree's ACTUAL state
-    // — creating + binding it from zero, or filling a bound-but-empty tree. The
-    // tree URL is included only as a hint when a binding already exists.
-    return [
-      "Let's set up our team's shared context.",
-      "",
-      "Please build out our Context Tree from our connected code — propose an initial structure for me to review, then fill it in.",
-      "",
-      ...formatSourceList(sourceUrls, "Connected code:"),
-      ...(opts.treeUrl ? ["", `Context Tree: ${opts.treeUrl}`] : []),
-    ].join("\n");
-  }
-  const sourceLines = formatSourceList(sourceUrls, "Source code:");
-  const treeLine = `Context Tree: ${opts.treeUrl ?? "resolved by First Tree Cloud"}`;
+export function buildTreeSetupBootstrap(): string {
+  // The setup chat, not the Context tab, resolves the actual tree and source
+  // state. Keep the visible task useful when Cloud has no registered repo: the
+  // agent can ask for one local checkout or GitHub URL without making GitHub App
+  // installation a prerequisite for building the tree.
   return [
-    "This chat sets up team context for future agent work.",
+    "Let's build or finish our team's Context Tree.",
     "",
-    treeLine,
-    "",
-    ...sourceLines,
-    "",
-    "This setup helps future agents understand the team's code, decisions, and conventions. The first task chat stays separate.",
-    "",
-    "Read the bound tree first. Use first-tree-read, first-tree-seed, or first-tree-write as appropriate.",
+    "Please inspect the actual tree state and any source code already readable in this workspace. If no source code is readable, ask me for one local project folder path or GitHub repository URL. Once you have readable code, propose the initial top- and second-level domain structure for my review before writing it. Use this same chat to continue after approval; never restart a populated tree.",
   ].join("\n");
 }
 

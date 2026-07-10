@@ -2248,9 +2248,8 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("builds a missing tree from the Context page entry via agent-seed (no provisioning)", async () => {
+  it("opens the chat-first tree setup from Context without provisioning or repo registration", async () => {
     const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-    orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
 
     const view = await renderDom(<ContextTreeBuildEntry />);
     await waitForText("Build your Context Tree", view.container);
@@ -2258,21 +2257,24 @@ describe("web DOM interaction coverage", () => {
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Build your Context Tree")) ??
         null) as HTMLButtonElement | null,
     );
-    await waitForText("Building", view.container);
+    await waitForCondition(
+      () => onboardingEventMocks.treeSetupStartChat.mock.calls.length === 1,
+      "Expected the Context entry to open the tree setup chat",
+    );
 
-    // agentSeed default: no Cloud provisioning. The agent sets the tree up from
-    // its actual state, launched through the org-level tree-setup chat.
     expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();
+    expect(resourceMocks.listTeamResourcesForOrg).not.toHaveBeenCalled();
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+    expect(githubMocks.listOrgGithubRepos).not.toHaveBeenCalled();
     expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
     expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledTimes(1);
-    expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Please build out our Context Tree from our connected code"),
-        topic: "Set up shared context",
-        complete: true,
-      }),
-    );
+    expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      agentUuid: "agent-1",
+      bootstrap: expect.stringContaining("local project folder path or GitHub repository URL"),
+      topic: "Set up shared context",
+    });
     await unmountRoot(view.root);
   });
 

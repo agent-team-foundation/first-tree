@@ -2,6 +2,7 @@ import {
   contextTreeInstallationInfoResponseSchema,
   initializeContextTreeRequestSchema,
   initializeContextTreeResponseSchema,
+  treeSetupKickoffSchema,
 } from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ConflictError } from "../../errors.js";
@@ -15,6 +16,8 @@ import { findInstallationByOrg } from "../../services/github-app-installations.j
 import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
 import type { GithubCreatedRepo } from "../../services/github-oauth.js";
 import { GithubUserTokenError, getFreshGithubUserToken } from "../../services/github-user-token.js";
+import { notifyRecipients } from "../../services/notifier.js";
+import { kickoffOnboarding } from "../../services/onboarding-kickoff.js";
 import { getOrgContextTree, putOrgSetting } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
 
@@ -42,6 +45,29 @@ const REPO_SUFFIX = "-context-tree";
 const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 
 export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> {
+  app.post<{ Params: { orgId: string }; Body: unknown }>("/setup-chat", async (request, reply) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const body = treeSetupKickoffSchema.parse(request.body);
+    const result = await kickoffOnboarding(app.db, {
+      memberId: scope.memberId,
+      humanAgentId: scope.humanAgentId,
+      organizationId: scope.organizationId,
+      targetAgentId: body.agentUuid,
+      bootstrap: body.bootstrap,
+      topic: body.topic ?? "Set up shared context",
+      kickoffKey: `${scope.organizationId}:tree-setup`,
+      complete: false,
+    });
+    if (result.sent) {
+      notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
+      app.log.info(
+        { event: "context_tree.setup_chat", userId: scope.userId, chatId: result.chatId },
+        "context tree: setup chat kickoff",
+      );
+    }
+    return reply.status(200).send({ chatId: result.chatId });
+  });
+
   // Read-only routing view of the team's bound GitHub App installation. The
   // agent-driven `first-tree tree init` flow calls this after creating the tree
   // repo with local `gh` to build the "add this repo to your installation"

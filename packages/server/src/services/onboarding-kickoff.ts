@@ -61,7 +61,7 @@ export type KickoffOnboardingResult = {
  * True only after a tree setup kickoff has a bootstrap message. A chat row by
  * itself is not enough: `kickoffOnboarding` creates the chat before sending the
  * message, so a send failure can leave an empty idempotency-keyed chat that a
- * later `/build-tree` retry should still fill.
+ * later Context setup retry should still fill.
  */
 export async function hasTreeSetupKickoffMessage(db: Database, organizationId: string): Promise<boolean> {
   const [row] = await db

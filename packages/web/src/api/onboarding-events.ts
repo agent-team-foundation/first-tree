@@ -77,11 +77,14 @@ export type TreeSetupStartChatArgs = {
   agentUuid: string;
   bootstrap: string;
   topic?: string;
-  complete?: boolean;
 };
 
 export async function postTreeSetupStartChat(args: TreeSetupStartChatArgs): Promise<StartOnboardingChatResult> {
-  return api.post<StartOnboardingChatResult>("/me/onboarding/tree-setup/kickoff", args);
+  const { organizationId, ...body } = args;
+  return api.post<StartOnboardingChatResult>(
+    `/orgs/${encodeURIComponent(organizationId)}/context-tree/setup-chat`,
+    body,
+  );
 }
 
 export type TreeSetupStatus = {

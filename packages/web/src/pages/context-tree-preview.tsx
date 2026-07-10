@@ -8,7 +8,7 @@ import { SettingsContextTreePage } from "./settings/context-tree.js";
 import { SettingsLayout } from "./settings.js";
 
 /**
- * DEV-only visual preview for the collapsed build-tree work. Renders the REAL
+ * DEV-only visual preview for the chat-first Context setup. Renders the REAL
  * full Settings → Context tree page (sidebar + header + panel) in each state,
  * plus the Context tab's single build entry. Mounted with a seeded React Query
  * cache + a mock AuthContext so the real components render with no backend.
@@ -34,38 +34,6 @@ const AGENTS = [
     type: "agent",
     status: "active",
     organizationId: ORG,
-  },
-];
-const REPO_RESOURCE = [
-  { type: "repo", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/acme-web" } },
-];
-// GitHub App installation + the repos it grants — seeds the inline connect+pick
-// states of the Context tab build entry (no repo resource yet).
-const INSTALLATION = {
-  installationId: 42,
-  accountLogin: "acme",
-  accountType: "Organization",
-  manageUrl: "https://github.com/organizations/acme/settings/installations/42",
-  suspended: false,
-  permissions: {},
-  events: [],
-};
-const GH_REPOS = [
-  {
-    fullName: "acme/acme-web",
-    cloneUrl: "https://github.com/acme/acme-web.git",
-    htmlUrl: "https://github.com/acme/acme-web",
-    private: true,
-    defaultBranch: "main",
-    pushedAt: null,
-  },
-  {
-    fullName: "acme/acme-api",
-    cloneUrl: "https://github.com/acme/acme-api.git",
-    htmlUrl: "https://github.com/acme/acme-api",
-    private: true,
-    defaultBranch: "main",
-    pushedAt: null,
   },
 ];
 const FEATURES_DISABLED = { contextReviewer: { enabled: false, agentUuid: null } };
@@ -129,7 +97,15 @@ function FullPageCase({ title, authRole, seed }: { title: string; authRole: stri
 }
 
 /** The Context tab build entry on its own (it lives in the Context tab empty state). */
-function BuildEntryCase({ title, seed }: { title: string; seed: Seed }) {
+function BuildEntryCase({
+  title,
+  seed,
+  intent = "build",
+}: {
+  title: string;
+  seed: Seed;
+  intent?: "build" | "recover";
+}) {
   const qc = useSeededClient(seed);
   const auth = mockAuth("admin", "2026-01-01T00:00:00.000Z");
   return (
@@ -146,7 +122,7 @@ function BuildEntryCase({ title, seed }: { title: string; seed: Seed }) {
       </div>
       <QueryClientProvider client={qc}>
         <AuthContext.Provider value={auth}>
-          <ContextTreeBuildEntry />
+          <ContextTreeBuildEntry intent={intent} />
         </AuthContext.Provider>
       </QueryClientProvider>
     </section>
@@ -156,7 +132,7 @@ function BuildEntryCase({ title, seed }: { title: string; seed: Seed }) {
 export function ContextTreePreviewPage() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", padding: "var(--sp-6)" }}>
-      <PageHeader title="Context tree — preview" subtitle="DEV-only visual review of the collapsed build-tree work." />
+      <PageHeader title="Context tree — preview" subtitle="DEV-only visual review of chat-first Context setup." />
 
       <div style={{ marginTop: "var(--sp-5)" }}>
         <FullPageCase
@@ -225,37 +201,13 @@ export function ContextTreePreviewPage() {
           gap: "var(--sp-5)",
         }}
       >
+        <BuildEntryCase title="build · 2 agents" seed={[[["context-build", "managed-agents", ORG], AGENTS]]} />
         <BuildEntryCase
-          title="repo connected · 2 agents"
-          seed={[
-            [["context-build", "managed-agents", ORG], AGENTS],
-            [["context-build", "resources", ORG], REPO_RESOURCE],
-          ]}
+          title="bound tree recovery · continue in chat"
+          intent="recover"
+          seed={[[["context-build", "managed-agents", ORG], AGENTS]]}
         />
-        <BuildEntryCase
-          title="no repo · GitHub not connected (install CTA)"
-          seed={[
-            [["context-build", "managed-agents", ORG], AGENTS],
-            [["context-build", "resources", ORG], []],
-            [["context-build", "installation", ORG], null],
-          ]}
-        />
-        <BuildEntryCase
-          title="no repo · connected → pick a repo inline"
-          seed={[
-            [["context-build", "managed-agents", ORG], AGENTS],
-            [["context-build", "resources", ORG], []],
-            [["context-build", "installation", ORG], INSTALLATION],
-            [["context-build", "org-github-repos", ORG], GH_REPOS],
-          ]}
-        />
-        <BuildEntryCase
-          title="repo connected · no active agent"
-          seed={[
-            [["context-build", "managed-agents", ORG], []],
-            [["context-build", "resources", ORG], REPO_RESOURCE],
-          ]}
-        />
+        <BuildEntryCase title="build · no active agent" seed={[[["context-build", "managed-agents", ORG], []]]} />
       </div>
     </div>
   );

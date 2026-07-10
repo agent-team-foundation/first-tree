@@ -6,7 +6,6 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
-  treeSetupKickoffSchema,
   updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
@@ -312,7 +311,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * POST /me/onboarding/kickoff — idempotent server-side tail of onboarding.
    * Folds the three steps the browser used to orchestrate sequentially (create
    * the first chat → send the bootstrap message → stamp completion) into one
-   * resumable request. Re-running it (reopened tab, network retry, build-tree
+   * resumable request. Re-running it (reopened tab, network retry, Context setup
    * recovery) reuses the same first chat and stamps completion only once,
    * instead of leaving the orphan-chat / duplicate-bootstrap / completed-stamp-
    * decoupled-from-reality states the client-orchestrated flow could produce.
@@ -363,33 +362,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ chatId: result.chatId });
   });
 
-  app.post("/me/onboarding/tree-setup/kickoff", async (request, reply) => {
-    const { userId } = requireUser(request);
-    const body = treeSetupKickoffSchema.parse(request.body);
-    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
-    const result = await kickoffOnboarding(app.db, {
-      memberId,
-      humanAgentId,
-      organizationId,
-      targetAgentId: body.agentUuid,
-      bootstrap: body.bootstrap,
-      topic: body.topic ?? "Set up shared context",
-      kickoffKey: `${organizationId}:tree-setup`,
-      complete: body.complete ?? true,
-    });
-    if (result.sent) {
-      notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
-      app.log.info(
-        { event: "onboarding.tree_setup_kickoff", userId, chatId: result.chatId },
-        "onboarding funnel: tree setup kickoff",
-      );
-    }
-    return reply.status(200).send({ chatId: result.chatId });
-  });
-
   /**
-   * GET /me/onboarding/tree-setup-status — recovery probe for the standalone
-   * `/build-tree` surface and Settings nav. A missing tree binding still needs
+   * GET /me/onboarding/tree-setup-status — recovery probe for the Context
+   * setup surface and Settings nav. A missing tree binding still needs
    * setup. A binding created after the org's value-first first chat completed
    * also needs setup until a tree setup bootstrap message exists; this covers
    * the recoverable edge where Cloud wrote `context_tree` but the background

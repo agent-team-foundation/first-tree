@@ -200,8 +200,7 @@ describe("onboarding and campaign API wrappers", () => {
       bootstrap: "start",
       complete: true,
     });
-    expect(apiMock.post).toHaveBeenNthCalledWith(4, "/me/onboarding/tree-setup/kickoff", {
-      organizationId: "org/id",
+    expect(apiMock.post).toHaveBeenNthCalledWith(4, "/orgs/org%2Fid/context-tree/setup-chat", {
       agentUuid: "agent-1",
       bootstrap: "tree",
     });

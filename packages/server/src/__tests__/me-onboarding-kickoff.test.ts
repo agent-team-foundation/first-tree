@@ -37,7 +37,7 @@ async function createOrgAgent(
 }
 
 const KICKOFF_URL = "/api/v1/me/onboarding/kickoff";
-const TREE_KICKOFF_URL = "/api/v1/me/onboarding/tree-setup/kickoff";
+const treeKickoffUrl = (organizationId: string): string => `/api/v1/orgs/${organizationId}/context-tree/setup-chat`;
 const TREE_STATUS_URL = "/api/v1/me/onboarding/tree-setup-status";
 
 describe("POST /me/onboarding/kickoff", () => {
@@ -148,9 +148,9 @@ describe("POST /me/onboarding/kickoff", () => {
 
     const tree = await app.inject({
       method: "POST",
-      url: TREE_KICKOFF_URL,
+      url: treeKickoffUrl(admin.organizationId),
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...base, bootstrap: "Seed the Context Tree.", topic: "Set up shared context" },
+      payload: { agentUuid: agent.uuid, bootstrap: "Seed the Context Tree.", topic: "Set up shared context" },
     });
     expect(tree.statusCode).toBe(200);
 
@@ -259,7 +259,7 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(msgs).toHaveLength(1);
   });
 
-  it("keeps onboarding and tree setup kickoffs as separate chats so /build-tree still wakes the agent", async () => {
+  it("keeps onboarding and tree setup kickoffs as separate chats so /context still wakes the agent", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
@@ -280,14 +280,14 @@ describe("POST /me/onboarding/kickoff", () => {
     const [introChat] = await app.db.select().from(chats).where(eq(chats.id, introChatId)).limit(1);
     expect(introChat?.topic).toBe("Get started with First Tree");
 
-    // 2) Later, /build-tree with the SAME agent → dedicated tree setup kickoff.
+    // 2) Later, /context with the SAME agent → dedicated tree setup kickoff.
     //    Must be a NEW chat carrying the tree-seeding bootstrap, not the
     //    onboarding chat.
     const tree = await app.inject({
       method: "POST",
-      url: TREE_KICKOFF_URL,
+      url: treeKickoffUrl(admin.organizationId),
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...base, bootstrap: "Seed the team tree.", topic: "Set up shared context" },
+      payload: { agentUuid: agent.uuid, bootstrap: "Seed the team tree.", topic: "Set up shared context" },
     });
     const treeChatId = tree.json<{ chatId: string }>().chatId;
     const [treeChat] = await app.db.select().from(chats).where(eq(chats.id, treeChatId)).limit(1);
@@ -335,10 +335,9 @@ describe("POST /me/onboarding/kickoff", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: TREE_KICKOFF_URL,
+      url: treeKickoffUrl(firstAdmin.organizationId),
       headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
       payload: {
-        organizationId: firstAdmin.organizationId,
         agentUuid: laterAgent.uuid,
         bootstrap: "Seed the retried team tree.",
         topic: "Set up shared context",
@@ -361,6 +360,41 @@ describe("POST /me/onboarding/kickoff", () => {
     const speakerIds = new Set(speakers.map((speaker) => speaker.agentId));
     expect(speakerIds.has(laterAdmin.humanAgentUuid)).toBe(true);
     expect(speakerIds.has(laterAgent.uuid)).toBe(true);
+  });
+
+  it("requires an org admin and rejects body-controlled org or completion fields", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, admin.memberId));
+
+    const memberResponse = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: agent.uuid, bootstrap: "Seed the team tree." },
+    });
+    expect(memberResponse.statusCode).toBe(403);
+
+    await app.db.update(members).set({ role: "admin" }).where(eq(members.id, admin.memberId));
+    const staleBody = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "Seed the team tree.",
+        complete: true,
+      },
+    });
+    expect(staleBody.statusCode).toBe(400);
+
+    const rows = await app.db
+      .select()
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, `${admin.organizationId}:tree-setup`));
+    expect(rows).toHaveLength(0);
   });
 
   it("rejects campaign kickoff when growth landing pages are enabled because campaigns moved to landing-campaigns/start", async () => {
