@@ -152,13 +152,15 @@ function eventTouchesSourceWorktree(event: unknown): boolean {
   return collectToolInputStrings(event.event).some((value) => commandTouchesSourceWorktree(value));
 }
 
-function eventSuccessfullyMaterializesSourceWorktree(event: unknown): boolean {
+function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePath: string): boolean {
   if (!isRecord(event) || eventType(event) !== "codex_event") return false;
+  const managedWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
   return collectCommandExecutions(event.event).some(
     (execution) =>
       execution.exitCode === 0 &&
       !/(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output) &&
       /\bworktree\s+add\b/iu.test(execution.command) &&
+      execution.command.includes(managedWorktreePath) &&
       commandTouchesSourceWorktree(execution.command),
   );
 }
@@ -664,6 +666,7 @@ function containsSourceFixtureEvidence(event: unknown): boolean {
     (execution) =>
       execution.exitCode === 0 &&
       SOURCE_EVIDENCE_ROOT_PATHS.some((root) => execution.command.includes(root)) &&
+      !execution.command.includes("source-repos/source-repo/worktrees/seed-source-repo") &&
       (/(?:^|\s)(?:awk|cat|find|grep|head|jq|less|ls|rg|sed|tail|wc)(?:\s|$)/iu.test(execution.command) ||
         /\bgit\b[^\n]*(?:show|grep|ls-tree|cat-file)\b/iu.test(execution.command)) &&
       /Apollo Console|CLI App|Web Dashboard|Team Practice|Context Tree commands|operator dashboard|runtime coordination/iu.test(
@@ -815,7 +818,7 @@ export function deriveMetrics(
     if (eventTouchesSourceWorktree(event)) {
       sourceWorktreeAccessObserved = true;
     }
-    if (eventSuccessfullyMaterializesSourceWorktree(event)) {
+    if (eventSuccessfullyMaterializesSourceWorktree(event, paths.workspacePath)) {
       sourceWorktreeMaterializedObserved = true;
     }
 

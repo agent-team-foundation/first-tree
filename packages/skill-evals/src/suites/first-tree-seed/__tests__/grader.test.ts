@@ -534,7 +534,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               aggregated_output: "Preparing worktree (detached HEAD 1234567)",
-              command: "git -C source-repos/source-repo worktree add worktrees/seed-source-repo origin/main",
+              command: `git -C source-repos/source-repo worktree add ${join(tempRoot, "worktrees", "seed-source-repo")} origin/main`,
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -550,6 +550,37 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a successful worktree created inside the bare clone", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-wrong-worktree-location-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)",
+              command:
+                "git -C source-repos/source-repo worktree add source-repos/source-repo/worktrees/seed-source-repo origin/main",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(true);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
