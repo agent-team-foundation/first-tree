@@ -47,7 +47,9 @@ vi.mock("../../../lib/visibility-interval.js", () => visibilityMocks);
 let root: Root | null = null;
 const PROD_INSTALLER_URL = "https://download.first-tree.ai/releases/prod/install.sh";
 const bootstrapCommand = (token: string): string =>
-  `curl -fsSL ${PROD_INSTALLER_URL} | sh\n~/.local/bin/first-tree login ${token}`;
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  `(trap 'rm -f "$installer_tmp"' 0; curl -fsSL ${PROD_INSTALLER_URL} -o "$installer_tmp" && ` +
+  `sh "$installer_tmp" &&\n~/.local/bin/first-tree login ${token})`;
 
 function expectHookValue<T>(value: T): NonNullable<T> {
   if (value === null || value === undefined) throw new Error("hook value was not captured");

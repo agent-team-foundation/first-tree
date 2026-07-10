@@ -205,7 +205,10 @@ vi.mock("../../lib/visibility-interval.js", () => ({
 
 const NOW = "2026-05-28T12:00:00.000Z";
 const PROD_INSTALLER_URL = "https://download.first-tree.ai/releases/prod/install.sh";
-const PROD_BOOTSTRAP_COMMAND = `curl -fsSL ${PROD_INSTALLER_URL} | sh\n~/.local/bin/first-tree login connect-token`;
+const PROD_BOOTSTRAP_COMMAND =
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  `(trap 'rm -f "$installer_tmp"' 0; curl -fsSL ${PROD_INSTALLER_URL} -o "$installer_tmp" && ` +
+  'sh "$installer_tmp" &&\n~/.local/bin/first-tree login connect-token)';
 
 const AGENT_NAMES: Record<string, string> = {
   "agent-1": "Nova",

@@ -13,7 +13,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const roots: Root[] = [];
 const BOOTSTRAP_COMMAND =
-  "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n~/.local/bin/first-tree login abc123";
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  "(trap 'rm -f \"$installer_tmp\"' 0; " +
+  'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
+  'sh "$installer_tmp" &&\n~/.local/bin/first-tree login abc123)';
 
 function computer(overrides: Partial<ComputerConnection> = {}): ComputerConnection {
   return {

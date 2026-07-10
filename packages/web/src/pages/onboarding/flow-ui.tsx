@@ -185,10 +185,10 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
 /**
  * The terminal command(s) the user pastes to connect a computer. Renders
  * whatever lines the server's bootstrap command contains — hosted channels
- * currently return the shell installer followed by an explicit
- * `~/.local/bin/<binName> login <code>` line, while dev returns only its
- * source-installed login command. Each line nowraps and ellipsizes on
- * overflow so a long opaque token shows as
+ * currently return a guarded download/install chain whose explicit
+ * `~/.local/bin/<binName> login <code>` step runs only after installation
+ * succeeds, while dev returns only its source-installed login command. Each
+ * line nowraps and ellipsizes on overflow so a long opaque token shows as
  * much as fits without word-breaking; Copy puts the full multi-line command
  * on the clipboard regardless of what's visible.
  *

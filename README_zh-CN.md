@@ -83,13 +83,14 @@ First Tree 围绕 Context Tree 连接五个部分：
 命令。托管生产环境使用：
 
 ```bash
-curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
-~/.local/bin/first-tree login <connect-code>
+installer_tmp=$(mktemp "${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && sh "$installer_tmp" &&
+~/.local/bin/first-tree login <connect-code>)
 ```
 
 请以 Web 控制台显示的命令为准，尤其是在使用 staging 或自托管部署时。
-macOS/Linux 安装脚本已内置 Node.js，无需另行安装。登录命令显式使用
-`~/.local/bin`，因此即使当前 shell 尚未刷新 `PATH` 也能立即执行。
+macOS/Linux 安装脚本已内置 Node.js，无需另行安装。命令仅在安装成功后
+执行登录；登录命令显式使用 `~/.local/bin`，因此即使当前 shell 尚未刷新
+`PATH` 也能立即执行。
 
 ## CLI
 

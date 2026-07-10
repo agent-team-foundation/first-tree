@@ -53,8 +53,12 @@ vi.mock("../../../lib/visibility-interval.js", () => ({
 
 const NOW = "2026-05-28T12:00:00.000Z";
 const STAGING_INSTALLER_URL = "https://download.first-tree.ai/releases/staging/install.sh";
-const STAGING_BOOTSTRAP_COMMAND = `curl -fsSL ${STAGING_INSTALLER_URL} | sh\n~/.local/bin/first-tree-staging login connect-token`;
-const STAGING_FRESH_BOOTSTRAP_COMMAND = `curl -fsSL ${STAGING_INSTALLER_URL} | sh\n~/.local/bin/first-tree-staging login fresh-token`;
+const stagingBootstrapCommand = (token: string): string =>
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  `(trap 'rm -f "$installer_tmp"' 0; curl -fsSL ${STAGING_INSTALLER_URL} -o "$installer_tmp" && ` +
+  `sh "$installer_tmp" &&\n~/.local/bin/first-tree-staging login ${token})`;
+const STAGING_BOOTSTRAP_COMMAND = stagingBootstrapCommand("connect-token");
+const STAGING_FRESH_BOOTSTRAP_COMMAND = stagingBootstrapCommand("fresh-token");
 
 const AGENT_NAMES: Record<string, string> = {
   "agent-1": "Nova",

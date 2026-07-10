@@ -101,15 +101,17 @@ function buildPortableBootstrapCommand(options: {
   const installerEnv = isCustomDownloadBase
     ? `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} `
     : "";
+  const loginCommand = buildLoginCommand({
+    executable: `~/.local/bin/${options.binName}`,
+    tokenArg: shellArg(options.token),
+    serverUrl: options.serverUrl,
+    defaultServerUrl: options.defaultServerUrl,
+  });
 
   return [
-    `curl -fsSL ${installerUrl} | ${installerEnv}sh`,
-    buildLoginCommand({
-      executable: `~/.local/bin/${options.binName}`,
-      tokenArg: shellArg(options.token),
-      serverUrl: options.serverUrl,
-      defaultServerUrl: options.defaultServerUrl,
-    }),
+    `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; ` +
+      `curl -fsSL ${installerUrl} -o "$installer_tmp" && ${installerEnv}sh "$installer_tmp" &&`,
+    `${loginCommand})`,
   ].join("\n");
 }
 

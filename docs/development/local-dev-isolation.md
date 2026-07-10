@@ -94,6 +94,11 @@ side-by-side:
 
 ```bash
 curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+```
+
+After the installer completes successfully, sign in with the staging binary:
+
+```bash
 ~/.local/bin/first-tree-staging login <connect-code>
 # now both `first-tree-dev daemon status` and `first-tree-staging daemon status` work
 ```

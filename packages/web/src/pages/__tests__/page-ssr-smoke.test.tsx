@@ -751,7 +751,9 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
       selectedRuntime: "claude-code",
       setSelectedRuntime: () => undefined,
       cliCommand:
-        "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n~/.local/bin/first-tree login connect-token",
+        `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+        "(trap 'rm -f \"$installer_tmp\"' 0; curl -fsSL https://download.first-tree.ai/releases/prod/install.sh " +
+        '-o "$installer_tmp" && sh "$installer_tmp" &&\n~/.local/bin/first-tree login connect-token)',
       tokenError: null,
       retry: () => undefined,
     },
@@ -1239,7 +1241,14 @@ describe("page SSR smoke coverage", () => {
 
     const html = renderPage(
       <>
-        <CommandBox command="curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n~/.local/bin/first-tree login token" />
+        <CommandBox
+          command={
+            `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+            "(trap 'rm -f \"$installer_tmp\"' 0; " +
+            'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
+            'sh "$installer_tmp" &&\n~/.local/bin/first-tree login token)'
+          }
+        />
         <FlowNote tone="info">Heads up</FlowNote>
         <StatusRow state="waiting" label="Waiting now" />
         <StatusRow state="ok" label="Connected now" />

@@ -8,7 +8,8 @@ Install the production CLI (macOS or Linux):
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ```
 
-Then connect this computer with a short code from the First Tree web console:
+After the installer completes successfully, connect this computer with a short
+code from the First Tree web console:
 
 ```bash
 ~/.local/bin/first-tree login <connect-code>
@@ -20,6 +21,11 @@ For staging, use the staging installer and binary:
 
 ```bash
 curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+```
+
+After the installer completes successfully, connect with the staging binary:
+
+```bash
 ~/.local/bin/first-tree-staging login <connect-code>
 ```
 

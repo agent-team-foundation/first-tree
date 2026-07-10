@@ -58,7 +58,10 @@ vi.mock("../../lib/visibility-interval.js", () => ({
 
 const NOW = "2026-05-28T12:00:00.000Z";
 const PROD_BOOTSTRAP_COMMAND =
-  "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n~/.local/bin/first-tree login old-token";
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  "(trap 'rm -f \"$installer_tmp\"' 0; " +
+  'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
+  'sh "$installer_tmp" &&\n~/.local/bin/first-tree login old-token)';
 
 let root: Root | null = null;
 
@@ -392,10 +395,7 @@ describe("NewAgentDialog extra branches", () => {
     await waitForText(container, "~/.local/bin/first-tree login old-token");
     const renderedCommand = document.body.querySelector("pre code");
     expect(renderedCommand?.textContent).toBe(PROD_BOOTSTRAP_COMMAND);
-    expect(renderedCommand?.textContent?.split("\n")).toEqual([
-      "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh",
-      "~/.local/bin/first-tree login old-token",
-    ]);
+    expect(renderedCommand?.textContent?.split("\n")).toEqual(PROD_BOOTSTRAP_COMMAND.split("\n"));
     await click(buttonByText(document.body, "Copy"));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(PROD_BOOTSTRAP_COMMAND);
     expect(document.body.textContent).not.toContain("npm install");

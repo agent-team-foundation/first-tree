@@ -34,9 +34,10 @@ export const connectTokenResponseSchema = z.object({
   command: z.string(),
   /**
    * Authoritative bootstrap command shown by web onboarding and connection
-   * dialogs. Prod/staging return the public shell installer followed by an
-   * explicit `~/.local/bin/<binName> login <code>` line. Dev returns only the
-   * source-built CLI login command.
+   * dialogs. Prod/staging return a guarded public installer command that runs
+   * the explicit `~/.local/bin/<binName> login <code>` line only after the
+   * download and installation succeed. Dev returns only the source-built CLI
+   * login command.
    */
   bootstrapCommand: z.string(),
   /**

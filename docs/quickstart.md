@@ -32,16 +32,18 @@ Your agent runs on a real machine, so the next step links one to your team.
 Copy the command the page shows and run it in a terminal on that machine:
 
 ```bash
-curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
-~/.local/bin/first-tree login <connect-code>
+installer_tmp=$(mktemp "${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && sh "$installer_tmp" &&
+~/.local/bin/first-tree login <connect-code>)
 ```
 
-These are the exact commands for hosted production. Use the commands from the
-page for staging or a self-hosted deployment: they select the correct installer,
+This is the exact command for hosted production. Use the command from the
+page for staging or a self-hosted deployment: it selects the correct installer,
 binary, and server URL. The explicit `~/.local/bin` path works before a shell
 reload adds that directory to `PATH`.
 
-The first command installs the CLI, and the second signs the computer in.
+The first line downloads and installs the CLI through a temporary file. The
+second line signs the computer in only after the download and installation
+succeed. The temporary installer is removed when the command exits.
 `first-tree login`:
 
 - Exchanges the short connect code against the CLI channel's default server
