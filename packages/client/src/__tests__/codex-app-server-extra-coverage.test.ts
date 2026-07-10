@@ -636,6 +636,58 @@ describe("codex app-server handler extra branches", () => {
     await handler.shutdown();
   });
 
+  it.each([
+    "max",
+    "ultra",
+  ] as const)("passes Codex %s effort through app-server turn/start", async (reasoningEffort) => {
+    const fake = new FakeAppServerClient();
+    const payload = {
+      kind: "codex",
+      prompt: { append: "" },
+      model: "gpt-5.6-sol",
+      reasoningEffort,
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+    } satisfies AgentRuntimeConfigPayload;
+    const cachedConfig = runtimeConfig(payload);
+    const agentConfigCache = {
+      refresh: vi.fn(async () => cachedConfig),
+      get: vi.fn(() => cachedConfig),
+    } as unknown as AgentConfigCache;
+    const handler = createCodexAppServerHandler({
+      workspaceRoot,
+      agentConfigCache,
+      codexRuntimeBinaryResolver: async () => ({
+        ok: true,
+        binary: "/tmp/fake-codex",
+        runtimeSource: "path",
+        runtimePath: "/tmp/fake-codex",
+        version: "0.0.0-test",
+      }),
+      codexAppServerClientFactory: async (options: {
+        onNotification?: NotificationHandler;
+        onClose?: CloseHandler;
+      }) => {
+        fake.onNotification = options.onNotification ?? null;
+        fake.onClose = options.onClose ?? null;
+        return fake;
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m-effort", "run"), makeContext());
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"), "effort turn/start");
+    const turnStart = fake.requests.find((request) => request.method === "turn/start");
+    expect(asRecord(turnStart?.params)?.effort).toBe(reasoningEffort);
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-1", status: "completed", error: null, items: [{ type: "agentMessage", text: "done" }] },
+    });
+    await startPromise;
+    await handler.shutdown();
+  });
+
   it("returns a queued route and retries when initial inbound formatting fails", async () => {
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();

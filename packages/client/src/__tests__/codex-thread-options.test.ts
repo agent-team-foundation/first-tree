@@ -55,12 +55,11 @@ describe("buildCodexThreadOptions", () => {
   });
 
   it("passes the operator-configured reasoning effort through to the SDK", () => {
-    expect(buildCodexThreadOptions(basePayload({ reasoningEffort: "medium" }), "/tmp/wsk").modelReasoningEffort).toBe(
-      "medium",
-    );
-    expect(buildCodexThreadOptions(basePayload({ reasoningEffort: "xhigh" }), "/tmp/wsk").modelReasoningEffort).toBe(
-      "xhigh",
-    );
+    for (const reasoningEffort of ["medium", "xhigh", "max", "ultra"] as const) {
+      expect(buildCodexThreadOptions(basePayload({ reasoningEffort }), "/tmp/wsk").modelReasoningEffort).toBe(
+        reasoningEffort,
+      );
+    }
   });
 
   it("derives additionalDirectories from gitRepos (with deriveRepoLocalPath fallback)", () => {
