@@ -112,6 +112,16 @@ export type CursorFinalizeResult = {
 };
 
 /**
+ * Disposition of a no-result exit under the shared provider-turn retry policy,
+ * evaluated per attempt. `retry` means the handler should foreground-wait
+ * `delayMs` and re-spawn a FRESH turn (replay safety re-evaluated); `settle`
+ * means a terminal stop (consumed error) or a hand-back-to-inbox recovery.
+ */
+export type CursorNoResultDisposition =
+  | { action: "retry"; delayMs: number; scheduledEvent: SessionEvent }
+  | { action: "settle"; events: SessionEvent[]; settlement: TurnSettlement };
+
+/**
  * Fold one parsed stream-json event into `state` and return the events to emit
  * for it. `raw` is the already-`JSON.parse`d line; malformed lines are handled
  * (skipped) by the caller before reaching here.
@@ -219,93 +229,158 @@ function consumeResult(state: CursorTurnState, event: Record<string, unknown>): 
 }
 
 /**
- * Produce the terminal events + settlement for a closed turn.
+ * Finalize a turn that produced a `result`: emit token_usage (when usage
+ * present), the full assistant text (chunked, from `result.result`), then
+ * `turn_end`. `is_error` maps to a consumed provider error; a `forwardResult`
+ * failure on the otherwise-successful path is a consumed forward-failed error
+ * (mirrors codex's `resolveTurnSettlement({ forwardFailed })`).
  *
- * With a `result`: emit token_usage (when usage present), the full assistant
- * text (chunked, from `result.result`), then `turn_end`. `is_error` maps to a
- * consumed provider error; otherwise success.
- *
- * Without a `result` (process exited before completing — the error path):
- * classify the stderr tail and run it through the shared provider-retry policy
- * with replay safety derived from turn progress. Auth / invalid-model /
- * usage-limit are terminal (consumed error); a generic crash retries ONLY when
- * no tool side effect / user-visible output occurred, otherwise it too settles
- * terminal. Terminal failures also emit the encoded provider-retry event that
- * drives SessionManager's durable chat notice.
+ * Precondition: `state.sawResult === true`.
  */
-export function finalizeCursorTurn(
+export function finalizeCursorResult(
   state: CursorTurnState,
-  exitCode: number | null,
-  stderrTail: string,
   opts: { forwardFailed?: boolean } = {},
 ): CursorFinalizeResult {
   const events: SessionEvent[] = [];
-
-  if (state.sawResult) {
-    if (state.usage) {
-      events.push({
-        kind: "token_usage",
-        payload: {
-          provider: CURSOR_PROVIDER,
-          model: state.model ?? "",
-          // Cursor's `usage.inputTokens` is already the NON-cached prompt total
-          // (disjoint from cacheReadTokens), matching the schema's `inputTokens`
-          // — no subtraction needed.
-          inputTokens: state.usage.inputTokens,
-          cachedInputTokens: state.usage.cacheReadTokens,
-          outputTokens: state.usage.outputTokens,
-        },
-      });
-    }
-    for (const chunk of chunkAssistantText(state.resultText)) {
-      events.push({ kind: "assistant_text", payload: { text: chunk } });
-    }
-    // A `forwardResult` failure on the success path is a consumed error (mirrors
-    // codex's `resolveTurnSettlement({ forwardFailed })`); `forwardFailed` is
-    // only ever set on the non-error success path (the handler forwards there).
-    const forwardFailed = opts.forwardFailed ?? false;
-    events.push({ kind: "turn_end", payload: { status: state.isError || forwardFailed ? "error" : "success" } });
-    const settlement = state.isError
-      ? resolveTurnSettlement({ consumedErrorReason: "provider_clean_error" })
-      : resolveTurnSettlement({ forwardFailed });
-    return { events, settlement };
+  if (state.usage) {
+    events.push({
+      kind: "token_usage",
+      payload: {
+        provider: CURSOR_PROVIDER,
+        model: state.model ?? "",
+        // Cursor's `usage.inputTokens` is already the NON-cached prompt total
+        // (disjoint from cacheReadTokens), matching the schema's `inputTokens`
+        // — no subtraction needed.
+        inputTokens: state.usage.inputTokens,
+        cachedInputTokens: state.usage.cacheReadTokens,
+        outputTokens: state.usage.outputTokens,
+      },
+    });
   }
+  for (const chunk of chunkAssistantText(state.resultText)) {
+    events.push({ kind: "assistant_text", payload: { text: chunk } });
+  }
+  const forwardFailed = opts.forwardFailed ?? false;
+  events.push({ kind: "turn_end", payload: { status: state.isError || forwardFailed ? "error" : "success" } });
+  const settlement = state.isError
+    ? resolveTurnSettlement({ consumedErrorReason: "provider_clean_error" })
+    : resolveTurnSettlement({ forwardFailed });
+  return { events, settlement };
+}
 
-  // No result — the process exited before completing. Route the failure through
-  // the SAME shared provider-retry policy codex uses (classify → decide →
-  // encode), so: (finding 1) a crash AFTER a tool side effect / user-visible
-  // output settles as a terminal consumed error rather than replaying the turn,
-  // and (finding 3) terminal failures emit the structured provider-retry event
-  // SessionManager turns into a durable chat notice + ACK guard.
+/**
+ * Decide the disposition of a no-result exit at `attempt` (1-based) under the
+ * shared provider-turn retry policy — the SAME classify → decide → encode chain
+ * codex's runTurn uses. Replay safety is derived from THIS attempt's turn
+ * progress (a tool side effect / user-visible output makes a replay unsafe), so
+ * a crash after a side effect never re-spawns.
+ *
+ * `retry` → the handler foreground-waits `delayMs` and re-spawns a fresh turn
+ * (attempt+1). `settle` → a terminal stop: a consumed error (auth / model /
+ * quota / unsafe-replay), a real exhaustion, or a pre-provider exhausted
+ * hand-back-to-inbox recovery. Terminal stops carry the encoded provider-retry
+ * event that drives SessionManager's durable chat notice.
+ */
+export function evaluateCursorNoResult(
+  state: CursorTurnState,
+  exitCode: number | null,
+  stderrTail: string,
+  attempt: number,
+): CursorNoResultDisposition {
   const kind = classifyCursorNoResult(stderrTail);
   const humanMessage = buildNoResultMessage(kind, stderrTail.trim(), exitCode);
   const replaySafety = noResultReplaySafety(state, kind);
   const classification = classificationForNoResult(kind, humanMessage);
-  const decision = decideProviderRetry({ classification, scope: "provider_turn", attempt: 1, replaySafety });
+  const decision = decideProviderRetry({ classification, scope: "provider_turn", attempt, replaySafety });
   const eventName: ProviderRetryEventName =
     decision.action === "retry"
       ? "provider_retry_scheduled"
       : decision.terminalKind === "exhausted"
         ? "provider_retry_exhausted"
         : "provider_failure_terminal";
-  const retryEventPayload = buildProviderRetryEvent({
-    event: eventName,
-    provider: CURSOR_PROVIDER,
-    scope: "provider_turn",
-    classification,
-    decision,
-    messagePreview: humanMessage,
-  });
-
-  // Structured event first (SessionManager decodes this for the durable notice),
-  // then the human-readable error, then turn_end — mirroring codex's ordering.
-  events.push({
+  const structuredEvent: SessionEvent = {
     kind: "error",
-    payload: { source: "runtime", message: encodeProviderRetryEventMessage(retryEventPayload) },
-  });
-  events.push({ kind: "error", payload: { source: "sdk", message: humanMessage.slice(0, ERROR_MESSAGE_LIMIT) } });
-  events.push({ kind: "turn_end", payload: { status: "error" } });
+    payload: {
+      source: "runtime",
+      message: encodeProviderRetryEventMessage(
+        buildProviderRetryEvent({
+          event: eventName,
+          provider: CURSOR_PROVIDER,
+          scope: "provider_turn",
+          classification,
+          decision,
+          messagePreview: humanMessage,
+        }),
+      ),
+    },
+  };
 
+  if (decision.action === "retry") {
+    return { action: "retry", delayMs: decision.delayMs, scheduledEvent: structuredEvent };
+  }
+
+  // Terminal stop — structured event (durable notice), human error, turn_end.
+  const events: SessionEvent[] = [
+    structuredEvent,
+    { kind: "error", payload: { source: "sdk", message: humanMessage.slice(0, ERROR_MESSAGE_LIMIT) } },
+    { kind: "turn_end", payload: { status: "error" } },
+  ];
+  // A pre-provider exhaustion is safe to hand back to the inbox for redelivery
+  // (mirrors codex's `retryAfterHelperStop`); every other terminal stop is a
+  // consumed error.
+  const settlement =
+    decision.replaySafety === "pre_provider" && decision.terminalKind === "exhausted"
+      ? resolveTurnSettlement({ retryReason: decision.reasonCode })
+      : resolveTurnSettlement({ consumedErrorReason: consumedReasonForDecision(decision) });
+  return { action: "settle", events, settlement };
+}
+
+/**
+ * Terminal disposition for an unresolvable cursor CLI binary after bind
+ * (finding 3): a needs-operator CAPABILITY failure, NOT a transient retry.
+ * Mirrors the auth/quota terminal path — emit the encoded capability
+ * provider-retry event so SessionManager posts the durable runtime notice and
+ * guards the ACK, then settle consumed.
+ */
+export function finalizeCursorBinaryMissing(message: string): CursorFinalizeResult {
+  const classification: ProviderFailureClassification = {
+    category: "capability",
+    reasonCode: "provider_binary_missing",
+    message,
+    sourceKind: "permanent",
+  };
+  const decision = decideProviderRetry({
+    classification,
+    scope: "provider_turn",
+    attempt: 1,
+    replaySafety: "pre_provider",
+  });
+  const eventName: ProviderRetryEventName =
+    decision.action === "retry"
+      ? "provider_retry_scheduled"
+      : decision.terminalKind === "exhausted"
+        ? "provider_retry_exhausted"
+        : "provider_failure_terminal";
+  const events: SessionEvent[] = [
+    {
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: encodeProviderRetryEventMessage(
+          buildProviderRetryEvent({
+            event: eventName,
+            provider: CURSOR_PROVIDER,
+            scope: "provider_turn",
+            classification,
+            decision,
+            messagePreview: message,
+          }),
+        ),
+      },
+    },
+    { kind: "error", payload: { source: "sdk", message: message.slice(0, ERROR_MESSAGE_LIMIT) } },
+    { kind: "turn_end", payload: { status: "error" } },
+  ];
   const settlement =
     decision.action === "retry"
       ? resolveTurnSettlement({ retryReason: decision.reasonCode })

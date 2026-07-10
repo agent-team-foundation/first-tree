@@ -243,6 +243,38 @@ describe("context-tree IO service", () => {
     expect(summary.agents[0]).toMatchObject({ readCount: 1, writeCount: 2, runtimeProvider: "cursor" });
   });
 
+  it("does NOT count a cursor ref that carries only localPath (the raw parser shape needs handler enrichment)", async () => {
+    // This is exactly what the pure parser emits before the handler resolves the
+    // path against the tree binding (finding 6): no repoUrl / repoRelativePath.
+    // The normalizer must skip it, so a localPath-only ref never inflates counts.
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const edit = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-cursor-localpath-only",
+        name: "edit",
+        args: { path: "/tmp/tree/members/alice/NODE.md" },
+        status: "ok",
+        toolFileRefs: [{ origin: "file_change", localPath: "/tmp/tree/members/alice/NODE.md", pathKind: "file" }],
+      },
+    });
+    await recordFromSessionEvent(app.db, {
+      organizationId: seed.organizationId,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      runtimeProvider: "cursor",
+      sessionEvent: edit,
+    });
+
+    const rows = await app.db
+      .select()
+      .from(contextTreeIoEvents)
+      .where(eq(contextTreeIoEvents.sourceSessionEventId, edit.id));
+    expect(rows).toHaveLength(0);
+  });
+
   it("recognizes Cursor tool names in the recordability decision (not unsupported_tool)", () => {
     const editRef = {
       origin: "file_change" as const,

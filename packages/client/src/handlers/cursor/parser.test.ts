@@ -2,7 +2,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { type ProviderRetryEventPayload, parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { classifyCursorNoResult, consumeCursorEvent, createCursorTurnState, finalizeCursorTurn } from "./parser.js";
+import {
+  classifyCursorNoResult,
+  consumeCursorEvent,
+  createCursorTurnState,
+  evaluateCursorNoResult,
+  finalizeCursorBinaryMissing,
+  finalizeCursorResult,
+} from "./parser.js";
 
 /** Decode the structured provider-retry event SessionManager reads for the durable notice. */
 function structuredRetryEvent(events: SessionEvent[]): ProviderRetryEventPayload | null {
@@ -98,7 +105,7 @@ describe("cursor parser — multitool success", () => {
     expect(state.isError).toBe(false);
 
     // Finalize: token_usage → assistant_text → turn_end, in that order.
-    const { events: finalEvents, settlement } = finalizeCursorTurn(state, 0, "");
+    const { events: finalEvents, settlement } = finalizeCursorResult(state, {});
     expect(finalEvents.map((e) => e.kind)).toEqual(["token_usage", "assistant_text", "turn_end"]);
 
     const usage = finalEvents.find((e) => e.kind === "token_usage");
@@ -181,7 +188,9 @@ describe("cursor parser — no-result finalize classification", () => {
   });
 
   it("auth → structured terminal event (credential) + human hint + terminal consumed settlement", () => {
-    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, AUTH_STDERR);
+    const disposition = evaluateCursorNoResult(createCursorTurnState(), 1, AUTH_STDERR, 1);
+    if (disposition.action !== "settle") throw new Error("expected settle");
+    const { events, settlement } = disposition;
     // structured provider-retry event first, then the human-readable error, then turn_end.
     expect(events.map((e) => e.kind)).toEqual(["error", "error", "turn_end"]);
 
@@ -206,51 +215,71 @@ describe("cursor parser — no-result finalize classification", () => {
   });
 
   it("invalid model → structured terminal event (configuration) + terminal consumed settlement", () => {
-    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, INVALID_MODEL_STDERR);
-    const structured = structuredRetryEvent(events);
+    const disposition = evaluateCursorNoResult(createCursorTurnState(), 1, INVALID_MODEL_STDERR, 1);
+    if (disposition.action !== "settle") throw new Error("expected settle");
+    const structured = structuredRetryEvent(disposition.events);
     expect(structured?.event).toBe("provider_failure_terminal");
     expect(structured?.category).toBe("configuration");
-    const human = events.find((e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"));
+    const human = disposition.events.find(
+      (e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"),
+    );
     expect(human?.kind === "error" && human.payload.message).toBe(INVALID_MODEL_STDERR);
-    expect(settlement.action.kind).toBe("complete");
-    expect(settlement.status).toBe("error");
+    expect(disposition.settlement.action.kind).toBe("complete");
+    expect(disposition.settlement.status).toBe("error");
   });
 
   it("usage limit → structured terminal event (provider_capacity) + terminal consumed settlement", () => {
     // Usage limit implies the provider was reached → provider_entered → terminal.
     const state = createCursorTurnState();
     state.sawInit = true;
-    const { events, settlement } = finalizeCursorTurn(state, 1, USAGE_LIMIT_STDERR);
-    const structured = structuredRetryEvent(events);
+    const disposition = evaluateCursorNoResult(state, 1, USAGE_LIMIT_STDERR, 1);
+    if (disposition.action !== "settle") throw new Error("expected settle");
+    const structured = structuredRetryEvent(disposition.events);
     expect(structured?.event).toBe("provider_failure_terminal");
     expect(structured?.category).toBe("provider_capacity");
-    const human = events.find((e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"));
+    const human = disposition.events.find(
+      (e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"),
+    );
     expect(human?.kind === "error" && human.payload.message).toBe(USAGE_LIMIT_STDERR);
-    expect(settlement.action.kind).toBe("complete");
-    expect(settlement.status).toBe("error");
+    expect(disposition.settlement.action.kind).toBe("complete");
+    expect(disposition.settlement.status).toBe("error");
   });
 
-  it("generic exit with NO tool effect → retryable settlement (not terminal)", () => {
-    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 2, "");
-    const human = events.find((e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"));
-    expect(human?.kind === "error" && human.payload.message).toContain("cursor-agent exited");
-    expect(settlement.action.kind).toBe("retry");
+  it("generic exit with NO tool effect → foreground RETRY disposition (attempt 1)", () => {
+    const disposition = evaluateCursorNoResult(createCursorTurnState(), 2, "", 1);
+    if (disposition.action !== "retry") throw new Error("expected retry");
+    expect(disposition.delayMs).toBeGreaterThan(0);
+    // The scheduled (non-terminal) structured event drives the "retrying" status,
+    // and shouldPost... returns false for it (no premature durable notice).
+    const structured = structuredRetryEvent([disposition.scheduledEvent]);
+    expect(structured?.event).toBe("provider_retry_scheduled");
+  });
+
+  it("generic exit exhausted (later attempt, pre-provider) → hand back to inbox (retry settlement)", () => {
+    // Attempt beyond the unknown-retry budget → stop(exhausted); pre_provider →
+    // recover via the inbox rather than dropping the message as consumed.
+    const disposition = evaluateCursorNoResult(createCursorTurnState(), 2, "", 5);
+    if (disposition.action !== "settle") throw new Error("expected settle");
+    const structured = structuredRetryEvent(disposition.events);
+    expect(structured?.event).toBe("provider_retry_exhausted");
+    expect(disposition.settlement.action.kind).toBe("retry");
   });
 
   it("generic exit AFTER a tool effect → terminal consumed (never replays a side effect)", () => {
     // A tool_call already ran (edit/shell) before the CLI crashed pre-result:
-    // replay would re-apply the effect, so this must NOT retry.
+    // replay would re-apply the effect, so this must NOT retry even at attempt 1.
     const state = createCursorTurnState();
     state.sawInit = true;
     state.sawToolEffect = true;
-    const { events, settlement } = finalizeCursorTurn(state, 139, "segfault");
-    const structured = structuredRetryEvent(events);
+    const disposition = evaluateCursorNoResult(state, 139, "segfault", 1);
+    if (disposition.action !== "settle") throw new Error("expected settle");
+    const structured = structuredRetryEvent(disposition.events);
     expect(structured?.event).toBe("provider_failure_terminal");
     expect(structured?.replaySafety).toBe("user_visible");
-    expect(settlement.action.kind).toBe("complete");
-    expect(settlement.status).toBe("error");
-    if (settlement.action.kind !== "complete") throw new Error("expected complete");
-    expect(settlement.action.outcome).toMatchObject({ terminal: true, completion: "consumed" });
+    expect(disposition.settlement.action.kind).toBe("complete");
+    expect(disposition.settlement.status).toBe("error");
+    if (disposition.settlement.action.kind !== "complete") throw new Error("expected complete");
+    expect(disposition.settlement.action.outcome).toMatchObject({ terminal: true, completion: "consumed" });
   });
 
   it("result with is_error → consumed error settlement + error turn_end", () => {
@@ -258,12 +287,24 @@ describe("cursor parser — no-result finalize classification", () => {
     state.sawResult = true;
     state.isError = true;
     state.resultText = "partial";
-    const { events, settlement } = finalizeCursorTurn(state, 0, "");
+    const { events, settlement } = finalizeCursorResult(state, {});
     // No usage captured → no token_usage; assistant_text still carries the text.
     expect(events.map((e) => e.kind)).toEqual(["assistant_text", "turn_end"]);
     const turnEnd = events.find((e) => e.kind === "turn_end");
     expect(turnEnd?.kind === "turn_end" && turnEnd.payload.status).toBe("error");
     expect(settlement.action.kind).toBe("complete");
     expect(settlement.status).toBe("error");
+  });
+
+  it("missing binary → terminal capability event + consumed settlement (finding 3)", () => {
+    const { events, settlement } = finalizeCursorBinaryMissing("Cursor runtime binary is missing on this machine.");
+    const structured = structuredRetryEvent(events);
+    expect(structured?.event).toBe("provider_failure_terminal");
+    expect(structured?.category).toBe("capability");
+    expect(events.map((e) => e.kind)).toEqual(["error", "error", "turn_end"]);
+    expect(settlement.action.kind).toBe("complete");
+    expect(settlement.status).toBe("error");
+    if (settlement.action.kind !== "complete") throw new Error("expected complete");
+    expect(settlement.action.outcome).toMatchObject({ terminal: true, completion: "consumed" });
   });
 });
