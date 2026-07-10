@@ -73,9 +73,8 @@ COPY --from=build /app/packages/web/dist packages/server/web-dist/
 RUN apk add --no-cache git wget
 
 RUN addgroup -S firsttree && \
-    adduser -S -G firsttree firsttree && \
-    chown -R firsttree:firsttree /app
-
+    adduser -S -G firsttree firsttree
+    
 ENV NODE_ENV=production
 ENV FIRST_TREE_WEB_DIST_PATH=/app/packages/server/web-dist
 EXPOSE 8000
