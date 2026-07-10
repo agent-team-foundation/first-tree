@@ -8,8 +8,9 @@ import { print } from "./output.js";
  * exposes a `codex` executable on PATH (and pulls the platform-specific
  * `@openai/codex-{platform}` binary as an optionalDependency). This is the
  * package First Tree intentionally does NOT bundle by default — the runtime
- * resolves a system `codex` on PATH, and this one-click install is the
- * remediation when none exists.
+ * resolves an external `codex` from PATH, well-known install locations, or the
+ * macOS ChatGPT/Codex desktop app, and this one-click install is the remediation
+ * when none exists.
  */
 const CODEX_RUNTIME_PACKAGE = "@openai/codex";
 
@@ -45,7 +46,7 @@ function parseInstalledVersion(stdout: string): string | null {
  * Install the native Codex runtime globally (`npm install -g @openai/codex@<spec>`).
  *
  * This is the daemon's one-click remediation for a host with no `codex` on
- * PATH: it runs the same tracked-subprocess install path the CLI self-update
+ * any supported location: it runs the same tracked-subprocess install path the CLI self-update
  * uses (reaped on shutdown, hard-timeout, error-taxonomy classification), then
  * the caller is expected to re-probe the codex capability so the new binary is
  * picked up via PATH resolution. Does not exit the process.
