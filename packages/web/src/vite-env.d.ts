@@ -8,7 +8,7 @@
 declare const __WEB_BUILD_ID__: string;
 
 interface ImportMetaEnv {
-  readonly VITE_ENABLE_MOBILE_ROOT_REDIRECT?: string;
+  readonly VITE_ENABLE_MOBILE_EXPERIENCE?: string;
   readonly VITE_SENTRY_DSN?: string;
   readonly VITE_SENTRY_ENABLED?: string;
   readonly VITE_SENTRY_ENVIRONMENT?: string;

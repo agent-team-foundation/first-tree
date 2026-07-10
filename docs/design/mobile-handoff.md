@@ -89,6 +89,15 @@ pnpm build-script approvals are already configured.
    `Layout` group. It should wrap `MobileShell` in the same `PulseProvider`
    pattern used by the desktop workspace.
 
+   Gate the visible mobile experience behind `VITE_ENABLE_MOBILE_EXPERIENCE`
+   and the server release channel. The flag defaults off; when off, `/m/*`
+   should fall back to `/` and the static HTML must not advertise the mobile PWA
+   manifest. When the flag is on, the app should still activate mobile only for
+   `dev`/`staging` channels; `prod` remains desktop even if the same image was
+   built with the flag. Staging can build with
+   `VITE_ENABLE_MOBILE_EXPERIENCE=true` to enable `/m/*`, phone root redirect to
+   `/m/now`, and PWA metadata.
+
    Target route shape:
 
    ```tsx
@@ -113,8 +122,11 @@ pnpm build-script approvals are already configured.
 
    - `mobileChatSignal` ranks needs-answer before failed, unread, working, and
      recent chats.
-   - `/m` redirects to `/m/now`.
-   - `/m/now`, `/m/chat`, `/m/team`, and `/m/me` render under auth.
+   - with `VITE_ENABLE_MOBILE_EXPERIENCE=true`, `/m` redirects to `/m/now`.
+   - with the flag enabled, `/m/now`, `/m/chat`, `/m/team`, and `/m/me` render
+     under auth on `dev`/`staging`.
+   - with the flag disabled or the server channel set to `prod`, `/m/*` falls
+     back to the desktop root.
    - chat detail hides the mobile bottom tabs when `?c=` is present.
    - Now and Chat empty/error/loading states render without throwing.
 

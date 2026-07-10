@@ -20,6 +20,15 @@ vi.mock("../hooks/pulse-context.js", () => ({
   PulseProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
+const serverChannelStateMock = vi.hoisted(() => ({
+  channel: "prod" as "dev" | "staging" | "prod" | null,
+  settled: true,
+}));
+
+vi.mock("../hooks/use-server-channel.js", () => ({
+  useServerChannelState: () => serverChannelStateMock,
+}));
+
 vi.mock("../components/ui/toast.js", () => ({
   ToastProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
@@ -111,13 +120,13 @@ function setViewportWidth(width: number): void {
   });
 }
 
-function setMobileRootRedirect(value: string | undefined): void {
+function setMobileExperience(value: string | undefined): void {
   const env = import.meta.env as Record<string, string | undefined>;
   if (value === undefined) {
-    delete env.VITE_ENABLE_MOBILE_ROOT_REDIRECT;
+    delete env.VITE_ENABLE_MOBILE_EXPERIENCE;
     return;
   }
-  env.VITE_ENABLE_MOBILE_ROOT_REDIRECT = value;
+  env.VITE_ENABLE_MOBILE_EXPERIENCE = value;
 }
 
 async function renderAppAt(path: string): Promise<string> {
@@ -141,7 +150,9 @@ describe("App routes", () => {
     document.body.innerHTML = "";
     root = null;
     setViewportWidth(1280);
-    setMobileRootRedirect(undefined);
+    setMobileExperience(undefined);
+    serverChannelStateMock.channel = "prod";
+    serverChannelStateMock.settled = true;
   });
 
   afterEach(async () => {
@@ -192,22 +203,6 @@ describe("App routes", () => {
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
-    expect(await renderAppAt("/m")).toContain("mobile now");
-    await act(async () => root?.unmount());
-    document.body.innerHTML = "";
-
-    expect(await renderAppAt("/m/chat")).toContain("mobile chat");
-    await act(async () => root?.unmount());
-    document.body.innerHTML = "";
-
-    expect(await renderAppAt("/m/team")).toContain("mobile team");
-    await act(async () => root?.unmount());
-    document.body.innerHTML = "";
-
-    expect(await renderAppAt("/m/me")).toContain("mobile me");
-    await act(async () => root?.unmount());
-    document.body.innerHTML = "";
-
     expect(await renderAppAt("/preview/styleguide")).toContain("styleguide preview");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
@@ -219,15 +214,63 @@ describe("App routes", () => {
     expect(await renderAppAt("/preview/command-palette")).toContain("command palette preview");
   });
 
-  it("keeps the phone root on desktop while the mobile-root redirect flag is disabled", async () => {
+  it("keeps the mobile experience disabled by default", async () => {
     setViewportWidth(390);
     expect(await renderAppAt("/")).toContain("workspace page");
+    expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/now")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/chat")).toContain("workspace page");
   });
 
-  it("opens the mobile shell from the root on phones when the redirect flag is enabled", async () => {
-    setMobileRootRedirect("true");
+  it("keeps the mobile experience disabled on prod even when the build flag is enabled", async () => {
+    setMobileExperience("true");
+    serverChannelStateMock.channel = "prod";
+    setViewportWidth(390);
+
+    expect(await renderAppAt("/")).toContain("workspace page");
+    expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/now")).toContain("workspace page");
+  });
+
+  it("opens mobile routes, phone root, and PWA metadata when the mobile experience flag is enabled on staging", async () => {
+    setMobileExperience("true");
+    serverChannelStateMock.channel = "staging";
     setViewportWidth(390);
     expect(await renderAppAt("/")).toContain("mobile now");
+    expect(document.head.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe("/manifest.webmanifest");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m")).toContain("mobile now");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/chat")).toContain("mobile chat");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/team")).toContain("mobile team");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/me")).toContain("mobile me");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
