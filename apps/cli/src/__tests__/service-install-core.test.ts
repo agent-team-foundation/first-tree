@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -177,7 +177,7 @@ describe("service install helpers", () => {
 
     execFileSyncMock.mockReturnValueOnce(`${extensionlessShim}\r\n${cmdShim}\r\n`);
 
-    expect(resolveCliInvocation()).toEqual({ kind: "bin", program: cmdShim });
+    expect(resolveCliInvocation()).toEqual({ kind: "bin", program: realpathSync(cmdShim) });
   });
 
   it("renders service templates with escaped values and quoted shell arguments", () => {
