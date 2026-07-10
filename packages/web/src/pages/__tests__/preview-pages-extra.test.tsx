@@ -303,9 +303,9 @@ describe("extra preview pages", () => {
     expect(text(rendered.container)).toContain("admin, team HAS a tree");
     expect(text(rendered.container)).toContain("member (read-only)");
     expect(text(rendered.container)).toContain("Context Reviewer");
-    expect(text(rendered.container)).toContain("repo connected");
-    expect(text(rendered.container)).toContain("no repo");
-    expect(text(rendered.container)).toContain("acme/acme-api");
+    expect(text(rendered.container)).toContain("build · 2 agents");
+    expect(text(rendered.container)).toContain("bound tree recovery");
+    expect(text(rendered.container)).toContain("Work on this in chat");
 
     await cleanupRendered(rendered);
   });

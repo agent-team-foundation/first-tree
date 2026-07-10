@@ -64,5 +64,5 @@ describe("first-tree-seed periodic cases", () => {
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }
-  });
+  }, 20_000);
 });

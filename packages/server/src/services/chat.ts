@@ -22,7 +22,12 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { resolveAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
-import { preflightMessageSendIntent, type SendIntentParticipant, sendMessage } from "./message.js";
+import {
+  preflightMessageSendIntent,
+  runDeferredSendMessagePostCommitEffects,
+  type SendIntentParticipant,
+  sendMessage,
+} from "./message.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
 import { inviteParticipantsToChat, rejectedPrivateTargets } from "./participant-invite.js";
 import { addChatParticipants, applyMembershipWrite, recomputeChatWatchers } from "./participant-mode.js";
@@ -446,25 +451,35 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
           participants,
           recipients: [] as string[],
           initialMessageCreated: false,
+          postCommitEffects: null,
         };
       }
 
       if (input.beforeInitialMessage) await input.beforeInitialMessage();
       invalidateChatAudience(activeChat.id);
-      const { message, recipients } = await sendMessage(
-        tx as unknown as Database,
-        activeChat.id,
-        effectiveSenderId,
-        initialMessage,
-        {
-          normalizeMentionsInContent: input.source === "agent",
-        },
-      );
-      return { chat: activeChat, message, participants, recipients, initialMessageCreated: true };
+      const sent = await sendMessage(tx as unknown as Database, activeChat.id, effectiveSenderId, initialMessage, {
+        deferPostCommitEffects: true,
+        normalizeMentionsInContent: input.source === "agent",
+      });
+      if (!sent.deferredPostCommitEffects) {
+        throw new Error("Keyed task-chat bootstrap did not return deferred post-commit effects");
+      }
+      return {
+        chat: activeChat,
+        message: sent.message,
+        participants,
+        recipients: sent.recipients,
+        initialMessageCreated: true,
+        postCommitEffects: sent.deferredPostCommitEffects,
+      };
     });
+    if (result.postCommitEffects) {
+      await runDeferredSendMessagePostCommitEffects(db, result.postCommitEffects);
+    }
     invalidateChatAudience(result.chat.id);
+    const { postCommitEffects: _postCommitEffects, ...taskResult } = result;
     return {
-      ...result,
+      ...taskResult,
       effectiveSenderId,
       initialRecipientAgentIds,
       contextParticipantAgentIds,

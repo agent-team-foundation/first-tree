@@ -1,10 +1,12 @@
 import type { SendMessage } from "@first-tree/shared";
-import { and, eq, isNull, like, or } from "drizzle-orm";
+import { and, desc, eq, isNull, like, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "./chat.js";
+import { runDeferredSendMessagePostCommitEffects, sendMessage } from "./message.js";
 
 /**
  * Idempotency key for a production-scan fix launcher, shared by BOTH entry
@@ -32,6 +34,8 @@ export type KickoffOnboardingArgs = {
   targetAgentId: string;
   /** The user-visible first message body sent into the kickoff chat. */
   bootstrap: string;
+  /** Optional trusted metadata for a server-owned bootstrap variant. */
+  bootstrapMetadata?: Record<string, unknown>;
   /** Display title for the created chat. */
   topic: string;
   /** Stable idempotency key for this kickoff surface. */
@@ -57,11 +61,133 @@ export type KickoffOnboardingResult = {
   sent?: { recipients: string[]; messageId: string };
 };
 
+export type TreeSetupRecoveryMessage = {
+  content: string;
+  fingerprint: string;
+};
+
+/**
+ * Append the current server-owned recovery diagnosis to an existing setup
+ * chat and wake its selected agent. The setup kickoff itself is intentionally
+ * sent only into an empty chat, but recovery is a new user turn: returning to
+ * an established Phase 1/2 conversation must not silently navigate to stale
+ * history.
+ *
+ * The chat row lock serializes concurrent CTA clicks. Only an immediately
+ * repeated identical recovery turn is suppressed; once either participant has
+ * replied, the same underlying failure can be raised again as a fresh turn.
+ */
+export async function appendTreeSetupRecoveryMessage(
+  db: Database,
+  args: {
+    chatId: string;
+    humanAgentId: string;
+    targetAgentId: string;
+    recovery: TreeSetupRecoveryMessage;
+  },
+): Promise<{ recipients: string[]; messageId: string } | null> {
+  const result = await db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const [chat] = await txDb
+      .select({ id: chats.id })
+      .from(chats)
+      .where(eq(chats.id, args.chatId))
+      .for("update")
+      .limit(1);
+    if (!chat) throw new Error(`Context Tree setup chat "${args.chatId}" disappeared before recovery send`);
+
+    const [latest] = await txDb
+      .select({ content: messages.content, metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, args.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(1);
+    if (
+      latest?.metadata.contextTreeRecoveryFingerprint === args.recovery.fingerprint ||
+      latest?.content === args.recovery.content
+    ) {
+      return null;
+    }
+
+    const sent = await sendMessage(
+      txDb,
+      args.chatId,
+      args.humanAgentId,
+      {
+        format: "text",
+        content: args.recovery.content,
+        metadata: { contextTreeRecoveryFingerprint: args.recovery.fingerprint },
+        source: "api",
+      },
+      { addressedToAgentIds: [args.targetAgentId], deferPostCommitEffects: true },
+    );
+    if (!sent.deferredPostCommitEffects) {
+      throw new Error("Context Tree recovery send did not return deferred post-commit effects");
+    }
+    return {
+      recipients: sent.recipients,
+      messageId: sent.message.id,
+      postCommitEffects: sent.deferredPostCommitEffects,
+    };
+  });
+  if (!result) return null;
+  await runDeferredSendMessagePostCommitEffects(db, result.postCommitEffects);
+  return { recipients: result.recipients, messageId: result.messageId };
+}
+
+/**
+ * Adopt the retired org-keyed setup chat only when its complete participant ACL
+ * is exactly the initiating human and selected private agent. Older clients
+ * used one org-wide key for an ordinary private task chat; blindly reusing that
+ * row can cross administrator ownership boundaries, while always creating a
+ * new row discards a safe same-chat Phase 1 history. The row lock + conditional
+ * update make the narrow safe migration race-resilient.
+ */
+export async function adoptSafeLegacyTreeSetupChat(
+  db: Database,
+  args: { humanAgentId: string; organizationId: string; targetAgentId: string },
+): Promise<void> {
+  const legacyKey = `${args.organizationId}:tree-setup`;
+  const scopedKey = `${args.humanAgentId}:${args.targetAgentId}:tree-setup`;
+
+  await db.transaction(async (tx) => {
+    const [scoped] = await tx
+      .select({ id: chats.id })
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, scopedKey))
+      .limit(1);
+    if (scoped) return;
+
+    const [legacy] = await tx
+      .select({ id: chats.id })
+      .from(chats)
+      .where(and(eq(chats.organizationId, args.organizationId), eq(chats.onboardingKickoffKey, legacyKey)))
+      .for("update")
+      .limit(1);
+    if (!legacy) return;
+
+    const participants = await tx
+      .select({ accessMode: chatMembership.accessMode, agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(eq(chatMembership.chatId, legacy.id));
+    const expected = new Set([args.humanAgentId, args.targetAgentId]);
+    const exactPrivateBoundary =
+      participants.length === expected.size &&
+      participants.every((participant) => participant.accessMode === "speaker" && expected.has(participant.agentId));
+    if (!exactPrivateBoundary) return;
+
+    await tx
+      .update(chats)
+      .set({ onboardingKickoffKey: scopedKey })
+      .where(and(eq(chats.id, legacy.id), eq(chats.onboardingKickoffKey, legacyKey)));
+  });
+}
+
 /**
  * True only after a tree setup kickoff has a bootstrap message. A chat row by
  * itself is not enough: `kickoffOnboarding` creates the chat before sending the
  * message, so a send failure can leave an empty idempotency-keyed chat that a
- * later `/build-tree` retry should still fill.
+ * later Context setup retry should still fill.
  */
 export async function hasTreeSetupKickoffMessage(db: Database, organizationId: string): Promise<boolean> {
   const [row] = await db
@@ -71,7 +197,7 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
     .where(
       and(
         eq(chats.organizationId, organizationId),
-        or(eq(chats.onboardingKickoffKey, `${organizationId}:tree-setup`), like(chats.onboardingKickoffKey, "%:tree")),
+        or(like(chats.onboardingKickoffKey, "%:tree-setup"), like(chats.onboardingKickoffKey, "%:tree")),
       ),
     )
     .limit(1);
@@ -99,6 +225,7 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
   const initialMessage: SendMessage = {
     format: "text",
     content: args.bootstrap,
+    ...(args.bootstrapMetadata ? { metadata: args.bootstrapMetadata } : {}),
     source: "api",
   };
   const created = await createChat(db, {

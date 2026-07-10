@@ -47,7 +47,6 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     ok: false,
     reason: "no-installation",
   });
-  const decorateSnapshotWithMintGuidance = vi.fn((raw: ContextTreeSnapshot) => raw);
   const resolveContextTreeRecoveryAction = vi.fn().mockResolvedValue("manage_github_app_installation");
   const resolveOrgViewer = vi.fn().mockResolvedValue({ memberId: "member-1", role: "admin" });
   const summarizeContextTreeUsage = vi.fn().mockResolvedValue({
@@ -80,7 +79,6 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   }));
   vi.doMock("../services/github-app-installations.js", () => ({ findInstallationByOrg }));
   vi.doMock("../services/github-app-token.js", () => ({
-    decorateSnapshotWithMintGuidance,
     mintContextTreeInstallationToken,
     resolveContextTreeRecoveryAction,
   }));
@@ -100,7 +98,6 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
     app,
     mocks: {
       buildContextTreeIoSummary,
-      decorateSnapshotWithMintGuidance,
       findInstallationByOrg,
       getContextTreeSnapshot,
       getOrgContextTree,
@@ -133,19 +130,20 @@ describe("context tree snapshot user route with mocked dependencies", () => {
     await ctx.app.close();
   });
 
-  it("mints GitHub App guidance and reconciles org telemetry for GitHub remote bindings", async () => {
+  it("mints snapshot credentials without adding App guidance and reconciles org telemetry", async () => {
     const ctx = await setupRoute({ orgId: "org-1", githubRemote: true });
     const res = await ctx.app.inject({ method: "GET", url: "/snapshot?window=30d" });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       recoveryAction: "manage_github_app_installation",
+      contextStatus: { detail: "mock snapshot" },
       usage: { windowDays: 7, agentCount: 1, usageCount: 2 },
       io: { windowDays: 7, summary: { read: { eventCount: 1 } } },
     });
+    expect(res.json<{ contextStatus: { detail: string } }>().contextStatus.detail).not.toContain("GitHub App");
     expect(ctx.mocks.findInstallationByOrg).toHaveBeenCalledWith(ctx.app.db, "org-1");
     expect(ctx.mocks.mintContextTreeInstallationToken).toHaveBeenCalled();
-    expect(ctx.mocks.decorateSnapshotWithMintGuidance).toHaveBeenCalled();
     expect(ctx.mocks.resolveContextTreeRecoveryAction).toHaveBeenCalled();
     expect(ctx.mocks.resolveOrgViewer).toHaveBeenCalledWith(ctx.app.db, "user-1", "org-1");
     expect(ctx.mocks.summarizeContextTreeUsage).toHaveBeenCalled();

@@ -7,15 +7,13 @@ import type {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
-import { AlertTriangle, ExternalLink, Network, RefreshCw } from "lucide-react";
+import { AlertTriangle, Network, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
-import { getGithubAppInstallation } from "../api/github-app.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
 import { Identicon } from "../components/identicon.js";
-import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
 import { ContextTreeBuildEntry } from "./context-tree-build-entry.js";
@@ -75,12 +73,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
         ) : null}
         {snapshot && (preview || !query.isLoading) ? (
           snapshot.snapshotStatus === "unavailable" ? (
-            <UnavailableState
-              snapshot={snapshot}
-              isAdmin={isAdmin}
-              canInitialize={!preview && isAdmin && !snapshot.repo}
-              canManageInstall={!preview && isAdmin && snapshot.recoveryAction === "manage_github_app_installation"}
-            />
+            <UnavailableState snapshot={snapshot} isAdmin={isAdmin} canOpenChat={!preview && isAdmin} />
           ) : (
             <>
               <ContextStatusNote snapshot={snapshot} />
@@ -641,58 +634,23 @@ function ErrorState({ message }: { message: string }) {
 function UnavailableState({
   snapshot,
   isAdmin,
-  canInitialize,
-  canManageInstall,
+  canOpenChat,
 }: {
   snapshot: ContextTreeSnapshot;
   isAdmin: boolean;
-  canInitialize: boolean;
-  // The server probed the unavailable snapshot and confirmed it's a GitHub App
-  // repo-coverage gap (`recoveryAction === "manage_github_app_installation"`),
-  // AND the viewer is a non-preview admin. Gated this narrowly by the caller so
-  // the admin-only manage-URL fetch never fires for members, in the preview
-  // gallery, or for non-coverage unavailable causes (bad branch, transient
-  // clone, local/non-GitHub binding) that adding a repo can't fix.
-  canManageInstall: boolean;
+  canOpenChat: boolean;
 }) {
-  const { organizationId } = useAuth();
-  // Only fetch the deep-link once the server has confirmed a coverage gap for an
-  // admin. `manageUrl` points at the installation settings page where the admin
-  // adds the repo — the App can't add itself (no self-add API) and the user's
-  // token can't either, so it's a manual GitHub action. Admin-only endpoint.
-  const installQuery = useQuery({
-    queryKey: ["github-app-installation", organizationId],
-    queryFn: () => {
-      if (!organizationId) throw new Error("No organization selected");
-      return getGithubAppInstallation(organizationId);
-    },
-    enabled: canManageInstall && !!organizationId,
-  });
-  const manageUrl = installQuery.data?.manageUrl ?? null;
-
-  // Server-confirmed "the App can't read this repo — add it to the installation."
-  // Only this specific cause gets the App-remediation copy/CTA; every other
-  // unavailable cause keeps the generic sync copy so we never misdirect users
-  // to GitHub for a failure adding a repo can't fix.
-  const isRepoCoverageGap = snapshot.recoveryAction === "manage_github_app_installation";
   const title = snapshot.repo
     ? "Context Tree sync unavailable"
     : isAdmin
       ? "Your team doesn't have a Context Tree yet"
       : "Connect Context Tree";
   const detail = snapshot.repo
-    ? isRepoCoverageGap
-      ? isAdmin
-        ? // Problem statement only; the recovery action lives on the button below
-          // when an installation exists. Keeping the imperative off the copy
-          // avoids a dangling "add it" instruction when there's no installation
-          // (manageUrl null) and no button to act on.
-          "First Tree can't read this repo yet."
-        : "First Tree can't read this repo yet. Ask an admin to add it to the GitHub App."
-      : // Non-coverage unavailable cause — keep the generic sync copy.
-        "First Tree cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
+    ? isAdmin
+      ? "Open a chat with your agent to inspect the tree and this sync issue."
+      : "Ask an admin to inspect this Context Tree sync issue."
     : isAdmin
-      ? "Connect your code and your agent will build your team's shared memory with you in a chat."
+      ? "Your agent can build it with you in a chat. Share a local project folder or GitHub repository URL there."
       : "Ask an admin to set up your team's Context Tree.";
   const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
@@ -711,28 +669,12 @@ function UnavailableState({
                 {syncDetail}
               </div>
             ) : null}
-            {/* Admin recovery for a bound-but-unreadable repo: deep-link to the
-                App installation settings so the repo can be added. Rendered only
-                once `manageUrl` resolves so we never show a dead button. */}
-            {canManageInstall && manageUrl ? (
+            {/* Every admin-facing unavailable state continues in the same
+                chat-first setup flow. The tab never diagnoses or mutates source
+                access itself; the agent inspects the real workspace and tree. */}
+            {canOpenChat ? (
               <div style={{ marginTop: "var(--sp-3)" }}>
-                <Button asChild variant="default" size="sm">
-                  <a href={manageUrl} target="_blank" rel="noreferrer">
-                    Add repo to the GitHub App
-                    <ExternalLink size={14} aria-hidden="true" />
-                  </a>
-                </Button>
-              </div>
-            ) : null}
-            {/* The team's single setup entry — admin + recoverable tree setup.
-                It launches the tree-build agent chat; it never edits the tree in
-                the tab, so the read-only-perception boundary holds. */}
-            {canInitialize ? (
-              <div style={{ marginTop: "var(--sp-3)" }}>
-                <ContextTreeBuildEntry
-                  treeBindingPlan={snapshot.repo ? "useBoundTree" : "agentSeed"}
-                  detectedTreeUrl={snapshot.repo}
-                />
+                <ContextTreeBuildEntry intent={snapshot.repo ? "recover" : "build"} />
               </div>
             ) : null}
             {snapshot.repo || snapshot.branch ? (

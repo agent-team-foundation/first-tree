@@ -37,7 +37,7 @@ async function createOrgAgent(
 }
 
 const KICKOFF_URL = "/api/v1/me/onboarding/kickoff";
-const TREE_KICKOFF_URL = "/api/v1/me/onboarding/tree-setup/kickoff";
+const treeKickoffUrl = (organizationId: string): string => `/api/v1/orgs/${organizationId}/context-tree/setup-chat`;
 const TREE_STATUS_URL = "/api/v1/me/onboarding/tree-setup-status";
 
 describe("POST /me/onboarding/kickoff", () => {
@@ -148,9 +148,9 @@ describe("POST /me/onboarding/kickoff", () => {
 
     const tree = await app.inject({
       method: "POST",
-      url: TREE_KICKOFF_URL,
+      url: treeKickoffUrl(admin.organizationId),
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...base, bootstrap: "Seed the Context Tree.", topic: "Set up shared context" },
+      payload: { agentUuid: agent.uuid },
     });
     expect(tree.statusCode).toBe(200);
 
@@ -259,7 +259,7 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(msgs).toHaveLength(1);
   });
 
-  it("keeps onboarding and tree setup kickoffs as separate chats so /build-tree still wakes the agent", async () => {
+  it("keeps onboarding and tree setup kickoffs as separate chats so /context still wakes the agent", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
@@ -280,37 +280,183 @@ describe("POST /me/onboarding/kickoff", () => {
     const [introChat] = await app.db.select().from(chats).where(eq(chats.id, introChatId)).limit(1);
     expect(introChat?.topic).toBe("Get started with First Tree");
 
-    // 2) Later, /build-tree with the SAME agent → dedicated tree setup kickoff.
+    // 2) Later, /context with the SAME agent → dedicated tree setup kickoff.
     //    Must be a NEW chat carrying the tree-seeding bootstrap, not the
     //    onboarding chat.
     const tree = await app.inject({
       method: "POST",
-      url: TREE_KICKOFF_URL,
+      url: treeKickoffUrl(admin.organizationId),
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...base, bootstrap: "Seed the team tree.", topic: "Set up shared context" },
+      payload: { agentUuid: agent.uuid },
     });
     const treeChatId = tree.json<{ chatId: string }>().chatId;
     const [treeChat] = await app.db.select().from(chats).where(eq(chats.id, treeChatId)).limit(1);
     expect(treeChat?.topic).toBe("Set up shared context");
-    expect(treeChat?.onboardingKickoffKey).toBe(`${admin.organizationId}:tree-setup`);
+    expect(treeChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:tree-setup`);
 
     expect(treeChatId).not.toBe(introChatId);
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));
     expect(treeMsgs).toHaveLength(1);
-    expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
+    expect(treeMsgs[0]?.content).toContain("Let's build or finish our team's Context Tree.");
+    expect(treeMsgs[0]?.content).toContain("A non-empty source manifest is authoritative");
+    expect(treeMsgs[0]?.content).toContain("missing declared clone as a blocking half-provisioned workspace");
+    expect(treeMsgs[0]?.content).toContain("Only when the manifest is empty or absent");
+    expect(treeMsgs[0]?.content).toContain("local project folder path or GitHub repository URL");
+    expect(treeMsgs[0]?.content).toContain("Use this same chat to continue after approval");
+    expect(treeMsgs[0]?.content).not.toContain("GitHub App");
   });
 
-  it("fills an org-level empty tree setup chat when another admin retries with another agent", async () => {
+  it("starts a new recovery chat with the current server-resolved snapshot diagnostic", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const repo = `https://localhost:1/acme/unreadable-${crypto.randomUUID()}.git`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo, branch: "release" },
+      updatedBy: admin.userId,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: agent.uuid },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const chatId = response.json<{ chatId: string }>().chatId;
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(chatMessages).toHaveLength(1);
+    expect(chatMessages[0]?.content).toContain("Current server-resolved recovery diagnostic:");
+    expect(chatMessages[0]?.content).toContain(`Configured repository: ${repo}`);
+    expect(chatMessages[0]?.content).toContain("Configured branch: release");
+    expect(chatMessages[0]?.content).toContain("Snapshot status: unavailable");
+    expect(chatMessages[0]?.metadata).toMatchObject({
+      contextTreeRecoveryFingerprint: expect.any(String),
+      mentions: [agent.uuid],
+      addressedAgentIds: [agent.uuid],
+    });
+    const deliveries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, chatMessages[0]?.id ?? ""));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.notify).toBe(true);
+  });
+
+  it("appends and wakes on recovery in an existing setup chat, but deduplicates an immediate retry", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const open = () =>
+      app.inject({
+        method: "POST",
+        url: treeKickoffUrl(admin.organizationId),
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { agentUuid: agent.uuid },
+      });
+
+    const initial = await open();
+    const chatId = initial.json<{ chatId: string }>().chatId;
+    const repo = `https://localhost:1/acme/unreadable-${crypto.randomUUID()}.git`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo, branch: "main" },
+      updatedBy: admin.userId,
+    });
+
+    const [recovery, retry] = await Promise.all([open(), open()]);
+    expect(recovery.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect(recovery.json<{ chatId: string }>().chatId).toBe(chatId);
+    expect(retry.json<{ chatId: string }>().chatId).toBe(chatId);
+
+    const chatMessages = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, chatId))
+      .orderBy(messages.createdAt, messages.id);
+    expect(chatMessages).toHaveLength(2);
+    expect(chatMessages[0]?.content).not.toContain("Current server-resolved recovery diagnostic:");
+    expect(chatMessages[1]?.content).toContain("Current server-resolved recovery diagnostic:");
+    expect(chatMessages[1]?.content).toContain(`Configured repository: ${repo}`);
+    expect(chatMessages[1]?.metadata).toMatchObject({
+      contextTreeRecoveryFingerprint: expect.any(String),
+      addressedAgentIds: [agent.uuid],
+    });
+    const recoveryDeliveries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, chatMessages[1]?.id ?? ""));
+    expect(recoveryDeliveries).toHaveLength(1);
+    expect(recoveryDeliveries[0]?.notify).toBe(true);
+  });
+
+  it("safely re-keys and reuses a legacy org setup chat with the exact same private boundary", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const legacyChatId = `chat-${crypto.randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: legacyChatId,
+      organizationId: admin.organizationId,
+      type: "group",
+      topic: "Set up shared context",
+      onboardingKickoffKey: `${admin.organizationId}:tree-setup`,
+    });
+    await app.db.insert(chatMembership).values([
+      {
+        chatId: legacyChatId,
+        agentId: admin.humanAgentUuid,
+        role: "owner",
+        accessMode: "speaker",
+        mode: "mention_only",
+      },
+      {
+        chatId: legacyChatId,
+        agentId: agent.uuid,
+        role: "member",
+        accessMode: "speaker",
+        mode: "mention_only",
+      },
+    ]);
+    await app.db.insert(messages).values({
+      id: `msg-${crypto.randomUUID()}`,
+      chatId: legacyChatId,
+      senderId: admin.humanAgentUuid,
+      format: "text",
+      content: "Our approved Phase 1 history.",
+      source: "api",
+      metadata: { mentions: [agent.uuid], addressedAgentIds: [agent.uuid] },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: agent.uuid },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ chatId: string }>().chatId).toBe(legacyChatId);
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, legacyChatId)).limit(1);
+    expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:tree-setup`);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, legacyChatId));
+    expect(chatMessages.map((message) => message.content)).toEqual(["Our approved Phase 1 history."]);
+  });
+
+  it("does not adopt a legacy org setup chat owned by another admin and private agent", async () => {
     const app = getApp();
     const firstAdmin = await createTestAdmin(app);
     const laterAdmin = await createTestAdmin(app);
-    expect(laterAdmin.organizationId).toBe(firstAdmin.organizationId);
     const firstAgent = await createOrgAgent(app, firstAdmin);
     const laterAgent = await createOrgAgent(app, laterAdmin);
-
-    const emptyChatId = `chat-${crypto.randomUUID()}`;
+    const legacyChatId = `chat-${crypto.randomUUID()}`;
     await app.db.insert(chats).values({
-      id: emptyChatId,
+      id: legacyChatId,
       organizationId: firstAdmin.organizationId,
       type: "group",
       topic: "Set up shared context",
@@ -318,14 +464,14 @@ describe("POST /me/onboarding/kickoff", () => {
     });
     await app.db.insert(chatMembership).values([
       {
-        chatId: emptyChatId,
+        chatId: legacyChatId,
         agentId: firstAdmin.humanAgentUuid,
         role: "owner",
         accessMode: "speaker",
         mode: "mention_only",
       },
       {
-        chatId: emptyChatId,
+        chatId: legacyChatId,
         agentId: firstAgent.uuid,
         role: "member",
         accessMode: "speaker",
@@ -333,34 +479,104 @@ describe("POST /me/onboarding/kickoff", () => {
       },
     ]);
 
-    const res = await app.inject({
+    const response = await app.inject({
       method: "POST",
-      url: TREE_KICKOFF_URL,
+      url: treeKickoffUrl(firstAdmin.organizationId),
       headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
+      payload: { agentUuid: laterAgent.uuid },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const laterChatId = response.json<{ chatId: string }>().chatId;
+    expect(laterChatId).not.toBe(legacyChatId);
+    const [legacy] = await app.db.select().from(chats).where(eq(chats.id, legacyChatId)).limit(1);
+    expect(legacy?.onboardingKickoffKey).toBe(`${firstAdmin.organizationId}:tree-setup`);
+    const legacySpeakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, legacyChatId));
+    expect(new Set(legacySpeakers.map((speaker) => speaker.agentId))).toEqual(
+      new Set([firstAdmin.humanAgentUuid, firstAgent.uuid]),
+    );
+  });
+
+  it("keeps each admin's setup chat inside their own private-agent boundary", async () => {
+    const app = getApp();
+    const firstAdmin = await createTestAdmin(app);
+    const laterAdmin = await createTestAdmin(app);
+    expect(laterAdmin.organizationId).toBe(firstAdmin.organizationId);
+    const firstAgent = await createOrgAgent(app, firstAdmin);
+    const laterAgent = await createOrgAgent(app, laterAdmin);
+
+    const first = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(firstAdmin.organizationId),
+      headers: { authorization: `Bearer ${firstAdmin.accessToken}` },
+      payload: { agentUuid: firstAgent.uuid },
+    });
+    const later = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(firstAdmin.organizationId),
+      headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
+      payload: { agentUuid: laterAgent.uuid },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(later.statusCode).toBe(200);
+    const firstChatId = first.json<{ chatId: string }>().chatId;
+    const laterChatId = later.json<{ chatId: string }>().chatId;
+    expect(laterChatId).not.toBe(firstChatId);
+
+    const firstSpeakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, firstChatId));
+    expect(new Set(firstSpeakers.map((speaker) => speaker.agentId))).toEqual(
+      new Set([firstAdmin.humanAgentUuid, firstAgent.uuid]),
+    );
+    const laterSpeakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, laterChatId));
+    expect(new Set(laterSpeakers.map((speaker) => speaker.agentId))).toEqual(
+      new Set([laterAdmin.humanAgentUuid, laterAgent.uuid]),
+    );
+
+    const setupRows = await app.db
+      .select({ key: chats.onboardingKickoffKey })
+      .from(chats)
+      .where(eq(chats.organizationId, firstAdmin.organizationId));
+    expect(new Set(setupRows.map((row) => row.key))).toEqual(
+      new Set([
+        `${firstAdmin.humanAgentUuid}:${firstAgent.uuid}:tree-setup`,
+        `${laterAdmin.humanAgentUuid}:${laterAgent.uuid}:tree-setup`,
+      ]),
+    );
+  });
+
+  it("requires an org admin and rejects body-controlled org or completion fields", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, admin.memberId));
+
+    const memberResponse = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: agent.uuid },
+    });
+    expect(memberResponse.statusCode).toBe(403);
+
+    await app.db.update(members).set({ role: "admin" }).where(eq(members.id, admin.memberId));
+    const staleBody = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: {
-        organizationId: firstAdmin.organizationId,
-        agentUuid: laterAgent.uuid,
-        bootstrap: "Seed the retried team tree.",
-        topic: "Set up shared context",
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        complete: true,
       },
     });
+    expect(staleBody.statusCode).toBe(400);
 
-    expect(res.statusCode).toBe(200);
-    expect(res.json<{ chatId: string }>().chatId).toBe(emptyChatId);
-
-    const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, emptyChatId));
-    expect(treeMsgs).toHaveLength(1);
-    expect(treeMsgs[0]?.senderId).toBe(laterAdmin.humanAgentUuid);
-    expect(treeMsgs[0]?.content).toBe("Seed the retried team tree.");
-    expect(treeMsgs[0]?.metadata).toEqual({
-      mentions: [laterAgent.uuid],
-      addressedAgentIds: [laterAgent.uuid],
-    });
-
-    const speakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, emptyChatId));
-    const speakerIds = new Set(speakers.map((speaker) => speaker.agentId));
-    expect(speakerIds.has(laterAdmin.humanAgentUuid)).toBe(true);
-    expect(speakerIds.has(laterAgent.uuid)).toBe(true);
+    const rows = await app.db
+      .select()
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, `${admin.humanAgentUuid}:${agent.uuid}:tree-setup`));
+    expect(rows).toHaveLength(0);
   });
 
   it("rejects campaign kickoff when growth landing pages are enabled because campaigns moved to landing-campaigns/start", async () => {
@@ -478,6 +694,22 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(campaign.statusCode).toBe(410);
     expect(campaign.json()).toMatchObject({ code: "campaign_kickoff_moved" });
   });
+
+  it("returns a controlled moved response for stale tree-setup clients", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding/tree-setup/kickoff",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: "stale-agent", bootstrap: "stale bootstrap" },
+    });
+
+    expect(res.statusCode).toBe(410);
+    expect(res.json()).toMatchObject({ code: "tree_setup_kickoff_moved" });
+    expect(await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId))).toHaveLength(0);
+  });
 });
 
 describe("GET /me/onboarding/tree-setup-status", () => {
@@ -575,7 +807,7 @@ describe("GET /me/onboarding/tree-setup-status", () => {
       id: emptyChatId,
       organizationId: admin.organizationId,
       type: "direct",
-      onboardingKickoffKey: `${admin.organizationId}:tree-setup`,
+      onboardingKickoffKey: `${admin.humanAgentUuid}:${agent.uuid}:tree-setup`,
     });
 
     const withEmptyChat = await app.inject({
