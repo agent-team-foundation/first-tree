@@ -597,7 +597,7 @@ function previewTabTitle(tab: PreviewTab): string {
 function mockFeedReasonLabel(chat: MockChat): string {
   switch (chat.signal.tone) {
     case "needs-you":
-      return `Question from ${chat.owner}`;
+      return "Question waiting";
     case "error":
       return "Failed run";
     case "unread":
@@ -616,7 +616,6 @@ function primaryActionLabel(tone: MobileChatSignal["tone"]): string | null {
     case "error":
       return "Review";
     case "unread":
-      return "Read";
     case "working":
     case "idle":
       return null;

@@ -786,7 +786,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("renders narrow timeline chrome with a participants sheet and no desktop header actions", async () => {
+  it("keeps full chat details on the generic narrow Workspace path", async () => {
     const { ChatView } = await import("../chat-view.js");
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
     const onShowConversations = vi.fn();
@@ -800,15 +800,41 @@ describe("ChatView", () => {
     await waitForText(container, "Example recoverable runtime error");
     await waitForText(container, "Preview image for");
     expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
-    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
+    expect(container.textContent).toContain("GitHub");
     expect(container.querySelector('button[aria-label$="Open participants."]')).toBeNull();
-    expect(container.querySelector('button[aria-label="Add participant"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Show chat details"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Hide agent final messages"]')).toBeNull();
     expect(buttonByTitle(container, "Click to rename")).toBeNull();
 
     await click(container.querySelector('button[aria-label="Show conversations"]'));
     expect(onShowConversations).toHaveBeenCalledTimes(1);
+
+    await click(container.querySelector('button[aria-label="Hide chat options"]'));
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("uses a participants-only sheet for mobile chat detail", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
+    const onShowConversations = vi.fn();
+    const { container, root } = await renderDom(
+      <ChatView
+        agentId="agent-1"
+        chatId="chat-1"
+        narrow
+        presentation="mobile"
+        onShowConversations={onShowConversations}
+      />,
+      undefined,
+      "/",
+    );
+
+    await waitForText(container, "Launch planning");
+    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
 
     await click(container.querySelector('button[aria-label="Show chat options"]'));
     await waitForText(container, "Participants · 4");

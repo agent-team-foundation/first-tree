@@ -163,7 +163,7 @@ describe("mobile density tiers", () => {
     expect(feedCards[0]?.querySelector("[data-mobile-card-title]")?.className).toContain("text-mobile-title");
     expect(feedCards[0]?.querySelector("[data-mobile-card-preview]")?.className).toContain("text-mobile-body");
     const labels = [...feed.querySelectorAll("[data-mobile-signal-label]")].map((label) => label.textContent);
-    expect(labels).toEqual(["Question from gandy-coder", "Working now", "Recent update"]);
+    expect(labels).toEqual(["Question waiting", "Working now", "Recent update"]);
     expect(feedCards[0]?.querySelector("[data-mobile-signal-label]")?.className).toContain("truncate");
     expect(feedCards[0]?.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
     expect(feedCards[1]?.querySelector("[data-mobile-primary-action]")).toBeNull();

@@ -185,6 +185,26 @@ describe("ChatSummary", () => {
     overlayEl.remove();
   });
 
+  it("can ignore a desktop-expanded manual preference on mobile entry", async () => {
+    localStorage.clear();
+    localStorage.setItem("first-tree:chat-summary-expanded:v1:chat-1", "1");
+    const scrollEl = document.createElement("div");
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+      autoExpandUnread: false,
+      restoreManualExpansion: false,
+    });
+
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(overlayEl.querySelector("strong")).toBeNull();
+    expect(container.textContent).toContain("Updated");
+
+    await act(async () => root.unmount());
+    container.remove();
+    overlayEl.remove();
+  });
+
   it("does not auto-expand the same unread summary version after the user manually collapses it", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");

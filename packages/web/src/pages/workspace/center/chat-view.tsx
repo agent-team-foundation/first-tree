@@ -1330,6 +1330,7 @@ export function ChatView({
   joinAction,
   narrow = false,
   onShowConversations = null,
+  presentation = "workspace",
   isTrial = false,
 }: {
   agentId: string;
@@ -1358,10 +1359,12 @@ export function ChatView({
   };
   /** Workspace shell is in narrow-viewport mode (<768). Two effects:
    *  (1) `onShowConversations` is non-null, so we render a hamburger in
-   *  the chat header; (2) the right rail, when shown, renders as an
-   *  absolute-positioned overlay over the chat instead of an inline
-   *  shrink-0 column — at 375 px logical there isn't room for both. */
+   *  the chat header; (2) mobile presentation can replace the full details
+   *  rail with a participants sheet. */
   narrow?: boolean;
+  /** Generic narrow Workspace keeps the full details rail, including GitHub
+   * state. `/m/chat` opts into the smaller mobile participants sheet. */
+  presentation?: "workspace" | "mobile";
   /** Non-null only in narrow mode. Invoking it summons the conversation-
    *  list overlay (which lives in `WorkspacePage`). */
   onShowConversations?: (() => void) | null;
@@ -1486,25 +1489,28 @@ export function ChatView({
   // rail (a global preference, not per-chat), otherwise collapsed for the full
   // reading column.
   const storedSidebarPref = useRef<boolean | null>(loadSidebarOpen());
-  const [showSidebar, setShowSidebar] = useState<boolean>(() =>
-    narrow ? false : (storedSidebarPref.current ?? false),
-  );
+  const useMobileDetailsSheet = presentation === "mobile";
+  const [showSidebar, setShowSidebar] = useState<boolean>(storedSidebarPref.current ?? false);
+  const [showMobileDetails, setShowMobileDetails] = useState(false);
+  const detailsOpen = useMobileDetailsSheet ? showMobileDetails : showSidebar;
   // Persist only genuine user choices (toggle / dismiss / open), never the
   // transient doc-preview stash — that must not masquerade as an explicit
   // preference. `setSidebarByUser` writes through to localStorage;
   // system-driven changes use `setShowSidebar`.
   const setSidebarByUser = useCallback(
     (open: boolean | ((v: boolean) => boolean)) => {
+      if (useMobileDetailsSheet) {
+        setShowMobileDetails((prev) => (typeof open === "function" ? open(prev) : open));
+        return;
+      }
       setShowSidebar((prev) => {
         const next = typeof open === "function" ? open(prev) : open;
-        if (!narrow) {
-          storedSidebarPref.current = next;
-          saveSidebarOpen(next);
-        }
+        storedSidebarPref.current = next;
+        saveSidebarOpen(next);
         return next;
       });
     },
-    [narrow],
+    [useMobileDetailsSheet],
   );
 
   // Temporary, staging-only view filter: hide agent final-text mirrors. The
@@ -1572,7 +1578,7 @@ export function ChatView({
   // collapse the rail too. Skip while doc-preview owns the right rail —
   // its own component handles Esc to close itself.
   useEffect(() => {
-    if (!showSidebar || hasDocPreview) return;
+    if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const active = document.activeElement;
@@ -1584,7 +1590,7 @@ export function ChatView({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [hasDocPreview, showSidebar, setSidebarByUser]);
+  }, [detailsOpen, hasDocPreview, setSidebarByUser]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // The composer footer band — wraps BOTH the request dock (with its option
@@ -3654,18 +3660,18 @@ export function ChatView({
                   <button
                     type="button"
                     onClick={toggleSidebar}
-                    aria-label={showSidebar ? "Hide chat options" : "Show chat options"}
-                    aria-expanded={showSidebar}
-                    aria-pressed={showSidebar}
-                    title={showSidebar ? "Hide chat options" : "Show chat options"}
+                    aria-label={detailsOpen ? "Hide chat options" : "Show chat options"}
+                    aria-expanded={detailsOpen}
+                    aria-pressed={detailsOpen}
+                    title={detailsOpen ? "Hide chat options" : "Show chat options"}
                     className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                     style={{
                       width: 32,
                       height: 32,
                       border: 0,
-                      background: showSidebar ? "var(--bg-sunken)" : "transparent",
+                      background: detailsOpen ? "var(--bg-sunken)" : "transparent",
                       borderRadius: "var(--radius-input)",
-                      color: showSidebar ? "var(--fg)" : "var(--fg-3)",
+                      color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
                       cursor: "pointer",
                     }}
                   >
@@ -3748,18 +3754,18 @@ export function ChatView({
                     <button
                       type="button"
                       onClick={toggleSidebar}
-                      aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
-                      aria-expanded={showSidebar}
-                      aria-pressed={showSidebar}
-                      title={showSidebar ? "Hide chat details" : "Show chat details"}
+                      aria-label={detailsOpen ? "Hide chat details" : "Show chat details"}
+                      aria-expanded={detailsOpen}
+                      aria-pressed={detailsOpen}
+                      title={detailsOpen ? "Hide chat details" : "Show chat details"}
                       className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                       style={{
                         width: 28,
                         height: 28,
                         border: 0,
-                        background: showSidebar ? "var(--bg-sunken)" : "transparent",
+                        background: detailsOpen ? "var(--bg-sunken)" : "transparent",
                         borderRadius: "var(--radius-input)",
-                        color: showSidebar ? "var(--fg)" : "var(--fg-3)",
+                        color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
                         cursor: "pointer",
                       }}
                     >
@@ -3776,7 +3782,8 @@ export function ChatView({
             descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
             lastReadAt={chatDetail?.lastReadAt ?? null}
             freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
-            autoExpandUnread={!narrow}
+            autoExpandUnread={!useMobileDetailsSheet}
+            restoreManualExpansion={!useMobileDetailsSheet}
             scrollContainerRef={scrollContainerRef}
             overlayContainerRef={overlayContainerRef}
           />
@@ -4389,17 +4396,40 @@ export function ChatView({
         {/* No chat-details right rail on the trial surface — a pure
             conversation. `!isTrial` also defends against a persisted
             `showSidebar=true` carried over from a prior non-trial session. */}
-        {showSidebar && !isTrial ? (
+        {detailsOpen && !isTrial ? (
           narrow ? (
-            <MobileParticipantsSheet
-              chatId={chatId}
-              participants={chatDetail?.participants ?? []}
-              participantsLoading={chatDetailLoading}
-              managedByMe={managedByMeMap}
-              onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-              readOnly={readOnly}
-              onDismiss={() => setSidebarByUser(false)}
-            />
+            useMobileDetailsSheet ? (
+              <MobileParticipantsSheet
+                chatId={chatId}
+                participants={chatDetail?.participants ?? []}
+                participantsLoading={chatDetailLoading}
+                managedByMe={managedByMeMap}
+                onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                readOnly={readOnly}
+                onDismiss={() => setSidebarByUser(false)}
+              />
+            ) : (
+              <>
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => setSidebarByUser(false)}
+                  className="absolute inset-0 z-20"
+                  style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+                />
+                <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
+                  <ChatRightSidebar
+                    chatId={chatId}
+                    participants={chatDetail?.participants ?? []}
+                    participantsLoading={chatDetailLoading}
+                    managedByMe={managedByMeMap}
+                    onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                    readOnly={readOnly}
+                    width="min(88vw, 20rem)"
+                  />
+                </div>
+              </>
+            )
           ) : (
             <ChatRightSidebar
               chatId={chatId}

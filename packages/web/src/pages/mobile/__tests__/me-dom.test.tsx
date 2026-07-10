@@ -112,7 +112,8 @@ describe("MobileMePage", () => {
     expect(harness.container.textContent).toContain("Acme Research");
     expect(harness.container.textContent).toContain("Change team");
     expect(harness.container.textContent).toContain("Switch theme");
-    expect(harness.container.textContent).toContain("Help and support");
+    expect(harness.container.textContent).toContain("Community support");
+    expect(harness.container.querySelector('a[href="https://discord.gg/nCG9wsbbvF"]')).not.toBeNull();
     expect(harness.container.textContent).toContain("Sign out");
     expect(harness.container.textContent).not.toContain("Desktop settings");
     expect(harness.container.textContent).not.toContain("Agent runtime");

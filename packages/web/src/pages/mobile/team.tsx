@@ -146,7 +146,7 @@ function MobileHumanRow({ member, isSelf }: { member: MemberListItem; isSelf: bo
           Human
         </span>
       }
-      chatTarget={member.agentId}
+      chatTarget={isSelf ? null : member.agentId}
     />
   );
 }
@@ -162,7 +162,7 @@ function MobileTeamRow({
   title: string;
   subtitle: string;
   meta: ReactNode;
-  chatTarget: string;
+  chatTarget: string | null;
 }) {
   return (
     <div
@@ -183,11 +183,13 @@ function MobileTeamRow({
         </p>
         <div style={{ marginTop: "var(--sp-1)" }}>{meta}</div>
       </div>
-      <Button asChild size="icon" variant="outline" aria-label={`Chat with ${title}`}>
-        <Link to={`/m/chat?c=draft&with=${encodeURIComponent(chatTarget)}`}>
-          <MessageSquareText className="h-4 w-4" />
-        </Link>
-      </Button>
+      {chatTarget ? (
+        <Button asChild size="icon" variant="outline" aria-label={`Chat with ${title}`}>
+          <Link to={`/m/chat?c=draft&with=${encodeURIComponent(chatTarget)}`}>
+            <MessageSquareText className="h-4 w-4" />
+          </Link>
+        </Button>
+      ) : null}
     </div>
   );
 }
