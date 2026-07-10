@@ -11,7 +11,7 @@ import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { formatRelative } from "../../lib/utils.js";
-import { MobilePage, MobileSection, MobileSystemState } from "./components.js";
+import { MobilePage, MobileSection, MobileSystemState, mobileCardStyle } from "./components.js";
 
 type MemberListItem = {
   id: string;
@@ -117,7 +117,15 @@ function MobileAgentRow({ agent }: { agent: Agent }) {
   const subtitle = `${agent.visibility === "private" ? "Private" : "Public"} agent`;
   return (
     <MobileTeamRow
-      avatar={<Avatar name={agent.displayName} src={agent.avatarImageUrl} colorToken={agent.avatarColorToken} seed={agent.uuid} size={36} />}
+      avatar={
+        <Avatar
+          name={agent.displayName}
+          src={agent.avatarImageUrl}
+          colorToken={agent.avatarColorToken}
+          seed={agent.uuid}
+          size={36}
+        />
+      }
       title={agent.displayName}
       subtitle={subtitle}
       meta={<PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />}
@@ -133,7 +141,11 @@ function MobileHumanRow({ member, isSelf }: { member: MemberListItem; isSelf: bo
       avatar={<Avatar name={member.displayName} src={member.avatarUrl} seed={member.id} size={36} />}
       title={isSelf ? `${member.displayName} (you)` : member.displayName}
       subtitle={`${member.role} · ${activeLabel}`}
-      meta={<span className="mono text-caption" style={{ color: "var(--fg-3)" }}>Human</span>}
+      meta={
+        <span className="mono text-mobile-caption" style={{ color: "var(--fg-3)" }}>
+          Human
+        </span>
+      }
       chatTarget={member.agentId}
     />
   );
@@ -156,20 +168,17 @@ function MobileTeamRow({
     <div
       className="flex items-center"
       style={{
-        minHeight: "var(--sp-16)",
+        ...mobileCardStyle("panel"),
         gap: "var(--sp-3)",
-        padding: "var(--sp-3)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-dialog)",
-        background: "var(--bg-raised)",
       }}
+      data-mobile-card="panel"
     >
       <div className="shrink-0">{avatar}</div>
       <div className="min-w-0" style={{ flex: 1 }}>
-        <p className="text-subtitle truncate" style={{ color: "var(--fg)", margin: 0 }}>
+        <p className="text-mobile-subtitle truncate" style={{ color: "var(--fg)", margin: 0 }}>
           {title}
         </p>
-        <p className="text-body truncate" style={{ color: "var(--fg-3)", margin: "var(--sp-0_5) 0 0" }}>
+        <p className="text-mobile-body truncate" style={{ color: "var(--fg-3)", margin: "var(--sp-0_5) 0 0" }}>
           {subtitle}
         </p>
         <div style={{ marginTop: "var(--sp-1)" }}>{meta}</div>

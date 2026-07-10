@@ -19,6 +19,11 @@ import { DocPage } from "./pages/docs/doc-page.js";
 import { DocsListPage } from "./pages/docs/docs-list-page.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
+import { MobileChatPage } from "./pages/mobile/chat.js";
+import { MobileMePage } from "./pages/mobile/me.js";
+import { MobileNowPage } from "./pages/mobile/now.js";
+import { MobileShell } from "./pages/mobile/shell.js";
+import { MobileTeamPage } from "./pages/mobile/team.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
@@ -119,6 +124,10 @@ const SupportMenuPreviewPage = import.meta.env.DEV
 
 const ChatSummaryPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/chat-summary-preview.js").then((module) => ({ default: module.ChatSummaryPreviewPage })))
+  : null;
+
+const MobilePreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/mobile-preview.js").then((module) => ({ default: module.MobilePreviewPage })))
   : null;
 
 const TeamSwitcherPreviewPage = import.meta.env.DEV
@@ -276,6 +285,16 @@ export function App() {
                   }
                 />
               ) : null}
+              {MobilePreviewPage ? (
+                <Route
+                  path="/preview/mobile"
+                  element={
+                    <Suspense fallback={null}>
+                      <MobilePreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               {SettingsGithubPreviewPage ? (
                 <Route
                   path="/preview/settings-github"
@@ -345,11 +364,24 @@ export function App() {
                 <Route
                   element={
                     <PulseProvider>
+                      <MobileShell />
+                    </PulseProvider>
+                  }
+                >
+                  <Route path="m" element={<Navigate to="/m/now" replace />} />
+                  <Route path="m/now" element={<MobileNowPage />} />
+                  <Route path="m/chat" element={<MobileChatPage />} />
+                  <Route path="m/team" element={<MobileTeamPage />} />
+                  <Route path="m/me" element={<MobileMePage />} />
+                </Route>
+                <Route
+                  element={
+                    <PulseProvider>
                       <Layout />
                     </PulseProvider>
                   }
                 >
-                  <Route index element={<WorkspacePage />} />
+                  <Route index element={<WorkspaceEntry />} />
                   {/* Growth quickstart (landing-campaign trial). Lives INSIDE
                       the Layout group so the trial chat renders with full
                       workspace chrome — but as its own route, NOT the gated
@@ -419,4 +451,28 @@ export function App() {
 function AdminRedirect() {
   const location = useLocation();
   return <Navigate to={`/team${location.hash}`} replace />;
+}
+
+function WorkspaceEntry() {
+  const location = useLocation();
+  if (shouldOpenMobileRoot(location)) {
+    return <Navigate to="/m/now" replace />;
+  }
+  return <WorkspacePage />;
+}
+
+function shouldOpenMobileRoot(location: ReturnType<typeof useLocation>): boolean {
+  if (!mobileRootRedirectEnabled()) return false;
+  if (location.pathname !== "/" || location.search || location.hash) return false;
+  if (typeof window === "undefined") return false;
+
+  const mediaQuery = window.matchMedia?.("(max-width: 47.999rem)");
+  if (mediaQuery) return mediaQuery.matches;
+
+  return window.innerWidth > 0 && window.innerWidth < 768;
+}
+
+function mobileRootRedirectEnabled(): boolean {
+  const value = import.meta.env.VITE_ENABLE_MOBILE_ROOT_REDIRECT?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
 }

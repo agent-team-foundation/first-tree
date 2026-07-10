@@ -5,7 +5,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
-import { MobileBottomTabs, MobileTopBar } from "./components.js";
+import { MobileBottomTabs } from "./components.js";
 import { countAttentionRows, countUnreadRows } from "./data.js";
 
 export function MobileShell() {
@@ -54,7 +54,6 @@ export function MobileShell() {
         background: "var(--bg)",
       }}
     >
-      {immersiveChat ? null : <MobileTopBar title={mobileTitle(location.pathname)} />}
       <TeamSwitchOverlay />
       <main className="flex-1 min-h-0 overflow-hidden">
         <Outlet />
@@ -64,11 +63,4 @@ export function MobileShell() {
       )}
     </div>
   );
-}
-
-function mobileTitle(pathname: string): string {
-  if (pathname.startsWith("/m/chat")) return "Chat";
-  if (pathname.startsWith("/m/team")) return "Team";
-  if (pathname.startsWith("/m/me")) return "Me";
-  return "Today";
 }

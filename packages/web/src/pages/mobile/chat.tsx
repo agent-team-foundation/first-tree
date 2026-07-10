@@ -5,13 +5,18 @@ import { useCallback, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { listMeChats } from "../../api/me-chats.js";
 import { useAuth } from "../../auth/auth-context.js";
-import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { ActivityDots } from "../../components/chat/activity-dots.js";
+import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
-import { SegmentedControl } from "../../components/ui/segmented-control.js";
 import { formatRowTime } from "../../lib/utils.js";
 import { CenterPanel } from "../workspace/center/index.js";
-import { MobilePage, MobileSignalChip, MobileSystemState } from "./components.js";
+import {
+  MobilePage,
+  MobileSegmentedControl,
+  MobileSignalChip,
+  MobileSystemState,
+  mobileCardStyle,
+} from "./components.js";
 import { mobileChatPreview, mobileChatSignal, sortMobileChats } from "./data.js";
 
 type MobileChatView = "all" | "unread" | "watching";
@@ -73,7 +78,7 @@ function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
   return (
     <MobilePage className="flex flex-col" padded>
       <div className="flex items-center" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}>
-        <SegmentedControl
+        <MobileSegmentedControl
           value={view}
           onChange={setView}
           options={[
@@ -124,12 +129,9 @@ function MobileChatRow({
       onClick={() => onSelect(row.chatId)}
       className="w-full text-left transition-colors hover:bg-[var(--bg-hover)]"
       style={{
-        minHeight: "var(--sp-16)",
-        padding: "var(--sp-3)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-dialog)",
-        background: "var(--bg-raised)",
+        ...mobileCardStyle("list"),
       }}
+      data-mobile-card="list"
     >
       <div className="flex items-start" style={{ gap: "var(--sp-3)" }}>
         <ChatRowAvatar
@@ -147,13 +149,17 @@ function MobileChatRow({
         />
         <div className="min-w-0" style={{ flex: 1 }}>
           <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-            <span className="text-subtitle truncate" style={{ color: "var(--fg)", flex: 1 }}>
+            <span
+              className="text-mobile-subtitle truncate"
+              style={{ color: "var(--fg)", flex: 1 }}
+              data-mobile-card-title
+            >
               {row.title}
             </span>
             {row.busyAgentIds.length > 0 ? (
               <ActivityDots />
             ) : row.lastMessageAt ? (
-              <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+              <span className="mono text-mobile-caption shrink-0" style={{ color: "var(--fg-4)" }}>
                 {formatRowTime(row.lastMessageAt)}
               </span>
             ) : null}
@@ -162,7 +168,7 @@ function MobileChatRow({
             <MobileSignalChip signal={signal} />
           </div>
           <p
-            className="text-body"
+            className="text-mobile-body"
             style={{
               color: "var(--fg-3)",
               margin: "var(--sp-2) 0 0",
@@ -171,6 +177,7 @@ function MobileChatRow({
               WebkitBoxOrient: "vertical",
               overflow: "hidden",
             }}
+            data-mobile-card-preview
           >
             {mobileChatPreview(row)}
           </p>

@@ -42,6 +42,21 @@ vi.mock("../pages/onboarding/onboarding-page.js", () => ({ OnboardingPage: () =>
 vi.mock("../pages/workspace/index.js", () => ({ WorkspacePage: () => <div>workspace page</div> }));
 vi.mock("../pages/context.js", () => ({ ContextPage: () => <div>context page</div> }));
 vi.mock("../pages/team/index.js", () => ({ TeamPage: () => <div>team page</div> }));
+vi.mock("../pages/mobile/shell.js", async () => {
+  const { Outlet } = await import("react-router");
+  return {
+    MobileShell: () => (
+      <div data-testid="mobile-shell">
+        mobile shell
+        <Outlet />
+      </div>
+    ),
+  };
+});
+vi.mock("../pages/mobile/now.js", () => ({ MobileNowPage: () => <div>mobile now</div> }));
+vi.mock("../pages/mobile/chat.js", () => ({ MobileChatPage: () => <div>mobile chat</div> }));
+vi.mock("../pages/mobile/team.js", () => ({ MobileTeamPage: () => <div>mobile team</div> }));
+vi.mock("../pages/mobile/me.js", () => ({ MobileMePage: () => <div>mobile me</div> }));
 vi.mock("../pages/settings.js", async () => {
   const { Outlet } = await import("react-router");
   return {
@@ -74,9 +89,36 @@ vi.mock("../pages/agent-detail/resources-tab.js", () => ({ ResourcesTab: () => <
 vi.mock("../pages/command-palette-preview.js", () => ({
   CommandPalettePreviewPage: () => <div>command palette preview</div>,
 }));
+vi.mock("../pages/mobile-preview.js", () => ({ MobilePreviewPage: () => <div>mobile preview page</div> }));
 vi.mock("../pages/styleguide-preview.js", () => ({ StyleguidePreviewPage: () => <div>styleguide preview</div> }));
 
 let root: Root | null = null;
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn((query: string) => ({
+      matches: query.includes("max-width") ? width <= 767 : width >= 768,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
+function setMobileRootRedirect(value: string | undefined): void {
+  const env = import.meta.env as Record<string, string | undefined>;
+  if (value === undefined) {
+    delete env.VITE_ENABLE_MOBILE_ROOT_REDIRECT;
+    return;
+  }
+  env.VITE_ENABLE_MOBILE_ROOT_REDIRECT = value;
+}
 
 async function renderAppAt(path: string): Promise<string> {
   window.history.pushState({}, "", path);
@@ -98,6 +140,8 @@ describe("App routes", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
     root = null;
+    setViewportWidth(1280);
+    setMobileRootRedirect(undefined);
   });
 
   afterEach(async () => {
@@ -108,6 +152,10 @@ describe("App routes", () => {
   });
 
   it("routes public, protected, nested, preview, and redirect paths", async () => {
+    expect(await renderAppAt("/")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
     expect(await renderAppAt("/login")).toContain("login page");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
@@ -144,10 +192,56 @@ describe("App routes", () => {
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
+    expect(await renderAppAt("/m")).toContain("mobile now");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/chat")).toContain("mobile chat");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/team")).toContain("mobile team");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/m/me")).toContain("mobile me");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
     expect(await renderAppAt("/preview/styleguide")).toContain("styleguide preview");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
+    expect(await renderAppAt("/preview/mobile")).toContain("mobile preview page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
     expect(await renderAppAt("/preview/command-palette")).toContain("command palette preview");
+  });
+
+  it("keeps the phone root on desktop while the mobile-root redirect flag is disabled", async () => {
+    setViewportWidth(390);
+    expect(await renderAppAt("/")).toContain("workspace page");
+  });
+
+  it("opens the mobile shell from the root on phones when the redirect flag is enabled", async () => {
+    setMobileRootRedirect("true");
+    setViewportWidth(390);
+    expect(await renderAppAt("/")).toContain("mobile now");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/?desktop=1")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/?c=chat-1")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/#debug")).toContain("workspace page");
   });
 });

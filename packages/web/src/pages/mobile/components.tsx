@@ -1,7 +1,6 @@
-import type { ReactNode } from "react";
+import { Activity, CircleUserRound, MessageSquareText, UsersRound } from "lucide-react";
+import type { CSSProperties, ReactNode } from "react";
 import { NavLink } from "react-router";
-import { CalendarCheck, CircleUserRound, MessageSquareText, UsersRound } from "lucide-react";
-import { TeamSwitcher } from "../../components/team-switcher.js";
 import { cn } from "../../lib/utils.js";
 import type { MobileChatSignal, MobileChatSignalTone } from "./data.js";
 
@@ -9,6 +8,43 @@ type MobileTopBarProps = {
   title: string;
   right?: ReactNode;
 };
+
+export type MobileCardTier = "priorityFeed" | "feed" | "list" | "panel";
+
+const BASE_CARD_STYLE = {
+  border: "var(--hairline) solid var(--border)",
+  borderRadius: "var(--radius-dialog)",
+  background: "var(--bg-raised)",
+} as const;
+
+export function mobileCardStyle(tier: MobileCardTier): CSSProperties {
+  switch (tier) {
+    case "priorityFeed":
+      return {
+        ...BASE_CARD_STYLE,
+        minHeight: "var(--sp-45)",
+        padding: "var(--sp-4)",
+      };
+    case "feed":
+      return {
+        ...BASE_CARD_STYLE,
+        minHeight: "var(--sp-35)",
+        padding: "var(--sp-4)",
+      };
+    case "list":
+      return {
+        ...BASE_CARD_STYLE,
+        minHeight: "calc(var(--sp-16) + var(--sp-6))",
+        padding: "var(--sp-3_5)",
+      };
+    case "panel":
+      return {
+        ...BASE_CARD_STYLE,
+        minHeight: "var(--sp-16)",
+        padding: "var(--sp-3)",
+      };
+  }
+}
 
 export function MobileTopBar({ title, right }: MobileTopBarProps) {
   return (
@@ -22,10 +58,8 @@ export function MobileTopBar({ title, right }: MobileTopBarProps) {
         background: "var(--bg-raised)",
       }}
     >
-      <div className="flex items-center justify-start" style={{ minWidth: 0 }}>
-        <TeamSwitcher variant="compact" redirectHomeOnSwitch={false} />
-      </div>
-      <div className="text-center text-title truncate" style={{ color: "var(--fg)" }}>
+      <div aria-hidden />
+      <div className="text-center text-mobile-title truncate" style={{ color: "var(--fg)" }}>
         {title}
       </div>
       <div className="flex items-center justify-end">{right}</div>
@@ -54,23 +88,15 @@ export function MobilePage({
   );
 }
 
-export function MobileSection({
-  title,
-  count,
-  children,
-}: {
-  title: string;
-  count?: number;
-  children: ReactNode;
-}) {
+export function MobileSection({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
   return (
     <section className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
       <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-        <h2 className="text-subtitle" style={{ color: "var(--fg)", margin: 0 }}>
+        <h2 className="text-mobile-subtitle" style={{ color: "var(--fg)", margin: 0 }}>
           {title}
         </h2>
         {count !== undefined ? (
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+          <span className="mono text-mobile-caption" style={{ color: "var(--fg-4)" }}>
             {count}
           </span>
         ) : null}
@@ -94,11 +120,11 @@ export function MobileSystemState({
       className="flex min-h-[var(--sp-35)] flex-col items-center justify-center text-center"
       style={{ gap: "var(--sp-1)", color: toneColor(tone), padding: "var(--sp-6) var(--sp-4)" }}
     >
-      <p className="text-subtitle" style={{ margin: 0, color: "var(--fg)" }}>
+      <p className="text-mobile-subtitle" style={{ margin: 0, color: "var(--fg)" }}>
         {title}
       </p>
       {detail ? (
-        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+        <p className="text-mobile-body" style={{ margin: 0, color: "var(--fg-3)" }}>
           {detail}
         </p>
       ) : null}
@@ -106,11 +132,11 @@ export function MobileSystemState({
   );
 }
 
-export function MobileSignalChip({ signal }: { signal: MobileChatSignal }) {
+export function MobileSignalChip({ signal, label = signal.label }: { signal: MobileChatSignal; label?: string }) {
   const color = toneColor(signal.tone);
   return (
     <span
-      className="mono inline-flex items-center text-caption"
+      className="mono inline-flex min-w-0 max-w-full items-center text-mobile-caption"
       style={{
         gap: "var(--sp-1)",
         color,
@@ -127,14 +153,58 @@ export function MobileSignalChip({ signal }: { signal: MobileChatSignal }) {
           flexShrink: 0,
         }}
       />
-      {signal.label}
+      <span className="truncate" data-mobile-signal-label>
+        {label}
+      </span>
     </span>
+  );
+}
+
+export function MobileSegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: ReadonlyArray<{ value: T; label: ReactNode }>;
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div className="inline-flex items-center" style={{ gap: "var(--sp-1)" }}>
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={active}
+            onClick={() => {
+              if (!active) onChange(option.value);
+            }}
+            className={cn(
+              "text-mobile-caption cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+              !active && "hover:bg-[var(--bg-hover)]",
+            )}
+            style={{
+              padding: "var(--sp-1) var(--sp-2)",
+              border: 0,
+              borderRadius: "var(--radius-chip)",
+              background: active ? "var(--bg-active)" : "transparent",
+              color: active ? "var(--fg)" : "var(--fg-3)",
+              cursor: active ? "default" : "pointer",
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
 export function MobileBottomTabs({ attentionCount, unreadCount }: { attentionCount: number; unreadCount: number }) {
   const tabs = [
-    { to: "/m/today", label: "Today", icon: CalendarCheck, badge: attentionCount },
+    { to: "/m/now", label: "Now", icon: Activity, badge: attentionCount },
     { to: "/m/chat", label: "Chat", icon: MessageSquareText, badge: unreadCount },
     { to: "/m/team", label: "Team", icon: UsersRound, badge: 0 },
     { to: "/m/me", label: "Me", icon: CircleUserRound, badge: 0 },
@@ -168,7 +238,7 @@ export function MobileBottomTabs({ attentionCount, unreadCount }: { attentionCou
           {({ isActive }) => (
             <>
               <tab.icon aria-hidden size={18} strokeWidth={isActive ? 2.2 : 1.8} />
-              <span className="text-label">{tab.label}</span>
+              <span className="text-mobile-label">{tab.label}</span>
               {tab.badge > 0 ? <MobileTabBadge count={tab.badge} /> : null}
             </>
           )}
@@ -181,7 +251,7 @@ export function MobileBottomTabs({ attentionCount, unreadCount }: { attentionCou
 function MobileTabBadge({ count }: { count: number }) {
   return (
     <span
-      className="mono absolute text-caption"
+      className="mono absolute text-mobile-caption"
       style={{
         top: "var(--sp-1)",
         right: "calc(50% - var(--sp-6))",
@@ -203,7 +273,7 @@ function MobileTabBadge({ count }: { count: number }) {
 function toneColor(tone: MobileChatSignalTone): string {
   switch (tone) {
     case "needs-you":
-      return "var(--state-needs-you)";
+      return "var(--fg-needs-you-strong)";
     case "error":
       return "var(--state-error)";
     case "unread":
