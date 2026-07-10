@@ -142,8 +142,24 @@ function segmentTouchesSourceWorktree(segment: string): boolean {
 // True when a captured command string operates on the source worktree. Split on
 // shell operators first so a search sub-command's quoted pattern is not
 // attributed to a neighboring real operation.
+function unwrapShellCommand(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(?:\S*\/)?(?:bash|sh|zsh)\s+-lc\s+([\s\S]+)$/u);
+  if (!match?.[1]) return trimmed;
+  const wrapped = match[1].trim();
+  const quote = wrapped[0];
+  if ((quote === '"' || quote === "'") && wrapped.at(-1) === quote) {
+    return wrapped.slice(1, -1).replace(/\\(["'])/gu, "$1");
+  }
+  return wrapped;
+}
+
+function shellCommandSegments(text: string): string[] {
+  return unwrapShellCommand(text).split(/&&|\|\||[;|\n]/u);
+}
+
 function commandTouchesSourceWorktree(text: string): boolean {
-  return text.split(/&&|\|\||[;|\n]/u).some((segment) => segmentTouchesSourceWorktree(segment));
+  return shellCommandSegments(text).some((segment) => segmentTouchesSourceWorktree(segment));
 }
 
 function eventTouchesSourceWorktree(event: unknown): boolean {
@@ -159,9 +175,10 @@ function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePa
     (execution) =>
       execution.exitCode === 0 &&
       !/(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output) &&
-      /\bworktree\s+add\b/iu.test(execution.command) &&
-      execution.command.includes(managedWorktreePath) &&
-      commandTouchesSourceWorktree(execution.command),
+      shellCommandSegments(execution.command).some((segment) => {
+        const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
+        return program === "git" && /\bworktree\s+add\b/iu.test(segment) && segment.includes(managedWorktreePath);
+      }),
   );
 }
 
@@ -665,13 +682,27 @@ function containsSourceFixtureEvidence(event: unknown): boolean {
   return collectCommandExecutions(event.event).some(
     (execution) =>
       execution.exitCode === 0 &&
-      SOURCE_EVIDENCE_ROOT_PATHS.some((root) => execution.command.includes(root)) &&
-      !execution.command.includes("source-repos/source-repo/worktrees/seed-source-repo") &&
-      (/(?:^|\s)(?:awk|cat|find|grep|head|jq|less|ls|rg|sed|tail|wc)(?:\s|$)/iu.test(execution.command) ||
-        /\bgit\b[^\n]*(?:show|grep|ls-tree|cat-file)\b/iu.test(execution.command)) &&
-      /Apollo Console|CLI App|Web Dashboard|Team Practice|Context Tree commands|operator dashboard|runtime coordination/iu.test(
-        execution.output,
-      ),
+      !/(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output) &&
+      shellCommandSegments(execution.command).some((segment) => {
+        const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
+        const readsContent =
+          ["awk", "cat", "find", "grep", "head", "jq", "less", "ls", "rg", "sed", "tail", "wc"].includes(program) ||
+          (program === "git" && /\b(?:show|grep|ls-tree|cat-file)\b/iu.test(segment));
+        return (
+          readsContent &&
+          SOURCE_EVIDENCE_ROOT_PATHS.some((root) => segment.includes(root)) &&
+          !segment.includes("source-repos/source-repo/worktrees/seed-source-repo")
+        );
+      }) &&
+      countMatches(execution.output, [
+        "Apollo Console",
+        "CLI App",
+        "Web Dashboard",
+        "Team Practice",
+        "Context Tree commands",
+        "operator dashboard",
+        "runtime coordination",
+      ]) >= 2,
   );
 }
 

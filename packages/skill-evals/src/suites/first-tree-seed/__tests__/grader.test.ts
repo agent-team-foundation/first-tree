@@ -586,6 +586,67 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not treat a wrapped doc search for worktree instructions as materialization", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-wrapped-worktree-doc-search-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: `git worktree add ${managedPath} origin/main`,
+              command: `/bin/zsh -lc "rg \\"worktree add ${managedPath}\\" AGENTS.md"`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(false);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not attribute a failed wrapped source read to later Context Tree output", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-compound-source-failure-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: `find: ${managedPath}: No such file or directory\n# Apollo Console\nruntime coordination`,
+              command: `/bin/zsh -lc "find ${managedPath} -type f; sed -n '1,120p' context-tree/NODE.md"`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("passes real first-tree periodic case when source evidence is read through a worktree", () => {
     expect(
       casePassed(
@@ -673,7 +734,7 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
-              aggregated_output: "# Apollo Console",
+              aggregated_output: "# Apollo Console\nRuntime coordination overview.",
               command: "git -C source-repos/source-repo show refs/remotes/origin/main:README.md",
               exit_code: 0,
               status: "completed",
@@ -736,7 +797,7 @@ describe("first-tree-seed grader", () => {
               exit_code: 0,
               status: "completed",
               type: "command_execution",
-              output: "Apollo Console source evidence",
+              output: "Apollo Console source evidence for runtime coordination",
             },
             type: "codex_event",
           },
