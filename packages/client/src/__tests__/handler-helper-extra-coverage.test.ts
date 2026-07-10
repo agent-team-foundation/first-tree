@@ -1,6 +1,7 @@
 import type { AgentRuntimeConfigPayload, SessionEvent, ToolFileRef } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildClaudeQueryOptions,
   createToolCallProcessor,
   detectClaudeSessionLimitResult,
   detectStreamApiError,
@@ -15,6 +16,7 @@ import {
   toolFileRefsForTerminalCodexTool,
   toolFileRefsFromCodexFileChange,
 } from "../handlers/codex/index.js";
+import type { ChatContext } from "../runtime/chat-context.js";
 import type { ContextTreeGitWriteTracker } from "../runtime/context-tree-git-status.js";
 
 function claudePayload(overrides: Partial<Extract<AgentRuntimeConfigPayload, { kind: "claude-code" }>> = {}) {
@@ -111,6 +113,44 @@ describe("additional Claude helper branches", () => {
     expect(isSameModelFamily("claude-opus-4-5", "claude-sonnet-4-5")).toBe(false);
     expect(isSameModelFamily("", "claude-opus-4-5")).toBe(false);
     expect(isSameModelFamily("short", "claude-opus-4-5")).toBe(false);
+  });
+
+  it("builds Claude SDK query options from model, MCP, effort, and chat context", () => {
+    const chatContext: ChatContext = {
+      chatId: "chat-1",
+      title: "Release thread",
+      topic: "Coverage",
+      description: "Discuss coverage gaps.",
+      selfOwner: { name: "alice", displayName: "Alice" },
+      participants: [
+        { name: "alice", displayName: "Alice", type: "human" },
+        { name: "agent", displayName: "Agent", type: "agent" },
+      ],
+    };
+
+    const options = buildClaudeQueryOptions(
+      claudePayload({
+        model: "claude-opus-4-5",
+        reasoningEffort: "high",
+        mcpServers: [{ name: "stdio-server", transport: "stdio", command: "node", args: ["server.js"] }],
+      }),
+      chatContext,
+    );
+
+    expect(options).toMatchObject({
+      model: "claude-opus-4-5",
+      effort: "high",
+      mcpServers: {
+        "stdio-server": { type: "stdio", command: "node", args: ["server.js"] },
+      },
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+      },
+    });
+    expect(options.systemPrompt?.append).toContain("<first-tree-runtime-contract>");
+    expect(options.systemPrompt?.append).toContain("<first-tree-current-chat-context");
+    expect(options.systemPrompt?.append).toContain('"name": "alice"');
   });
 
   it("classifies stream API and session-limit result text without false positives", () => {
@@ -245,5 +285,83 @@ describe("additional Claude helper branches", () => {
       kind: "tool_call",
       payload: { toolUseId: "tool-flush", status: "pending" },
     });
+  });
+
+  it("attributes notebook, search, and shell tool refs through the processor", () => {
+    const events: SessionEvent[] = [];
+    const processor = createToolCallProcessor(
+      (event) => events.push(event),
+      {
+        path: "/tree/",
+        repoUrl: "https://github.com/acme/context.git",
+        branch: "main",
+      },
+      { cwd: "/tree" },
+    );
+
+    for (const [id, name, input] of [
+      ["tool-notebook", "NotebookRead", { notebook_path: "/tree/notebooks/demo.ipynb" }],
+      ["tool-grep-root", "Grep", { path: "." }],
+      ["tool-bash", "Bash", { command: "cat NODE.md" }],
+      ["tool-relative-write", "Write", { file_path: "relative.md" }],
+      ["tool-no-path", "Glob", { pattern: "*.md" }],
+    ] satisfies Array<[string, string, unknown]>) {
+      processor.onMessage({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id, name, input }] },
+      });
+      processor.onMessage({
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: id, content: "" }] },
+      });
+    }
+
+    const completed = events.filter((event) => event.kind === "tool_call" && event.payload.status === "ok");
+    expect(completed).toHaveLength(5);
+    expect(completed[0]).toMatchObject({
+      payload: {
+        toolUseId: "tool-notebook",
+        toolFileRefs: [
+          {
+            localPath: "/tree/notebooks/demo.ipynb",
+            repoUrl: "https://github.com/acme/context.git",
+            repoBranch: "main",
+            repoRelativePath: "notebooks/demo.ipynb",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    expect(completed[1]).toMatchObject({
+      payload: {
+        toolUseId: "tool-grep-root",
+        toolFileRefs: [
+          {
+            localPath: "/tree",
+            repoRelativePath: "/",
+            pathKind: "repo",
+          },
+        ],
+      },
+    });
+    expect(completed[2]).toMatchObject({
+      payload: {
+        toolUseId: "tool-bash",
+        toolFileRefs: [
+          {
+            localPath: "/tree/NODE.md",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    expect(completed[3]).toMatchObject({
+      payload: {
+        toolUseId: "tool-relative-write",
+        toolFileRefs: [{ localPath: "relative.md", pathKind: "file" }],
+      },
+    });
+    expect(completed[4]?.payload).not.toHaveProperty("toolFileRefs");
   });
 });

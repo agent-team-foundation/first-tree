@@ -1,8 +1,8 @@
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SOURCE_REPOS_DIRNAME } from "@first-tree/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_TREE_DIRNAME, ensureWorkspaceManifest } from "../runtime/workspace-manifest.js";
 
 describe("ensureWorkspaceManifest", () => {
@@ -13,6 +13,8 @@ describe("ensureWorkspaceManifest", () => {
   });
   afterEach(() => {
     rmSync(ws, { recursive: true, force: true });
+    vi.doUnmock("@first-tree/shared");
+    vi.resetModules();
   });
 
   const manifestPath = () => join(ws, ".first-tree", "workspace.json");
@@ -80,5 +82,37 @@ describe("ensureWorkspaceManifest", () => {
     // The manifest may name a tree dir that does not exist yet; the runtime
     // must not create a directory or symlink (even a dangling one) at that path.
     expect(lstatSync(treeDirPath(), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  it("logs and continues when the workspace state dir cannot be created", () => {
+    const fileWorkspace = join(ws, "not-a-directory");
+    const logs: string[] = [];
+    writeFileSync(fileWorkspace, "already a file");
+
+    expect(() => ensureWorkspaceManifest(fileWorkspace, ["app"], (msg) => logs.push(msg))).not.toThrow();
+
+    expect(logs.some((line) => line.includes("workspace manifest write failed"))).toBe(true);
+  });
+
+  it("logs and skips filesystem writes when manifest validation fails", async () => {
+    vi.resetModules();
+    vi.doMock("@first-tree/shared", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@first-tree/shared")>();
+      return {
+        ...actual,
+        workspaceManifestSchema: {
+          parse: () => {
+            throw new Error("schema rejected manifest");
+          },
+        },
+      };
+    });
+    const mod = await import("../runtime/workspace-manifest.js");
+    const logs: string[] = [];
+
+    expect(() => mod.ensureWorkspaceManifest(ws, ["app"], (msg) => logs.push(msg))).not.toThrow();
+
+    expect(existsSync(manifestPath())).toBe(false);
+    expect(logs.some((line) => line.includes("workspace manifest skipped: schema rejected manifest"))).toBe(true);
   });
 });

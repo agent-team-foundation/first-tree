@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { ChatParticipantDetail } from "@first-tree/shared";
@@ -9,6 +9,7 @@ import {
   formatInboundContent,
   resolveSenderLabel,
 } from "../runtime/agent-io.js";
+import { writeAttachmentFile } from "../runtime/attachment-store.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { SessionMessage } from "../runtime/handler.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
@@ -273,6 +274,126 @@ describe("formatInboundContent", () => {
     expect(out).toContain("[From: alice · type=agent]");
     expect(out).toContain("legacy.png");
     expect(out).not.toContain('{"imageId"');
+  });
+
+  it("appends document attachment paths to inbound text for the agent", async () => {
+    const home = join(tmpdir(), `ft-agent-io-attachments-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    vi.stubEnv("FIRST_TREE_HOME", home);
+    try {
+      const attachmentPath = await writeAttachmentFile({
+        chatId: "chat-1",
+        attachmentId: "11111111-1111-4111-8111-111111111111",
+        filename: "evidence.pdf",
+        base64: Buffer.from("pdf bytes").toString("base64"),
+      });
+      const sdk = mkSdk(async () => participants);
+      const cache = createParticipantCache(sdk, "chat-1", () => {});
+      const msg: SessionMessage = {
+        id: "m1",
+        chatId: "chat-1",
+        senderId: "agent-a",
+        format: "text",
+        content: "Please inspect this file.",
+        metadata: {
+          attachments: [
+            {
+              attachmentId: "11111111-1111-4111-8111-111111111111",
+              kind: "file",
+              mimeType: "application/pdf",
+              filename: "evidence.pdf",
+              size: 9,
+            },
+          ],
+        },
+      };
+
+      const out = await formatInboundContent(msg, cache);
+
+      expect(out).toContain("Please inspect this file.");
+      expect(out).toContain("A file was shared in this chat");
+      expect(out).toContain("Filename: evidence.pdf");
+      expect(out).toContain(`Path: ${attachmentPath}`);
+      expect(out).not.toContain("not available");
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("renders an unavailable note when a document attachment was not written locally", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "text",
+      content: "Please inspect this file.",
+      metadata: {
+        attachments: [
+          {
+            attachmentId: "22222222-2222-4222-8222-222222222222",
+            kind: "document",
+            mimeType: "text/csv",
+            filename: "missing.csv",
+            size: 12,
+          },
+        ],
+      },
+    };
+
+    const out = await formatInboundContent(msg, cache);
+
+    expect(out).toContain("Please inspect this file.");
+    expect(out).toContain('File "missing.csv" not available on this device');
+    expect(out).not.toContain("Path:");
+  });
+
+  it("ignores malformed attachment metadata when rendering inbound text", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "text",
+      content: "Plain message.",
+      metadata: { attachments: "not-an-array" },
+    };
+
+    const out = await formatInboundContent(msg, cache);
+
+    expect(out).toBe("[From: alice · type=agent]\n\nPlain message.");
+    expect(out).not.toContain("file was shared");
+  });
+
+  it("does not render image metadata attachments as document files", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "text",
+      content: "Image metadata only.",
+      metadata: {
+        attachments: [
+          {
+            attachmentId: "33333333-3333-4333-8333-333333333333",
+            kind: "image",
+            mimeType: "image/png",
+            filename: "chart.png",
+            size: 1024,
+          },
+        ],
+      },
+    };
+
+    const out = await formatInboundContent(msg, cache);
+
+    expect(out).toBe("[From: alice · type=agent]\n\nImage metadata only.");
+    expect(out).not.toContain("chart.png");
+    expect(out).not.toContain("file was shared");
   });
 
   it("only calls listChatParticipants once across many messages (cache hit)", async () => {

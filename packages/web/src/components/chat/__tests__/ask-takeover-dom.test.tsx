@@ -14,7 +14,7 @@ vi.mock("../../ui/markdown.js", () => ({
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-// usePendingImages stages a revocable object-URL per file; give the test a
+// usePendingAttachments stages a revocable object-URL per image; give the test a
 // deterministic, side-effect-free implementation regardless of happy-dom's.
 URL.createObjectURL = () => "blob:mock";
 URL.revokeObjectURL = () => {};
@@ -504,6 +504,29 @@ describe("AskTakeover", () => {
     expect(onReply).toHaveBeenCalledWith({ content: "", mentions: [], images: [file] });
   });
 
+  it("stages an attached document and includes it in the reply", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} />,
+    );
+
+    const file = new File(["a,b\n1,2"], "evidence.csv", { type: "text/csv" });
+    const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("file input missing");
+    await changeFiles(fileInput, [file]);
+
+    expect(c.textContent).toContain("evidence.csv");
+    expect(btn(c, "Reply")?.disabled).toBe(false);
+
+    await click(btn(c, "Reply"));
+    expect(onReply).toHaveBeenCalledWith({
+      content: "",
+      mentions: [],
+      images: [],
+      attachments: [{ file, kind: "file" }],
+    });
+  });
+
   it("opens the file picker, stages pasted and dropped images, and removes thumbnails", async () => {
     const c = await renderDom(
       <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
@@ -511,7 +534,7 @@ describe("AskTakeover", () => {
     const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
     if (!fileInput) throw new Error("file input missing");
     const openPicker = vi.spyOn(fileInput, "click");
-    await click(c.querySelector('[aria-label="Attach image"]'));
+    await click(c.querySelector('[aria-label="Attach file"]'));
     expect(openPicker).toHaveBeenCalledTimes(1);
 
     const pasted = new File(["paste"], "paste.png", { type: "image/png" });
@@ -537,7 +560,7 @@ describe("AskTakeover", () => {
       <AskTakeover body="# Evidence?" isTrial payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
     );
     expect(c.querySelector('[aria-label="Mention an agent"]')).toBeNull();
-    expect(c.querySelector('[aria-label="Attach image"]')).toBeNull();
+    expect(c.querySelector('[aria-label="Attach file"]')).toBeNull();
 
     const file = new File(["x"], "trial.png", { type: "image/png" });
     const paste = await pasteFiles(freeTextBox(c), [file]);
@@ -554,7 +577,7 @@ describe("AskTakeover", () => {
     const c = await renderDom(
       <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} />,
     );
-    // One byte over the per-image cap usePendingImages enforces.
+    // One byte over the per-attachment cap usePendingAttachments enforces.
     const big = new File([new ArrayBuffer(MAX_ATTACHMENT_BYTES + 1)], "big.png", { type: "image/png" });
     const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
     if (!fileInput) throw new Error("file input missing");
@@ -563,6 +586,29 @@ describe("AskTakeover", () => {
     expect(c.textContent).toContain("too large");
     expect(thumbnails(c).length).toBe(0);
     expect(btn(c, "Reply")?.disabled).toBe(true);
+  });
+
+  it("stages supported files while surfacing unsupported files from the same selection", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} />,
+    );
+    const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("file input missing");
+    const valid = new File(["a,b\n1,2"], "valid.csv", { type: "text/csv" });
+    const invalid = new File(["zip"], "payload.zip", { type: "application/zip" });
+
+    await changeFiles(fileInput, [valid, invalid]);
+
+    expect(c.querySelector('[title="valid.csv"]')).not.toBeNull();
+    expect(c.textContent).toContain("Unsupported file type: payload.zip");
+    await click(btn(c, "Reply"));
+    expect(onReply).toHaveBeenCalledWith({
+      content: "",
+      mentions: [],
+      images: [],
+      attachments: [{ file: valid, kind: "file" }],
+    });
   });
 
   it("surfaces a host send error inside the card", async () => {

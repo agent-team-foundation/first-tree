@@ -27,6 +27,7 @@ type ClientConnectionPrivate = {
   registered: boolean;
   pausedReason: ClientPausedReason | null;
   authRefreshTimer: ReturnType<typeof setTimeout> | null;
+  nextReconnectMinDelayMs: number;
   desiredBindings: Map<string, { agentId: string; runtimeType: string; runtimeVersion?: string }>;
   boundAgents: Map<string, BoundAgent>;
   bindRetryRecords: Map<string, BindRetryRecord>;
@@ -222,6 +223,19 @@ describe("ClientConnection — additional branch coverage", () => {
     });
     socket.emitMessage({ type: "inbox:ack:accepted", entryId: 101, ref: "wrong-ref", disposition: "acked" });
     socket.emitMessage({
+      type: "inbox:ack:accepted",
+      entryId: "bad",
+      ref: ackFrame.ref,
+      disposition: "acked",
+    });
+    socket.emitMessage({
+      type: "inbox:recover:accepted",
+      ref: recoverFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-1",
+      resetCount: "bad",
+    });
+    socket.emitMessage({
       type: "inbox:recover:accepted",
       ref: recoverFrame.ref,
       agentId: "agent-1",
@@ -234,6 +248,29 @@ describe("ClientConnection — additional branch coverage", () => {
     expect(commands).toEqual([]);
     expect(pins).toEqual([]);
     expect(runtimeAuthStarts).toEqual([]);
+
+    const deliveredFrame = {
+      type: "inbox:deliver",
+      entryId: 102,
+      inboxId: "inbox-agent-1",
+      chatId: "chat-1",
+      message: {
+        id: "message-1",
+        chatId: "chat-1",
+        senderId: "agent-sender",
+        format: "text",
+        content: "hello",
+        metadata: {},
+        inReplyTo: null,
+        source: null,
+        createdAt: "2026-07-10T00:00:00.000Z",
+        configVersion: 1,
+        recipientMode: "full",
+        precedingMessages: [],
+      },
+    };
+    socket.emitMessage(deliveredFrame);
+    expect(delivered).toEqual([{ agentId: "inbox-agent-1", frame: deliveredFrame }]);
 
     socket.emitMessage({
       type: "session:event:accepted",
@@ -412,5 +449,288 @@ describe("ClientConnection — additional branch coverage", () => {
     await connectingConnection.disconnect();
 
     expect(connectingSocket.terminate).toHaveBeenCalledOnce();
+  });
+
+  it("rejects every pending operation during disconnect", async () => {
+    const connection = await makeConnection({ clientId: "client_disconnect_pending" });
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, {
+      wsInboxAckConfirm: true,
+      wsSessionEventConfirm: true,
+    });
+    await bindAgent(connection, socket);
+
+    const pendingBind = internal.sendBind("agent-2", "codex");
+    const pendingAck = connection.sendInboxAck(404, "agent-1");
+    const pendingRecover = connection.sendInboxRecover("agent-1", "chat-disconnect");
+    const pendingEvent = connection.reportSessionEventConfirmed(
+      "agent-1",
+      "chat-disconnect",
+      sessionEvent("disconnect"),
+    );
+    const rejections = [pendingBind, pendingAck, pendingRecover, pendingEvent].map((pending) =>
+      expect(pending).rejects.toThrow("Client disconnected"),
+    );
+
+    await connection.disconnect();
+
+    await Promise.all(rejections);
+  });
+
+  it("rejects unavailable operations and falls back before reporting unsupported confirmation", async () => {
+    const connection = await makeConnection({ clientId: "client_unavailable_operations" });
+
+    connection.clearPaused();
+    expect(connection.isPaused()).toBe(false);
+    await expect(connection.sendInboxRecover("agent-1", "chat-unavailable")).rejects.toThrow("socket not bound");
+    await expect(connection.bindAgent("agent-1", "codex")).rejects.toThrow("Client not connected");
+
+    const socket = await openRegisteredConnection(connection);
+    await bindAgent(connection, socket);
+    const sentBeforeReport = socket.sent.length;
+
+    await expect(
+      connection.reportSessionEventConfirmed("agent-1", "chat-legacy", sessionEvent("legacy")),
+    ).rejects.toThrow("confirmation unsupported by server");
+    expect(parseSent(socket, sentBeforeReport)).toMatchObject({
+      type: "session:event",
+      agentId: "agent-1",
+      chatId: "chat-legacy",
+    });
+
+    priv(connection).clearTimers();
+  });
+
+  it("covers legacy inbox acks, duplicate confirmed acks, and rejection confirmations", async () => {
+    vi.useFakeTimers();
+    const connection = await makeConnection();
+
+    await expect(connection.sendInboxAck(1, "agent-1")).resolves.toBeUndefined();
+
+    const legacySocket = await openRegisteredConnection(connection);
+    await bindAgent(connection, legacySocket);
+    expect(connection.agents.has("agent-1")).toBe(true);
+
+    await expect(connection.sendInboxAck(2, "agent-1")).resolves.toBeUndefined();
+    expect(parseSent(legacySocket, legacySocket.sent.length - 1)).toEqual({ type: "inbox:ack", entryId: 2 });
+
+    const confirmed = await makeConnection({ clientId: "client_confirmed_rejections" });
+    const socket = await openRegisteredConnection(confirmed, {
+      wsInboxAckConfirm: true,
+      wsSessionEventConfirm: true,
+    });
+    await bindAgent(confirmed, socket);
+
+    const ackPromise = confirmed.sendInboxAck(202, "agent-1");
+    const sameAckPromise = confirmed.sendInboxAck(202, "agent-1");
+    expect(sameAckPromise).toBe(ackPromise);
+    const ackFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({ type: "inbox:ack:rejected", entryId: "bad", ref: ackFrame.ref, reason: "prefix_gap" });
+    socket.emitMessage({ type: "inbox:ack:rejected", entryId: 202, ref: "wrong", reason: "failed_or_dead" });
+    socket.emitMessage({ type: "inbox:ack:rejected", entryId: 202, ref: ackFrame.ref, reason: "prefix_gap" });
+    await expect(ackPromise).rejects.toThrow("inbox:ack rejected (prefix_gap)");
+
+    const recoverPromise = confirmed.sendInboxRecover("agent-1", "chat-reject");
+    const recoverFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "inbox:recover:rejected",
+      ref: recoverFrame.ref,
+      agentId: 42,
+      chatId: "chat-reject",
+      reason: "recover_failed",
+    });
+    socket.emitMessage({
+      type: "inbox:recover:rejected",
+      ref: recoverFrame.ref,
+      agentId: "other-agent",
+      chatId: "chat-reject",
+      reason: "agent_not_bound",
+    });
+    socket.emitMessage({
+      type: "inbox:recover:rejected",
+      ref: recoverFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-reject",
+      reason: "recover_failed",
+    });
+    await expect(recoverPromise).rejects.toThrow("inbox:recover rejected (recover_failed)");
+
+    const eventPromise = confirmed.reportSessionEventConfirmed("agent-1", "chat-reject", sessionEvent("reject"));
+    const eventFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "session:event:rejected",
+      ref: eventFrame.ref,
+      agentId: 42,
+      chatId: "chat-reject",
+      reason: "malformed",
+    });
+    socket.emitMessage({
+      type: "session:event:rejected",
+      ref: eventFrame.ref,
+      agentId: "other-agent",
+      chatId: "chat-reject",
+      reason: "agent_not_bound",
+    });
+    socket.emitMessage({
+      type: "session:event:rejected",
+      ref: eventFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-reject",
+      reason: "persist_failed",
+    });
+    await expect(eventPromise).rejects.toThrow("session:event rejected (persist_failed)");
+
+    priv(connection).clearTimers();
+    priv(confirmed).clearTimers();
+  });
+
+  it("handles auth control frames and register rejection variants", async () => {
+    vi.useFakeTimers();
+    const retryable = await makeConnection({ clientId: "client_retryable_auth" });
+    const retryableSocket = await openRegisteredConnection(retryable);
+
+    retryableSocket.emitMessage({
+      type: "auth:retryable",
+      code: "auth_backend_unavailable",
+      retryAfterMs: 12_345,
+      message: "try later",
+    });
+
+    expect(retryableSocket.closeCalls.at(-1)).toEqual({ code: 1013, reason: "auth retryable" });
+
+    const malformedRetryable = await makeConnection({ clientId: "client_retryable_malformed" });
+    const malformedRetryableSocket = await openRegisteredConnection(malformedRetryable);
+    malformedRetryableSocket.emitMessage({ type: "auth:retryable", code: "unknown_retryable_code" });
+    expect(malformedRetryableSocket.closeCalls.at(-1)).toEqual({ code: 1013, reason: "auth retryable" });
+
+    const rejected = await makeConnection({ clientId: "client_auth_rejected" });
+    const rejectedSocket = await openRegisteredConnection(rejected);
+    const paused: ClientPausedReason[] = [];
+    const fatalNames: string[] = [];
+    rejected.on("auth:paused", (reason) => paused.push(reason));
+    rejected.on("auth:fatal", (err) => fatalNames.push(err.name));
+
+    rejectedSocket.emitMessage({ type: "auth:rejected", code: "invalid_token", message: "bad jwt" });
+    rejectedSocket.emitMessage({ type: "auth:rejected", code: "future_code", reason: "legacy bad" });
+
+    expect(rejected.isPaused()).toBe(true);
+    expect(paused).toEqual(["auth_rejected", "auth_rejected"]);
+    expect(fatalNames).toEqual(["ServerAuthRejectedError", "ServerAuthRejectedError"]);
+    expect(rejectedSocket.closeCalls.at(-1)).toEqual({ code: 4401, reason: "auth rejected" });
+
+    const userMismatch = await makeConnection({ clientId: "client_user_mismatch" });
+    const userSocket = await openRegisteredConnection(userMismatch);
+    const userErrors: string[] = [];
+    userMismatch.on("error", (err) => userErrors.push(`${err.name}:${err.message}`));
+    userSocket.emitMessage({
+      type: "client:register:rejected",
+      code: "CLIENT_USER_MISMATCH",
+      message: "belongs to somebody else",
+    });
+    expect(userErrors).toContain("ClientUserMismatchError:belongs to somebody else");
+
+    const orgMismatch = await makeConnection({ clientId: "client_org_mismatch" });
+    const orgSocket = await openRegisteredConnection(orgMismatch);
+    const orgErrors: string[] = [];
+    orgMismatch.on("error", (err) => orgErrors.push(`${err.name}:${err.message}`));
+    orgSocket.emitMessage({
+      type: "client:register:rejected",
+      code: "CLIENT_ORG_MISMATCH",
+      message: "wrong org",
+    });
+    expect(orgErrors).toContain("ClientOrgMismatchError:wrong org");
+
+    const genericRejected = await makeConnection({ clientId: "client_generic_register_rejected" });
+    const genericSocket = await openRegisteredConnection(genericRejected);
+    const genericErrors: string[] = [];
+    genericRejected.on("error", (err) => genericErrors.push(`${err.name}:${err.message}`));
+    genericSocket.emitMessage({ type: "client:register:rejected", message: "schema drift" });
+    expect(genericErrors).toContain("Error:client:register rejected: schema drift");
+
+    for (const conn of [retryable, malformedRetryable, rejected, userMismatch, orgMismatch, genericRejected]) {
+      priv(conn).clearTimers();
+    }
+  });
+
+  it("covers rebind recovery, rebind rejection, force disconnect, and control events", async () => {
+    const connection = await makeConnection();
+    const socket = await openRegisteredConnection(connection, {
+      wsInboxAckConfirm: true,
+      wsSessionEventConfirm: true,
+    });
+    await bindAgent(connection, socket, "agent-1");
+
+    const unbound: Array<{ agentId: string; reason?: string }> = [];
+    const recovered: unknown[] = [];
+    const commands: unknown[] = [];
+    const runtimeAuthStarts: unknown[] = [];
+    const reconciles: unknown[] = [];
+    connection.on("agent:unbound", (agentId, reason) => unbound.push({ agentId, reason }));
+    connection.on("resilience.bind.recovered", (payload) => recovered.push(payload));
+    connection.on("session:command", (command) => commands.push(command));
+    connection.on("runtime-auth:start", (command) => runtimeAuthStarts.push(command));
+    connection.on("session:reconcile:result", (result) => reconciles.push(result));
+
+    const pendingRecover = connection.sendInboxRecover("agent-1", "chat-force");
+    const pendingEvent = connection.reportSessionEventConfirmed("agent-1", "chat-force", sessionEvent("force"));
+    connection.sendInboxAck(303, "agent-1").catch(() => undefined);
+
+    socket.emitMessage({ type: "agent:force_disconnect", agentId: "agent-1", reason: "maintenance" });
+    await expect(pendingRecover).rejects.toThrow("agent_force_disconnect");
+    await expect(pendingEvent).rejects.toThrow("agent_force_disconnect");
+    expect(unbound).toContainEqual({ agentId: "agent-1", reason: "maintenance" });
+
+    priv(connection).desiredBindings.set("agent-1", {
+      agentId: "agent-1",
+      runtimeType: "codex",
+      runtimeVersion: "1.0",
+    });
+    priv(connection).bindRetryRecords.set("agent-1", {
+      attempts: 3,
+      nextAllowedAt: 0,
+      lastReason: "bind_wrong_client",
+    });
+    priv(connection).rebindAgents();
+
+    const reboundFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bound",
+      ref: reboundFrame.ref,
+      agentId: "agent-1",
+      displayName: null,
+      runtimeSessionToken: "",
+    });
+    await flushMicrotasks();
+    expect(recovered).toContainEqual({ agentId: "agent-1", totalAttempts: 3 });
+    expect(connection.agents.get("agent-1")?.displayName).toBe("agent-1");
+
+    priv(connection).desiredBindings.set("agent-2", { agentId: "agent-2", runtimeType: "codex" });
+    priv(connection).bindRetryRecords.set("agent-2", {
+      attempts: 1,
+      nextAllowedAt: 0,
+      lastReason: "bind_retryable",
+    });
+    priv(connection).rebindAgents();
+    const rejectedFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bind:rejected",
+      ref: rejectedFrame.ref,
+      reason: "wrong_client",
+    });
+    await flushMicrotasks();
+    expect(unbound).toContainEqual({ agentId: "agent-2" });
+
+    socket.emitMessage({ type: "agent:unbound", agentId: "agent-1" });
+    expect(unbound).toContainEqual({ agentId: "agent-1" });
+
+    socket.emitMessage({ type: "session:resume", agentId: "agent-1", chatId: "chat-1" });
+    socket.emitMessage({ type: "runtime-auth:start", provider: "codex", method: "browser", ref: "auth-ref" });
+    socket.emitMessage({ type: "session:reconcile:result", agentId: "agent-1", staleChatIds: ["chat-1"] });
+
+    expect(commands).toContainEqual({ type: "session:resume", agentId: "agent-1", chatId: "chat-1" });
+    expect(runtimeAuthStarts).toContainEqual({ provider: "codex", method: "browser", ref: "auth-ref" });
+    expect(reconciles).toContainEqual({ agentId: "agent-1", staleChatIds: ["chat-1"] });
+
+    priv(connection).clearTimers();
   });
 });
