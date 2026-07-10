@@ -30,6 +30,9 @@ describe("first-tree-seed floor invariants", () => {
     expect(stateC).toBeGreaterThan(continuation);
     expect(skillMarkdown).toContain("this setup chat's visible history");
     expect(skillMarkdown).toContain("re-resolve the same readable sources and enter Phase 2");
+    expect(skillMarkdown).toContain("applies only to the Context Tree checkout");
+    expect(skillMarkdown).toMatch(/Do not\s+use `git ls-tree`, `git show`, `git grep`/);
+    expect(skillMarkdown).toContain("not a leftover checkout");
   });
 
   it("delays App coverage guidance until a reviewable milestone", () => {

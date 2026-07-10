@@ -552,6 +552,14 @@ DEFAULT=$(git -C <tree> symbolic-ref refs/remotes/origin/HEAD | sed 's|^refs/rem
 git -C <tree> ls-tree "origin/$DEFAULT" -- <top-level>  # for each approved domain
 ```
 
+That `ls-tree` check applies only to the Context Tree checkout. Before listing
+or reading any source content in Phase 2, materialize each declared bare source
+through the source Worktrees protocol and read the resulting checkout. Do not
+use `git ls-tree`, `git show`, `git grep`, or similar content reads directly
+against a source bare clone, even as a quick preflight. Removing the temporary
+source read worktree after the evidence read is complete is expected cleanup;
+the required proof is the materialize/read event, not a leftover checkout.
+
 ### Sub-agent allocation
 
 Phase 2 must balance parallelism against three costs: token spend,
