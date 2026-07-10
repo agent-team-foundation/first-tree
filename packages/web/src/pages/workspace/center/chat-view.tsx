@@ -30,6 +30,7 @@ import {
   PanelRight,
   Paperclip,
   X,
+  X as XIcon,
 } from "lucide-react";
 import {
   memo,
@@ -137,6 +138,7 @@ import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
+import { ParticipantsSection } from "../right-sidebar/participants-section.js";
 import { ChatSummary } from "./chat-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
@@ -1484,19 +1486,26 @@ export function ChatView({
   // rail (a global preference, not per-chat), otherwise collapsed for the full
   // reading column.
   const storedSidebarPref = useRef<boolean | null>(loadSidebarOpen());
-  const [showSidebar, setShowSidebar] = useState<boolean>(storedSidebarPref.current ?? false);
+  const [showSidebar, setShowSidebar] = useState<boolean>(() =>
+    narrow ? false : (storedSidebarPref.current ?? false),
+  );
   // Persist only genuine user choices (toggle / dismiss / open), never the
   // transient doc-preview stash — that must not masquerade as an explicit
   // preference. `setSidebarByUser` writes through to localStorage;
   // system-driven changes use `setShowSidebar`.
-  const setSidebarByUser = useCallback((open: boolean | ((v: boolean) => boolean)) => {
-    setShowSidebar((prev) => {
-      const next = typeof open === "function" ? open(prev) : open;
-      storedSidebarPref.current = next;
-      saveSidebarOpen(next);
-      return next;
-    });
-  }, []);
+  const setSidebarByUser = useCallback(
+    (open: boolean | ((v: boolean) => boolean)) => {
+      setShowSidebar((prev) => {
+        const next = typeof open === "function" ? open(prev) : open;
+        if (!narrow) {
+          storedSidebarPref.current = next;
+          saveSidebarOpen(next);
+        }
+        return next;
+      });
+    },
+    [narrow],
+  );
 
   // Temporary, staging-only view filter: hide agent final-text mirrors. The
   // toggle renders only on non-prod channels (`finalTextToggleEnabled`), and
@@ -3525,9 +3534,10 @@ export function ChatView({
                       watching
                     </span>
                   </span>
-                ) : isTrial ? (
-                  // Trial surface: the title is not renamable (a write on the
-                  // controlled single-run chat) — render it as plain text.
+                ) : isTrial || narrow ? (
+                  // Trial and narrow mobile surfaces keep the header as
+                  // navigation/context only. Rename remains a desktop detail
+                  // action instead of a hidden tap target in the chat title.
                   <span className="truncate text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
                     {chatDetail?.title ?? titleFallback ?? "…"}
                   </span>
@@ -3639,91 +3649,19 @@ export function ChatView({
               {/* Trial surface hides the entire audience/details cluster
                   (participant stats, add participant, chat-details toggle) —
                   the trial is a pure conversation with no side rail. */}
-              {!isTrial && (
-                <>
-                  {/* Audience — compact stats icon + quick-add icon. Replaces
-              the previous chip-row, which one-shot the panel width once
-              chats grew past three participants. Stats icon shows count
-              + hover popover with full name list; the quick-add icon
-              opens the same dropdown the sidebar's "+ Add participant"
-              uses (shared backend mutation, single one-way-door notice). */}
-                  <ParticipantsStats
-                    participants={chatDetail?.participants ?? []}
-                    chatId={chatId}
-                    agentIdentity={chatScopedAgentIdentity}
-                    onOpen={() => setSidebarByUser(true)}
-                  />
-                  {/* Vertical divider splits "look" (avatar strip = identity +
-                  state) from "do" (add / open details). Keeps the four
-                  icons from reading as one undifferentiated cluster. */}
-                  <span
-                    aria-hidden="true"
-                    className="shrink-0"
-                    style={{
-                      width: "var(--hairline)",
-                      height: "var(--sp-4)",
-                      background: "var(--border)",
-                      marginLeft: "var(--sp-1)",
-                      marginRight: "var(--sp-1)",
-                    }}
-                  />
-                  {readOnly ? null : (
-                    <AddParticipantDropdown
-                      variant="icon"
-                      chatId={chatId}
-                      participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-                      onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                    />
-                  )}
-                  {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
-              (gated on `finalTextToggleEnabled`). Filters the per-turn
-              final-text mirrors out of the timeline so a human watcher sees
-              only deliberate sends + human messages. Eye / EyeOff conveys the
-              show/hide state; pressed styling marks "currently hiding". */}
-                  {finalTextToggleEnabled && (
-                    <button
-                      type="button"
-                      onClick={toggleHideAgentFinalText}
-                      aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                      aria-pressed={hideAgentFinalText}
-                      title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                      style={{
-                        width: 28,
-                        height: 28,
-                        border: 0,
-                        background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
-                        borderRadius: "var(--radius-input)",
-                        color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {hideAgentFinalText ? (
-                        <EyeOff size={16} strokeWidth={2.25} />
-                      ) : (
-                        <Eye size={16} strokeWidth={2.25} />
-                      )}
-                    </button>
-                  )}
-                  {/* Chat details toggle — opens the right rail (Participants /
-              GitHub / Chat actions). Sits at the panel's far right,
-              mirroring the rail's position. The PanelRight glyph is the
-              panel-toggle convention (Linear / Notion / VS Code); the same
-              glyph renders in both states — pressed styling (sunken
-              background + darker foreground) carries the open/closed state.
-              An ellipsis is reserved for overflow-action menus (see
-              row-actions-menu.tsx), so it would mislead here. */}
+              {!isTrial &&
+                (narrow ? (
                   <button
                     type="button"
                     onClick={toggleSidebar}
-                    aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
+                    aria-label={showSidebar ? "Hide chat options" : "Show chat options"}
                     aria-expanded={showSidebar}
                     aria-pressed={showSidebar}
-                    title={showSidebar ? "Hide chat details" : "Show chat details"}
+                    title={showSidebar ? "Hide chat options" : "Show chat options"}
                     className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                     style={{
-                      width: 28,
-                      height: 28,
+                      width: 32,
+                      height: 32,
                       border: 0,
                       background: showSidebar ? "var(--bg-sunken)" : "transparent",
                       borderRadius: "var(--radius-input)",
@@ -3731,10 +3669,104 @@ export function ChatView({
                       cursor: "pointer",
                     }}
                   >
-                    <PanelRight size={16} strokeWidth={2.25} />
+                    <PanelRight size={17} strokeWidth={2.25} />
                   </button>
-                </>
-              )}
+                ) : (
+                  <>
+                    {/* Audience — compact stats icon + quick-add icon. Replaces
+              the previous chip-row, which one-shot the panel width once
+              chats grew past three participants. Stats icon shows count
+              + hover popover with full name list; the quick-add icon
+              opens the same dropdown the sidebar's "+ Add participant"
+              uses (shared backend mutation, single one-way-door notice). */}
+                    <ParticipantsStats
+                      participants={chatDetail?.participants ?? []}
+                      chatId={chatId}
+                      agentIdentity={chatScopedAgentIdentity}
+                      onOpen={() => setSidebarByUser(true)}
+                    />
+                    {/* Vertical divider splits "look" (avatar strip = identity +
+                  state) from "do" (add / open details). Keeps the four
+                  icons from reading as one undifferentiated cluster. */}
+                    <span
+                      aria-hidden="true"
+                      className="shrink-0"
+                      style={{
+                        width: "var(--hairline)",
+                        height: "var(--sp-4)",
+                        background: "var(--border)",
+                        marginLeft: "var(--sp-1)",
+                        marginRight: "var(--sp-1)",
+                      }}
+                    />
+                    {readOnly ? null : (
+                      <AddParticipantDropdown
+                        variant="icon"
+                        chatId={chatId}
+                        participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+                        onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                      />
+                    )}
+                    {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
+              (gated on `finalTextToggleEnabled`). Filters the per-turn
+              final-text mirrors out of the timeline so a human watcher sees
+              only deliberate sends + human messages. Eye / EyeOff conveys the
+              show/hide state; pressed styling marks "currently hiding". */}
+                    {finalTextToggleEnabled && (
+                      <button
+                        type="button"
+                        onClick={toggleHideAgentFinalText}
+                        aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                        aria-pressed={hideAgentFinalText}
+                        title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                        className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                        style={{
+                          width: 28,
+                          height: 28,
+                          border: 0,
+                          background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
+                          borderRadius: "var(--radius-input)",
+                          color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {hideAgentFinalText ? (
+                          <EyeOff size={16} strokeWidth={2.25} />
+                        ) : (
+                          <Eye size={16} strokeWidth={2.25} />
+                        )}
+                      </button>
+                    )}
+                    {/* Chat details toggle — opens the right rail (Participants /
+              GitHub / Chat actions). Sits at the panel's far right,
+              mirroring the rail's position. The PanelRight glyph is the
+              panel-toggle convention (Linear / Notion / VS Code); the same
+              glyph renders in both states — pressed styling (sunken
+              background + darker foreground) carries the open/closed state.
+              An ellipsis is reserved for overflow-action menus (see
+              row-actions-menu.tsx), so it would mislead here. */}
+                    <button
+                      type="button"
+                      onClick={toggleSidebar}
+                      aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
+                      aria-expanded={showSidebar}
+                      aria-pressed={showSidebar}
+                      title={showSidebar ? "Hide chat details" : "Show chat details"}
+                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        border: 0,
+                        background: showSidebar ? "var(--bg-sunken)" : "transparent",
+                        borderRadius: "var(--radius-input)",
+                        color: showSidebar ? "var(--fg)" : "var(--fg-3)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <PanelRight size={16} strokeWidth={2.25} />
+                    </button>
+                  </>
+                ))}
             </div>
           </div>
 
@@ -3744,6 +3776,7 @@ export function ChatView({
             descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
             lastReadAt={chatDetail?.lastReadAt ?? null}
             freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
+            autoExpandUnread={!narrow}
             scrollContainerRef={scrollContainerRef}
             overlayContainerRef={overlayContainerRef}
           />
@@ -4358,30 +4391,15 @@ export function ChatView({
             `showSidebar=true` carried over from a prior non-trial session. */}
         {showSidebar && !isTrial ? (
           narrow ? (
-            // Narrow viewport: rail floats over the chat instead of
-            // pushing it aside. A scrim catches outside-clicks for
-            // dismissal — Esc still works via the existing key handler
-            // bound earlier in this component.
-            <>
-              <button
-                type="button"
-                aria-label="Dismiss"
-                onClick={() => setSidebarByUser(false)}
-                className="absolute inset-0 z-20"
-                style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
-              />
-              <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
-                <ChatRightSidebar
-                  chatId={chatId}
-                  participants={chatDetail?.participants ?? []}
-                  participantsLoading={chatDetailLoading}
-                  managedByMe={managedByMeMap}
-                  onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                  readOnly={readOnly}
-                  width="min(88vw, 20rem)"
-                />
-              </div>
-            </>
+            <MobileParticipantsSheet
+              chatId={chatId}
+              participants={chatDetail?.participants ?? []}
+              participantsLoading={chatDetailLoading}
+              managedByMe={managedByMeMap}
+              onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+              readOnly={readOnly}
+              onDismiss={() => setSidebarByUser(false)}
+            />
           ) : (
             <ChatRightSidebar
               chatId={chatId}
@@ -4397,6 +4415,84 @@ export function ChatView({
     </div>
   );
   return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
+}
+
+function MobileParticipantsSheet({
+  chatId,
+  participants,
+  participantsLoading,
+  managedByMe,
+  onAdded,
+  readOnly,
+  onDismiss,
+}: {
+  chatId: string;
+  participants: ChatParticipantDetail[];
+  participantsLoading: boolean;
+  managedByMe: Map<string, boolean>;
+  onAdded: () => void;
+  readOnly: boolean;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-30 flex items-end" data-mobile-participants-sheet-root>
+      <button
+        type="button"
+        aria-label="Close participants"
+        onClick={onDismiss}
+        className="absolute inset-0"
+        style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mobile-participants-sheet-title"
+        data-mobile-participants-sheet="true"
+        className="relative z-10 w-full overflow-hidden border-t shadow-[var(--shadow-md)] animate-in fade-in slide-in-from-bottom-4 duration-150"
+        style={{
+          maxHeight: "82vh",
+          borderColor: "var(--border)",
+          borderRadius: "var(--radius-dialog) var(--radius-dialog) 0 0",
+          background: "var(--bg-raised)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}
+      >
+        <div
+          className="flex items-center"
+          style={{
+            gap: "var(--sp-3)",
+            padding: "var(--sp-4) var(--sp-4) var(--sp-2)",
+            borderBottom: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          <div className="min-w-0" style={{ flex: 1 }}>
+            <h2 id="mobile-participants-sheet-title" className="text-mobile-title" style={{ margin: 0 }}>
+              Participants
+            </h2>
+          </div>
+          <button
+            type="button"
+            aria-label="Close participants"
+            onClick={onDismiss}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-input)] border transition-colors hover:bg-[var(--bg-hover)]"
+            style={{ borderColor: "var(--border)", color: "var(--fg-3)" }}
+          >
+            <XIcon aria-hidden className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="overflow-y-auto" style={{ maxHeight: "calc(82vh - var(--sp-16))" }}>
+          <ParticipantsSection
+            chatId={chatId}
+            participants={participants}
+            participantsLoading={participantsLoading}
+            managedByMe={managedByMe}
+            onAdded={onAdded}
+            readOnly={readOnly}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -4509,7 +4605,7 @@ function ParticipantAvatar({
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${label} · ${stateText}. Open chat details.`}
+      aria-label={`${label} · ${stateText}. Open participants.`}
       title={`${label} · ${stateText}`}
       className="relative inline-flex items-center justify-center transition-transform hover:translate-y-px"
       style={{

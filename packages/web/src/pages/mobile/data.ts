@@ -29,7 +29,8 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
   if (row.chatHasExplicitMentionToMe || row.unreadMentionCount > 0) {
     return {
       tone: "unread",
-      label: row.unreadMentionCount === 1 ? "Unread" : `${row.unreadMentionCount} unread`,
+      label:
+        row.unreadMentionCount === 0 || row.unreadMentionCount === 1 ? "Unread" : `${row.unreadMentionCount} unread`,
       rank: 2,
       attention: true,
     };
@@ -54,6 +55,29 @@ export function mobileChatPreview(row: MeChatRow): string {
   return row.description?.trim() || row.lastMessagePreview?.trim() || "No messages yet.";
 }
 
+export function mobileFeedReasonLabel(row: MeChatRow, selfAgentId?: string): string {
+  if (row.openRequestCount > 0) {
+    if (row.openRequestCount === 1) {
+      const source = firstOtherParticipantName(row, selfAgentId);
+      return source ? `Question from ${source}` : "Question waiting";
+    }
+    return `${row.openRequestCount} questions waiting`;
+  }
+  if (row.failedAgentIds.length > 0) {
+    return row.failedAgentIds.length === 1 ? "Failed run" : `${row.failedAgentIds.length} failed runs`;
+  }
+  if (row.chatHasExplicitMentionToMe || row.unreadMentionCount > 0) {
+    return row.unreadMentionCount > 1 ? `${row.unreadMentionCount} unread mentions` : "Unread mention";
+  }
+  if (row.busyAgentIds.length > 0 || row.liveActivity !== null) {
+    return "Working now";
+  }
+  if (row.membershipKind === "watching") {
+    return "Watching";
+  }
+  return "Recent update";
+}
+
 export function sortMobileChats(rows: readonly MeChatRow[]): MeChatRow[] {
   return [...rows].sort((a, b) => {
     const signalDelta = mobileChatSignal(a).rank - mobileChatSignal(b).rank;
@@ -74,4 +98,9 @@ function timestampValue(iso: string | null): number {
   if (!iso) return 0;
   const value = Date.parse(iso);
   return Number.isNaN(value) ? 0 : value;
+}
+
+function firstOtherParticipantName(row: MeChatRow, selfAgentId?: string): string | null {
+  const participant = row.participants.find((candidate) => candidate.agentId !== selfAgentId);
+  return participant?.displayName?.trim() || null;
 }

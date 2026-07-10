@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { RouteTracker } from "./analytics.js";
 import { AuthProvider } from "./auth/auth-context.js";
@@ -7,6 +7,7 @@ import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
 import { ToastProvider } from "./components/ui/toast.js";
 import { PulseProvider } from "./hooks/pulse-context.js";
+import { useServerChannelState } from "./hooks/use-server-channel.js";
 import { ProfileTab } from "./pages/agent-detail/profile-tab.js";
 import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
 import { RepositoriesTab } from "./pages/agent-detail/repositories-tab.js";
@@ -19,6 +20,11 @@ import { DocPage } from "./pages/docs/doc-page.js";
 import { DocsListPage } from "./pages/docs/docs-list-page.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
+import { MobileChatPage } from "./pages/mobile/chat.js";
+import { MobileMePage } from "./pages/mobile/me.js";
+import { MobileNowPage } from "./pages/mobile/now.js";
+import { MobileShell } from "./pages/mobile/shell.js";
+import { MobileTeamPage } from "./pages/mobile/team.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
@@ -121,6 +127,10 @@ const ChatSummaryPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/chat-summary-preview.js").then((module) => ({ default: module.ChatSummaryPreviewPage })))
   : null;
 
+const MobilePreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/mobile-preview.js").then((module) => ({ default: module.MobilePreviewPage })))
+  : null;
+
 const TeamSwitcherPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/team-switcher-preview.js").then((module) => ({ default: module.TeamSwitcherPreviewPage })),
@@ -146,6 +156,7 @@ export function App() {
       <AuthProvider>
         <ToastProvider>
           <BrowserRouter>
+            <MobileExperienceHead />
             <RouteTracker />
             <Routes>
               {/* Public routes — no auth required */}
@@ -276,6 +287,16 @@ export function App() {
                   }
                 />
               ) : null}
+              {MobilePreviewPage ? (
+                <Route
+                  path="/preview/mobile"
+                  element={
+                    <Suspense fallback={null}>
+                      <MobilePreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               {SettingsGithubPreviewPage ? (
                 <Route
                   path="/preview/settings-github"
@@ -342,6 +363,14 @@ export function App() {
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
+                <Route element={<MobileExperienceGate />}>
+                  <Route path="m" element={<Navigate to="/m/now" replace />} />
+                  <Route path="m/now" element={<MobileNowPage />} />
+                  <Route path="m/chat" element={<MobileChatPage />} />
+                  <Route path="m/team" element={<MobileTeamPage />} />
+                  <Route path="m/me" element={<MobileMePage />} />
+                  <Route path="m/*" element={<Navigate to="/m/now" replace />} />
+                </Route>
                 <Route
                   element={
                     <PulseProvider>
@@ -349,7 +378,7 @@ export function App() {
                     </PulseProvider>
                   }
                 >
-                  <Route index element={<WorkspacePage />} />
+                  <Route index element={<WorkspaceEntry />} />
                   {/* Growth quickstart (landing-campaign trial). Lives INSIDE
                       the Layout group so the trial chat renders with full
                       workspace chrome — but as its own route, NOT the gated
@@ -416,7 +445,90 @@ export function App() {
   );
 }
 
+type MobileExperienceState = {
+  enabled: boolean;
+  settled: boolean;
+};
+
 function AdminRedirect() {
   const location = useLocation();
   return <Navigate to={`/team${location.hash}`} replace />;
+}
+
+function WorkspaceEntry() {
+  const location = useLocation();
+  const mobileExperience = useMobileExperienceState();
+  if (!mobileExperience.settled) return null;
+  if (mobileExperience.enabled && shouldOpenMobileRoot(location)) {
+    return <Navigate to="/m/now" replace />;
+  }
+  return <WorkspacePage />;
+}
+
+function shouldOpenMobileRoot(location: ReturnType<typeof useLocation>): boolean {
+  if (location.pathname !== "/" || location.search || location.hash) return false;
+  if (typeof window === "undefined") return false;
+
+  const mediaQuery = window.matchMedia?.("(max-width: 47.999rem)");
+  if (mediaQuery) return mediaQuery.matches;
+
+  return window.innerWidth > 0 && window.innerWidth < 768;
+}
+
+function useMobileExperienceState(): MobileExperienceState {
+  const { channel, settled: channelSettled } = useServerChannelState();
+  if (!channelSettled) {
+    return { enabled: false, settled: false };
+  }
+  return { enabled: channel === "dev" || channel === "staging", settled: true };
+}
+
+function MobileExperienceGate() {
+  const mobileExperience = useMobileExperienceState();
+  if (!mobileExperience.settled) return null;
+  if (!mobileExperience.enabled) return <Navigate to="/" replace />;
+
+  return (
+    <PulseProvider>
+      <MobileShell />
+    </PulseProvider>
+  );
+}
+
+function MobileExperienceHead() {
+  const { enabled } = useMobileExperienceState();
+
+  useEffect(() => {
+    if (!enabled || typeof document === "undefined") return;
+
+    const elements = [
+      createHeadElement("link", { rel: "manifest", href: "/manifest.webmanifest" }),
+      createHeadElement("link", { rel: "apple-touch-icon", href: "/icons/apple-touch-icon.png" }),
+      createHeadElement("meta", { name: "mobile-web-app-capable", content: "yes" }),
+      createHeadElement("meta", { name: "apple-mobile-web-app-capable", content: "yes" }),
+      createHeadElement("meta", { name: "apple-mobile-web-app-title", content: "First Tree" }),
+      createHeadElement("meta", { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" }),
+    ];
+
+    for (const element of elements) {
+      document.head.appendChild(element);
+    }
+
+    return () => {
+      for (const element of elements) {
+        element.remove();
+      }
+    };
+  }, [enabled]);
+
+  return null;
+}
+
+function createHeadElement(tagName: "link" | "meta", attributes: Record<string, string>): HTMLElement {
+  const element = document.createElement(tagName);
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, value);
+  }
+  element.dataset.mobileExperience = "true";
+  return element;
 }
