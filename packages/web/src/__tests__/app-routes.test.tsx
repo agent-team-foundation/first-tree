@@ -120,15 +120,6 @@ function setViewportWidth(width: number): void {
   });
 }
 
-function setMobileExperience(value: string | undefined): void {
-  const env = import.meta.env as Record<string, string | undefined>;
-  if (value === undefined) {
-    delete env.VITE_ENABLE_MOBILE_EXPERIENCE;
-    return;
-  }
-  env.VITE_ENABLE_MOBILE_EXPERIENCE = value;
-}
-
 async function renderAppAt(path: string): Promise<string> {
   window.history.pushState({}, "", path);
   const container = document.createElement("div");
@@ -150,7 +141,6 @@ describe("App routes", () => {
     document.body.innerHTML = "";
     root = null;
     setViewportWidth(1280);
-    setMobileExperience(undefined);
     serverChannelStateMock.channel = "prod";
     serverChannelStateMock.settled = true;
   });
@@ -214,7 +204,7 @@ describe("App routes", () => {
     expect(await renderAppAt("/preview/command-palette")).toContain("command palette preview");
   });
 
-  it("keeps the mobile experience disabled by default", async () => {
+  it("keeps the mobile experience disabled on prod", async () => {
     setViewportWidth(390);
     expect(await renderAppAt("/")).toContain("workspace page");
     expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
@@ -232,21 +222,17 @@ describe("App routes", () => {
     expect(await renderAppAt("/m/chat")).toContain("workspace page");
   });
 
-  it("keeps the mobile experience disabled on prod even when the build flag is enabled", async () => {
-    setMobileExperience("true");
-    serverChannelStateMock.channel = "prod";
+  it("waits for the server channel before choosing the mobile or desktop shell", async () => {
+    serverChannelStateMock.channel = null;
+    serverChannelStateMock.settled = false;
     setViewportWidth(390);
 
-    expect(await renderAppAt("/")).toContain("workspace page");
+    expect(await renderAppAt("/")).not.toContain("workspace page");
+    expect(document.body.textContent ?? "").not.toContain("mobile now");
     expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
-    await act(async () => root?.unmount());
-    document.body.innerHTML = "";
-
-    expect(await renderAppAt("/m/now")).toContain("workspace page");
   });
 
-  it("opens mobile routes, phone root, and PWA metadata when the mobile experience flag is enabled on staging", async () => {
-    setMobileExperience("true");
+  it("opens mobile routes, phone root, and PWA metadata on staging", async () => {
     serverChannelStateMock.channel = "staging";
     setViewportWidth(390);
     expect(await renderAppAt("/")).toContain("mobile now");
@@ -286,5 +272,12 @@ describe("App routes", () => {
 
     setViewportWidth(390);
     expect(await renderAppAt("/#debug")).toContain("workspace page");
+  });
+
+  it("opens the mobile experience on dev", async () => {
+    serverChannelStateMock.channel = "dev";
+    setViewportWidth(390);
+
+    expect(await renderAppAt("/m/now")).toContain("mobile now");
   });
 });

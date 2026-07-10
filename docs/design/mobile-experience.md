@@ -49,13 +49,11 @@ Mobile uses explicit `/m/*` routes inside the existing React web app:
 - `/m/team` shows the mobile roster.
 - `/m/me` shows account and personal controls.
 
-The first rollout is gated by `VITE_ENABLE_MOBILE_EXPERIENCE` plus the server
-release channel. The build flag defaults off. When it is on, mobile still only
-activates against `dev` or `staging` server channels; `prod` keeps the existing
-desktop Workspace experience and `/m/*` falls back to `/`. Staging should build
-with the flag on, which enables `/m/*`, phone-width pure `/` visits redirecting
-to `/m/now`, and mobile PWA metadata. Root URLs with query or hash state stay on
-desktop as a hidden escape hatch.
+The first rollout is controlled by the server release channel. `dev` and
+`staging` enable the whole mobile experience by default: `/m/*`, phone-width
+pure `/` visits redirecting to `/m/now`, and mobile PWA metadata. `prod` keeps
+the existing desktop Workspace experience and `/m/*` falls back to `/`. Root
+URLs with query or hash state stay on desktop as a hidden escape hatch.
 
 Desktop routes are otherwise left intact. A mobile browser may still open
 desktop links, but the mobile entry point is explicit so the product can evolve

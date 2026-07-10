@@ -69,7 +69,6 @@ jobs:
             SENTRY_ORG=${{ vars.SENTRY_ORG }}
             SENTRY_PROJECT_WEB=first-tree-web
             VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
-            VITE_ENABLE_MOBILE_EXPERIENCE=${{ vars.VITE_ENABLE_MOBILE_EXPERIENCE || 'false' }}
             VITE_SENTRY_ENVIRONMENT=${{ vars.VITE_SENTRY_ENVIRONMENT || 'production' }}
           secrets: |
             SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}

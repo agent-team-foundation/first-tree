@@ -477,9 +477,6 @@ function shouldOpenMobileRoot(location: ReturnType<typeof useLocation>): boolean
 
 function useMobileExperienceState(): MobileExperienceState {
   const { channel, settled: channelSettled } = useServerChannelState();
-  if (!mobileExperienceBuildEnabled()) {
-    return { enabled: false, settled: true };
-  }
   if (!channelSettled) {
     return { enabled: false, settled: false };
   }
@@ -496,11 +493,6 @@ function MobileExperienceGate() {
       <MobileShell />
     </PulseProvider>
   );
-}
-
-function mobileExperienceBuildEnabled(): boolean {
-  const value = import.meta.env.VITE_ENABLE_MOBILE_EXPERIENCE?.trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
 function MobileExperienceHead() {
