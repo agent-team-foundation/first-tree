@@ -21,18 +21,38 @@ export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
 ];
 
 /**
- * Codex CLI model slugs baked into `@openai/codex@0.125.0` — extracted from
- * the bundled binary's config schema. ChatGPT-account auth restricts which
- * are usable at runtime (gpt-5.5 works; older slugs reject); API-key auth
- * accepts the wider set. The picker lists all and lets the runtime surface
- * actual permission errors instead of pre-validating per auth mode.
+ * Curated Codex model ids exposed by the picker. Keep this as an enum-style
+ * `as const` object (rather than a TypeScript enum) so option values stay
+ * literal-typed and easy to reuse in Zod-compatible code. Runtime config still
+ * accepts arbitrary strings: account access differs and newer model ids must
+ * remain usable before this picker is refreshed.
  */
-export const CODEX_MODEL_OPTIONS: ModelOption[] = [
-  { value: "gpt-5.5", label: "gpt-5.5", hint: "latest" },
-  { value: "gpt-5.4", label: "gpt-5.4" },
-  { value: "gpt-5.4-mini", label: "gpt-5.4-mini", hint: "fastest" },
-  { value: "gpt-5.3-codex", label: "gpt-5.3-codex", hint: "coding-specialized" },
-  { value: "gpt-5.2", label: "gpt-5.2" },
+export const CODEX_MODEL_IDS = {
+  GPT_5_6_SOL: "gpt-5.6-sol",
+  GPT_5_6_TERRA: "gpt-5.6-terra",
+  GPT_5_6_LUNA: "gpt-5.6-luna",
+  GPT_5_5: "gpt-5.5",
+  GPT_5_4: "gpt-5.4",
+  GPT_5_4_MINI: "gpt-5.4-mini",
+  GPT_5_3_CODEX: "gpt-5.3-codex",
+  GPT_5_2: "gpt-5.2",
+} as const;
+
+export type CodexModelId = (typeof CODEX_MODEL_IDS)[keyof typeof CODEX_MODEL_IDS];
+
+export const CODEX_MODEL_OPTIONS: Array<ModelOption & { value: CodexModelId }> = [
+  { value: CODEX_MODEL_IDS.GPT_5_6_SOL, label: CODEX_MODEL_IDS.GPT_5_6_SOL, hint: "flagship" },
+  { value: CODEX_MODEL_IDS.GPT_5_6_TERRA, label: CODEX_MODEL_IDS.GPT_5_6_TERRA, hint: "balanced" },
+  { value: CODEX_MODEL_IDS.GPT_5_6_LUNA, label: CODEX_MODEL_IDS.GPT_5_6_LUNA, hint: "fastest" },
+  { value: CODEX_MODEL_IDS.GPT_5_5, label: CODEX_MODEL_IDS.GPT_5_5 },
+  { value: CODEX_MODEL_IDS.GPT_5_4, label: CODEX_MODEL_IDS.GPT_5_4 },
+  { value: CODEX_MODEL_IDS.GPT_5_4_MINI, label: CODEX_MODEL_IDS.GPT_5_4_MINI },
+  {
+    value: CODEX_MODEL_IDS.GPT_5_3_CODEX,
+    label: CODEX_MODEL_IDS.GPT_5_3_CODEX,
+    hint: "coding-specialized",
+  },
+  { value: CODEX_MODEL_IDS.GPT_5_2, label: CODEX_MODEL_IDS.GPT_5_2 },
 ];
 
 const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
