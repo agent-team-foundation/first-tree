@@ -30,19 +30,22 @@ Hosted production and staging use these commands respectively:
 
 ```bash
 # Production
-installer_tmp=$(mktemp "${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && sh "$installer_tmp" &&
-~/.local/bin/first-tree login <connect-code>)
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-code>
 
 # Staging
-installer_tmp=$(mktemp "${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; curl -fsSL https://download.first-tree.ai/releases/staging/install.sh -o "$installer_tmp" && sh "$installer_tmp" &&
-~/.local/bin/first-tree-staging login <connect-code>)
+curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+~/.local/bin/first-tree-staging login <connect-code>
 ```
 
 Use the exact command from the web console for self-hosted deployments. It
 includes the server and download-base overrides when they differ from the
-hosted channel defaults. The success chain only logs in after installation
-completes and removes the temporary installer on exit. The explicit
-`~/.local/bin` path works before the current shell reloads its `PATH`.
+hosted channel defaults. The two lines are intentionally independent and do
+not provide shell-level transaction protection: when pasted together, an
+install-line failure does not automatically prevent the login line from
+running, and POSIX `sh` does not guarantee that `curl | sh` preserves a `curl`
+failure status. The explicit `~/.local/bin` path works before the current shell
+reloads its `PATH`.
 
 Local development continues to use the source checkout:
 

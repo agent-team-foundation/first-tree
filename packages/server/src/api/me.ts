@@ -108,11 +108,7 @@ function buildPortableBootstrapCommand(options: {
     defaultServerUrl: options.defaultServerUrl,
   });
 
-  return [
-    `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; ` +
-      `curl -fsSL ${installerUrl} -o "$installer_tmp" && ${installerEnv}sh "$installer_tmp" &&`,
-    `${loginCommand})`,
-  ].join("\n");
+  return [`curl -fsSL ${installerUrl} | ${installerEnv}sh`, loginCommand].join("\n");
 }
 
 /**

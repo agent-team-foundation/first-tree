@@ -751,9 +751,8 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
       selectedRuntime: "claude-code",
       setSelectedRuntime: () => undefined,
       cliCommand:
-        `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
-        "(trap 'rm -f \"$installer_tmp\"' 0; curl -fsSL https://download.first-tree.ai/releases/prod/install.sh " +
-        '-o "$installer_tmp" && sh "$installer_tmp" &&\n~/.local/bin/first-tree login connect-token)',
+        "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+        "~/.local/bin/first-tree login connect-token",
       tokenError: null,
       retry: () => undefined,
     },
@@ -1251,10 +1250,8 @@ describe("page SSR smoke coverage", () => {
       <>
         <CommandBox
           command={
-            `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
-            "(trap 'rm -f \"$installer_tmp\"' 0; " +
-            'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-            'sh "$installer_tmp" &&\n~/.local/bin/first-tree login token)'
+            "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+            "~/.local/bin/first-tree login token"
           }
         />
         <FlowNote tone="info">Heads up</FlowNote>

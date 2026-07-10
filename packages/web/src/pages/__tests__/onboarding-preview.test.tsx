@@ -8,11 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const PROD_BOOTSTRAP_COMMAND =
-  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
-  "(trap 'rm -f \"$installer_tmp\"' 0; " +
-  'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-  'sh "$installer_tmp" &&\n' +
-  "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6)";
+  "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+  "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 
 const authMock = vi.hoisted(() => ({ memberships: [] as unknown[] }));
 

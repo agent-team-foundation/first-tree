@@ -51,11 +51,8 @@ const DEFAULT_AGENT_NAME = "gandy assistant";
 // URL + bin name — `first-tree` on prod; see api/me.ts) so the gallery reads
 // true for design review instead of showing placeholders a real user never sees.
 const SAMPLE_CLI =
-  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
-  "(trap 'rm -f \"$installer_tmp\"' 0; " +
-  'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-  'sh "$installer_tmp" &&\n' +
-  "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6)";
+  "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+  "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 const GITHUB_ACCESS_GROUP = "GitHub access states";
 
 const NOW_ISO = new Date().toISOString();

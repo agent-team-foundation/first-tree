@@ -439,10 +439,8 @@ describe("small API route handlers", () => {
     expect(result.token).toBe(token);
     expect(result.command).toBe("first-tree login 'code'\\''$(id);x'");
     expect(result.bootstrapCommand).toBe(
-      `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
-        `(trap 'rm -f "$installer_tmp"' 0; ` +
-        'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-        `sh "$installer_tmp" &&\n~/.local/bin/first-tree login 'code'\\''$(id);x')`,
+      `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n` +
+        `~/.local/bin/first-tree login 'code'\\''$(id);x'`,
     );
     expect(result.installerUrl).toBe("https://download.first-tree.ai/releases/prod/install.sh");
     expect(result.installerUrl).not.toContain(token);
