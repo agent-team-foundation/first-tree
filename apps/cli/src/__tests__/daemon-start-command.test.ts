@@ -54,6 +54,7 @@ const failMock = vi.hoisted(() =>
 vi.mock("@first-tree/client", () => ({
   ...clientMocks,
   ClientOrgMismatchError: class ClientOrgMismatchError extends Error {},
+  ClientRetiredError: class ClientRetiredError extends Error {},
   ClientUserMismatchError: class ClientUserMismatchError extends Error {},
 }));
 
@@ -725,6 +726,26 @@ describe("daemon start command", () => {
 
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "error" });
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("client.yaml is not accepted"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <code>"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
+    expect(output()).toBe("");
+  });
+
+  it("logs service-mode retired client through error-level logger with reset recovery", async () => {
+    const daemonLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    clientMocks.createLogger.mockReturnValue(daemonLogger);
+    writeFileSync(
+      join(home, "config", "client.yaml"),
+      "logLevel: error\nserver:\n  url: https://first-tree.example\nclient:\n  id: client_1234abcd\n",
+    );
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    const client = await import("@first-tree/client");
+    runtimeInstance.start.mockRejectedValueOnce(new client.ClientRetiredError("client retired"));
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "error" });
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("client identity has been retired"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <code>"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
     expect(output()).toBe("");

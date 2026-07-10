@@ -361,7 +361,7 @@ describe("task scheduler final branch coverage", () => {
 
   it("summarizes a long residual supervisor command after cleanup times out", async () => {
     const process = supervisorJson(777, { Name: 123, CommandLine: "x".repeat(220) });
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(6001);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(70_001);
     queuePowershell([taskMissing()], [], [out(process), out(process)]);
     const taskScheduler = await backend();
 
