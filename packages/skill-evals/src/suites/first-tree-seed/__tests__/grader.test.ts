@@ -40,6 +40,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     sourceRepoChanged: false,
     sourceWorktreeAccessObserved: true,
     sourceWorktreeCreated: true,
+    sourceWorktreeMaterializedObserved: true,
     treeInitObserved: false,
     treeInitWithContextTreeDirObserved: false,
     workspaceManifestReadObserved: true,
@@ -245,6 +246,8 @@ describe("first-tree-seed grader", () => {
             event: {
               aggregated_output: "# Apollo Console\nApproved Phase 1 skeleton.",
               command: "sed -n '1,120p' context-tree/NODE.md",
+              exit_code: 0,
+              status: "completed",
               type: "command_execution",
             },
             type: "codex_event",
@@ -471,6 +474,87 @@ describe("first-tree-seed grader", () => {
     expect(buildGrading(evalCase, metrics, true).scores.process_pass).toBe(true);
   });
 
+  it("does not pass cleanup when worktree materialization and source reads only failed", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-failed-worktree-attempt-"));
+    try {
+      const derived = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "fatal: invalid reference: origin/main",
+              command: "git -C source-repos/source-repo worktree add worktrees/seed-source-repo origin/main",
+              exit_code: 128,
+              status: "failed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              aggregated_output: "cat: worktrees/seed-source-repo/README.md: No such file or directory",
+              command: "cat worktrees/seed-source-repo/README.md",
+              exit_code: 1,
+              status: "failed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(derived.sourceWorktreeAccessObserved).toBe(true);
+      expect(derived.sourceWorktreeMaterializedObserved).toBe(false);
+      expect(derived.sourceEvidenceReadObserved).toBe(false);
+      expect(
+        casePassed(
+          findCase("bare-source-worktree-protocol"),
+          baseMetrics({
+            sourceEvidenceReadObserved: derived.sourceEvidenceReadObserved,
+            sourceWorktreeAccessObserved: derived.sourceWorktreeAccessObserved,
+            sourceWorktreeCreated: false,
+            sourceWorktreeMaterializedObserved: derived.sourceWorktreeMaterializedObserved,
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("records a completed worktree add as successful materialization", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-successful-worktree-add-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)",
+              command: "git -C source-repos/source-repo worktree add worktrees/seed-source-repo origin/main",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("passes real first-tree periodic case when source evidence is read through a worktree", () => {
     expect(
       casePassed(
@@ -490,7 +574,10 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
+              aggregated_output: '{"name":"first-tree"}\nApollo Console runtime coordination',
               command: "cat worktrees/seed-source-repo/package.json && ls worktrees/seed-source-repo/packages",
+              exit_code: 0,
+              status: "completed",
               type: "command_execution",
             },
             type: "codex_event",
@@ -557,6 +644,8 @@ describe("first-tree-seed grader", () => {
             event: {
               aggregated_output: "# Apollo Console",
               command: "git -C source-repos/source-repo show refs/remotes/origin/main:README.md",
+              exit_code: 0,
+              status: "completed",
               type: "command_execution",
             },
             type: "codex_event",
@@ -613,6 +702,8 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command: "sed -n '1,120p' worktrees/seed-source-repo/README.md",
+              exit_code: 0,
+              status: "completed",
               type: "command_execution",
               output: "Apollo Console source evidence",
             },

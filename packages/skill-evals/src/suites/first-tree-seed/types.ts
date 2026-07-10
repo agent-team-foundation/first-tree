@@ -90,6 +90,7 @@ export type EvalMetrics = {
   // a Phase-1 add/read/cleanup sequence cannot erase it.
   sourceWorktreeAccessObserved: boolean;
   sourceWorktreeCreated: boolean;
+  sourceWorktreeMaterializedObserved: boolean;
   treeInitObserved: boolean;
   treeInitWithContextTreeDirObserved: boolean;
   workspaceManifestReadObserved: boolean;

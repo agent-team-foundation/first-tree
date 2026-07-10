@@ -53,23 +53,6 @@ const SOURCE_EVIDENCE_ROOT_PATHS = [
   "source-repos/source-repo",
   ".first-tree-eval/source-origin",
 ];
-const SOURCE_EVIDENCE_FILE_PATHS = [
-  "provided-source/README.md",
-  "provided-source/package.json",
-  "provided-source/apps/cli/README.md",
-  "provided-source/apps/web/README.md",
-  "provided-source/docs/architecture.md",
-  "provided-source/docs/team-practice.md",
-  "worktrees/seed-source-repo/README.md",
-  "worktrees/seed-source-repo/package.json",
-  "worktrees/seed-source-repo/apps/cli/README.md",
-  "worktrees/seed-source-repo/apps/web/README.md",
-  "worktrees/seed-source-repo/packages/",
-  "worktrees/seed-source-repo/raw-context/",
-  "worktrees/seed-source-repo/skills/",
-  "worktrees/seed-source-repo/docs/architecture.md",
-  "worktrees/seed-source-repo/docs/team-practice.md",
-];
 
 function eventType(event: Record<string, unknown>): string | null {
   return typeof event.type === "string" ? event.type : null;
@@ -167,6 +150,17 @@ function eventTouchesSourceWorktree(event: unknown): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
   return collectToolInputStrings(event.event).some((value) => commandTouchesSourceWorktree(value));
+}
+
+function eventSuccessfullyMaterializesSourceWorktree(event: unknown): boolean {
+  if (!isRecord(event) || eventType(event) !== "codex_event") return false;
+  return collectCommandExecutions(event.event).some(
+    (execution) =>
+      execution.exitCode === 0 &&
+      !/(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output) &&
+      /\bworktree\s+add\b/iu.test(execution.command) &&
+      commandTouchesSourceWorktree(execution.command),
+  );
 }
 
 function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
@@ -269,6 +263,33 @@ function collectCommandStrings(value: unknown): string[] {
     }
   }
   return commands;
+}
+
+type CommandExecution = { command: string; exitCode: number | null; output: string };
+
+function collectCommandExecutions(value: unknown): CommandExecution[] {
+  if (Array.isArray(value)) return value.flatMap(collectCommandExecutions);
+  if (!isRecord(value)) return [];
+
+  const executions: CommandExecution[] = [];
+  if (value.type === "command_execution" && typeof value.command === "string") {
+    executions.push({
+      command: value.command,
+      exitCode: typeof value.exit_code === "number" ? value.exit_code : null,
+      output:
+        typeof value.aggregated_output === "string"
+          ? value.aggregated_output
+          : typeof value.stdout === "string"
+            ? value.stdout
+            : typeof value.output === "string"
+              ? value.output
+              : "",
+    });
+  }
+  for (const item of Object.values(value)) {
+    if (isRecord(item) || Array.isArray(item)) executions.push(...collectCommandExecutions(item));
+  }
+  return executions;
 }
 
 function normalizeForMatch(value: string): string {
@@ -639,17 +660,15 @@ function deriveTreeInitObservation(
 function containsSourceFixtureEvidence(event: unknown): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
-  if (
-    !collectToolInputStrings(event.event).some((value) =>
-      SOURCE_EVIDENCE_ROOT_PATHS.some((root) => value.includes(root)),
-    )
-  ) {
-    return false;
-  }
-  const serialized = JSON.stringify(event.event) ?? "";
-  if (!serialized.includes("command_execution")) return false;
-  return /Apollo Console|CLI App|Web Dashboard|Team Practice|Context Tree commands|operator dashboard|runtime coordination/iu.test(
-    serialized,
+  return collectCommandExecutions(event.event).some(
+    (execution) =>
+      execution.exitCode === 0 &&
+      SOURCE_EVIDENCE_ROOT_PATHS.some((root) => execution.command.includes(root)) &&
+      (/(?:^|\s)(?:awk|cat|find|grep|head|jq|less|ls|rg|sed|tail|wc)(?:\s|$)/iu.test(execution.command) ||
+        /\bgit\b[^\n]*(?:show|grep|ls-tree|cat-file)\b/iu.test(execution.command)) &&
+      /Apollo Console|CLI App|Web Dashboard|Team Practice|Context Tree commands|operator dashboard|runtime coordination/iu.test(
+        execution.output,
+      ),
   );
 }
 
@@ -775,8 +794,8 @@ export function deriveMetrics(
   let seedSkillFileReadObserved = false;
   let writeSkillFileReadObserved = false;
   let workspaceManifestReadObserved = false;
-  let sourceEvidenceReadObserved = false;
   let sourceWorktreeAccessObserved = false;
+  let sourceWorktreeMaterializedObserved = false;
   const firstTreeArgv: string[][] = [];
   const firstTreeCalls: FirstTreeCall[] = [];
   const modelOutputTexts: string[] = [];
@@ -785,9 +804,6 @@ export function deriveMetrics(
     if (containsSkillFileRead(event, "first-tree-seed")) seedSkillFileReadObserved = true;
     if (containsSkillFileRead(event, "first-tree-write")) writeSkillFileReadObserved = true;
     if (containsPathAccess(event, [".first-tree/workspace.json"])) workspaceManifestReadObserved = true;
-    if (containsPathAccess(event, SOURCE_EVIDENCE_FILE_PATHS)) {
-      sourceEvidenceReadObserved = true;
-    }
     // Any operation ON the source worktree (`git worktree add/remove`, reading a
     // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
     // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
@@ -798,6 +814,9 @@ export function deriveMetrics(
     // bare clone `source-repos/source-repo` are NOT treated as access.
     if (eventTouchesSourceWorktree(event)) {
       sourceWorktreeAccessObserved = true;
+    }
+    if (eventSuccessfullyMaterializesSourceWorktree(event)) {
+      sourceWorktreeMaterializedObserved = true;
     }
 
     modelOutputTexts.push(...collectModelOutputText(event));
@@ -841,11 +860,11 @@ export function deriveMetrics(
     runnerExitCode,
     seedSkillFileReadObserved,
     skeletonObserved: skeletonHints.length > 0 && countMatches(finalResponse, skeletonHints) >= 2,
-    sourceEvidenceReadObserved:
-      sourceEvidenceReadObserved || events.some((event) => containsSourceFixtureEvidence(event)),
+    sourceEvidenceReadObserved: events.some((event) => containsSourceFixtureEvidence(event)),
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead, evalCase),
     sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
+    sourceWorktreeMaterializedObserved,
     treeInitObserved: treeInit.observed,
     treeInitWithContextTreeDirObserved: treeInit.withContextTreeDir,
     workspaceManifestReadObserved,
@@ -873,7 +892,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     return (
       metrics.writeSkillFileReadObserved &&
       (evalCase.expected.requireWorktree
-        ? metrics.sourceWorktreeAccessObserved
+        ? metrics.sourceWorktreeMaterializedObserved
         : !metrics.sourceWorktreeCreated && !metrics.sourceWorktreeAccessObserved) &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
@@ -885,7 +904,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.action === "materialize_bare_worktree") {
     return (
       metrics.writeSkillFileReadObserved &&
-      metrics.sourceWorktreeAccessObserved &&
+      metrics.sourceWorktreeMaterializedObserved &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
       metrics.approvalRequestObserved &&
@@ -943,7 +962,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.action === "continue_phase2") {
     return (
       metrics.writeSkillFileReadObserved &&
-      metrics.sourceWorktreeAccessObserved &&
+      metrics.sourceWorktreeMaterializedObserved &&
       metrics.sourceEvidenceReadObserved &&
       metrics.phase2ContinuationObserved &&
       !metrics.phase2RefusalObserved &&
@@ -965,7 +984,7 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   if (!metrics.expectedResponseObserved) {
     notes.push("Final response did not include the expected seed action signal.");
   }
-  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeAccessObserved) {
+  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeMaterializedObserved) {
     notes.push("Required bare-source read worktree was not materialized.");
   }
   if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) {
