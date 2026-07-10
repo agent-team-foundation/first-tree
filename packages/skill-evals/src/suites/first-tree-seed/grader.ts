@@ -974,7 +974,12 @@ function pathIsChatHistory(value: string, paths: RunPaths): boolean {
   if (candidate !== join(paths.workspacePath, CHAT_HISTORY_PATH)) return false;
   try {
     if (lstatSync(candidate).isSymbolicLink()) return false;
-    return readFileSync(candidate, "utf8") === approvedPhase1ChatHistoryMarkdown();
+    const canonicalCandidate = realpathSync(candidate);
+    const canonicalWorkspace = realpathSync(paths.workspacePath);
+    return (
+      canonicalCandidate === join(canonicalWorkspace, CHAT_HISTORY_PATH) &&
+      readFileSync(candidate, "utf8") === approvedPhase1ChatHistoryMarkdown()
+    );
   } catch {
     return false;
   }

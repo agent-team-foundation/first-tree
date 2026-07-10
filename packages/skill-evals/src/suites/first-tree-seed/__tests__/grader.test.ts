@@ -340,6 +340,39 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not credit transcript evidence through a symlinked fixture directory", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-symlinked-history-parent-"));
+    const externalEvalDir = join(tempRoot, "external-eval");
+    try {
+      mkdirSync(externalEvalDir, { recursive: true });
+      writeFileSync(join(externalEvalDir, "chat-history.md"), approvedPhase1ChatHistoryMarkdown(), "utf8");
+      symlinkSync(externalEvalDir, join(tempRoot, ".first-tree-eval"));
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: approvedPhase1ChatHistoryMarkdown(),
+              command: "cat .first-tree-eval/chat-history.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("requires proposal, approval, and PR handoff evidence from the transcript read", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-incomplete-history-"));
     try {
