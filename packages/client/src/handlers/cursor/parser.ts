@@ -1,4 +1,17 @@
-import type { SessionEvent, ToolFileRef } from "@first-tree/shared";
+import {
+  encodeProviderRetryEventMessage,
+  type ProviderRetryEventName,
+  type ReplaySafety,
+  type RuntimeProvider,
+  type SessionEvent,
+  type ToolFileRef,
+} from "@first-tree/shared";
+import {
+  buildProviderRetryEvent,
+  classifyProviderFailure,
+  decideProviderRetry,
+  type ProviderFailureClassification,
+} from "../../runtime/provider-retry-policy.js";
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint } from "../auth-error-hint.js";
 import { resolveTurnSettlement, type TurnSettlement } from "../turn-settlement.js";
@@ -26,7 +39,7 @@ import { resolveTurnSettlement, type TurnSettlement } from "../turn-settlement.j
 const RESULT_PREVIEW_LIMIT = 400;
 const ERROR_MESSAGE_LIMIT = 2000;
 
-const CURSOR_PROVIDER = "cursor";
+const CURSOR_PROVIDER: RuntimeProvider = "cursor";
 
 /** Friendly `tool_call.name` per known Cursor tool union key. */
 const TOOL_NAME_BY_UNION_KEY: Readonly<Record<string, string>> = {
@@ -60,6 +73,13 @@ export type CursorTurnState = {
   model: string | null;
   /** Tool-call `started` args captured by `call_id`, reattached on `completed`. */
   startedToolCalls: Map<string, { name: string; args: unknown }>;
+  /** `system:init` seen — the provider was reached (replay safety: provider_entered). */
+  sawInit: boolean;
+  /**
+   * A tool_call was emitted — a real side effect (edit/shell) may have run, so a
+   * no-result crash must NOT replay the turn (replay safety: user_visible).
+   */
+  sawToolEffect: boolean;
   sawResult: boolean;
   resultText: string;
   usage: CursorUsage | null;
@@ -71,6 +91,8 @@ export function createCursorTurnState(): CursorTurnState {
     sessionId: null,
     model: null,
     startedToolCalls: new Map(),
+    sawInit: false,
+    sawToolEffect: false,
     sawResult: false,
     resultText: "",
     usage: null,
@@ -115,6 +137,7 @@ export function consumeCursorEvent(state: CursorTurnState, raw: unknown): Sessio
 
 function consumeSystem(state: CursorTurnState, event: Record<string, unknown>): SessionEvent[] {
   if (getString(event, "subtype") !== "init") return [];
+  state.sawInit = true;
   state.sessionId = getString(event, "session_id") ?? state.sessionId;
   state.model = getString(event, "model") ?? state.model;
   return [];
@@ -139,11 +162,13 @@ function consumeToolCall(state: CursorTurnState, event: Record<string, unknown>)
   const args = unionValue ? unionValue.args : undefined;
 
   if (subtype === "started") {
+    state.sawToolEffect = true;
     state.startedToolCalls.set(callId, { name, args });
     return [{ kind: "tool_call", payload: { toolUseId: callId, name, args, status: "pending" } }];
   }
 
   if (subtype === "completed") {
+    state.sawToolEffect = true;
     const started = state.startedToolCalls.get(callId);
     state.startedToolCalls.delete(callId);
     const effectiveArgs = args ?? started?.args;
@@ -198,9 +223,12 @@ function consumeResult(state: CursorTurnState, event: Record<string, unknown>): 
  * consumed provider error; otherwise success.
  *
  * Without a `result` (process exited before completing — the error path):
- * classify the stderr tail. Auth / invalid-model / usage-limit are terminal
- * (consumed error, not retryable); anything else is treated as transient
- * (retry).
+ * classify the stderr tail and run it through the shared provider-retry policy
+ * with replay safety derived from turn progress. Auth / invalid-model /
+ * usage-limit are terminal (consumed error); a generic crash retries ONLY when
+ * no tool side effect / user-visible output occurred, otherwise it too settles
+ * terminal. Terminal failures also emit the encoded provider-retry event that
+ * drives SessionManager's durable chat notice.
  */
 export function finalizeCursorTurn(
   state: CursorTurnState,
@@ -235,17 +263,45 @@ export function finalizeCursorTurn(
     return { events, settlement };
   }
 
-  // No result — classify the stderr tail.
+  // No result — the process exited before completing. Route the failure through
+  // the SAME shared provider-retry policy codex uses (classify → decide →
+  // encode), so: (finding 1) a crash AFTER a tool side effect / user-visible
+  // output settles as a terminal consumed error rather than replaying the turn,
+  // and (finding 3) terminal failures emit the structured provider-retry event
+  // SessionManager turns into a durable chat notice + ACK guard.
   const kind = classifyCursorNoResult(stderrTail);
-  const trimmed = stderrTail.trim();
-  const message = buildNoResultMessage(kind, trimmed, exitCode).slice(0, ERROR_MESSAGE_LIMIT);
-  events.push({ kind: "error", payload: { source: "sdk", message } });
+  const humanMessage = buildNoResultMessage(kind, stderrTail.trim(), exitCode);
+  const replaySafety = noResultReplaySafety(state, kind);
+  const classification = classificationForNoResult(kind, humanMessage);
+  const decision = decideProviderRetry({ classification, scope: "provider_turn", attempt: 1, replaySafety });
+  const eventName: ProviderRetryEventName =
+    decision.action === "retry"
+      ? "provider_retry_scheduled"
+      : decision.terminalKind === "exhausted"
+        ? "provider_retry_exhausted"
+        : "provider_failure_terminal";
+  const retryEventPayload = buildProviderRetryEvent({
+    event: eventName,
+    provider: CURSOR_PROVIDER,
+    scope: "provider_turn",
+    classification,
+    decision,
+    messagePreview: humanMessage,
+  });
+
+  // Structured event first (SessionManager decodes this for the durable notice),
+  // then the human-readable error, then turn_end — mirroring codex's ordering.
+  events.push({
+    kind: "error",
+    payload: { source: "runtime", message: encodeProviderRetryEventMessage(retryEventPayload) },
+  });
+  events.push({ kind: "error", payload: { source: "sdk", message: humanMessage.slice(0, ERROR_MESSAGE_LIMIT) } });
   events.push({ kind: "turn_end", payload: { status: "error" } });
 
   const settlement =
-    kind === "generic"
-      ? resolveTurnSettlement({ retryReason: `cursor_exited_without_result_code_${exitCode ?? "null"}` })
-      : resolveTurnSettlement({ consumedErrorReason: consumedReasonFor(kind) });
+    decision.action === "retry"
+      ? resolveTurnSettlement({ retryReason: decision.reasonCode })
+      : resolveTurnSettlement({ consumedErrorReason: consumedReasonForDecision(decision) });
   return { events, settlement };
 }
 
@@ -256,15 +312,56 @@ export function classifyCursorNoResult(stderrTail: string): CursorNoResultKind {
   return "generic";
 }
 
-function consumedReasonFor(kind: Exclude<CursorNoResultKind, "generic">): string {
+/**
+ * Replay safety for a no-result exit. A tool_call was emitted → a side effect
+ * (edit/shell) may have run → `user_visible` (never replay). A classified
+ * provider error (auth/model/quota) means the provider WAS reached even if the
+ * `init` line was not parsed (auth exits before init) → `provider_entered`.
+ * Otherwise a pre-provider crash is safe to replay.
+ */
+function noResultReplaySafety(state: CursorTurnState, kind: CursorNoResultKind): ReplaySafety {
+  if (state.sawToolEffect) return "user_visible";
+  if (state.sawInit || kind !== "generic") return "provider_entered";
+  return "pre_provider";
+}
+
+/**
+ * Build the failure classification for a no-result exit. cursor-agent's exact
+ * stderr wordings (e.g. "Cannot use this model:") don't reliably trip the
+ * generic text classifier, so the known cases are mapped explicitly; only the
+ * generic case defers to `classifyProviderFailure`.
+ */
+function classificationForNoResult(kind: CursorNoResultKind, message: string): ProviderFailureClassification {
   switch (kind) {
     case "auth":
-      return "cursor_auth_required";
+      return { category: "credential", reasonCode: "provider_credential_required", message, sourceKind: "permanent" };
     case "invalid_model":
-      return "cursor_invalid_model";
+      return {
+        category: "configuration",
+        reasonCode: "provider_configuration_error",
+        message,
+        sourceKind: "permanent",
+      };
     case "usage_limit":
-      return "cursor_usage_limit";
+      return { category: "provider_capacity", reasonCode: "provider_usage_limit", message, sourceKind: "degraded" };
+    case "generic":
+      return classifyProviderFailure(new Error(message), {
+        provider: CURSOR_PROVIDER,
+        scope: "provider_turn",
+        source: "sdk",
+      });
   }
+}
+
+/** Map a terminal decision to the consumed-error reason, mirroring codex. */
+function consumedReasonForDecision(
+  decision: Extract<ReturnType<typeof decideProviderRetry>, { action: "stop" }>,
+): string {
+  return decision.terminalKind === "capacity_wait_required"
+    ? "capacity_wait_required"
+    : decision.terminalKind === "exhausted"
+      ? "provider_retry_exhausted"
+      : decision.reasonCode;
 }
 
 function buildNoResultMessage(kind: CursorNoResultKind, stderr: string, exitCode: number | null): string {

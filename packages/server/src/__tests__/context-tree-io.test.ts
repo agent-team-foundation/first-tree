@@ -156,6 +156,120 @@ describe("context-tree IO service", () => {
     expect(summary.agents[0]).toMatchObject({ readCount: 0, writeCount: 1, runtimeProvider: "codex" });
   });
 
+  it("derives Cursor edit (write) and read source from tool name", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const edit = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-cursor-edit",
+        name: "edit",
+        args: { path: "/tmp/tree/members/alice/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "file_change",
+            localPath: "/tmp/tree/members/alice/NODE.md",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "members/alice/NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    const read = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-cursor-read",
+        name: "read",
+        args: { path: "/tmp/tree/domains/runtime/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "domains/runtime/NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    for (const sessionEvent of [edit, read]) {
+      await recordFromSessionEvent(app.db, {
+        organizationId: seed.organizationId,
+        agentId: seed.agent.uuid,
+        chatId: seed.chatId,
+        runtimeProvider: "cursor",
+        sessionEvent,
+      });
+    }
+
+    const rows = await app.db
+      .select()
+      .from(contextTreeIoEvents)
+      .where(eq(contextTreeIoEvents.agentId, seed.agent.uuid));
+    expect(
+      rows.map((row) => ({ action: row.action, source: row.source })).sort((a, b) => a.source.localeCompare(b.source)),
+    ).toEqual([
+      { action: "write", source: "cursor_edit_tool" },
+      { action: "read", source: "cursor_read_tool" },
+    ]);
+
+    const summary = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
+    expect(summary.agents[0]).toMatchObject({ readCount: 1, writeCount: 1, runtimeProvider: "cursor" });
+  });
+
+  it("recognizes Cursor tool names in the recordability decision (not unsupported_tool)", () => {
+    const editRef = {
+      origin: "file_change" as const,
+      repoUrl: TREE_REPO,
+      repoBranch: "main",
+      repoRelativePath: "members/alice/NODE.md",
+      pathKind: "file" as const,
+    };
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "cursor",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: { toolUseId: "tu", name: "edit", args: {}, status: "ok", toolFileRefs: [editRef] },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: true });
+    // Missing refs → the cursor-specific "no_tool_file_refs", NOT "unsupported_tool".
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "cursor",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: { toolUseId: "tu2", name: "read", args: {}, status: "ok", toolFileRefs: [] },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "no_tool_file_refs" });
+    // A cursor shell reading a tree file is a supported read via classifyShellCommandIo.
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "cursor",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu3",
+            name: "shell",
+            args: { command: "cat /tmp/tree/NODE.md" },
+            status: "ok",
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).not.toMatchObject({ reason: "unsupported_tool" });
+  });
+
   it("derives Claude read and write source from tool name, not client-provided action", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();

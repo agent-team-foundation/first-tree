@@ -1,8 +1,18 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { SessionEvent } from "@first-tree/shared";
+import { type ProviderRetryEventPayload, parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { classifyCursorNoResult, consumeCursorEvent, createCursorTurnState, finalizeCursorTurn } from "./parser.js";
+
+/** Decode the structured provider-retry event SessionManager reads for the durable notice. */
+function structuredRetryEvent(events: SessionEvent[]): ProviderRetryEventPayload | null {
+  for (const event of events) {
+    if (event.kind !== "error") continue;
+    const payload = parseProviderRetryEventMessage(event.payload.message);
+    if (payload) return payload;
+  }
+  return null;
+}
 
 function fixture(name: string): string {
   return readFileSync(fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url)), "utf-8");
@@ -150,14 +160,24 @@ describe("cursor parser — no-result finalize classification", () => {
     expect(classifyCursorNoResult("network blip, please retry")).toBe("generic");
   });
 
-  it("auth → error event with a re-login hint + terminal consumed settlement", () => {
+  it("auth → structured terminal event (credential) + human hint + terminal consumed settlement", () => {
     const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, AUTH_STDERR);
-    expect(events.map((e) => e.kind)).toEqual(["error", "turn_end"]);
-    const error = events[0];
-    expect(error?.kind === "error" && error.payload.source).toBe("sdk");
-    expect(error?.kind === "error" && error.payload.message).toContain("cursor-agent login");
-    expect(error?.kind === "error" && error.payload.message).toContain("Authentication required");
-    const turnEnd = events[1];
+    // structured provider-retry event first, then the human-readable error, then turn_end.
+    expect(events.map((e) => e.kind)).toEqual(["error", "error", "turn_end"]);
+
+    // Structured event: SessionManager turns this into the durable chat notice.
+    const structured = structuredRetryEvent(events);
+    expect(structured?.event).toBe("provider_failure_terminal");
+    expect(structured?.provider).toBe("cursor");
+    expect(structured?.category).toBe("credential");
+
+    // Human-readable error carries the re-login hint.
+    const human = events.find((e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"));
+    expect(human?.kind === "error" && human.payload.source).toBe("sdk");
+    expect(human?.kind === "error" && human.payload.message).toContain("cursor-agent login");
+    expect(human?.kind === "error" && human.payload.message).toContain("Authentication required");
+
+    const turnEnd = events.find((e) => e.kind === "turn_end");
     expect(turnEnd?.kind === "turn_end" && turnEnd.payload.status).toBe("error");
     expect(settlement.action.kind).toBe("complete");
     expect(settlement.status).toBe("error");
@@ -165,27 +185,52 @@ describe("cursor parser — no-result finalize classification", () => {
     expect(settlement.action.outcome).toMatchObject({ terminal: true, completion: "consumed" });
   });
 
-  it("invalid model → error event carrying the stderr + terminal consumed settlement", () => {
+  it("invalid model → structured terminal event (configuration) + terminal consumed settlement", () => {
     const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, INVALID_MODEL_STDERR);
-    const error = events[0];
-    expect(error?.kind === "error" && error.payload.message).toBe(INVALID_MODEL_STDERR);
+    const structured = structuredRetryEvent(events);
+    expect(structured?.event).toBe("provider_failure_terminal");
+    expect(structured?.category).toBe("configuration");
+    const human = events.find((e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"));
+    expect(human?.kind === "error" && human.payload.message).toBe(INVALID_MODEL_STDERR);
     expect(settlement.action.kind).toBe("complete");
     expect(settlement.status).toBe("error");
   });
 
-  it("usage limit → error event carrying the stderr + terminal consumed settlement", () => {
-    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, USAGE_LIMIT_STDERR);
-    const error = events[0];
-    expect(error?.kind === "error" && error.payload.message).toBe(USAGE_LIMIT_STDERR);
+  it("usage limit → structured terminal event (provider_capacity) + terminal consumed settlement", () => {
+    // Usage limit implies the provider was reached → provider_entered → terminal.
+    const state = createCursorTurnState();
+    state.sawInit = true;
+    const { events, settlement } = finalizeCursorTurn(state, 1, USAGE_LIMIT_STDERR);
+    const structured = structuredRetryEvent(events);
+    expect(structured?.event).toBe("provider_failure_terminal");
+    expect(structured?.category).toBe("provider_capacity");
+    const human = events.find((e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"));
+    expect(human?.kind === "error" && human.payload.message).toBe(USAGE_LIMIT_STDERR);
     expect(settlement.action.kind).toBe("complete");
     expect(settlement.status).toBe("error");
   });
 
-  it("generic exit → error event + retryable settlement (not terminal)", () => {
+  it("generic exit with NO tool effect → retryable settlement (not terminal)", () => {
     const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 2, "");
-    const error = events[0];
-    expect(error?.kind === "error" && error.payload.message).toContain("cursor-agent exited");
+    const human = events.find((e) => e.kind === "error" && !e.payload.message.startsWith("provider.retry:"));
+    expect(human?.kind === "error" && human.payload.message).toContain("cursor-agent exited");
     expect(settlement.action.kind).toBe("retry");
+  });
+
+  it("generic exit AFTER a tool effect → terminal consumed (never replays a side effect)", () => {
+    // A tool_call already ran (edit/shell) before the CLI crashed pre-result:
+    // replay would re-apply the effect, so this must NOT retry.
+    const state = createCursorTurnState();
+    state.sawInit = true;
+    state.sawToolEffect = true;
+    const { events, settlement } = finalizeCursorTurn(state, 139, "segfault");
+    const structured = structuredRetryEvent(events);
+    expect(structured?.event).toBe("provider_failure_terminal");
+    expect(structured?.replaySafety).toBe("user_visible");
+    expect(settlement.action.kind).toBe("complete");
+    expect(settlement.status).toBe("error");
+    if (settlement.action.kind !== "complete") throw new Error("expected complete");
+    expect(settlement.action.outcome).toMatchObject({ terminal: true, completion: "consumed" });
   });
 
   it("result with is_error → consumed error settlement + error turn_end", () => {

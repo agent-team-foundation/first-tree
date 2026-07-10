@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import {
@@ -37,6 +38,21 @@ import { consumeCursorEvent, createCursorTurnState, finalizeCursorTurn } from ".
 const STDERR_TAIL_LIMIT = 8_000;
 
 /**
+ * Prefix marking a synthetic, UNCONFIRMED session id. cursor-agent mints the
+ * real session id via `system:init`; when the very first turn exits before init
+ * (e.g. broken auth) no id is captured. Rather than throw AFTER the turn has
+ * already settled the delivery (double-handling — see the start path), we return
+ * a synthetic id with this prefix. It is never replayed via `--resume` until a
+ * real init upgrades it, so a bogus resume can never re-drive a lost session.
+ */
+const SYNTHETIC_SESSION_ID_PREFIX = "cursor-pending-";
+
+/** Grace window between SIGTERM and SIGKILL when tearing a turn's child down. */
+const KILL_TERMINATE_GRACE_MS = 5_000;
+/** Upper bound on awaiting a turn's own settlement after the child is killed. */
+const KILL_FINAL_WAIT_MS = 2_000;
+
+/**
  * Cursor Handler — session-oriented handler that drives the `cursor-agent` CLI
  * via a fresh per-turn child-process spawn.
  *
@@ -67,10 +83,20 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
   const contextTreePath = readStringConfig(config.contextTreePath);
   const contextTreeRepoUrl = readStringConfig(config.contextTreeRepoUrl);
   const contextTreeBranch = readStringConfig(config.contextTreeBranch);
+  // Kill-escalation timings. Defaults are production values; a test can inject
+  // short windows to exercise SIGTERM→SIGKILL escalation without a real wait.
+  const killTerminateGraceMs = readNumberConfig(config.cursorKillTerminateGraceMs) ?? KILL_TERMINATE_GRACE_MS;
+  const killFinalWaitMs = readNumberConfig(config.cursorKillFinalWaitMs) ?? KILL_FINAL_WAIT_MS;
 
   let cwd: string | null = null;
-  /** The cursor `session_id` captured from `system:init` — replayed via `--resume`. */
+  /** The cursor `session_id` — captured from `system:init`, or a synthetic id. */
   let sessionId: string | null = null;
+  /**
+   * Whether `sessionId` was minted by cursor (`system:init`/`result`). Only a
+   * confirmed id is replayed via `--resume`; a synthetic id is never resumed
+   * (see {@link SYNTHETIC_SESSION_ID_PREFIX}).
+   */
+  let sessionConfirmed = false;
   /** Operator-configured model (empty = let the Cursor CLI choose). */
   let currentModel = "";
   let ctx: SessionContext | null = null;
@@ -170,8 +196,29 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
   function buildTurnArgs(): string[] {
     const args = ["-p", "--output-format", "stream-json", "--trust", "--force", "--sandbox", "disabled"];
     if (currentModel) args.push("--model", currentModel);
-    if (sessionId) args.push("--resume", sessionId);
+    // Only replay a CONFIRMED (cursor-minted) session id. A synthetic id from a
+    // pre-init first-turn failure must never be `--resume`d — cursor would
+    // reject it and the message would loop instead of starting fresh.
+    if (sessionId && sessionConfirmed) args.push("--resume", sessionId);
     return args;
+  }
+
+  /**
+   * Adopt the session id cursor minted this turn. When it replaces an id
+   * SessionManager already holds (a synthetic id being upgraded, or a changed
+   * real id), rebind custody via `replaceSessionId` so continuity survives.
+   */
+  function captureSessionId(state: { sessionId: string | null }, sessionCtx: SessionContext): void {
+    if (!state.sessionId) return;
+    const previous = sessionId;
+    if (previous && previous !== state.sessionId) {
+      sessionCtx.replaceSessionId?.(
+        state.sessionId,
+        sessionConfirmed ? "cursor_session_id_changed" : "cursor_session_id_assigned",
+      );
+    }
+    sessionId = state.sessionId;
+    sessionConfirmed = true;
   }
 
   /**
@@ -295,7 +342,7 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
       currentChild = null;
 
       // Capture the cursor session id assigned this turn (system:init / result).
-      if (state.sessionId) sessionId = state.sessionId;
+      captureSessionId(state, sessionCtx);
 
       if (currentTurnAborted) {
         // Deliberate suspend/shutdown kill — keep the message recoverable.
@@ -380,14 +427,25 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
     for (const queued of drained) queued.token.retry(queued.message, reason);
   }
 
+  /**
+   * Tear down the active turn's child with a bounded SIGTERM → SIGKILL
+   * escalation (`RegisteredChild.kill` sends a single signal — it does NOT
+   * escalate). Every await is deadline-bounded so a CLI that ignores SIGTERM,
+   * or a wedged stdout reader, cannot hang suspend/shutdown forever. Mirrors the
+   * codex app-server client's `shutdown()` escalation.
+   */
   async function killCurrentTurn(): Promise<void> {
     currentTurnAborted = true;
-    currentChild?.kill("SIGTERM");
-    try {
-      await currentTurnPromise;
-    } catch {
-      // The turn resolves rather than throwing; swallow defensively.
+    const child = currentChild;
+    const turn = currentTurnPromise;
+    if (child) {
+      child.kill("SIGTERM");
+      const exited = await exitedWithin(child.exited, killTerminateGraceMs);
+      if (!exited) child.kill("SIGKILL");
     }
+    // The turn promise resolves once the child exits and stdout drains; bound it
+    // so a stuck reader can't wedge the caller even after the child is gone.
+    if (turn) await raceWithTimeout(turn, killFinalWaitMs);
     currentChild = null;
     currentTurnPromise = null;
   }
@@ -418,6 +476,7 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
 
       currentModel = payload.model || "";
       sessionId = null;
+      sessionConfirmed = false;
 
       initialTurnPreparing = true;
       let initialTurnCompleted = false;
@@ -430,8 +489,17 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
         if (initialTurnCompleted) scheduleQueuedMessagesDrain();
       }
 
+      // runTurn ALWAYS settles the delivery token (complete or retry), so the
+      // turn's disposition is already authoritative. If the first turn exited
+      // before `system:init` (e.g. broken auth) no id was captured — return a
+      // synthetic UNCONFIRMED id rather than throwing, which would double-handle
+      // an already-settled inbox row. A later real init upgrades it.
       if (!sessionId) {
-        throw new Error("cursor did not assign a session id during the first turn");
+        sessionId = `${SYNTHETIC_SESSION_ID_PREFIX}${randomUUID()}`;
+        sessionConfirmed = false;
+        sessionCtx.log(
+          "cursor first turn produced no session id (pre-init exit); returning a synthetic unconfirmed id",
+        );
       }
       // Seed the briefing baseline now that the session id is known; a fresh
       // session starts in sync so a later resume only nudges on a real change.
@@ -477,6 +545,9 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
 
       currentModel = payload.model || "";
       sessionId = resumeSessionId;
+      // A synthetic id from a prior pre-init failure is NOT resumable; treat any
+      // other id as a real cursor session to replay via `--resume`.
+      sessionConfirmed = !resumeSessionId.startsWith(SYNTHETIC_SESSION_ID_PREFIX);
 
       if (message) {
         initialTurnPreparing = true;
@@ -520,6 +591,7 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
       // worktrees are all agent-scoped persistent state — NEVER deleted here.
       cwd = null;
       sessionId = null;
+      sessionConfirmed = false;
       ctx = null;
       initialTurnPreparing = false;
       pendingChatContextPrompt = null;
@@ -530,4 +602,48 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
 
 function readStringConfig(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function readNumberConfig(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Resolve `true` if `exited` settles within `ms`, else `false` (unref'd timer). */
+function exitedWithin(exited: Promise<void>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, ms);
+    timer.unref?.();
+    void exited.then(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+/** Await `promise` but give up after `ms` so a wedged turn can't hang teardown. */
+function raceWithTimeout(promise: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    }, ms);
+    timer.unref?.();
+    void Promise.resolve(promise)
+      .catch(() => {})
+      .then(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      });
+  });
 }

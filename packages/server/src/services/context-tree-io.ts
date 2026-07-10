@@ -47,6 +47,11 @@ const CONTEXT_TREE_IO_TOOL_NAMES = [
   "Write",
   "command",
   "file_change",
+  // Cursor tool names (see the cursor handler parser): edit/read carry
+  // toolFileRefs; shell is classified via classifyShellCommandIo like codex.
+  "edit",
+  "read",
+  "shell",
 ];
 const log = createLogger("ContextTreeIo");
 const GIT_STATUS_DELTA_REF_ORIGIN = "git_status_delta";
@@ -184,7 +189,9 @@ function shellToolCanRead(event: SessionEvent): boolean {
 
 function isShellTool(runtimeProvider: string, toolName: string): boolean {
   return (
-    (runtimeProvider === "codex" && toolName === "command") || (isClaudeRuntime(runtimeProvider) && toolName === "Bash")
+    (runtimeProvider === "codex" && toolName === "command") ||
+    (runtimeProvider === "cursor" && toolName === "shell") ||
+    (isClaudeRuntime(runtimeProvider) && toolName === "Bash")
   );
 }
 
@@ -216,6 +223,9 @@ function skippedDecisionFastPathForNoRefs(
   if (runtimeProvider === "codex" && toolName === "file_change") {
     return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
   }
+  if (runtimeProvider === "cursor" && (toolName === "edit" || toolName === "read")) {
+    return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
+  }
   if (isClaudeRuntime(runtimeProvider) && (CLAUDE_READ_TOOLS.has(toolName) || CLAUDE_WRITE_TOOLS.has(toolName))) {
     return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
   }
@@ -239,6 +249,12 @@ function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDer
   const toolName = event.payload.name;
   if (runtimeProvider === "codex" && toolName === "file_change") {
     return { action: "write", source: "codex_file_change" };
+  }
+  if (runtimeProvider === "cursor" && toolName === "edit") {
+    return { action: "write", source: "cursor_edit_tool" };
+  }
+  if (runtimeProvider === "cursor" && toolName === "read") {
+    return { action: "read", source: "cursor_read_tool" };
   }
   if (isClaudeRuntime(runtimeProvider) && CLAUDE_READ_TOOLS.has(toolName)) {
     return { action: "read", source: "claude_read_tool" };
