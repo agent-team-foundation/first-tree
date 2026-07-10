@@ -11,6 +11,7 @@ import {
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
+import { findAttachmentFile } from "../runtime/attachment-store.js";
 import type { ContextTreeBinding } from "../runtime/bootstrap.js";
 import type {
   AgentHandler,
@@ -546,6 +547,55 @@ describe("SessionManager additional delivery token and payload coverage", () => 
     expect(ackEntry).toHaveBeenCalledWith(403);
 
     await sm.shutdown();
+  });
+
+  it("downloads document attachment refs to the local files store before routing", async () => {
+    const home = mkdtempSync(join(tmpdir(), "session-manager-attachments-"));
+    vi.stubEnv("FIRST_TREE_HOME", home);
+    try {
+      const fetchAttachment = vi.fn().mockResolvedValue({ bytes: Buffer.from("a,b\n1,2") });
+      const sdk = mockSdk({ fetchAttachment });
+      let capturedMessage: SessionMessage | undefined;
+      const handler = createMockHandler({
+        start: vi.fn(async (message) => {
+          capturedMessage = message;
+          return "session-id-mock";
+        }),
+      });
+      const sm = createSessionManager({ handler, sdk });
+      const attachmentId = "11111111-1111-4111-8111-111111111111";
+
+      await sm.dispatch(
+        mockEntry({
+          id: 404,
+          chatId: "chat-doc-attachment",
+          messageId: "msg-doc-attachment",
+          metadata: {
+            attachments: [
+              {
+                attachmentId,
+                kind: "file",
+                mimeType: "text/csv",
+                filename: "evidence.csv",
+                size: 7,
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(fetchAttachment).toHaveBeenCalledWith({ id: attachmentId });
+      const path = findAttachmentFile("chat-doc-attachment", attachmentId, "evidence.csv");
+      expect(path).not.toBeNull();
+      if (!path) throw new Error("attachment file missing");
+      expect(readFileSync(path, "utf-8")).toBe("a,b\n1,2");
+      expect(capturedMessage?.metadata).toMatchObject({ attachments: [{ attachmentId, filename: "evidence.csv" }] });
+
+      await sm.shutdown();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("routes malformed file payloads without eager attachment fetches", async () => {

@@ -17,19 +17,35 @@ import { apiFetchRaw, withOrg } from "./client.js";
  * user-visible filename shown in chat comes from the message ref (JSON body),
  * not this header — the header only feeds the download `Content-Disposition`.
  */
-export async function uploadImageAttachment(file: File): Promise<UploadAttachmentResponse> {
+/**
+ * Best-effort MIME for an upload: browsers leave `File.type` empty for several
+ * text-native formats (`.md`, `.csv`, source files). The server requires a
+ * non-empty MIME and stores it verbatim, and a message's `AttachmentRef` must
+ * declare the SAME value it was stored with, so both the upload header and the
+ * ref derive their MIME from this one deterministic function. Kind/rendering is
+ * driven by the filename extension, not this MIME, so the octet-stream fallback
+ * is harmless.
+ */
+export function uploadMimeFor(file: File): string {
+  return file.type || "application/octet-stream";
+}
+
+export async function uploadAttachment(file: File): Promise<UploadAttachmentResponse> {
   const bytes = await file.arrayBuffer();
   const res = await apiFetchRaw(withOrg("/attachments"), {
     method: "POST",
     body: bytes,
     headers: {
       "Content-Type": "application/octet-stream",
-      [ATTACHMENT_MIME_HEADER]: file.type,
+      [ATTACHMENT_MIME_HEADER]: uploadMimeFor(file),
       [ATTACHMENT_FILENAME_HEADER]: encodeURIComponent(file.name),
     },
   });
   return uploadAttachmentResponseSchema.parse(await res.json());
 }
+
+/** @deprecated Use {@link uploadAttachment}; the primitive is not image-specific. */
+export const uploadImageAttachment = uploadAttachment;
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {

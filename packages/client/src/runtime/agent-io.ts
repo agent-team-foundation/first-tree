@@ -1,6 +1,7 @@
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import {
+  attachmentRefsFromMetadata,
   type ChatParticipantDetail,
   extractCaption,
   type ImageRefContent,
@@ -8,6 +9,7 @@ import {
   isImageRefContent,
 } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { findAttachmentFile } from "./attachment-store.js";
 import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity, SessionMessage } from "./handler.js";
 import { findImagePath } from "./image-store.js";
@@ -300,12 +302,42 @@ export async function buildFromHeader(message: SessionMessage, participants: Par
  * attachments}` JSON.
  */
 function renderForLLM(message: SessionMessage): string {
-  if (typeof message.content === "string") return message.content;
-  if (message.format === "file") {
-    const rendered = renderFileMessageForLLM(message);
-    if (rendered !== null) return rendered;
+  let base: string;
+  if (typeof message.content === "string") {
+    base = message.content;
+  } else if (message.format === "file") {
+    base = renderFileMessageForLLM(message) ?? JSON.stringify(message.content);
+  } else {
+    base = JSON.stringify(message.content);
   }
-  return JSON.stringify(message.content);
+  // Document/file attachments ride metadata.attachments on any format — append
+  // their on-disk paths so a shell-capable agent can open them.
+  const docNote = renderDocumentAttachmentsForLLM(message);
+  if (!docNote) return base;
+  return base.length > 0 ? `${base}\n\n${docNote}` : docNote;
+}
+
+/**
+ * A text note listing the on-disk paths of any document/file attachments on
+ * this message (`metadata.attachments`, non-image), so a shell-capable agent
+ * can open them. Returns null when there are none. Images are handled
+ * separately — they ride `content`.
+ */
+export function renderDocumentAttachmentsForLLM(message: SessionMessage): string | null {
+  const refs = attachmentRefsFromMetadata(message.metadata ?? undefined).filter((ref) => ref.kind !== "image");
+  if (refs.length === 0) return null;
+  const lines: string[] = [
+    refs.length === 1
+      ? "A file was shared in this chat. Open it before responding — use the Read tool for text/PDF, or a shell parser (e.g. python) for spreadsheets / office documents."
+      : `${refs.length} files were shared in this chat. Open each before responding — use the Read tool for text/PDF, or a shell parser (e.g. python) for spreadsheets / office documents.`,
+  ];
+  for (const ref of refs) {
+    const path = findAttachmentFile(message.chatId, ref.attachmentId, ref.filename);
+    lines.push(
+      path ? `\nFilename: ${ref.filename}\nPath: ${path}` : `\n[File "${ref.filename}" not available on this device]`,
+    );
+  }
+  return lines.join("\n");
 }
 
 /** Return a text rendering for a file message's content, or null when the

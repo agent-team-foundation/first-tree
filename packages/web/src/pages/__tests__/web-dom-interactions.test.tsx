@@ -39,7 +39,9 @@ const agentConfigMocks = vi.hoisted(() => ({
 }));
 
 const attachmentMocks = vi.hoisted(() => ({
+  uploadAttachment: vi.fn(),
   uploadImageAttachment: vi.fn(),
+  uploadMimeFor: vi.fn((file: File) => file.type || "application/octet-stream"),
 }));
 
 const chatApiMocks = vi.hoisted(() => ({
@@ -683,7 +685,15 @@ beforeEach(() => {
     updatedAt: NOW,
     updatedBy: "member-self",
   });
-  attachmentMocks.uploadImageAttachment.mockResolvedValue({ id: "uploaded-image", mimeType: "image/png", size: 3 });
+  attachmentMocks.uploadAttachment.mockImplementation(async (file: File) => ({
+    id: file.name === "brief.pdf" ? "11111111-1111-4111-8111-111111111111" : "uploaded-image",
+    mimeType: file.type || "application/octet-stream",
+    filename: file.name,
+    sizeBytes: file.size,
+    uploadedBy: "member-self",
+    createdAt: NOW,
+  }));
+  attachmentMocks.uploadImageAttachment.mockImplementation((file: File) => attachmentMocks.uploadAttachment(file));
   chatApiMocks.createAgentChat.mockResolvedValue({ id: "chat-onboarding" });
   chatApiMocks.readFileAsBase64.mockResolvedValue("base64");
   chatApiMocks.sendChatMessage.mockResolvedValue(undefined);
@@ -1115,7 +1125,7 @@ describe("web DOM interaction coverage", () => {
     await setValue(textarea, "@design image attached");
     await keyDown(textarea, "Enter");
     await waitForCondition(() => meChatMocks.createMeTaskChat.mock.calls.length > 0, "Expected image task create");
-    expect(attachmentMocks.uploadImageAttachment).toHaveBeenCalledWith(dropped);
+    expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(dropped);
     expect(imageStoreMocks.putImage).toHaveBeenCalledWith({
       imageId: "uploaded-image",
       base64: "base64",
@@ -1168,6 +1178,47 @@ describe("web DOM interaction coverage", () => {
     });
     expect(onCreated).toHaveBeenCalledWith("image-only-chat");
     await unmountRoot(imageOnly.root);
+
+    meChatMocks.createMeTaskChat.mockClear();
+    meChatMocks.createMeTaskChat.mockResolvedValueOnce({ chatId: "document-only-chat" });
+    const documentOnly = await renderDom(<NewChatDraft onCreated={onCreated} initialParticipantIds={["agent-1"]} />);
+    await waitForText("Nova", documentOnly.container);
+    const documentOnlyInput = documentOnly.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!documentOnlyInput) throw new Error("Document-only file input missing");
+    const documentFile = new File(["pdf"], "brief.pdf", { type: "application/pdf" });
+    await changeFiles(documentOnlyInput, [documentFile]);
+    await waitForText("brief.pdf", documentOnly.container);
+    await click(documentOnly.container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(
+      () => meChatMocks.createMeTaskChat.mock.calls.length > 0,
+      "Expected document-only task create",
+    );
+    expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(documentFile);
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-1"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "",
+        metadata: {
+          attachments: [
+            {
+              attachmentId: "11111111-1111-4111-8111-111111111111",
+              kind: "file",
+              mimeType: "application/pdf",
+              filename: "brief.pdf",
+              size: 3,
+            },
+          ],
+        },
+        source: "web",
+      },
+    });
+    expect(onCreated).toHaveBeenCalledWith("document-only-chat");
+    await unmountRoot(documentOnly.root);
   });
 
   it("searches, keyboard-selects, and closes AddParticipantDropdown", async () => {

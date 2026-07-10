@@ -11,6 +11,7 @@ import type {
   SessionState,
 } from "@first-tree/shared";
 import {
+  attachmentRefsFromMetadata,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
   isImageBatchRefContent,
@@ -29,6 +30,7 @@ import {
   formatInboundContent,
   resolveSenderLabel,
 } from "./agent-io.js";
+import { findAttachmentFile, writeAttachmentFile } from "./attachment-store.js";
 import { type ContextTreeBinding, resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { reresolveUnboundTree } from "./context-tree-rebind.js";
@@ -626,16 +628,16 @@ export class SessionManager {
    * degrades to a placeholder for any ref that didn't land.
    */
   private async ensureImagesLocal(message: SessionMessage): Promise<void> {
-    if (message.format !== "file") return;
-    const refs = isImageBatchRefContent(message.content)
-      ? message.content.attachments
-      : isImageRefContent(message.content)
-        ? [message.content]
-        : [];
-    if (refs.length === 0) return;
-
+    // Images: refs in `content` on a `format: "file"` message. Written under
+    // the images dir and handed to the model as a path to Read.
+    const imageRefs =
+      message.format === "file" && isImageBatchRefContent(message.content)
+        ? message.content.attachments
+        : message.format === "file" && isImageRefContent(message.content)
+          ? [message.content]
+          : [];
     await Promise.all(
-      refs.map(async (ref) => {
+      imageRefs.map(async (ref) => {
         if (findImagePath(message.chatId, ref.imageId, ref.mimeType)) return;
         try {
           const { bytes } = await this.config.sdk.fetchAttachment({ id: ref.imageId });
@@ -649,6 +651,31 @@ export class SessionManager {
           this.config.log.warn(
             { chatId: message.chatId, imageId: ref.imageId, err },
             "eager image fetch failed — message will render a placeholder",
+          );
+        }
+      }),
+    );
+
+    // Documents/files: generic refs in `metadata.attachments`, any format.
+    // Written under the files dir keyed by their real filename so the handler
+    // can hand the model an on-disk path to Read. A no-op for messages without
+    // document attachments (the common case).
+    const docRefs = attachmentRefsFromMetadata(message.metadata ?? undefined).filter((ref) => ref.kind !== "image");
+    await Promise.all(
+      docRefs.map(async (ref) => {
+        if (findAttachmentFile(message.chatId, ref.attachmentId, ref.filename)) return;
+        try {
+          const { bytes } = await this.config.sdk.fetchAttachment({ id: ref.attachmentId });
+          await writeAttachmentFile({
+            chatId: message.chatId,
+            attachmentId: ref.attachmentId,
+            filename: ref.filename,
+            base64: bytes.toString("base64"),
+          });
+        } catch (err) {
+          this.config.log.warn(
+            { chatId: message.chatId, attachmentId: ref.attachmentId, err },
+            "eager attachment fetch failed — agent will not see this file",
           );
         }
       }),

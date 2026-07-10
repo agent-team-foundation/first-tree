@@ -221,6 +221,135 @@ describe("shared setup hooks", () => {
     expect(expectHookValue(latest.current).selectedRuntime).toBe("codex");
   });
 
+  it("keeps prior runtime choice and falls back to enabled future providers after transient capability failures", async () => {
+    const latest = { current: null as ComputerConnection | null };
+    const client = {
+      id: "client-1",
+      userId: "user-self",
+      status: "connected",
+      authState: "ok",
+      binName: "first-tree-dev",
+      sdkVersion: "0.5.0",
+      hostname: "gandy-macbook",
+      os: "darwin",
+      agentCount: 0,
+      connectedAt: "2026-05-28T00:00:00.000Z",
+      lastSeenAt: "2026-05-28T12:00:00.000Z",
+      capabilities: {},
+    };
+    activityMocks.listClients.mockResolvedValue([client]);
+    activityMocks.getClientCapabilities.mockRejectedValueOnce(new Error("capabilities offline")).mockResolvedValue({
+      ...client,
+      capabilities: {
+        "claude-code-tui": {
+          state: "ok",
+          available: true,
+          detectedAt: "2026-05-28T12:00:00.000Z",
+        },
+        "future-provider": {
+          state: "ok",
+          available: true,
+          detectedAt: "2026-05-28T12:00:00.000Z",
+        },
+      },
+    });
+
+    function Probe() {
+      latest.current = useComputerConnection(true);
+      return <div>{latest.current.selectedRuntime ?? "none"}</div>;
+    }
+
+    await renderProbe(<Probe />);
+    await flush();
+    await flush();
+
+    expect(expectHookValue(latest.current).capabilitiesLoaded).toBe(false);
+
+    const tick = visibilityMocks.runVisibilityAwareInterval.mock.calls[0]?.[0];
+    if (!tick) throw new Error("visibility-aware interval was not registered");
+    await act(async () => {
+      await tick();
+    });
+    await flush();
+
+    expect(expectHookValue(latest.current).capabilitiesLoaded).toBe(true);
+    expect(expectHookValue(latest.current).okRuntimes).toEqual(["future-provider"]);
+    expect(expectHookValue(latest.current).selectedRuntime).toBe("future-provider");
+
+    await act(async () => expectHookValue(latest.current).setSelectedRuntime("future-provider"));
+    activityMocks.getClientCapabilities.mockResolvedValueOnce({
+      ...client,
+      capabilities: {
+        "future-provider": {
+          state: "ok",
+          available: true,
+          detectedAt: "2026-05-28T12:00:05.000Z",
+        },
+        codex: {
+          state: "ok",
+          available: true,
+          detectedAt: "2026-05-28T12:00:05.000Z",
+        },
+      },
+    });
+    await act(async () => {
+      await tick();
+    });
+    await flush();
+
+    expect(expectHookValue(latest.current).selectedRuntime).toBe("future-provider");
+  });
+
+  it("mints connect commands, surfaces final token failures, and retries manually", async () => {
+    const latest = { current: null as ComputerConnection | null };
+    activityMocks.listClients.mockResolvedValue([]);
+    clientMocks.api.post
+      .mockResolvedValueOnce({
+        token: "token-1",
+        expiresIn: 600,
+        command: "first-tree-dev login token-1",
+        bootstrapCommand: "first-tree-dev login token-1",
+        npmSpec: null,
+        binName: "first-tree-dev",
+      })
+      .mockRejectedValueOnce(new Error("token retry failed"))
+      .mockRejectedValueOnce("still down")
+      .mockRejectedValueOnce(new Error("token failed"))
+      .mockResolvedValueOnce({
+        token: "token-2",
+        expiresIn: 600,
+        command: "first-tree-dev login token-2",
+        bootstrapCommand: "first-tree-dev login token-2",
+        npmSpec: null,
+        binName: "first-tree-dev",
+      });
+
+    function Probe() {
+      latest.current = useComputerConnection(true);
+      return <div>{latest.current.cliCommand ?? latest.current.tokenError ?? "pending"}</div>;
+    }
+
+    await renderProbe(<Probe />);
+    await flush();
+    await flush();
+
+    expect(expectHookValue(latest.current).cliCommand).toBe("first-tree-dev login token-1");
+
+    await act(async () => expectHookValue(latest.current).retry());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2400));
+    });
+
+    expect(expectHookValue(latest.current).tokenError).toBe("token failed");
+
+    await act(async () => expectHookValue(latest.current).retry());
+    await flush();
+    await flush();
+
+    expect(expectHookValue(latest.current).cliCommand).toBe("first-tree-dev login token-2");
+    expect(expectHookValue(latest.current).tokenError).toBeNull();
+  }, 10_000);
+
   it("creates an agent and reports lifecycle through callbacks only", async () => {
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };
     const onOnline = vi.fn();

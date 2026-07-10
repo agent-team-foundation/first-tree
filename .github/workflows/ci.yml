@@ -134,6 +134,12 @@ jobs:
           --health-retries 10
     env:
       CI_DATABASE_URL: postgres://test:test@localhost:5432/test
+      # GitHub-hosted runners are ~7GB. Node's default heap is ~4GB/process;
+      # stacking turbo package suites + multi-fork vitest OOM'd CLI workers
+      # (Mark-Compact ~4057MB, then tinypool `Channel closed`). Cap forks
+      # package-wide; the steps below also limit turbo concurrency and run
+      # the CLI suite alone so it never shares the runner with server/web.
+      VITEST_MAX_FORKS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -159,7 +165,12 @@ jobs:
       # all 233 tests passed. Building before vitest starts keeps the
       # heavy work outside the worker IPC window.
       - run: pnpm build
-      - run: pnpm test
+      # Keep a single `vitest run` per package (no multi-batch shell chains).
+      # Memory isolation is: turbo concurrency + VITEST_MAX_FORKS + CLI last.
+      - name: Test packages (excluding CLI)
+        run: pnpm exec turbo run test --filter='!first-tree-dev' --concurrency=2
+      - name: Test CLI
+        run: pnpm --filter first-tree-dev test
 
   portable-smoke:
     name: Portable CLI Smoke
