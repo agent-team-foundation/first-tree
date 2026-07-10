@@ -128,7 +128,13 @@ describe("MobileTeamPage", () => {
     await harness.waitFor(() => expect(harness.container.textContent).toContain("Gandy (you)"));
 
     expect(harness.container.querySelector('a[href="/m/chat?c=draft&with=human-agent-self"]')).toBeNull();
-    expect(harness.container.querySelector('a[href="/m/chat?c=draft&with=human-agent-teammate"]')).not.toBeNull();
+    const teammateCard = harness.container.querySelector('a[href="/m/chat?c=draft&with=human-agent-teammate"]');
+    expect(teammateCard).not.toBeNull();
     expect(harness.container.querySelector('a[href="/m/chat?c=draft&with=agent-1"]')).not.toBeNull();
+
+    // Q1: the whole card is the tap target — the title lives inside the anchor,
+    // and the separate chat-icon button is gone.
+    expect(teammateCard?.textContent).toContain("Teammate");
+    expect(harness.container.querySelector('button[aria-label^="Chat with"]')).toBeNull();
   });
 });

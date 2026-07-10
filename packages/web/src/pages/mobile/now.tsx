@@ -21,7 +21,13 @@ export function MobileNowPage() {
     refetchInterval: 30_000,
   });
 
-  const sortedRows = sortMobileChats(chatsQuery.data?.rows ?? []);
+  // Now is a needs-attention feed, not the full chat list: keep only chats with
+  // an active signal (failed agent, open request, unread mention, working) and
+  // drop `idle` (quiet / watching-only) chats. Ordering stays the canonical
+  // attention order; the complete list lives in the Chat tab.
+  const sortedRows = sortMobileChats(chatsQuery.data?.rows ?? []).filter(
+    (row) => mobileChatSignal(row).tone !== "idle",
+  );
 
   return (
     <MobilePage className="flex flex-col" padded>
@@ -44,7 +50,10 @@ export function MobileNowPage() {
       ) : chatsQuery.error ? (
         <MobileSystemState title="Failed to load work" detail={formatError(chatsQuery.error)} tone="error" />
       ) : sortedRows.length === 0 ? (
-        <MobileSystemState title="Nothing active" detail="Start a chat when you are ready." />
+        <MobileSystemState
+          title="You're all caught up"
+          detail="Asks, failures, and updates show up here. Find every chat in Chat."
+        />
       ) : (
         <div className="flex flex-col" style={{ gap: "var(--sp-2)" }} data-mobile-feed>
           {sortedRows.map((row) => (

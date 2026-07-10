@@ -156,19 +156,21 @@ describe("mobile density tiers", () => {
     const feed = harness.container.querySelector("[data-mobile-feed]");
     if (!feed) throw new Error("Missing Now feed");
     const feedCards = [...feed.querySelectorAll<HTMLElement>('[data-mobile-card="feed"]')];
-    expect(feedCards).toHaveLength(3);
+    // Now is signal-filtered: the `idle` "Recent update" row is dropped, leaving
+    // the question (priority) and working (feed) cards.
+    expect(feedCards).toHaveLength(2);
     expect(feedCards[0]?.textContent).toContain("Release readiness");
     expect(feedCards[0]?.getAttribute("style")).toContain("min-height: var(--sp-45)");
     expect(feedCards[1]?.getAttribute("style")).toContain("min-height: var(--sp-35)");
     expect(feedCards[0]?.querySelector("[data-mobile-card-title]")?.className).toContain("text-mobile-title");
     expect(feedCards[0]?.querySelector("[data-mobile-card-preview]")?.className).toContain("text-mobile-body");
     const labels = [...feed.querySelectorAll("[data-mobile-signal-label]")].map((label) => label.textContent);
-    expect(labels).toEqual(["Question waiting", "Working now", "Recent update"]);
+    expect(labels).toEqual(["Question waiting", "Working now"]);
     expect(feedCards[0]?.querySelector("[data-mobile-signal-label]")?.className).toContain("truncate");
     expect(feedCards[0]?.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
     expect(feedCards[1]?.querySelector("[data-mobile-primary-action]")).toBeNull();
-    expect(feedCards[2]?.querySelector("[data-mobile-primary-action]")).toBeNull();
     expect(feed.querySelector('[data-mobile-card="list"]')).toBeNull();
+    expect(harness.container.textContent).not.toContain("Recent update");
   });
 
   it("renders Chat rows as medium list cards, not full feed cards", async () => {

@@ -1,13 +1,11 @@
 import type { Agent } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { MessageSquareText } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { listAgents, listAllAgents } from "../../api/agents.js";
 import { listMembers } from "../../api/members.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Avatar } from "../../components/avatar.js";
-import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { formatRelative } from "../../lib/utils.js";
@@ -164,15 +162,12 @@ function MobileTeamRow({
   meta: ReactNode;
   chatTarget: string | null;
 }) {
-  return (
-    <div
-      className="flex items-center"
-      style={{
-        ...mobileCardStyle("panel"),
-        gap: "var(--sp-3)",
-      }}
-      data-mobile-card="panel"
-    >
+  const cardStyle = {
+    ...mobileCardStyle("panel"),
+    gap: "var(--sp-3)",
+  };
+  const body = (
+    <>
       <div className="shrink-0">{avatar}</div>
       <div className="min-w-0" style={{ flex: 1 }}>
         <p className="text-mobile-subtitle truncate" style={{ color: "var(--fg)", margin: 0 }}>
@@ -183,14 +178,28 @@ function MobileTeamRow({
         </p>
         <div style={{ marginTop: "var(--sp-1)" }}>{meta}</div>
       </div>
-      {chatTarget ? (
-        <Button asChild size="icon" variant="outline" aria-label={`Chat with ${title}`}>
-          <Link to={`/m/chat?c=draft&with=${encodeURIComponent(chatTarget)}`}>
-            <MessageSquareText className="h-4 w-4" />
-          </Link>
-        </Button>
-      ) : null}
-    </div>
+    </>
+  );
+  // The whole card is the tap target — start/open a chat with this teammate.
+  // Self (chatTarget null) has nothing to chat with, so it stays a plain,
+  // non-interactive row.
+  if (!chatTarget) {
+    return (
+      <div className="flex items-center" style={cardStyle} data-mobile-card="panel">
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Link
+      to={`/m/chat?c=draft&with=${encodeURIComponent(chatTarget)}`}
+      aria-label={`Chat with ${title}`}
+      className="flex items-center transition-colors hover:bg-[var(--bg-hover)]"
+      style={{ ...cardStyle, color: "var(--fg)", textDecoration: "none" }}
+      data-mobile-card="panel"
+    >
+      {body}
+    </Link>
   );
 }
 

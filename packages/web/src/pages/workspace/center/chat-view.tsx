@@ -20,6 +20,7 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   ArrowUp,
   AtSign,
   Check,
@@ -3584,8 +3585,12 @@ export function ChatView({
                 <button
                   type="button"
                   onClick={onShowConversations}
-                  aria-label="Show conversations"
-                  title="Show conversations"
+                  // Mobile chat detail is a full-screen page whose only exit is
+                  // back to the chat list, so it uses a back arrow. Desktop
+                  // narrow Workspace summons the conversation-list overlay (a
+                  // menu), so it keeps the hamburger.
+                  aria-label={useMobileDetailsSheet ? "Back to conversations" : "Show conversations"}
+                  title={useMobileDetailsSheet ? "Back to conversations" : "Show conversations"}
                   className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                   style={{
                     width: 28,
@@ -3597,7 +3602,11 @@ export function ChatView({
                     cursor: "pointer",
                   }}
                 >
-                  <Menu size={16} strokeWidth={2.25} />
+                  {useMobileDetailsSheet ? (
+                    <ArrowLeft size={18} strokeWidth={2.25} />
+                  ) : (
+                    <Menu size={16} strokeWidth={2.25} />
+                  )}
                 </button>
               ) : null}
               {/* Identity — title is the sole click-to-rename affordance
