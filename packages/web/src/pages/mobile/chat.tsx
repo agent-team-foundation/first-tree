@@ -7,6 +7,7 @@ import { listMeChats } from "../../api/me-chats.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { ActivityDots } from "../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
+import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { Button } from "../../components/ui/button.js";
 import { formatRowTime } from "../../lib/utils.js";
 import { CenterPanel } from "../workspace/center/index.js";
@@ -41,23 +42,30 @@ export function MobileChatPage() {
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
-  if (selectedChatId !== null) {
-    return (
-      <div className="flex h-full min-h-0 overflow-hidden">
-        <CenterPanel
-          selectedChatId={selectedChatId}
-          onSelectChat={selectChat}
-          onClearChat={clearChat}
-          narrow
-          onShowConversations={clearChat}
-          initialParticipantIds={parseParticipantList(searchParams)}
-          presentation="mobile"
-        />
-      </div>
-    );
-  }
-
-  return <MobileChatList onSelectChat={selectChat} />;
+  return (
+    <>
+      {selectedChatId !== null ? (
+        <div className="flex h-full min-h-0 overflow-hidden">
+          <CenterPanel
+            selectedChatId={selectedChatId}
+            onSelectChat={selectChat}
+            onClearChat={clearChat}
+            narrow
+            onShowConversations={clearChat}
+            initialParticipantIds={parseParticipantList(searchParams)}
+            presentation="mobile"
+          />
+        </div>
+      ) : (
+        <MobileChatList onSelectChat={selectChat} />
+      )}
+      {/* Mobile document-evidence surface: a captured `attachment:` link in the
+          chat timeline sets docChat/docMsg/docAttachment params; the drawer
+          (fixed inset-0 on mobile) consumes them so the doc opens instead of
+          the click being a no-op. Renders null when no doc ref is set. */}
+      <DocPreviewDrawer />
+    </>
+  );
 }
 
 function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => void }) {

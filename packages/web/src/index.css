@@ -726,6 +726,12 @@
     padding-top: env(safe-area-inset-top);
   }
 
+  /* Reserve the bottom safe-area inset (home indicator) for a viewport-fixed
+     overlay whose own scroll surface reaches the bottom edge. */
+  .pb-safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   /* Surface utilities — consolidate Panel / PageHeader / Tab containers.
      Prefer these over hand-rolled background/border/radius combinations. */
   .surface-base {
