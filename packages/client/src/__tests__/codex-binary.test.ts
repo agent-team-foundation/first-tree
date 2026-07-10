@@ -175,8 +175,8 @@ describe("codex binary resolution", () => {
     const found = findCodexExecutableOnPath(
       { PATH: "", HOME: mkdtempSync(join(tmpdir(), "ft-codex-home-")) },
       // wellKnownDirs:[] isolates from a real host codex (e.g. /opt/homebrew/bin)
-      // which is now searched before the login-shell PATH.
-      { loginShellPathDirs: () => [dir], wellKnownDirs: () => [] },
+      // and desktopAppDirs:[] isolates from the installed macOS app bundle.
+      { loginShellPathDirs: () => [dir], wellKnownDirs: () => [], desktopAppDirs: () => [] },
     );
     expect(found).toBe(executable);
   });
@@ -208,12 +208,38 @@ describe("codex binary resolution", () => {
 
     const deps = {
       loginShellPathDirs: () => [],
-      wellKnownDirs: () => [chatGptResources, legacyResources],
+      wellKnownDirs: () => [],
+      desktopAppDirs: () => [chatGptResources, legacyResources],
     };
     expect(findCodexExecutableOnPath({ PATH: "" }, deps)).toBe(chatGptCodex);
 
     rmSync(chatGptCodex);
     expect(findCodexExecutableOnPath({ PATH: "" }, deps)).toBe(legacyCodex);
+  });
+
+  it("prefers a login-shell PATH codex over the desktop app CLI", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-login-vs-app-"));
+    const loginDir = join(tmp, "login-bin");
+    const appResources = join(tmp, "ChatGPT.app", "Contents", "Resources");
+    mkdirSync(loginDir, { recursive: true });
+    mkdirSync(appResources, { recursive: true });
+    const loginCodex = join(loginDir, "codex");
+    const appCodex = join(appResources, "codex");
+    writeFileSync(loginCodex, "#!/bin/sh\nexit 0\n");
+    writeFileSync(appCodex, "#!/bin/sh\nexit 0\n");
+    chmodSync(loginCodex, 0o755);
+    chmodSync(appCodex, 0o755);
+
+    expect(
+      findCodexExecutableOnPath(
+        { PATH: "" },
+        {
+          wellKnownDirs: () => [],
+          loginShellPathDirs: () => [loginDir],
+          desktopAppDirs: () => [appResources],
+        },
+      ),
+    ).toBe(loginCodex);
   });
 
   it("does not throw when the login-shell probe yields nothing (graceful fallback)", () => {
@@ -222,7 +248,9 @@ describe("codex binary resolution", () => {
     // Empty PATH + login-shell []; resolution then falls through to the curated
     // well-known dirs without throwing (the dev machine may or may not have a
     // codex in an absolute well-known dir, so only assert no-throw here).
-    expect(() => findCodexExecutableOnPath({ PATH: "", HOME: home }, { loginShellPathDirs: () => [] })).not.toThrow();
+    expect(() =>
+      findCodexExecutableOnPath({ PATH: "", HOME: home }, { loginShellPathDirs: () => [], desktopAppDirs: () => [] }),
+    ).not.toThrow();
   });
 
   it("does not consult the login-shell probe when the daemon PATH already resolves codex", () => {
@@ -231,9 +259,11 @@ describe("codex binary resolution", () => {
     writeFileSync(executable, "#!/bin/sh\nexit 0\n");
     chmodSync(executable, 0o755);
     const loginShellPathDirs = vi.fn(() => []);
+    const desktopAppDirs = vi.fn(() => []);
 
-    expect(findCodexExecutableOnPath({ PATH: tmp }, { loginShellPathDirs })).toBe(executable);
+    expect(findCodexExecutableOnPath({ PATH: tmp }, { loginShellPathDirs, desktopAppDirs })).toBe(executable);
     expect(loginShellPathDirs).not.toHaveBeenCalled();
+    expect(desktopAppDirs).not.toHaveBeenCalled();
   });
 
   it("verifies a candidate codex executable by launching --version", () => {

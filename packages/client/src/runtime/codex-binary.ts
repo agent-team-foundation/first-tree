@@ -199,6 +199,8 @@ export type FindCodexExecutableDeps = {
   loginShellPathDirs?: () => string[];
   /** Returns the curated well-known bin dirs; defaults to the real host list. */
   wellKnownDirs?: () => string[];
+  /** Returns macOS desktop-app resource dirs; searched only after every PATH source misses. */
+  desktopAppDirs?: () => string[];
 };
 
 export function findCodexExecutableOnPath(
@@ -207,7 +209,8 @@ export function findCodexExecutableOnPath(
 ): string | null {
   const loginShellPathDirs = deps.loginShellPathDirs ?? getLoginShellPathDirs;
   const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
-  const wellKnownDirs = deps.wellKnownDirs ?? (() => [...wellKnownBinDirs(home), ...codexDesktopAppBinDirs(home)]);
+  const wellKnownDirs = deps.wellKnownDirs ?? (() => wellKnownBinDirs(home));
+  const desktopAppDirs = deps.desktopAppDirs ?? (() => codexDesktopAppBinDirs(home));
   const names = codexExecutableNames(env);
   const seen = new Set<string>();
 
@@ -225,20 +228,20 @@ export function findCodexExecutableOnPath(
     return null;
   };
 
-  // Priority — cheap (no-spawn) checks first, the login-shell probe last:
-  // daemon PATH → curated well-known dirs (including macOS desktop-app
-  // Resources) → login-shell PATH. The well-known dirs are pure existence
-  // checks; the login-shell PATH (which may `spawnSync` a shell) is consulted
-  // last, only when daemon PATH + well-known miss, so a hit in either never
-  // triggers a shell spawn. It catches binaries that live only on the user's
-  // interactive PATH (nvm / fnm / volta / mise / asdf, custom exports). Codex
-  // resolution is never on the daemon's pre-connect path.
+  // Priority: daemon PATH → curated install dirs → login-shell PATH → macOS
+  // desktop-app Resources. The login-shell probe may spawn a shell, so cheap
+  // sources still short-circuit it. The desktop app is deliberately last: an
+  // intentional CLI install visible through nvm / fnm / volta / mise / asdf or
+  // a custom export must keep its selected version and credential context.
+  // Codex resolution is never on the daemon's pre-connect path.
   const pathValue = readPathValue(env);
   const fromDaemon = search(pathValue ? pathValue.split(delimiter) : []);
   if (fromDaemon) return fromDaemon;
   const fromWellKnown = search(wellKnownDirs());
   if (fromWellKnown) return fromWellKnown;
-  return search(loginShellPathDirs());
+  const fromLoginShell = search(loginShellPathDirs());
+  if (fromLoginShell) return fromLoginShell;
+  return search(desktopAppDirs());
 }
 
 function errorText(input: unknown): string {
