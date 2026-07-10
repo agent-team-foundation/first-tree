@@ -1,9 +1,10 @@
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
 import type { RunPaths } from "../../core/types.js";
+import { approvedPhase1ChatHistoryMarkdown } from "./fixture.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
@@ -431,6 +432,20 @@ function gitStatus(repoPath: string): string {
   return result.stdout;
 }
 
+function sourceWorkingTreeIsPristine(repoPath: string): boolean {
+  const status = runCommand("git", ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"], repoPath);
+  if (status.exitCode !== 0 || status.stdout.trim().length > 0) return false;
+
+  // Lowercase tags and `S` expose assume-unchanged / skip-worktree entries
+  // that can hide modified source content from ordinary status/diff checks.
+  const indexFlags = runCommand("git", ["ls-files", "-v"], repoPath);
+  if (indexFlags.exitCode !== 0) return false;
+  return indexFlags.stdout
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .every((line) => line.startsWith("H "));
+}
+
 function baselineHeads(events: readonly unknown[]): { contextTreeHead: string | null; sourceRepoHead: string | null } {
   let contextTreeHead: string | null = null;
   let sourceRepoHead: string | null = null;
@@ -470,10 +485,14 @@ function sourceWorktreeMaterializedAtExpectedHead(paths: RunPaths, baselineHead:
   const worktreePath = join(paths.workspacePath, "worktrees", "seed-source-repo");
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   if (!existsSync(worktreePath) || !existsSync(sourceRepoPath)) return false;
+  try {
+    if (lstatSync(worktreePath).isSymbolicLink()) return false;
+  } catch {
+    return false;
+  }
 
-  const status = runCommand("git", ["status", "--porcelain"], worktreePath);
   const commonDir = runCommand("git", ["rev-parse", "--git-common-dir"], worktreePath);
-  if (status.exitCode !== 0 || status.stdout.trim().length > 0 || commonDir.exitCode !== 0) return false;
+  if (!sourceWorkingTreeIsPristine(worktreePath) || commonDir.exitCode !== 0) return false;
   const rawCommonDir = commonDir.stdout.trim();
   const resolvedCommonDir = isAbsolute(rawCommonDir) ? rawCommonDir : resolve(worktreePath, rawCommonDir);
   let canonicalCommonDir: string;
@@ -497,14 +516,11 @@ function sourceRepoChanged(paths: RunPaths, baselineHead: string | null, evalCas
   if (currentHead !== baselineHead) return true;
 
   if (chatLocal) {
-    const status = runCommand("git", ["status", "--porcelain"], sourceRepoPath);
-    return status.exitCode !== 0 || status.stdout.trim().length > 0;
+    return !sourceWorkingTreeIsPristine(sourceRepoPath);
   }
 
   for (const worktreePath of sourceWorktreePaths(paths)) {
-    const status = runCommand("git", ["status", "--porcelain"], worktreePath);
-    if (status.exitCode !== 0) return true;
-    if (status.stdout.trim().length > 0) return true;
+    if (!sourceWorkingTreeIsPristine(worktreePath)) return true;
     if (gitHead(worktreePath) !== baselineHead) return true;
   }
 
@@ -908,11 +924,44 @@ function pathBelongsToSourceEvidence(value: string, paths: RunPaths, evalCase: F
     evalCase.fixture.sourceRepoState === "chat-local-readable"
       ? join(paths.workspacePath, "provided-source")
       : join(paths.workspacePath, "worktrees", "seed-source-repo");
-  return pathIsWithinRoot(value, sourceRoot, paths.workspacePath);
+  if (!pathIsWithinRoot(value, sourceRoot, paths.workspacePath)) return false;
+  // Parser-focused unit events do not materialize a repository. Live fixtures
+  // always do; if a live source disappears, sourceRepoChanged/final-state
+  // checks fail the case independently.
+  if (!existsSync(sourceRoot)) return true;
+  const candidate = resolve(paths.workspacePath, value);
+  let canonicalRoot: string;
+  let canonicalCandidate: string;
+  try {
+    if (lstatSync(sourceRoot).isSymbolicLink() || lstatSync(candidate).isSymbolicLink()) return false;
+    canonicalRoot = realpathSync(sourceRoot);
+    canonicalCandidate = realpathSync(candidate);
+  } catch {
+    return false;
+  }
+  if (!pathIsWithinRoot(canonicalCandidate, canonicalRoot, paths.workspacePath)) return false;
+
+  const relativePath = relative(sourceRoot, candidate).split(sep).join("/");
+  const tracked = runCommand("git", ["ls-files", "--error-unmatch", "--", relativePath], sourceRoot);
+  const worktreeHash = runCommand("git", ["hash-object", "--no-filters", "--", relativePath], sourceRoot);
+  const headHash = runCommand("git", ["rev-parse", `HEAD:${relativePath}`], sourceRoot);
+  return (
+    tracked.exitCode === 0 &&
+    worktreeHash.exitCode === 0 &&
+    headHash.exitCode === 0 &&
+    worktreeHash.stdout.trim() === headHash.stdout.trim()
+  );
 }
 
 function pathIsChatHistory(value: string, paths: RunPaths): boolean {
-  return resolve(paths.workspacePath, value) === join(paths.workspacePath, CHAT_HISTORY_PATH);
+  const candidate = resolve(paths.workspacePath, value);
+  if (candidate !== join(paths.workspacePath, CHAT_HISTORY_PATH)) return false;
+  try {
+    if (lstatSync(candidate).isSymbolicLink()) return false;
+    return readFileSync(candidate, "utf8") === approvedPhase1ChatHistoryMarkdown();
+  } catch {
+    return false;
+  }
 }
 
 function commandProvesStandaloneContentRead(

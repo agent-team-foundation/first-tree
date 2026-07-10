@@ -127,7 +127,7 @@ function writeWorkspaceManifest(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
   writeText(join(paths.workspacePath, ".first-tree", "workspace.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function approvedPhase1ChatHistoryMarkdown(): string {
+export function approvedPhase1ChatHistoryMarkdown(): string {
   return `# Visible Context Tree setup chat transcript
 
 ## Assistant — earlier turn
