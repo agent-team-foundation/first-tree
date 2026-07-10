@@ -35,7 +35,9 @@ const agentMocks = vi.hoisted(() => ({
 
 const attachmentMocks = vi.hoisted(() => ({
   fetchAttachmentBase64: vi.fn(),
+  uploadAttachment: vi.fn(),
   uploadImageAttachment: vi.fn(),
+  uploadMimeFor: vi.fn((file: File) => file.type || "application/octet-stream"),
 }));
 
 const chatMocks = vi.hoisted(() => ({

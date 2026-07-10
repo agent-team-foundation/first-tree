@@ -1,4 +1,5 @@
 import type {
+  AttachmentRef,
   Chat,
   ChatDetail,
   ChatEngagementStatus,
@@ -85,16 +86,24 @@ export function sendChatMessage(
   chatId: string,
   content: string,
   mentions: string[],
-  opts?: { inReplyTo?: string; resolves?: RequestResolution },
+  opts?: { inReplyTo?: string; resolves?: RequestResolution; attachments?: AttachmentRef[] },
 ): Promise<Message> {
   // `resolves` is the explicit lifecycle signal — present only when the human
   // submits a clean answer from the request card (it drives the server's
   // `open_request_count` −1 / red-dot clear). A plain "chat about this" reply
   // omits it and threads under the question without resolving it.
+  //
+  // `attachments` carries document/file `AttachmentRef`s on a plain text
+  // message — the document-only composer send (no images). A send that also
+  // carries images uses `sendFileMessageBatch` instead, which folds documents
+  // into the same message's metadata.
+  const attachments = opts?.attachments;
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
   const metadata =
-    mentions.length > 0 || opts?.resolves
+    mentions.length > 0 || hasAttachments || opts?.resolves
       ? {
           ...(mentions.length > 0 ? { mentions } : {}),
+          ...(hasAttachments ? { attachments } : {}),
           ...(opts?.resolves ? { resolves: opts.resolves } : {}),
         }
       : undefined;
@@ -145,13 +154,18 @@ export type ImageBatchRefContent = {
 };
 
 /**
- * Optional message metadata for a file send. Today only `mentions` is wired
- * — it lets a multi-image send carry the @-mentions parsed from the user's
- * accompanying text so the server's group-chat mention guard accepts the
- * send. Without this, the message arrives with no addressees and is
- * rejected before the text reaches anyone (issue 387).
+ * Optional message metadata for a file send.
+ * - `mentions` lets a multi-image send carry the @-mentions parsed from the
+ *   user's accompanying text so the server's group-chat mention guard accepts
+ *   the send. Without this, the message arrives with no addressees and is
+ *   rejected before the text reaches anyone (issue 387).
+ * - `attachments` carries generic {@link AttachmentRef}s (documents / files
+ *   uploaded in the composer) in `message.metadata.attachments[]`. Images stay
+ *   in `content` as `ImageRefContent`; a mixed send (images + documents) rides
+ *   one `format: "file"` message carrying both. The server validates each ref
+ *   against its stored blob (`validateMessageAttachmentRefs`).
  */
-export type SendFileMessageMetadata = { mentions?: string[] };
+export type SendFileMessageMetadata = { mentions?: string[]; attachments?: AttachmentRef[] };
 
 /**
  * Send a single `format: "file"` message carrying 1+ image references and an
@@ -178,15 +192,18 @@ export function sendFileMessageBatch(
   // truthiness check by accident — each new field must be opted in here.
   const mentions = metadata?.mentions;
   const hasMentions = Array.isArray(mentions) && mentions.length > 0;
+  const attachments = metadata?.attachments;
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
   // `resolves` rides a file-format send only when the human answers a blocking
   // ask WITH an attached image (the AskTakeover image path). The server's
   // resolution gate is format-agnostic — it authorizes off `senderId === target`
   // (services/message.ts), so a captioned image from the target resolves the
   // question exactly like a text answer. Mirrors `sendChatMessage`.
   const meta =
-    hasMentions || opts?.resolves
+    hasMentions || hasAttachments || opts?.resolves
       ? {
           ...(hasMentions ? { mentions } : {}),
+          ...(hasAttachments ? { attachments } : {}),
           ...(opts?.resolves ? { resolves: opts.resolves } : {}),
         }
       : undefined;

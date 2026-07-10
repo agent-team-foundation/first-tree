@@ -2,6 +2,9 @@ import { defineConfig } from "vitest/config";
 import { monorepoSourceAliases } from "../../scripts/vitest-aliases.js";
 import { unitCoverageConfig } from "../../scripts/vitest-coverage.js";
 
+const requestedMaxForks = Number.parseInt(process.env.VITEST_MAX_FORKS ?? "", 10);
+const maxForks = Number.isFinite(requestedMaxForks) && requestedMaxForks > 0 ? requestedMaxForks : 2;
+
 export default defineConfig({
   test: {
     // Many CLI tests spawn the command as a subprocess and do real file/process
@@ -13,6 +16,13 @@ export default defineConfig({
     // so transient CPU starvation can't trip them; a genuine hang still fails,
     // just at 15s.
     testTimeout: 15_000,
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        maxForks,
+        minForks: 1,
+      },
+    },
     coverage: unitCoverageConfig({
       exclude: ["src/commands/types.ts"],
     }),
