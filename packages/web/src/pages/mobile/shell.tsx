@@ -23,7 +23,9 @@ export function MobileShell() {
   useAdminWs();
 
   const tabCountsQuery = useQuery({
-    queryKey: ["mobile", "tab-counts", organizationId],
+    // Nested under ["me", "chats"] so the shared realtime invalidation keeps
+    // the bottom-tab attention / unread badges live, not just poll-driven.
+    queryKey: ["me", "chats", "mobile", "tab-counts", organizationId],
     queryFn: () => listMeChats({ limit: 50, engagement: "active" }),
     enabled: !!organizationId,
     refetchInterval: 30_000,

@@ -64,7 +64,9 @@ function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
   const { agentId } = useAuth();
   const [view, setView] = useState<MobileChatView>("all");
   const chatsQuery = useQuery({
-    queryKey: ["mobile", "chats", view],
+    // Nested under ["me", "chats"] so the shared realtime invalidation keeps
+    // the mobile chat list live instead of poll-only.
+    queryKey: ["me", "chats", "mobile", "chats", view],
     queryFn: () =>
       listMeChats({
         limit: 80,

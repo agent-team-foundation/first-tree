@@ -13,7 +13,10 @@ import { mobileChatPreview, mobileChatSignal, mobileFeedReasonLabel, sortMobileC
 export function MobileNowPage() {
   const { agentId } = useAuth();
   const chatsQuery = useQuery({
-    queryKey: ["mobile", "now"],
+    // Nested under ["me", "chats"] so the shared realtime invalidation
+    // (useAdminWs WS events + chat send / ask-answer / new-chat mutations)
+    // refreshes Now immediately instead of waiting for the poll.
+    queryKey: ["me", "chats", "mobile", "now"],
     queryFn: () => listMeChats({ limit: 50, engagement: "active" }),
     refetchInterval: 30_000,
   });
