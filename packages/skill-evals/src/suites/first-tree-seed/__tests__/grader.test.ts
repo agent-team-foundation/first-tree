@@ -338,6 +338,36 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not credit a skipped transcript read followed by variable-expanded evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-variable-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              command:
+                "H='Phase 1 proposal\\nApproved\\nPhase 1 PR handoff'; false && cat .first-tree-eval/chat-history.md; printf '%b\\n' \"$H\"",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit a failed transcript content read", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-failed-history-"));
     try {
@@ -899,7 +929,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("attributes a wrapped compound worktree add and source-file loop without cross-segment bare-read leakage", () => {
+  it("attributes separate wrapped worktree materialization and source pipeline evidence", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-wrapped-source-loop-"));
     const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
     try {
@@ -907,11 +937,18 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
-              aggregated_output: `Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture\nFILE ${managedPath}/README.md\n# Apollo Console\nContext Tree commands\nruntime coordination\nFILE context-tree/NODE.md\n# Approved Seed Skeleton`,
-              command:
-                `/bin/zsh -lc 'git -C source-repos/source-repo fetch origin && ` +
-                `git -C source-repos/source-repo worktree add ${managedPath} origin/main && ` +
-                `for f in ${managedPath}/README.md context-tree/NODE.md; do echo "FILE $f"; sed -n 1,80p "$f"; done'`,
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture",
+              command: `/bin/zsh -lc 'git -C source-repos/source-repo worktree add ${managedPath} origin/main'`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              aggregated_output: "# Apollo Console\nContext Tree commands\nruntime coordination",
+              command: `/bin/zsh -lc 'cat ${managedPath}/README.md | head -50'`,
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -1433,7 +1470,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("allows ordinary echo headings around successful source reads", () => {
+  it("keeps source evidence fail-closed when headings are mixed into the reader command", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-source-read-headings-"));
     try {
       const metrics = deriveMetrics(
@@ -1457,7 +1494,37 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a skipped source read followed by variable-expanded evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-variable-source-evidence-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Apollo Console\nruntime coordination",
+              command:
+                "H='Apollo Console\\nruntime coordination'; false && cat worktrees/seed-source-repo/README.md; printf '%b\\n' \"$H\"",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

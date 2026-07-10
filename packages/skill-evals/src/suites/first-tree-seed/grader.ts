@@ -889,18 +889,6 @@ function segmentReferencesSourceEvidence(segment: string): boolean {
   );
 }
 
-// If a successful command mixes a source read with another independent output
-// producer, the aggregate output cannot be attributed to the source read. This
-// rejects false-greens such as a skipped `test && cat <source>` followed by a
-// Context Tree `sed` whose output happens to contain the expected phrases.
-// Pipeline filters are intentionally not listed: they transform the preceding
-// source stream rather than independently selecting a different file.
-function segmentCanProduceIndependentEvidence(segment: string): boolean {
-  const program = segmentProgram(segment);
-  if (segmentReadsContent(segment)) return true;
-  return ["node", "perl", "python", "python3", "ruby"].includes(program);
-}
-
 function shellWords(segment: string): string[] {
   const words: string[] = [];
   let current = "";
@@ -980,91 +968,33 @@ function segmentIsPurePipelineFilter(segment: string): boolean {
   return false;
 }
 
-function segmentIsSourcePipelineFilter(segments: readonly ShellCommandSegment[], index: number): boolean {
-  const segment = segments[index];
-  if (!segment || !segmentIsPurePipelineFilter(segment.text)) return false;
-  const inPipeline = segment.connectorBefore === "|" || segments[index + 1]?.connectorBefore === "|";
-  if (!inPipeline) return false;
-
-  let start = index;
-  while (start > 0 && segments[start]?.connectorBefore === "|") start--;
-  let end = index;
-  while (segments[end + 1]?.connectorBefore === "|") end++;
-  return segments
-    .slice(start, end + 1)
-    .some((candidate) => segmentReadsContent(candidate.text) && segmentReferencesSourceEvidence(candidate.text));
-}
-
-function segmentIsChatHistoryPipelineFilter(segments: readonly ShellCommandSegment[], index: number): boolean {
-  const segment = segments[index];
-  if (!segment || !segmentIsPurePipelineFilter(segment.text)) return false;
-  const inPipeline = segment.connectorBefore === "|" || segments[index + 1]?.connectorBefore === "|";
-  if (!inPipeline) return false;
-
-  let start = index;
-  while (start > 0 && segments[start]?.connectorBefore === "|") start--;
-  let end = index;
-  while (segments[end + 1]?.connectorBefore === "|") end++;
-  return segments
-    .slice(start, end + 1)
-    .some((candidate) => segmentReadsContent(candidate.text) && candidate.text.includes(CHAT_HISTORY_PATH));
-}
-
-function sourceBoundLoopVariables(command: string): ReadonlySet<string> {
-  const variables = new Set<string>();
-  const loopPattern = /\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([\s\S]*?);\s*do\s+([\s\S]*?)(?:;\s*done|\bdone\b)/gu;
-  for (const match of command.matchAll(loopPattern)) {
-    const variable = match[1];
-    const operands = match[2] ?? "";
-    const body = match[3] ?? "";
-    if (!variable || !SOURCE_EVIDENCE_ROOT_PATHS.some((root) => operands.includes(root))) continue;
-    const variableOperand = new RegExp(`(?:\\$${variable}\\b|\\$\\{${variable}\\})`, "u");
-    if (shellCommandSegments(body).some((segment) => segmentReadsContent(segment) && variableOperand.test(segment))) {
-      variables.add(variable);
-    }
-  }
-  return variables;
-}
-
-function segmentReadsSourceBoundLoopVariable(segment: string, variables: ReadonlySet<string>): boolean {
-  if (!segmentReadsContent(segment)) return false;
-  for (const variable of variables) {
-    if (new RegExp(`(?:\\$${variable}\\b|\\$\\{${variable}\\})`, "u").test(segment)) return true;
-  }
-  return false;
-}
-
-function outputContainsSourceEvidenceBlock(output: string, evidenceHints: readonly string[]): boolean {
-  let activeBlockIsSource = false;
-  let activeBlock = "";
-  const activeBlockHasEvidence = (): boolean => activeBlockIsSource && countMatches(activeBlock, evidenceHints) >= 2;
-  const marksSourcePath = (value: string): boolean => {
-    const normalized = value.replace(/\\/gu, "/").replace(/\/+$/u, "");
-    return SOURCE_EVIDENCE_ROOT_PATHS.some(
-      (root) => normalized === root || normalized.startsWith(`${root}/`) || normalized.includes(`/${root}/`),
-    );
-  };
-
-  for (const line of output.split(/\r?\n/u)) {
-    const marker = /^\s*FILE\s+(.+?)\s*$/u.exec(line);
-    if (marker) {
-      if (activeBlockHasEvidence()) return true;
-      const markedPath = marker[1] ?? "";
-      activeBlockIsSource = marksSourcePath(markedPath);
-      activeBlock = "";
-      continue;
-    }
-    if (activeBlockIsSource) activeBlock += `${line}\n`;
-  }
-  return activeBlockHasEvidence();
-}
-
-function unboundLiteralOutputSpoofsSourceEvidence(
-  segments: readonly string[],
-  evidenceHints: readonly string[],
+function commandProvesStandaloneContentRead(
+  command: string,
+  exitCode: number | null,
+  referencesRequiredPath: (segment: string) => boolean,
 ): boolean {
-  const literalOutput = segments.filter((segment) => ["echo", "printf"].includes(segmentProgram(segment))).join("\n");
-  return countMatches(literalOutput, evidenceHints) >= 2;
+  if (exitCode !== 0) return false;
+  const segments = shellCommandSegmentsWithConnectors(unwrapShellCommand(command));
+  if (segments.length === 0) return false;
+  const isReader = (segment: ShellCommandSegment): boolean =>
+    segmentReadsContent(segment.text) && referencesRequiredPath(segment.text);
+
+  if (segments.some((segment) => segment.connectorBefore === "|")) {
+    const first = segments[0];
+    if (!first || first.connectorBefore !== null || !isReader(first)) return false;
+    return segments.slice(1).every((segment) => {
+      const program = segmentProgram(segment.text);
+      return (
+        segment.connectorBefore === "|" &&
+        ["cat", "grep", "head", "less", "rg", "tail", "wc"].includes(program) &&
+        segmentIsPurePipelineFilter(segment.text)
+      );
+    });
+  }
+
+  return segments.every(
+    (segment, index) => segment.connectorBefore === (index === 0 ? null : "&&") && isReader(segment),
+  );
 }
 
 function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEvalCase): boolean {
@@ -1079,35 +1009,8 @@ function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEv
       return false;
     }
     const command = unwrapShellCommand(execution.command);
-    const segments = shellCommandSegmentsWithConnectors(command);
-    const loopVariables = sourceBoundLoopVariables(command);
-    const hasDirectSourceRead = segments.some(
-      (segment) => segmentReadsContent(segment.text) && segmentReferencesSourceEvidence(segment.text),
-    );
-    const hasLoopSourceRead = loopVariables.size > 0;
-    const hasSourceRead = hasDirectSourceRead || hasLoopSourceRead;
-    const hasUnboundOutputProducer = segments.some(
-      (segment, index) =>
-        segmentCanProduceIndependentEvidence(segment.text) &&
-        !segmentReferencesSourceEvidence(segment.text) &&
-        !segmentIsSourcePipelineFilter(segments, index) &&
-        !segmentReadsSourceBoundLoopVariable(segment.text, loopVariables),
-    );
-    // A common inspection command loops over both source and Context Tree
-    // files and prints `FILE <path>` before each read. Credit that mixed loop
-    // only when the evidence itself occurs inside the source-marked output
-    // block. A source marker from a skipped iteration must not borrow evidence
-    // emitted by a later Context Tree iteration.
-    const loopOutputBindsSource =
-      loopVariables.size > 0 && outputContainsSourceEvidenceBlock(execution.output, evidenceHints);
     return (
-      hasSourceRead &&
-      (hasDirectSourceRead || loopOutputBindsSource) &&
-      !hasUnboundOutputProducer &&
-      !unboundLiteralOutputSpoofsSourceEvidence(
-        segments.map((segment) => segment.text),
-        evidenceHints,
-      ) &&
+      commandProvesStandaloneContentRead(command, execution.exitCode, segmentReferencesSourceEvidence) &&
       countMatches(execution.output, evidenceHints) >= 2
     );
   });
@@ -1120,24 +1023,10 @@ function containsChatHistoryEvidence(event: unknown): boolean {
     if (execution.exitCode !== 0 || /(?:no such file|not a directory|permission denied)/iu.test(execution.output)) {
       return false;
     }
-    const segments = shellCommandSegmentsWithConnectors(unwrapShellCommand(execution.command));
-    const readObserved = segments.some(
-      (segment) => segmentReadsContent(segment.text) && segment.text.includes(CHAT_HISTORY_PATH),
-    );
-    const hasUnboundOutputProducer = segments.some(
-      (segment, index) =>
-        segmentCanProduceIndependentEvidence(segment.text) &&
-        !segment.text.includes(CHAT_HISTORY_PATH) &&
-        !segmentIsChatHistoryPipelineFilter(segments, index),
-    );
     return (
-      readObserved &&
-      !hasUnboundOutputProducer &&
-      !unboundLiteralOutputSpoofsSourceEvidence(
-        segments.map((segment) => segment.text),
-        CHAT_HISTORY_EVIDENCE_HINTS,
-      ) &&
-      countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) === CHAT_HISTORY_EVIDENCE_HINTS.length
+      commandProvesStandaloneContentRead(execution.command, execution.exitCode, (segment) =>
+        segment.includes(CHAT_HISTORY_PATH),
+      ) && countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) === CHAT_HISTORY_EVIDENCE_HINTS.length
     );
   });
 }
