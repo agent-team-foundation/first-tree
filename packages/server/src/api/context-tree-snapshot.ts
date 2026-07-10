@@ -14,7 +14,6 @@ import {
 import { findInstallationByOrg } from "../services/github-app-installations.js";
 import {
   type ContextTreeInstallationTokenResult,
-  decorateSnapshotWithMintGuidance,
   mintContextTreeInstallationToken,
   resolveContextTreeRecoveryAction,
 } from "../services/github-app-token.js";
@@ -45,10 +44,9 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
     }
     const githubToken = mintResult?.ok ? mintResult.token : undefined;
     const window = query.window ?? "7d";
-    const rawSnapshot = await timing.time("snapshot_build", () =>
+    const snapshot = await timing.time("snapshot_build", () =>
       getContextTreeSnapshot({ ...binding, githubToken }, window, { timing: timing.add }),
     );
-    const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
     // Probe (only on the unavailable + GitHub-remote + minted path) whether the
     // App genuinely can't read the repo, so the Context tab can offer the "add
     // repo to the App" recovery without misdirecting other unavailable causes.

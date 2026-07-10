@@ -87,47 +87,6 @@ export async function mintContextTreeInstallationToken(
 }
 
 /**
- * Append a remediation hint to an unavailable snapshot's `contextStatus.detail`
- * when the underlying cause is a missing / suspended / failed GitHub App token
- * mint. Public-repo snapshots (mint reason `no-app-config`) are left untouched
- * — the deployment may legitimately have no App configured.
- *
- * Gated on `isGithubRemoteBinding(binding)` so unrelated unavailable
- * reasons (no repo configured, localPath missing, illegal branch name,
- * public-repo fetch error) don't get a misleading "install the GitHub
- * App" hint appended.
- *
- * Lives next to `mintContextTreeInstallationToken` so the two routes that
- * call mint share one shaping function; the snapshot service itself stays
- * token-agnostic.
- */
-export function decorateSnapshotWithMintGuidance(
-  snapshot: ContextTreeSnapshot,
-  binding: ContextTreeBinding,
-  mintResult: ContextTreeInstallationTokenResult,
-): ContextTreeSnapshot {
-  if (mintResult.ok) return snapshot;
-  if (snapshot.snapshotStatus !== "unavailable") return snapshot;
-  if (mintResult.reason === "no-app-config") return snapshot;
-  if (!isGithubRemoteBinding(binding)) return snapshot;
-
-  const guidance =
-    mintResult.reason === "no-installation"
-      ? "Install the First Tree GitHub App from Team Settings and grant it access to this repo."
-      : mintResult.reason === "suspended"
-        ? "The GitHub App installation is suspended — unsuspend it from your GitHub account settings."
-        : `First Tree could not mint a GitHub App installation token.${mintResult.detail ? ` ${mintResult.detail}` : ""}`;
-
-  return {
-    ...snapshot,
-    contextStatus: {
-      ...snapshot.contextStatus,
-      detail: `${snapshot.contextStatus.detail} ${guidance}`,
-    },
-  };
-}
-
-/**
  * Parse a binding's `repo` (a GitHub HTTPS URL or `owner/name` shorthand) into
  * `{ owner, repo }`. Returns null for non-GitHub / unparseable values, matching
  * the `isGithubRemoteBinding` boundary.
