@@ -117,6 +117,25 @@ describe("scanBareDocPathTokens", () => {
     expect(tokens(text)).toEqual(["docs/after.md"]);
   });
 
+  it("does not treat a backtick fence line with backticks after the marker as an opener", () => {
+    // CommonMark: a backtick-fence info string may not contain backticks, so
+    // this line renders as a paragraph with inline code, not a code block.
+    const text = ["```pnpm test``` runs the suite", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("keeps real fences skipped after a backtick-containing pseudo-fence line", () => {
+    const text = ["```docs/inline.md``` as inline code", "```", "docs/fenced.md", "```", "docs/after.md"].join("\n");
+    const matches = scanBareDocPathTokens(text);
+    expect(matches.map((m) => m.raw)).toEqual(["docs/inline.md", "docs/after.md"]);
+    expect(matches[0]?.enclosingCodeSpan).toBeDefined();
+  });
+
+  it("allows backticks in a tilde fence info string", () => {
+    const text = ["~~~ `note`", "docs/fenced.md", "~~~", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
   it("ignores indented (4-space / tab) code blocks", () => {
     expect(tokens("    docs/indented.md")).toEqual([]);
     expect(tokens("\tdocs/tabbed.md")).toEqual([]);
