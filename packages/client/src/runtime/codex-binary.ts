@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
-import { wellKnownBinDirs } from "./install-locations.js";
+import { codexDesktopAppBinDirs, wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
 
 export type CodexRuntimeSource = "bundled" | "path";
@@ -65,7 +65,7 @@ const DETERMINISTIC_CRASH_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set([
 ]);
 
 /**
- * A codex binary that EXISTS on PATH (resolution already found it) but whose
+ * An externally resolved codex binary that EXISTS (resolution already found it) but whose
  * `--version` smoke check did not complete for a transient reason — a spawn
  * timeout, a kill by the timeout signal, or transient resource pressure. The
  * binary is installed; the host was merely too busy / cold to answer in time.
@@ -100,7 +100,7 @@ export function formatCodexBinaryMissingMessage(input: unknown): string {
   const suffix = original ? ` Original error: ${original}` : "";
   return (
     "Codex runtime binary is missing on this machine. " +
-    "First Tree does not bundle the native Codex engine by default — it resolves a system `codex` on PATH. " +
+    "First Tree does not bundle the native Codex engine by default — it resolves `codex` from PATH, well-known install directories, or the ChatGPT/Codex desktop app on macOS. " +
     "Install it with the daemon's one-click `daemon install-codex` (or `npm install -g @openai/codex`), then run `codex login` and retry." +
     suffix
   );
@@ -131,12 +131,12 @@ export function createCodexClientWithBinaryFallback<TOptions extends CodexOption
         throw new CodexBinaryVerifyTransientError(verification.reason);
       }
       throw new Error(
-        formatCodexBinaryMissingMessage(`${errorText(err)} PATH codex failed validation: ${verification.reason}`),
+        formatCodexBinaryMissingMessage(`${errorText(err)} Resolved codex failed validation: ${verification.reason}`),
       );
     }
 
     deps.log?.(
-      `Codex SDK bundled binary missing; falling back to system codex at ${fallbackPath}. ` +
+      `Codex SDK bundled binary missing; falling back to codex at ${fallbackPath}. ` +
         `Original error: ${errorText(err)}`,
     );
     return {
@@ -199,6 +199,8 @@ export type FindCodexExecutableDeps = {
   loginShellPathDirs?: () => string[];
   /** Returns the curated well-known bin dirs; defaults to the real host list. */
   wellKnownDirs?: () => string[];
+  /** Returns macOS desktop-app resource dirs; searched only after every PATH source misses. */
+  desktopAppDirs?: () => string[];
 };
 
 export function findCodexExecutableOnPath(
@@ -208,6 +210,7 @@ export function findCodexExecutableOnPath(
   const loginShellPathDirs = deps.loginShellPathDirs ?? getLoginShellPathDirs;
   const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
   const wellKnownDirs = deps.wellKnownDirs ?? (() => wellKnownBinDirs(home));
+  const desktopAppDirs = deps.desktopAppDirs ?? (() => codexDesktopAppBinDirs(home));
   const names = codexExecutableNames(env);
   const seen = new Set<string>();
 
@@ -225,19 +228,20 @@ export function findCodexExecutableOnPath(
     return null;
   };
 
-  // Priority — cheap (no-spawn) checks first, the login-shell probe last:
-  // daemon PATH → curated well-known dirs → login-shell PATH. The well-known
-  // dirs are pure existence checks; the login-shell PATH (which may `spawnSync`
-  // a shell) is consulted last, only when daemon PATH + well-known miss, so a
-  // hit in either never triggers a shell spawn. It catches binaries that live
-  // only on the user's interactive PATH (nvm / fnm / volta / mise / asdf, custom
-  // exports). Codex resolution is never on the daemon's pre-connect path.
+  // Priority: daemon PATH → curated install dirs → login-shell PATH → macOS
+  // desktop-app Resources. The login-shell probe may spawn a shell, so cheap
+  // sources still short-circuit it. The desktop app is deliberately last: an
+  // intentional CLI install visible through nvm / fnm / volta / mise / asdf or
+  // a custom export must keep its selected version and credential context.
+  // Codex resolution is never on the daemon's pre-connect path.
   const pathValue = readPathValue(env);
   const fromDaemon = search(pathValue ? pathValue.split(delimiter) : []);
   if (fromDaemon) return fromDaemon;
   const fromWellKnown = search(wellKnownDirs());
   if (fromWellKnown) return fromWellKnown;
-  return search(loginShellPathDirs());
+  const fromLoginShell = search(loginShellPathDirs());
+  if (fromLoginShell) return fromLoginShell;
+  return search(desktopAppDirs());
 }
 
 function errorText(input: unknown): string {

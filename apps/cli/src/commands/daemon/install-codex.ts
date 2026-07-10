@@ -8,8 +8,9 @@ import { isJsonMode, print } from "../../core/output.js";
  * `daemon install-codex` — one-click install of the native Codex engine.
  *
  * First Tree does not bundle the ~225MB native `codex` binary by default; the
- * runtime resolves a system `codex` on PATH. When none exists, the codex
- * capability probes as `missing`. This command is the remediation: it runs
+ * runtime resolves an external `codex` from PATH, known install locations, or
+ * the macOS ChatGPT/Codex desktop app. When none exists, the codex capability
+ * probes as `missing`. This command is the remediation: it runs
  * `npm install -g @openai/codex` through the same tracked-subprocess path the
  * CLI self-update uses, then re-probes so the freshly installed binary is
  * reflected in the capability snapshot.

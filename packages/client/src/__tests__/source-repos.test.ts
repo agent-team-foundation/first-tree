@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD, SOURCE_REPOS_DIRNAME } from "@first-tree/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { wellKnownBinDirs } from "../runtime/install-locations.js";
+import { codexDesktopAppBinDirs, wellKnownBinDirs } from "../runtime/install-locations.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 
 const originalPlatform = process.platform;
@@ -35,6 +35,21 @@ describe("wellKnownBinDirs", () => {
     expect(dirs).toContain(join("/home/gandy", ".local", "share", "pnpm"));
     expect(dirs).not.toContain(join("/home/gandy", "Library", "pnpm"));
     expect(dirs).not.toContain("/opt/homebrew/bin");
+  });
+});
+
+describe("codexDesktopAppBinDirs", () => {
+  it("checks the current ChatGPT app paths before legacy Codex app paths on macOS", () => {
+    expect(codexDesktopAppBinDirs("/Users/gandy", "darwin")).toEqual([
+      join("/Applications", "ChatGPT.app", "Contents", "Resources"),
+      join("/Users/gandy", "Applications", "ChatGPT.app", "Contents", "Resources"),
+      join("/Applications", "Codex.app", "Contents", "Resources"),
+      join("/Users/gandy", "Applications", "Codex.app", "Contents", "Resources"),
+    ]);
+  });
+
+  it("does not add macOS app bundle paths on other platforms", () => {
+    expect(codexDesktopAppBinDirs("/home/gandy", "linux")).toEqual([]);
   });
 });
 
