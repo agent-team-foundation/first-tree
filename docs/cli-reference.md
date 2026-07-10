@@ -262,6 +262,7 @@ through the Admin API.
 first-tree agent config
 ├── show <agent>
 ├── set-model <agent> <model>                       # alias: opus | sonnet | haiku, or full id (e.g. claude-opus-4-7)
+├── set-reasoning-effort <agent> <level>
 ├── prompt show <agent> [--raw]                     # per-agent prompt fragment; --raw is verbatim (round-trippable)
 ├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.
 │                                                   #   Rejects copies of the assembled AGENTS.md (generated marker /
@@ -274,6 +275,12 @@ first-tree agent config
 ├── add-repo <agent> <url> [--ref <branch>] [--path <local>]
 └── dry-run <agent> -f <patch.json>                 # validate + diff, no persist
 ```
+
+Reasoning effort values are provider-specific. Claude Code and Claude Code
+TUI accept `""` (inherit the operator's local setting), `low`, `medium`,
+`high`, or `max`. Codex accepts `low`, `medium`, `high`, `xhigh`, `max`, or
+`ultra`; availability of the higher levels is model-dependent and rejected
+combinations are reported by the provider.
 
 ### agent bind
 

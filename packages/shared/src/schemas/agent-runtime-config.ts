@@ -451,7 +451,7 @@ const agentRuntimeConfigPatchShape = z
     // patch shape is flat and provider-agnostic, while the allowed values
     // differ per provider. Validity is enforced when the merged payload is
     // re-parsed against the tagged union in `commitWrite` — an out-of-range
-    // value (e.g. "max" for codex, "xhigh" for claude) is rejected there.
+    // value (e.g. "" for codex, "xhigh" for claude) is rejected there.
     reasoningEffort: z.string(),
   })
   .partial();
