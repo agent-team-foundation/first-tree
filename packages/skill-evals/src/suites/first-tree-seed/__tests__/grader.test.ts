@@ -425,6 +425,43 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not credit transcript operands with shell expansion or an untrusted reader", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-expanded-history-"));
+    const commands = [
+      'cat ".first-tree-eval/$(printf chat-history.md)"',
+      'cat ".first-tree-eval/$H"',
+      "cat .first-tree-eval/{chat-history.md,other.md}",
+      "/tmp/cat .first-tree-eval/chat-history.md",
+    ];
+    try {
+      for (const command of commands) {
+        const metrics = deriveMetrics(
+          [
+            {
+              event: {
+                aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+                command,
+                exit_code: 0,
+                status: "completed",
+                type: "command_execution",
+              },
+              type: "codex_event",
+            },
+          ],
+          findCase("same-chat-phase2-continuation"),
+          fixtureValidation(),
+          0,
+          baseRunPaths(tempRoot),
+          join(tempRoot, "context-tree"),
+        );
+
+        expect(metrics.chatHistoryReadObserved, command).toBe(false);
+      }
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit transcript hints synthesized by a rewriting pipeline filter", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-rewrite-history-"));
     try {
@@ -631,6 +668,37 @@ describe("first-tree-seed grader", () => {
             event: {
               item: {
                 text: "This chat lacks the visible history required for Phase 2 continuation. I’m refusing seed continuation.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2RefusalObserved).toBe(true);
+      expect(metrics.phase2ContinuationObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).not.toContain("continue_phase2");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("classifies an explicit not-authorized Phase 2 response as a refusal", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-not-authorized-refusal-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "Refused: this is state C—already seeded. It is not authorized as a Phase 2 continuation. No source repositories were explored and nothing was written.",
                 type: "agent_message",
               },
               type: "item.completed",
@@ -1745,6 +1813,44 @@ describe("first-tree-seed grader", () => {
       "cat /tmp/worktrees/seed-source-repo/README.md",
       "cat worktrees/seed-source-repo/../../context-tree/NODE.md",
       "cat worktrees/seed-source-repo/../seed-source-repo-evil/README.md",
+    ];
+    try {
+      for (const command of commands) {
+        const metrics = deriveMetrics(
+          [
+            {
+              event: {
+                aggregated_output: "Apollo Console\nruntime coordination",
+                command,
+                exit_code: 0,
+                status: "completed",
+                type: "command_execution",
+              },
+              type: "codex_event",
+            },
+          ],
+          findCase("same-chat-phase2-continuation"),
+          fixtureValidation(),
+          0,
+          baseRunPaths(tempRoot),
+          join(tempRoot, "context-tree"),
+        );
+
+        expect(metrics.sourceEvidenceReadObserved, command).toBe(false);
+      }
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit source operands whose shell expansion can escape the managed root", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-expanded-source-evidence-"));
+    const commands = [
+      'cat "worktrees/seed-source-repo/$(printf ../../context-tree/NODE.md)"',
+      "cat worktrees/seed-source-repo/{../../context-tree/NODE.md,README.md}",
+      'cat "worktrees/seed-source-repo/$P"',
+      "cat worktrees/seed-source-repo/*.md",
+      "/tmp/cat worktrees/seed-source-repo/README.md",
     ];
     try {
       for (const command of commands) {
