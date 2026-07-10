@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexBinaryVerifyTransientError,
   createCodexClientWithBinaryFallback,
+  type FindCodexExecutableDeps,
   findCodexExecutableOnPath,
   formatCodexBinaryMissingMessage,
   isCodexBinaryMissingError,
@@ -275,7 +276,9 @@ describe("codex binary resolution", () => {
     chmodSync(chatGptCodex, 0o755);
     chmodSync(legacyCodex, 0o755);
 
-    const deps = {
+    const deps: FindCodexExecutableDeps = {
+      platform: "linux",
+      pathDelimiter: delimiter,
       loginShellPathDirs: () => [],
       wellKnownDirs: () => [],
       desktopAppDirs: () => [chatGptResources, legacyResources],
@@ -303,6 +306,8 @@ describe("codex binary resolution", () => {
       findCodexExecutableOnPath(
         { PATH: "" },
         {
+          platform: "linux",
+          pathDelimiter: delimiter,
           wellKnownDirs: () => [],
           loginShellPathDirs: () => [loginDir],
           desktopAppDirs: () => [appResources],
