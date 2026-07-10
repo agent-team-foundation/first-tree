@@ -43,6 +43,7 @@ import {
   switchLocalClientForLogin,
 } from "../core/index.js";
 import { print } from "../core/output.js";
+import { shouldRestartServiceAfterRefresh } from "../core/service-recovery.js";
 import { decodeJwtPayload, deriveHubUrlFromToken, HubUrlDerivationError } from "./_shared/connect-token.js";
 
 /** Owning user id (`sub`) from a server-issued JWT, or null if undecodable. */
@@ -88,17 +89,6 @@ async function assertReusableClientAccepted(url: string, accessToken: string, cl
     "CLIENT_RETIRED_REQUIRES_RESET",
     `Client "${clientId}" has been retired. Run \`${channelConfig.binName} computer reset\`, then run \`${channelConfig.binName} login <code>\` with a fresh connect code.`,
     1,
-  );
-}
-
-function shouldRestartServiceAfterRefresh(service: ReturnType<typeof getClientServiceStatus>): boolean {
-  if (service.state === "active") return true;
-  if (service.platform !== "task-scheduler" || service.state !== "unknown") return false;
-  const detail = (service.detail ?? "").toLowerCase();
-  return (
-    detail.includes("task running") ||
-    detail.includes("service runtime marker is live") ||
-    detail.includes("supervisor process is still live")
   );
 }
 
