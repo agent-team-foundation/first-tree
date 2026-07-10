@@ -3,11 +3,12 @@
 //
 // Why: the `@openai/codex-{platform}` package ships a ~225MB native `codex`
 // binary as a transitive optionalDependency of `@openai/codex-sdk`. First Tree
-// does not need it bundled — the runtime resolves a system `codex` on PATH
-// (see packages/client/src/runtime/codex-binary.ts) and the daemon can install
-// the native engine on demand (`daemon install-codex`). Removing the vendored
-// binary at install time trims the install footprint without touching the
-// small `@openai/codex-sdk` TypeScript client we actually import.
+// does not need it bundled — the runtime resolves an external `codex` from
+// PATH, known install locations, or the macOS ChatGPT/Codex desktop app (see
+// packages/client/src/runtime/codex-binary.ts), and the daemon can install the
+// native engine on demand (`daemon install-codex`). Removing the vendored binary
+// at install time trims the install footprint without touching the small
+// `@openai/codex-sdk` TypeScript client we actually import.
 //
 // Zero-config: runs as a `postinstall` of the published package, but ONLY
 // prunes for a global install (`npm install -g first-tree`) — see the
@@ -91,7 +92,7 @@ function main() {
   // unrelated package. npm sets `npm_config_global=true` for `-g` installs;
   // absent it (local dependency install, or a package manager that doesn't
   // export the flag) we skip and leave the binary in place. The runtime still
-  // resolves a system `codex` on PATH, so skipping only forgoes the size win.
+  // resolves an external `codex`, so skipping only forgoes the size win.
   if (process.env.npm_config_global !== "true") return;
 
   // Anchor resolution at both the install package dir (cwd during a
@@ -113,7 +114,7 @@ function main() {
   }
   if (removedBytes > 0) {
     console.log(
-      `[first-tree] codex runtime resolves from PATH or \`daemon install-codex\` (~${(removedBytes / 1e6).toFixed(0)}MB saved)`,
+      `[first-tree] codex runtime resolves from external install locations or \`daemon install-codex\` (~${(removedBytes / 1e6).toFixed(0)}MB saved)`,
     );
   }
 }

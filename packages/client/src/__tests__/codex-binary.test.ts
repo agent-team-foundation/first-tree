@@ -59,7 +59,7 @@ describe("codex binary resolution", () => {
     });
     expect(calls).toHaveLength(2);
     expect(verifyPath).toHaveBeenCalledWith("/usr/local/bin/codex", { PATH: "/usr/local/bin" });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("falling back to system codex"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("falling back to codex"));
   });
 
   it("does not fall back to a PATH codex executable that cannot start", () => {
@@ -74,7 +74,7 @@ describe("codex binary resolution", () => {
           verifyPath: () => ({ ok: false, transient: false, reason: "`codex --version` exited 1: broken shim" }),
         },
       ),
-    ).toThrow(/PATH codex failed validation: `codex --version` exited 1: broken shim/);
+    ).toThrow(/Resolved codex failed validation: `codex --version` exited 1: broken shim/);
   });
 
   it("treats a transient PATH-codex verify flake as retryable, NOT a missing binary", () => {
@@ -193,6 +193,29 @@ describe("codex binary resolution", () => {
     expect(findCodexExecutableOnPath({ PATH: "", HOME: home }, { loginShellPathDirs: () => [] })).toBe(executable);
   });
 
+  it("prefers the ChatGPT app CLI and falls back to the legacy Codex app CLI", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-apps-"));
+    const chatGptResources = join(tmp, "ChatGPT.app", "Contents", "Resources");
+    const legacyResources = join(tmp, "Codex.app", "Contents", "Resources");
+    mkdirSync(chatGptResources, { recursive: true });
+    mkdirSync(legacyResources, { recursive: true });
+    const chatGptCodex = join(chatGptResources, "codex");
+    const legacyCodex = join(legacyResources, "codex");
+    writeFileSync(chatGptCodex, "#!/bin/sh\nexit 0\n");
+    writeFileSync(legacyCodex, "#!/bin/sh\nexit 0\n");
+    chmodSync(chatGptCodex, 0o755);
+    chmodSync(legacyCodex, 0o755);
+
+    const deps = {
+      loginShellPathDirs: () => [],
+      wellKnownDirs: () => [chatGptResources, legacyResources],
+    };
+    expect(findCodexExecutableOnPath({ PATH: "" }, deps)).toBe(chatGptCodex);
+
+    rmSync(chatGptCodex);
+    expect(findCodexExecutableOnPath({ PATH: "" }, deps)).toBe(legacyCodex);
+  });
+
   it("does not throw when the login-shell probe yields nothing (graceful fallback)", () => {
     const home = mkdtempSync(join(tmpdir(), "ft-codex-none-"));
     tmp = home;
@@ -225,6 +248,7 @@ describe("codex binary resolution", () => {
   it("formats binary-missing messages with the original cause", () => {
     const message = formatCodexBinaryMissingMessage("Unable to locate Codex CLI binaries");
     expect(message).toContain("Codex runtime binary is missing");
+    expect(message).toContain("ChatGPT/Codex desktop app on macOS");
     expect(message).toContain("Original error: Unable to locate Codex CLI binaries");
   });
 });

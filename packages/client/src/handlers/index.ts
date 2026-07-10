@@ -38,8 +38,10 @@ export function registerBuiltinHandlers(deps: RegisterBuiltinHandlersDeps = {}):
   registerHandler("claude-code-tui", (config) =>
     createClaudeCodeTuiHandler({ ...config, claudeCodeExecutable: resolution.path }),
   );
-  // Codex SDK bundles the codex CLI binary inside the npm package — no PATH
-  // resolution needed. The handler factory consumes the same HandlerConfig
-  // (workspaceRoot / agentConfigCache / contextTreePath).
+  // Codex prefers the SDK-bundled CLI binary. Global First Tree installs prune
+  // that large optional binary, so the handler can fall back to PATH, known
+  // install locations, or the macOS ChatGPT/Codex desktop app at session start.
+  // The handler factory consumes the same HandlerConfig (workspaceRoot /
+  // agentConfigCache / contextTreePath).
   registerHandler("codex", (config) => createCodexHandler(config));
 }

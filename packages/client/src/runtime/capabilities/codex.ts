@@ -16,7 +16,8 @@ import { verifyLaunchable } from "./launch-probe.js";
  * Platform-package map mirrored from `@openai/codex-sdk`'s own binary
  * resolution (src/exec.ts). The probe must look for the SAME binary the runtime
  * spawns — the handler prefers the SDK-bundled vendor binary and only falls
- * back to a system `codex` on PATH when the bundle is missing.
+ * back to an external `codex` resolved from PATH, a well-known install
+ * directory, or the macOS ChatGPT/Codex desktop app when the bundle is missing.
  */
 const CODEX_PLATFORM_PACKAGE_BY_TARGET: Record<string, string> = {
   "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
@@ -77,7 +78,7 @@ function isFile(p: string): boolean {
  * `codex-package.json` marker are present; otherwise the legacy
  * `codex/<codex>` layout. Returns null when neither resolves — which is
  * precisely when `new Codex()` throws "Unable to locate Codex CLI binaries"
- * and the handler falls back to a system PATH codex. Existence-only.
+ * and the handler falls back to an externally installed codex. Existence-only.
  */
 export function resolveBundledBinaryInPackageRoot(packageRoot: string): string | null {
   const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
@@ -139,7 +140,7 @@ export async function resolveBundledCodexBinary(): Promise<
 }
 
 /** Resolved runtime binary + provenance — mirrors the handler's bundled-first,
- * system-PATH-fallback order (PR #1054 `codex-binary.ts`). */
+ * external-path-fallback order (PR #1054 `codex-binary.ts`). */
 export type CodexBinaryResolution =
   | {
       ok: true;
@@ -161,8 +162,8 @@ export type CodexRuntimeResolveDeps = {
 /**
  * Resolve the codex binary the RUNTIME would actually spawn, on the SAME
  * contract as the handler (`createCodexClientWithBinaryFallback`): SDK-bundled
- * vendor binary first (launch-verified), else a validated system `codex` on
- * PATH. This is a RUNTIME/handler + login helper — it DOES launch-verify the
+ * vendor binary first (launch-verified), else a validated external `codex`
+ * resolved from PATH / known install locations. This is a RUNTIME/handler + login helper — it DOES launch-verify the
  * binary it is about to spawn. The capability probe does NOT use it (see
  * `probeCodexCapability`, which is install-only / existence-only); they share
  * the same `resolveBundledCodexBinary` + `findCodexExecutableOnPath`
@@ -219,7 +220,7 @@ export async function resolveCodexRuntimeBinary(
     }
     return {
       ok: false,
-      error: formatCodexBinaryMissingMessage(`PATH codex failed validation: ${verification.reason}`),
+      error: formatCodexBinaryMissingMessage(`resolved codex failed validation: ${verification.reason}`),
     };
   }
 
@@ -238,7 +239,7 @@ export type CodexProbeDeps = {
  *
  * Installed when the binary the runtime would spawn EXISTS — the SDK-bundled
  * vendor binary (per the SDK's own `resolveNativePackage` layout check), or a
- * system `codex` on PATH — without launching it (`--version`), checking
+ * external `codex` from PATH / known install locations — without launching it (`--version`), checking
  * `codex login status`, or running `codex doctor`. Reports `runtimeSource` /
  * `runtimePath` so diagnostics still show which artifact backs the runtime.
  * Authentication and reachability are no longer probed; a logged-out or
