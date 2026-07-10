@@ -19,12 +19,14 @@ export const PROVIDER_ORDER: RuntimeProvider[] = [
   RUNTIME_PROVIDERS.CLAUDE_CODE,
   RUNTIME_PROVIDERS.CLAUDE_CODE_TUI,
   RUNTIME_PROVIDERS.CODEX,
+  RUNTIME_PROVIDERS.CURSOR,
 ].filter((p) => isRuntimeProviderEnabled(p));
 
 export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
   "claude-code-tui": "Claude Code CLI",
   codex: "Codex",
+  cursor: "Cursor",
 };
 
 const KNOWN_RUNTIME_PROVIDERS: readonly string[] = Object.values(RUNTIME_PROVIDERS);
@@ -61,7 +63,18 @@ export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string> = {
   "claude-code": "@anthropic-ai/claude-code",
   "claude-code-tui": "@anthropic-ai/claude-code",
   codex: "@openai/codex",
+  // Cursor is not distributed via npm — it installs through the curl script
+  // below (see CURSOR_INSTALL_COMMAND). This entry keeps the Record total for
+  // callers that key off it, but the install-command path special-cases cursor.
+  cursor: "",
 };
+
+/**
+ * Cursor CLI install command. Cursor ships a shell installer rather than an npm
+ * package, so `buildInstallCommand` special-cases this provider instead of the
+ * `npm install -g …` path used by the others.
+ */
+export const CURSOR_INSTALL_COMMAND = "curl https://cursor.com/install -fsS | bash";
 
 /**
  * Per-runtime login command shown after install. Codex prints
@@ -74,6 +87,7 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
   "claude-code": "claude auth login",
   "claude-code-tui": "claude auth login",
   codex: "codex login",
+  cursor: "cursor-agent login",
 };
 
 /**
@@ -83,6 +97,10 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
  * box with a copy button per box.
  */
 export function buildInstallCommand(provider: RuntimeProvider, os?: string | null): string {
+  if (provider === "cursor") {
+    // Cursor uses a shell installer, not npm.
+    return `${CURSOR_INSTALL_COMMAND}\n${PROVIDER_LOGIN_COMMAND.cursor}`;
+  }
   const base = `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
   if (provider === "claude-code-tui") {
     // The tmux-driven runtime additionally needs tmux (>= 3.0). tmux is not an
@@ -187,6 +205,9 @@ export function providerInstallHint(
     return tmuxCmd
       ? `Run \`npm install -g @anthropic-ai/claude-code\` and \`${tmuxCmd}\` (tmux >= 3.0) on this ${device}.`
       : `Run \`npm install -g @anthropic-ai/claude-code\`, then install tmux (>= 3.0) with your package manager, on this ${device}.`;
+  }
+  if (provider === "cursor") {
+    return `Run \`${CURSOR_INSTALL_COMMAND}\` on this ${device}.`;
   }
   return `Install the OpenAI Codex CLI on this ${device}.`;
 }

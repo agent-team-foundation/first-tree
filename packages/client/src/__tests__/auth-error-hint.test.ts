@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAuthHint, isClaudeAuthError, isCodexAuthError } from "../handlers/auth-error-hint.js";
+import { formatAuthHint, isClaudeAuthError, isCodexAuthError, isCursorAuthError } from "../handlers/auth-error-hint.js";
 
 /**
  * Locks the behavioural contract of the auth-error hint module that
@@ -93,6 +93,23 @@ describe("isClaudeAuthError", () => {
   });
 });
 
+describe("isCursorAuthError", () => {
+  it("matches the cursor-agent logged-out stderr wording", () => {
+    expect(
+      isCursorAuthError(
+        "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.",
+      ),
+    ).toBe(true);
+    expect(isCursorAuthError("please set CURSOR_API_KEY")).toBe(true);
+  });
+
+  it("does NOT match unrelated cursor errors, and returns false for empty", () => {
+    expect(isCursorAuthError("Cannot use this model: bogus")).toBe(false);
+    expect(isCursorAuthError("network blip")).toBe(false);
+    expect(isCursorAuthError("")).toBe(false);
+  });
+});
+
 describe("formatAuthHint", () => {
   it("targets `codex login` for the codex runtime and quotes the original SDK message", () => {
     const hint = formatAuthHint(
@@ -113,6 +130,18 @@ describe("formatAuthHint", () => {
     expect(hint).toContain("Anthropic");
     expect(hint).toContain("not First Tree's");
     expect(hint).toContain("authentication_failed");
+  });
+
+  it("targets `cursor-agent login` for the cursor runtime", () => {
+    const hint = formatAuthHint(
+      "cursor",
+      "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.",
+    );
+    expect(hint).toContain("cursor");
+    expect(hint).toContain("`cursor-agent login`");
+    expect(hint).toContain("Cursor");
+    expect(hint).toContain("not First Tree's");
+    expect(hint).toContain("Authentication required");
   });
 
   it("falls back to a placeholder when the SDK gives no message", () => {

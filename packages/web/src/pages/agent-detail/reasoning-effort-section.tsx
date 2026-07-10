@@ -30,18 +30,25 @@ export const CODEX_EFFORT_OPTIONS: SelectOption[] = [
   { value: "ultra", label: "ultra", hint: "deepest; model-dependent" },
 ];
 
+// Cursor's config carries a reasoning-effort field for parity, but cursor-agent
+// v1 has no reasoning-effort flag, so the picker only exposes the "unset"
+// sentinel — the value is not wired to the CLI spawn yet.
+const CURSOR_EFFORT_OPTIONS: SelectOption[] = [{ value: "", label: "(unset)" }];
+
 const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
   "claude-code": CLAUDE_EFFORT_OPTIONS,
   // claude-code-tui drives the same `claude` CLI as claude-code, so it shares
   // the identical effort options + inherit sentinel.
   "claude-code-tui": CLAUDE_EFFORT_OPTIONS,
   codex: CODEX_EFFORT_OPTIONS,
+  cursor: CURSOR_EFFORT_OPTIONS,
 };
 
 const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   "claude-code": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   "claude-code-tui": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   codex: "Applies to new sessions. Higher means more reasoning per turn; max and ultra require a compatible model.",
+  cursor: "Not configurable for Cursor — the cursor-agent CLI does not expose a reasoning-effort flag.",
 };
 
 export type ReasoningEffortSectionProps = {

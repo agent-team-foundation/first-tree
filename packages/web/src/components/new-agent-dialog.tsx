@@ -141,7 +141,9 @@ async function resolveAvailableHandle(base: string, isStale: () => boolean): Pro
  * doesn't know about yet — the UI just ignores anything it can't render.
  */
 function asRuntimeProvider(provider: string): RuntimeProvider | null {
-  if (provider === "claude-code" || provider === "claude-code-tui" || provider === "codex") return provider;
+  if (provider === "claude-code" || provider === "claude-code-tui" || provider === "codex" || provider === "cursor") {
+    return provider;
+  }
   return null;
 }
 
@@ -159,6 +161,7 @@ function pickPreferredRuntime(caps: ClientCapabilities): RuntimeProvider | null 
   // DISABLED_RUNTIME_PROVIDERS restores its priority over Codex in one line.
   if (isRuntimeProviderEnabled("claude-code-tui") && caps["claude-code-tui"]?.state === "ok") return "claude-code-tui";
   if (caps.codex?.state === "ok") return "codex";
+  if (caps.cursor?.state === "ok") return "cursor";
   // Any other provider (incl. one still disabled in a stale snapshot) is only
   // auto-picked when enabled.
   for (const [provider, entry] of Object.entries(caps)) {
@@ -174,6 +177,7 @@ function prettyRuntimeLabel(provider: RuntimeProvider): string {
   if (provider === "claude-code") return "Claude Code";
   if (provider === "claude-code-tui") return "Claude Code CLI";
   if (provider === "codex") return "Codex";
+  if (provider === "cursor") return "Cursor";
   return provider;
 }
 

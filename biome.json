@@ -45,7 +45,8 @@
       "!**/*.code-workspace",
       "!**/.gstack",
       "!**/.first-tree/tmp",
-      "!packages/skill-evals/.runs"
+      "!packages/skill-evals/.runs",
+      "!packages/client/src/handlers/cursor/__fixtures__"
     ]
   }
 }

@@ -55,16 +55,23 @@ export const CODEX_MODEL_OPTIONS: Array<ModelOption & { value: CodexModelId }> =
   { value: CODEX_MODEL_IDS.GPT_5_2, label: CODEX_MODEL_IDS.GPT_5_2 },
 ];
 
+// Cursor exposes many account-dependent models and picks a default when unset,
+// so we ship no curated preset list — the picker shows "(unset)" plus any
+// custom id the operator stored. Runtime config still accepts arbitrary ids.
+const CURSOR_MODEL_OPTIONS: ModelOption[] = [];
+
 const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
   "claude-code": CLAUDE_MODEL_OPTIONS,
   "claude-code-tui": CLAUDE_MODEL_OPTIONS,
   codex: CODEX_MODEL_OPTIONS,
+  cursor: CURSOR_MODEL_OPTIONS,
 };
 
 const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   "claude-code": "Applies to new sessions immediately. Unset falls back to the CLI default.",
   "claude-code-tui": "Applies to new sessions immediately. Model swap restarts the tmux session (~2–4s).",
   codex: "Applies to new sessions immediately. Unset lets the CLI pick by auth mode.",
+  cursor: "Applies to new sessions immediately. Unset lets the Cursor CLI pick a default model.",
 };
 
 export type ModelSectionProps = {

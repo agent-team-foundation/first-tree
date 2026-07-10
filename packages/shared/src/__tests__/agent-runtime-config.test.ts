@@ -74,6 +74,27 @@ describe("agent runtime config — codex defaults", () => {
       kind: "codex",
       model: "",
     });
+    expect(defaultRuntimeConfigPayload("cursor")).toMatchObject({
+      kind: "cursor",
+      model: "",
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "never",
+    });
+  });
+
+  it("schema accepts an explicit cursor payload and defaults its provider fields", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "cursor",
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+    });
+    expect(parsed.kind).toBe("cursor");
+    if (parsed.kind !== "cursor") throw new Error("expected cursor variant");
+    expect(parsed.sandboxMode).toBe("danger-full-access");
+    expect(parsed.approvalPolicy).toBe("never");
+    expect(parsed.reasoningEffort).toBe("");
   });
 
   it("DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD is claude-code-tui with model='opus'", () => {

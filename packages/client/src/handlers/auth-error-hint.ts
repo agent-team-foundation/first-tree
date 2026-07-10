@@ -13,7 +13,7 @@
  * CLI. The hint reframes the message so the next step is obvious.
  */
 
-type Runtime = "codex" | "claude-code";
+type Runtime = "codex" | "claude-code" | "cursor";
 
 /**
  * Substring keywords used to detect codex's auth-refresh failures. Codex's
@@ -51,6 +51,20 @@ export function isCodexAuthError(message: string): boolean {
 }
 
 /**
+ * Substring keywords for Cursor CLI auth failures. When logged out, cursor-agent
+ * exits before emitting any JSON with an "Authentication required. Please run
+ * 'agent login' first, or set CURSOR_API_KEY environment variable." stderr line.
+ * Match on those two phrases so the handler can reframe it into a re-login hint.
+ */
+const CURSOR_AUTH_KEYWORDS: readonly string[] = ["authentication required", "cursor_api_key"];
+
+export function isCursorAuthError(message: string): boolean {
+  if (message.length === 0) return false;
+  const lower = message.toLowerCase();
+  return CURSOR_AUTH_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/**
  * The single auth-failure code claude-code's SDK reports (out of the
  * `SDKAssistantMessageError` union). Centralised here so both the assistant-
  * message path and the api_retry path can share one check.
@@ -72,8 +86,9 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
   // hint matches what the Setup-incomplete card already prints. Keeping them
   // textually identical is intentional — if the provider's canonical command
   // ever changes, update both call sites together.
-  const reauth = runtime === "codex" ? "`codex login`" : "`claude auth login`";
-  const provider = runtime === "codex" ? "OpenAI" : "Anthropic";
+  const reauth =
+    runtime === "codex" ? "`codex login`" : runtime === "cursor" ? "`cursor-agent login`" : "`claude auth login`";
+  const provider = runtime === "codex" ? "OpenAI" : runtime === "cursor" ? "Cursor" : "Anthropic";
   // Cap the appended raw message so an upstream stack-trace envelope (codex
   // wraps its `event.error.message` in surprising ways) doesn't bloat the
   // hint into a wall of text on the chat timeline.

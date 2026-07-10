@@ -1,0 +1,204 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import type { SessionEvent } from "@first-tree/shared";
+import { describe, expect, it } from "vitest";
+import { classifyCursorNoResult, consumeCursorEvent, createCursorTurnState, finalizeCursorTurn } from "./parser.js";
+
+function fixture(name: string): string {
+  return readFileSync(fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url)), "utf-8");
+}
+
+function parseJsonlLines(text: string): unknown[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+/** Drive a whole jsonl fixture through the parser, returning streamed events. */
+function streamFixture(name: string): { events: SessionEvent[]; state: ReturnType<typeof createCursorTurnState> } {
+  const state = createCursorTurnState();
+  const events: SessionEvent[] = [];
+  for (const raw of parseJsonlLines(fixture(name))) {
+    events.push(...consumeCursorEvent(state, raw));
+  }
+  return { events, state };
+}
+
+function toolCalls(events: SessionEvent[]): Array<Extract<SessionEvent, { kind: "tool_call" }>["payload"]> {
+  return events
+    .filter((e): e is Extract<SessionEvent, { kind: "tool_call" }> => e.kind === "tool_call")
+    .map((e) => e.payload);
+}
+
+const EDIT_CALL_ID = "tool_28d67f7a-14e6-4ec2-9e0e-8bd077528d8";
+const READ_CALL_ID = "tool_5fea06e6-7ec1-450a-a642-c7a6000d389";
+const SHELL_CALL_ID = "tool_c5cb272a-f951-41f9-a165-be2e3edc29d";
+
+describe("cursor parser — multitool success", () => {
+  it("emits thinking markers, paired tool calls, usage, assistant text, and a success turn_end", () => {
+    const { events, state } = streamFixture("multitool-success.jsonl");
+
+    // Two `thinking:completed` blocks → two presence-only markers (deltas dropped).
+    expect(events.filter((e) => e.kind === "thinking")).toHaveLength(2);
+
+    // No assistant_text emitted during the stream — it is deferred to finalize.
+    expect(events.some((e) => e.kind === "assistant_text")).toBe(false);
+
+    // Tool calls, in emitted order, paired by call_id across the interleave.
+    const calls = toolCalls(events);
+    expect(calls.map((c) => [c.toolUseId, c.name, c.status])).toEqual([
+      [EDIT_CALL_ID, "edit", "pending"],
+      [EDIT_CALL_ID, "edit", "ok"],
+      [READ_CALL_ID, "read", "pending"],
+      [SHELL_CALL_ID, "shell", "pending"],
+      [READ_CALL_ID, "read", "ok"],
+      [SHELL_CALL_ID, "shell", "ok"],
+    ]);
+
+    // Terminal edit: file_change ref + duration + message preview.
+    const editDone = calls.find((c) => c.toolUseId === EDIT_CALL_ID && c.status === "ok");
+    expect(editDone?.toolFileRefs).toEqual([
+      {
+        localPath: "/private/tmp/cursor-cli-multitool-xm1EqH/phase0-proof.txt",
+        pathKind: "file",
+        origin: "file_change",
+      },
+    ]);
+    expect(editDone?.durationMs).toBe(382);
+    expect(editDone?.resultPreview).toBe("Wrote contents to /private/tmp/cursor-cli-multitool-xm1EqH/phase0-proof.txt");
+
+    // Terminal read: tool_arg ref + "<bytes> bytes" preview.
+    const readDone = calls.find((c) => c.toolUseId === READ_CALL_ID && c.status === "ok");
+    expect(readDone?.toolFileRefs).toEqual([
+      { localPath: "/private/tmp/cursor-cli-multitool-xm1EqH/phase0-proof.txt", pathKind: "file", origin: "tool_arg" },
+    ]);
+    expect(readDone?.resultPreview).toBe("46 bytes");
+
+    // Terminal shell (success): stdout preview, no file refs.
+    const shellDone = calls.find((c) => c.toolUseId === SHELL_CALL_ID && c.status === "ok");
+    expect(shellDone?.resultPreview).toBe("      46 phase0-proof.txt\n");
+    expect(shellDone?.toolFileRefs).toBeUndefined();
+
+    // State captured from system:init and result.
+    expect(state.sessionId).toBe("b4b94c7c-fafd-4445-aa91-2b6da9e2a503");
+    expect(state.model).toBe("Composer 2.5");
+    expect(state.sawResult).toBe(true);
+    expect(state.isError).toBe(false);
+
+    // Finalize: token_usage → assistant_text → turn_end, in that order.
+    const { events: finalEvents, settlement } = finalizeCursorTurn(state, 0, "");
+    expect(finalEvents.map((e) => e.kind)).toEqual(["token_usage", "assistant_text", "turn_end"]);
+
+    const usage = finalEvents.find((e) => e.kind === "token_usage");
+    expect(usage?.kind === "token_usage" && usage.payload).toEqual({
+      provider: "cursor",
+      model: "Composer 2.5",
+      inputTokens: 4358,
+      cachedInputTokens: 32896,
+      outputTokens: 408,
+    });
+
+    // assistant_text equals the aggregated `result.result` string exactly.
+    const resultLine = parseJsonlLines(fixture("multitool-success.jsonl")).find(
+      (e): e is { type: string; result: string } =>
+        typeof e === "object" && e !== null && "type" in e && (e as { type: unknown }).type === "result",
+    );
+    const expectedText = "Creating the file, reading it back, then running `wc -c`.\nFT_MULTITOOL_OK";
+    expect(resultLine?.result).toBe(expectedText);
+    const assistantText = finalEvents.find((e) => e.kind === "assistant_text");
+    expect(assistantText?.kind === "assistant_text" && assistantText.payload.text).toBe(expectedText);
+
+    const turnEnd = finalEvents.find((e) => e.kind === "turn_end");
+    expect(turnEnd?.kind === "turn_end" && turnEnd.payload.status).toBe("success");
+
+    expect(settlement.action.kind).toBe("complete");
+    expect(settlement.status).toBe("success");
+  });
+});
+
+describe("cursor parser — shell failure (completed line)", () => {
+  it("marks a shell exit-nonzero tool call as error with the stderr in the preview", () => {
+    const state = createCursorTurnState();
+    const raw = JSON.parse(fixture("shell-failure-completed.json"));
+    const events = consumeCursorEvent(state, raw);
+
+    expect(events).toHaveLength(1);
+    const call = events[0];
+    expect(call?.kind).toBe("tool_call");
+    if (call?.kind !== "tool_call") throw new Error("expected tool_call");
+    expect(call.payload.name).toBe("shell");
+    expect(call.payload.status).toBe("error");
+    expect(call.payload.toolUseId).toBe("tool_8f1d4c42-bfec-4d64-a4d3-113840a50c4");
+    expect(call.payload.resultPreview).toBe("FT_EXPECTED_STDERR");
+    expect(call.payload.durationMs).toBe(638);
+  });
+});
+
+describe("cursor parser — no-result finalize classification", () => {
+  const AUTH_STDERR =
+    "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.";
+  const INVALID_MODEL_STDERR = "Cannot use this model: bogus-model. Available models: auto, gpt-5.3-codex-low";
+  const USAGE_LIMIT_STDERR =
+    "ActionRequiredError: You've hit your usage limit You've saved $48 on API model usage this month with Pro.";
+
+  it("classifies the three terminal no-result cases", () => {
+    expect(classifyCursorNoResult(AUTH_STDERR)).toBe("auth");
+    expect(classifyCursorNoResult(INVALID_MODEL_STDERR)).toBe("invalid_model");
+    expect(classifyCursorNoResult(USAGE_LIMIT_STDERR)).toBe("usage_limit");
+    expect(classifyCursorNoResult("network blip, please retry")).toBe("generic");
+  });
+
+  it("auth → error event with a re-login hint + terminal consumed settlement", () => {
+    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, AUTH_STDERR);
+    expect(events.map((e) => e.kind)).toEqual(["error", "turn_end"]);
+    const error = events[0];
+    expect(error?.kind === "error" && error.payload.source).toBe("sdk");
+    expect(error?.kind === "error" && error.payload.message).toContain("cursor-agent login");
+    expect(error?.kind === "error" && error.payload.message).toContain("Authentication required");
+    const turnEnd = events[1];
+    expect(turnEnd?.kind === "turn_end" && turnEnd.payload.status).toBe("error");
+    expect(settlement.action.kind).toBe("complete");
+    expect(settlement.status).toBe("error");
+    if (settlement.action.kind !== "complete") throw new Error("expected complete");
+    expect(settlement.action.outcome).toMatchObject({ terminal: true, completion: "consumed" });
+  });
+
+  it("invalid model → error event carrying the stderr + terminal consumed settlement", () => {
+    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, INVALID_MODEL_STDERR);
+    const error = events[0];
+    expect(error?.kind === "error" && error.payload.message).toBe(INVALID_MODEL_STDERR);
+    expect(settlement.action.kind).toBe("complete");
+    expect(settlement.status).toBe("error");
+  });
+
+  it("usage limit → error event carrying the stderr + terminal consumed settlement", () => {
+    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 1, USAGE_LIMIT_STDERR);
+    const error = events[0];
+    expect(error?.kind === "error" && error.payload.message).toBe(USAGE_LIMIT_STDERR);
+    expect(settlement.action.kind).toBe("complete");
+    expect(settlement.status).toBe("error");
+  });
+
+  it("generic exit → error event + retryable settlement (not terminal)", () => {
+    const { events, settlement } = finalizeCursorTurn(createCursorTurnState(), 2, "");
+    const error = events[0];
+    expect(error?.kind === "error" && error.payload.message).toContain("cursor-agent exited");
+    expect(settlement.action.kind).toBe("retry");
+  });
+
+  it("result with is_error → consumed error settlement + error turn_end", () => {
+    const state = createCursorTurnState();
+    state.sawResult = true;
+    state.isError = true;
+    state.resultText = "partial";
+    const { events, settlement } = finalizeCursorTurn(state, 0, "");
+    // No usage captured → no token_usage; assistant_text still carries the text.
+    expect(events.map((e) => e.kind)).toEqual(["assistant_text", "turn_end"]);
+    const turnEnd = events.find((e) => e.kind === "turn_end");
+    expect(turnEnd?.kind === "turn_end" && turnEnd.payload.status).toBe("error");
+    expect(settlement.action.kind).toBe("complete");
+    expect(settlement.status).toBe("error");
+  });
+});

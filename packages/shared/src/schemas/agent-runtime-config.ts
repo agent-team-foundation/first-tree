@@ -271,10 +271,31 @@ const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   reasoningEffort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).default("high"),
 });
 
+const cursorRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("cursor"),
+  // Cursor CLI sandbox posture. v1 of the handler always spawns the
+  // `cursor-agent` CLI with `--sandbox disabled` (cursor is the agent's primary
+  // local-execution surface, matching codex's `danger-full-access`), so this
+  // field is carried for forward-compat / parity and defaults accordingly. It
+  // is not yet wired to a spawn flag.
+  sandboxMode: z.enum(["read-only", "workspace-write", "danger-full-access"]).default("danger-full-access"),
+  // Cursor CLI approval policy. v1 runs fully non-interactive (`--force`), so
+  // this defaults to "never" and is carried for forward-compat / parity; it is
+  // not yet wired to a spawn flag.
+  approvalPolicy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
+  // Carried for parity with the other providers so shared payload readers
+  // (server `applyPatch`, web runtime tab, CLI config commands) stay type-safe
+  // across the whole union. The empty string is the "inherit / unset" sentinel.
+  // cursor-agent v1 has no reasoning-effort flag, so the handler does not pass
+  // it through yet.
+  reasoningEffort: z.enum(["", "low", "medium", "high", "max"]).default(""),
+});
+
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
   claudeRuntimeConfigPayloadShape,
   claudeCodeTuiRuntimeConfigPayloadShape,
   codexRuntimeConfigPayloadShape,
+  cursorRuntimeConfigPayloadShape,
 ]);
 type TaggedPayload = z.infer<typeof taggedPayloadUnion>;
 
@@ -378,6 +399,25 @@ export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
 };
 
 /**
+ * Default payload for a fresh cursor agent. Same 5 base fields as the other
+ * providers, plus the cursor-specific `sandboxMode` / `approvalPolicy`.
+ * `model` is left empty so the Cursor CLI picks a default that matches the
+ * user's account/auth mode.
+ */
+export const DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "cursor",
+  prompt: { append: "" },
+  model: "",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+  resourceSkills: [],
+  reasoningEffort: "",
+  sandboxMode: "danger-full-access",
+  approvalPolicy: "never",
+};
+
+/**
  * Default payload for a fresh claude-code-tui agent. Same fields as claude-code
  * (including the reasoningEffort inherit sentinel) since both drive the same
  * `claude` CLI; the provider differs only in how the client runtime
@@ -403,6 +443,8 @@ export function defaultRuntimeConfigPayload(
   switch (provider) {
     case "codex":
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
+    case "cursor":
+      return { ...DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code-tui":
       return { ...DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code":
