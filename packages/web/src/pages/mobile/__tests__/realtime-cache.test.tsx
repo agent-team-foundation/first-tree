@@ -36,7 +36,7 @@ describe("mobile projections share the realtime invalidation prefix", () => {
     // Let the first fetch settle (empty state renders) before invalidating,
     // so the invalidation queues a real refetch rather than coalescing with an
     // in-flight fetch.
-    await harness.waitFor(() => expect(harness.container.textContent).toContain("Nothing active"));
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("You're all caught up"));
     expect(meChatMocks.listMeChats).toHaveBeenCalledTimes(1);
 
     // A realtime WS event (useAdminWs) or a chat send / ask-answer / new-chat

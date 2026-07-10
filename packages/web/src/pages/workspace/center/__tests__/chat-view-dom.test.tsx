@@ -843,6 +843,9 @@ describe("ChatView", () => {
     expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
     // Mobile presentation keeps the header context-only: no click-to-rename.
     expect(buttonByTitle(container, "Click to rename")).toBeNull();
+    // Q4: mobile chat detail exits with a back arrow, not the hamburger.
+    expect(container.querySelector('button[aria-label="Back to conversations"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Show conversations"]')).toBeNull();
 
     await click(container.querySelector('button[aria-label="Show chat options"]'));
     await waitForText(container, "Participants · 4");

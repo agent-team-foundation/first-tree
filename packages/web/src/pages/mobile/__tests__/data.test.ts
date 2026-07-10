@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   countAttentionRows,
   countUnreadRows,
+  isNowFeedRow,
   mobileChatSignal,
   mobileFeedReasonLabel,
   sortMobileChats,
@@ -109,5 +110,38 @@ describe("mobile chat projection", () => {
         }),
       ),
     ).toBe("Question waiting");
+  });
+});
+
+describe("isNowFeedRow (needs-attention admission)", () => {
+  it("admits chats with an authoritative active signal", () => {
+    expect(isNowFeedRow(chatRow({ failedAgentIds: ["agent-1"] }))).toBe(true);
+    expect(isNowFeedRow(chatRow({ openRequestCount: 1 }))).toBe(true);
+    expect(isNowFeedRow(chatRow({ chatHasExplicitMentionToMe: true }))).toBe(true);
+    expect(isNowFeedRow(chatRow({ busyAgentIds: ["agent-1"] }))).toBe(true);
+  });
+
+  it("excludes idle and watching-only chats", () => {
+    expect(isNowFeedRow(chatRow({}))).toBe(false);
+    expect(isNowFeedRow(chatRow({ membershipKind: "watching" }))).toBe(false);
+  });
+
+  it("does not admit a liveActivity-only row (description is not busy authority)", () => {
+    // A residual/cached liveActivity with no authoritative busyAgentIds must not
+    // keep a chat in the needs-attention feed.
+    expect(
+      isNowFeedRow(
+        chatRow({
+          busyAgentIds: [],
+          liveActivity: { agentId: "agent-1", kind: "tool_call", label: "Using Bash", startedAt: NOW },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not admit a plain unread 1:1 reply (implicit auto-mention only)", () => {
+    // unreadMentionCount also counts the implicit 1:1 DM auto-mention; only an
+    // explicit @me qualifies.
+    expect(isNowFeedRow(chatRow({ unreadMentionCount: 3, chatHasExplicitMentionToMe: false }))).toBe(false);
   });
 });

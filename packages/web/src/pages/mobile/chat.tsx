@@ -39,7 +39,10 @@ export function MobileChatPage() {
     const next = new URLSearchParams(searchParams);
     next.delete("c");
     next.delete("with");
-    setSearchParams(next);
+    // Back semantics: replace the detail URL with the list rather than pushing,
+    // so the browser Back button / swipe does not reopen the chat detail the
+    // user just exited via the back arrow.
+    setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
   return (
