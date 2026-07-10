@@ -63,7 +63,7 @@ export type SdkConfig = {
    */
   agentId?: string;
   /**
-   * Token or token provider for the current owner-client runtime session.
+   * Token or token provider for the current runtime session.
    * Agent-scoped HTTP includes it to prove the request comes from the active
    * runtime owner, not merely from a user JWT that knows `X-Agent-Id`.
    */
@@ -261,7 +261,7 @@ export class FirstTreeHubSDK {
     return this._agentId;
   }
 
-  /** Runtime-session token scoped to the current owner-client, if any. */
+  /** Runtime-session token scoped to the current bind, if any. */
   get runtimeSessionToken(): string | undefined {
     return this.resolveRuntimeSessionToken();
   }

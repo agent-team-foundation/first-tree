@@ -793,44 +793,6 @@ describe("AgentSlot", () => {
     expect(connection.tokenProviders.has("agent-1")).toBe(false);
   });
 
-  it("keeps the runtime token file and transport when a reconnect reuses the token", async () => {
-    const tokenFile = "/tmp/first-tree-test-data/runtime-session-tokens/agent-1.token";
-    const { slot, connection, sdk, state } = await makeSlot({
-      activeRuntimeChatIds: ["chat-1"],
-      runtimeSessionToken: "runtime-token-1",
-    });
-
-    try {
-      await slot.start();
-      const session = state.sessions[0];
-      if (!session) throw new Error("session missing");
-      expect(readFileSync(tokenFile, "utf8").trim()).toBe("runtime-token-1");
-      vi.mocked(sdk.listActiveRuntimeChatIds).mockClear();
-      session.updateTransport.mockClear();
-
-      const reusedSdk = makeSdk({
-        activeRuntimeChatIds: ["chat-2"],
-        runtimeSessionToken: "runtime-token-should-not-win",
-      });
-      connection.emit("agent:bound", {
-        agentId: "agent-1",
-        displayName: "Agent One",
-        agentType: "agent",
-        sdk: reusedSdk,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(readFileSync(tokenFile, "utf8").trim()).toBe("runtime-token-1");
-      expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(reusedSdk.listActiveRuntimeChatIds)).not.toHaveBeenCalled();
-      expect(session.updateTransport).not.toHaveBeenCalled();
-    } finally {
-      await slot.stop();
-    }
-  });
-
   it("starts a fresh active-runtime-chat refresh after rebind even when the old refresh is in flight", async () => {
     const { slot, connection, sdk, state } = await makeSlot({ activeRuntimeChatIds: ["chat-1"] });
     await slot.start();

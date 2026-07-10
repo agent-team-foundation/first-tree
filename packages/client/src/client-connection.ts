@@ -136,7 +136,7 @@ export type BoundAgent = {
    */
   displayName: string;
   agentType: string;
-  /** Token returned by a minting WS `agent:bind`; omitted when the server reused the current owner-client token. */
+  /** Ephemeral token returned by the current successful WS `agent:bind`. */
   runtimeSessionToken?: string;
   sdk: FirstTreeHubSDK;
 };
@@ -1103,7 +1103,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private sendBind(agentId: string, runtimeType: string, runtimeVersion?: string): Promise<BoundAgent> {
     return new Promise<BoundAgent>((resolve, reject) => {
       const ref = randomUUID().slice(0, 12);
-      const currentRuntimeSessionToken = this.resolveRuntimeSessionToken(agentId);
       this.pendingBinds.set(ref, { agentId, runtimeType, runtimeVersion, resolve, reject });
       this.ws?.send(
         JSON.stringify({
@@ -1112,7 +1111,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           agentId,
           runtimeType,
           runtimeVersion,
-          ...(currentRuntimeSessionToken ? { currentRuntimeSessionToken } : {}),
         }),
       );
     });

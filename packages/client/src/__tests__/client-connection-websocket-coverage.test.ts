@@ -336,7 +336,7 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     ]);
   });
 
-  it("presents the current runtime session token when binding", async () => {
+  it("keeps bind token presentation out of agent:bind while SDK reads the token provider", async () => {
     const connection = await makeConnection();
     const internal = priv(connection);
     const socket = await openRegisteredConnection(connection);
@@ -348,8 +348,8 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     expect(bindFrame).toMatchObject({
       type: "agent:bind",
       agentId: "agent-1",
-      currentRuntimeSessionToken: "runtime-token-file-1",
     });
+    expect(bindFrame).not.toHaveProperty("currentRuntimeSessionToken");
 
     socket.emitMessage({
       type: "agent:bound",
@@ -357,9 +357,10 @@ describe("ClientConnection — WebSocket edge coverage", () => {
       agentId: "agent-1",
       displayName: "Agent One",
       agentType: "agent",
+      runtimeSessionToken: "runtime-token-minted",
     });
     const bound = await bindPromise;
-    expect(bound.runtimeSessionToken).toBeUndefined();
+    expect(bound.runtimeSessionToken).toBe("runtime-token-minted");
     expect(bound.sdk.runtimeSessionToken).toBe("runtime-token-file-1");
 
     currentToken = "runtime-token-file-2";
