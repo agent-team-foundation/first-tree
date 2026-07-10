@@ -161,14 +161,14 @@ describe("agent runtime config — reasoning effort", () => {
     );
   });
 
-  it("codex accepts low/medium/high/xhigh", () => {
-    for (const v of ["low", "medium", "high", "xhigh"]) {
+  it("codex accepts low/medium/high/xhigh/max/ultra", () => {
+    for (const v of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
       expect(agentRuntimeConfigPayloadSchema.parse({ kind: "codex", reasoningEffort: v }).reasoningEffort).toBe(v);
     }
   });
 
-  it("codex rejects minimal (breaks tools), claude-only max, and the '' sentinel", () => {
-    for (const v of ["minimal", "max", ""]) {
+  it("codex rejects minimal/none (incompatible with the default tools), the '' sentinel, and unknown values", () => {
+    for (const v of ["minimal", "none", "", "extreme"]) {
       expect(agentRuntimeConfigPayloadSchema.safeParse({ kind: "codex", reasoningEffort: v }).success).toBe(false);
     }
   });

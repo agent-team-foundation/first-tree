@@ -54,8 +54,8 @@ function fakeSpawnError(error: Error): ReturnType<typeof vi.fn> {
 }
 
 describe("Windows supervisor loop", () => {
-  it("restarts promptly on exit 75 and spawns the daemon child attached", async () => {
-    const spawnProcess = fakeSpawnFor([75, 0]);
+  it("returns exit 75 so the wrapper reloads the supervisor after self-update", async () => {
+    const spawnProcess = fakeSpawnFor([75]);
 
     const code = await runWindowsSupervisorLoop({
       platform: "win32",
@@ -64,8 +64,8 @@ describe("Windows supervisor loop", () => {
       maxCycles: 3,
     });
 
-    expect(code).toBe(0);
-    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    expect(code).toBe(75);
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
     expect(spawnProcess).toHaveBeenNthCalledWith(
       1,
       process.env.ComSpec || "cmd.exe",
@@ -79,7 +79,7 @@ describe("Windows supervisor loop", () => {
         }),
       }),
     );
-    expect(readFileSync(windowsSupervisorLogPath(), "utf-8")).toContain("requested self-update restart");
+    expect(readFileSync(windowsSupervisorLogPath(), "utf-8")).toContain("wrapper will reload supervisor");
   });
 
   it("routes extensionless npm bin shims through cmd.exe on Windows", async () => {
@@ -105,12 +105,11 @@ describe("Windows supervisor loop", () => {
     );
   });
 
-  it("re-resolves the daemon child invocation after exit 75", async () => {
-    const spawnProcess = fakeSpawnFor([75, 0]);
+  it("does not keep old supervisor code in memory after exit 75", async () => {
+    const spawnProcess = fakeSpawnFor([75]);
     const resolveInvocation = vi
       .fn()
-      .mockReturnValueOnce({ kind: "bin", program: "C:\\First Tree\\old\\first-tree-dev.cmd" })
-      .mockReturnValueOnce({ kind: "bin", program: "C:\\First Tree\\new\\first-tree-dev.cmd" });
+      .mockReturnValue({ kind: "bin", program: "C:\\First Tree\\old\\first-tree-dev.cmd" });
 
     const code = await runWindowsSupervisorLoop({
       platform: "win32",
@@ -119,18 +118,12 @@ describe("Windows supervisor loop", () => {
       maxCycles: 3,
     });
 
-    expect(code).toBe(0);
-    expect(resolveInvocation).toHaveBeenCalledTimes(2);
+    expect(code).toBe(75);
+    expect(resolveInvocation).toHaveBeenCalledTimes(1);
     expect(spawnProcess).toHaveBeenNthCalledWith(
       1,
       process.env.ComSpec || "cmd.exe",
       ["/d", "/s", "/c", '""C:\\First Tree\\old\\first-tree-dev.cmd" "daemon" "start" "--no-interactive""'],
-      expect.objectContaining({ windowsVerbatimArguments: true }),
-    );
-    expect(spawnProcess).toHaveBeenNthCalledWith(
-      2,
-      process.env.ComSpec || "cmd.exe",
-      ["/d", "/s", "/c", '""C:\\First Tree\\new\\first-tree-dev.cmd" "daemon" "start" "--no-interactive""'],
       expect.objectContaining({ windowsVerbatimArguments: true }),
     );
   });

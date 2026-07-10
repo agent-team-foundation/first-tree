@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveNpmInvocation } from "../core/npm-invocation.js";
 
 const bootstrapMocks = vi.hoisted(() => {
   class ServerUrlNotConfiguredError extends Error {
@@ -116,14 +117,21 @@ describe("core update helpers", () => {
       return {
         ...actual,
         existsSync: (path: Parameters<typeof actual.existsSync>[0]) =>
-          String(path).endsWith("/npm.cmd") || actual.existsSync(path),
+          String(path).replaceAll("\\", "/").endsWith("/node_modules/npm/bin/npm-cli.js") || actual.existsSync(path),
       };
     });
     spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "0.6.0\n", stderr: "" });
     const winUpdate = await import("../core/update.js");
 
     expect(winUpdate.fetchLatestVersion()).toEqual({ ok: true, version: "0.6.0" });
-    expect(String(spawnSyncMock.mock.calls[0]?.[0])).toMatch(/\/npm\.cmd$/);
+    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(process.execPath);
+    expect(spawnSyncMock.mock.calls[0]?.[1]).toEqual([
+      expect.stringMatching(/[\\/]node_modules[\\/]npm[\\/]bin[\\/]npm-cli\.js$/),
+      "view",
+      "first-tree",
+      "version",
+    ]);
+    expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({ shell: false });
 
     vi.resetModules();
     vi.doMock("node:fs", async () => {
@@ -131,7 +139,7 @@ describe("core update helpers", () => {
       return {
         ...actual,
         existsSync: (path: Parameters<typeof actual.existsSync>[0]) =>
-          String(path).endsWith("/npm") || actual.existsSync(path),
+          String(path).replaceAll("\\", "/").endsWith("/npm") || actual.existsSync(path),
       };
     });
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
@@ -139,7 +147,8 @@ describe("core update helpers", () => {
     const siblingUpdate = await import("../core/update.js");
 
     expect(siblingUpdate.fetchLatestVersion()).toEqual({ ok: true, version: "0.7.0" });
-    expect(String(spawnSyncMock.mock.calls[1]?.[0])).toMatch(/\/npm$/);
+    expect(String(spawnSyncMock.mock.calls[1]?.[0])).toMatch(/[\\/]npm$/);
+    expect(spawnSyncMock.mock.calls[1]?.[2]).toMatchObject({ shell: false });
   });
 
   it("runs npm installs through the child registry and parses installed versions", async () => {
@@ -165,10 +174,15 @@ describe("core update helpers", () => {
     child.stdout.emit("data", Buffer.from("+ first-tree@0.6.0,\n"));
     child.emit("exit", 0, null);
     await expect(resultPromise).resolves.toEqual({ ok: true, mode: "global", installedVersion: "0.6.0" });
+    const npm = resolveNpmInvocation(["install", "-g", "first-tree@0.6.0"]);
     expect(childRegistryMocks.getChildProcessRegistry().spawn).toHaveBeenCalledWith(
-      expect.stringMatching(/npm(?:\\.cmd)?$/),
-      ["install", "-g", "first-tree@0.6.0"],
-      expect.objectContaining({ category: "npm-install", timeoutMs: 300_000 }),
+      npm.command,
+      npm.args,
+      expect.objectContaining({
+        category: "npm-install",
+        timeoutMs: 300_000,
+        shell: npm.shell,
+      }),
     );
 
     const child2 = new MockChild();
@@ -491,6 +505,25 @@ describe("core update helpers", () => {
       ok: false,
       retryable: true,
       reasonCode: "npm_timeout",
+    });
+  });
+
+  it("maps synchronous registry spawn failures instead of rejecting the upgrade", async () => {
+    const spawnError = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    childRegistryMocks.classify.mockReturnValueOnce({ kind: "permanent", reasonCode: "spawn_einval" });
+    childRegistryMocks.getChildProcessRegistry.mockReturnValue({
+      spawn: vi.fn(() => {
+        throw spawnError;
+      }),
+    });
+    const { installGlobalSpec } = await import("../core/update.js");
+
+    await expect(installGlobalSpec("latest")).resolves.toEqual({
+      ok: false,
+      mode: "global",
+      reason: "spawn EINVAL",
+      retryable: false,
+      reasonCode: "spawn_einval",
     });
   });
 

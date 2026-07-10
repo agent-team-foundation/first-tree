@@ -70,6 +70,7 @@ type SupervisorProcessListResult = { ok: true; processes: WindowsProcessIdentity
 
 const POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"] as const;
 const PID_REUSE_CREATION_TOLERANCE_MS = 5_000;
+const WINDOWS_SUPERVISOR_STOP_TIMEOUT_MS = 70_000;
 const UTF_16LE_BOM = "\uFEFF";
 
 function windowsInfo(state: ServiceState, pid?: number, detail?: string): ServiceInfo {
@@ -623,7 +624,7 @@ function stopWindowsTaskSchedulerService(): ServiceOpResult {
     if (!residual.ok) return { ok: false, reason: residual.reason };
     if (residual.processes.length > 0) {
       writeWindowsSupervisorStopIntent();
-      const stopped = waitForNoWindowsSupervisorProcesses(5_000);
+      const stopped = waitForNoWindowsSupervisorProcesses(WINDOWS_SUPERVISOR_STOP_TIMEOUT_MS);
       if (!stopped.ok) return stopped;
     }
     clearWindowsSupervisorStopIntent();
@@ -659,7 +660,7 @@ function stopWindowsTaskSchedulerService(): ServiceOpResult {
     };
   }
 
-  const residual = waitForNoWindowsSupervisorProcesses(5_000);
+  const residual = waitForNoWindowsSupervisorProcesses(WINDOWS_SUPERVISOR_STOP_TIMEOUT_MS);
   if (!residual.ok) return residual;
   clearWindowsSupervisorStopIntent();
 

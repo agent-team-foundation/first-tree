@@ -33,6 +33,10 @@ class FakeClientUserMismatchError extends Error {
   override name = "ClientUserMismatchError";
 }
 
+class FakeClientRetiredError extends Error {
+  override name = "ClientRetiredError";
+}
+
 function noMessageShape(fields: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     ...fields,
@@ -95,6 +99,13 @@ describe("error-taxonomy.classify", () => {
 
     it("ClientUserMismatchError → permanent", () => {
       const c = classify(new FakeClientUserMismatchError("wrong user"));
+      expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(c.reasonCode).toBe("client_identity_mismatch");
+      expect(c.strategy.kind).toBe("none");
+    });
+
+    it("ClientRetiredError is permanent", () => {
+      const c = classify(new FakeClientRetiredError("client retired"));
       expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
       expect(c.reasonCode).toBe("client_identity_mismatch");
       expect(c.strategy.kind).toBe("none");

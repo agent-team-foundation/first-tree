@@ -35,7 +35,7 @@ export type DetectOutcome =
       installed: true;
       /** Provider version, when cheaply known without launching. Usually absent. */
       version?: string | null;
-      /** Which artifact backs the runtime (bundled binary vs system-PATH). */
+      /** Which artifact backs the runtime (bundled binary vs external path). */
       runtimeSource?: CapabilityRuntimeSource;
       /** Absolute path of the resolved binary, when `runtimeSource: "path"`. */
       runtimePath?: string | null;

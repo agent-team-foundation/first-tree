@@ -47,8 +47,9 @@ export type CapabilityAuthMethod = z.infer<typeof capabilityAuthMethodSchema>;
 /**
  * Which on-disk artifact backs the runtime:
  *   - "bundled": the SDK-bundled binary (the default the runtime spawns).
- *   - "path":    a system `claude` / `codex` found on PATH (or a well-known
- *     install dir), used when no bundled binary is present.
+ *   - "path":    a system `claude` / `codex` found on PATH, in a well-known
+ *     install dir, or in a supported desktop-app bundle, used when no bundled
+ *     binary is present.
  */
 export const capabilityRuntimeSourceSchema = z.enum(["bundled", "path"]);
 export type CapabilityRuntimeSource = z.infer<typeof capabilityRuntimeSourceSchema>;
@@ -100,7 +101,7 @@ export const capabilityEntrySchema = z.object({
    * Install-only detection does not launch the binary, so this is often absent.
    */
   sdkVersion: z.string().nullable().optional(),
-  /** Which artifact backs the runtime (bundled binary vs system-PATH fallback). */
+  /** Which artifact backs the runtime (bundled binary vs external-path fallback). */
   runtimeSource: capabilityRuntimeSourceSchema.optional(),
   /** Absolute path of the resolved binary, when `runtimeSource: "path"`. */
   runtimePath: z.string().nullable().optional(),

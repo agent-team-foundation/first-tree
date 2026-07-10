@@ -32,7 +32,7 @@ import {
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
 import { classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
-import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
+import { type AccessTokenProvider, FirstTreeHubSDK, type RuntimeSessionTokenProvider } from "./sdk.js";
 
 /**
  * Per-agent bind retry bookkeeping (Bug 5). A failed `agent:bind` no longer
@@ -278,6 +278,19 @@ export class ClientUserMismatchError extends Error {
   }
 }
 
+/**
+ * Thrown when the server refuses `client:register` because this local
+ * client identity was retired server-side. Retrying the same client id cannot
+ * recover; the operator must reset local identity and register a fresh client.
+ */
+export class ClientRetiredError extends Error {
+  readonly code = "CLIENT_RETIRED";
+  constructor(message = "Client has been retired") {
+    super(message);
+    this.name = "ClientRetiredError";
+  }
+}
+
 class ServerAuthRejectedError extends Error {
   readonly authCode: AuthRejectedCode | undefined;
   readonly authMessage: string | undefined;
@@ -469,6 +482,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private readonly authLogger: pino.Logger;
 
   private readonly boundAgents = new Map<string, BoundAgent>();
+  private readonly runtimeSessionTokenProviders = new Map<string, RuntimeSessionTokenProvider>();
 
   /** Agents scheduled to rebind automatically on every reconnect. */
   private readonly desiredBindings = new Map<
@@ -517,6 +531,27 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     // (AgentRuntime / ClientRuntime) attach their own listeners for logging —
     // this one is the fallback for raw-SDK users who don't.
     this.on("error", () => {});
+  }
+
+  setRuntimeSessionTokenProvider(agentId: string, provider: RuntimeSessionTokenProvider): void {
+    this.runtimeSessionTokenProviders.set(agentId, provider);
+  }
+
+  clearRuntimeSessionTokenProvider(agentId: string, provider?: RuntimeSessionTokenProvider): void {
+    if (provider && this.runtimeSessionTokenProviders.get(agentId) !== provider) return;
+    this.runtimeSessionTokenProviders.delete(agentId);
+  }
+
+  private resolveRuntimeSessionToken(agentId: string): string | undefined {
+    const provider = this.runtimeSessionTokenProviders.get(agentId);
+    if (!provider) return undefined;
+    try {
+      const token = provider()?.trim();
+      return token || undefined;
+    } catch (err) {
+      this.wsLogger.warn({ err, agentId }, "runtime session token provider failed");
+      return undefined;
+    }
   }
 
   get isConnected(): boolean {
@@ -1376,9 +1411,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const err =
         code === "CLIENT_USER_MISMATCH"
           ? new ClientUserMismatchError(message)
-          : code === "CLIENT_ORG_MISMATCH"
-            ? new ClientOrgMismatchError(message)
-            : new Error(`client:register rejected: ${message}`);
+          : code === "CLIENT_RETIRED"
+            ? new ClientRetiredError(message)
+            : code === "CLIENT_ORG_MISMATCH"
+              ? new ClientOrgMismatchError(message)
+              : new Error(`client:register rejected: ${message}`);
       this.lastHandshakeError = err;
       this.wsLogger.error({ code, message }, "client register rejected");
       this.emit("error", err);
@@ -1419,7 +1456,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           serverUrl: this.serverUrl,
           getAccessToken: this.getAccessToken,
           agentId,
-          runtimeSessionToken,
+          runtimeSessionToken: () =>
+            this.runtimeSessionTokenProviders.has(agentId)
+              ? this.resolveRuntimeSessionToken(agentId)
+              : runtimeSessionToken,
           userAgent: this.userAgent,
         });
         const agent: BoundAgent = {

@@ -5,6 +5,7 @@ import {
   CHAT_ENGAGEMENT_STATUSES,
   type ChatDetail,
   type ChatParticipantDetail,
+  COMPOSER_ACCEPT_ATTRIBUTE,
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
@@ -22,6 +23,7 @@ import {
   ArrowUp,
   AtSign,
   Check,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
@@ -49,7 +51,12 @@ import { useSearchParams } from "react-router";
 import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
-import { fetchAttachmentBase64, uploadImageAttachment } from "../../../api/attachments.js";
+import {
+  downloadAttachment,
+  fetchAttachmentBase64,
+  uploadAttachment,
+  uploadMimeFor,
+} from "../../../api/attachments.js";
 import {
   type FileMessageContent,
   getChat,
@@ -112,6 +119,7 @@ import {
   useSlashCommand,
 } from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
+import { FileChip } from "../../../components/ui/file-chip.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
@@ -128,7 +136,7 @@ import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
-import { usePendingImages } from "../../../lib/use-pending-images.js";
+import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
 import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js";
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
@@ -590,6 +598,15 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     }
     return map;
   }, [msg.metadata]);
+  // Attachment refs to render as download chips: everything in
+  // `metadata.attachments` that is NOT already surfaced as an inline
+  // `[display](attachment:<id>)` link in the body (the agent doc-capture
+  // flow, which keeps its drawer link). Human composer uploads carry the ref
+  // with no inline link, so they render here as a FileChip.
+  const chipAttachmentRefs = useMemo(() => {
+    const body = typeof msg.content === "string" ? msg.content : "";
+    return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
+  }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
@@ -759,6 +776,23 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         >
           {JSON.stringify(msg.content, null, 2)}
         </pre>
+      )}
+      {chipAttachmentRefs.length > 0 && (
+        <div className="flex flex-col items-start" style={{ gap: 6, marginTop: 6 }}>
+          {chipAttachmentRefs.map((ref) => (
+            <button
+              key={ref.attachmentId}
+              type="button"
+              onClick={() => {
+                void downloadAttachment(ref.attachmentId, ref.filename);
+              }}
+              aria-label={`Download ${ref.filename}`}
+              className="cursor-pointer border-none bg-transparent p-0 text-left"
+            >
+              <FileChip filename={ref.filename} trailing={<Download className="size-4 text-muted-foreground" />} />
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1434,10 +1468,10 @@ export function ChatView({
   // `askError` surfaces a send failure IN the card (the composer is covered).
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
-  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+  const { pendingAttachments, addFiles, removeAttachment, clearAttachments } = usePendingAttachments({
     onError: setUploadError,
-    // Dismiss a stale upload error (e.g. "image too large") the moment the
-    // user adds or removes an image — they're already fixing it.
+    // Dismiss a stale upload error (e.g. "file too large") the moment the
+    // user adds or removes an attachment — they're already fixing it.
     onChange: () => setUploadError(null),
   });
   const clearMentionTipTimers = useCallback(() => {
@@ -1793,7 +1827,7 @@ export function ChatView({
   const buildOptimisticTextMessage = useCallback(
     (
       text: string,
-      route?: { mentions?: string[]; inReplyTo?: string; resolves?: RequestResolution },
+      route?: { mentions?: string[]; inReplyTo?: string; resolves?: RequestResolution; attachments?: AttachmentRef[] },
     ): MessageWithDelivery | null => {
       if (!myAgentId) return null;
       return {
@@ -1806,10 +1840,12 @@ export function ChatView({
         // `deriveRequestState` flips a just-answered request immediately —
         // the dock unpins and the card resolves without waiting for the
         // POST + refetch round-trip (otherwise the still-"open" question
-        // invites a second resolve send on a slow link).
+        // invites a second resolve send on a slow link). `attachments` lets a
+        // document-only send render its file chips optimistically too.
         metadata: {
           ...(route?.mentions && route.mentions.length > 0 ? { mentions: route.mentions } : {}),
           ...(route?.resolves ? { resolves: route.resolves } : {}),
+          ...(route?.attachments && route.attachments.length > 0 ? { attachments: route.attachments } : {}),
         },
         inReplyTo: route?.inReplyTo ?? null,
         source: "web",
@@ -1960,14 +1996,18 @@ export function ChatView({
   const handleSend = async () => {
     if (isLandingCampaignTrialChatLocked(chatDetail?.metadata)) return;
     const text = draft.trim();
-    const images = pendingImages;
+    // Images ride `content` as ImageRefContent (unchanged); documents/files ride
+    // `metadata.attachments[]` as generic AttachmentRefs. A mixed send carries
+    // both on one message.
+    const images = pendingAttachments.filter((a) => a.kind === "image");
+    const docs = pendingAttachments.filter((a) => a.kind !== "image");
     if (uploading) return;
 
     // Answering a blocking question is owned by the AskTakeover overlay (it
     // covers the composer while a question blocks me), so the composer's send
     // path no longer resolves requests — it is reached only when nothing blocks.
 
-    if (!text && images.length === 0) return;
+    if (!text && images.length === 0 && docs.length === 0) return;
 
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
     // doesn't resolve to a chat member is treated as plain text, matching
@@ -2012,16 +2052,16 @@ export function ChatView({
     // by the target human's answer in the AskTakeover (an agent cannot resolve).
     const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
 
-    if (images.length > 0) {
+    if (images.length > 0 || docs.length > 0) {
       setUploading(true);
       setUploadError(null);
-      // Carry the routing mentions onto each image message so the
-      // server's explicit-recipient enforcement check accepts file-format sends.
-      // `routedMentions` already includes the 1:1 peer (per the
-      // explicit-only contract) or the dock-asker fallback, so the file path
-      // works in DM, group, and docked-question chats — without this every
-      // image POST would 400.
-      const imageMetadata = routedMentions.length > 0 ? { mentions: routedMentions } : undefined;
+      // Carry the routing mentions onto the file message so the server's
+      // explicit-recipient enforcement check accepts file-format sends.
+      // `routedMentions` already includes the 1:1 peer (per the explicit-only
+      // contract) or the dock-asker fallback, so the file path works in DM,
+      // group, and docked-question chats — without this every file POST would
+      // 400.
+      const mentionMeta = routedMentions.length > 0 ? { mentions: routedMentions } : undefined;
       // Snapshot draft + clear inputs up front so the composer feels instant.
       // Optimistic rows render into the cache below; rollback restores both
       // the textarea draft and any not-yet-acked optimistic tempIds on error.
@@ -2029,7 +2069,7 @@ export function ChatView({
       const sendChatId = chatId;
       const sendUserId = user?.id ?? null;
       setDraft("");
-      clearImages();
+      clearAttachments();
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
       const pendingTempIds = new Set<string>();
       try {
@@ -2045,7 +2085,7 @@ export function ChatView({
         // bubble. Bytes never ride the message body any more.
         const optimisticRefs: ImageRefContent[] = [];
         for (const img of images) {
-          const uploaded = await uploadImageAttachment(img.file);
+          const uploaded = await uploadAttachment(img.file);
           // Warm the per-browser cache so the sending tab renders its own
           // message instantly without re-downloading the bytes it just
           // uploaded. A failed cache write is non-fatal — the render path
@@ -2065,50 +2105,88 @@ export function ChatView({
           });
         }
 
-        let batchTempId: string | null = null;
-        if (myAgentId) {
-          const optimisticContent: ImageBatchRefContent = {
-            ...(text ? { caption: text } : {}),
-            attachments: optimisticRefs,
-          };
-          const optimistic: MessageWithDelivery = {
-            id: `optimistic-${crypto.randomUUID()}`,
-            chatId,
-            senderId: myAgentId,
-            format: "file",
-            content: optimisticContent,
-            metadata: imageMetadata ?? {},
-            // Mirror the POST below: a captioned image answering a docked
-            // question threads under it, optimistically too.
-            inReplyTo: threadedRequestId ?? null,
-            source: "web",
-            createdAt: new Date().toISOString(),
-            deliveryStatus: "pending",
-          };
-          batchTempId = optimistic.id;
-          pendingTempIds.add(batchTempId);
-          // Pre-advance the watermark before the batched POST resolves so
-          // the pill never counts the optimistic file batch as new
-          // (parallel to sendMut.onMutate's pre-advance for text).
-          insertOwnOptimisticMessage(optimistic);
+        // Upload documents/files → generic AttachmentRefs carried in
+        // metadata.attachments. MIME is derived once (uploadMimeFor) so the
+        // declared ref matches what the server stored, even when the browser
+        // left File.type empty (.md / .csv / source files).
+        const docRefs: AttachmentRef[] = [];
+        for (const doc of docs) {
+          const uploaded = await uploadAttachment(doc.file);
+          docRefs.push({
+            attachmentId: uploaded.id,
+            kind: doc.kind,
+            mimeType: uploadMimeFor(doc.file),
+            filename: doc.file.name,
+            size: doc.file.size,
+          });
         }
+        const fileMetadata =
+          mentionMeta || docRefs.length > 0
+            ? { ...(mentionMeta ?? {}), ...(docRefs.length > 0 ? { attachments: docRefs } : {}) }
+            : undefined;
 
-        const saved = await sendFileMessageBatch(
-          chatId,
-          {
-            ...(text ? { caption: text } : {}),
-            attachments: optimisticRefs,
-          },
-          imageMetadata,
-          threadedRequestId ? { inReplyTo: threadedRequestId } : undefined,
-        );
-        if (batchTempId) {
-          replaceOptimisticMessage(batchTempId, saved);
-          pendingTempIds.delete(batchTempId);
+        let tempId: string | null = null;
+        let saved: Awaited<ReturnType<typeof sendChatMessage>>;
+        if (images.length > 0) {
+          // Image (or mixed image + document) message: images ride `content`,
+          // any documents fold into `metadata.attachments`.
+          if (myAgentId) {
+            const optimisticContent: ImageBatchRefContent = {
+              ...(text ? { caption: text } : {}),
+              attachments: optimisticRefs,
+            };
+            const optimistic: MessageWithDelivery = {
+              id: `optimistic-${crypto.randomUUID()}`,
+              chatId,
+              senderId: myAgentId,
+              format: "file",
+              content: optimisticContent,
+              metadata: fileMetadata ?? {},
+              // Mirror the POST below: a captioned file answering a docked
+              // question threads under it, optimistically too.
+              inReplyTo: threadedRequestId ?? null,
+              source: "web",
+              createdAt: new Date().toISOString(),
+              deliveryStatus: "pending",
+            };
+            tempId = optimistic.id;
+            pendingTempIds.add(tempId);
+            // Pre-advance the watermark before the batched POST resolves so
+            // the pill never counts the optimistic file batch as new
+            // (parallel to sendMut.onMutate's pre-advance for text).
+            insertOwnOptimisticMessage(optimistic);
+          }
+          saved = await sendFileMessageBatch(
+            chatId,
+            { ...(text ? { caption: text } : {}), attachments: optimisticRefs },
+            fileMetadata,
+            threadedRequestId ? { inReplyTo: threadedRequestId } : undefined,
+          );
+        } else {
+          // Document-only message: a plain text send carrying the document
+          // refs in metadata.attachments.
+          const optimistic = buildOptimisticTextMessage(text, {
+            mentions: routedMentions,
+            inReplyTo: threadedRequestId,
+            attachments: docRefs,
+          });
+          if (optimistic) {
+            tempId = optimistic.id;
+            pendingTempIds.add(tempId);
+            insertOwnOptimisticMessage(optimistic);
+          }
+          saved = await sendChatMessage(chatId, text, routedMentions, {
+            ...(threadedRequestId ? { inReplyTo: threadedRequestId } : {}),
+            attachments: docRefs,
+          });
+        }
+        if (tempId) {
+          replaceOptimisticMessage(tempId, saved);
+          pendingTempIds.delete(tempId);
         }
         lastSentMessageId = saved.id;
         for (const img of images) {
-          URL.revokeObjectURL(img.previewUrl);
+          if (img.previewUrl) URL.revokeObjectURL(img.previewUrl);
         }
         // Mirror sendMut.onSettled: predictive session-activation only shows
         // up in the sidebar after we invalidate, otherwise the file-send path
@@ -2162,9 +2240,9 @@ export function ChatView({
 
   // Resolve the blocking ask with the answer composed in the AskTakeover card.
   // Routed here (not through the composer's `sendMut`) because the card owns its
-  // own text + @mentions + staged images, and an image answer must go out as a
-  // `format="file"` message carrying `metadata.resolves` (the server's resolve
-  // gate is format-agnostic — it authorizes off sender == target).
+  // own text + @mentions + staged attachments, and an image answer must go out
+  // as a `format="file"` message carrying `metadata.resolves` (the server's
+  // resolve gate is format-agnostic — it authorizes off sender == target).
   //
   // Deliberately NON-optimistic: the card stays mounted until the server's
   // resolving reply lands (via the messages invalidate -> refetch -> request
@@ -2179,11 +2257,24 @@ export function ChatView({
     // Route to the asker PLUS anyone the free text @mentioned (deduped).
     const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
     const resolves: RequestResolution = { request: request.id, kind: "answered" };
+    const docs = answer.attachments ?? [];
     try {
+      const docRefs: AttachmentRef[] = [];
+      for (const doc of docs) {
+        const uploaded = await uploadAttachment(doc.file);
+        docRefs.push({
+          attachmentId: uploaded.id,
+          kind: doc.kind,
+          mimeType: uploadMimeFor(doc.file),
+          filename: doc.file.name,
+          size: doc.file.size,
+        });
+      }
+
       if (answer.images.length > 0) {
         const refs: ImageRefContent[] = [];
         for (const file of answer.images) {
-          const uploaded = await uploadImageAttachment(file);
+          const uploaded = await uploadAttachment(file);
           // Warm the per-browser cache so the sender renders its own image
           // instantly. Best-effort — the render path re-fetches on a miss.
           try {
@@ -2196,11 +2287,15 @@ export function ChatView({
         await sendFileMessageBatch(
           chatId,
           { ...(answer.content ? { caption: answer.content } : {}), attachments: refs },
-          { mentions: routedMentions },
+          { mentions: routedMentions, ...(docRefs.length > 0 ? { attachments: docRefs } : {}) },
           { inReplyTo: request.id, resolves },
         );
       } else {
-        await sendChatMessage(chatId, answer.content, routedMentions, { inReplyTo: request.id, resolves });
+        await sendChatMessage(chatId, answer.content, routedMentions, {
+          inReplyTo: request.id,
+          resolves,
+          ...(docRefs.length > 0 ? { attachments: docRefs } : {}),
+        });
       }
       queryClient.invalidateQueries({ queryKey: messagesQueryKey });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
@@ -3279,7 +3374,7 @@ export function ChatView({
   // look for that state.
   const landingCampaignChatLocked = isLandingCampaignTrialChatLocked(chatDetail?.metadata);
   const sendDisabled =
-    landingCampaignChatLocked || sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0);
+    landingCampaignChatLocked || sendMut.isPending || uploading || (!draft.trim() && pendingAttachments.length === 0);
   const sendDimmed = sendDisabled || sendBlockedByMentionGate;
 
   const mention = useMentionAutocomplete({
@@ -3953,7 +4048,7 @@ export function ChatView({
                         // No drag-and-drop image attachments on the trial surface.
                         if (isTrial) return;
                         e.preventDefault();
-                        addImages(Array.from(e.dataTransfer.files));
+                        addFiles(Array.from(e.dataTransfer.files));
                       }}
                     >
                       {/* Group-mention tip bubble: a transient popover anchored
@@ -3989,52 +4084,83 @@ export function ChatView({
                           <span className="mention-tip-arrow" aria-hidden="true" />
                         </div>
                       )}
-                      {/* Image preview area — above textarea */}
-                      {pendingImages.length > 0 && (
+                      {/* Attachment preview area — above textarea. Images render
+                          as thumbnails; documents/files render as FileChips. */}
+                      {pendingAttachments.length > 0 && (
                         <div
                           className="flex items-center"
                           style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
                         >
-                          {pendingImages.map((img) => (
-                            <div
-                              key={img.id}
-                              style={{
-                                position: "relative",
-                                flexShrink: 0,
-                                borderRadius: 4,
-                                border: "var(--hairline) solid var(--border)",
-                                overflow: "hidden",
-                              }}
-                            >
-                              <img
-                                src={img.previewUrl}
-                                alt={img.file.name}
-                                style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => removeImage(img.id)}
+                          {pendingAttachments.map((att) =>
+                            att.kind === "image" && att.previewUrl ? (
+                              <div
+                                key={att.id}
                                 style={{
-                                  position: "absolute",
-                                  top: 1,
-                                  right: 1,
-                                  width: 14,
-                                  height: 14,
-                                  borderRadius: "50%",
-                                  background: "var(--color-overlay-scrim)",
-                                  border: "none",
-                                  color: "var(--bg-raised)",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  cursor: "pointer",
-                                  padding: 0,
+                                  position: "relative",
+                                  flexShrink: 0,
+                                  borderRadius: 4,
+                                  border: "var(--hairline) solid var(--border)",
+                                  overflow: "hidden",
                                 }}
                               >
-                                <X className="h-2 w-2" />
-                              </button>
-                            </div>
-                          ))}
+                                <img
+                                  src={att.previewUrl}
+                                  alt={att.file.name}
+                                  style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeAttachment(att.id)}
+                                  aria-label={`Remove ${att.file.name}`}
+                                  style={{
+                                    position: "absolute",
+                                    top: 1,
+                                    right: 1,
+                                    width: 14,
+                                    height: 14,
+                                    borderRadius: "50%",
+                                    background: "var(--color-overlay-scrim)",
+                                    border: "none",
+                                    color: "var(--bg-raised)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    cursor: "pointer",
+                                    padding: 0,
+                                  }}
+                                >
+                                  <X className="h-2 w-2" />
+                                </button>
+                              </div>
+                            ) : (
+                              <FileChip
+                                key={att.id}
+                                filename={att.file.name}
+                                trailing={
+                                  <button
+                                    type="button"
+                                    onClick={() => removeAttachment(att.id)}
+                                    aria-label={`Remove ${att.file.name}`}
+                                    style={{
+                                      width: 14,
+                                      height: 14,
+                                      borderRadius: "50%",
+                                      background: "var(--color-overlay-scrim)",
+                                      border: "none",
+                                      color: "var(--bg-raised)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      cursor: "pointer",
+                                      padding: 0,
+                                    }}
+                                  >
+                                    <X className="h-2 w-2" />
+                                  </button>
+                                }
+                              />
+                            ),
+                          )}
                         </div>
                       )}
                       <div style={{ position: "relative" }}>
@@ -4095,7 +4221,7 @@ export function ChatView({
                             setCursor(e.target.selectionStart ?? e.target.value.length);
                             // Dismiss a stale upload error (e.g. the "no @mention"
                             // hint) the moment the user starts fixing it. Mirrors
-                            // the unconditional clears in `addImages` / `removeImage`
+                            // the unconditional clears in `addFiles` / `removeAttachment`
                             // — React bails on identical setState so the null→null
                             // case is free.
                             setUploadError(null);
@@ -4151,7 +4277,7 @@ export function ChatView({
                             const files = Array.from(e.clipboardData.files);
                             if (files.length > 0) {
                               e.preventDefault();
-                              addImages(files);
+                              addFiles(files);
                             }
                           }}
                           placeholder={
@@ -4301,7 +4427,7 @@ export function ChatView({
                               type="button"
                               onClick={() => fileInputRef.current?.click()}
                               disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
-                              title="Attach image"
+                              title="Attach file"
                               style={{
                                 background: "none",
                                 border: "none",
@@ -4320,13 +4446,13 @@ export function ChatView({
                             <input
                               ref={fileInputRef}
                               type="file"
-                              accept="image/*"
+                              accept={COMPOSER_ACCEPT_ATTRIBUTE}
                               multiple
                               disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                               style={{ display: "none" }}
                               onChange={(e) => {
                                 if (e.target.files) {
-                                  addImages(Array.from(e.target.files));
+                                  addFiles(Array.from(e.target.files));
                                   e.target.value = "";
                                 }
                               }}

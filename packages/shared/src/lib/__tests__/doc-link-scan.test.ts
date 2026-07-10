@@ -54,6 +54,69 @@ describe("scanBareDocPathTokens", () => {
     expect(tokens(text)).toEqual(["docs/after.md"]);
   });
 
+  it("does not close a longer backtick fence on a shorter nested marker", () => {
+    const text = [
+      "To open a code block, type:",
+      "",
+      "````",
+      "```",
+      "````",
+      "",
+      "Project layout:",
+      "",
+      "```",
+      "repo/",
+      "├── NODE.md",
+      "├── docs/setup.md",
+      "└── sub/",
+      "    └── NODE.md",
+      "```",
+      "",
+      "See `README.md` for details.",
+    ].join("\n");
+
+    expect(tokens(text)).toEqual(["README.md"]);
+  });
+
+  it("treats an unclosed fence as code through the end of the input", () => {
+    const text = ["Before README.md", "```", "docs/fenced.md", "After docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["README.md"]);
+  });
+
+  it("requires closing fences to use the opening marker character and minimum length", () => {
+    const text = [
+      "````",
+      "docs/fenced.md",
+      "~~~",
+      "docs/still-fenced.md",
+      "```",
+      "docs/also-fenced.md",
+      "````",
+      "docs/after.md",
+    ].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("supports tilde-opened fences and does not close them on backtick markers", () => {
+    const text = ["~~~", "docs/fenced.md", "```", "docs/still-fenced.md", "~~~", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("recognizes opening fences indented up to three spaces", () => {
+    const text = ["   ```", "docs/fenced.md", "   ```", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("treats a four-space fence marker as indented code, not a fence opener", () => {
+    const text = ["    ```", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
+  it("skips fenced blocks whose opening fence carries an info string", () => {
+    const text = ["```ts", 'const doc = "docs/fenced.md";', "```", "docs/after.md"].join("\n");
+    expect(tokens(text)).toEqual(["docs/after.md"]);
+  });
+
   it("ignores indented (4-space / tab) code blocks", () => {
     expect(tokens("    docs/indented.md")).toEqual([]);
     expect(tokens("\tdocs/tabbed.md")).toEqual([]);

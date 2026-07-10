@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveNpmInvocation } from "../core/npm-invocation.js";
 
 const clientMocks = vi.hoisted(() => ({
   classify: vi.fn(() => ({ kind: "transient", reasonCode: "classified_transient" })),
@@ -108,14 +109,16 @@ describe("native runtime installers", () => {
     child.emit("exit", 0, null);
 
     await expect(result).resolves.toEqual({ ok: true, installedVersion: "0.140.0" });
+    const npm = resolveNpmInvocation(["install", "-g", "@openai/codex@0.140.0"]);
     expect(spawn).toHaveBeenCalledWith(
-      expect.stringMatching(/npm(?:\.cmd)?$/),
-      ["install", "-g", "@openai/codex@0.140.0"],
+      npm.command,
+      npm.args,
       expect.objectContaining({
         category: "npm-install",
         label: "npm install -g @openai/codex@0.140.0",
         timeoutMs: 480_000,
         stdio: ["ignore", "pipe", "pipe"],
+        shell: npm.shell,
       }),
     );
   });
@@ -129,14 +132,16 @@ describe("native runtime installers", () => {
     child.emit("exit", 0, null);
 
     await expect(result).resolves.toEqual({ ok: true, installedVersion: "2.1.84" });
+    const npm = resolveNpmInvocation(["install", "-g", "@anthropic-ai/claude-code@2.1.84"]);
     expect(spawn).toHaveBeenCalledWith(
-      expect.stringMatching(/npm(?:\.cmd)?$/),
-      ["install", "-g", "@anthropic-ai/claude-code@2.1.84"],
+      npm.command,
+      npm.args,
       expect.objectContaining({
         category: "npm-install",
         label: "npm install -g @anthropic-ai/claude-code@2.1.84",
         timeoutMs: 480_000,
         stdio: ["ignore", "pipe", "pipe"],
+        shell: npm.shell,
       }),
     );
   });
@@ -201,46 +206,6 @@ describe("native runtime installers", () => {
     });
   });
 
-  it("prefers platform-specific sibling npm commands when present", async () => {
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-    vi.resetModules();
-    vi.doMock("node:fs", async () => {
-      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-      return {
-        ...actual,
-        existsSync: (path: Parameters<typeof actual.existsSync>[0]) => String(path).endsWith("/npm.cmd"),
-      };
-    });
-    const winChild = new MockChild();
-    const winSpawn = prepareSpawn(winChild).spawn;
-    const { installCodexRuntime } = await import("../core/install-codex-runtime.js");
-    const winResult = installCodexRuntime("latest");
-    winChild.emit("exit", 0, null);
-    await expect(winResult).resolves.toEqual({ ok: true, installedVersion: null });
-    expect(String(winSpawn.mock.calls[0]?.[0])).toMatch(/\/npm\.cmd$/);
-
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    vi.resetModules();
-    vi.doMock("node:fs", async () => {
-      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-      return {
-        ...actual,
-        existsSync: (path: Parameters<typeof actual.existsSync>[0]) => String(path).endsWith("/npm"),
-      };
-    });
-    const linuxChild = new MockChild();
-    const linuxSpawn = prepareSpawn(linuxChild).spawn;
-    const { installClaudeRuntime } = await import("../core/install-claude-runtime.js");
-    const linuxResult = installClaudeRuntime("latest");
-    linuxChild.emit("exit", 0, null);
-    await expect(linuxResult).resolves.toEqual({ ok: true, installedVersion: null });
-    expect(String(linuxSpawn.mock.calls[0]?.[0])).toMatch(/\/npm$/);
-
-    vi.doUnmock("node:fs");
-    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-  });
-
   it("classifies Claude spawn errors, npm failures, and timeout exits", async () => {
     const { installClaudeRuntime } = await import("../core/install-claude-runtime.js");
 
@@ -274,6 +239,30 @@ describe("native runtime installers", () => {
       reason: expect.stringContaining("killed by signal SIGTERM (timeout)"),
       retryable: true,
       reasonCode: "npm_timeout",
+    });
+  });
+
+  it("maps synchronous registry spawn failures for both runtime installers", async () => {
+    const spawnError = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    clientMocks.getChildProcessRegistry.mockReturnValue({
+      spawn: vi.fn(() => {
+        throw spawnError;
+      }),
+    });
+    const { installCodexRuntime } = await import("../core/install-codex-runtime.js");
+    const { installClaudeRuntime } = await import("../core/install-claude-runtime.js");
+
+    await expect(installCodexRuntime()).resolves.toMatchObject({
+      ok: false,
+      reason: "spawn EINVAL",
+      retryable: true,
+      reasonCode: "classified_transient",
+    });
+    await expect(installClaudeRuntime()).resolves.toMatchObject({
+      ok: false,
+      reason: "spawn EINVAL",
+      retryable: true,
+      reasonCode: "classified_transient",
     });
   });
 });

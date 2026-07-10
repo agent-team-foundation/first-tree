@@ -24,6 +24,7 @@ import {
   createExecuteUpdate,
   ensureActiveRootClientIdPersisted,
   ensureFreshAccessToken,
+  getClientServiceStatus,
   handleClientOrgMismatch,
   hasIncompleteClientSwitch,
   installClientService,
@@ -37,10 +38,12 @@ import {
   recordActiveClientOwner,
   refreshServerUpdateTarget,
   resolveClientRuntimeStopReason,
+  restartClientService,
   saveCredentials,
   switchLocalClientForLogin,
 } from "../core/index.js";
 import { print } from "../core/output.js";
+import { shouldRestartServiceAfterRefresh } from "../core/service-recovery.js";
 import { decodeJwtPayload, deriveHubUrlFromToken, HubUrlDerivationError } from "./_shared/connect-token.js";
 
 /** Owning user id (`sub`) from a server-issued JWT, or null if undecodable. */
@@ -62,6 +65,31 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
     fail("AUTH_ERROR", body.error ?? `Token exchange failed (HTTP ${res.status})`, 1);
   }
   return (await res.json()) as { accessToken: string; refreshToken: string };
+}
+
+async function readServerClientStatus(url: string, accessToken: string, clientId: string): Promise<string | null> {
+  try {
+    const res = await cliFetch(`${url}/api/v1/clients/${encodeURIComponent(clientId)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 404 || !res.ok) return null;
+    const body = (await res.json().catch(() => null)) as { status?: unknown } | null;
+    return typeof body?.status === "string" ? body.status : null;
+  } catch {
+    return null;
+  }
+}
+
+async function assertReusableClientAccepted(url: string, accessToken: string, clientId: string): Promise<void> {
+  const status = await readServerClientStatus(url, accessToken, clientId);
+  if (status !== "retired") return;
+  fail(
+    "CLIENT_RETIRED_REQUIRES_RESET",
+    `Client "${clientId}" has been retired. Run \`${channelConfig.binName} computer reset\`, then run \`${channelConfig.binName} login <code>\` with a fresh connect code.`,
+    1,
+  );
 }
 
 /**
@@ -96,6 +124,8 @@ export function registerLoginCommand(program: Command): void {
         }
 
         const configDir = defaultConfigDir();
+        const rootClientIdBeforeLogin = readActiveRootClientId(configDir);
+        let reusedLocalClientIdentity = false;
         const existingCredentials = loadCredentials();
         const previousOwnerSub = readOwnerSub(existingCredentials?.accessToken);
         const rememberedOwner = readActiveClientOwner();
@@ -118,6 +148,7 @@ export function registerLoginCommand(program: Command): void {
             targetTokens: { ...tokens, serverUrl: url },
             targetOwnerSub: newOwnerSub,
           });
+          reusedLocalClientIdentity = true;
           print.line("\n  ✓ Interrupted local client switch recovered\n");
         }
         const existingOwnerSub = previousOwnerSub;
@@ -148,9 +179,10 @@ export function registerLoginCommand(program: Command): void {
             targetTokens: { ...tokens, serverUrl: url },
             targetOwnerSub: newOwnerSub,
           });
+          reusedLocalClientIdentity = true;
           print.line("\n  ✓ Previous local client parked\n");
         }
-        if (!existingCredentials && !rememberedOwner && readActiveRootClientId(configDir)) {
+        if (!existingCredentials && !rememberedOwner && rootClientIdBeforeLogin) {
           fail(
             "CLIENT_OWNER_UNKNOWN_REQUIRES_RESET_OR_OWNER_LOGIN",
             `Existing client.yaml has no credentials or remembered owner metadata, so First Tree cannot safely decide whether this is a same-user reconnect or account switch. Run \`${channelConfig.binName} computer reset\` after backing up local state, or restore/log in from a state that still has the current owner's credentials.`,
@@ -168,15 +200,28 @@ export function registerLoginCommand(program: Command): void {
           resetConfig();
           resetConfigMeta();
           config = await initConfig({ schema: clientConfigSchema, role: "client" });
+          reusedLocalClientIdentity = reusedLocalClientIdentity || rootClientIdBeforeLogin === config.client.id;
           ensureActiveRootClientIdPersisted(config.client.id, configDir);
           recordActiveClientOwner({ clientId: config.client.id, userId: newOwnerSub, serverUrl: url });
+        }
+        if (reusedLocalClientIdentity) {
+          await assertReusableClientAccepted(url, tokens.accessToken, config.client.id);
         }
         print.line("  ✓ Authenticated\n");
         print.line(`  ✓ Computer registered (id: ${config.client.id})\n`);
 
         const shouldInstallService = options.start !== false && isServiceSupported();
         if (shouldInstallService) {
+          const beforeService = getClientServiceStatus();
           const info = installClientService();
+          if (shouldRestartServiceAfterRefresh(beforeService)) {
+            const restart = restartClientService();
+            if (!restart.ok) {
+              print.line(`\n  Background service refreshed but restart failed: ${restart.reason}\n`);
+              print.line(`  Run \`${channelConfig.binName} daemon restart\` to retry.\n\n`);
+              process.exit(1);
+            }
+          }
           print.line(`  ✓ Background service installed (${info.platform}) — you may close this terminal.\n`);
           print.line(`    Logs: ${info.logDir}\n\n`);
           return;

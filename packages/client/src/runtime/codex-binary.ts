@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
-import { wellKnownBinDirs } from "./install-locations.js";
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { codexDesktopAppBinDirs, wellKnownBinDirs } from "./install-locations.js";
 import { getLoginShellPathDirs } from "./login-shell-path.js";
 
 export type CodexRuntimeSource = "bundled" | "path";
@@ -64,8 +65,13 @@ const DETERMINISTIC_CRASH_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set([
   "SIGFPE",
 ]);
 
+const WINDOWS_CODEX_PLATFORM_PACKAGE_BY_ARCH: Readonly<Record<string, { triple: string; packageName: string }>> = {
+  x64: { triple: "x86_64-pc-windows-msvc", packageName: "@openai/codex-win32-x64" },
+  arm64: { triple: "aarch64-pc-windows-msvc", packageName: "@openai/codex-win32-arm64" },
+};
+
 /**
- * A codex binary that EXISTS on PATH (resolution already found it) but whose
+ * An externally resolved codex binary that EXISTS (resolution already found it) but whose
  * `--version` smoke check did not complete for a transient reason — a spawn
  * timeout, a kill by the timeout signal, or transient resource pressure. The
  * binary is installed; the host was merely too busy / cold to answer in time.
@@ -100,7 +106,7 @@ export function formatCodexBinaryMissingMessage(input: unknown): string {
   const suffix = original ? ` Original error: ${original}` : "";
   return (
     "Codex runtime binary is missing on this machine. " +
-    "First Tree does not bundle the native Codex engine by default — it resolves a system `codex` on PATH. " +
+    "First Tree does not bundle the native Codex engine by default — it resolves `codex` from PATH, well-known install directories, or the ChatGPT/Codex desktop app on macOS. " +
     "Install it with the daemon's one-click `daemon install-codex` (or `npm install -g @openai/codex`), then run `codex login` and retry." +
     suffix
   );
@@ -131,12 +137,12 @@ export function createCodexClientWithBinaryFallback<TOptions extends CodexOption
         throw new CodexBinaryVerifyTransientError(verification.reason);
       }
       throw new Error(
-        formatCodexBinaryMissingMessage(`${errorText(err)} PATH codex failed validation: ${verification.reason}`),
+        formatCodexBinaryMissingMessage(`${errorText(err)} Resolved codex failed validation: ${verification.reason}`),
       );
     }
 
     deps.log?.(
-      `Codex SDK bundled binary missing; falling back to system codex at ${fallbackPath}. ` +
+      `Codex SDK bundled binary missing; falling back to codex at ${fallbackPath}. ` +
         `Original error: ${errorText(err)}`,
     );
     return {
@@ -199,16 +205,26 @@ export type FindCodexExecutableDeps = {
   loginShellPathDirs?: () => string[];
   /** Returns the curated well-known bin dirs; defaults to the real host list. */
   wellKnownDirs?: () => string[];
+  /** Returns macOS desktop-app resource dirs; searched only after every PATH source misses. */
+  desktopAppDirs?: () => string[];
+  /** Test seams for Windows PATH/shim behaviour without mutating process globals. */
+  platform?: NodeJS.Platform;
+  arch?: NodeJS.Architecture;
+  pathDelimiter?: string;
 };
 
 export function findCodexExecutableOnPath(
   env: Record<string, string | undefined> = process.env,
   deps: FindCodexExecutableDeps = {},
 ): string | null {
+  const platform = deps.platform ?? process.platform;
+  const arch = deps.arch ?? process.arch;
+  const pathDelimiter = deps.pathDelimiter ?? (platform === "win32" ? ";" : delimiter);
   const loginShellPathDirs = deps.loginShellPathDirs ?? getLoginShellPathDirs;
   const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
   const wellKnownDirs = deps.wellKnownDirs ?? (() => wellKnownBinDirs(home));
-  const names = codexExecutableNames(env);
+  const desktopAppDirs = deps.desktopAppDirs ?? (() => codexDesktopAppBinDirs(home));
+  const names = codexExecutableNames(env, platform);
   const seen = new Set<string>();
 
   const search = (dirs: readonly string[]): string | null => {
@@ -219,25 +235,27 @@ export function findCodexExecutableOnPath(
       seen.add(base);
       for (const name of names) {
         const candidate = join(base, name);
-        if (isExecutable(candidate)) return candidate;
+        const executable = resolveSpawnableCodexCandidate(candidate, { platform, arch });
+        if (executable) return executable;
       }
     }
     return null;
   };
 
-  // Priority — cheap (no-spawn) checks first, the login-shell probe last:
-  // daemon PATH → curated well-known dirs → login-shell PATH. The well-known
-  // dirs are pure existence checks; the login-shell PATH (which may `spawnSync`
-  // a shell) is consulted last, only when daemon PATH + well-known miss, so a
-  // hit in either never triggers a shell spawn. It catches binaries that live
-  // only on the user's interactive PATH (nvm / fnm / volta / mise / asdf, custom
-  // exports). Codex resolution is never on the daemon's pre-connect path.
-  const pathValue = readPathValue(env);
-  const fromDaemon = search(pathValue ? pathValue.split(delimiter) : []);
+  // Priority: daemon PATH → curated install dirs → login-shell PATH → macOS
+  // desktop-app Resources. The login-shell probe may spawn a shell, so cheap
+  // sources still short-circuit it. The desktop app is deliberately last: an
+  // intentional CLI install visible through nvm / fnm / volta / mise / asdf or
+  // a custom export must keep its selected version and credential context.
+  // Codex resolution is never on the daemon's pre-connect path.
+  const pathValue = readPathValue(env, platform);
+  const fromDaemon = search(pathValue ? pathValue.split(pathDelimiter) : []);
   if (fromDaemon) return fromDaemon;
   const fromWellKnown = search(wellKnownDirs());
   if (fromWellKnown) return fromWellKnown;
-  return search(loginShellPathDirs());
+  const fromLoginShell = search(loginShellPathDirs());
+  if (fromLoginShell) return fromLoginShell;
+  return search(desktopAppDirs());
 }
 
 function errorText(input: unknown): string {
@@ -255,25 +273,107 @@ function errorSearchText(input: unknown): string {
   return errorText(input);
 }
 
-function readPathValue(env: Record<string, string | undefined>): string | undefined {
-  if (process.platform !== "win32") return env.PATH;
+function readPathValue(env: Record<string, string | undefined>, platform = process.platform): string | undefined {
+  if (platform !== "win32") return env.PATH;
   const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === "path");
   return key ? env[key] : undefined;
 }
 
-function codexExecutableNames(env: Record<string, string | undefined>): string[] {
-  if (process.platform !== "win32") return ["codex"];
+function codexExecutableNames(env: Record<string, string | undefined>, platform = process.platform): string[] {
+  if (platform !== "win32") return ["codex"];
   const pathExt = env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM";
-  const exts = pathExt
-    .split(";")
-    .map((ext) => ext.trim())
-    .filter(Boolean);
-  return ["codex", ...exts.map((ext) => `codex${ext.toLowerCase()}`), ...exts.map((ext) => `codex${ext}`)];
+  const exts = uniqueStrings(
+    pathExt
+      .split(";")
+      .map((ext) => ext.trim())
+      .filter(Boolean),
+  );
+  const preferred = [".EXE", ".COM"].filter((ext) =>
+    exts.some((candidate) => candidate.toLowerCase() === ext.toLowerCase()),
+  );
+  const rest = exts.filter((ext) => !preferred.some((candidate) => candidate.toLowerCase() === ext.toLowerCase()));
+  return uniqueStrings([
+    ...preferred.map((ext) => `codex${ext.toLowerCase()}`),
+    ...preferred.map((ext) => `codex${ext}`),
+    "codex",
+    ...rest.map((ext) => `codex${ext.toLowerCase()}`),
+    ...rest.map((ext) => `codex${ext}`),
+  ]);
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function resolveSpawnableCodexCandidate(
+  candidate: string,
+  host: { platform: NodeJS.Platform; arch: NodeJS.Architecture },
+): string | null {
+  if (!isExecutable(candidate)) return null;
+  if (host.platform !== "win32") return candidate;
+
+  const ext = extname(candidate).toLowerCase();
+  if (ext === ".exe" || ext === ".com") return candidate;
+
+  return resolveWindowsNativeCodexFromNpmShim(candidate, host);
+}
+
+function resolveWindowsNativeCodexFromNpmShim(
+  candidate: string,
+  host: { platform: NodeJS.Platform; arch: NodeJS.Architecture },
+): string | null {
+  if (host.platform !== "win32") return null;
+  const base = candidate
+    .slice(candidate.lastIndexOf("\\") + 1)
+    .slice(candidate.lastIndexOf("/") + 1)
+    .toLowerCase();
+  if (!base.startsWith("codex")) return null;
+
+  const target = WINDOWS_CODEX_PLATFORM_PACKAGE_BY_ARCH[host.arch];
+  if (!target) return null;
+
+  const packageRoot = join(dirname(candidate), "node_modules", "@openai", "codex");
+  const packageJson = join(packageRoot, "package.json");
+  if (!fileExists(packageJson)) return null;
+
+  let platformPackageRoot: string | null = null;
+  try {
+    const requireFromCodex = createRequire(packageJson);
+    platformPackageRoot = dirname(requireFromCodex.resolve(`${target.packageName}/package.json`));
+  } catch {
+    const nested = join(packageRoot, "node_modules", target.packageName);
+    if (fileExists(join(nested, "package.json"))) platformPackageRoot = nested;
+  }
+
+  const candidates = [
+    platformPackageRoot ? join(platformPackageRoot, "vendor", target.triple, "bin", "codex.exe") : null,
+    join(packageRoot, "vendor", target.triple, "bin", "codex.exe"),
+  ];
+  for (const resolved of candidates) {
+    if (resolved && isExecutable(resolved)) return resolved;
+  }
+  return null;
 }
 
 function isExecutable(filePath: string): boolean {
   try {
     accessSync(filePath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function fileExists(filePath: string): boolean {
+  try {
+    accessSync(filePath, constants.F_OK);
     return true;
   } catch {
     return false;

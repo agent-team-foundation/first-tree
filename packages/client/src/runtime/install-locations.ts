@@ -28,3 +28,21 @@ export function wellKnownBinDirs(home: string): string[] {
   ];
   return dirs;
 }
+
+/**
+ * macOS desktop-app resource directories that can carry the Codex CLI.
+ *
+ * Codex originally shipped as `/Applications/Codex.app`, then moved into the
+ * ChatGPT desktop app. Keep the current name first and retain the standalone
+ * app as a compatibility fallback. Per-user app installs use the same order.
+ */
+export function codexDesktopAppBinDirs(home: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== "darwin") return [];
+
+  return [
+    join("/Applications", "ChatGPT.app", "Contents", "Resources"),
+    join(home, "Applications", "ChatGPT.app", "Contents", "Resources"),
+    join("/Applications", "Codex.app", "Contents", "Resources"),
+    join(home, "Applications", "Codex.app", "Contents", "Resources"),
+  ];
+}

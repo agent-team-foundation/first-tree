@@ -190,6 +190,11 @@ describe("ClientRuntime context-tree wiring", () => {
     rmSync(home, { recursive: true, force: true });
     if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
     else process.env.FIRST_TREE_HOME = originalHome;
+    // Release per-case runtime fixtures so this 1.3k-line suite does not keep
+    // slot/connection graphs alive until the next beforeEach in the same fork.
+    slotInstances.length = 0;
+    connectionListeners.clear();
+    connectionCtorOptions.length = 0;
     vi.clearAllMocks();
   });
 

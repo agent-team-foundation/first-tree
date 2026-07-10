@@ -29,6 +29,7 @@ import {
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
+import { renderDocumentAttachmentsForLLM } from "../runtime/agent-io.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
 import { renderChatContextPrompt, renderRuntimeOutputContract } from "../runtime/chat-context-section.js";
@@ -970,6 +971,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             lines.push(`\n[Image "${att.filename}" not available on this device]`);
           }
         }
+        // A mixed send (images + documents) also carries document/file refs in
+        // metadata.attachments — append their on-disk paths so the agent sees
+        // both. Null when the message has no documents (the common image case).
+        const docNote = renderDocumentAttachmentsForLLM(message);
+        if (docNote) lines.push(`\n${docNote}`);
         return {
           type: "user",
           message: { role: "user", content: `${prefix}${lines.join("\n")}` },
