@@ -1,7 +1,7 @@
 import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
 import type { ReactNode } from "react";
 import { InlineCommand } from "./inline-command.js";
-import { buildInstallCommand, PROVIDER_LABEL, PROVIDER_LOGIN_COMMAND, PROVIDER_NPM_PACKAGE } from "./providers.js";
+import { buildInstallCommand, PROVIDER_LABEL, PROVIDER_LOGIN_COMMAND, providerReinstallCommand } from "./providers.js";
 
 type RuntimeInstallBoxProps = {
   provider: RuntimeProvider;
@@ -104,7 +104,10 @@ export function installBoxView(
   if (entry.state === "error") {
     return {
       headline: `${PROVIDER_LABEL[provider]} probe failed: ${entry.error ?? "unknown error"}. Reinstall on ${hostname}:`,
-      command: `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}`,
+      // Use the provider's reinstall command (npm template OR a non-npm override
+      // such as cursor's curl installer) so a provider with no npm package never
+      // renders a broken `npm install -g ` line.
+      command: providerReinstallCommand(provider),
     };
   }
   // `ok` should not reach here — the Setup-incomplete card filters such

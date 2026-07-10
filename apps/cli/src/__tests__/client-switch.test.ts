@@ -259,14 +259,40 @@ describe("client switch drain markers", () => {
     expect(issues).toEqual([expect.objectContaining({ pid: 128, reason: "missing trusted switch drain markers" })]);
   });
 
+  it("fails closed on marker-less Cursor provider commands (agent / cursor-agent)", () => {
+    for (const command of ["/opt/cursor/bin/agent -p --output-format stream-json", "/usr/local/bin/cursor-agent -p"]) {
+      const providers: Array<{ pid: number; provider: string; command: string }> = [];
+      const issues: Array<{ pid: number; command: string; reason: string }> = [];
+      collectSwitchDrainProcessFromEnvText({
+        pid: 200,
+        command,
+        // Same home, but no trusted switch-drain markers.
+        envText: "FIRST_TREE_HOME=/Users/alice/.first-tree",
+        home: "/Users/alice/.first-tree",
+        clientId: "client_aabbccdd",
+        providers,
+        issues,
+      });
+      expect(providers).toEqual([]);
+      expect(issues).toEqual([expect.objectContaining({ pid: 200, reason: "missing trusted switch drain markers" })]);
+    }
+  });
+
   it("requires readable env only for known switch-drain process commands", () => {
     expect(isSwitchDrainEnvRequired("/usr/bin/codex exec")).toBe(true);
     expect(isSwitchDrainEnvRequired("node /app/node_modules/@openai/codex/bin.js")).toBe(true);
     expect(isSwitchDrainEnvRequired("node ./node_modules/claude-code/cli.js")).toBe(true);
+    // Cursor: an unreadable-env `agent` / `cursor-agent` process must still
+    // require drain markers so the switch fails closed (finding 1).
+    expect(isSwitchDrainEnvRequired("/opt/cursor/bin/agent -p")).toBe(true);
+    expect(isSwitchDrainEnvRequired("/usr/local/bin/cursor-agent -p")).toBe(true);
     expect(isSwitchDrainEnvRequired("first-tree-dev daemon start --foreground")).toBe(true);
     expect(isSwitchDrainEnvRequired("node cli/index.mjs daemon start --foreground")).toBe(true);
     expect(isSwitchDrainEnvRequired("first-tree daemon status")).toBe(false);
     expect(isSwitchDrainEnvRequired("/bin/bash unrelated-script")).toBe(false);
+    // `agent` must match only as a whole token, never a `-agent` suffix.
+    expect(isSwitchDrainEnvRequired("/usr/bin/ssh-agent -s")).toBe(false);
+    expect(isSwitchDrainEnvRequired("/usr/bin/gpg-agent --daemon")).toBe(false);
   });
 });
 

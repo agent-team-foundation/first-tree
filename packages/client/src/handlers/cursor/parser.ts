@@ -44,6 +44,9 @@ const CURSOR_PROVIDER: RuntimeProvider = "cursor";
 /** Friendly `tool_call.name` per known Cursor tool union key. */
 const TOOL_NAME_BY_UNION_KEY: Readonly<Record<string, string>> = {
   editToolCall: "edit",
+  // `writeToolCall` is Cursor's file-CREATION tool (distinct from an in-place
+  // `editToolCall`); both are writes and both carry `args.path`.
+  writeToolCall: "write",
   readToolCall: "read",
   shellToolCall: "shell",
 };
@@ -234,6 +237,7 @@ export function finalizeCursorTurn(
   state: CursorTurnState,
   exitCode: number | null,
   stderrTail: string,
+  opts: { forwardFailed?: boolean } = {},
 ): CursorFinalizeResult {
   const events: SessionEvent[] = [];
 
@@ -256,10 +260,14 @@ export function finalizeCursorTurn(
     for (const chunk of chunkAssistantText(state.resultText)) {
       events.push({ kind: "assistant_text", payload: { text: chunk } });
     }
-    events.push({ kind: "turn_end", payload: { status: state.isError ? "error" : "success" } });
+    // A `forwardResult` failure on the success path is a consumed error (mirrors
+    // codex's `resolveTurnSettlement({ forwardFailed })`); `forwardFailed` is
+    // only ever set on the non-error success path (the handler forwards there).
+    const forwardFailed = opts.forwardFailed ?? false;
+    events.push({ kind: "turn_end", payload: { status: state.isError || forwardFailed ? "error" : "success" } });
     const settlement = state.isError
       ? resolveTurnSettlement({ consumedErrorReason: "provider_clean_error" })
-      : resolveTurnSettlement({});
+      : resolveTurnSettlement({ forwardFailed });
     return { events, settlement };
   }
 
@@ -419,7 +427,7 @@ function toolResultPreview(unionKey: string, result: Record<string, unknown> | n
   } else if (unionKey === "readToolCall") {
     const fileSize = success ? getNumber(success, "fileSize") : null;
     if (fileSize !== null) return `${fileSize} bytes`;
-  } else if (unionKey === "editToolCall") {
+  } else if (unionKey === "editToolCall" || unionKey === "writeToolCall") {
     const message = success ? getString(success, "message") : null;
     if (message) return message;
   }
@@ -437,7 +445,8 @@ function toolFileRefsFor(unionKey: string, args: unknown): ToolFileRef[] | undef
   const argsRecord = asRecord(args);
   const path = argsRecord ? getString(argsRecord, "path") : null;
   if (!path) return undefined;
-  if (unionKey === "editToolCall") {
+  // edit + write are both file mutations → a `file_change` write ref.
+  if (unionKey === "editToolCall" || unionKey === "writeToolCall") {
     return [{ localPath: path, pathKind: "file", origin: "file_change" }];
   }
   if (unionKey === "readToolCall") {

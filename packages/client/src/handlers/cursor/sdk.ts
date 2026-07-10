@@ -51,6 +51,11 @@ const SYNTHETIC_SESSION_ID_PREFIX = "cursor-pending-";
 const KILL_TERMINATE_GRACE_MS = 5_000;
 /** Upper bound on awaiting a turn's own settlement after the child is killed. */
 const KILL_FINAL_WAIT_MS = 2_000;
+/**
+ * Cap on waiting for the child `close` (all stdio drained) after `exit`. `close`
+ * normally fires within milliseconds; this only guards a wedged/inherited pipe.
+ */
+const POST_EXIT_DRAIN_GRACE_MS = 2_000;
 
 /**
  * Cursor Handler — session-oriented handler that drives the `cursor-agent` CLI
@@ -222,30 +227,52 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Await both the child process exit AND the stdout line-reader close so every
-   * emitted line is consumed before we finalize. Resolves with the exit code.
+   * Gate finalize on the child `close` event — which fires only after ALL stdio
+   * (stdout AND stderr) has fully drained — plus the stdout line-reader close.
+   * `exit` alone is insufficient: Node can deliver the remaining stderr AFTER
+   * `exit`, and the stderr tail is what classifies auth/model/quota failures, so
+   * settling on `exit` could classify a permanent failure as a generic retry
+   * (finding 4). The exit code is captured from `exit`, but the barrier is
+   * `close`. A bounded post-exit grace prevents a wedged stdio pipe from hanging
+   * the turn forever.
    */
   function awaitChildSettled(child: ChildProcess, rl: Interface): Promise<number | null> {
     return new Promise((resolve) => {
-      let exited = false;
+      let closed = false;
       let readerClosed = false;
       let exitCode: number | null = null;
       let done = false;
-      const settle = (): void => {
-        if (done || !exited || !readerClosed) return;
+      let graceTimer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (): void => {
+        if (done) return;
         done = true;
+        if (graceTimer) clearTimeout(graceTimer);
         resolve(exitCode);
       };
+      const settle = (): void => {
+        if (closed && readerClosed) finish();
+      };
       child.once("exit", (code) => {
-        exited = true;
         exitCode = code;
+        // Safety net: if `close` (all stdio drained) does not arrive shortly
+        // after exit, settle anyway so a wedged/inherited stdio pipe cannot hang
+        // the turn. In the normal case `close` fires within milliseconds.
+        graceTimer = setTimeout(() => {
+          closed = true;
+          readerClosed = true;
+          finish();
+        }, POST_EXIT_DRAIN_GRACE_MS);
+        graceTimer.unref?.();
+      });
+      child.once("close", () => {
+        closed = true;
         settle();
       });
       child.once("error", () => {
-        // Spawn failure — no stdout stream will open/close on its own.
-        exited = true;
+        // Spawn failure — no stdio stream will open/close on its own.
+        closed = true;
         readerClosed = true;
-        settle();
+        finish();
       });
       rl.once("close", () => {
         readerClosed = true;
@@ -350,7 +377,27 @@ export const createCursorSdkHandler: HandlerFactory = (config) => {
         return false;
       }
 
-      const { events, settlement } = finalizeCursorTurn(state, exitCode, stderrTail);
+      // Turn-completion hook (mirrors codex's runTurn success path). On a
+      // successful turn we call forwardResult to clear the per-chat turn trigger;
+      // a rejection routes into the settlement as a consumed forward-failed error
+      // (never a silent skip of the hook that would strand the trigger).
+      let forwardFailed = false;
+      if (state.sawResult && !state.isError && state.resultText.trim().length > 0) {
+        try {
+          await sessionCtx.forwardResult(state.resultText);
+        } catch (err) {
+          forwardFailed = true;
+          sessionCtx.emitEvent({
+            kind: "error",
+            payload: {
+              source: "runtime",
+              message: `forwardResult failed: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          });
+        }
+      }
+
+      const { events, settlement } = finalizeCursorTurn(state, exitCode, stderrTail, { forwardFailed });
       for (const event of events) sessionCtx.emitEvent(event);
 
       if (settlement.action.kind === "complete") {

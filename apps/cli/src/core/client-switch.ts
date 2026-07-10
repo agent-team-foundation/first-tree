@@ -797,7 +797,15 @@ export function parseSwitchProcessEnvValue(envText: string, key: string): string
 }
 
 function isKnownProviderCommand(command: string): boolean {
-  return /(^|[/\s])(claude|codex)(\s|$)/i.test(command) || /@openai\/codex|claude-code/i.test(command);
+  // Cursor ships the same binary under two names — `agent` (preferred) and
+  // `cursor-agent` — so BOTH must be recognized. `agent` only matches as a
+  // whole path/argv token (`/bin/agent`, `agent -p`), never a suffix like
+  // `ssh-agent`/`gpg-agent` (the preceding `-` fails the `[/\s]` boundary), so
+  // it stays fail-closed for real Cursor providers without over-matching.
+  return (
+    /(^|[/\s])(claude|codex|cursor-agent|agent)(\s|$)/i.test(command) ||
+    /@openai\/codex|claude-code|cursor-agent/i.test(command)
+  );
 }
 
 function isKnownDaemonRuntimeCommand(command: string): boolean {

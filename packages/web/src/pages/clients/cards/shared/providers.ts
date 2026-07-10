@@ -71,10 +71,28 @@ export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string> = {
 
 /**
  * Cursor CLI install command. Cursor ships a shell installer rather than an npm
- * package, so `buildInstallCommand` special-cases this provider instead of the
- * `npm install -g …` path used by the others.
+ * package.
  */
 export const CURSOR_INSTALL_COMMAND = "curl https://cursor.com/install -fsS | bash";
+
+/**
+ * Provider-level install-command override for runtimes NOT distributed via npm.
+ * When a provider is listed here its reinstall / setup command uses this string
+ * verbatim instead of the `npm install -g <pkg>` template — so a provider with
+ * an empty {@link PROVIDER_NPM_PACKAGE} (cursor) never renders a broken
+ * `npm install -g ` line.
+ */
+export const PROVIDER_INSTALL_COMMAND: Partial<Record<RuntimeProvider, string>> = {
+  cursor: CURSOR_INSTALL_COMMAND,
+};
+
+/**
+ * The bare install command for a provider (no login step): the
+ * {@link PROVIDER_INSTALL_COMMAND} override when present, else the npm template.
+ */
+export function providerReinstallCommand(provider: RuntimeProvider): string {
+  return PROVIDER_INSTALL_COMMAND[provider] ?? `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}`;
+}
 
 /**
  * Per-runtime login command shown after install. Codex prints
@@ -97,11 +115,9 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
  * box with a copy button per box.
  */
 export function buildInstallCommand(provider: RuntimeProvider, os?: string | null): string {
-  if (provider === "cursor") {
-    // Cursor uses a shell installer, not npm.
-    return `${CURSOR_INSTALL_COMMAND}\n${PROVIDER_LOGIN_COMMAND.cursor}`;
-  }
-  const base = `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
+  // `providerReinstallCommand` resolves the npm template OR a non-npm override
+  // (cursor's curl installer), so no per-provider special-case is needed here.
+  const base = `${providerReinstallCommand(provider)}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
   if (provider === "claude-code-tui") {
     // The tmux-driven runtime additionally needs tmux (>= 3.0). tmux is not an
     // npm package, so emit the command for the host's actual package manager

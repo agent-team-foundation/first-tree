@@ -15,7 +15,7 @@ import { mockCtxPlumbing } from "./test-helpers.js";
  * ignored on demand to exercise the SIGTERM→SIGKILL escalation.
  */
 
-type FakeMode = "auth" | "success" | "ignore-term";
+type FakeMode = "auth" | "auth-late-stderr" | "success" | "ignore-term";
 
 type FakeChildController = {
   child: EventEmitter & { stdout: PassThrough; stderr: PassThrough; stdin: Writable };
@@ -66,16 +66,29 @@ function makeFakeChild(category: string, label: string): FakeChildController {
   const exited = new Promise<void>((resolve) => {
     resolveExited = resolve;
   });
-  let done = false;
+  let exitDone = false;
+  let closeDone = false;
   const signals: string[] = [];
-  const finish = (code: number, signal: string | null): void => {
-    if (done) return;
-    done = true;
+  // `close` fires only after ALL stdio has drained — the barrier the handler
+  // now gates finalize on (finding 4).
+  const emitClose = (code: number, signal: string | null): void => {
+    if (closeDone) return;
+    closeDone = true;
     controller.isAlive = false;
+    child.emit("close", code, signal);
+    resolveExited();
+  };
+  const emitExit = (code: number, signal: string | null): void => {
+    if (exitDone) return;
+    exitDone = true;
+    child.emit("exit", code, signal);
+  };
+  // Simple termination: end stdio, then exit + close together.
+  const finish = (code: number, signal: string | null): void => {
     stdout.end();
     stderr.end();
-    child.emit("exit", code, signal);
-    resolveExited();
+    emitExit(code, signal);
+    emitClose(code, signal);
   };
   // SIGTERM is ignored in "ignore-term" mode; SIGKILL always terminates.
   const kill = (signal?: string): void => {
@@ -98,6 +111,17 @@ function makeFakeChild(category: string, label: string): FakeChildController {
     if (fakeState.mode === "auth") {
       stderr.write(AUTH_STDERR);
       finish(1, null);
+    } else if (fakeState.mode === "auth-late-stderr") {
+      // stdout closes first (empty), the process exits, and ONLY THEN does the
+      // auth stderr arrive — before `close`. A barrier that settled on `exit`
+      // would miss it and misclassify the failure as a generic retry.
+      stdout.end();
+      emitExit(1, null);
+      setTimeout(() => {
+        stderr.write(AUTH_STDERR);
+        stderr.end();
+        emitClose(1, null);
+      }, 15);
     } else if (fakeState.mode === "success") {
       stdout.write(`${INIT_LINE}\n`);
       stdout.write(`${RESULT_LINE}\n`);
@@ -164,6 +188,9 @@ type CtxCapture = {
   events: SessionEvent[];
   finishOutcomes: TurnOutcome[];
   retryReasons: string[];
+  forwardedTexts: string[];
+  /** When set, forwardResult rejects with this error (finding 3 failure path). */
+  forwardError?: Error;
 };
 
 function makeContext(capture: CtxCapture): SessionContext {
@@ -184,6 +211,10 @@ function makeContext(capture: CtxCapture): SessionContext {
     recordProviderActivity: () => {},
     emitEvent: (event) => capture.events.push(event),
     ...mockCtxPlumbing({ sendMessage }, "chat-cursor"),
+    forwardResult: async (text: string) => {
+      capture.forwardedTexts.push(text);
+      if (capture.forwardError) throw capture.forwardError;
+    },
     finishTurn: async (_messages, outcome) => {
       capture.finishOutcomes.push(outcome);
     },
@@ -199,7 +230,7 @@ function makeMessage(content: string): SessionMessage {
 }
 
 function newCapture(): CtxCapture {
-  return { events: [], finishOutcomes: [], retryReasons: [] };
+  return { events: [], finishOutcomes: [], retryReasons: [], forwardedTexts: [] };
 }
 
 function structuredTerminalEvent(events: SessionEvent[]): ReturnType<typeof parseProviderRetryEventMessage> {
@@ -230,7 +261,7 @@ afterEach(() => {
 });
 
 describe("cursor handler — first-turn disposition (finding 2)", () => {
-  it("a successful first turn returns the cursor-minted session id", async () => {
+  it("a successful first turn returns the cursor-minted session id and forwards the result", async () => {
     fakeState.mode = "success";
     const capture = newCapture();
     const handler = createCursorHandler({ workspaceRoot, runtimeProvider: "cursor" });
@@ -238,6 +269,8 @@ describe("cursor handler — first-turn disposition (finding 2)", () => {
     const sessionId = typeof result === "string" ? result : result.sessionId;
     expect(sessionId).toBe("sess-real-abc");
     expect(capture.finishOutcomes.at(-1)?.status).toBe("success");
+    // forwardResult (the turn-completion hook) is invoked with the result text (finding 3).
+    expect(capture.forwardedTexts).toEqual(["done"]);
     await handler.shutdown();
   });
 
@@ -295,5 +328,51 @@ describe("cursor handler — bounded teardown escalation (finding 4)", () => {
     // The aborted turn was left recoverable (retry), not falsely completed.
     await startPromise;
     expect(capture.retryReasons).toContain("cursor_turn_aborted");
+  });
+});
+
+describe("cursor handler — forwardResult contract (finding 3)", () => {
+  it("routes a forwardResult rejection into a consumed forward-failed settlement", async () => {
+    fakeState.mode = "success";
+    const capture = newCapture();
+    capture.forwardError = new Error("trigger sink offline");
+    const handler = createCursorHandler({ workspaceRoot, runtimeProvider: "cursor" });
+
+    await handler.start(makeMessage("hi"), makeContext(capture));
+
+    // The hook was still invoked, and its failure became a terminal consumed
+    // error — not a silently-skipped hook nor a success ACK.
+    expect(capture.forwardedTexts).toEqual(["done"]);
+    expect(capture.retryReasons).toHaveLength(0);
+    expect(capture.finishOutcomes).toHaveLength(1);
+    expect(capture.finishOutcomes[0]).toMatchObject({
+      status: "error",
+      completion: "consumed",
+      reason: "forward_failed",
+    });
+    const turnEnd = capture.events.find((e) => e.kind === "turn_end");
+    expect(turnEnd?.kind === "turn_end" && turnEnd.payload.status).toBe("error");
+    await handler.shutdown();
+  });
+});
+
+describe("cursor handler — stderr-after-exit barrier (finding 4)", () => {
+  it("gates finalize on `close` so a late auth stderr is classified terminal, not generic retry", async () => {
+    fakeState.mode = "auth-late-stderr";
+    const capture = newCapture();
+    const handler = createCursorHandler({ workspaceRoot, runtimeProvider: "cursor" });
+
+    await handler.start(makeMessage("hi"), makeContext(capture));
+
+    // The auth tail arrived AFTER exit but before `close`; the barrier waited for
+    // it, so the failure is terminal (credential) with a durable notice — not a
+    // generic retry driven by an empty stderr tail.
+    expect(capture.retryReasons).toHaveLength(0);
+    expect(capture.finishOutcomes).toHaveLength(1);
+    expect(capture.finishOutcomes[0]).toMatchObject({ terminal: true, completion: "consumed" });
+    const terminal = structuredTerminalEvent(capture.events);
+    expect(terminal?.event).toBe("provider_failure_terminal");
+    expect(terminal?.category).toBe("credential");
+    await handler.shutdown();
   });
 });

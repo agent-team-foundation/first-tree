@@ -156,7 +156,7 @@ describe("context-tree IO service", () => {
     expect(summary.agents[0]).toMatchObject({ readCount: 0, writeCount: 1, runtimeProvider: "codex" });
   });
 
-  it("derives Cursor edit (write) and read source from tool name", async () => {
+  it("derives Cursor edit/write (write) and read source from tool name", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
 
@@ -174,6 +174,25 @@ describe("context-tree IO service", () => {
             repoUrl: TREE_REPO,
             repoBranch: "main",
             repoRelativePath: "members/alice/NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    const write = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-cursor-write",
+        name: "write",
+        args: { path: "/tmp/tree/members/carol/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "file_change",
+            localPath: "/tmp/tree/members/carol/NODE.md",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "members/carol/NODE.md",
             pathKind: "file",
           },
         ],
@@ -198,7 +217,7 @@ describe("context-tree IO service", () => {
       },
     });
 
-    for (const sessionEvent of [edit, read]) {
+    for (const sessionEvent of [edit, write, read]) {
       await recordFromSessionEvent(app.db, {
         organizationId: seed.organizationId,
         agentId: seed.agent.uuid,
@@ -217,10 +236,11 @@ describe("context-tree IO service", () => {
     ).toEqual([
       { action: "write", source: "cursor_edit_tool" },
       { action: "read", source: "cursor_read_tool" },
+      { action: "write", source: "cursor_write_tool" },
     ]);
 
     const summary = await summarizeContextTreeIo(app.db, seed.organizationId, 7);
-    expect(summary.agents[0]).toMatchObject({ readCount: 1, writeCount: 1, runtimeProvider: "cursor" });
+    expect(summary.agents[0]).toMatchObject({ readCount: 1, writeCount: 2, runtimeProvider: "cursor" });
   });
 
   it("recognizes Cursor tool names in the recordability decision (not unsupported_tool)", () => {

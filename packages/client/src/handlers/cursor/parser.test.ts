@@ -146,6 +146,26 @@ describe("cursor parser — shell failure (completed line)", () => {
   });
 });
 
+describe("cursor parser — writeToolCall (file creation)", () => {
+  it("maps writeToolCall to a canonical WRITE with a file_change ref", () => {
+    const state = createCursorTurnState();
+    const raw = JSON.parse(fixture("write-tool-completed.json"));
+    const events = consumeCursorEvent(state, raw);
+
+    expect(events).toHaveLength(1);
+    const call = events[0];
+    if (call?.kind !== "tool_call") throw new Error("expected tool_call");
+    expect(call.payload.name).toBe("write");
+    expect(call.payload.status).toBe("ok");
+    expect(call.payload.durationMs).toBe(420);
+    expect(call.payload.resultPreview).toBe("Created /private/tmp/cursor-cli-write-Xk2/created.txt");
+    // A created file must carry a write (file_change) ref so the server derives IO.
+    expect(call.payload.toolFileRefs).toEqual([
+      { localPath: "/private/tmp/cursor-cli-write-Xk2/created.txt", pathKind: "file", origin: "file_change" },
+    ]);
+  });
+});
+
 describe("cursor parser — no-result finalize classification", () => {
   const AUTH_STDERR =
     "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.";

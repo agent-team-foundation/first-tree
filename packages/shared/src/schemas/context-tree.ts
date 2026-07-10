@@ -186,6 +186,7 @@ export const contextTreeIoSourceSchema = z.enum([
   "claude_write_tool",
   "codex_file_change",
   "cursor_edit_tool",
+  "cursor_write_tool",
   "cursor_read_tool",
   "shell_command",
   "git_status_delta",

@@ -47,9 +47,10 @@ const CONTEXT_TREE_IO_TOOL_NAMES = [
   "Write",
   "command",
   "file_change",
-  // Cursor tool names (see the cursor handler parser): edit/read carry
+  // Cursor tool names (see the cursor handler parser): edit/write/read carry
   // toolFileRefs; shell is classified via classifyShellCommandIo like codex.
   "edit",
+  "write",
   "read",
   "shell",
 ];
@@ -223,7 +224,7 @@ function skippedDecisionFastPathForNoRefs(
   if (runtimeProvider === "codex" && toolName === "file_change") {
     return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
   }
-  if (runtimeProvider === "cursor" && (toolName === "edit" || toolName === "read")) {
+  if (runtimeProvider === "cursor" && (toolName === "edit" || toolName === "write" || toolName === "read")) {
     return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
   }
   if (isClaudeRuntime(runtimeProvider) && (CLAUDE_READ_TOOLS.has(toolName) || CLAUDE_WRITE_TOOLS.has(toolName))) {
@@ -252,6 +253,9 @@ function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDer
   }
   if (runtimeProvider === "cursor" && toolName === "edit") {
     return { action: "write", source: "cursor_edit_tool" };
+  }
+  if (runtimeProvider === "cursor" && toolName === "write") {
+    return { action: "write", source: "cursor_write_tool" };
   }
   if (runtimeProvider === "cursor" && toolName === "read") {
     return { action: "read", source: "cursor_read_tool" };
