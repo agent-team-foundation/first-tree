@@ -125,7 +125,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               item: {
-                text: "I will continue into Phase 2 leaf drafting now. This does not require a GitHub App.",
+                text: "Phase 2 is not blocked, so I will continue leaf drafting without restarting the Phase 1 proposal. No need to install the GitHub App.",
                 type: "agent_message",
               },
               type: "item.completed",
@@ -143,6 +143,7 @@ describe("first-tree-seed grader", () => {
       expect(metrics.phase2ContinuationObserved).toBe(true);
       expect(metrics.phase2RefusalObserved).toBe(false);
       expect(metrics.githubAppRequirementObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).toEqual([]);
       expect(
         casePassed(
           findCase("same-chat-phase2-continuation"),
@@ -154,6 +155,37 @@ describe("first-tree-seed grader", () => {
           }),
         ),
       ).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("recognizes passive no-refusal prose as a positive continuation", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-passive-positive-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "Phase 2 continuation is valid and should not be refused. Phase 2 will dispatch leaf drafting.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2ContinuationObserved).toBe(true);
+      expect(metrics.phase2RefusalObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).not.toContain("refuse_nonempty_tree");
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -425,6 +457,18 @@ describe("first-tree-seed grader", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("passes bare-source protocol after the read worktree is safely cleaned up", () => {
+    const evalCase = findCase("bare-source-worktree-protocol");
+    const metrics = baseMetrics({
+      finalResponse: "I read the source worktree, cleaned it up, and propose a Phase 1 skeleton for approval.",
+      sourceWorktreeAccessObserved: true,
+      sourceWorktreeCreated: false,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(true);
+    expect(buildGrading(evalCase, metrics, true).scores.process_pass).toBe(true);
   });
 
   it("passes real first-tree periodic case when source evidence is read through a worktree", () => {

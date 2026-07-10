@@ -21,7 +21,7 @@ function requiresWriteSkill(evalCase: FirstTreeSeedEvalCase): boolean {
 }
 
 function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
-  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) return false;
+  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeAccessObserved) return false;
   // A source worktree must not be touched when none is required — check the
   // final filesystem AND the event trace, so a Phase-1 add/read/`git worktree
   // remove` sequence cannot pass by cleaning up before grading.

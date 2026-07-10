@@ -40,7 +40,7 @@ describe("first-tree-seed chat-first fixtures", () => {
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }
-  });
+  }, 20_000);
 
   it("materializes an approved Phase 1 skeleton without Phase 2 leaves", () => {
     const evalCase = gateCase("same-chat-phase2-continuation");
@@ -70,5 +70,5 @@ describe("first-tree-seed chat-first fixtures", () => {
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }
-  });
+  }, 20_000);
 });

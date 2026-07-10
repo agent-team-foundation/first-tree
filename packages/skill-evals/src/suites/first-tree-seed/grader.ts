@@ -661,7 +661,7 @@ function phase2RefusalObserved(text: string): boolean {
   return text.split(/[.!?;\n]+/u).some((segment) => {
     if (!/(?:phase\s*2|leaf)/iu.test(segment)) return false;
     const withoutNegatedRefusal = segment.replace(
-      /\b(?:do not|don't|will not|won't|should not|shouldn't)\s+refuse\b/giu,
+      /\b(?:(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:refuse|stop)|(?:is|are|was|were)\s+not\s+(?:blocked|refused|stopped)|(?:should|must|will|would|can)\s+not\s+be\s+(?:blocked|refused|stopped))\b/giu,
       "continue",
     );
     return /\b(?:cannot|can't|won't|will not|unable|refus(?:e|es|ed|ing|al)|blocked|stop(?:s|ped|ping)?)\b/iu.test(
@@ -677,7 +677,9 @@ function phase2ContinuationObserved(text: string): boolean {
     .some(
       (segment) =>
         /(?:phase\s*2|leaf)/iu.test(segment) &&
-        /\b(?:begin|continue|draft|enter|move|proceed|route|start|write|writing)\w*\b/iu.test(segment),
+        /\b(?:begin|continuation|continue|dispatch|draft|enter|move|proceed|route|start|valid|write|writing)\w*\b/iu.test(
+          segment,
+        ),
     );
 }
 
@@ -686,6 +688,7 @@ function githubAppRequirementObserved(text: string): boolean {
     if (!/github app/iu.test(segment)) return false;
     if (
       /\b(?:do not|don't|does not|doesn't|did not|didn't)\s+(?:need|require|install|connect)\b/iu.test(segment) ||
+      /\b(?:no\s+need\s+to|need\s+not)\s+(?:install|connect|require)\b/iu.test(segment) ||
       /\bwithout\s+(?:needing|requiring|installing|connecting)\b/iu.test(segment) ||
       /\bno\s+github app\s+(?:is\s+)?(?:needed|required)\b/iu.test(segment) ||
       /\bgithub app\s+(?:is\s+)?not\s+(?:needed|required)\b/iu.test(segment)
@@ -693,6 +696,22 @@ function githubAppRequirementObserved(text: string): boolean {
       return false;
     }
     return /\b(?:connect|install|need|require|settings)\w*\b|\bmust\b/iu.test(segment);
+  });
+}
+
+function phase1RestartObserved(text: string): boolean {
+  return text.split(/[.!?;\n]+/u).some((segment) => {
+    if (!/phase\s*1/iu.test(segment)) return false;
+    if (
+      /\bwithout\s+(?:restarting|repeating|redoing|re-proposing)\b/iu.test(segment) ||
+      /\b(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:restart|repeat|redo|re-propose)\b/iu.test(segment) ||
+      /\bno\s+phase\s*1\s+(?:restart|repeat|redo|re-proposal)\b/iu.test(segment)
+    ) {
+      return false;
+    }
+    return /\b(?:restart|repeat|redo|re-propos)\w*\b|\b(?:propos|approval|confirm)\w*\b[^.]{0,40}\bagain\b/iu.test(
+      segment,
+    );
   });
 }
 
@@ -724,7 +743,7 @@ function forbiddenActionHits(
       hits.push(action);
     }
     if (action === "refuse_nonempty_tree" && metrics.phase2RefusalObserved) hits.push(action);
-    if (action === "restart_phase1" && /phase\s*1[^\n.]{0,100}(?:propos|approval|confirm)/iu.test(text)) {
+    if (action === "restart_phase1" && phase1RestartObserved(text)) {
       hits.push(action);
     }
     if (
@@ -854,7 +873,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     return (
       metrics.writeSkillFileReadObserved &&
       (evalCase.expected.requireWorktree
-        ? metrics.sourceWorktreeCreated
+        ? metrics.sourceWorktreeAccessObserved
         : !metrics.sourceWorktreeCreated && !metrics.sourceWorktreeAccessObserved) &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
@@ -866,7 +885,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.action === "materialize_bare_worktree") {
     return (
       metrics.writeSkillFileReadObserved &&
-      metrics.sourceWorktreeCreated &&
+      metrics.sourceWorktreeAccessObserved &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
       metrics.approvalRequestObserved &&
@@ -924,7 +943,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.action === "continue_phase2") {
     return (
       metrics.writeSkillFileReadObserved &&
-      metrics.sourceWorktreeCreated &&
+      metrics.sourceWorktreeAccessObserved &&
       metrics.sourceEvidenceReadObserved &&
       metrics.phase2ContinuationObserved &&
       !metrics.phase2RefusalObserved &&
@@ -946,7 +965,7 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   if (!metrics.expectedResponseObserved) {
     notes.push("Final response did not include the expected seed action signal.");
   }
-  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) {
+  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeAccessObserved) {
     notes.push("Required bare-source read worktree was not materialized.");
   }
   if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) {
