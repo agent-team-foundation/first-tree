@@ -54,9 +54,14 @@ const BARE_PATH_RE =
 const INLINE_MARKDOWN_LINK_RE = /\[(?:[^\]\\\n]|\\.)*\]\([^)\n]*\)/g;
 const REFERENCE_LINK_DEFINITION_RE = /^\s*\[[^\]\n]+\]:\s*\S+/;
 const HTML_TAG_RE = /<\/?[A-Za-z][^>\n]*>/g;
-const FENCE_OPEN_RE = /^\s*(```|~~~)/;
+const FENCE_MARKER_RE = /^(?: {0,3})(?<marker>`{3,}|~{3,})/;
 const INDENT_CODE_RE = /^(?: {4}|\t)/;
 const DOMAIN_LIKE_PREFIX_RE = /^[a-z][a-z0-9.-]*\.[a-z]{2,}\//i;
+
+type FenceState = {
+  marker: "`" | "~";
+  length: number;
+};
 
 export type BarePathMatch = {
   /** The raw token as it appears in the text, including any `:line[:col]`. */
@@ -88,7 +93,7 @@ export function scanBareDocPathTokens(text: string): BarePathMatch[] {
   const out: BarePathMatch[] = [];
   // Split on newlines while preserving them in indices via a running offset.
   const lines = text.split(/(\r?\n)/);
-  let inFence = false;
+  let fence: FenceState | null = null;
   let absoluteOffset = 0;
 
   for (const line of lines) {
@@ -96,12 +101,16 @@ export function scanBareDocPathTokens(text: string): BarePathMatch[] {
       absoluteOffset += line.length;
       continue;
     }
-    if (FENCE_OPEN_RE.test(line)) {
-      inFence = !inFence;
+    if (fence) {
+      if (isClosingFence(line, fence)) {
+        fence = null;
+      }
       absoluteOffset += line.length;
       continue;
     }
-    if (inFence) {
+    const openingFence = parseOpeningFence(line);
+    if (openingFence) {
+      fence = openingFence;
       absoluteOffset += line.length;
       continue;
     }
@@ -139,6 +148,22 @@ export function scanBareDocPathTokens(text: string): BarePathMatch[] {
     absoluteOffset += line.length;
   }
   return out;
+}
+
+function parseOpeningFence(line: string): FenceState | null {
+  const match = FENCE_MARKER_RE.exec(line);
+  const marker = match?.groups?.marker;
+  if (!marker) return null;
+  const markerChar = marker[0];
+  if (markerChar !== "`" && markerChar !== "~") return null;
+  return { marker: markerChar, length: marker.length };
+}
+
+function isClosingFence(line: string, fence: FenceState): boolean {
+  const match = FENCE_MARKER_RE.exec(line);
+  const marker = match?.groups?.marker;
+  if (!marker || marker[0] !== fence.marker || marker.length < fence.length) return false;
+  return /^[ \t]*$/.test(line.slice(match[0].length));
 }
 
 /**
