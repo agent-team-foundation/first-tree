@@ -890,6 +890,36 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not treat a source path printed by echo as a source read", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-echoed-source-path-spoof-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "worktrees/seed-source-repo/README.md Apollo Console runtime coordination",
+              command:
+                "test -f worktrees/seed-source-repo/README.md && cat worktrees/seed-source-repo/README.md; echo 'worktrees/seed-source-repo/README.md Apollo Console runtime coordination'",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("fails bare-source protocol when first-tree-write required reading was not loaded", () => {
     expect(
       casePassed(

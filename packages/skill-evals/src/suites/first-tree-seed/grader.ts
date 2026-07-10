@@ -826,11 +826,7 @@ function segmentCanProduceIndependentEvidence(segment: string): boolean {
 }
 
 function unboundLiteralOutputSpoofsSourceEvidence(segments: readonly string[]): boolean {
-  const literalOutput = segments
-    .filter(
-      (segment) => ["echo", "printf"].includes(segmentProgram(segment)) && !segmentReferencesSourceEvidence(segment),
-    )
-    .join("\n");
+  const literalOutput = segments.filter((segment) => ["echo", "printf"].includes(segmentProgram(segment))).join("\n");
   return countMatches(literalOutput, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2;
 }
 
