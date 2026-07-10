@@ -8,7 +8,7 @@ import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { formatRowTime } from "../../lib/utils.js";
 import { MobilePage, MobileSignalChip, MobileSystemState, mobileCardStyle } from "./components.js";
-import { mobileChatPreview, mobileChatSignal, mobileFeedReasonLabel, sortMobileChats } from "./data.js";
+import { isNowFeedRow, mobileChatPreview, mobileChatSignal, mobileFeedReasonLabel, sortMobileChats } from "./data.js";
 
 export function MobileNowPage() {
   const { agentId } = useAuth();
@@ -21,13 +21,11 @@ export function MobileNowPage() {
     refetchInterval: 30_000,
   });
 
-  // Now is a needs-attention feed, not the full chat list: keep only chats with
-  // an active signal (failed agent, open request, unread mention, working) and
-  // drop `idle` (quiet / watching-only) chats. Ordering stays the canonical
-  // attention order; the complete list lives in the Chat tab.
-  const sortedRows = sortMobileChats(chatsQuery.data?.rows ?? []).filter(
-    (row) => mobileChatSignal(row).tone !== "idle",
-  );
+  // Now is a needs-attention feed, not the full chat list: admit only chats
+  // with an AUTHORITATIVE active signal (see isNowFeedRow — failed agent, open
+  // request, explicit @me, or an in-flight turn), then keep the canonical
+  // attention order. Quiet / watching-only chats live in the Chat tab.
+  const sortedRows = sortMobileChats(chatsQuery.data?.rows ?? []).filter(isNowFeedRow);
 
   return (
     <MobilePage className="flex flex-col" padded>

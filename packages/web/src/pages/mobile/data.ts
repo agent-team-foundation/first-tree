@@ -88,6 +88,29 @@ export function sortMobileChats(rows: readonly MeChatRow[]): MeChatRow[] {
   });
 }
 
+/**
+ * Now feed admission. A chat enters the needs-attention feed only when it
+ * carries an AUTHORITATIVE active signal, read from the source-of-truth fields
+ * rather than the display `mobileChatSignal` tone:
+ *   - a caller-managed failed agent (`failedAgentIds`);
+ *   - an open request directed at the caller (`openRequestCount`);
+ *   - an explicit `@me` mention (`chatHasExplicitMentionToMe`) — NOT the
+ *     broader `unreadMentionCount`, which also counts the implicit 1:1 DM
+ *     auto-mention, so a plain unread reply does not qualify;
+ *   - an in-flight turn (`busyAgentIds`) — NOT `liveActivity`, which is a
+ *     descriptive label the session-status contract allows to linger after the
+ *     authoritative busy projection is already false.
+ * `idle` / watching-only chats stay in the Chat tab, not Now.
+ */
+export function isNowFeedRow(row: MeChatRow): boolean {
+  return (
+    row.failedAgentIds.length > 0 ||
+    row.openRequestCount > 0 ||
+    row.chatHasExplicitMentionToMe ||
+    row.busyAgentIds.length > 0
+  );
+}
+
 export function countAttentionRows(rows: readonly MeChatRow[]): number {
   return rows.reduce((total, row) => total + (mobileChatSignal(row).attention ? 1 : 0), 0);
 }
