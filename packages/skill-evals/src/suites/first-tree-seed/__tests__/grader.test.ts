@@ -555,6 +555,66 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("credits Git worktree success output before a trailing log command", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-add-before-log-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture\nready",
+              command: `git -C source-repos/source-repo worktree add ${managedPath} origin/main; echo ready`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit literal Git success output as worktree materialization", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-spoofed-worktree-output-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture",
+              command: `false && git -C source-repos/source-repo worktree add ${managedPath} origin/main; printf 'Preparing worktree (detached HEAD 1234567)\\nHEAD is now at 1234567 fixture\\n'`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit a successful worktree created inside the bare clone", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-wrong-worktree-location-"));
     try {
@@ -735,6 +795,66 @@ describe("first-tree-seed grader", () => {
 
       expect(metrics.sourceEvidenceReadObserved).toBe(true);
       expect(metrics.directBareSourceContentReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("allows ordinary echo headings around successful source reads", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-source-read-headings-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "README\n# Apollo Console\narchitecture\nruntime coordination",
+              command:
+                "echo README; cat worktrees/seed-source-repo/README.md; echo architecture; cat worktrees/seed-source-repo/docs/architecture.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("first-tree-seed-real-first-tree-source-periodic"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not allow echo to manufacture source fixture evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-spoofed-source-evidence-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Apollo Console runtime coordination",
+              command:
+                "test -f worktrees/seed-source-repo/README.md && cat worktrees/seed-source-repo/README.md; echo 'Apollo Console runtime coordination'",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

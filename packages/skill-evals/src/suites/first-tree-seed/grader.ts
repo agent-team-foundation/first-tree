@@ -53,6 +53,15 @@ const SOURCE_EVIDENCE_ROOT_PATHS = [
   "source-repos/source-repo",
   ".first-tree-eval/source-origin",
 ];
+const SOURCE_FIXTURE_EVIDENCE_HINTS = [
+  "Apollo Console",
+  "CLI App",
+  "Web Dashboard",
+  "Team Practice",
+  "Context Tree commands",
+  "operator dashboard",
+  "runtime coordination",
+];
 
 function eventType(event: Record<string, unknown>): string | null {
   return typeof event.type === "string" ? event.type : null;
@@ -261,15 +270,34 @@ function eventTouchesSourceWorktree(event: unknown): boolean {
 function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePath: string): boolean {
   if (!isRecord(event) || eventType(event) !== "codex_event") return false;
   const managedWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
-  return collectCommandExecutions(event.event).some(
-    (execution) =>
-      execution.exitCode === 0 &&
-      !/(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output) &&
-      segmentsProvenSuccessfulByExitCode(execution.command, execution.exitCode).some((segment) => {
-        const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
-        return program === "git" && /\bworktree\s+add\b/iu.test(segment) && segment.includes(managedWorktreePath);
-      }),
-  );
+  return collectCommandExecutions(event.event).some((execution) => {
+    if (
+      execution.exitCode !== 0 ||
+      /(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output)
+    ) {
+      return false;
+    }
+    const isManagedWorktreeAdd = (segment: string): boolean => {
+      const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
+      return program === "git" && /\bworktree\s+add\b/iu.test(segment) && segment.includes(managedWorktreePath);
+    };
+    if (segmentsProvenSuccessfulByExitCode(execution.command, execution.exitCode).some(isManagedWorktreeAdd)) {
+      return true;
+    }
+
+    // A worktree add before a trailing `; echo ...` cannot be proven from the
+    // shell exit code, but Git's paired success lines bind the aggregate output
+    // to a completed add. Reject commands that contain those lines literally,
+    // so `echo 'Preparing worktree ...'` cannot manufacture this proof.
+    const hasStrongGitSuccessOutput =
+      /Preparing worktree \([^\n]+\)/u.test(execution.output) && /HEAD is now at [0-9a-f]+/iu.test(execution.output);
+    const commandSpoofsGitSuccessOutput = /Preparing worktree \(|HEAD is now at [0-9a-f]+/iu.test(execution.command);
+    return (
+      hasStrongGitSuccessOutput &&
+      !commandSpoofsGitSuccessOutput &&
+      shellCommandSegments(execution.command).some(isManagedWorktreeAdd)
+    );
+  });
 }
 
 function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
@@ -793,9 +821,11 @@ function segmentReferencesSourceEvidence(segment: string): boolean {
 // source stream rather than independently selecting a different file.
 function segmentCanProduceIndependentEvidence(segment: string): boolean {
   const program = segmentProgram(segment);
-  return (
-    segmentReadsContent(segment) || ["echo", "node", "perl", "printf", "python", "python3", "ruby"].includes(program)
-  );
+  if (segmentReadsContent(segment)) return true;
+  if (["echo", "printf"].includes(program)) {
+    return countMatches(segment, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2;
+  }
+  return ["node", "perl", "python", "python3", "ruby"].includes(program);
 }
 
 function containsSourceFixtureEvidence(event: unknown): boolean {
@@ -816,17 +846,7 @@ function containsSourceFixtureEvidence(event: unknown): boolean {
       (segment) => segmentCanProduceIndependentEvidence(segment) && !segmentReferencesSourceEvidence(segment),
     );
     return (
-      hasSourceRead &&
-      !hasUnboundOutputProducer &&
-      countMatches(execution.output, [
-        "Apollo Console",
-        "CLI App",
-        "Web Dashboard",
-        "Team Practice",
-        "Context Tree commands",
-        "operator dashboard",
-        "runtime coordination",
-      ]) >= 2
+      hasSourceRead && !hasUnboundOutputProducer && countMatches(execution.output, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2
     );
   });
 }
