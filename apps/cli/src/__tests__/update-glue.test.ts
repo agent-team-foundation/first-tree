@@ -89,6 +89,8 @@ describe("update glue", () => {
       createExecuteUpdate({ managed: false })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
     ).resolves.toEqual({ installed: false });
     expect(output()).toContain("Cannot self-update");
+    expect(output()).toContain("./scripts/dev-install.sh");
+    expect(output()).not.toContain("npm i -g");
   });
 
   it("refuses loop-guarded targets and records install failures", async () => {

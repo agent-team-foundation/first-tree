@@ -58,6 +58,14 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function shellArg(value: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : shellQuote(value);
+}
+
+function normalizeDownloadBaseUrl(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
 function normalizeCommandServerUrl(value: string): string {
   try {
     return new URL(value).origin;
@@ -80,23 +88,31 @@ function buildLoginCommand(options: {
 function buildPortableBootstrapCommand(options: {
   installerUrl: string;
   portableDownloadBaseUrl: string;
+  defaultPortableDownloadBaseUrl: string;
   binName: string;
   token: string;
   serverUrl: string;
   defaultServerUrl: string;
 }): string {
+  const isCustomDownloadBase =
+    normalizeDownloadBaseUrl(options.portableDownloadBaseUrl) !==
+    normalizeDownloadBaseUrl(options.defaultPortableDownloadBaseUrl);
+  const installerUrl = isCustomDownloadBase ? shellQuote(options.installerUrl) : options.installerUrl;
+  const installerEnv = isCustomDownloadBase
+    ? `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} `
+    : "";
+  const loginCommand = buildLoginCommand({
+    executable: `~/.local/bin/${options.binName}`,
+    tokenArg: shellArg(options.token),
+    serverUrl: options.serverUrl,
+    defaultServerUrl: options.defaultServerUrl,
+  });
+
   return [
-    `tmp="$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX")"`,
-    `trap 'rm -f "$tmp"' EXIT HUP INT TERM`,
-    `curl -fsSL ${shellQuote(options.installerUrl)} -o "$tmp"`,
-    `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} sh "$tmp"`,
-    buildLoginCommand({
-      executable: `"$HOME/.local/bin/${options.binName}"`,
-      tokenArg: shellQuote(options.token),
-      serverUrl: options.serverUrl,
-      defaultServerUrl: options.defaultServerUrl,
-    }),
-  ].join(" && \\\n");
+    `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; ` +
+      `curl -fsSL ${installerUrl} -o "$installer_tmp" && ${installerEnv}sh "$installer_tmp" &&`,
+    `${loginCommand})`,
+  ].join("\n");
 }
 
 /**
@@ -546,80 +562,48 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { userId } = requireUser(request);
     const issuer = resolvePublicUrl(app, request);
     const { token, expiresIn } = await authService.generateConnectToken(app.db, userId, app.config.auth, issuer);
-    // Channel-aware npm spec + bin name. Web onboarding renders the
-    // returned `bootstrapCommand` / `binName` directly so a fresh-machine
-    // install lands on the right package without web needing to know
-    // about channels.
-    //
-    // Multi-env: each channel is its own npm package, so the spec is
-    // always the bare package name (no `@<dist-tag>` suffix — each
-    // package has exactly one `latest`). dev servers have
-    // `packageName=null`: the bootstrap line skips the `npm install -g`
-    // step entirely because the operator builds from source.
+    // Web surfaces render the server-provided command directly. Dev is
+    // source-only; hosted channels always use their public shell installer.
     const ch = getChannelConfig(app.config.channel);
     const command = buildLoginCommand({
       executable: ch.binName,
-      tokenArg: token,
+      tokenArg: shellArg(token),
       serverUrl: issuer,
       defaultServerUrl: ch.defaultServerUrl,
     });
-    if (ch.packageName === null) {
+    if (app.config.channel === "dev") {
       return {
         token,
         expiresIn,
         command,
         bootstrapCommand: command,
-        npmSpec: null,
-        installMethod: "source",
         installerUrl: null,
         binName: ch.binName,
       };
     }
-    const npmSpec = ch.packageName;
-    if (app.config.connectBootstrap.method === "portable") {
-      const installerPath = ch.portable.publicInstallerPath;
-      if (installerPath === null) {
-        return {
-          token,
-          expiresIn,
-          command,
-          bootstrapCommand: command,
-          npmSpec,
-          installMethod: "source",
-          installerUrl: null,
-          binName: ch.binName,
-        };
-      }
-      const portableDownloadBaseUrl = app.config.connectBootstrap.portableDownloadBaseUrl;
-      const installerUrl = joinUrl(portableDownloadBaseUrl, installerPath);
-      const bootstrapCommand = buildPortableBootstrapCommand({
-        installerUrl,
-        portableDownloadBaseUrl,
-        binName: ch.binName,
-        token,
-        serverUrl: issuer,
-        defaultServerUrl: ch.defaultServerUrl,
-      });
-      return {
-        token,
-        expiresIn,
-        command,
-        bootstrapCommand,
-        npmSpec,
-        installMethod: "portable",
-        installerUrl,
-        binName: ch.binName,
-      };
+
+    const installerPath = ch.portable.publicInstallerPath;
+    const defaultPortableDownloadBaseUrl = ch.portable.downloadBaseUrl;
+    if (installerPath === null || defaultPortableDownloadBaseUrl === null) {
+      throw new Error(`Portable installer metadata is missing for the ${app.config.channel} channel`);
     }
-    const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
+    const portableDownloadBaseUrl = app.config.connectBootstrap.portableDownloadBaseUrl;
+    const installerUrl = joinUrl(portableDownloadBaseUrl, installerPath);
+    const bootstrapCommand = buildPortableBootstrapCommand({
+      installerUrl,
+      portableDownloadBaseUrl,
+      defaultPortableDownloadBaseUrl,
+      binName: ch.binName,
+      token,
+      serverUrl: issuer,
+      defaultServerUrl: ch.defaultServerUrl,
+    });
     return {
       token,
       expiresIn,
       command,
       bootstrapCommand,
-      npmSpec,
-      installMethod: "npm",
-      installerUrl: null,
+      installerUrl,
       binName: ch.binName,
     };
   });

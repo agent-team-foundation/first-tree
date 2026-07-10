@@ -11,7 +11,7 @@ const CLIENT_DETECT_POLL_MS = 5_000;
  * can host an agent.
  *
  * Lifecycle (mirrors the proven logic from the legacy Step2Body):
- *   1. Mint a short-lived connect token + bootstrap command (the one-liner
+ *   1. Mint a short-lived connect token + bootstrap command (the command block
  *      the user pastes into their terminal).
  *   2. Poll `listClients()`; the most-recently-seen connected client wins.
  *   3. Once a client is connected, fetch its capabilities to learn which AI

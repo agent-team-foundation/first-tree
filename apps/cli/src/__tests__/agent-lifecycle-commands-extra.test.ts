@@ -1063,7 +1063,7 @@ describe("logout and upgrade commands", () => {
 
     coreMocks.detectInstallMode.mockReturnValueOnce("npx");
     await runTopLevel(registerUpgradeCommand, ["upgrade"]);
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("npm i -g first-tree");
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("./scripts/dev-install.sh");
 
     coreMocks.detectInstallMode.mockReturnValue("global");
     coreMocks.fetchServerCommandVersion.mockResolvedValueOnce({ ok: false, reason: "server down" });

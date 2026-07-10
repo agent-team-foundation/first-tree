@@ -45,6 +45,11 @@ vi.mock("../../../api/onboarding-events.js", () => eventMocks);
 vi.mock("../../../lib/visibility-interval.js", () => visibilityMocks);
 
 let root: Root | null = null;
+const PROD_INSTALLER_URL = "https://download.first-tree.ai/releases/prod/install.sh";
+const bootstrapCommand = (token: string): string =>
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  `(trap 'rm -f "$installer_tmp"' 0; curl -fsSL ${PROD_INSTALLER_URL} -o "$installer_tmp" && ` +
+  `sh "$installer_tmp" &&\n~/.local/bin/first-tree login ${token})`;
 
 function expectHookValue<T>(value: T): NonNullable<T> {
   if (value === null || value === undefined) throw new Error("hook value was not captured");
@@ -307,10 +312,10 @@ describe("shared setup hooks", () => {
       .mockResolvedValueOnce({
         token: "token-1",
         expiresIn: 600,
-        command: "first-tree-dev login token-1",
-        bootstrapCommand: "first-tree-dev login token-1",
-        npmSpec: null,
-        binName: "first-tree-dev",
+        command: "first-tree login token-1",
+        bootstrapCommand: bootstrapCommand("token-1"),
+        installerUrl: PROD_INSTALLER_URL,
+        binName: "first-tree",
       })
       .mockRejectedValueOnce(new Error("token retry failed"))
       .mockRejectedValueOnce("still down")
@@ -318,10 +323,10 @@ describe("shared setup hooks", () => {
       .mockResolvedValueOnce({
         token: "token-2",
         expiresIn: 600,
-        command: "first-tree-dev login token-2",
-        bootstrapCommand: "first-tree-dev login token-2",
-        npmSpec: null,
-        binName: "first-tree-dev",
+        command: "first-tree login token-2",
+        bootstrapCommand: bootstrapCommand("token-2"),
+        installerUrl: PROD_INSTALLER_URL,
+        binName: "first-tree",
       });
 
     function Probe() {
@@ -333,7 +338,7 @@ describe("shared setup hooks", () => {
     await flush();
     await flush();
 
-    expect(expectHookValue(latest.current).cliCommand).toBe("first-tree-dev login token-1");
+    expect(expectHookValue(latest.current).cliCommand).toBe(bootstrapCommand("token-1"));
 
     await act(async () => expectHookValue(latest.current).retry());
     await act(async () => {
@@ -346,7 +351,7 @@ describe("shared setup hooks", () => {
     await flush();
     await flush();
 
-    expect(expectHookValue(latest.current).cliCommand).toBe("first-tree-dev login token-2");
+    expect(expectHookValue(latest.current).cliCommand).toBe(bootstrapCommand("token-2"));
     expect(expectHookValue(latest.current).tokenError).toBeNull();
   }, 10_000);
 

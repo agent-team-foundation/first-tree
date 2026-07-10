@@ -1,43 +1,26 @@
 import { ArrowRight } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Button } from "../../../components/ui/button.js";
 import { runtimeProviderLabel } from "../../clients/cards/shared/providers.js";
 import { COPY } from "../copy.js";
 import { CommandBox, FlowHint, StatusRow } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
-/** Wait this long on the connect command before surfacing the Node.js recovery line. */
-const STUCK_AFTER_MS = 75_000;
-
 /**
  * Install the First Tree client (a small background app) on the user's computer.
- * Two install paths: run a one-liner in a terminal, OR paste a ready prompt to
+ * Two install paths: run the command block in a terminal, OR paste a ready prompt to
  * the coding agent the user already has (Claude Code / Codex) and let it install.
  * We poll until the computer shows up, then list the coding agents detected on it
  * (read-only — picking which one to use moves to the next step, create-agent).
  *
  * No "Need help?" disclosure / example terminal: the normal state is just the
- * command(s) + status; a single Node.js recovery line surfaces only once the
- * connect has hung a while (Node.js missing is the #1 "command not found" cause).
+ * server-provided command(s) + status.
  */
-export function StepConnectComputer({ initialStuck = false }: { initialStuck?: boolean } = {}) {
+export function StepConnectComputer() {
   const { computer, goNext } = useOnboardingFlow();
   const { connectedClient, capabilitiesLoaded, okRuntimes, cliCommand, tokenError, retry } = computer;
 
   const noRuntime = !!connectedClient && capabilitiesLoaded && okRuntimes.length === 0;
   const ready = !!connectedClient && okRuntimes.length > 0;
-
-  // Flip to "stuck" if the command doesn't connect within a reasonable window.
-  // `initialStuck` lets the DEV preview render the stuck state directly.
-  const [stuck, setStuck] = useState(initialStuck);
-  useEffect(() => {
-    if (connectedClient) {
-      setStuck(false);
-      return;
-    }
-    const t = window.setTimeout(() => setStuck(true), STUCK_AFTER_MS);
-    return () => window.clearTimeout(t);
-  }, [connectedClient]);
 
   // Box 2 hands the SAME command to the user's coding agent as a paste-able
   // prompt, with a natural-language "please run this" wrapper so the agent
@@ -76,22 +59,6 @@ export function StepConnectComputer({ initialStuck = false }: { initialStuck?: b
               <CommandBox command={agentPrompt} />
             </div>
             <StatusRow state="waiting" label={COPY.connectComputer.waiting} />
-            {/* Stuck recovery — one line, Node.js the #1 "command not found" cause. */}
-            {stuck ? (
-              <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-                {COPY.connectComputer.stuckNodePre}
-                <a
-                  href={COPY.connectComputer.nodeUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium"
-                  style={{ color: "var(--primary)" }}
-                >
-                  {COPY.connectComputer.nodeLinkLabel}
-                </a>
-                {COPY.connectComputer.stuckNodePost}
-              </p>
-            ) : null}
           </>
         )
       ) : (

@@ -7,8 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+const PROD_BOOTSTRAP_COMMAND =
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  "(trap 'rm -f \"$installer_tmp\"' 0; " +
+  'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
+  'sh "$installer_tmp" &&\n' +
+  "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6)";
+
+const authMock = vi.hoisted(() => ({ memberships: [] as unknown[] }));
+
 vi.mock("../../auth/auth-context.js", () => ({
-  useAuth: () => ({ logout: () => undefined, memberships: [] }),
+  useAuth: () => ({ logout: () => undefined, memberships: authMock.memberships }),
 }));
 
 vi.mock("../../components/ui/toast.js", () => ({
@@ -52,6 +61,7 @@ async function waitForText(container: ParentNode, text: string): Promise<void> {
 }
 
 beforeEach(() => {
+  authMock.memberships = [];
   document.body.innerHTML = "";
   document.documentElement.className = "";
   window.history.replaceState(null, "", "/preview/onboarding");
@@ -97,6 +107,41 @@ describe("onboarding preview review surface", () => {
     expect(previewText).not.toMatch(/\bKickoff\b/);
     expect(previewText).not.toContain("Install First Tree");
     expect(previewText).not.toContain("No Context Tree finale");
+  });
+
+  it("renders the full production shell bootstrap without the removed Node.js recovery state", async () => {
+    authMock.memberships = [{}];
+    window.history.replaceState(null, "", "/preview/onboarding?role=admin&view=flow");
+
+    const { ONBOARDING_PREVIEW_SCENARIOS, OnboardingPreviewPage } = await import("../onboarding-preview.js");
+    const scenarioCatalog = ONBOARDING_PREVIEW_SCENARIOS.flatMap((scenario) => [
+      scenario.id,
+      scenario.label,
+      scenario.group,
+    ]).join("\n");
+    expect(scenarioCatalog).not.toContain("admin-cc-stuck");
+    expect(scenarioCatalog).not.toContain("Node.js");
+
+    const { container, root } = await renderDom(
+      <MemoryRouter>
+        <OnboardingPreviewPage />
+      </MemoryRouter>,
+    );
+    await clickByText(container, "Connect computer");
+    expect(window.location.search).toContain("scenario=admin-cc-waiting");
+    await waitForText(container, "https://download.first-tree.ai/releases/prod/install.sh");
+    const commandBox = [...document.body.querySelectorAll<HTMLElement>("[title]")].find(
+      (element) => element.title === PROD_BOOTSTRAP_COMMAND,
+    );
+
+    expect(commandBox?.title).toBe(PROD_BOOTSTRAP_COMMAND);
+    const commandLines = commandBox ? [...commandBox.querySelectorAll("span")].map((line) => line.textContent) : [];
+    expect(commandLines).toEqual(PROD_BOOTSTRAP_COMMAND.split("\n"));
+    expect(container.textContent).not.toContain("admin-cc-stuck");
+    expect(container.textContent).not.toContain("Node.js");
+    expect(container.textContent).not.toContain("Install Node.js");
+
+    await act(async () => root.unmount());
   });
 
   it("keeps invitee focused on unique states and moves experiments out of the live flow", async () => {

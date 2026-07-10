@@ -3,7 +3,7 @@
 import type { ReactElement } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComputerConnection } from "../../../../features/agent-setup/use-computer-connection.js";
 import type { OnboardingFlowValue } from "../../onboarding-flow.js";
 import { OnboardingFlowContext } from "../../onboarding-flow.js";
@@ -12,6 +12,11 @@ import { StepConnectComputer } from "../step-connect-computer.js";
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const roots: Root[] = [];
+const BOOTSTRAP_COMMAND =
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  "(trap 'rm -f \"$installer_tmp\"' 0; " +
+  'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
+  'sh "$installer_tmp" &&\n~/.local/bin/first-tree login abc123)';
 
 function computer(overrides: Partial<ComputerConnection> = {}): ComputerConnection {
   return {
@@ -20,7 +25,7 @@ function computer(overrides: Partial<ComputerConnection> = {}): ComputerConnecti
     okRuntimes: [],
     selectedRuntime: null,
     setSelectedRuntime: vi.fn(),
-    cliCommand: "first-tree connect --token abc123",
+    cliCommand: BOOTSTRAP_COMMAND,
     tokenError: null,
     retry: vi.fn(),
     ...overrides,
@@ -67,14 +72,14 @@ function flow(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue
   };
 }
 
-async function renderStep(value: OnboardingFlowValue, initialStuck = false): Promise<HTMLElement> {
+async function renderStep(value: OnboardingFlowValue): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   roots.push(root);
   const ui: ReactElement = (
     <OnboardingFlowContext.Provider value={value}>
-      <StepConnectComputer initialStuck={initialStuck} />
+      <StepConnectComputer />
     </OnboardingFlowContext.Provider>
   );
   await act(async () => {
@@ -94,6 +99,13 @@ function buttonByText(scope: ParentNode, text: string): HTMLButtonElement | null
   return [...scope.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ?? null;
 }
 
+beforeEach(() => {
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: vi.fn(async () => undefined) },
+  });
+});
+
 afterEach(() => {
   act(() => {
     for (const root of roots.splice(0)) root.unmount();
@@ -103,13 +115,17 @@ afterEach(() => {
 });
 
 describe("StepConnectComputer", () => {
-  it("renders both connect command paths, stuck recovery, and a disabled continue while waiting", async () => {
+  it("renders and copies the server bootstrap command while waiting", async () => {
     const value = flow();
 
-    const container = await renderStep(value, true);
+    const container = await renderStep(value);
 
-    expect(container.textContent).toContain("first-tree connect --token abc123");
-    expect(container.textContent).toContain("Node.js");
+    expect(container.textContent).toContain("https://download.first-tree.ai/releases/prod/install.sh");
+    expect(container.textContent).toContain("~/.local/bin/first-tree login abc123");
+    expect(container.textContent).not.toContain("npm install");
+    expect(container.textContent).not.toContain("Node.js");
+    await click(buttonByText(container, "Copy"));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(BOOTSTRAP_COMMAND);
     expect(buttonByText(container, "Continue")?.disabled).toBe(true);
   });
 

@@ -33,27 +33,16 @@ export const connectTokenResponseSchema = z.object({
   /** `<binName> login <code>` — channel-aware bin name. */
   command: z.string(),
   /**
-   * Full bootstrap line shown by web onboarding / connect-computer dialogs.
-   * For prod/staging: `npm install -g <pkg>\n<binName> login <code>`.
-   * For dev (server has no published package): just the `<binName> login
-   * <code>` line.
+   * Authoritative bootstrap command shown by web onboarding and connection
+   * dialogs. Prod/staging return a guarded public installer command that runs
+   * the explicit `~/.local/bin/<binName> login <code>` line only after the
+   * download and installation succeed. Dev returns only the source-built CLI
+   * login command.
    */
   bootstrapCommand: z.string(),
   /**
-   * Bare npm package name (no `@<dist-tag>` suffix; multi-env each
-   * channel has its own `latest`). `null` for dev servers — the web UI
-   * suppresses the `npm install -g` step.
-   */
-  npmSpec: z.string().nullable(),
-  /**
-   * Bootstrap install method selected by the server. `npm` remains the
-   * default for published channels until operators opt in to portable
-   * bootstrap. `source` is dev-only.
-   */
-  installMethod: z.enum(["npm", "portable", "source"]),
-  /**
-   * Public installer URL when `installMethod=portable`. Connect tokens never
-   * appear here; the token is only in the local login command.
+   * Public installer URL for prod/staging. Connect tokens never appear here;
+   * the token is only in the local login command. `null` for dev.
    */
   installerUrl: z.string().url().nullable(),
   /**

@@ -52,6 +52,13 @@ vi.mock("../../../lib/visibility-interval.js", () => ({
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
+const STAGING_INSTALLER_URL = "https://download.first-tree.ai/releases/staging/install.sh";
+const stagingBootstrapCommand = (token: string): string =>
+  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` +
+  `(trap 'rm -f "$installer_tmp"' 0; curl -fsSL ${STAGING_INSTALLER_URL} -o "$installer_tmp" && ` +
+  `sh "$installer_tmp" &&\n~/.local/bin/first-tree-staging login ${token})`;
+const STAGING_BOOTSTRAP_COMMAND = stagingBootstrapCommand("connect-token");
+const STAGING_FRESH_BOOTSTRAP_COMMAND = stagingBootstrapCommand("fresh-token");
 
 const AGENT_NAMES: Record<string, string> = {
   "agent-1": "Nova",
@@ -327,10 +334,10 @@ function seedDefaultMocks(): void {
   activityMocks.generateConnectToken.mockResolvedValue({
     token: "connect-token",
     expiresIn: 600,
-    command: "first-tree-dev login connect-token",
-    bootstrapCommand: "first-tree-dev login connect-token",
-    npmSpec: null,
-    binName: "first-tree-dev",
+    command: "first-tree-staging login connect-token",
+    bootstrapCommand: STAGING_BOOTSTRAP_COMMAND,
+    installerUrl: STAGING_INSTALLER_URL,
+    binName: "first-tree-staging",
   });
   memberMocks.listMembers.mockResolvedValue([
     { userId: "user-self", displayName: "Gandy" },
@@ -444,9 +451,9 @@ describe("ClientsPage computer cards", () => {
 
     await click(exactButton(container, "Generate new token"));
     await waitForText(document.body, "Re-authenticate computer");
-    await waitForText(document.body, "first-tree-dev login connect-token");
-    await click(copyButtonForCommand(document.body, "first-tree-dev login connect-token"));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree-dev login connect-token");
+    await waitForText(document.body, "~/.local/bin/first-tree-staging login connect-token");
+    await click(copyButtonForCommand(document.body, STAGING_BOOTSTRAP_COMMAND));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(STAGING_BOOTSTRAP_COMMAND);
     await click(exactButton(document.body, "Cancel"));
 
     await click(exactButton(container, "Connect"));
@@ -531,13 +538,13 @@ describe("ClientsPage computer cards", () => {
     activityMocks.generateConnectToken.mockResolvedValueOnce({
       token: "fresh-token",
       expiresIn: 600,
-      command: "first-tree-dev login fresh-token",
-      bootstrapCommand: "first-tree-dev login fresh-token",
-      npmSpec: null,
-      binName: "first-tree-dev",
+      command: "first-tree-staging login fresh-token",
+      bootstrapCommand: STAGING_FRESH_BOOTSTRAP_COMMAND,
+      installerUrl: STAGING_INSTALLER_URL,
+      binName: "first-tree-staging",
     });
     await click(exactButton(document.body, "Generate new token"));
-    await waitForText(document.body, "first-tree-dev login fresh-token");
+    await waitForText(document.body, "~/.local/bin/first-tree-staging login fresh-token");
     await act(async () => member.root.unmount());
 
     authMock.value = {

@@ -40,9 +40,9 @@ export const serverConfigSchema = defineConfig({
   /**
    * Which release channel this server speaks to. Single switch that drives
    * every CLI-facing identifier emitted by the server:
-   *   - `prod`    → tells web/CLI to install `first-tree`           (bin `first-tree`)
-   *   - `staging` → tells web/CLI to install `first-tree-staging`   (bin `first-tree-staging`)
-   *   - `dev`     → no npm package; bootstrap commands skip `npm install -g`
+   *   - `prod`    → installs the portable `first-tree` binary
+   *   - `staging` → installs the portable `first-tree-staging` binary
+   *   - `dev`     → source-only `first-tree-dev` login command
    *
    * Set via `FIRST_TREE_CHANNEL` in the deployment env. Default `dev` makes
    * `pnpm --filter @first-tree/server dev` Just Work on a developer machine.
@@ -277,14 +277,9 @@ export const serverConfigSchema = defineConfig({
   trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_TRUST_PROXY" }),
   connectBootstrap: {
     /**
-     * Fresh-machine bootstrap method returned by POST /me/connect-tokens.
-     * Defaults to npm for published channels until portable artifacts are
-     * fully promoted in production. Dev remains source-only regardless of
-     * this value because it has no published channel artifact.
+     * Base URL for prod/staging portable installers and artifacts. Mirrors
+     * may override it; dev remains source-only.
      */
-    method: field(z.enum(["npm", "portable"]).default("npm"), {
-      env: "FIRST_TREE_CONNECT_BOOTSTRAP_METHOD",
-    }),
     portableDownloadBaseUrl: field(z.string().url().default("https://download.first-tree.ai/releases"), {
       env: "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL",
     }),
