@@ -238,7 +238,7 @@ export const FIRST_TREE_SEED_PERIODIC_CASES: readonly FirstTreeSeedEvalCase[] = 
     },
     id: "first-tree-seed-real-first-tree-source-periodic",
     prompt:
-      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol, inspect source evidence, and stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol. For unambiguous eval evidence, make the managed worktree add a standalone successful command and run `cat worktrees/seed-source-repo/README.md | head -50` as a separate source read before any broader exploration. Stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",

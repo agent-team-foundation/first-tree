@@ -396,6 +396,65 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not credit a transcript path outside the current eval workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-wrong-root-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              command: "cat /tmp/.first-tree-eval/chat-history.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit transcript hints synthesized by a rewriting pipeline filter", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-rewrite-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Phase 1 proposal Approved Phase 1 PR handoff",
+              command:
+                "cat .first-tree-eval/chat-history.md | rg --replace='Phase 1 proposal Approved Phase 1 PR handoff' '.+'",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit transcript hints synthesized by an awk BEGIN block", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-awk-history-"));
     try {
@@ -988,7 +1047,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("credits Git worktree success output before a trailing log command", () => {
+  it("does not infer worktree materialization from aggregate Git-looking output", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-add-before-log-"));
     const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
     try {
@@ -1012,7 +1071,39 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit encoded Git-looking output after a skipped worktree add", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-encoded-worktree-output-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture",
+              command:
+                `false && git -C source-repos/source-repo worktree add ${managedPath} origin/main; ` +
+                "node -e \"process.stdout.write(Buffer.from(process.argv[1], 'base64').toString())\" UHJlcGFyaW5nIHdvcmt0cmVlIChkZXRhY2hlZCBIRUFEIDEyMzQ1NjcpCkhFQUQgaXMgbm93IGF0IDEyMzQ1NjcgZml4dHVyZQ==",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -1628,6 +1719,72 @@ describe("first-tree-seed grader", () => {
             event: {
               aggregated_output: "Apollo Console\nruntime coordination",
               command: "cat worktrees/seed-source-repo/README.md context-tree/NODE.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit source-like operands outside the current managed source root", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-wrong-root-source-evidence-"));
+    const commands = [
+      "cat /tmp/worktrees/seed-source-repo/README.md",
+      "cat worktrees/seed-source-repo/../../context-tree/NODE.md",
+      "cat worktrees/seed-source-repo/../seed-source-repo-evil/README.md",
+    ];
+    try {
+      for (const command of commands) {
+        const metrics = deriveMetrics(
+          [
+            {
+              event: {
+                aggregated_output: "Apollo Console\nruntime coordination",
+                command,
+                exit_code: 0,
+                status: "completed",
+                type: "command_execution",
+              },
+              type: "codex_event",
+            },
+          ],
+          findCase("same-chat-phase2-continuation"),
+          fixtureValidation(),
+          0,
+          baseRunPaths(tempRoot),
+          join(tempRoot, "context-tree"),
+        );
+
+        expect(metrics.sourceEvidenceReadObserved, command).toBe(false);
+      }
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit source hints synthesized by a rewriting pipeline filter", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-rewrite-source-evidence-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Apollo Console runtime coordination",
+              command:
+                "cat worktrees/seed-source-repo/package.json | rg --replace='Apollo Console runtime coordination' '.+'",
               exit_code: 0,
               status: "completed",
               type: "command_execution",

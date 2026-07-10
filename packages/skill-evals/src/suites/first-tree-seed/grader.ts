@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
@@ -46,12 +46,6 @@ const PROTECTED_BARE_SOURCE_CONTENT_PATHS = [
   ".first-tree-eval/source-origin/objects/",
   ".first-tree-eval/source-origin/packed-refs",
   ".first-tree-eval/source-origin/refs/",
-];
-const SOURCE_EVIDENCE_ROOT_PATHS = [
-  "worktrees/seed-source-repo",
-  "provided-source",
-  "source-repos/source-repo",
-  ".first-tree-eval/source-origin",
 ];
 const SYNTHETIC_SOURCE_EVIDENCE_HINTS = [
   "Apollo Console",
@@ -319,24 +313,11 @@ function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePa
     if (segmentsProvenSuccessfulByExitCode(command, execution.exitCode).some(isManagedWorktreeAdd)) {
       return true;
     }
-
-    // A single managed worktree add before a trailing `; echo ...` cannot be
-    // proven from the shell exit code, but Git's paired success lines bind the
-    // aggregate output to that sole add. One `HEAD is now at ...` line is not
-    // enough: an unrelated reset/checkout can emit it after the managed add was
-    // skipped. Reject multiple add candidates and literal manufacture too.
-    const worktreeAddSegments = shellCommandSegments(command).filter((segment) =>
-      /\bgit\b[\s\S]*\bworktree\s+add\b/iu.test(segment),
-    );
-    const hasStrongGitSuccessOutput =
-      /Preparing worktree \([^\n]+\)/u.test(execution.output) && /HEAD is now at [0-9a-f]+/iu.test(execution.output);
-    const commandSpoofsGitSuccessOutput = /Preparing worktree \(|HEAD is now at [0-9a-f]+/iu.test(command);
-    return (
-      hasStrongGitSuccessOutput &&
-      !commandSpoofsGitSuccessOutput &&
-      worktreeAddSegments.length === 1 &&
-      worktreeAddSegments.some(isManagedWorktreeAdd)
-    );
+    // Do not infer success from Git-looking aggregate output: a skipped add can
+    // be followed by an unrelated command that prints the same text. Commands
+    // whose shell structure cannot prove the add ran are credited only through
+    // the independent final-filesystem validation below.
+    return false;
   });
 }
 
@@ -938,17 +919,11 @@ function positionalShellArgs(segment: string, optionsWithValues: ReadonlySet<str
 // `cat source | head context-tree/NODE.md` does not.
 function segmentIsPurePipelineFilter(segment: string): boolean {
   const program = segmentProgram(segment);
-  if (["cat", "less", "wc"].includes(program)) {
+  if (program === "cat") {
     return positionalShellArgs(segment, new Set()).length === 0;
   }
   if (["head", "tail"].includes(program)) {
     return positionalShellArgs(segment, new Set(["-c", "--bytes", "-n", "--lines"])).length === 0;
-  }
-  if (["grep", "rg"].includes(program)) {
-    return positionalShellArgs(segment, new Set(["-e", "--regexp"])).length <= 1;
-  }
-  if (["awk", "jq", "sed"].includes(program)) {
-    return positionalShellArgs(segment, new Set(["-e", "--expression"])).length <= 1;
   }
   return false;
 }
@@ -962,17 +937,24 @@ function contentReaderFileOperands(segment: string): string[] | null {
   return null;
 }
 
-function pathBelongsToSourceEvidence(value: string): boolean {
-  const normalized = value.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/+$/u, "");
-  if (normalized.includes("source-repos/source-repo/worktrees/seed-source-repo")) return false;
-  return SOURCE_EVIDENCE_ROOT_PATHS.some(
-    (root) => normalized === root || normalized.startsWith(`${root}/`) || normalized.includes(`/${root}/`),
+function pathIsWithinRoot(value: string, root: string, workspacePath: string): boolean {
+  const candidate = resolve(workspacePath, value);
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath === "" || (!isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`))
   );
 }
 
-function pathIsChatHistory(value: string): boolean {
-  const normalized = value.replace(/\\/gu, "/").replace(/^\.\//u, "");
-  return normalized === CHAT_HISTORY_PATH || normalized.endsWith(`/${CHAT_HISTORY_PATH}`);
+function pathBelongsToSourceEvidence(value: string, paths: RunPaths, evalCase: FirstTreeSeedEvalCase): boolean {
+  const sourceRoot =
+    evalCase.fixture.sourceRepoState === "chat-local-readable"
+      ? join(paths.workspacePath, "provided-source")
+      : join(paths.workspacePath, "worktrees", "seed-source-repo");
+  return pathIsWithinRoot(value, sourceRoot, paths.workspacePath);
+}
+
+function pathIsChatHistory(value: string, paths: RunPaths): boolean {
+  return resolve(paths.workspacePath, value) === join(paths.workspacePath, CHAT_HISTORY_PATH);
 }
 
 function commandProvesStandaloneContentRead(
@@ -995,7 +977,7 @@ function commandProvesStandaloneContentRead(
       const program = segmentProgram(segment.text);
       return (
         segment.connectorBefore === "|" &&
-        ["cat", "grep", "head", "less", "rg", "tail", "wc"].includes(program) &&
+        ["cat", "head", "tail"].includes(program) &&
         segmentIsPurePipelineFilter(segment.text)
       );
     });
@@ -1006,7 +988,7 @@ function commandProvesStandaloneContentRead(
   );
 }
 
-function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEvalCase): boolean {
+function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEvalCase, paths: RunPaths): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
   const evidenceHints = sourceEvidenceHints(evalCase);
@@ -1019,13 +1001,14 @@ function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEv
     }
     const command = unwrapShellCommand(execution.command);
     return (
-      commandProvesStandaloneContentRead(command, execution.exitCode, pathBelongsToSourceEvidence) &&
-      countMatches(execution.output, evidenceHints) >= 2
+      commandProvesStandaloneContentRead(command, execution.exitCode, (operand) =>
+        pathBelongsToSourceEvidence(operand, paths, evalCase),
+      ) && countMatches(execution.output, evidenceHints) >= 2
     );
   });
 }
 
-function containsChatHistoryEvidence(event: unknown): boolean {
+function containsChatHistoryEvidence(event: unknown, paths: RunPaths): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
   return collectCommandExecutions(event.event).some((execution) => {
@@ -1033,8 +1016,9 @@ function containsChatHistoryEvidence(event: unknown): boolean {
       return false;
     }
     return (
-      commandProvesStandaloneContentRead(execution.command, execution.exitCode, pathIsChatHistory) &&
-      countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) === CHAT_HISTORY_EVIDENCE_HINTS.length
+      commandProvesStandaloneContentRead(execution.command, execution.exitCode, (operand) =>
+        pathIsChatHistory(operand, paths),
+      ) && countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) === CHAT_HISTORY_EVIDENCE_HINTS.length
     );
   });
 }
@@ -1189,7 +1173,7 @@ export function deriveMetrics(
     if (containsSkillFileRead(event, "first-tree-seed")) seedSkillFileReadObserved = true;
     if (containsSkillFileRead(event, "first-tree-write")) writeSkillFileReadObserved = true;
     if (containsPathAccess(event, [".first-tree/workspace.json"])) workspaceManifestReadObserved = true;
-    if (containsChatHistoryEvidence(event)) chatHistoryReadObserved = true;
+    if (containsChatHistoryEvidence(event, paths)) chatHistoryReadObserved = true;
     // Any operation ON the source worktree (`git worktree add/remove`, reading a
     // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
     // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
@@ -1248,7 +1232,7 @@ export function deriveMetrics(
     runnerExitCode,
     seedSkillFileReadObserved,
     skeletonObserved: skeletonHints.length > 0 && countMatches(finalResponse, skeletonHints) >= 2,
-    sourceEvidenceReadObserved: events.some((event) => containsSourceFixtureEvidence(event, evalCase)),
+    sourceEvidenceReadObserved: events.some((event) => containsSourceFixtureEvidence(event, evalCase, paths)),
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead, evalCase),
     sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
