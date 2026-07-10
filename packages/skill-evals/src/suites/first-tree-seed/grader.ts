@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
@@ -485,25 +486,40 @@ function sourceWorktreeMaterializedAtExpectedHead(paths: RunPaths, baselineHead:
   const worktreePath = join(paths.workspacePath, "worktrees", "seed-source-repo");
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   if (!existsSync(worktreePath) || !existsSync(sourceRepoPath)) return false;
+  let canonicalWorkspace: string;
+  let canonicalWorktree: string;
   try {
-    if (lstatSync(worktreePath).isSymbolicLink()) return false;
+    const worktreeStat = lstatSync(worktreePath);
+    if (worktreeStat.isSymbolicLink() || !worktreeStat.isDirectory()) return false;
+    canonicalWorkspace = realpathSync(paths.workspacePath);
+    canonicalWorktree = realpathSync(worktreePath);
   } catch {
     return false;
   }
+  if (canonicalWorktree !== join(canonicalWorkspace, "worktrees", "seed-source-repo")) return false;
 
   const commonDir = runCommand("git", ["rev-parse", "--git-common-dir"], worktreePath);
-  if (!sourceWorkingTreeIsPristine(worktreePath) || commonDir.exitCode !== 0) return false;
+  const topLevel = runCommand("git", ["rev-parse", "--show-toplevel"], worktreePath);
+  if (!sourceWorkingTreeIsPristine(worktreePath) || commonDir.exitCode !== 0 || topLevel.exitCode !== 0) {
+    return false;
+  }
   const rawCommonDir = commonDir.stdout.trim();
   const resolvedCommonDir = isAbsolute(rawCommonDir) ? rawCommonDir : resolve(worktreePath, rawCommonDir);
   let canonicalCommonDir: string;
   let canonicalSourceRepo: string;
+  let canonicalTopLevel: string;
   try {
     canonicalCommonDir = realpathSync(resolvedCommonDir);
     canonicalSourceRepo = realpathSync(sourceRepoPath);
+    canonicalTopLevel = realpathSync(topLevel.stdout.trim());
   } catch {
     return false;
   }
-  return canonicalCommonDir === canonicalSourceRepo && gitHead(worktreePath) === baselineHead;
+  return (
+    canonicalTopLevel === canonicalWorktree &&
+    canonicalCommonDir === canonicalSourceRepo &&
+    gitHead(worktreePath) === baselineHead
+  );
 }
 
 function sourceRepoChanged(paths: RunPaths, baselineHead: string | null, evalCase: FirstTreeSeedEvalCase): boolean {
@@ -967,28 +983,66 @@ function pathIsChatHistory(value: string, paths: RunPaths): boolean {
 function commandProvesStandaloneContentRead(
   command: string,
   exitCode: number | null,
+  output: string,
+  workspacePath: string,
   acceptsFileOperand: (operand: string) => boolean,
 ): boolean {
   if (exitCode !== 0) return false;
   const segments = shellCommandSegmentsWithConnectors(unwrapShellCommand(command));
   if (segments.length === 0) return false;
+  const fileOperands: string[] = [];
   const isReader = (segment: ShellCommandSegment): boolean => {
     const operands = contentReaderFileOperands(segment.text);
-    return operands !== null && operands.length > 0 && operands.every(acceptsFileOperand);
+    if (operands === null || operands.length === 0 || !operands.every(acceptsFileOperand)) return false;
+    fileOperands.push(...operands);
+    return true;
   };
 
-  if (segments.some((segment) => segment.connectorBefore === "|")) {
+  const pipeline = segments.some((segment) => segment.connectorBefore === "|");
+  if (pipeline) {
     const first = segments[0];
     if (!first || first.connectorBefore !== null || !isReader(first)) return false;
-    return segments.slice(1).every((segment) => {
-      const program = trustedContentReaderProgram(segment.text);
-      return segment.connectorBefore === "|" && program !== null && segmentIsPurePipelineFilter(segment.text);
-    });
+    if (
+      !segments.slice(1).every((segment) => {
+        const program = trustedContentReaderProgram(segment.text);
+        return segment.connectorBefore === "|" && program !== null && segmentIsPurePipelineFilter(segment.text);
+      })
+    ) {
+      return false;
+    }
+  } else if (
+    !segments.every((segment, index) => segment.connectorBefore === (index === 0 ? null : "&&") && isReader(segment))
+  ) {
+    return false;
   }
 
-  return segments.every(
-    (segment, index) => segment.connectorBefore === (index === 0 ? null : "&&") && isReader(segment),
-  );
+  // Parser-focused unit events intentionally omit a filesystem fixture. Live
+  // cases always materialize these operands; there, replay the validated
+  // cat/head/tail shape against the final protected files. Exact output
+  // equality binds evidence to content that survived the run, so temporarily
+  // replacing a source/transcript, reading fabricated hints, and restoring the
+  // original cannot earn credit from the earlier command output.
+  if (!fileOperands.every((operand) => existsSync(resolve(workspacePath, operand)))) return true;
+
+  let replayed = "";
+  let pipelineInput: string | undefined;
+  for (const segment of segments) {
+    const words = shellWords(segment.text);
+    const executable = words[0];
+    if (!executable || trustedContentReaderProgram(segment.text) === null) return false;
+    const result = spawnSync(executable, words.slice(1), {
+      cwd: workspacePath,
+      encoding: "utf8",
+      input: pipeline && segment.connectorBefore === "|" ? pipelineInput : undefined,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    if (result.status !== 0 || result.error) return false;
+    const stdout = result.stdout ?? "";
+    if (pipeline) pipelineInput = stdout;
+    else replayed += stdout;
+  }
+  if (pipeline) replayed = pipelineInput ?? "";
+  return replayed === output;
 }
 
 function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEvalCase, paths: RunPaths): boolean {
@@ -1004,8 +1058,12 @@ function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEv
     }
     const command = unwrapShellCommand(execution.command);
     return (
-      commandProvesStandaloneContentRead(command, execution.exitCode, (operand) =>
-        pathBelongsToSourceEvidence(operand, paths, evalCase),
+      commandProvesStandaloneContentRead(
+        command,
+        execution.exitCode,
+        execution.output,
+        paths.workspacePath,
+        (operand) => pathBelongsToSourceEvidence(operand, paths, evalCase),
       ) && countMatches(execution.output, evidenceHints) >= 2
     );
   });
@@ -1019,8 +1077,12 @@ function containsChatHistoryEvidence(event: unknown, paths: RunPaths): boolean {
       return false;
     }
     return (
-      commandProvesStandaloneContentRead(execution.command, execution.exitCode, (operand) =>
-        pathIsChatHistory(operand, paths),
+      commandProvesStandaloneContentRead(
+        execution.command,
+        execution.exitCode,
+        execution.output,
+        paths.workspacePath,
+        (operand) => pathIsChatHistory(operand, paths),
       ) && countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) === CHAT_HISTORY_EVIDENCE_HINTS.length
     );
   });
