@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -642,6 +642,57 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit wrapped worktree and source commands skipped by shell control flow", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-skipped-shell-segments-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "",
+              command: `/bin/zsh -lc "false && git -C source-repos/source-repo worktree add ${managedPath} origin/main; true"`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              aggregated_output: "# Apollo Console\nruntime coordination",
+              command: `/bin/zsh -lc "test -f ${managedPath}/README.md && cat ${managedPath}/README.md; sed -n '1,120p' context-tree/NODE.md"`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(existsSync(managedPath)).toBe(false);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+      expect(
+        casePassed(
+          findCase("same-chat-phase2-continuation"),
+          baseMetrics({
+            sourceEvidenceReadObserved: metrics.sourceEvidenceReadObserved,
+            sourceWorktreeMaterializedObserved: metrics.sourceWorktreeMaterializedObserved,
+          }),
+        ),
+      ).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

@@ -154,8 +154,98 @@ function unwrapShellCommand(text: string): string {
   return wrapped;
 }
 
+type ShellConnector = "&&" | "||" | ";" | "|";
+type ShellCommandSegment = { connectorBefore: ShellConnector | null; text: string };
+
+// Split the command without discarding the operators that determine whether a
+// segment ran. Separators inside quoted arguments are data, not shell control
+// flow (for example `sed -n '1;20p'`). This is deliberately a small shell
+// scanner rather than an attempted full shell parser: it recognizes the
+// top-level operators the grader reasons about and treats everything else as
+// opaque command text.
+function shellCommandSegmentsWithConnectors(text: string): ShellCommandSegment[] {
+  const command = unwrapShellCommand(text);
+  const segments: ShellCommandSegment[] = [];
+  let connectorBefore: ShellConnector | null = null;
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  const push = (connector: ShellConnector | null): void => {
+    if (current.trim().length > 0) {
+      segments.push({ connectorBefore, text: current });
+      current = "";
+    }
+    connectorBefore = connector;
+  };
+
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index] ?? "";
+    const next = command[index + 1] ?? "";
+
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      current += character;
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      current += character;
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      current += character;
+      continue;
+    }
+    if (character === "&" && next === "&") {
+      push("&&");
+      index++;
+      continue;
+    }
+    if (character === "|" && next === "|") {
+      push("||");
+      index++;
+      continue;
+    }
+    if (character === "|") {
+      push("|");
+      continue;
+    }
+    if (character === ";" || character === "\n") {
+      push(";");
+      continue;
+    }
+    current += character;
+  }
+  push(null);
+  return segments;
+}
+
 function shellCommandSegments(text: string): string[] {
-  return unwrapShellCommand(text).split(/&&|\|\||[;|\n]/u);
+  return shellCommandSegmentsWithConnectors(text).map((segment) => segment.text);
+}
+
+// For a successful shell execution, only the final `;`/newline-delimited
+// list determines the process exit code. When that list is a plain command or
+// an `&&` chain, exit 0 proves every segment in it ran successfully. An `||`
+// or pipeline does not provide that guarantee for each operand, so it earns no
+// positive execution credit here.
+function segmentsProvenSuccessfulByExitCode(command: string, exitCode: number | null): string[] {
+  if (exitCode !== 0) return [];
+  const segments = shellCommandSegmentsWithConnectors(command);
+  let finalListStart = 0;
+  for (let index = 1; index < segments.length; index++) {
+    if (segments[index]?.connectorBefore === ";") finalListStart = index;
+  }
+  const finalList = segments.slice(finalListStart);
+  if (finalList.some((segment) => segment.connectorBefore === "||" || segment.connectorBefore === "|")) return [];
+  return finalList.map((segment) => segment.text);
 }
 
 function commandTouchesSourceWorktree(text: string): boolean {
@@ -175,7 +265,7 @@ function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePa
     (execution) =>
       execution.exitCode === 0 &&
       !/(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output) &&
-      shellCommandSegments(execution.command).some((segment) => {
+      segmentsProvenSuccessfulByExitCode(execution.command, execution.exitCode).some((segment) => {
         const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
         return program === "git" && /\bworktree\s+add\b/iu.test(segment) && segment.includes(managedWorktreePath);
       }),
@@ -676,24 +766,58 @@ function deriveTreeInitObservation(
   return { observed, withContextTreeDir };
 }
 
+function segmentProgram(segment: string): string {
+  return (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
+}
+
+function segmentReadsContent(segment: string): boolean {
+  const program = segmentProgram(segment);
+  return (
+    ["awk", "cat", "find", "grep", "head", "jq", "less", "ls", "rg", "sed", "tail", "wc"].includes(program) ||
+    (program === "git" && /\b(?:show|grep|ls-tree|cat-file|log|diff)\b/iu.test(segment))
+  );
+}
+
+function segmentReferencesSourceEvidence(segment: string): boolean {
+  return (
+    SOURCE_EVIDENCE_ROOT_PATHS.some((root) => segment.includes(root)) &&
+    !segment.includes("source-repos/source-repo/worktrees/seed-source-repo")
+  );
+}
+
+// If a successful command mixes a source read with another independent output
+// producer, the aggregate output cannot be attributed to the source read. This
+// rejects false-greens such as a skipped `test && cat <source>` followed by a
+// Context Tree `sed` whose output happens to contain the expected phrases.
+// Pipeline filters are intentionally not listed: they transform the preceding
+// source stream rather than independently selecting a different file.
+function segmentCanProduceIndependentEvidence(segment: string): boolean {
+  const program = segmentProgram(segment);
+  return (
+    segmentReadsContent(segment) || ["echo", "node", "perl", "printf", "python", "python3", "ruby"].includes(program)
+  );
+}
+
 function containsSourceFixtureEvidence(event: unknown): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
-  return collectCommandExecutions(event.event).some(
-    (execution) =>
-      execution.exitCode === 0 &&
-      !/(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output) &&
-      shellCommandSegments(execution.command).some((segment) => {
-        const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
-        const readsContent =
-          ["awk", "cat", "find", "grep", "head", "jq", "less", "ls", "rg", "sed", "tail", "wc"].includes(program) ||
-          (program === "git" && /\b(?:show|grep|ls-tree|cat-file)\b/iu.test(segment));
-        return (
-          readsContent &&
-          SOURCE_EVIDENCE_ROOT_PATHS.some((root) => segment.includes(root)) &&
-          !segment.includes("source-repos/source-repo/worktrees/seed-source-repo")
-        );
-      }) &&
+  return collectCommandExecutions(event.event).some((execution) => {
+    if (
+      execution.exitCode !== 0 ||
+      /(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output)
+    ) {
+      return false;
+    }
+    const segments = shellCommandSegments(execution.command);
+    const hasSourceRead = segments.some(
+      (segment) => segmentReadsContent(segment) && segmentReferencesSourceEvidence(segment),
+    );
+    const hasUnboundOutputProducer = segments.some(
+      (segment) => segmentCanProduceIndependentEvidence(segment) && !segmentReferencesSourceEvidence(segment),
+    );
+    return (
+      hasSourceRead &&
+      !hasUnboundOutputProducer &&
       countMatches(execution.output, [
         "Apollo Console",
         "CLI App",
@@ -702,8 +826,9 @@ function containsSourceFixtureEvidence(event: unknown): boolean {
         "Context Tree commands",
         "operator dashboard",
         "runtime coordination",
-      ]) >= 2,
-  );
+      ]) >= 2
+    );
+  });
 }
 
 function phase2LeafContentObserved(text: string): boolean {
