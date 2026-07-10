@@ -3,7 +3,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -368,6 +367,65 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not credit transcript evidence from another file operand in the same reader", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-multi-file-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              command: "cat .first-tree-eval/chat-history.md context-tree/NODE.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit transcript hints synthesized by an awk BEGIN block", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-awk-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              command:
+                'awk \'BEGIN { print "Phase 1 proposal"; print "Approved"; print "Phase 1 PR handoff"; exit }\' .first-tree-eval/chat-history.md',
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit a failed transcript content read", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-failed-history-"));
     try {
@@ -483,6 +541,37 @@ describe("first-tree-seed grader", () => {
             event: {
               item: {
                 text: "This chat lacks the visible proposal, approval, and handoff, so Phase 2 continuation is unauthorized. The tree shape cannot substitute for that history. I’m refusing the seed continuation.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2RefusalObserved).toBe(true);
+      expect(metrics.phase2ContinuationObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).not.toContain("continue_phase2");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("classifies a curly-apostrophe seed-continuation refusal after a separate Phase 2 explanation", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-curly-refusal-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "This chat lacks the visible history required for Phase 2 continuation. I’m refusing seed continuation.",
                 type: "agent_message",
               },
               type: "item.completed",
@@ -1378,20 +1467,20 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("detects real first-tree package metadata and layout evidence without synthetic fixture phrases", () => {
+  it("detects real first-tree package and README evidence without synthetic fixture phrases", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-real-source-meta-read-"));
     try {
       const repoRoot = join(process.cwd(), "..", "..");
       const actualOutput = [
         readFileSync(join(repoRoot, "package.json"), "utf8"),
-        readdirSync(join(repoRoot, "packages")).join("\n"),
+        readFileSync(join(repoRoot, "README.md"), "utf8"),
       ].join("\n");
       const metrics = deriveMetrics(
         [
           {
             event: {
               aggregated_output: actualOutput,
-              command: "cat worktrees/seed-source-repo/package.json && ls worktrees/seed-source-repo/packages",
+              command: "cat worktrees/seed-source-repo/package.json && cat worktrees/seed-source-repo/README.md",
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -1510,6 +1599,65 @@ describe("first-tree-seed grader", () => {
               aggregated_output: "Apollo Console\nruntime coordination",
               command:
                 "H='Apollo Console\\nruntime coordination'; false && cat worktrees/seed-source-repo/README.md; printf '%b\\n' \"$H\"",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit source evidence from another file operand in the same reader", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-multi-file-source-evidence-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Apollo Console\nruntime coordination",
+              command: "cat worktrees/seed-source-repo/README.md context-tree/NODE.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit source hints synthesized by an awk BEGIN block", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-awk-source-evidence-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Apollo Console\nruntime coordination",
+              command:
+                'awk \'BEGIN { print "Apollo Console"; print "runtime coordination"; exit }\' worktrees/seed-source-repo/README.md',
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -1681,7 +1829,7 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
       expect(metrics.directBareSourceContentReadObserved).toBe(true);
       expect(metrics.forbiddenActionHits).toContain("direct_bare_source_read");
     } finally {
@@ -1724,7 +1872,7 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
-              command: "sed -n '1,120p' worktrees/seed-source-repo/README.md",
+              command: "cat worktrees/seed-source-repo/README.md",
               exit_code: 0,
               status: "completed",
               type: "command_execution",
