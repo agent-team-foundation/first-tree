@@ -49,9 +49,23 @@ describe("first-tree-seed chat-first fixtures", () => {
     try {
       const reporter = createEvalReporter(evalCase.id, false);
       const contextTreePath = setupFixture(evalCase, paths, reporter);
+      const localHead = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: contextTreePath,
+        encoding: "utf8",
+      }).trim();
+      const remoteHead = execFileSync("git", ["rev-parse", "origin/main"], {
+        cwd: contextTreePath,
+        encoding: "utf8",
+      }).trim();
+      const remoteDefault = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
+        cwd: contextTreePath,
+        encoding: "utf8",
+      }).trim();
 
       expect(existsSync(join(contextTreePath, "product", "onboarding", "NODE.md"))).toBe(true);
       expect(existsSync(join(contextTreePath, "product", "onboarding", "flow.md"))).toBe(false);
+      expect(remoteHead).toBe(localHead);
+      expect(remoteDefault).toBe("refs/remotes/origin/main");
       expect(validateFixture(paths, contextTreePath, evalCase, false, reporter).ok).toBe(true);
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });

@@ -47,6 +47,29 @@ const PROTECTED_BARE_SOURCE_CONTENT_PATHS = [
   ".first-tree-eval/source-origin/packed-refs",
   ".first-tree-eval/source-origin/refs/",
 ];
+const SOURCE_EVIDENCE_ROOT_PATHS = [
+  "worktrees/seed-source-repo",
+  "provided-source",
+  "source-repos/source-repo",
+  ".first-tree-eval/source-origin",
+];
+const SOURCE_EVIDENCE_FILE_PATHS = [
+  "provided-source/README.md",
+  "provided-source/package.json",
+  "provided-source/apps/cli/README.md",
+  "provided-source/apps/web/README.md",
+  "provided-source/docs/architecture.md",
+  "provided-source/docs/team-practice.md",
+  "worktrees/seed-source-repo/README.md",
+  "worktrees/seed-source-repo/package.json",
+  "worktrees/seed-source-repo/apps/cli/README.md",
+  "worktrees/seed-source-repo/apps/web/README.md",
+  "worktrees/seed-source-repo/packages/",
+  "worktrees/seed-source-repo/raw-context/",
+  "worktrees/seed-source-repo/skills/",
+  "worktrees/seed-source-repo/docs/architecture.md",
+  "worktrees/seed-source-repo/docs/team-practice.md",
+];
 
 function eventType(event: Record<string, unknown>): string | null {
   return typeof event.type === "string" ? event.type : null;
@@ -616,6 +639,13 @@ function deriveTreeInitObservation(
 function containsSourceFixtureEvidence(event: unknown): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
+  if (
+    !collectToolInputStrings(event.event).some((value) =>
+      SOURCE_EVIDENCE_ROOT_PATHS.some((root) => value.includes(root)),
+    )
+  ) {
+    return false;
+  }
   const serialized = JSON.stringify(event.event) ?? "";
   if (!serialized.includes("command_execution")) return false;
   return /Apollo Console|CLI App|Web Dashboard|Team Practice|Context Tree commands|operator dashboard|runtime coordination/iu.test(
@@ -625,6 +655,45 @@ function containsSourceFixtureEvidence(event: unknown): boolean {
 
 function phase2LeafContentObserved(text: string): boolean {
   return /^##\s+(Decision|Rationale|Constraints)\b/mu.test(text);
+}
+
+function phase2RefusalObserved(text: string): boolean {
+  return text.split(/[.!?;\n]+/u).some((segment) => {
+    if (!/(?:phase\s*2|leaf)/iu.test(segment)) return false;
+    const withoutNegatedRefusal = segment.replace(
+      /\b(?:do not|don't|will not|won't|should not|shouldn't)\s+refuse\b/giu,
+      "continue",
+    );
+    return /\b(?:cannot|can't|won't|will not|unable|refus(?:e|es|ed|ing|al)|blocked|stop(?:s|ped|ping)?)\b/iu.test(
+      withoutNegatedRefusal,
+    );
+  });
+}
+
+function phase2ContinuationObserved(text: string): boolean {
+  if (phase2RefusalObserved(text)) return false;
+  return text
+    .split(/[.!?;\n]+/u)
+    .some(
+      (segment) =>
+        /(?:phase\s*2|leaf)/iu.test(segment) &&
+        /\b(?:begin|continue|draft|enter|move|proceed|route|start|write|writing)\w*\b/iu.test(segment),
+    );
+}
+
+function githubAppRequirementObserved(text: string): boolean {
+  return text.split(/[.!?;\n]+/u).some((segment) => {
+    if (!/github app/iu.test(segment)) return false;
+    if (
+      /\b(?:do not|don't|does not|doesn't|did not|didn't)\s+(?:need|require|install|connect)\b/iu.test(segment) ||
+      /\bwithout\s+(?:needing|requiring|installing|connecting)\b/iu.test(segment) ||
+      /\bno\s+github app\s+(?:is\s+)?(?:needed|required)\b/iu.test(segment) ||
+      /\bgithub app\s+(?:is\s+)?not\s+(?:needed|required)\b/iu.test(segment)
+    ) {
+      return false;
+    }
+    return /\b(?:connect|install|need|require|settings)\w*\b|\bmust\b/iu.test(segment);
+  });
 }
 
 function forbiddenActionHits(
@@ -651,9 +720,10 @@ function forbiddenActionHits(
     }
     if (action === "phase1_skeleton" && metrics.skeletonObserved) hits.push(action);
     if (action === "partial_seed" && metrics.skeletonObserved) hits.push(action);
-    if (action === "require_github_app" && /(?:install|connect|require)[^\n.]{0,80}github app/iu.test(text)) {
+    if (action === "require_github_app" && metrics.githubAppRequirementObserved) {
       hits.push(action);
     }
+    if (action === "refuse_nonempty_tree" && metrics.phase2RefusalObserved) hits.push(action);
     if (action === "restart_phase1" && /phase\s*1[^\n.]{0,100}(?:propos|approval|confirm)/iu.test(text)) {
       hits.push(action);
     }
@@ -696,25 +766,7 @@ export function deriveMetrics(
     if (containsSkillFileRead(event, "first-tree-seed")) seedSkillFileReadObserved = true;
     if (containsSkillFileRead(event, "first-tree-write")) writeSkillFileReadObserved = true;
     if (containsPathAccess(event, [".first-tree/workspace.json"])) workspaceManifestReadObserved = true;
-    if (
-      containsPathAccess(event, [
-        "provided-source/README.md",
-        "provided-source/package.json",
-        "provided-source/apps/cli/README.md",
-        "provided-source/apps/web/README.md",
-        "provided-source/docs/architecture.md",
-        "provided-source/docs/team-practice.md",
-        "worktrees/seed-source-repo/README.md",
-        "worktrees/seed-source-repo/package.json",
-        "worktrees/seed-source-repo/apps/cli/README.md",
-        "worktrees/seed-source-repo/apps/web/README.md",
-        "worktrees/seed-source-repo/packages/",
-        "worktrees/seed-source-repo/raw-context/",
-        "worktrees/seed-source-repo/skills/",
-        "worktrees/seed-source-repo/docs/architecture.md",
-        "worktrees/seed-source-repo/docs/team-practice.md",
-      ])
-    ) {
+    if (containsPathAccess(event, SOURCE_EVIDENCE_FILE_PATHS)) {
       sourceEvidenceReadObserved = true;
     }
     // Any operation ON the source worktree (`git worktree add/remove`, reading a
@@ -763,7 +815,10 @@ export function deriveMetrics(
     firstTreeArgv,
     forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv, evalCase),
     fixtureValidationOk: fixtureValidation.ok,
+    githubAppRequirementObserved: githubAppRequirementObserved(finalResponse),
+    phase2ContinuationObserved: phase2ContinuationObserved(finalResponse),
     phase2LeafContentObserved: phase2LeafContentObserved(finalResponse),
+    phase2RefusalObserved: phase2RefusalObserved(finalResponse),
     runnerExitCode,
     seedSkillFileReadObserved,
     skeletonObserved: skeletonHints.length > 0 && countMatches(finalResponse, skeletonHints) >= 2,
@@ -871,6 +926,8 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
       metrics.writeSkillFileReadObserved &&
       metrics.sourceWorktreeCreated &&
       metrics.sourceEvidenceReadObserved &&
+      metrics.phase2ContinuationObserved &&
+      !metrics.phase2RefusalObserved &&
       !metrics.directBareSourceContentReadObserved
     );
   }
@@ -938,6 +995,12 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (metrics.phase2LeafContentObserved && evalCase.expected.action !== "continue_phase2") {
     notes.push("Phase 2-style leaf content was observed before user approval.");
+  }
+  if (evalCase.expected.action === "continue_phase2" && !metrics.phase2ContinuationObserved) {
+    notes.push("Same-chat continuation did not positively route into Phase 2 leaf drafting.");
+  }
+  if (metrics.phase2RefusalObserved) {
+    notes.push("Model refused the verified same-chat Phase 2 continuation.");
   }
   return notes.length > 0 ? notes.join(" ") : null;
 }

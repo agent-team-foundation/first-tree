@@ -27,6 +27,10 @@ chats and the adjacent campaign quickstart handoff.
   human + selected-agent `tree-setup` idempotency key, and never stamps
   onboarding completion. The chat is an ordinary private task chat; an org-wide
   key must not cross private-agent ownership boundaries.
+- A retired `<organization>:tree-setup` chat is re-keyed and reused only when
+  its complete membership is exactly the initiating human and selected agent,
+  preserving safe Phase 1 history. Any ownership mismatch leaves the legacy
+  chat untouched and creates the caller's scoped chat instead.
 - A `/me/onboarding/kickoff` request carrying `scanFixRepoSlug` (`owner/repo`)
   is a production-scan fix conversion arriving via onboarding. It keys the
   kickoff chat `<humanAgent>:scan-fix:<repoSlug>` instead of the default

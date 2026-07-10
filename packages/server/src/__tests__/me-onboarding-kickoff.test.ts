@@ -303,6 +303,108 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(treeMsgs[0]?.content).not.toContain("GitHub App");
   });
 
+  it("safely re-keys and reuses a legacy org setup chat with the exact same private boundary", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const legacyChatId = `chat-${crypto.randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: legacyChatId,
+      organizationId: admin.organizationId,
+      type: "group",
+      topic: "Set up shared context",
+      onboardingKickoffKey: `${admin.organizationId}:tree-setup`,
+    });
+    await app.db.insert(chatMembership).values([
+      {
+        chatId: legacyChatId,
+        agentId: admin.humanAgentUuid,
+        role: "owner",
+        accessMode: "speaker",
+        mode: "mention_only",
+      },
+      {
+        chatId: legacyChatId,
+        agentId: agent.uuid,
+        role: "member",
+        accessMode: "speaker",
+        mode: "mention_only",
+      },
+    ]);
+    await app.db.insert(messages).values({
+      id: `msg-${crypto.randomUUID()}`,
+      chatId: legacyChatId,
+      senderId: admin.humanAgentUuid,
+      format: "text",
+      content: "Our approved Phase 1 history.",
+      source: "api",
+      metadata: { mentions: [agent.uuid], addressedAgentIds: [agent.uuid] },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: agent.uuid },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ chatId: string }>().chatId).toBe(legacyChatId);
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, legacyChatId)).limit(1);
+    expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:tree-setup`);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, legacyChatId));
+    expect(chatMessages.map((message) => message.content)).toEqual(["Our approved Phase 1 history."]);
+  });
+
+  it("does not adopt a legacy org setup chat owned by another admin and private agent", async () => {
+    const app = getApp();
+    const firstAdmin = await createTestAdmin(app);
+    const laterAdmin = await createTestAdmin(app);
+    const firstAgent = await createOrgAgent(app, firstAdmin);
+    const laterAgent = await createOrgAgent(app, laterAdmin);
+    const legacyChatId = `chat-${crypto.randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: legacyChatId,
+      organizationId: firstAdmin.organizationId,
+      type: "group",
+      topic: "Set up shared context",
+      onboardingKickoffKey: `${firstAdmin.organizationId}:tree-setup`,
+    });
+    await app.db.insert(chatMembership).values([
+      {
+        chatId: legacyChatId,
+        agentId: firstAdmin.humanAgentUuid,
+        role: "owner",
+        accessMode: "speaker",
+        mode: "mention_only",
+      },
+      {
+        chatId: legacyChatId,
+        agentId: firstAgent.uuid,
+        role: "member",
+        accessMode: "speaker",
+        mode: "mention_only",
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(firstAdmin.organizationId),
+      headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
+      payload: { agentUuid: laterAgent.uuid },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const laterChatId = response.json<{ chatId: string }>().chatId;
+    expect(laterChatId).not.toBe(legacyChatId);
+    const [legacy] = await app.db.select().from(chats).where(eq(chats.id, legacyChatId)).limit(1);
+    expect(legacy?.onboardingKickoffKey).toBe(`${firstAdmin.organizationId}:tree-setup`);
+    const legacySpeakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, legacyChatId));
+    expect(new Set(legacySpeakers.map((speaker) => speaker.agentId))).toEqual(
+      new Set([firstAdmin.humanAgentUuid, firstAgent.uuid]),
+    );
+  });
+
   it("keeps each admin's setup chat inside their own private-agent boundary", async () => {
     const app = getApp();
     const firstAdmin = await createTestAdmin(app);

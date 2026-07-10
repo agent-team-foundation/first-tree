@@ -29,7 +29,10 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     forbiddenActionHits: [],
     forbiddenSideEffectHits: [],
     fixtureValidationOk: true,
+    githubAppRequirementObserved: false,
+    phase2ContinuationObserved: false,
     phase2LeafContentObserved: false,
+    phase2RefusalObserved: false,
     runnerExitCode: 0,
     seedSkillFileReadObserved: true,
     skeletonObserved: true,
@@ -112,6 +115,120 @@ describe("first-tree-seed grader", () => {
       risk_pass: true,
       routing_pass: false,
     });
+  });
+
+  it("requires a positive Phase 2 continuation and does not misread no-App prose as an App requirement", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-positive-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will continue into Phase 2 leaf drafting now. This does not require a GitHub App.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2ContinuationObserved).toBe(true);
+      expect(metrics.phase2RefusalObserved).toBe(false);
+      expect(metrics.githubAppRequirementObserved).toBe(false);
+      expect(
+        casePassed(
+          findCase("same-chat-phase2-continuation"),
+          baseMetrics({
+            finalResponse: metrics.finalResponse,
+            phase2ContinuationObserved: true,
+            phase2RefusalObserved: false,
+            skeletonObserved: false,
+          }),
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a Phase 2 refusal and detects a real GitHub App requirement", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-refusal-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I cannot continue Phase 2 leaf drafting because the tree is non-empty. Install a GitHub App first.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2ContinuationObserved).toBe(false);
+      expect(metrics.phase2RefusalObserved).toBe(true);
+      expect(metrics.githubAppRequirementObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toEqual(
+        expect.arrayContaining(["refuse_nonempty_tree", "require_github_app"]),
+      );
+      expect(
+        casePassed(
+          findCase("same-chat-phase2-continuation"),
+          baseMetrics({
+            forbiddenActionHits: metrics.forbiddenActionHits,
+            phase2ContinuationObserved: false,
+            phase2RefusalObserved: true,
+            skeletonObserved: false,
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not count Context Tree output as source evidence without a source path read", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-is-not-source-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "# Apollo Console\nApproved Phase 1 skeleton.",
+              command: "sed -n '1,120p' context-tree/NODE.md",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
   });
 
   it("does not count first-tree-write mentions in first-tree-seed skill output as write-skill reads", () => {
@@ -451,6 +568,7 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
+              command: "sed -n '1,120p' worktrees/seed-source-repo/README.md",
               type: "command_execution",
               output: "Apollo Console source evidence",
             },

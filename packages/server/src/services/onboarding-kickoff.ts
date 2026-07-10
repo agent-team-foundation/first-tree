@@ -1,6 +1,7 @@
 import type { SendMessage } from "@first-tree/shared";
 import { and, eq, isNull, like, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -56,6 +57,54 @@ export type KickoffOnboardingResult = {
    *  message already there. */
   sent?: { recipients: string[]; messageId: string };
 };
+
+/**
+ * Adopt the retired org-keyed setup chat only when its complete participant ACL
+ * is exactly the initiating human and selected private agent. Older clients
+ * used one org-wide key for an ordinary private task chat; blindly reusing that
+ * row can cross administrator ownership boundaries, while always creating a
+ * new row discards a safe same-chat Phase 1 history. The row lock + conditional
+ * update make the narrow safe migration race-resilient.
+ */
+export async function adoptSafeLegacyTreeSetupChat(
+  db: Database,
+  args: { humanAgentId: string; organizationId: string; targetAgentId: string },
+): Promise<void> {
+  const legacyKey = `${args.organizationId}:tree-setup`;
+  const scopedKey = `${args.humanAgentId}:${args.targetAgentId}:tree-setup`;
+
+  await db.transaction(async (tx) => {
+    const [scoped] = await tx
+      .select({ id: chats.id })
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, scopedKey))
+      .limit(1);
+    if (scoped) return;
+
+    const [legacy] = await tx
+      .select({ id: chats.id })
+      .from(chats)
+      .where(and(eq(chats.organizationId, args.organizationId), eq(chats.onboardingKickoffKey, legacyKey)))
+      .for("update")
+      .limit(1);
+    if (!legacy) return;
+
+    const participants = await tx
+      .select({ accessMode: chatMembership.accessMode, agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(eq(chatMembership.chatId, legacy.id));
+    const expected = new Set([args.humanAgentId, args.targetAgentId]);
+    const exactPrivateBoundary =
+      participants.length === expected.size &&
+      participants.every((participant) => participant.accessMode === "speaker" && expected.has(participant.agentId));
+    if (!exactPrivateBoundary) return;
+
+    await tx
+      .update(chats)
+      .set({ onboardingKickoffKey: scopedKey })
+      .where(and(eq(chats.id, legacy.id), eq(chats.onboardingKickoffKey, legacyKey)));
+  });
+}
 
 /**
  * True only after a tree setup kickoff has a bootstrap message. A chat row by

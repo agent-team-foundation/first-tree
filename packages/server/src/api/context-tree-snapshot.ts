@@ -48,8 +48,8 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       getContextTreeSnapshot({ ...binding, githubToken }, window, { timing: timing.add }),
     );
     // Probe (only on the unavailable + GitHub-remote + minted path) whether the
-    // App genuinely can't read the repo, so the Context tab can offer the "add
-    // repo to the App" recovery without misdirecting other unavailable causes.
+    // App genuinely cannot read the repo. Keep the structured diagnosis for API
+    // compatibility and observability; the Context tab routes recovery to chat.
     const recoveryAction = mintResult
       ? await timing.time("github_recovery", () => resolveContextTreeRecoveryAction(snapshot, binding, mintResult))
       : null;

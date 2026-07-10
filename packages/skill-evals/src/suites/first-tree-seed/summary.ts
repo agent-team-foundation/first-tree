@@ -63,7 +63,7 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
     return metrics.treeInitWithContextTreeDirObserved;
   }
   if (evalCase.expected.action === "continue_phase2") {
-    return true;
+    return metrics.phase2ContinuationObserved && !metrics.phase2RefusalObserved;
   }
   return false;
 }

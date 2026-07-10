@@ -17,7 +17,7 @@ import { mintContextTreeInstallationToken } from "../../services/github-app-toke
 import type { GithubCreatedRepo } from "../../services/github-oauth.js";
 import { GithubUserTokenError, getFreshGithubUserToken } from "../../services/github-user-token.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { kickoffOnboarding } from "../../services/onboarding-kickoff.js";
+import { adoptSafeLegacyTreeSetupChat, kickoffOnboarding } from "../../services/onboarding-kickoff.js";
 import { getOrgContextTree, putOrgSetting } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
 
@@ -54,6 +54,11 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
   app.post<{ Params: { orgId: string }; Body: unknown }>("/setup-chat", async (request, reply) => {
     const scope = await requireOrgAdmin(request, app.db);
     const body = treeSetupKickoffSchema.parse(request.body);
+    await adoptSafeLegacyTreeSetupChat(app.db, {
+      humanAgentId: scope.humanAgentId,
+      organizationId: scope.organizationId,
+      targetAgentId: body.agentUuid,
+    });
     const result = await kickoffOnboarding(app.db, {
       memberId: scope.memberId,
       humanAgentId: scope.humanAgentId,

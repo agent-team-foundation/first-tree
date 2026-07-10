@@ -147,11 +147,11 @@ Durable system constraints for the seed eval fixture.
 
 function approvedSkeletonRootMarkdown(): string {
   return `---
-title: "Apollo Console"
+title: "Approved Seed Skeleton"
 owners: [eval-owner]
 ---
 
-# Apollo Console
+# Approved Seed Skeleton
 
 Approved Phase 1 domain skeleton. Phase 2 leaf content is not drafted yet.
 `;
@@ -258,6 +258,13 @@ function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCas
         ? "docs: merge approved phase one skeleton"
         : "chore: seed populated context tree",
   );
+  if (evalCase.fixture.treeState === "phase1-approved") {
+    const treeOriginPath = join(paths.runRoot, "context-tree-origin.git");
+    assertCommandOk(runCommand("git", ["clone", "--bare", contextTreePath, treeOriginPath], paths.workspacePath));
+    assertCommandOk(runCommand("git", ["remote", "add", "origin", treeOriginPath], contextTreePath));
+    assertCommandOk(runCommand("git", ["fetch", "origin"], contextTreePath));
+    assertCommandOk(runCommand("git", ["remote", "set-head", "origin", "main"], contextTreePath));
+  }
   return contextTreePath;
 }
 
@@ -507,7 +514,17 @@ function validateTreeEmpty(
   evalCase: FirstTreeSeedEvalCase,
   errors: string[],
 ): boolean {
-  if (evalCase.fixture.treeState === "nonempty" || evalCase.fixture.treeState === "phase1-approved") return true;
+  if (evalCase.fixture.treeState === "nonempty") return true;
+  if (evalCase.fixture.treeState === "phase1-approved") {
+    const localHead = gitHead(contextTreePath);
+    const remoteHead = gitHead(contextTreePath, "refs/remotes/origin/main");
+    const remoteDefault = runCommand("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], contextTreePath);
+    if (localHead === null || remoteHead !== localHead || remoteDefault.stdout.trim() !== "refs/remotes/origin/main") {
+      errors.push("approved Phase 1 fixture must be merged into the configured origin default branch.");
+      return false;
+    }
+    return true;
+  }
   if (evalCase.fixture.treeState === "unbound") return validateTreeUnbound(paths, contextTreePath, errors);
   const forbiddenEntries = readdirSync(contextTreePath).filter((entry) => {
     if (entry === ".git" || entry === ".first-tree" || entry === ".github") return false;
