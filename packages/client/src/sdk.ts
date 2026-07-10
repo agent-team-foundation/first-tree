@@ -45,6 +45,7 @@ import { createLogger } from "./observability/logger.js";
  * and immediately get kicked off with `auth:expired`.
  */
 export type AccessTokenProvider = (opts?: { minValidityMs?: number }) => string | Promise<string>;
+export type RuntimeSessionTokenProvider = () => string | undefined;
 
 export type SdkConfig = {
   serverUrl: string;
@@ -62,11 +63,11 @@ export type SdkConfig = {
    */
   agentId?: string;
   /**
-   * Ephemeral token returned by the current successful WS `agent:bind`.
+   * Token or token provider for the current runtime session.
    * Agent-scoped HTTP includes it to prove the request comes from the active
-   * runtime binding, not merely from a user JWT that knows `X-Agent-Id`.
+   * runtime owner, not merely from a user JWT that knows `X-Agent-Id`.
    */
-  runtimeSessionToken?: string;
+  runtimeSessionToken?: string | RuntimeSessionTokenProvider;
   /**
    * Optional `User-Agent` header sent on every request. Without it Node's
    * default `User-Agent: node` lands in trace backends — useless for forensics
@@ -236,7 +237,7 @@ export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly _agentId: string | undefined;
-  private readonly _runtimeSessionToken: string | undefined;
+  private readonly resolveRuntimeSessionToken: RuntimeSessionTokenProvider;
   private readonly _userAgent: string | undefined;
   private readonly logger = createLogger("sdk");
 
@@ -244,7 +245,9 @@ export class FirstTreeHubSDK {
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
     this.getAccessToken = config.getAccessToken;
     this._agentId = config.agentId;
-    this._runtimeSessionToken = config.runtimeSessionToken;
+    const runtimeSessionToken = config.runtimeSessionToken;
+    this.resolveRuntimeSessionToken =
+      typeof runtimeSessionToken === "function" ? runtimeSessionToken : () => runtimeSessionToken;
     this._userAgent = config.userAgent;
   }
 
@@ -258,9 +261,9 @@ export class FirstTreeHubSDK {
     return this._agentId;
   }
 
-  /** Ephemeral runtime-session token scoped to the current WS bind, if any. */
+  /** Runtime-session token scoped to the current bind, if any. */
   get runtimeSessionToken(): string | undefined {
-    return this._runtimeSessionToken;
+    return this.resolveRuntimeSessionToken();
   }
 
   /** Validate current JWT + X-Agent-Id, return agent identity. */
@@ -706,8 +709,9 @@ export class FirstTreeHubSDK {
     };
     if (this._agentId) {
       headers[AGENT_SELECTOR_HEADER] = this._agentId;
-      if (this._runtimeSessionToken) {
-        headers[AGENT_RUNTIME_SESSION_HEADER] = this._runtimeSessionToken;
+      const runtimeSessionToken = this.resolveRuntimeSessionToken();
+      if (runtimeSessionToken) {
+        headers[AGENT_RUNTIME_SESSION_HEADER] = runtimeSessionToken;
       }
     }
     if (this._userAgent) {

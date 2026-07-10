@@ -84,11 +84,12 @@ export function buildAgentEnv(
   },
 ): NodeJS.ProcessEnv {
   const env = withExplicitCliBinDirOnPath(parentEnv, ctx.log);
+  delete env.FIRST_TREE_RUNTIME_SESSION_TOKEN;
+  delete env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
   return {
     ...env,
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
-    ...(ctx.sdk.runtimeSessionToken ? { FIRST_TREE_RUNTIME_SESSION_TOKEN: ctx.sdk.runtimeSessionToken } : {}),
     ...(ctx.runtimeSessionTokenFile ? { FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: ctx.runtimeSessionTokenFile } : {}),
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,
