@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -14,55 +14,27 @@ import { createTestAdmin, createTestApp, useTestApp } from "./helpers.js";
 
 const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
 const execFileAsync = promisify(execFile);
-const PORTABLE_BOOTSTRAP_PREFIX =
-  `installer_tmp=$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && ` + `(trap 'rm -f "$installer_tmp"' 0; `;
-
-type BootstrapExecutionMode = "fetch-failure" | "installer-failure" | "success";
-
-type BootstrapExecutionResult = {
-  exitCode: number;
-  events: string[];
-  remainingTempFiles: string[];
-};
-
 async function writeExecutable(path: string, contents: string): Promise<void> {
   await writeFile(path, contents);
   await chmod(path, 0o755);
 }
 
-async function executePortableBootstrap(
-  bootstrapCommand: string,
-  mode: BootstrapExecutionMode,
-): Promise<BootstrapExecutionResult> {
+async function executePortableBootstrap(bootstrapCommand: string): Promise<string[]> {
   const root = await mkdtemp(join(tmpdir(), "first-tree-connect-bootstrap-"));
   try {
     const homeDirectory = join(root, "home");
     const localBinDirectory = join(homeDirectory, ".local", "bin");
     const fakeBinDirectory = join(root, "fake-bin");
-    const tempDirectory = join(root, "tmp");
     const eventLog = join(root, "events.log");
     const fakeInstaller = join(root, "installer.sh");
     await Promise.all([
       mkdir(localBinDirectory, { recursive: true }),
       mkdir(fakeBinDirectory, { recursive: true }),
-      mkdir(tempDirectory, { recursive: true }),
       writeFile(eventLog, ""),
     ]);
-
-    await writeExecutable(
-      join(localBinDirectory, "first-tree"),
-      `#!/bin/sh
-printf '%s\n' "stale-login:$*" >> "$EVENT_LOG"
-`,
-    );
     await writeExecutable(
       fakeInstaller,
-      mode === "installer-failure"
-        ? `#!/bin/sh
-printf '%s\n' 'installer-start' >> "$EVENT_LOG"
-exit 9
-`
-        : `#!/bin/sh
+      `#!/bin/sh
 printf '%s\n' 'installer-start' >> "$EVENT_LOG"
 cat > "$HOME/.local/bin/first-tree" <<'SHIM'
 #!/bin/sh
@@ -75,49 +47,22 @@ printf '%s\n' 'installer-success' >> "$EVENT_LOG"
     await writeExecutable(
       join(fakeBinDirectory, "curl"),
       `#!/bin/sh
-if [ "$FAKE_CURL_MODE" = 'fetch-failure' ]; then
-  exit 22
-fi
-
-output=
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = '-o' ]; then
-    shift
-    output=$1
-  fi
-  shift
-done
-[ -n "$output" ] || exit 64
-cp "$FAKE_INSTALLER" "$output"
+cat "$FAKE_INSTALLER"
 `,
     );
 
-    let exitCode = 0;
-    try {
-      await execFileAsync("/bin/sh", ["-c", bootstrapCommand], {
-        env: {
-          ...process.env,
-          EVENT_LOG: eventLog,
-          FAKE_CURL_MODE: mode,
-          FAKE_INSTALLER: fakeInstaller,
-          HOME: homeDirectory,
-          PATH: `${fakeBinDirectory}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-          TMPDIR: tempDirectory,
-        },
-        timeout: 10_000,
-      });
-    } catch (error) {
-      const code = error instanceof Error ? Reflect.get(error, "code") : undefined;
-      if (typeof code !== "number") throw error;
-      exitCode = code;
-    }
+    await execFileAsync("/bin/sh", ["-c", bootstrapCommand], {
+      env: {
+        ...process.env,
+        EVENT_LOG: eventLog,
+        FAKE_INSTALLER: fakeInstaller,
+        HOME: homeDirectory,
+        PATH: `${fakeBinDirectory}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      },
+      timeout: 10_000,
+    });
 
-    const events = (await readFile(eventLog, "utf8")).trim().split("\n").filter(Boolean);
-    return {
-      exitCode,
-      events,
-      remainingTempFiles: await readdir(tempDirectory),
-    };
+    return (await readFile(eventLog, "utf8")).trim().split("\n").filter(Boolean);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -172,55 +117,14 @@ describe("POST /me/connect-tokens bootstrap command", () => {
       expectShortConnectCode(body.token);
       expect(body.command).toBe(`first-tree login ${body.token}`);
       expect(body.bootstrapCommand).toBe(
-        PORTABLE_BOOTSTRAP_PREFIX +
-          'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-          `sh "$installer_tmp" &&\n~/.local/bin/first-tree login ${body.token})`,
+        `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n` +
+          `~/.local/bin/first-tree login ${body.token}`,
       );
       expect(body).not.toHaveProperty("npmSpec");
       expect(body).not.toHaveProperty("installMethod");
     });
 
-    it("preserves a fetch failure and does not invoke an existing CLI", async () => {
-      const app = getApp();
-      const admin = await createTestAdmin(app);
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/v1/me/connect-tokens",
-        headers: {
-          authorization: `Bearer ${admin.accessToken}`,
-          host: "cloud.first-tree.ai",
-          "x-forwarded-proto": "https",
-        },
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json<{ bootstrapCommand: string }>();
-
-      const result = await executePortableBootstrap(body.bootstrapCommand, "fetch-failure");
-
-      expect(result).toEqual({ exitCode: 22, events: [], remainingTempFiles: [] });
-    });
-
-    it("preserves an installer failure and does not invoke an existing CLI", async () => {
-      const app = getApp();
-      const admin = await createTestAdmin(app);
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/v1/me/connect-tokens",
-        headers: {
-          authorization: `Bearer ${admin.accessToken}`,
-          host: "cloud.first-tree.ai",
-          "x-forwarded-proto": "https",
-        },
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json<{ bootstrapCommand: string }>();
-
-      const result = await executePortableBootstrap(body.bootstrapCommand, "installer-failure");
-
-      expect(result).toEqual({ exitCode: 9, events: ["installer-start"], remainingTempFiles: [] });
-    });
-
-    it("invokes the newly installed CLI only after the installer succeeds", async () => {
+    it("executes the installer pipeline and invokes the installed CLI", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const res = await app.inject({
@@ -235,13 +139,9 @@ describe("POST /me/connect-tokens bootstrap command", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json<{ bootstrapCommand: string; token: string }>();
 
-      const result = await executePortableBootstrap(body.bootstrapCommand, "success");
+      const events = await executePortableBootstrap(body.bootstrapCommand);
 
-      expect(result).toEqual({
-        exitCode: 0,
-        events: ["installer-start", "installer-success", `installed-login:login ${body.token}`],
-        remainingTempFiles: [],
-      });
+      expect(events).toEqual(["installer-start", "installer-success", `installed-login:login ${body.token}`]);
     });
 
     it("adds an explicit server URL for non-default deployment hosts", async () => {
@@ -261,10 +161,8 @@ describe("POST /me/connect-tokens bootstrap command", () => {
       expectShortConnectCode(body.token);
       expect(body.command).toBe(`FIRST_TREE_SERVER_URL='https://selfhost.example.test' first-tree login ${body.token}`);
       expect(body.bootstrapCommand).toBe(
-        PORTABLE_BOOTSTRAP_PREFIX +
-          'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-          `sh "$installer_tmp" &&\n` +
-          `FIRST_TREE_SERVER_URL='https://selfhost.example.test' ~/.local/bin/first-tree login ${body.token})`,
+        `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n` +
+          `FIRST_TREE_SERVER_URL='https://selfhost.example.test' ~/.local/bin/first-tree login ${body.token}`,
       );
     });
 
@@ -284,10 +182,8 @@ describe("POST /me/connect-tokens bootstrap command", () => {
         expectShortConnectCode(body.token);
         expect(body.command).toBe(`FIRST_TREE_SERVER_URL='first-tree.internal' first-tree login ${body.token}`);
         expect(body.bootstrapCommand).toBe(
-          PORTABLE_BOOTSTRAP_PREFIX +
-            'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-            `sh "$installer_tmp" &&\n` +
-            `FIRST_TREE_SERVER_URL='first-tree.internal' ~/.local/bin/first-tree login ${body.token})`,
+          `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n` +
+            `FIRST_TREE_SERVER_URL='first-tree.internal' ~/.local/bin/first-tree login ${body.token}`,
         );
       } finally {
         app.config.server.publicUrl = originalPublicUrl;
@@ -310,10 +206,8 @@ describe("POST /me/connect-tokens bootstrap command", () => {
         expectShortConnectCode(body.token);
         expect(body.command).toBe(`FIRST_TREE_SERVER_URL='self'\\''host;$(id)' first-tree login ${body.token}`);
         expect(body.bootstrapCommand).toBe(
-          PORTABLE_BOOTSTRAP_PREFIX +
-            'curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && ' +
-            `sh "$installer_tmp" &&\n` +
-            `FIRST_TREE_SERVER_URL='self'\\''host;$(id)' ~/.local/bin/first-tree login ${body.token})`,
+          `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n` +
+            `FIRST_TREE_SERVER_URL='self'\\''host;$(id)' ~/.local/bin/first-tree login ${body.token}`,
         );
       } finally {
         app.config.server.publicUrl = originalPublicUrl;
@@ -349,9 +243,8 @@ describe("POST /me/connect-tokens bootstrap command", () => {
       expect(body.installerUrl).toBe("https://download.first-tree.ai/releases/staging/install.sh");
       expect(body.command).toBe(`first-tree-staging login ${body.token}`);
       expect(body.bootstrapCommand).toBe(
-        PORTABLE_BOOTSTRAP_PREFIX +
-          'curl -fsSL https://download.first-tree.ai/releases/staging/install.sh -o "$installer_tmp" && ' +
-          `sh "$installer_tmp" &&\n~/.local/bin/first-tree-staging login ${body.token})`,
+        `curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh\n` +
+          `~/.local/bin/first-tree-staging login ${body.token}`,
       );
     });
   });
@@ -387,10 +280,9 @@ describe("POST /me/connect-tokens bootstrap command", () => {
       expectShortConnectCode(body.token);
       expect(body.installerUrl).toBe("https://downloads.example.test/releases/prod/install.sh");
       expect(body.bootstrapCommand).toBe(
-        PORTABLE_BOOTSTRAP_PREFIX +
-          `curl -fsSL 'https://downloads.example.test/releases/prod/install.sh' -o "$installer_tmp" && ` +
+        `curl -fsSL 'https://downloads.example.test/releases/prod/install.sh' | ` +
           `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL='https://downloads.example.test/releases' ` +
-          `sh "$installer_tmp" &&\n~/.local/bin/first-tree login ${body.token})`,
+          `sh\n~/.local/bin/first-tree login ${body.token}`,
       );
       expect(body.installerUrl).not.toContain(body.token);
     });
@@ -415,11 +307,9 @@ describe("POST /me/connect-tokens bootstrap command", () => {
         expectShortConnectCode(body.token);
         expect(body.installerUrl).toBe("https://downloads.example.test/releases/$(id)/prod/install.sh");
         expect(body.bootstrapCommand).toBe(
-          PORTABLE_BOOTSTRAP_PREFIX +
-            `curl -fsSL 'https://downloads.example.test/releases/$(id)/prod/install.sh' ` +
-            `-o "$installer_tmp" && ` +
+          `curl -fsSL 'https://downloads.example.test/releases/$(id)/prod/install.sh' | ` +
             `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL='https://downloads.example.test/releases/$(id)' ` +
-            `sh "$installer_tmp" &&\n~/.local/bin/first-tree login ${body.token})`,
+            `sh\n~/.local/bin/first-tree login ${body.token}`,
         );
       } finally {
         app.config.connectBootstrap.portableDownloadBaseUrl = originalPortableDownloadBaseUrl;

@@ -17,23 +17,25 @@ human-friendly index over them.
 Production:
 
 ```bash
-installer_tmp=$(mktemp "${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && sh "$installer_tmp" &&
-~/.local/bin/first-tree login <connect-code>)
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-code>
 ```
 
 Staging:
 
 ```bash
-installer_tmp=$(mktemp "${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; curl -fsSL https://download.first-tree.ai/releases/staging/install.sh -o "$installer_tmp" && sh "$installer_tmp" &&
-~/.local/bin/first-tree-staging login <connect-code>)
+curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+~/.local/bin/first-tree-staging login <connect-code>
 ```
 
 The public shell installers support macOS and Linux and bundle Node.js. They
 install channel-specific binaries under `~/.local/bin`: `first-tree` / `ft`
 for production and `first-tree-staging` / `fts` for staging. The full path in
 the login command works immediately, before the current shell reloads `PATH`.
-The success chain preserves download and installer failures, removes the
-temporary installer, and does not run login unless installation completes.
+The two lines are intentionally independent and do not provide shell-level
+transaction protection: when pasted together, an install-line failure does not
+automatically prevent the login line from running, and POSIX `sh` does not
+guarantee that `curl | sh` preserves a `curl` failure status.
 
 For self-hosted deployments, use the two-line command returned by the web
 console. It includes the server and portable download-base overrides when

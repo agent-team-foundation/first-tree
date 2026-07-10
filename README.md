@@ -127,15 +127,18 @@ At the "connect a computer" step, setup gives you the channel-aware commands
 to install the CLI and link the machine. Hosted production uses:
 
 ```bash
-installer_tmp=$(mktemp "${TMPDIR:-/tmp}/first-tree-install.XXXXXX") && (trap 'rm -f "$installer_tmp"' 0; curl -fsSL https://download.first-tree.ai/releases/prod/install.sh -o "$installer_tmp" && sh "$installer_tmp" &&
-~/.local/bin/first-tree login <connect-code>)
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-code>
 ```
 
 Use the exact commands shown in the web console, especially for staging or a
 self-hosted deployment. The macOS/Linux installer bundles Node.js, so new
-users do not need to install Node separately. The command only logs in after
-the installer succeeds, and the explicit `~/.local/bin` path works immediately,
-even before the shell reloads its `PATH`.
+users do not need to install Node separately. The two lines are intentionally
+independent and do not provide shell-level transaction protection: when pasted
+together, an install-line failure does not automatically prevent the login line
+from running, and POSIX `sh` does not guarantee that `curl | sh` preserves a
+`curl` failure status. The explicit `~/.local/bin` path works immediately, even
+before the shell reloads its `PATH`.
 
 ## CLI
 
