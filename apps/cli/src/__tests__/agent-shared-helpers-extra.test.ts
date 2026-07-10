@@ -52,6 +52,12 @@ const originalRuntimeSessionToken = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN
 const originalRuntimeSessionTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
 
+function latestRuntimeSessionTokenProvider(): () => string | undefined {
+  const config = clientMocks.FirstTreeHubSDK.mock.calls.at(-1)?.[0] as { runtimeSessionToken?: unknown } | undefined;
+  expect(config?.runtimeSessionToken).toEqual(expect.any(Function));
+  return config?.runtimeSessionToken as () => string | undefined;
+}
+
 function restoreEnv(): void {
   if (originalAgentId === undefined) {
     delete process.env.FIRST_TREE_AGENT_ID;
@@ -124,15 +130,10 @@ describe("local agent shared helpers", () => {
     process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "runtime-token-1";
     createSdk("nova");
 
-    expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "agent-1",
-        runtimeSessionToken: undefined,
-      }),
-    );
+    expect(latestRuntimeSessionTokenProvider()()).toBeUndefined();
   });
 
-  it("prefers the runtime session token file over a stale inherited env token", async () => {
+  it("reads the runtime session token file fresh after SDK construction", async () => {
     const dir = mkdtempSync(join(tmpdir(), "first-tree-token-"));
     try {
       const tokenFile = join(dir, "runtime.token");
@@ -143,12 +144,11 @@ describe("local agent shared helpers", () => {
       process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
       createSdk("nova");
 
-      expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "agent-1",
-          runtimeSessionToken: "runtime-token-2",
-        }),
-      );
+      const resolveRuntimeSessionToken = latestRuntimeSessionTokenProvider();
+      expect(resolveRuntimeSessionToken()).toBe("runtime-token-2");
+
+      writeFileSync(tokenFile, "runtime-token-3\n", "utf8");
+      expect(resolveRuntimeSessionToken()).toBe("runtime-token-3");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -165,12 +165,7 @@ describe("local agent shared helpers", () => {
 
       expect(() => createSdk("nova")).not.toThrow();
       expect(outputMocks.fail).not.toHaveBeenCalled();
-      expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "agent-1",
-          runtimeSessionToken: undefined,
-        }),
-      );
+      expect(latestRuntimeSessionTokenProvider()()).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -188,12 +183,7 @@ describe("local agent shared helpers", () => {
 
       expect(() => createSdk("nova")).not.toThrow();
       expect(outputMocks.fail).not.toHaveBeenCalled();
-      expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "agent-1",
-          runtimeSessionToken: undefined,
-        }),
-      );
+      expect(latestRuntimeSessionTokenProvider()()).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

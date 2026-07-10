@@ -89,12 +89,11 @@ export function resolveLocalAgent(
 /** Build an SDK client scoped to the resolved local agent. */
 export function createSdk(agentName?: string): FirstTreeHubSDK {
   const { serverUrl, agentId } = resolveLocalAgent(agentName);
-  const runtimeSessionToken = resolveRuntimeSessionToken();
   return new FirstTreeHubSDK({
     serverUrl,
     getAccessToken: (opts) => ensureFreshAccessToken(opts),
     agentId,
-    runtimeSessionToken,
+    runtimeSessionToken: resolveRuntimeSessionToken,
     userAgent: CLI_USER_AGENT,
   });
 }
