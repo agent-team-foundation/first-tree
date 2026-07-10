@@ -4,6 +4,7 @@ import type { CommandResult } from "../../core/types.js";
 
 export type SeedTreeState = "empty" | "nonempty" | "phase1-approved" | "unbound";
 export type SeedSourceRepoState = "bare-readable" | "chat-local-readable" | "missing" | "real-first-tree-bare-readable";
+export type SeedChatHistoryState = "absent" | "approved-phase1";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
@@ -13,6 +14,7 @@ export type SeedExpectedAction =
   | "continue_phase2";
 
 export type FirstTreeSeedFixture = {
+  chatHistoryState?: SeedChatHistoryState;
   sourceRepoState: SeedSourceRepoState;
   treeState: SeedTreeState;
 };
@@ -20,6 +22,7 @@ export type FirstTreeSeedFixture = {
 export type FirstTreeSeedExpected = {
   action: SeedExpectedAction;
   approvalHints?: readonly string[];
+  requireChatHistoryRead?: boolean;
   requireSourceRead: boolean;
   requireWorktree: boolean;
   responseHints: readonly string[];
@@ -66,6 +69,7 @@ export type FixtureValidation = {
 
 export type EvalMetrics = {
   approvalRequestObserved: boolean;
+  chatHistoryReadObserved: boolean;
   contextTreeChanged: boolean;
   contextTreeStatus: string;
   directBareSourceContentReadObserved: boolean;

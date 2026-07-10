@@ -1,11 +1,12 @@
 import type { SendMessage } from "@first-tree/shared";
-import { and, eq, isNull, like, or } from "drizzle-orm";
+import { and, desc, eq, isNull, like, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "./chat.js";
+import { sendMessage } from "./message.js";
 
 /**
  * Idempotency key for a production-scan fix launcher, shared by BOTH entry
@@ -33,6 +34,8 @@ export type KickoffOnboardingArgs = {
   targetAgentId: string;
   /** The user-visible first message body sent into the kickoff chat. */
   bootstrap: string;
+  /** Optional trusted metadata for a server-owned bootstrap variant. */
+  bootstrapMetadata?: Record<string, unknown>;
   /** Display title for the created chat. */
   topic: string;
   /** Stable idempotency key for this kickoff surface. */
@@ -57,6 +60,70 @@ export type KickoffOnboardingResult = {
    *  message already there. */
   sent?: { recipients: string[]; messageId: string };
 };
+
+export type TreeSetupRecoveryMessage = {
+  content: string;
+  fingerprint: string;
+};
+
+/**
+ * Append the current server-owned recovery diagnosis to an existing setup
+ * chat and wake its selected agent. The setup kickoff itself is intentionally
+ * sent only into an empty chat, but recovery is a new user turn: returning to
+ * an established Phase 1/2 conversation must not silently navigate to stale
+ * history.
+ *
+ * The chat row lock serializes concurrent CTA clicks. Only an immediately
+ * repeated identical recovery turn is suppressed; once either participant has
+ * replied, the same underlying failure can be raised again as a fresh turn.
+ */
+export async function appendTreeSetupRecoveryMessage(
+  db: Database,
+  args: {
+    chatId: string;
+    humanAgentId: string;
+    targetAgentId: string;
+    recovery: TreeSetupRecoveryMessage;
+  },
+): Promise<{ recipients: string[]; messageId: string } | null> {
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const [chat] = await txDb
+      .select({ id: chats.id })
+      .from(chats)
+      .where(eq(chats.id, args.chatId))
+      .for("update")
+      .limit(1);
+    if (!chat) throw new Error(`Context Tree setup chat "${args.chatId}" disappeared before recovery send`);
+
+    const [latest] = await txDb
+      .select({ content: messages.content, metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, args.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(1);
+    if (
+      latest?.metadata.contextTreeRecoveryFingerprint === args.recovery.fingerprint ||
+      latest?.content === args.recovery.content
+    ) {
+      return null;
+    }
+
+    const sent = await sendMessage(
+      txDb,
+      args.chatId,
+      args.humanAgentId,
+      {
+        format: "text",
+        content: args.recovery.content,
+        metadata: { contextTreeRecoveryFingerprint: args.recovery.fingerprint },
+        source: "api",
+      },
+      { addressedToAgentIds: [args.targetAgentId] },
+    );
+    return { recipients: sent.recipients, messageId: sent.message.id };
+  });
+}
 
 /**
  * Adopt the retired org-keyed setup chat only when its complete participant ACL
@@ -148,6 +215,7 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
   const initialMessage: SendMessage = {
     format: "text",
     content: args.bootstrap,
+    ...(args.bootstrapMetadata ? { metadata: args.bootstrapMetadata } : {}),
     source: "api",
   };
   const created = await createChat(db, {

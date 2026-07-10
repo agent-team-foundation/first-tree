@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import {
+  type ContextTreeRecoveryAction,
   contextTreeInstallationInfoResponseSchema,
   initializeContextTreeRequestSchema,
   initializeContextTreeResponseSchema,
@@ -11,13 +13,27 @@ import {
   ContextTreeRepoProvisionError,
   ensureInstallationOwnedContextTreeRepo,
 } from "../../services/context-tree-repo-provisioner.js";
+import {
+  type ContextTreeBinding,
+  getContextTreeSnapshot,
+  isGithubRemoteBinding,
+} from "../../services/context-tree-snapshot.js";
 import { createRepoFileWithToken, GithubAppApiError, getRepoFileWithToken } from "../../services/github-app.js";
 import { findInstallationByOrg } from "../../services/github-app-installations.js";
-import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
+import {
+  type ContextTreeInstallationTokenResult,
+  mintContextTreeInstallationToken,
+  resolveContextTreeRecoveryAction,
+} from "../../services/github-app-token.js";
 import type { GithubCreatedRepo } from "../../services/github-oauth.js";
 import { GithubUserTokenError, getFreshGithubUserToken } from "../../services/github-user-token.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { adoptSafeLegacyTreeSetupChat, kickoffOnboarding } from "../../services/onboarding-kickoff.js";
+import {
+  adoptSafeLegacyTreeSetupChat,
+  appendTreeSetupRecoveryMessage,
+  kickoffOnboarding,
+  type TreeSetupRecoveryMessage,
+} from "../../services/onboarding-kickoff.js";
 import { getOrgContextTree, putOrgSetting } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
 
@@ -47,13 +63,15 @@ const TREE_SETUP_TOPIC = "Set up shared context";
 const TREE_SETUP_BOOTSTRAP = [
   "Let's build or finish our team's Context Tree.",
   "",
-  "Please inspect the actual tree state and any source code already readable in this workspace. If no source code is readable, ask me for one local project folder path or GitHub repository URL. Once you have readable code, propose the initial top- and second-level domain structure for my review before writing it. Use this same chat to continue after approval; never restart a populated tree.",
+  "Please inspect the actual tree state, then read .first-tree/workspace.json before choosing sources. A non-empty source manifest is authoritative: every declared clone must exist and be readable; report a missing declared clone as a blocking half-provisioned workspace instead of bypassing it with another source. Only when the manifest is empty or absent may you ask me for one local project folder path or GitHub repository URL. Once you have readable code, propose the initial top- and second-level domain structure for my review before writing it. Use this same chat to continue after approval; never restart a populated tree.",
 ].join("\n");
 
 export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { orgId: string }; Body: unknown }>("/setup-chat", async (request, reply) => {
     const scope = await requireOrgAdmin(request, app.db);
     const body = treeSetupKickoffSchema.parse(request.body);
+    const binding = await getOrgContextTree(app.db, scope.organizationId);
+    const recovery = await resolveTreeSetupRecoveryMessage(app, scope.organizationId, binding);
     await adoptSafeLegacyTreeSetupChat(app.db, {
       humanAgentId: scope.humanAgentId,
       organizationId: scope.organizationId,
@@ -64,7 +82,8 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       humanAgentId: scope.humanAgentId,
       organizationId: scope.organizationId,
       targetAgentId: body.agentUuid,
-      bootstrap: TREE_SETUP_BOOTSTRAP,
+      bootstrap: recovery?.content ?? TREE_SETUP_BOOTSTRAP,
+      ...(recovery ? { bootstrapMetadata: { contextTreeRecoveryFingerprint: recovery.fingerprint } } : {}),
       topic: TREE_SETUP_TOPIC,
       // A setup chat is an ordinary private task chat, so its stable identity
       // must stay inside the initiating human + selected private-agent ACL.
@@ -78,6 +97,27 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         { event: "context_tree.setup_chat", userId: scope.userId, chatId: result.chatId },
         "context tree: setup chat kickoff",
       );
+    }
+    if (recovery && !result.sent) {
+      const sent = await appendTreeSetupRecoveryMessage(app.db, {
+        chatId: result.chatId,
+        humanAgentId: scope.humanAgentId,
+        targetAgentId: body.agentUuid,
+        recovery,
+      });
+      if (sent) {
+        notifyRecipients(app.notifier, sent.recipients, sent.messageId);
+        app.log.info(
+          {
+            event: "context_tree.setup_chat_recovery",
+            userId: scope.userId,
+            chatId: result.chatId,
+            repo: binding.repo ?? null,
+            branch: binding.branch ?? null,
+          },
+          "context tree: setup chat recovery turn",
+        );
+      }
     }
     return reply.status(200).send({ chatId: result.chatId });
   });
@@ -319,6 +359,67 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       }),
     );
   });
+}
+
+async function resolveTreeSetupRecoveryMessage(
+  app: FastifyInstance,
+  organizationId: string,
+  binding: ContextTreeBinding,
+): Promise<TreeSetupRecoveryMessage | null> {
+  if (!binding.repo && !binding.localPath) return null;
+
+  let mintResult: ContextTreeInstallationTokenResult | null = null;
+  if (isGithubRemoteBinding(binding)) {
+    const installation = await findInstallationByOrg(app.db, organizationId);
+    mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+  }
+  const snapshot = await getContextTreeSnapshot({
+    ...binding,
+    ...(mintResult?.ok ? { githubToken: mintResult.token } : {}),
+  });
+  if (snapshot.snapshotStatus !== "unavailable") return null;
+  const recoveryAction = mintResult ? await resolveContextTreeRecoveryAction(snapshot, binding, mintResult) : null;
+  return treeSetupRecoveryMessage(
+    binding,
+    snapshot.contextStatus.detail ?? "First Tree could not read the configured Context Tree snapshot.",
+    recoveryAction,
+  );
+}
+
+function treeSetupRecoveryMessage(
+  binding: ContextTreeBinding,
+  detail: string,
+  recoveryAction: ContextTreeRecoveryAction | null,
+): TreeSetupRecoveryMessage {
+  const diagnostic = {
+    repo: binding.repo ?? null,
+    branch: binding.branch ?? null,
+    snapshotStatus: "unavailable",
+    detail,
+    recoveryAction,
+  } as const;
+  const fingerprintDiagnostic = {
+    ...diagnostic,
+    // A failed remote clone is cached briefly and the second read prefixes the
+    // same cause with this sentence. Strip only that transport-cache wrapper so
+    // an immediate retry deduplicates while a genuinely different diagnosis
+    // still produces a fresh turn.
+    detail: detail.replace(/Previous Context Tree sync failed recently\.\s*/gu, ""),
+  };
+  const fingerprint = createHash("sha256").update(JSON.stringify(fingerprintDiagnostic)).digest("hex");
+  const content = [
+    TREE_SETUP_BOOTSTRAP,
+    "",
+    "Current server-resolved recovery diagnostic:",
+    `- Configured repository: ${diagnostic.repo ?? "(local workspace binding)"}`,
+    `- Configured branch: ${diagnostic.branch ?? "(repository default)"}`,
+    `- Snapshot status: ${diagnostic.snapshotStatus}`,
+    `- Detail: ${diagnostic.detail}`,
+    `- Structured recovery hint: ${diagnostic.recoveryAction ?? "none"}`,
+    "",
+    "Re-check the current binding, repository, branch, and readable workspace state in this chat before changing anything.",
+  ].join("\n");
+  return { content, fingerprint };
 }
 
 class ContextTreeInitializeError extends Error {

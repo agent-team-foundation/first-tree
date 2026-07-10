@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +30,7 @@ function findCase(id: string): FirstTreeSeedEvalCase {
 function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
   return {
     approvalRequestObserved: true,
+    chatHistoryReadObserved: true,
     contextTreeChanged: false,
     contextTreeStatus: "",
     directBareSourceContentReadObserved: false,
@@ -156,6 +167,187 @@ describe("first-tree-seed grader", () => {
           }),
         ),
       ).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("requires the positive continuation case to read the visible prior-turn transcript", () => {
+    const evalCase = findCase("same-chat-phase2-continuation");
+    const metrics = baseMetrics({
+      chatHistoryReadObserved: false,
+      finalResponse: "The Phase 2 continuation is valid, so I will continue leaf drafting.",
+      phase2ContinuationObserved: true,
+      skeletonObserved: false,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(false);
+    expect(buildGrading(evalCase, metrics, false).scores.process_pass).toBe(false);
+  });
+
+  it("does not treat an eval-only stop before writes as refusing a verified Phase 2 continuation", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-eval-stop-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "The populated-tree exception applies, and this setup routes to Phase 2. Per the eval restriction, I stopped before dispatching leaf-writing work or modifying the tree.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2ContinuationObserved).toBe(true);
+      expect(metrics.phase2RefusalObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).not.toContain("refuse_nonempty_tree");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("records same-chat history only after a successful content read with transcript evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-history-read-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output:
+                "Phase 1 proposal: product and system.\nApproved.\nPhase 1 PR handoff: merge then return here.",
+              command: "cat .first-tree-eval/chat-history.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a transcript path mention or existence check as reading prior turns", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-history-spoof-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: ".first-tree-eval/chat-history.md exists",
+              command: "test -f .first-tree-eval/chat-history.md && echo .first-tree-eval/chat-history.md exists",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("passes the Phase-1-shaped negative sibling only when it refuses without source exploration", () => {
+    const evalCase = findCase("phase1-shaped-tree-without-same-chat-history-refuses");
+    const metrics = baseMetrics({
+      chatHistoryReadObserved: false,
+      finalResponse:
+        "This populated tree has no visible same-chat history, so first-tree-seed cannot continue; use first-tree-write or focused maintenance.",
+      phase2ContinuationObserved: false,
+      skeletonObserved: false,
+      sourceEvidenceReadObserved: false,
+      sourceWorktreeAccessObserved: false,
+      sourceWorktreeCreated: false,
+      sourceWorktreeMaterializedObserved: false,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(true);
+  });
+
+  it("flags Phase 2 continuation when the same-chat history fixture is absent", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-missing-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "The visible history is absent, but I will continue Phase 2 leaf drafting anyway.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2ContinuationObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("continue_phase2");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("classifies an explicit refusal after explaining the missing Phase 2 authorization", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-explicit-refusal-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "This chat lacks the visible proposal, approval, and handoff, so Phase 2 continuation is unauthorized. The tree shape cannot substitute for that history. I’m refusing the seed continuation.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2RefusalObserved).toBe(true);
+      expect(metrics.phase2ContinuationObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).not.toContain("continue_phase2");
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -585,6 +777,42 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("attributes a wrapped compound worktree add and source-file loop without cross-segment bare-read leakage", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-wrapped-source-loop-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: `HEAD is now at 1234567 fixture\nFILE ${managedPath}/README.md\n# Apollo Console\nContext Tree commands\nruntime coordination\nFILE context-tree/NODE.md\n# Approved Seed Skeleton`,
+              command:
+                `/bin/zsh -lc 'git -C context-tree ls-tree -r --name-only origin/main -- product system && ` +
+                `git -C source-repos/source-repo fetch origin && ` +
+                `git -C source-repos/source-repo worktree add ${managedPath} origin/main && ` +
+                `for f in ${managedPath}/README.md context-tree/NODE.md; do echo "FILE $f"; sed -n 1,80p "$f"; done'`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+      expect(metrics.directBareSourceContentReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit literal Git success output as worktree materialization", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-spoofed-worktree-output-"));
     const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
@@ -773,12 +1001,13 @@ describe("first-tree-seed grader", () => {
   it("detects real first-tree source evidence read from the materialized worktree", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-real-source-read-"));
     try {
+      const realReadme = readFileSync(join(process.cwd(), "..", "..", "README.md"), "utf8");
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: '{"name":"first-tree"}\nApollo Console runtime coordination',
-              command: "cat worktrees/seed-source-repo/package.json && ls worktrees/seed-source-repo/packages",
+              aggregated_output: realReadme,
+              command: "cat worktrees/seed-source-repo/README.md",
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -795,6 +1024,98 @@ describe("first-tree-seed grader", () => {
 
       expect(metrics.sourceEvidenceReadObserved).toBe(true);
       expect(metrics.directBareSourceContentReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects real first-tree package metadata and layout evidence without synthetic fixture phrases", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-real-source-meta-read-"));
+    try {
+      const repoRoot = join(process.cwd(), "..", "..");
+      const actualOutput = [
+        readFileSync(join(repoRoot, "package.json"), "utf8"),
+        readdirSync(join(repoRoot, "packages")).join("\n"),
+      ].join("\n");
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: actualOutput,
+              command: "cat worktrees/seed-source-repo/package.json && ls worktrees/seed-source-repo/packages",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("first-tree-seed-real-first-tree-source-periodic"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("attributes a pure pipeline filter to its source read", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-piped-source-read-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "# Apollo Console\nruntime coordination",
+              command: "cat worktrees/seed-source-repo/README.md | head -50",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not attribute a pipeline stage with its own Context Tree file operand to source", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-mixed-pipeline-read-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "# Apollo Console\nruntime coordination",
+              command: "cat worktrees/seed-source-repo/README.md | head -50 context-tree/NODE.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -817,7 +1138,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("first-tree-seed-real-first-tree-source-periodic"),
+        findCase("same-chat-phase2-continuation"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),

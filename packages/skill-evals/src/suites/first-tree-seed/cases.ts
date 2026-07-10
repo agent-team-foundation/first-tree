@@ -166,11 +166,13 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     briefingMode: "generated-fixture",
     expected: {
       action: "continue_phase2",
+      requireChatHistoryRead: true,
       requireSourceRead: true,
       requireWorktree: true,
       responseHints: ["Phase 2", "leaf"],
     },
     fixture: {
+      chatHistoryState: "approved-phase1",
       sourceRepoState: "bare-readable",
       treeState: "phase1-approved",
     },
@@ -180,11 +182,37 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "same-chat-phase2-continuation",
     prompt:
-      "Continue this same Context Tree setup chat. Earlier in this visible chat you proposed the Phase 1 skeleton, I approved it, and that skeleton is now merged in ./context-tree. Re-resolve the readable source and route to Phase 2 leaf drafting; do not refuse merely because the tree now contains the approved skeleton. Respect the eval workspace rule against actually writing or opening a PR.",
+      "Continue this Context Tree setup after I merged the Phase 1 PR. Load first-tree-seed and its required first-tree-write reading. Before deciding whether the populated-tree exception applies, inspect the equivalent visible prior-turn transcript at ./.first-tree-eval/chat-history.md and verify that this same chat contains the Phase 1 proposal, my approval, and the PR handoff. Then re-resolve the same readable source: materialize the declared bare source worktree and read source file content evidence (a filename listing alone is insufficient) before routing to Phase 2 leaf drafting. Respect the eval workspace rule against actually writing or opening a PR.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
     tags: ["same-chat", "phase2", "continuation"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "refuse_nonempty_tree",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["history", "populated", "first-tree-write", "focused maintenance", "cannot continue"],
+    },
+    fixture: {
+      chatHistoryState: "absent",
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["continue_phase2", "continue_seed", "phase1_skeleton"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "phase1-shaped-tree-without-same-chat-history-refuses",
+    prompt:
+      "I claim the Phase 1 skeleton is merged and ask you to continue, but this chat has no visible prior proposal, approval, or PR-handoff transcript. Use first-tree-seed to classify the populated tree: read the workspace manifest for the state check, but do not treat the tree shape or my current-message claim as same-chat authorization. Do not explore source or write anything.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["same-chat", "phase2", "missing-history", "negative"],
     tier: "gate",
   },
 ];
@@ -243,8 +271,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
 function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly string[] {
   const errors: string[] = [];
   const gateCases = cases.filter((evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "gate");
-  if (gateCases.length !== 7) {
-    errors.push(`seed suite must declare 7 gate cases, found ${gateCases.length}.`);
+  if (gateCases.length !== 8) {
+    errors.push(`seed suite must declare 8 gate cases, found ${gateCases.length}.`);
   }
   const periodicCases = cases.filter(
     (evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "periodic",
@@ -258,12 +286,15 @@ function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly s
       errors.push(`${evalCase.id}: fixture must be an object.`);
       continue;
     }
-    const fixture = evalCase.fixture as { sourceRepoState?: unknown; treeState?: unknown };
+    const fixture = evalCase.fixture as { chatHistoryState?: unknown; sourceRepoState?: unknown; treeState?: unknown };
     if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.sourceRepoState !== "string") {
       errors.push(`${evalCase.id}: live fixture must declare sourceRepoState.`);
     }
     if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.treeState !== "string") {
       errors.push(`${evalCase.id}: live fixture must declare treeState.`);
+    }
+    if (fixture.treeState === "phase1-approved" && typeof fixture.chatHistoryState !== "string") {
+      errors.push(`${evalCase.id}: phase1-approved fixture must declare chatHistoryState.`);
     }
   }
   return errors;

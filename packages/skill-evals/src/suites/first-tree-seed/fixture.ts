@@ -34,12 +34,18 @@ function workspaceAgentsMarkdown(
       : evalCase.fixture.treeState === "empty"
         ? "The Context Tree at `./context-tree` is newly provisioned and empty."
         : evalCase.fixture.treeState === "phase1-approved"
-          ? "The Context Tree at `./context-tree` contains only the Phase 1 skeleton that the user approved in this same setup chat; continue to Phase 2 rather than classifying it as an unrelated populated tree."
+          ? "The Context Tree at `./context-tree` has a Phase-1-shaped skeleton. Its shape alone does not prove that this chat owns the setup lifecycle; inspect the visible prior-turn transcript when one is provided."
           : "The Context Tree at `./context-tree` is already populated with durable domains.";
   const contextTreeStateLine =
     evalCase.fixture.treeState === "unbound"
       ? "- Context Tree: unbound (no `tree` field in the manifest; conventional path would be `./context-tree`)"
       : "- Context Tree: `./context-tree`";
+  const chatHistoryLine =
+    evalCase.fixture.chatHistoryState === "approved-phase1"
+      ? "- Visible prior-turn transcript: `./.first-tree-eval/chat-history.md` (inspect it before applying the populated-tree continuation exception)"
+      : evalCase.fixture.chatHistoryState === "absent"
+        ? "- Visible prior-turn transcript: absent for this chat"
+        : null;
 
   return `# First Tree Seed Eval Workspace
 
@@ -62,6 +68,7 @@ installed in this workspace.
 
 - Workspace manifest: \`./.first-tree/workspace.json\`
 ${contextTreeStateLine}
+${chatHistoryLine ?? ""}
 - Sources root: \`./source-repos\`
 - Declared source: \`source-repo\`
 - Tree state: ${evalCase.fixture.treeState}
@@ -118,6 +125,31 @@ function writeWorkspaceManifest(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
       ? { sources, sourcesRoot: "source-repos" }
       : { sources, sourcesRoot: "source-repos", tree: "context-tree" };
   writeText(join(paths.workspacePath, ".first-tree", "workspace.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function approvedPhase1ChatHistoryMarkdown(): string {
+  return `# Visible Context Tree setup chat transcript
+
+## Assistant — earlier turn
+
+Phase 1 proposal: create the reviewed top-level \`product\` and \`system\`
+domains, with \`product/onboarding\` and \`system/cloud\` as second-level
+domains. Please approve this skeleton before I write the structure PR.
+
+## User — earlier turn
+
+Approved. Use that exact Phase 1 skeleton.
+
+## Assistant — earlier turn
+
+Phase 1 PR handoff: the approved structure PR is ready. Merge it, then reply in
+this setup chat so I can verify the default branch and continue Phase 2.
+`;
+}
+
+function writeChatHistoryFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): void {
+  if (evalCase.fixture.chatHistoryState !== "approved-phase1") return;
+  writeText(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"), approvedPhase1ChatHistoryMarkdown());
 }
 
 function rootNodeMarkdown(): string {
@@ -415,6 +447,7 @@ export function setupFixture(evalCase: FirstTreeSeedEvalCase, paths: RunPaths, r
 
   installSeedSkills(paths.repoRoot, paths.workspacePath, evalCase);
   writeWorkspaceManifest(paths, evalCase);
+  writeChatHistoryFixture(paths, evalCase);
   const contextTreePath = writeContextTreeFixture(paths, evalCase);
   const sourceRepoPath = writeBareSourceFixture(paths, evalCase);
   mkdirSync(join(paths.workspacePath, "worktrees"), { recursive: true });
@@ -556,9 +589,16 @@ export function validateFixture(
           join(contextTreePath, ".first-tree", "VERSION"),
           join(contextTreePath, ".first-tree", "tree.json"),
         ];
+  if (evalCase.fixture.chatHistoryState === "approved-phase1") {
+    requiredFiles.push(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"));
+  }
   const missingFiles = requiredFiles.filter((file) => !existsSync(file));
   for (const missing of missingFiles) {
     errors.push(`missing required file: ${missing}`);
+  }
+  const chatHistoryPath = join(paths.workspacePath, ".first-tree-eval", "chat-history.md");
+  if (evalCase.fixture.chatHistoryState === "absent" && existsSync(chatHistoryPath)) {
+    errors.push(`chat history should be absent but exists: ${chatHistoryPath}`);
   }
 
   const treeEmptyOk = validateTreeEmpty(paths, contextTreePath, evalCase, errors);

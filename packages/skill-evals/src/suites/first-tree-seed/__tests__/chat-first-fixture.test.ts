@@ -64,8 +64,30 @@ describe("first-tree-seed chat-first fixtures", () => {
 
       expect(existsSync(join(contextTreePath, "product", "onboarding", "NODE.md"))).toBe(true);
       expect(existsSync(join(contextTreePath, "product", "onboarding", "flow.md"))).toBe(false);
+      const history = readFileSync(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"), "utf8");
+      expect(history).toContain("## Assistant — earlier turn");
+      expect(history).toContain("## User — earlier turn");
+      expect(history).toContain("Phase 1 proposal");
+      expect(history).toContain("Approved");
+      expect(history).toContain("Phase 1 PR handoff");
       expect(remoteHead).toBe(localHead);
       expect(remoteDefault).toBe("refs/remotes/origin/main");
+      expect(validateFixture(paths, contextTreePath, evalCase, false, reporter).ok).toBe(true);
+    } finally {
+      rmSync(paths.runRoot, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("keeps the Phase-1-shaped negative sibling free of same-chat history", () => {
+    const evalCase = gateCase("phase1-shaped-tree-without-same-chat-history-refuses");
+    const paths = createRunPaths({ caseId: evalCase.id, packageRoot, startedAt: new Date().toISOString() });
+
+    try {
+      const reporter = createEvalReporter(evalCase.id, false);
+      const contextTreePath = setupFixture(evalCase, paths, reporter);
+
+      expect(existsSync(join(contextTreePath, "product", "onboarding", "NODE.md"))).toBe(true);
+      expect(existsSync(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"))).toBe(false);
       expect(validateFixture(paths, contextTreePath, evalCase, false, reporter).ok).toBe(true);
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });

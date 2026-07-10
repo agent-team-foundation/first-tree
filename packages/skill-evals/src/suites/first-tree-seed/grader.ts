@@ -53,7 +53,7 @@ const SOURCE_EVIDENCE_ROOT_PATHS = [
   "source-repos/source-repo",
   ".first-tree-eval/source-origin",
 ];
-const SOURCE_FIXTURE_EVIDENCE_HINTS = [
+const SYNTHETIC_SOURCE_EVIDENCE_HINTS = [
   "Apollo Console",
   "CLI App",
   "Web Dashboard",
@@ -62,6 +62,22 @@ const SOURCE_FIXTURE_EVIDENCE_HINTS = [
   "operator dashboard",
   "runtime coordination",
 ];
+const REAL_FIRST_TREE_SOURCE_EVIDENCE_HINTS = [
+  "Context-grounded agentic work for teams",
+  "shared context, not isolated prompts",
+  "human-agent work loop",
+  "team-maintained memory of decisions",
+  "first-tree-monorepo",
+  "skill-evals",
+];
+const CHAT_HISTORY_PATH = ".first-tree-eval/chat-history.md";
+const CHAT_HISTORY_EVIDENCE_HINTS = ["Phase 1 proposal", "Approved", "Phase 1 PR handoff"];
+
+function sourceEvidenceHints(evalCase: FirstTreeSeedEvalCase): readonly string[] {
+  return evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
+    ? REAL_FIRST_TREE_SOURCE_EVIDENCE_HINTS
+    : SYNTHETIC_SOURCE_EVIDENCE_HINTS;
+}
 
 function eventType(event: Record<string, unknown>): string | null {
   return typeof event.type === "string" ? event.type : null;
@@ -277,11 +293,12 @@ function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePa
     ) {
       return false;
     }
+    const command = unwrapShellCommand(execution.command);
     const isManagedWorktreeAdd = (segment: string): boolean => {
       const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
       return program === "git" && /\bworktree\s+add\b/iu.test(segment) && segment.includes(managedWorktreePath);
     };
-    if (segmentsProvenSuccessfulByExitCode(execution.command, execution.exitCode).some(isManagedWorktreeAdd)) {
+    if (segmentsProvenSuccessfulByExitCode(command, execution.exitCode).some(isManagedWorktreeAdd)) {
       return true;
     }
 
@@ -289,13 +306,16 @@ function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePa
     // shell exit code, but Git's paired success lines bind the aggregate output
     // to a completed add. Reject commands that contain those lines literally,
     // so `echo 'Preparing worktree ...'` cannot manufacture this proof.
-    const hasStrongGitSuccessOutput =
-      /Preparing worktree \([^\n]+\)/u.test(execution.output) && /HEAD is now at [0-9a-f]+/iu.test(execution.output);
-    const commandSpoofsGitSuccessOutput = /Preparing worktree \(|HEAD is now at [0-9a-f]+/iu.test(execution.command);
+    // Codex command events do not always retain Git's stderr `Preparing
+    // worktree` line, but the checkout's `HEAD is now at ...` stdout line is
+    // still a strong completion signal when the same command contains the
+    // managed add. Literal manufacture remains rejected below.
+    const hasStrongGitSuccessOutput = /HEAD is now at [0-9a-f]+/iu.test(execution.output);
+    const commandSpoofsGitSuccessOutput = /Preparing worktree \(|HEAD is now at [0-9a-f]+/iu.test(command);
     return (
       hasStrongGitSuccessOutput &&
       !commandSpoofsGitSuccessOutput &&
-      shellCommandSegments(execution.command).some(isManagedWorktreeAdd)
+      shellCommandSegments(command).some(isManagedWorktreeAdd)
     );
   });
 }
@@ -612,7 +632,21 @@ function directBareSourceContentRead(events: readonly unknown[]): boolean {
   for (const event of events) {
     if (isRecord(event) && eventType(event) === "codex_event") {
       for (const command of collectCommandStrings(event.event)) {
-        if (commandReadsBareSourceContent(command)) return true;
+        // Bind the git content-reading verb and protected bare path to the
+        // same shell segment. A valid compound command may inspect the Context
+        // Tree with `git ls-tree` and separately fetch the source bare clone;
+        // matching across those segments is not a bare-source content read.
+        // This detector intentionally uses a coarse clause split after
+        // unwrapping `sh -lc`. It only needs to bind one `git` invocation's
+        // content verb to its own `-C`/`--git-dir` path; quote-aware parsing is
+        // counterproductive here because shell snippets such as
+        // `sed 's|...|...'` can otherwise keep later `&&` clauses inside one
+        // apparent segment and recreate the cross-command false positive.
+        const gitClauses = unwrapShellCommand(command)
+          .split(/&&|\|\||[;|\n]/u)
+          .map((clause) => clause.trim())
+          .filter((clause) => clause.includes("git"));
+        if (gitClauses.some(commandReadsBareSourceContent)) return true;
       }
     }
     if (containsPathAccess(event, PROTECTED_BARE_SOURCE_CONTENT_PATHS)) {
@@ -825,14 +859,136 @@ function segmentCanProduceIndependentEvidence(segment: string): boolean {
   return ["node", "perl", "python", "python3", "ruby"].includes(program);
 }
 
-function unboundLiteralOutputSpoofsSourceEvidence(segments: readonly string[]): boolean {
-  const literalOutput = segments.filter((segment) => ["echo", "printf"].includes(segmentProgram(segment))).join("\n");
-  return countMatches(literalOutput, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2;
+function shellWords(segment: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const push = (): void => {
+    if (current.length > 0) words.push(current);
+    current = "";
+  };
+
+  for (const character of segment.trim()) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      push();
+      continue;
+    }
+    current += character;
+  }
+  push();
+  return words;
 }
 
-function containsSourceFixtureEvidence(event: unknown): boolean {
+function positionalShellArgs(segment: string, optionsWithValues: ReadonlySet<string>): string[] {
+  const words = shellWords(segment).slice(1);
+  const positionals: string[] = [];
+  let optionsEnded = false;
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index] ?? "";
+    if (!optionsEnded && word === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && word.startsWith("-")) {
+      if (optionsWithValues.has(word)) index++;
+      continue;
+    }
+    positionals.push(word);
+  }
+  return positionals;
+}
+
+// A content-reading program can be a pure stdin filter in a pipeline. It is
+// attributable to the source stream only when it has no independent file
+// operand; `cat source | head -50` qualifies, while
+// `cat source | head context-tree/NODE.md` does not.
+function segmentIsPurePipelineFilter(segment: string): boolean {
+  const program = segmentProgram(segment);
+  if (["cat", "less", "wc"].includes(program)) {
+    return positionalShellArgs(segment, new Set()).length === 0;
+  }
+  if (["head", "tail"].includes(program)) {
+    return positionalShellArgs(segment, new Set(["-c", "--bytes", "-n", "--lines"])).length === 0;
+  }
+  if (["grep", "rg"].includes(program)) {
+    return positionalShellArgs(segment, new Set(["-e", "--regexp"])).length <= 1;
+  }
+  if (["awk", "jq", "sed"].includes(program)) {
+    return positionalShellArgs(segment, new Set(["-e", "--expression"])).length <= 1;
+  }
+  return false;
+}
+
+function segmentIsSourcePipelineFilter(segments: readonly ShellCommandSegment[], index: number): boolean {
+  const segment = segments[index];
+  if (!segment || !segmentIsPurePipelineFilter(segment.text)) return false;
+  const inPipeline = segment.connectorBefore === "|" || segments[index + 1]?.connectorBefore === "|";
+  if (!inPipeline) return false;
+
+  let start = index;
+  while (start > 0 && segments[start]?.connectorBefore === "|") start--;
+  let end = index;
+  while (segments[end + 1]?.connectorBefore === "|") end++;
+  return segments
+    .slice(start, end + 1)
+    .some((candidate) => segmentReadsContent(candidate.text) && segmentReferencesSourceEvidence(candidate.text));
+}
+
+function sourceBoundLoopVariables(command: string): ReadonlySet<string> {
+  const variables = new Set<string>();
+  const loopPattern = /\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([\s\S]*?);\s*do\s+([\s\S]*?)(?:;\s*done|\bdone\b)/gu;
+  for (const match of command.matchAll(loopPattern)) {
+    const variable = match[1];
+    const operands = match[2] ?? "";
+    const body = match[3] ?? "";
+    if (!variable || !SOURCE_EVIDENCE_ROOT_PATHS.some((root) => operands.includes(root))) continue;
+    const variableOperand = new RegExp(`(?:\\$${variable}\\b|\\$\\{${variable}\\})`, "u");
+    if (shellCommandSegments(body).some((segment) => segmentReadsContent(segment) && variableOperand.test(segment))) {
+      variables.add(variable);
+    }
+  }
+  return variables;
+}
+
+function segmentReadsSourceBoundLoopVariable(segment: string, variables: ReadonlySet<string>): boolean {
+  if (!segmentReadsContent(segment)) return false;
+  for (const variable of variables) {
+    if (new RegExp(`(?:\\$${variable}\\b|\\$\\{${variable}\\})`, "u").test(segment)) return true;
+  }
+  return false;
+}
+
+function unboundLiteralOutputSpoofsSourceEvidence(
+  segments: readonly string[],
+  evidenceHints: readonly string[],
+): boolean {
+  const literalOutput = segments.filter((segment) => ["echo", "printf"].includes(segmentProgram(segment))).join("\n");
+  return countMatches(literalOutput, evidenceHints) >= 2;
+}
+
+function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEvalCase): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
+  const evidenceHints = sourceEvidenceHints(evalCase);
   return collectCommandExecutions(event.event).some((execution) => {
     if (
       execution.exitCode !== 0 ||
@@ -840,19 +996,48 @@ function containsSourceFixtureEvidence(event: unknown): boolean {
     ) {
       return false;
     }
-    const segments = shellCommandSegments(execution.command);
-    const hasSourceRead = segments.some(
-      (segment) => segmentReadsContent(segment) && segmentReferencesSourceEvidence(segment),
-    );
+    const command = unwrapShellCommand(execution.command);
+    const segments = shellCommandSegmentsWithConnectors(command);
+    const loopVariables = sourceBoundLoopVariables(command);
+    const hasSourceRead =
+      segments.some((segment) => segmentReadsContent(segment.text) && segmentReferencesSourceEvidence(segment.text)) ||
+      loopVariables.size > 0;
     const hasUnboundOutputProducer = segments.some(
-      (segment) => segmentCanProduceIndependentEvidence(segment) && !segmentReferencesSourceEvidence(segment),
+      (segment, index) =>
+        segmentCanProduceIndependentEvidence(segment.text) &&
+        !segmentReferencesSourceEvidence(segment.text) &&
+        !segmentIsSourcePipelineFilter(segments, index) &&
+        !segmentReadsSourceBoundLoopVariable(segment.text, loopVariables),
     );
+    // A common inspection command loops over both source and Context Tree
+    // files and prints `FILE <path>` before each read. The explicit source-path
+    // marker in successful output binds the source-specific evidence to the
+    // source iteration even though another loop iteration is an independent
+    // Context Tree reader. Without that marker we keep the conservative
+    // mixed-output rejection.
+    const loopOutputBindsSource =
+      loopVariables.size > 0 && SOURCE_EVIDENCE_ROOT_PATHS.some((root) => execution.output.includes(root));
     return (
       hasSourceRead &&
-      !hasUnboundOutputProducer &&
-      !unboundLiteralOutputSpoofsSourceEvidence(segments) &&
-      countMatches(execution.output, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2
+      (!hasUnboundOutputProducer || loopOutputBindsSource) &&
+      !unboundLiteralOutputSpoofsSourceEvidence(
+        segments.map((segment) => segment.text),
+        evidenceHints,
+      ) &&
+      countMatches(execution.output, evidenceHints) >= 2
     );
+  });
+}
+
+function containsChatHistoryEvidence(event: unknown): boolean {
+  if (!isRecord(event)) return false;
+  if (eventType(event) !== "codex_event") return false;
+  return collectCommandExecutions(event.event).some((execution) => {
+    if (execution.exitCode !== 0) return false;
+    const readObserved = shellCommandSegmentsWithConnectors(unwrapShellCommand(execution.command)).some(
+      (segment) => segmentReadsContent(segment.text) && segment.text.includes(CHAT_HISTORY_PATH),
+    );
+    return readObserved && countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) >= 2;
   });
 }
 
@@ -861,13 +1046,26 @@ function phase2LeafContentObserved(text: string): boolean {
 }
 
 function phase2RefusalObserved(text: string): boolean {
+  if (
+    /(?:phase\s*2|leaf)[\s\S]{0,400}\b(?:I(?:'m| am)\s+refus(?:e|ing)|refus(?:e|es|ed|ing|al)\s+(?:the\s+)?continuation|cannot\s+continue)\b/iu.test(
+      text,
+    )
+  ) {
+    return true;
+  }
   return text.split(/[.!?;\n]+/u).some((segment) => {
     if (!/(?:phase\s*2|leaf)/iu.test(segment)) return false;
+    if (
+      /\b(?:eval|fixture|test)\s+(?:restriction|rule)\b/iu.test(segment) &&
+      /\bstopp?\w*\s+before\b/iu.test(segment)
+    ) {
+      return false;
+    }
     const withoutNegatedRefusal = segment.replace(
       /\b(?:(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:refuse|stop)|(?:is|are|was|were)\s+not\s+(?:blocked|refused|stopped)|(?:should|must|will|would|can)\s+not\s+be\s+(?:blocked|refused|stopped))\b/giu,
       "continue",
     );
-    return /\b(?:cannot|can't|won't|will not|unable|refus(?:e|es|ed|ing|al)|blocked|stop(?:s|ped|ping)?)\b/iu.test(
+    return /\b(?:cannot|can't|won't|will not|unable|unauthoriz\w*|refus(?:e|es|ed|ing|al)|blocked|stop(?:s|ped|ping)?)\b/iu.test(
       withoutNegatedRefusal,
     );
   });
@@ -946,6 +1144,7 @@ function forbiddenActionHits(
       hits.push(action);
     }
     if (action === "refuse_nonempty_tree" && metrics.phase2RefusalObserved) hits.push(action);
+    if (action === "continue_phase2" && metrics.phase2ContinuationObserved) hits.push(action);
     if (action === "restart_phase1" && phase1RestartObserved(text)) {
       hits.push(action);
     }
@@ -975,6 +1174,7 @@ export function deriveMetrics(
   paths: RunPaths,
   _contextTreePath: string,
 ): EvalMetrics {
+  let chatHistoryReadObserved = false;
   let seedSkillFileReadObserved = false;
   let writeSkillFileReadObserved = false;
   let workspaceManifestReadObserved = false;
@@ -988,6 +1188,7 @@ export function deriveMetrics(
     if (containsSkillFileRead(event, "first-tree-seed")) seedSkillFileReadObserved = true;
     if (containsSkillFileRead(event, "first-tree-write")) writeSkillFileReadObserved = true;
     if (containsPathAccess(event, [".first-tree/workspace.json"])) workspaceManifestReadObserved = true;
+    if (containsChatHistoryEvidence(event)) chatHistoryReadObserved = true;
     // Any operation ON the source worktree (`git worktree add/remove`, reading a
     // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
     // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
@@ -1029,6 +1230,7 @@ export function deriveMetrics(
 
   const partialMetrics = {
     approvalRequestObserved: approvalHints.length === 0 || containsAny(finalResponse, approvalHints),
+    chatHistoryReadObserved,
     contextTreeChanged: contextTreeChanged(paths, baselines.contextTreeHead),
     contextTreeStatus: contextTreeStatus(paths),
     directBareSourceContentReadObserved: directBareRead,
@@ -1044,7 +1246,7 @@ export function deriveMetrics(
     runnerExitCode,
     seedSkillFileReadObserved,
     skeletonObserved: skeletonHints.length > 0 && countMatches(finalResponse, skeletonHints) >= 2,
-    sourceEvidenceReadObserved: events.some((event) => containsSourceFixtureEvidence(event)),
+    sourceEvidenceReadObserved: events.some((event) => containsSourceFixtureEvidence(event, evalCase)),
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead, evalCase),
     sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
@@ -1066,6 +1268,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (metrics.runnerExitCode !== 0) return false;
   if (!metrics.seedSkillFileReadObserved) return false;
   if (!metrics.workspaceManifestReadObserved) return false;
+  if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) return false;
   if (metrics.contextTreeChanged) return false;
   if (metrics.sourceRepoChanged) return false;
   if (metrics.forbiddenActionHits.length > 0) return false;
@@ -1164,6 +1367,9 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (!metrics.workspaceManifestReadObserved) {
     notes.push("Workspace manifest was not read during seed self-check.");
+  }
+  if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) {
+    notes.push("Required visible prior-turn transcript was not read.");
   }
   if (!metrics.expectedResponseObserved) {
     notes.push("Final response did not include the expected seed action signal.");

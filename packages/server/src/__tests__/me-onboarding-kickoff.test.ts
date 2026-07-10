@@ -298,9 +298,102 @@ describe("POST /me/onboarding/kickoff", () => {
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));
     expect(treeMsgs).toHaveLength(1);
     expect(treeMsgs[0]?.content).toContain("Let's build or finish our team's Context Tree.");
+    expect(treeMsgs[0]?.content).toContain("A non-empty source manifest is authoritative");
+    expect(treeMsgs[0]?.content).toContain("missing declared clone as a blocking half-provisioned workspace");
+    expect(treeMsgs[0]?.content).toContain("Only when the manifest is empty or absent");
     expect(treeMsgs[0]?.content).toContain("local project folder path or GitHub repository URL");
     expect(treeMsgs[0]?.content).toContain("Use this same chat to continue after approval");
     expect(treeMsgs[0]?.content).not.toContain("GitHub App");
+  });
+
+  it("starts a new recovery chat with the current server-resolved snapshot diagnostic", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const repo = `https://localhost:1/acme/unreadable-${crypto.randomUUID()}.git`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo, branch: "release" },
+      updatedBy: admin.userId,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(admin.organizationId),
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: agent.uuid },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const chatId = response.json<{ chatId: string }>().chatId;
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(chatMessages).toHaveLength(1);
+    expect(chatMessages[0]?.content).toContain("Current server-resolved recovery diagnostic:");
+    expect(chatMessages[0]?.content).toContain(`Configured repository: ${repo}`);
+    expect(chatMessages[0]?.content).toContain("Configured branch: release");
+    expect(chatMessages[0]?.content).toContain("Snapshot status: unavailable");
+    expect(chatMessages[0]?.metadata).toMatchObject({
+      contextTreeRecoveryFingerprint: expect.any(String),
+      mentions: [agent.uuid],
+      addressedAgentIds: [agent.uuid],
+    });
+    const deliveries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, chatMessages[0]?.id ?? ""));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.notify).toBe(true);
+  });
+
+  it("appends and wakes on recovery in an existing setup chat, but deduplicates an immediate retry", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const open = () =>
+      app.inject({
+        method: "POST",
+        url: treeKickoffUrl(admin.organizationId),
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { agentUuid: agent.uuid },
+      });
+
+    const initial = await open();
+    const chatId = initial.json<{ chatId: string }>().chatId;
+    const repo = `https://localhost:1/acme/unreadable-${crypto.randomUUID()}.git`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo, branch: "main" },
+      updatedBy: admin.userId,
+    });
+
+    const recovery = await open();
+    const retry = await open();
+    expect(recovery.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect(recovery.json<{ chatId: string }>().chatId).toBe(chatId);
+    expect(retry.json<{ chatId: string }>().chatId).toBe(chatId);
+
+    const chatMessages = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, chatId))
+      .orderBy(messages.createdAt, messages.id);
+    expect(chatMessages).toHaveLength(2);
+    expect(chatMessages[0]?.content).not.toContain("Current server-resolved recovery diagnostic:");
+    expect(chatMessages[1]?.content).toContain("Current server-resolved recovery diagnostic:");
+    expect(chatMessages[1]?.content).toContain(`Configured repository: ${repo}`);
+    expect(chatMessages[1]?.metadata).toMatchObject({
+      contextTreeRecoveryFingerprint: expect.any(String),
+      addressedAgentIds: [agent.uuid],
+    });
+    const recoveryDeliveries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, chatMessages[1]?.id ?? ""));
+    expect(recoveryDeliveries).toHaveLength(1);
+    expect(recoveryDeliveries[0]?.notify).toBe(true);
   });
 
   it("safely re-keys and reuses a legacy org setup chat with the exact same private boundary", async () => {
