@@ -3,7 +3,6 @@ import {
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
   buildScanFixBootstrap,
-  buildTreeSetupBootstrap,
   buildValueFirstBootstrap,
 } from "../bootstrap-prose.js";
 
@@ -61,23 +60,6 @@ describe("start-chat bootstrap prose", () => {
     expect(message).not.toContain("Ask me for a local folder path or GitHub URL");
     expect(message).not.toContain("Ask the user for the project");
     expect(message).not.toContain("host gh");
-  });
-
-  it("builds one chat-first tree setup brief independent of App, binding, or repo catalog state", () => {
-    const message = buildTreeSetupBootstrap();
-
-    expect(message).toContain("Let's build or finish our team's Context Tree.");
-    expect(message).toContain("inspect the actual tree state and any source code already readable");
-    expect(message).toContain("local project folder path or GitHub repository URL");
-    expect(message).toContain("top- and second-level domain structure for my review");
-    expect(message).toContain("Use this same chat to continue after approval");
-    expect(message).toContain("never restart a populated tree");
-    expect(message).not.toContain("GitHub App");
-    expect(message).not.toContain("Connected code:");
-    expect(message).not.toContain("Context Tree:");
-    expect(message).not.toContain("first-tree-seed");
-    expect(message).not.toContain("first-tree-read");
-    expect(message).not.toContain("first-tree-write");
   });
 
   it("builds a value-first joining-teammate welcome without a raw tree URL or jargon", () => {

@@ -1,7 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { ManagedAgent } from "../../api/agents.js";
 import { postOnboardingStartChat, postTreeSetupStartChat, reportOnboardingEvent } from "../../api/onboarding-events.js";
-import { buildTreeSetupBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
 import type { TreeBindingPlan } from "./onboarding-flow.js";
 import { ensureSourceReposRegistered } from "./provision-tree.js";
 
@@ -68,8 +67,6 @@ export async function startTreeSetupChat(args: {
   const { chatId } = await postTreeSetupStartChat({
     organizationId: args.organizationId,
     agentUuid: args.agent.uuid,
-    bootstrap: buildTreeSetupBootstrap(),
-    topic: "Set up shared context",
   });
   void reportOnboardingEvent("kickoff_chat_started", {
     agentUuid: args.agent.uuid,

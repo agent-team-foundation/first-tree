@@ -2,14 +2,15 @@ import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
-export type SeedTreeState = "empty" | "nonempty" | "unbound";
-export type SeedSourceRepoState = "bare-readable" | "missing" | "real-first-tree-bare-readable";
+export type SeedTreeState = "empty" | "nonempty" | "phase1-approved" | "unbound";
+export type SeedSourceRepoState = "bare-readable" | "chat-local-readable" | "missing" | "real-first-tree-bare-readable";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
   | "report_missing_source"
   | "materialize_bare_worktree"
-  | "create_tree_via_init";
+  | "create_tree_via_init"
+  | "continue_phase2";
 
 export type FirstTreeSeedFixture = {
   sourceRepoState: SeedSourceRepoState;

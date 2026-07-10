@@ -150,7 +150,7 @@ describe("POST /me/onboarding/kickoff", () => {
       method: "POST",
       url: treeKickoffUrl(admin.organizationId),
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { agentUuid: agent.uuid, bootstrap: "Seed the Context Tree.", topic: "Set up shared context" },
+      payload: { agentUuid: agent.uuid },
     });
     expect(tree.statusCode).toBe(200);
 
@@ -287,20 +287,23 @@ describe("POST /me/onboarding/kickoff", () => {
       method: "POST",
       url: treeKickoffUrl(admin.organizationId),
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { agentUuid: agent.uuid, bootstrap: "Seed the team tree.", topic: "Set up shared context" },
+      payload: { agentUuid: agent.uuid },
     });
     const treeChatId = tree.json<{ chatId: string }>().chatId;
     const [treeChat] = await app.db.select().from(chats).where(eq(chats.id, treeChatId)).limit(1);
     expect(treeChat?.topic).toBe("Set up shared context");
-    expect(treeChat?.onboardingKickoffKey).toBe(`${admin.organizationId}:tree-setup`);
+    expect(treeChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:tree-setup`);
 
     expect(treeChatId).not.toBe(introChatId);
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));
     expect(treeMsgs).toHaveLength(1);
-    expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
+    expect(treeMsgs[0]?.content).toContain("Let's build or finish our team's Context Tree.");
+    expect(treeMsgs[0]?.content).toContain("local project folder path or GitHub repository URL");
+    expect(treeMsgs[0]?.content).toContain("Use this same chat to continue after approval");
+    expect(treeMsgs[0]?.content).not.toContain("GitHub App");
   });
 
-  it("fills an org-level empty tree setup chat when another admin retries with another agent", async () => {
+  it("keeps each admin's setup chat inside their own private-agent boundary", async () => {
     const app = getApp();
     const firstAdmin = await createTestAdmin(app);
     const laterAdmin = await createTestAdmin(app);
@@ -308,58 +311,44 @@ describe("POST /me/onboarding/kickoff", () => {
     const firstAgent = await createOrgAgent(app, firstAdmin);
     const laterAgent = await createOrgAgent(app, laterAdmin);
 
-    const emptyChatId = `chat-${crypto.randomUUID()}`;
-    await app.db.insert(chats).values({
-      id: emptyChatId,
-      organizationId: firstAdmin.organizationId,
-      type: "group",
-      topic: "Set up shared context",
-      onboardingKickoffKey: `${firstAdmin.organizationId}:tree-setup`,
+    const first = await app.inject({
+      method: "POST",
+      url: treeKickoffUrl(firstAdmin.organizationId),
+      headers: { authorization: `Bearer ${firstAdmin.accessToken}` },
+      payload: { agentUuid: firstAgent.uuid },
     });
-    await app.db.insert(chatMembership).values([
-      {
-        chatId: emptyChatId,
-        agentId: firstAdmin.humanAgentUuid,
-        role: "owner",
-        accessMode: "speaker",
-        mode: "mention_only",
-      },
-      {
-        chatId: emptyChatId,
-        agentId: firstAgent.uuid,
-        role: "member",
-        accessMode: "speaker",
-        mode: "mention_only",
-      },
-    ]);
-
-    const res = await app.inject({
+    const later = await app.inject({
       method: "POST",
       url: treeKickoffUrl(firstAdmin.organizationId),
       headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
-      payload: {
-        agentUuid: laterAgent.uuid,
-        bootstrap: "Seed the retried team tree.",
-        topic: "Set up shared context",
-      },
+      payload: { agentUuid: laterAgent.uuid },
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.json<{ chatId: string }>().chatId).toBe(emptyChatId);
+    expect(first.statusCode).toBe(200);
+    expect(later.statusCode).toBe(200);
+    const firstChatId = first.json<{ chatId: string }>().chatId;
+    const laterChatId = later.json<{ chatId: string }>().chatId;
+    expect(laterChatId).not.toBe(firstChatId);
 
-    const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, emptyChatId));
-    expect(treeMsgs).toHaveLength(1);
-    expect(treeMsgs[0]?.senderId).toBe(laterAdmin.humanAgentUuid);
-    expect(treeMsgs[0]?.content).toBe("Seed the retried team tree.");
-    expect(treeMsgs[0]?.metadata).toEqual({
-      mentions: [laterAgent.uuid],
-      addressedAgentIds: [laterAgent.uuid],
-    });
+    const firstSpeakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, firstChatId));
+    expect(new Set(firstSpeakers.map((speaker) => speaker.agentId))).toEqual(
+      new Set([firstAdmin.humanAgentUuid, firstAgent.uuid]),
+    );
+    const laterSpeakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, laterChatId));
+    expect(new Set(laterSpeakers.map((speaker) => speaker.agentId))).toEqual(
+      new Set([laterAdmin.humanAgentUuid, laterAgent.uuid]),
+    );
 
-    const speakers = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, emptyChatId));
-    const speakerIds = new Set(speakers.map((speaker) => speaker.agentId));
-    expect(speakerIds.has(laterAdmin.humanAgentUuid)).toBe(true);
-    expect(speakerIds.has(laterAgent.uuid)).toBe(true);
+    const setupRows = await app.db
+      .select({ key: chats.onboardingKickoffKey })
+      .from(chats)
+      .where(eq(chats.organizationId, firstAdmin.organizationId));
+    expect(new Set(setupRows.map((row) => row.key))).toEqual(
+      new Set([
+        `${firstAdmin.humanAgentUuid}:${firstAgent.uuid}:tree-setup`,
+        `${laterAdmin.humanAgentUuid}:${laterAgent.uuid}:tree-setup`,
+      ]),
+    );
   });
 
   it("requires an org admin and rejects body-controlled org or completion fields", async () => {
@@ -372,7 +361,7 @@ describe("POST /me/onboarding/kickoff", () => {
       method: "POST",
       url: treeKickoffUrl(admin.organizationId),
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { agentUuid: agent.uuid, bootstrap: "Seed the team tree." },
+      payload: { agentUuid: agent.uuid },
     });
     expect(memberResponse.statusCode).toBe(403);
 
@@ -384,7 +373,6 @@ describe("POST /me/onboarding/kickoff", () => {
       payload: {
         organizationId: admin.organizationId,
         agentUuid: agent.uuid,
-        bootstrap: "Seed the team tree.",
         complete: true,
       },
     });
@@ -393,7 +381,7 @@ describe("POST /me/onboarding/kickoff", () => {
     const rows = await app.db
       .select()
       .from(chats)
-      .where(eq(chats.onboardingKickoffKey, `${admin.organizationId}:tree-setup`));
+      .where(eq(chats.onboardingKickoffKey, `${admin.humanAgentUuid}:${agent.uuid}:tree-setup`));
     expect(rows).toHaveLength(0);
   });
 
@@ -512,6 +500,22 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(campaign.statusCode).toBe(410);
     expect(campaign.json()).toMatchObject({ code: "campaign_kickoff_moved" });
   });
+
+  it("returns a controlled moved response for stale tree-setup clients", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding/tree-setup/kickoff",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { agentUuid: "stale-agent", bootstrap: "stale bootstrap" },
+    });
+
+    expect(res.statusCode).toBe(410);
+    expect(res.json()).toMatchObject({ code: "tree_setup_kickoff_moved" });
+    expect(await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId))).toHaveLength(0);
+  });
 });
 
 describe("GET /me/onboarding/tree-setup-status", () => {
@@ -609,7 +613,7 @@ describe("GET /me/onboarding/tree-setup-status", () => {
       id: emptyChatId,
       organizationId: admin.organizationId,
       type: "direct",
-      onboardingKickoffKey: `${admin.organizationId}:tree-setup`,
+      onboardingKickoffKey: `${admin.humanAgentUuid}:${agent.uuid}:tree-setup`,
     });
 
     const withEmptyChat = await app.inject({

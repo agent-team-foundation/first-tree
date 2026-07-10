@@ -75,8 +75,6 @@ export async function postOnboardingStartChat(args: StartOnboardingChatArgs): Pr
 export type TreeSetupStartChatArgs = {
   organizationId: string;
   agentUuid: string;
-  bootstrap: string;
-  topic?: string;
 };
 
 export async function postTreeSetupStartChat(args: TreeSetupStartChatArgs): Promise<StartOnboardingChatResult> {

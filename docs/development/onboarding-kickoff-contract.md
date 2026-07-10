@@ -22,8 +22,11 @@ chats and the adjacent campaign quickstart handoff.
   and `404 feature_disabled` when they are disabled.
 - The first-chat endpoint does not accept the retired `kind` discriminator.
 - `POST /api/v1/orgs/:orgId/context-tree/setup-chat` is the only Context Tree
-  setup kickoff entry. It requires an org admin, uses the org-level `tree-setup`
-  idempotency key, and never stamps onboarding completion.
+  setup kickoff entry. It requires an org admin, accepts only the selected
+  agent, owns the canonical topic/bootstrap on the server, uses an initiating
+  human + selected-agent `tree-setup` idempotency key, and never stamps
+  onboarding completion. The chat is an ordinary private task chat; an org-wide
+  key must not cross private-agent ownership boundaries.
 - A `/me/onboarding/kickoff` request carrying `scanFixRepoSlug` (`owner/repo`)
   is a production-scan fix conversion arriving via onboarding. It keys the
   kickoff chat `<humanAgent>:scan-fix:<repoSlug>` instead of the default
@@ -46,6 +49,9 @@ Those request and prompt contracts are intentionally retired:
 - A `/me/onboarding/kickoff` request carrying `kind` is rejected with
   `409 stale_onboarding_kickoff_contract`. The recovery is to refresh the web app
   and retry through the current endpoint contract.
+- The retired `/me/onboarding/tree-setup/kickoff` route is authenticated and
+  non-mutating; it returns `410 tree_setup_kickoff_moved` so a stale browser tab
+  gets an explicit refresh boundary rather than an ambiguous 404.
 - The client renders legacy onboarding metadata as ordinary message metadata; it
   does not append hidden instructions to the agent prompt. Campaign skill
   activation must not rely on a client-appended directive.

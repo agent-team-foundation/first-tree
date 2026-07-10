@@ -94,8 +94,6 @@ export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
 export const treeSetupKickoffSchema = z
   .object({
     agentUuid: z.string().min(1),
-    bootstrap: z.string().min(1),
-    topic: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
 export type TreeSetupKickoff = z.infer<typeof treeSetupKickoffSchema>;

@@ -71,7 +71,7 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
     .where(
       and(
         eq(chats.organizationId, organizationId),
-        or(eq(chats.onboardingKickoffKey, `${organizationId}:tree-setup`), like(chats.onboardingKickoffKey, "%:tree")),
+        or(like(chats.onboardingKickoffKey, "%:tree-setup"), like(chats.onboardingKickoffKey, "%:tree")),
       ),
     )
     .limit(1);

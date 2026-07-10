@@ -363,6 +363,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * Retired browser contract. Keep an authenticated, non-mutating boundary so
+   * a tab loaded before the setup-chat migration receives a controlled answer
+   * instead of an ambiguous route-level 404.
+   */
+  app.post("/me/onboarding/tree-setup/kickoff", async (request, reply) => {
+    requireUser(request);
+    return reply.status(410).send({
+      error: "Context Tree setup moved to the team-scoped setup-chat endpoint. Refresh First Tree and try again.",
+      code: "tree_setup_kickoff_moved",
+    });
+  });
+
+  /**
    * GET /me/onboarding/tree-setup-status — recovery probe for the Context
    * setup surface and Settings nav. A missing tree binding still needs
    * setup. A binding created after the org's value-first first chat completed

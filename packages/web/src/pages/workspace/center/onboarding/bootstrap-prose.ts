@@ -4,10 +4,9 @@
  * (`first-tree-welcome`, `first-tree-write`, `first-tree-read`,
  * `first-tree-seed`), and those skills own the concrete flow.
  *
- * Work/intro chats are value-first. Tree setup chats are separate and resilient:
- * the agent reads the actual tree and source state, asks for a local path or
- * GitHub URL when necessary, and chooses seed vs read/write from that evidence.
- * A mere binding does not imply a populated tree.
+ * Work/intro chats are value-first. The dedicated Context Tree setup endpoint
+ * owns its canonical bootstrap so browser versions cannot race to persist
+ * different setup semantics under the same idempotency key.
  *
  * Single source of truth: only the start-chat step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
@@ -36,18 +35,6 @@ export function buildValueFirstBootstrap(
 
 export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [`${agentDisplayName}, welcome aboard.`, "", "Please help me get started with First Tree."].join("\n");
-}
-
-export function buildTreeSetupBootstrap(): string {
-  // The setup chat, not the Context tab, resolves the actual tree and source
-  // state. Keep the visible task useful when Cloud has no registered repo: the
-  // agent can ask for one local checkout or GitHub URL without making GitHub App
-  // installation a prerequisite for building the tree.
-  return [
-    "Let's build or finish our team's Context Tree.",
-    "",
-    "Please inspect the actual tree state and any source code already readable in this workspace. If no source code is readable, ask me for one local project folder path or GitHub repository URL. Once you have readable code, propose the initial top- and second-level domain structure for my review before writing it. Use this same chat to continue after approval; never restart a populated tree.",
-  ].join("\n");
 }
 
 /**

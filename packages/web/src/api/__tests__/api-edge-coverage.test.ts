@@ -182,7 +182,7 @@ describe("onboarding and campaign API wrappers", () => {
       onboarding.postOnboardingStartChat({ agentUuid: "agent-1", bootstrap: "start", complete: true }),
     ).resolves.toEqual({ chatId: "chat-1" });
     await expect(
-      onboarding.postTreeSetupStartChat({ organizationId: "org/id", agentUuid: "agent-1", bootstrap: "tree" }),
+      onboarding.postTreeSetupStartChat({ organizationId: "org/id", agentUuid: "agent-1" }),
     ).resolves.toEqual({ chatId: "chat-2" });
     await expect(onboarding.getTreeSetupStatus("org/id")).resolves.toEqual({
       needsTreeSetup: true,
@@ -202,7 +202,6 @@ describe("onboarding and campaign API wrappers", () => {
     });
     expect(apiMock.post).toHaveBeenNthCalledWith(4, "/orgs/org%2Fid/context-tree/setup-chat", {
       agentUuid: "agent-1",
-      bootstrap: "tree",
     });
     expect(apiMock.get).toHaveBeenCalledWith("/me/onboarding/tree-setup-status?organizationId=org%2Fid");
   });

@@ -19,18 +19,23 @@ function workspaceAgentsMarkdown(
 ): string {
   const sourceRepoPath = join(workspacePath, "source-repos", "source-repo");
   const sourceWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
+  const chatSourcePath = join(workspacePath, "provided-source");
   const sourceLine =
     evalCase.fixture.sourceRepoState === "missing"
       ? `The manifest source \`source-repo\` is intentionally missing from \`${sourceRepoPath}\`.`
-      : evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
-        ? `The manifest source \`source-repo\` exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
-        : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`;
+      : evalCase.fixture.sourceRepoState === "chat-local-readable"
+        ? `The workspace manifest intentionally declares no sources. The user supplied the readable local Git checkout \`${chatSourcePath}\` in this setup chat; use it directly without requiring GitHub App installation or team-resource registration.`
+        : evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
+          ? `The manifest source \`source-repo\` exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
+          : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`;
   const treeLine =
     evalCase.fixture.treeState === "unbound"
       ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
       : evalCase.fixture.treeState === "empty"
         ? "The Context Tree at `./context-tree` is newly provisioned and empty."
-        : "The Context Tree at `./context-tree` is already populated with durable domains.";
+        : evalCase.fixture.treeState === "phase1-approved"
+          ? "The Context Tree at `./context-tree` contains only the Phase 1 skeleton that the user approved in this same setup chat; continue to Phase 2 rather than classifying it as an unrelated populated tree."
+          : "The Context Tree at `./context-tree` is already populated with durable domains.";
   const contextTreeStateLine =
     evalCase.fixture.treeState === "unbound"
       ? "- Context Tree: unbound (no `tree` field in the manifest; conventional path would be `./context-tree`)"
@@ -65,7 +70,14 @@ ${contextTreeStateLine}
 ${treeLine}
 ${sourceLine}
 
-## Source Worktrees Protocol
+${
+  evalCase.fixture.sourceRepoState === "chat-local-readable"
+    ? `## Chat-provided Source Protocol
+
+The user supplied \`${chatSourcePath}\` as an already readable, non-bare local
+Git checkout. Read it directly. Do not materialize a bare-source worktree and
+do not require GitHub App installation or source-resource registration.`
+    : `## Source Worktrees Protocol
 
 Declared sources are agent-managed bare clones. Do not read source files
 directly from \`${sourceRepoPath}\`; it is a git object store, not a
@@ -76,7 +88,8 @@ git -C ${sourceRepoPath} fetch origin
 git -C ${sourceRepoPath} worktree add ${sourceWorktreePath} origin/main
 \`\`\`
 
-Then read files under \`${sourceWorktreePath}\`.
+Then read files under \`${sourceWorktreePath}\`.`
+}
 
 Do not use real GitHub, install GitHub Apps, create repositories, push, open
 pull requests, create or bind Context Trees, or run Phase 2 leaf-writing work
@@ -99,10 +112,11 @@ function installSeedSkills(repoRoot: string, workspacePath: string, evalCase: Fi
 }
 
 function writeWorkspaceManifest(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): void {
+  const sources = evalCase.fixture.sourceRepoState === "chat-local-readable" ? [] : ["source-repo"];
   const manifest =
     evalCase.fixture.treeState === "unbound"
-      ? { sources: ["source-repo"], sourcesRoot: "source-repos" }
-      : { sources: ["source-repo"], sourcesRoot: "source-repos", tree: "context-tree" };
+      ? { sources, sourcesRoot: "source-repos" }
+      : { sources, sourcesRoot: "source-repos", tree: "context-tree" };
   writeText(join(paths.workspacePath, ".first-tree", "workspace.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
@@ -128,6 +142,30 @@ owners: [eval-owner]
 # System
 
 Durable system constraints for the seed eval fixture.
+`;
+}
+
+function approvedSkeletonRootMarkdown(): string {
+  return `---
+title: "Apollo Console"
+owners: [eval-owner]
+---
+
+# Apollo Console
+
+Approved Phase 1 domain skeleton. Phase 2 leaf content is not drafted yet.
+`;
+}
+
+function approvedSkeletonNodeMarkdown(title: string): string {
+  return `---
+title: "${title}"
+owners: [eval-owner]
+---
+
+# ${title}
+
+Approved Phase 1 node awaiting Phase 2 leaf content.
 `;
 }
 
@@ -204,13 +242,21 @@ function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCas
     writeText(join(contextTreePath, "system", "NODE.md"), systemNodeMarkdown());
     writeText(join(contextTreePath, "system", "cli.md"), cliNodeMarkdown());
     writeText(join(contextTreePath, "members", "eval-owner", "NODE.md"), memberNodeMarkdown());
+  } else if (evalCase.fixture.treeState === "phase1-approved") {
+    writeText(join(contextTreePath, "NODE.md"), approvedSkeletonRootMarkdown());
+    writeText(join(contextTreePath, "system", "NODE.md"), approvedSkeletonNodeMarkdown("System"));
+    writeText(join(contextTreePath, "system", "cloud", "NODE.md"), approvedSkeletonNodeMarkdown("Cloud"));
+    writeText(join(contextTreePath, "product", "NODE.md"), approvedSkeletonNodeMarkdown("Product"));
+    writeText(join(contextTreePath, "product", "onboarding", "NODE.md"), approvedSkeletonNodeMarkdown("Onboarding"));
   }
 
   initGitRepo(
     contextTreePath,
     evalCase.fixture.treeState === "empty"
       ? "chore: provision empty context tree"
-      : "chore: seed populated context tree",
+      : evalCase.fixture.treeState === "phase1-approved"
+        ? "docs: merge approved phase one skeleton"
+        : "chore: seed populated context tree",
   );
   return contextTreePath;
 }
@@ -289,6 +335,12 @@ function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
   }
 
   const sourceOriginPath = writeSourceOriginFixture(paths);
+  if (evalCase.fixture.sourceRepoState === "chat-local-readable") {
+    const chatSourcePath = join(paths.workspacePath, "provided-source");
+    assertCommandOk(runCommand("git", ["clone", sourceOriginPath, chatSourcePath], paths.workspacePath));
+    return chatSourcePath;
+  }
+
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   mkdirSync(join(paths.workspacePath, "source-repos"), { recursive: true });
   assertCommandOk(runCommand("git", ["clone", "--bare", sourceOriginPath, sourceRepoPath], paths.workspacePath));
@@ -364,7 +416,13 @@ export function setupFixture(evalCase: FirstTreeSeedEvalCase, paths: RunPaths, r
     caseId: evalCase.id,
     contextTreeHead: gitHead(contextTreePath),
     contextTreePath,
-    sourceRepoHead: sourceRepoPath === null ? null : gitHead(sourceRepoPath, "refs/remotes/origin/main"),
+    sourceRepoHead:
+      sourceRepoPath === null
+        ? null
+        : gitHead(
+            sourceRepoPath,
+            evalCase.fixture.sourceRepoState === "chat-local-readable" ? "HEAD" : "refs/remotes/origin/main",
+          ),
     sourceRepoPath,
     type: "fixture_setup_finished",
     workspaceKind: "seed-bootstrap",
@@ -375,6 +433,20 @@ export function setupFixture(evalCase: FirstTreeSeedEvalCase, paths: RunPaths, r
 }
 
 function validateSourceRepo(paths: RunPaths, evalCase: FirstTreeSeedEvalCase, errors: string[]): boolean {
+  if (evalCase.fixture.sourceRepoState === "chat-local-readable") {
+    const chatSourcePath = join(paths.workspacePath, "provided-source");
+    if (!existsSync(chatSourcePath)) {
+      errors.push(`missing chat-provided source checkout: ${chatSourcePath}`);
+      return false;
+    }
+    const bare = runCommand("git", ["rev-parse", "--is-bare-repository"], chatSourcePath);
+    if (bare.stdout.trim() !== "false" || gitHead(chatSourcePath) === null) {
+      errors.push(`chat-provided source is not a readable Git checkout: ${chatSourcePath}`);
+      return false;
+    }
+    return true;
+  }
+
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   if (evalCase.fixture.sourceRepoState === "missing") {
     if (existsSync(sourceRepoPath)) {
@@ -435,7 +507,7 @@ function validateTreeEmpty(
   evalCase: FirstTreeSeedEvalCase,
   errors: string[],
 ): boolean {
-  if (evalCase.fixture.treeState === "nonempty") return true;
+  if (evalCase.fixture.treeState === "nonempty" || evalCase.fixture.treeState === "phase1-approved") return true;
   if (evalCase.fixture.treeState === "unbound") return validateTreeUnbound(paths, contextTreePath, errors);
   const forbiddenEntries = readdirSync(contextTreePath).filter((entry) => {
     if (entry === ".git" || entry === ".first-tree" || entry === ".github") return false;

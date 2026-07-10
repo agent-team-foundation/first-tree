@@ -17,8 +17,8 @@ import type { InstallationRow } from "./github-app-installations.js";
  *                 (username `x-access-token`).
  * - `ok: false` — caller falls back to unauthenticated git fetch. Public
  *                 repos still resolve; private repos surface as an
- *                 unavailable snapshot. The route layer uses `reason` to
- *                 pick a user-facing remediation message.
+ *                 unavailable snapshot. `reason` remains a structured
+ *                 compatibility/diagnostic signal; setup guidance stays in chat.
  */
 export type ContextTreeInstallationTokenResult =
   | {
@@ -39,8 +39,8 @@ export type MintContextTreeInstallationTokenOptions = {
  * Returns `ok: false` (with a precise reason) when the org has no App
  * configured, no installation row, the installation is suspended, or GitHub
  * rejects the mint — callers fall back to unauthenticated git fetch (public
- * repos still resolve; private repos surface as an unavailable snapshot
- * with a remediation message).
+ * repos still resolve; private repos surface as an unavailable snapshot with
+ * a structured recovery diagnosis for API compatibility.
  *
  * Takes the `installation` row directly so the helper has no DB dependency
  * — route handlers do the `findInstallationByOrg` lookup themselves. Keeps

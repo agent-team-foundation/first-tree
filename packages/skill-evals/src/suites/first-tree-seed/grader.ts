@@ -324,13 +324,19 @@ function sourceWorktreeCreated(paths: RunPaths): boolean {
   return sourceWorktreePaths(paths).length > 0;
 }
 
-function sourceRepoChanged(paths: RunPaths, baselineHead: string | null): boolean {
-  const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
+function sourceRepoChanged(paths: RunPaths, baselineHead: string | null, evalCase: FirstTreeSeedEvalCase): boolean {
+  const chatLocal = evalCase.fixture.sourceRepoState === "chat-local-readable";
+  const sourceRepoPath = join(paths.workspacePath, chatLocal ? "provided-source" : "source-repos/source-repo");
   if (baselineHead === null) return existsSync(sourceRepoPath);
   if (!existsSync(sourceRepoPath)) return true;
 
-  const currentHead = gitHead(sourceRepoPath, "refs/remotes/origin/main");
+  const currentHead = gitHead(sourceRepoPath, chatLocal ? "HEAD" : "refs/remotes/origin/main");
   if (currentHead !== baselineHead) return true;
+
+  if (chatLocal) {
+    const status = runCommand("git", ["status", "--porcelain"], sourceRepoPath);
+    return status.exitCode !== 0 || status.stdout.trim().length > 0;
+  }
 
   for (const worktreePath of sourceWorktreePaths(paths)) {
     const status = runCommand("git", ["status", "--porcelain"], worktreePath);
@@ -645,6 +651,12 @@ function forbiddenActionHits(
     }
     if (action === "phase1_skeleton" && metrics.skeletonObserved) hits.push(action);
     if (action === "partial_seed" && metrics.skeletonObserved) hits.push(action);
+    if (action === "require_github_app" && /(?:install|connect|require)[^\n.]{0,80}github app/iu.test(text)) {
+      hits.push(action);
+    }
+    if (action === "restart_phase1" && /phase\s*1[^\n.]{0,100}(?:propos|approval|confirm)/iu.test(text)) {
+      hits.push(action);
+    }
     if (
       action === "invent_source_structure" &&
       !metrics.sourceEvidenceReadObserved &&
@@ -686,6 +698,12 @@ export function deriveMetrics(
     if (containsPathAccess(event, [".first-tree/workspace.json"])) workspaceManifestReadObserved = true;
     if (
       containsPathAccess(event, [
+        "provided-source/README.md",
+        "provided-source/package.json",
+        "provided-source/apps/cli/README.md",
+        "provided-source/apps/web/README.md",
+        "provided-source/docs/architecture.md",
+        "provided-source/docs/team-practice.md",
         "worktrees/seed-source-repo/README.md",
         "worktrees/seed-source-repo/package.json",
         "worktrees/seed-source-repo/apps/cli/README.md",
@@ -751,7 +769,7 @@ export function deriveMetrics(
     skeletonObserved: skeletonHints.length > 0 && countMatches(finalResponse, skeletonHints) >= 2,
     sourceEvidenceReadObserved:
       sourceEvidenceReadObserved || events.some((event) => containsSourceFixtureEvidence(event)),
-    sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead),
+    sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead, evalCase),
     sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
     treeInitObserved: treeInit.observed,
@@ -780,7 +798,9 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.action === "propose_phase1_skeleton") {
     return (
       metrics.writeSkillFileReadObserved &&
-      metrics.sourceWorktreeCreated &&
+      (evalCase.expected.requireWorktree
+        ? metrics.sourceWorktreeCreated
+        : !metrics.sourceWorktreeCreated && !metrics.sourceWorktreeAccessObserved) &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
       metrics.approvalRequestObserved &&
@@ -846,6 +866,15 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     );
   }
 
+  if (evalCase.expected.action === "continue_phase2") {
+    return (
+      metrics.writeSkillFileReadObserved &&
+      metrics.sourceWorktreeCreated &&
+      metrics.sourceEvidenceReadObserved &&
+      !metrics.directBareSourceContentReadObserved
+    );
+  }
+
   return false;
 }
 
@@ -868,7 +897,8 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (
     (evalCase.expected.action === "propose_phase1_skeleton" ||
-      evalCase.expected.action === "materialize_bare_worktree") &&
+      evalCase.expected.action === "materialize_bare_worktree" ||
+      evalCase.expected.action === "continue_phase2") &&
     !metrics.writeSkillFileReadObserved
   ) {
     notes.push("first-tree-write/SKILL.md was not read before proposing the Phase 1 skeleton.");
@@ -906,7 +936,7 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
       );
     }
   }
-  if (metrics.phase2LeafContentObserved) {
+  if (metrics.phase2LeafContentObserved && evalCase.expected.action !== "continue_phase2") {
     notes.push("Phase 2-style leaf content was observed before user approval.");
   }
   return notes.length > 0 ? notes.join(" ") : null;

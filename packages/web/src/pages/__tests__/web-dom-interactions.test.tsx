@@ -2272,8 +2272,6 @@ describe("web DOM interaction coverage", () => {
     expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledWith({
       organizationId: "org-1",
       agentUuid: "agent-1",
-      bootstrap: expect.stringContaining("local project folder path or GitHub repository URL"),
-      topic: "Set up shared context",
     });
     await unmountRoot(view.root);
   });

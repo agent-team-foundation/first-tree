@@ -135,6 +135,58 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     tags: ["bare-source", "worktree-protocol"],
     tier: "gate",
   },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "propose_phase1_skeleton",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: false,
+      responseHints: ["Phase 1", "skeleton", "approval"],
+      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+    },
+    fixture: {
+      sourceRepoState: "chat-local-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["phase2_leaf_content_before_approval", "skip_user_confirmation", "require_github_app"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "empty-manifest-chat-source",
+    prompt:
+      "Use first-tree-seed to bootstrap the empty Context Tree. The workspace manifest intentionally declares no sources; in this setup chat I have provided the readable local checkout at ./provided-source. Use that source directly, do not require a GitHub App or team resource registration, and stop after the Phase 1 skeleton proposal for approval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["chat-source", "empty-manifest", "no-app-gate"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "continue_phase2",
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["Phase 2", "leaf"],
+    },
+    fixture: {
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["refuse_nonempty_tree", "restart_phase1", "require_github_app"],
+      sideEffects: ["tree_pr", "source_write", "github"],
+    },
+    id: "same-chat-phase2-continuation",
+    prompt:
+      "Continue this same Context Tree setup chat. Earlier in this visible chat you proposed the Phase 1 skeleton, I approved it, and that skeleton is now merged in ./context-tree. Re-resolve the readable source and route to Phase 2 leaf drafting; do not refuse merely because the tree now contains the approved skeleton. Respect the eval workspace rule against actually writing or opening a PR.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["same-chat", "phase2", "continuation"],
+    tier: "gate",
+  },
 ];
 
 export const FIRST_TREE_SEED_PERIODIC_CASES: readonly FirstTreeSeedEvalCase[] = [
@@ -175,8 +227,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
       validator: "case schema and lifecycle fixture shape",
     },
     fixture: {
-      sourceRepoStates: ["bare-readable", "missing", "real-first-tree-bare-readable"],
-      treeStates: ["empty", "nonempty", "unbound"],
+      sourceRepoStates: ["bare-readable", "chat-local-readable", "missing", "real-first-tree-bare-readable"],
+      treeStates: ["empty", "nonempty", "phase1-approved", "unbound"],
     },
     id: FLOOR_CASE_ID,
     skill: "first-tree-seed",
@@ -191,8 +243,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
 function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly string[] {
   const errors: string[] = [];
   const gateCases = cases.filter((evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "gate");
-  if (gateCases.length !== 5) {
-    errors.push(`seed suite must declare 5 gate cases, found ${gateCases.length}.`);
+  if (gateCases.length !== 7) {
+    errors.push(`seed suite must declare 7 gate cases, found ${gateCases.length}.`);
   }
   const periodicCases = cases.filter(
     (evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "periodic",

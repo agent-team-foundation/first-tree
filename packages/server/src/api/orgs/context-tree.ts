@@ -43,6 +43,12 @@ jobs:
 `;
 const REPO_SUFFIX = "-context-tree";
 const GITHUB_REPO_NAME_MAX_LENGTH = 100;
+const TREE_SETUP_TOPIC = "Set up shared context";
+const TREE_SETUP_BOOTSTRAP = [
+  "Let's build or finish our team's Context Tree.",
+  "",
+  "Please inspect the actual tree state and any source code already readable in this workspace. If no source code is readable, ask me for one local project folder path or GitHub repository URL. Once you have readable code, propose the initial top- and second-level domain structure for my review before writing it. Use this same chat to continue after approval; never restart a populated tree.",
+].join("\n");
 
 export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { orgId: string }; Body: unknown }>("/setup-chat", async (request, reply) => {
@@ -53,9 +59,12 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       humanAgentId: scope.humanAgentId,
       organizationId: scope.organizationId,
       targetAgentId: body.agentUuid,
-      bootstrap: body.bootstrap,
-      topic: body.topic ?? "Set up shared context",
-      kickoffKey: `${scope.organizationId}:tree-setup`,
+      bootstrap: TREE_SETUP_BOOTSTRAP,
+      topic: TREE_SETUP_TOPIC,
+      // A setup chat is an ordinary private task chat, so its stable identity
+      // must stay inside the initiating human + selected private-agent ACL.
+      // Org-level status still recognizes any completed setup bootstrap below.
+      kickoffKey: `${scope.humanAgentId}:${body.agentUuid}:tree-setup`,
       complete: false,
     });
     if (result.sent) {

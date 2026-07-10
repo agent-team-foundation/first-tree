@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FIRST_TREE_SEED_SUITE } from "../cases.js";
+import { FIRST_TREE_SEED_GATE_CASES, FIRST_TREE_SEED_SUITE } from "../cases.js";
 
 const validateFloor = FIRST_TREE_SEED_SUITE.validateFloor;
 if (!validateFloor) {
@@ -36,5 +36,21 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR is open");
     expect(skillMarkdown).toContain("do not interrupt source resolution, structure");
     expect(skillMarkdown).toContain("relay only a recovery URL returned");
+  });
+
+  it("ships behavioral gates for chat-supplied sources and same-chat Phase 2 continuation", () => {
+    const chatSource = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "empty-manifest-chat-source");
+    expect(chatSource).toMatchObject({
+      expected: { action: "propose_phase1_skeleton", requireSourceRead: true, requireWorktree: false },
+      fixture: { sourceRepoState: "chat-local-readable", treeState: "empty" },
+    });
+    expect(chatSource?.forbidden.actions).toContain("require_github_app");
+
+    const continuation = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "same-chat-phase2-continuation");
+    expect(continuation).toMatchObject({
+      expected: { action: "continue_phase2", requireSourceRead: true, requireWorktree: true },
+      fixture: { sourceRepoState: "bare-readable", treeState: "phase1-approved" },
+    });
+    expect(continuation?.forbidden.actions).toContain("refuse_nonempty_tree");
   });
 });

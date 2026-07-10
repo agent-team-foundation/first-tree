@@ -487,8 +487,6 @@ describe("ContextPage DOM behavior", () => {
     expect(onboardingEventMocks.postTreeSetupStartChat).toHaveBeenCalledWith({
       organizationId: "org-1",
       agentUuid: "agent-1",
-      bootstrap: expect.stringContaining("local project folder path or GitHub repository URL"),
-      topic: "Set up shared context",
     });
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-tree-recovery");
 
@@ -523,8 +521,6 @@ describe("ContextPage DOM behavior", () => {
     expect(onboardingEventMocks.postTreeSetupStartChat).toHaveBeenCalledWith({
       organizationId: "org-1",
       agentUuid: "agent-1",
-      bootstrap: expect.stringContaining("Use this same chat to continue after approval"),
-      topic: "Set up shared context",
     });
     expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-tree-success");
