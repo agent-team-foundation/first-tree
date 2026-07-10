@@ -1391,9 +1391,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           ? new ClientUserMismatchError(message)
           : code === "CLIENT_RETIRED"
             ? new ClientRetiredError(message)
-          : code === "CLIENT_ORG_MISMATCH"
-            ? new ClientOrgMismatchError(message)
-            : new Error(`client:register rejected: ${message}`);
+            : code === "CLIENT_ORG_MISMATCH"
+              ? new ClientOrgMismatchError(message)
+              : new Error(`client:register rejected: ${message}`);
       this.lastHandshakeError = err;
       this.wsLogger.error({ code, message }, "client register rejected");
       this.emit("error", err);

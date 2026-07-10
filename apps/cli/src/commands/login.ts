@@ -66,11 +66,7 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
   return (await res.json()) as { accessToken: string; refreshToken: string };
 }
 
-async function readServerClientStatus(
-  url: string,
-  accessToken: string,
-  clientId: string,
-): Promise<string | null> {
+async function readServerClientStatus(url: string, accessToken: string, clientId: string): Promise<string | null> {
   try {
     const res = await cliFetch(`${url}/api/v1/clients/${encodeURIComponent(clientId)}`, {
       method: "GET",
@@ -92,6 +88,17 @@ async function assertReusableClientAccepted(url: string, accessToken: string, cl
     "CLIENT_RETIRED_REQUIRES_RESET",
     `Client "${clientId}" has been retired. Run \`${channelConfig.binName} computer reset\`, then run \`${channelConfig.binName} login <code>\` with a fresh connect code.`,
     1,
+  );
+}
+
+function shouldRestartServiceAfterRefresh(service: ReturnType<typeof getClientServiceStatus>): boolean {
+  if (service.state === "active") return true;
+  if (service.platform !== "task-scheduler" || service.state !== "unknown") return false;
+  const detail = (service.detail ?? "").toLowerCase();
+  return (
+    detail.includes("task running") ||
+    detail.includes("service runtime marker is live") ||
+    detail.includes("supervisor process is still live")
   );
 }
 
@@ -217,7 +224,7 @@ export function registerLoginCommand(program: Command): void {
         if (shouldInstallService) {
           const beforeService = getClientServiceStatus();
           const info = installClientService();
-          if (beforeService.state === "active") {
+          if (shouldRestartServiceAfterRefresh(beforeService)) {
             const restart = restartClientService();
             if (!restart.ok) {
               print.line(`\n  Background service refreshed but restart failed: ${restart.reason}\n`);

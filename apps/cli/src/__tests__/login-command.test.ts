@@ -767,6 +767,28 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(clientRuntimeMock).not.toHaveBeenCalled();
   });
 
+  it("restarts a live Windows unknown background service after login refreshes it", async () => {
+    isServiceSupportedMock.mockReturnValue(true);
+    getClientServiceStatusMock.mockReturnValue({
+      platform: "task-scheduler",
+      state: "unknown",
+      label: "\\FirstTree\\first-tree-dev",
+      detail: "task running but no live service runtime marker",
+      logDir: join(home, "logs"),
+    });
+    installClientServiceMock.mockReturnValue({
+      platform: "task-scheduler",
+      logDir: join(home, "logs"),
+    });
+    restartClientServiceMock.mockReturnValue({ ok: true });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" })]);
+
+    expect(installClientServiceMock).toHaveBeenCalled();
+    expect(restartClientServiceMock).toHaveBeenCalled();
+    expect(clientRuntimeMock).not.toHaveBeenCalled();
+  });
+
   it("fails login when an already-active background service cannot restart after refresh", async () => {
     isServiceSupportedMock.mockReturnValue(true);
     getClientServiceStatusMock.mockReturnValue({
