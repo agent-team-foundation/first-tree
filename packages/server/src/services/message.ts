@@ -231,6 +231,19 @@ export type SendMessageResult = {
   message: typeof messages.$inferSelect;
   /** Inbox IDs that received this message (for notification). */
   recipients: string[];
+  /**
+   * Present only when an internal caller explicitly defers effects until its
+   * own outer transaction commits. Pass this to
+   * `runDeferredSendMessagePostCommitEffects` exactly once after commit.
+   */
+  deferredPostCommitEffects?: DeferredSendMessagePostCommitEffects;
+};
+
+export type DeferredSendMessagePostCommitEffects = {
+  chatId: string;
+  messageId: string;
+  organizationId: string;
+  recipientAgentIds: string[];
 };
 
 export type SendMessageOptions = {
@@ -312,6 +325,14 @@ export type SendMessageOptions = {
    * `github-event-card.tsx#isTrustedGithubDispatcherMessage`.
    */
   allowSystemSender?: boolean;
+  /**
+   * Trusted-internal escape hatch for a send performed inside an existing
+   * outer database transaction. When enabled, session activation and the
+   * workspace kick are returned as a descriptor instead of running before
+   * that outer transaction commits. The caller MUST flush the descriptor
+   * with `runDeferredSendMessagePostCommitEffects` after commit.
+   */
+  deferPostCommitEffects?: boolean;
 };
 
 export type SendIntentParticipant = {
@@ -913,36 +934,58 @@ async function sendMessageInner(
     };
   });
 
-  // Predictive session-state activation: after the main transaction commits,
-  // best-effort upsert an `active` agent_chat_sessions row for every notify=true
-  // recipient so the First Tree UI list refreshes immediately on send (see M-plan
-  // §8 R7 / §5 invariant #2 — notifier=undefined keeps NOTIFY scoped to First Tree UI,
-  // touchPresenceLastSeen=false avoids polluting the client's heartbeat).
-  // Failure is logged but never thrown: the message is durable, and the
-  // client's later `session:state: active` frame self-heals the row.
+  const postCommitEffects: DeferredSendMessagePostCommitEffects = {
+    chatId,
+    messageId: txResult.message.id,
+    organizationId: txResult.organizationId,
+    recipientAgentIds: txResult.recipientAgentIds,
+  };
+  if (!options.deferPostCommitEffects) {
+    await runDeferredSendMessagePostCommitEffects(db, postCommitEffects);
+  }
+
+  return {
+    message: txResult.message,
+    recipients: txResult.recipients,
+    ...(options.deferPostCommitEffects ? { deferredPostCommitEffects: postCommitEffects } : {}),
+  };
+}
+
+/**
+ * Run the non-transactional effects for a durable message. Ordinary sends call
+ * this immediately after their own transaction commits. A caller that sent
+ * through an existing outer transaction uses the deferred descriptor and
+ * invokes this helper only after that outer transaction has committed.
+ */
+export async function runDeferredSendMessagePostCommitEffects(
+  db: Database,
+  effects: DeferredSendMessagePostCommitEffects,
+): Promise<void> {
+  // Predictive session-state activation: best-effort upsert an `active`
+  // agent_chat_sessions row for every notify=true recipient so the First Tree
+  // UI list refreshes immediately on send. Failure is logged but never thrown:
+  // the message is durable, and a later session-state frame self-heals the row.
   const settled = await Promise.allSettled(
-    txResult.recipientAgentIds.map((agentId) =>
-      upsertSessionState(db, agentId, chatId, "active", txResult.organizationId, undefined, {
+    effects.recipientAgentIds.map((agentId) =>
+      upsertSessionState(db, agentId, effects.chatId, "active", effects.organizationId, undefined, {
         touchPresenceLastSeen: false,
       }),
     ),
   );
   for (let i = 0; i < settled.length; i++) {
-    const r = settled[i];
-    if (r?.status === "rejected") {
+    const result = settled[i];
+    if (result?.status === "rejected") {
       log.error(
-        { err: r.reason, chatId, agentId: txResult.recipientAgentIds[i] },
+        { err: result.reason, chatId: effects.chatId, agentId: effects.recipientAgentIds[i] },
         "predictive session activation failed",
       );
     }
   }
 
   // Best-effort chat-first workspace kick — speakers also get the existing
-  // inbox NOTIFY; this is what reaches watcher rows (no inbox entry → no
-  // wake-up otherwise). Failure is dropped; web reconnect refetches.
-  fireChatMessageKick(chatId, txResult.message.id);
-
-  return { message: txResult.message, recipients: txResult.recipients };
+  // inbox NOTIFY; this reaches watcher rows with no inbox entry. Failure is
+  // dropped; web reconnect refetches.
+  fireChatMessageKick(effects.chatId, effects.messageId);
 }
 
 /**

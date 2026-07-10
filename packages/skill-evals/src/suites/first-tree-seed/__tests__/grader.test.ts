@@ -246,6 +246,126 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("requires proposal, approval, and PR handoff evidence from the transcript read", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-incomplete-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Phase 1 proposal: product and system.\nApproved.",
+              command: "cat .first-tree-eval/chat-history.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not borrow same-chat evidence from an independent Context Tree read", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-mixed-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output:
+                "Phase 1 proposal: product and system.\nApproved.\nPhase 1 PR handoff: merge then return here.",
+              command:
+                "test -f .first-tree-eval/chat-history.md && cat .first-tree-eval/chat-history.md; sed -n 1,120p context-tree/NODE.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a skipped transcript read followed by literal evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-skipped-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff: merge then return here.",
+              command:
+                "false && cat .first-tree-eval/chat-history.md; printf 'Phase 1 proposal\\nApproved\\nPhase 1 PR handoff: merge then return here.\\n'",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a failed transcript content read", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-failed-history-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output:
+                "cat: .first-tree-eval/chat-history.md: No such file\nPhase 1 proposal\nApproved\nPhase 1 PR handoff",
+              command: "cat .first-tree-eval/chat-history.md",
+              exit_code: 1,
+              status: "failed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.chatHistoryReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit a transcript path mention or existence check as reading prior turns", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-history-spoof-"));
     try {
@@ -785,7 +905,7 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
-              aggregated_output: `HEAD is now at 1234567 fixture\nFILE ${managedPath}/README.md\n# Apollo Console\nContext Tree commands\nruntime coordination\nFILE context-tree/NODE.md\n# Approved Seed Skeleton`,
+              aggregated_output: `Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture\nFILE ${managedPath}/README.md\n# Apollo Console\nContext Tree commands\nruntime coordination\nFILE context-tree/NODE.md\n# Approved Seed Skeleton`,
               command:
                 `/bin/zsh -lc 'git -C context-tree ls-tree -r --name-only origin/main -- product system && ` +
                 `git -C source-repos/source-repo fetch origin && ` +
@@ -808,6 +928,70 @@ describe("first-tree-seed grader", () => {
       expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
       expect(metrics.sourceEvidenceReadObserved).toBe(true);
       expect(metrics.directBareSourceContentReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not let a skipped source loop iteration borrow Context Tree evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-skipped-source-loop-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: `FILE ${managedPath}/README.md\nFILE context-tree/NODE.md\n# Apollo Console\nruntime coordination`,
+              command:
+                `for f in ${managedPath}/README.md context-tree/NODE.md; do ` +
+                'echo "FILE $f"; test "$f" = context-tree/NODE.md && sed -n 1,80p "$f"; done',
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not let unrelated Git output credit a skipped managed worktree add", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-skipped-add-git-output-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "HEAD is now at 1234567 fixture",
+              command:
+                `false && git -C source-repos/source-repo worktree add ${managedPath} origin/main; ` +
+                "git -C context-tree reset --hard HEAD",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

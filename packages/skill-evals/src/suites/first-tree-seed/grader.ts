@@ -302,20 +302,22 @@ function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePa
       return true;
     }
 
-    // A worktree add before a trailing `; echo ...` cannot be proven from the
-    // shell exit code, but Git's paired success lines bind the aggregate output
-    // to a completed add. Reject commands that contain those lines literally,
-    // so `echo 'Preparing worktree ...'` cannot manufacture this proof.
-    // Codex command events do not always retain Git's stderr `Preparing
-    // worktree` line, but the checkout's `HEAD is now at ...` stdout line is
-    // still a strong completion signal when the same command contains the
-    // managed add. Literal manufacture remains rejected below.
-    const hasStrongGitSuccessOutput = /HEAD is now at [0-9a-f]+/iu.test(execution.output);
+    // A single managed worktree add before a trailing `; echo ...` cannot be
+    // proven from the shell exit code, but Git's paired success lines bind the
+    // aggregate output to that sole add. One `HEAD is now at ...` line is not
+    // enough: an unrelated reset/checkout can emit it after the managed add was
+    // skipped. Reject multiple add candidates and literal manufacture too.
+    const worktreeAddSegments = shellCommandSegments(command).filter((segment) =>
+      /\bgit\b[\s\S]*\bworktree\s+add\b/iu.test(segment),
+    );
+    const hasStrongGitSuccessOutput =
+      /Preparing worktree \([^\n]+\)/u.test(execution.output) && /HEAD is now at [0-9a-f]+/iu.test(execution.output);
     const commandSpoofsGitSuccessOutput = /Preparing worktree \(|HEAD is now at [0-9a-f]+/iu.test(command);
     return (
       hasStrongGitSuccessOutput &&
       !commandSpoofsGitSuccessOutput &&
-      shellCommandSegments(command).some(isManagedWorktreeAdd)
+      worktreeAddSegments.length === 1 &&
+      worktreeAddSegments.some(isManagedWorktreeAdd)
     );
   });
 }
@@ -523,6 +525,14 @@ function sourceWorktreePaths(paths: RunPaths): string[] {
 
 function sourceWorktreeCreated(paths: RunPaths): boolean {
   return sourceWorktreePaths(paths).length > 0;
+}
+
+function sourceWorktreeMaterializedAtExpectedHead(paths: RunPaths, baselineHead: string | null): boolean {
+  if (baselineHead === null) return false;
+  return sourceWorktreePaths(paths).some((worktreePath) => {
+    const status = runCommand("git", ["status", "--porcelain"], worktreePath);
+    return status.exitCode === 0 && status.stdout.trim().length === 0 && gitHead(worktreePath) === baselineHead;
+  });
 }
 
 function sourceRepoChanged(paths: RunPaths, baselineHead: string | null, evalCase: FirstTreeSeedEvalCase): boolean {
@@ -953,6 +963,21 @@ function segmentIsSourcePipelineFilter(segments: readonly ShellCommandSegment[],
     .some((candidate) => segmentReadsContent(candidate.text) && segmentReferencesSourceEvidence(candidate.text));
 }
 
+function segmentIsChatHistoryPipelineFilter(segments: readonly ShellCommandSegment[], index: number): boolean {
+  const segment = segments[index];
+  if (!segment || !segmentIsPurePipelineFilter(segment.text)) return false;
+  const inPipeline = segment.connectorBefore === "|" || segments[index + 1]?.connectorBefore === "|";
+  if (!inPipeline) return false;
+
+  let start = index;
+  while (start > 0 && segments[start]?.connectorBefore === "|") start--;
+  let end = index;
+  while (segments[end + 1]?.connectorBefore === "|") end++;
+  return segments
+    .slice(start, end + 1)
+    .some((candidate) => segmentReadsContent(candidate.text) && candidate.text.includes(CHAT_HISTORY_PATH));
+}
+
 function sourceBoundLoopVariables(command: string): ReadonlySet<string> {
   const variables = new Set<string>();
   const loopPattern = /\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([\s\S]*?);\s*do\s+([\s\S]*?)(?:;\s*done|\bdone\b)/gu;
@@ -977,6 +1002,31 @@ function segmentReadsSourceBoundLoopVariable(segment: string, variables: Readonl
   return false;
 }
 
+function outputContainsSourceEvidenceBlock(output: string, evidenceHints: readonly string[]): boolean {
+  let activeBlockIsSource = false;
+  let activeBlock = "";
+  const activeBlockHasEvidence = (): boolean => activeBlockIsSource && countMatches(activeBlock, evidenceHints) >= 2;
+  const marksSourcePath = (value: string): boolean => {
+    const normalized = value.replace(/\\/gu, "/").replace(/\/+$/u, "");
+    return SOURCE_EVIDENCE_ROOT_PATHS.some(
+      (root) => normalized === root || normalized.startsWith(`${root}/`) || normalized.includes(`/${root}/`),
+    );
+  };
+
+  for (const line of output.split(/\r?\n/u)) {
+    const marker = /^\s*FILE\s+(.+?)\s*$/u.exec(line);
+    if (marker) {
+      if (activeBlockHasEvidence()) return true;
+      const markedPath = marker[1] ?? "";
+      activeBlockIsSource = marksSourcePath(markedPath);
+      activeBlock = "";
+      continue;
+    }
+    if (activeBlockIsSource) activeBlock += `${line}\n`;
+  }
+  return activeBlockHasEvidence();
+}
+
 function unboundLiteralOutputSpoofsSourceEvidence(
   segments: readonly string[],
   evidenceHints: readonly string[],
@@ -999,9 +1049,11 @@ function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEv
     const command = unwrapShellCommand(execution.command);
     const segments = shellCommandSegmentsWithConnectors(command);
     const loopVariables = sourceBoundLoopVariables(command);
-    const hasSourceRead =
-      segments.some((segment) => segmentReadsContent(segment.text) && segmentReferencesSourceEvidence(segment.text)) ||
-      loopVariables.size > 0;
+    const hasDirectSourceRead = segments.some(
+      (segment) => segmentReadsContent(segment.text) && segmentReferencesSourceEvidence(segment.text),
+    );
+    const hasLoopSourceRead = loopVariables.size > 0;
+    const hasSourceRead = hasDirectSourceRead || hasLoopSourceRead;
     const hasUnboundOutputProducer = segments.some(
       (segment, index) =>
         segmentCanProduceIndependentEvidence(segment.text) &&
@@ -1010,15 +1062,15 @@ function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEv
         !segmentReadsSourceBoundLoopVariable(segment.text, loopVariables),
     );
     // A common inspection command loops over both source and Context Tree
-    // files and prints `FILE <path>` before each read. The explicit source-path
-    // marker in successful output binds the source-specific evidence to the
-    // source iteration even though another loop iteration is an independent
-    // Context Tree reader. Without that marker we keep the conservative
-    // mixed-output rejection.
+    // files and prints `FILE <path>` before each read. Credit that mixed loop
+    // only when the evidence itself occurs inside the source-marked output
+    // block. A source marker from a skipped iteration must not borrow evidence
+    // emitted by a later Context Tree iteration.
     const loopOutputBindsSource =
-      loopVariables.size > 0 && SOURCE_EVIDENCE_ROOT_PATHS.some((root) => execution.output.includes(root));
+      loopVariables.size > 0 && outputContainsSourceEvidenceBlock(execution.output, evidenceHints);
     return (
       hasSourceRead &&
+      (hasDirectSourceRead || loopOutputBindsSource) &&
       (!hasUnboundOutputProducer || loopOutputBindsSource) &&
       !unboundLiteralOutputSpoofsSourceEvidence(
         segments.map((segment) => segment.text),
@@ -1033,11 +1085,28 @@ function containsChatHistoryEvidence(event: unknown): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
   return collectCommandExecutions(event.event).some((execution) => {
-    if (execution.exitCode !== 0) return false;
-    const readObserved = shellCommandSegmentsWithConnectors(unwrapShellCommand(execution.command)).some(
+    if (execution.exitCode !== 0 || /(?:no such file|not a directory|permission denied)/iu.test(execution.output)) {
+      return false;
+    }
+    const segments = shellCommandSegmentsWithConnectors(unwrapShellCommand(execution.command));
+    const readObserved = segments.some(
       (segment) => segmentReadsContent(segment.text) && segment.text.includes(CHAT_HISTORY_PATH),
     );
-    return readObserved && countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) >= 2;
+    const hasUnboundOutputProducer = segments.some(
+      (segment, index) =>
+        segmentCanProduceIndependentEvidence(segment.text) &&
+        !segment.text.includes(CHAT_HISTORY_PATH) &&
+        !segmentIsChatHistoryPipelineFilter(segments, index),
+    );
+    return (
+      readObserved &&
+      !hasUnboundOutputProducer &&
+      !unboundLiteralOutputSpoofsSourceEvidence(
+        segments.map((segment) => segment.text),
+        CHAT_HISTORY_EVIDENCE_HINTS,
+      ) &&
+      countMatches(execution.output, CHAT_HISTORY_EVIDENCE_HINTS) === CHAT_HISTORY_EVIDENCE_HINTS.length
+    );
   });
 }
 
@@ -1224,6 +1293,7 @@ export function deriveMetrics(
   const baselines = baselineHeads(events);
   const directBareRead = directBareSourceContentRead(events);
   const sourceWorktreeWasCreated = sourceWorktreeCreated(paths);
+  const sourceWorktreeIsMaterialized = sourceWorktreeMaterializedAtExpectedHead(paths, baselines.sourceRepoHead);
   const skeletonHints = evalCase.expected.skeletonHints ?? [];
   const approvalHints = evalCase.expected.approvalHints ?? [];
   const treeInit = deriveTreeInitObservation(events, firstTreeCalls, paths.workspacePath);
@@ -1250,7 +1320,7 @@ export function deriveMetrics(
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead, evalCase),
     sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
-    sourceWorktreeMaterializedObserved,
+    sourceWorktreeMaterializedObserved: sourceWorktreeMaterializedObserved || sourceWorktreeIsMaterialized,
     treeInitObserved: treeInit.observed,
     treeInitWithContextTreeDirObserved: treeInit.withContextTreeDir,
     workspaceManifestReadObserved,

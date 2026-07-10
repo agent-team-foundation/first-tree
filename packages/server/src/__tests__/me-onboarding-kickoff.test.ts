@@ -368,8 +368,7 @@ describe("POST /me/onboarding/kickoff", () => {
       updatedBy: admin.userId,
     });
 
-    const recovery = await open();
-    const retry = await open();
+    const [recovery, retry] = await Promise.all([open(), open()]);
     expect(recovery.statusCode).toBe(200);
     expect(retry.statusCode).toBe(200);
     expect(recovery.json<{ chatId: string }>().chatId).toBe(chatId);

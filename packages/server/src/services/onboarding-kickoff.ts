@@ -6,7 +6,7 @@ import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "./chat.js";
-import { sendMessage } from "./message.js";
+import { runDeferredSendMessagePostCommitEffects, sendMessage } from "./message.js";
 
 /**
  * Idempotency key for a production-scan fix launcher, shared by BOTH entry
@@ -86,7 +86,7 @@ export async function appendTreeSetupRecoveryMessage(
     recovery: TreeSetupRecoveryMessage;
   },
 ): Promise<{ recipients: string[]; messageId: string } | null> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     const [chat] = await txDb
       .select({ id: chats.id })
@@ -119,10 +119,20 @@ export async function appendTreeSetupRecoveryMessage(
         metadata: { contextTreeRecoveryFingerprint: args.recovery.fingerprint },
         source: "api",
       },
-      { addressedToAgentIds: [args.targetAgentId] },
+      { addressedToAgentIds: [args.targetAgentId], deferPostCommitEffects: true },
     );
-    return { recipients: sent.recipients, messageId: sent.message.id };
+    if (!sent.deferredPostCommitEffects) {
+      throw new Error("Context Tree recovery send did not return deferred post-commit effects");
+    }
+    return {
+      recipients: sent.recipients,
+      messageId: sent.message.id,
+      postCommitEffects: sent.deferredPostCommitEffects,
+    };
   });
+  if (!result) return null;
+  await runDeferredSendMessagePostCommitEffects(db, result.postCommitEffects);
+  return { recipients: result.recipients, messageId: result.messageId };
 }
 
 /**
