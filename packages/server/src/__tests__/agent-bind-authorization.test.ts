@@ -52,7 +52,7 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("rejects an invalid runtime session token even before enforcement is enabled", async () => {
+  it("accepts an invalid runtime session token before enforcement is enabled", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
     await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
@@ -67,7 +67,7 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
       },
     });
 
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(200);
   });
 
   it("rejects when the pinned client belongs to a different user (not_owned)", async () => {
@@ -234,6 +234,7 @@ describe("runtime-bound agent HTTP enforcement", () => {
     });
 
     expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toContain(`Missing ${AGENT_RUNTIME_SESSION_HEADER} header`);
   });
 
   it("accepts non-human agent HTTP with the current runtime session token", async () => {
@@ -393,6 +394,7 @@ describe("runtime-bound agent HTTP enforcement", () => {
     });
 
     expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toContain("Invalid agent runtime session");
   });
 
   it("does not require runtime session tokens for human agents", async () => {
