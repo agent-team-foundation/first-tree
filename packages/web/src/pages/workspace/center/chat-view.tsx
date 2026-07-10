@@ -3635,10 +3635,12 @@ export function ChatView({
                       watching
                     </span>
                   </span>
-                ) : isTrial || narrow ? (
-                  // Trial and narrow mobile surfaces keep the header as
+                ) : isTrial || useMobileDetailsSheet ? (
+                  // Trial and mobile surfaces keep the header as
                   // navigation/context only. Rename remains a desktop detail
                   // action instead of a hidden tap target in the chat title.
+                  // Gated on mobile presentation, not viewport width, so the
+                  // ordinary narrow Workspace keeps its click-to-rename title.
                   <span className="truncate text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
                     {chatDetail?.title ?? titleFallback ?? "…"}
                   </span>
