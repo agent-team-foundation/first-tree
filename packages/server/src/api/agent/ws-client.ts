@@ -1176,16 +1176,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               let runtimeSessionToken: string;
-              let runtimeSessionReused = false;
               try {
-                const runtimeSession = await agentRuntimeSessionService.bindAgentRuntimeSession(
+                runtimeSessionToken = await agentRuntimeSessionService.bindAgentRuntimeSession(
                   app.db,
                   agent.id,
                   clientId,
-                  bindRequest.currentRuntimeSessionToken,
                 );
-                runtimeSessionToken = runtimeSession.token;
-                runtimeSessionReused = runtimeSession.reused;
               } catch (err) {
                 app.log.warn({ err, agentId: agent.id, clientId }, "agent:bind runtime session claim failed");
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
@@ -1199,21 +1195,17 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 runtimeVersion: bindRequest.runtimeVersion,
               });
               if (!published) {
-                if (!runtimeSessionReused) {
-                  await agentRuntimeSessionService
-                    .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
-                    .catch(() => {});
-                }
+                await agentRuntimeSessionService
+                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                  .catch(() => {});
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
                 return;
               }
 
               if (!connectionManager.isActiveClientConnection(clientId, socket)) {
-                const revoked = runtimeSessionReused
-                  ? false
-                  : await agentRuntimeSessionService
-                      .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
-                      .catch(() => false);
+                const revoked = await agentRuntimeSessionService
+                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                  .catch(() => false);
                 if (revoked && connectionManager.getAgentClientId(agent.id) !== clientId) {
                   await presenceService.unbindAgent(app.db, agent.id, { expectedClientId: clientId }).catch(() => {});
                 }
@@ -1271,7 +1263,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   agentId: agent.id,
                   displayName: agent.displayName,
                   agentType: agent.type,
-                  ...(runtimeSessionReused ? {} : { runtimeSessionToken }),
+                  runtimeSessionToken,
                 }),
               );
 

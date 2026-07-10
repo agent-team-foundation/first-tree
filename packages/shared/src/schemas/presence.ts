@@ -87,14 +87,13 @@ export type SessionRuntimeMessage = z.infer<typeof sessionRuntimeMessageSchema>;
 
 // -- Agent Bind Payload (client -> server) --
 // WS bind authorization derives from the WS-level JWT and the client_id pinned
-// to the agent (Rule R-RUN). A successful bind separately establishes the
-// current owner-client runtime-session token for subsequent agent-scoped HTTP.
+// to the agent (Rule R-RUN). A successful bind separately returns an ephemeral
+// runtime-session token for subsequent agent-scoped HTTP.
 
 export const agentBindRequestSchema = z.object({
   agentId: z.string().min(1),
   runtimeType: z.string().max(50),
   runtimeVersion: z.string().max(50).optional(),
-  currentRuntimeSessionToken: z.string().min(1).optional(),
 });
 export type AgentBindRequest = z.infer<typeof agentBindRequestSchema>;
 
