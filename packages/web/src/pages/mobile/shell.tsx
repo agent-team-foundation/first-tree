@@ -46,14 +46,7 @@ export function MobileShell() {
   const rows = tabCountsQuery.data?.rows ?? [];
 
   return (
-    <div
-      className="flex flex-col overflow-hidden"
-      style={{
-        height: "100vh",
-        minHeight: "100dvh",
-        background: "var(--bg)",
-      }}
-    >
+    <div className="h-dvh-screen pt-safe-top flex flex-col overflow-hidden" style={{ background: "var(--bg)" }}>
       <TeamSwitchOverlay />
       <main className="flex-1 min-h-0 overflow-hidden">
         <Outlet />
