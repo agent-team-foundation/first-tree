@@ -808,7 +808,10 @@ describe("ChatView", () => {
     expect(container.querySelector('button[aria-label$="Open participants."]')).toBeNull();
     expect(container.querySelector('button[aria-label="Show chat details"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Hide agent final messages"]')).toBeNull();
-    expect(buttonByTitle(container, "Click to rename")).toBeNull();
+    // Generic narrow Workspace keeps click-to-rename: it is gated on mobile
+    // presentation, not viewport width, so resizing to the narrow breakpoint
+    // does not drop the pre-existing rename affordance.
+    expect(buttonByTitle(container, "Click to rename")).not.toBeNull();
 
     await click(container.querySelector('button[aria-label="Show conversations"]'));
     expect(onShowConversations).toHaveBeenCalledTimes(1);
@@ -838,6 +841,8 @@ describe("ChatView", () => {
     await waitForText(container, "Launch planning");
     expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
     expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
+    // Mobile presentation keeps the header context-only: no click-to-rename.
+    expect(buttonByTitle(container, "Click to rename")).toBeNull();
 
     await click(container.querySelector('button[aria-label="Show chat options"]'));
     await waitForText(container, "Participants · 4");
