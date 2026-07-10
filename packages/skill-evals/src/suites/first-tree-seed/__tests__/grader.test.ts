@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -8,6 +9,7 @@ import {
   rmSync,
   symlinkSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -907,8 +909,7 @@ describe("first-tree-seed grader", () => {
             event: {
               aggregated_output: `Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture\nFILE ${managedPath}/README.md\n# Apollo Console\nContext Tree commands\nruntime coordination\nFILE context-tree/NODE.md\n# Approved Seed Skeleton`,
               command:
-                `/bin/zsh -lc 'git -C context-tree ls-tree -r --name-only origin/main -- product system && ` +
-                `git -C source-repos/source-repo fetch origin && ` +
+                `/bin/zsh -lc 'git -C source-repos/source-repo fetch origin && ` +
                 `git -C source-repos/source-repo worktree add ${managedPath} origin/main && ` +
                 `for f in ${managedPath}/README.md context-tree/NODE.md; do echo "FILE $f"; sed -n 1,80p "$f"; done'`,
               exit_code: 0,
@@ -965,6 +966,38 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not let a source output block bypass an independent Context Tree reader", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-source-block-independent-reader-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: `FILE ${managedPath}/README.md\n# Apollo Console\nruntime coordination`,
+              command:
+                `for f in ${managedPath}/README.md; do echo "FILE $f"; false && sed -n 1,80p "$f"; ` +
+                "sed -n 1,80p context-tree/NODE.md; done",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not let unrelated Git output credit a skipped managed worktree add", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-skipped-add-git-output-"));
     const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
@@ -991,6 +1024,101 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a worktree add from the Context Tree repository", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-wrong-source-worktree-add-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture",
+              command: `git -C context-tree worktree add ${managedPath} origin/main`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a source worktree add whose target only prefixes the managed path", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-prefixed-worktree-target-"));
+    const backupPath = join(tempRoot, "worktrees", "seed-source-repo-backup");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture",
+              command: `git -C source-repos/source-repo worktree add ${backupPath} origin/main`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not treat an ordinary clone at the managed path as the declared source worktree", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-ordinary-clone-worktree-"));
+    const sourceOrigin = join(tempRoot, "source-origin");
+    const sourceRepo = join(tempRoot, "source-repos", "source-repo");
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      mkdirSync(sourceOrigin, { recursive: true });
+      execFileSync("git", ["init", "-b", "main"], { cwd: sourceOrigin });
+      execFileSync("git", ["config", "user.email", "eval@example.com"], { cwd: sourceOrigin });
+      execFileSync("git", ["config", "user.name", "Eval"], { cwd: sourceOrigin });
+      writeFileSync(join(sourceOrigin, "README.md"), "# Apollo Console\nruntime coordination\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: sourceOrigin });
+      execFileSync("git", ["commit", "-m", "fixture"], { cwd: sourceOrigin });
+      mkdirSync(join(tempRoot, "source-repos"), { recursive: true });
+      mkdirSync(join(tempRoot, "worktrees"), { recursive: true });
+      execFileSync("git", ["clone", "--bare", sourceOrigin, sourceRepo]);
+      execFileSync("git", ["clone", sourceRepo, managedPath]);
+      const sourceHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: managedPath, encoding: "utf8" }).trim();
+
+      const metrics = deriveMetrics(
+        [{ type: "fixture_setup_finished", sourceRepoHead: sourceHead }],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeCreated).toBe(true);
       expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });

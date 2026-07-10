@@ -286,6 +286,7 @@ function eventTouchesSourceWorktree(event: unknown): boolean {
 function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePath: string): boolean {
   if (!isRecord(event) || eventType(event) !== "codex_event") return false;
   const managedWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
+  const managedSourceRepoPath = normalize(join(workspacePath, "source-repos", "source-repo"));
   return collectCommandExecutions(event.event).some((execution) => {
     if (
       execution.exitCode !== 0 ||
@@ -295,8 +296,25 @@ function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePa
     }
     const command = unwrapShellCommand(execution.command);
     const isManagedWorktreeAdd = (segment: string): boolean => {
-      const program = (segment.trim().split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
-      return program === "git" && /\bworktree\s+add\b/iu.test(segment) && segment.includes(managedWorktreePath);
+      const words = shellWords(segment);
+      const program = (words[0] ?? "").split("/").pop() ?? "";
+      const gitCwdMatch = /(?:^|\s)-C\s+(?:"([^"]+)"|'([^']+)'|([^\s]+))/u.exec(segment);
+      const gitCwd = gitCwdMatch?.[1] ?? gitCwdMatch?.[2] ?? gitCwdMatch?.[3];
+      const resolvedGitCwd = gitCwd ? normalize(isAbsolute(gitCwd) ? gitCwd : resolve(workspacePath, gitCwd)) : null;
+      const worktreeIndex = words.findIndex((word, index) => word === "worktree" && words[index + 1] === "add");
+      let targetIndex = worktreeIndex + 2;
+      while (targetIndex >= 2 && targetIndex < words.length && words[targetIndex]?.startsWith("-")) {
+        const option = words[targetIndex];
+        targetIndex += ["-b", "-B", "--reason"].includes(option ?? "") ? 2 : 1;
+      }
+      const target = words[targetIndex];
+      const resolvedTarget = target ? normalize(isAbsolute(target) ? target : resolve(workspacePath, target)) : null;
+      return (
+        program === "git" &&
+        resolvedGitCwd === managedSourceRepoPath &&
+        worktreeIndex >= 0 &&
+        resolvedTarget === normalize(managedWorktreePath)
+      );
     };
     if (segmentsProvenSuccessfulByExitCode(command, execution.exitCode).some(isManagedWorktreeAdd)) {
       return true;
@@ -529,10 +547,24 @@ function sourceWorktreeCreated(paths: RunPaths): boolean {
 
 function sourceWorktreeMaterializedAtExpectedHead(paths: RunPaths, baselineHead: string | null): boolean {
   if (baselineHead === null) return false;
-  return sourceWorktreePaths(paths).some((worktreePath) => {
-    const status = runCommand("git", ["status", "--porcelain"], worktreePath);
-    return status.exitCode === 0 && status.stdout.trim().length === 0 && gitHead(worktreePath) === baselineHead;
-  });
+  const worktreePath = join(paths.workspacePath, "worktrees", "seed-source-repo");
+  const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
+  if (!existsSync(worktreePath) || !existsSync(sourceRepoPath)) return false;
+
+  const status = runCommand("git", ["status", "--porcelain"], worktreePath);
+  const commonDir = runCommand("git", ["rev-parse", "--git-common-dir"], worktreePath);
+  if (status.exitCode !== 0 || status.stdout.trim().length > 0 || commonDir.exitCode !== 0) return false;
+  const rawCommonDir = commonDir.stdout.trim();
+  const resolvedCommonDir = isAbsolute(rawCommonDir) ? rawCommonDir : resolve(worktreePath, rawCommonDir);
+  let canonicalCommonDir: string;
+  let canonicalSourceRepo: string;
+  try {
+    canonicalCommonDir = realpathSync(resolvedCommonDir);
+    canonicalSourceRepo = realpathSync(sourceRepoPath);
+  } catch {
+    return false;
+  }
+  return canonicalCommonDir === canonicalSourceRepo && gitHead(worktreePath) === baselineHead;
 }
 
 function sourceRepoChanged(paths: RunPaths, baselineHead: string | null, evalCase: FirstTreeSeedEvalCase): boolean {
@@ -1071,7 +1103,7 @@ function containsSourceFixtureEvidence(event: unknown, evalCase: FirstTreeSeedEv
     return (
       hasSourceRead &&
       (hasDirectSourceRead || loopOutputBindsSource) &&
-      (!hasUnboundOutputProducer || loopOutputBindsSource) &&
+      !hasUnboundOutputProducer &&
       !unboundLiteralOutputSpoofsSourceEvidence(
         segments.map((segment) => segment.text),
         evidenceHints,
