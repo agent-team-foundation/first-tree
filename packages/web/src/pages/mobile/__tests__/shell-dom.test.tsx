@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
-import { MobileSignalChip } from "../components.js";
+import { MobilePage, MobileSignalChip } from "../components.js";
 import { MobileShell } from "../shell.js";
 
 const authMock = vi.hoisted(() => {
@@ -115,6 +115,21 @@ describe("MobileShell", () => {
     expect(harness.container.textContent).not.toContain("Current team");
   });
 
+  it("sizes the live shell to the dynamic viewport and reserves the top safe area", async () => {
+    renderShell(harness, "/m/now");
+    await harness.flush();
+
+    // Dynamic-viewport height comes from the .h-dvh-screen utility (100vh
+    // fallback + 100dvh override), not a raw inline 100vh that overflows the
+    // visible viewport on mobile browsers while the address bar is shown. The
+    // top safe-area inset is reserved via .pt-safe-top so content does not
+    // render under the status bar on notched devices.
+    const shell = harness.container.querySelector(".h-dvh-screen");
+    expect(shell).not.toBeNull();
+    expect((shell as HTMLElement).style.height).toBe("");
+    expect(shell?.className).toContain("pt-safe-top");
+  });
+
   it("uses the high-contrast token for needs-you signal text", () => {
     harness.render(
       <MobileSignalChip signal={{ tone: "needs-you", label: "Needs answer", rank: 0, attention: true }} />,
@@ -122,5 +137,19 @@ describe("MobileShell", () => {
 
     const chip = harness.container.querySelector("span");
     expect(chip?.getAttribute("style")).toContain("var(--fg-needs-you-strong)");
+  });
+});
+
+describe("MobilePage", () => {
+  it("is a bounded scroll container so page content can scroll", () => {
+    const harness = createDomHarness();
+    harness.render(<MobilePage>work feed</MobilePage>);
+
+    const scroller = harness.container.querySelector(".overflow-y-auto");
+    expect(scroller).not.toBeNull();
+    // h-full bounds the scroller to the parent height so overflow-y-auto
+    // engages; min-h-full would grow with content and never scroll.
+    expect(scroller?.className).toContain("h-full");
+    expect(scroller?.className).not.toContain("min-h-full");
   });
 });

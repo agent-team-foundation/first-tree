@@ -703,6 +703,29 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Dynamic viewport height with a universal fallback: `100vh` ships as the
+     base for browsers without `dvh`, then `100dvh` overrides where supported
+     (iOS 15.4+, Chrome 108+) so a full-height shell tracks the mobile URL-bar /
+     home-indicator resize instead of overflowing the visible viewport. Split
+     into a base rule + `@supports` override rather than two `height`
+     declarations in one rule, which inline styles cannot express and the
+     linter flags as a duplicate property. */
+  .h-dvh-screen {
+    height: 100vh;
+  }
+  @supports (height: 100dvh) {
+    .h-dvh-screen {
+      height: 100dvh;
+    }
+  }
+
+  /* Reserve the top safe-area inset (notch / status bar) so a full-height
+     shell without its own top chrome does not render content under the
+     status bar on notched devices. */
+  .pt-safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
   /* Surface utilities — consolidate Panel / PageHeader / Tab containers.
      Prefer these over hand-rolled background/border/radius combinations. */
   .surface-base {
