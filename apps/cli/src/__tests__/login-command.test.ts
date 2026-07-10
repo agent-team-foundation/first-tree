@@ -405,6 +405,9 @@ afterEach(() => {
   if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
   else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
   process.exitCode = undefined;
+  // Drop mock call history so the large command-graph suite cannot retain
+  // multi-MB argument snapshots across the 29 login cases in one worker.
+  vi.clearAllMocks();
 });
 
 // `runLogin` dynamic-imports `commands/login.js` on every test run, which

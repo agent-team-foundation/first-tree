@@ -24,8 +24,10 @@
       "inputs": ["$TURBO_DEFAULT$"]
     },
     "test": {
-      "inputs": ["$TURBO_DEFAULT$"]
+      "inputs": ["$TURBO_DEFAULT$"],
+      "passThroughEnv": ["VITEST_MAX_FORKS", "CI", "GITHUB_ACTIONS", "CI_DATABASE_URL"]
     },
+
     "coverage": {
       "dependsOn": ["^build"],
       "cache": false,
