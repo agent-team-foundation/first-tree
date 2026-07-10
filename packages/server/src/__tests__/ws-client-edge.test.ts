@@ -642,44 +642,6 @@ describe("Agent client WS edge protocol coverage", () => {
     }
   }, 15000);
 
-  it("reuses a presented runtime session token on same-client rebind", async () => {
-    const seed = await createAdminContext(app, { username: `ws-bind-reuse-${crypto.randomUUID().slice(0, 8)}` });
-    const agent = await createPinnedAgent({ ...seed, suffix: "reuse" });
-    const ws = await openRegisteredSocket(seed);
-
-    try {
-      const first = await bindAgent(ws, agent.uuid, "bind-reuse-first");
-      expect(first.type).toBe("agent:bound");
-      expect(first.runtimeSessionToken).toEqual(expect.any(String));
-
-      ws.send(
-        JSON.stringify({
-          type: "agent:bind",
-          agentId: agent.uuid,
-          ref: "bind-reuse-second",
-          runtimeType: "claude-code",
-          runtimeVersion: "edge-test",
-          currentRuntimeSessionToken: first.runtimeSessionToken,
-        }),
-      );
-      const second = (await waitForFrame(
-        ws,
-        (message) =>
-          (message as { type?: string; ref?: string }).type === "agent:bound" &&
-          (message as { ref?: string }).ref === "bind-reuse-second",
-      )) as { type?: string; ref?: string; agentId?: string; runtimeSessionToken?: string };
-
-      expect(second).toMatchObject({
-        type: "agent:bound",
-        ref: "bind-reuse-second",
-        agentId: agent.uuid,
-      });
-      expect(second).not.toHaveProperty("runtimeSessionToken");
-    } finally {
-      await closeSocket(ws);
-    }
-  }, 15000);
-
   it("rejects bind when runtime session or presence publication fails", async () => {
     const runtimeSeed = await createAdminContext(app, {
       username: `ws-bind-runtime-${crypto.randomUUID().slice(0, 8)}`,
@@ -705,26 +667,15 @@ describe("Agent client WS edge protocol coverage", () => {
     });
     const presenceAgent = await createPinnedAgent({ ...presenceSeed, suffix: "presence-fail" });
     const presenceWs = await openRegisteredSocket(presenceSeed);
-    const reusedRuntimeSpy = vi.spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession").mockResolvedValueOnce({
-      token: "reused-runtime-token",
-      reused: true,
-    });
-    const revokeSpy = vi
-      .spyOn(agentRuntimeSessionService, "revokeAgentRuntimeSessionIfTokenMatches")
-      .mockResolvedValueOnce(true);
     const presenceSpy = vi.spyOn(presenceService, "bindAgentIfActiveClient").mockResolvedValueOnce(false);
     try {
       await expect(bindAgent(presenceWs, presenceAgent.uuid, "bind-presence-fail")).resolves.toMatchObject({
         type: "agent:bind:rejected",
         reason: AGENT_BIND_REJECT_REASONS.WRONG_CLIENT,
       });
-      expect(reusedRuntimeSpy).toHaveBeenCalled();
       expect(presenceSpy).toHaveBeenCalled();
-      expect(revokeSpy).not.toHaveBeenCalled();
     } finally {
       await closeSocket(presenceWs);
-      reusedRuntimeSpy.mockRestore();
-      revokeSpy.mockRestore();
       presenceSpy.mockRestore();
     }
   }, 15000);
@@ -736,13 +687,6 @@ describe("Agent client WS edge protocol coverage", () => {
     const agent = await createPinnedAgent({ ...seed, suffix: "active-drift" });
     const ws = await openRegisteredSocket(seed);
     const activeSpy = vi.spyOn(connectionManager, "isActiveClientConnection");
-    const reusedRuntimeSpy = vi.spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession").mockResolvedValueOnce({
-      token: "reused-runtime-token",
-      reused: true,
-    });
-    const revokeSpy = vi
-      .spyOn(agentRuntimeSessionService, "revokeAgentRuntimeSessionIfTokenMatches")
-      .mockResolvedValueOnce(true);
 
     try {
       activeSpy.mockReturnValueOnce(false);
@@ -758,13 +702,9 @@ describe("Agent client WS edge protocol coverage", () => {
         ref: "bind-active-drift-after-presence",
         reason: AGENT_BIND_REJECT_REASONS.WRONG_CLIENT,
       });
-      expect(reusedRuntimeSpy).toHaveBeenCalledTimes(1);
-      expect(revokeSpy).not.toHaveBeenCalled();
     } finally {
       await closeSocket(ws);
       activeSpy.mockRestore();
-      reusedRuntimeSpy.mockRestore();
-      revokeSpy.mockRestore();
     }
   }, 15000);
 

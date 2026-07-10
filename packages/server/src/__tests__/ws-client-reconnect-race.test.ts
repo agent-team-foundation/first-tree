@@ -449,8 +449,7 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
       .spyOn(presenceService, "bindAgentIfActiveClient")
       .mockImplementationOnce(async (db, agentId, data) => {
         const published = await originalPublish(db, agentId, data);
-        const successorSession = await agentRuntimeSessionService.bindAgentRuntimeSession(app.db, agent.uuid, clientId);
-        successorToken = successorSession.token;
+        successorToken = await agentRuntimeSessionService.bindAgentRuntimeSession(app.db, agent.uuid, clientId);
         connectionManager.bindAgentToClient(clientId, agent.uuid, successorToken);
         return published;
       });

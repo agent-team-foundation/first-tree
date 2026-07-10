@@ -5,11 +5,7 @@ import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { agentSelectorHook } from "../middleware/agent-selector.js";
-import {
-  bindAgentRuntimeSession,
-  revokeAgentRuntimeSession,
-  validateAgentRuntimeSession,
-} from "../services/agent-runtime-session.js";
+import { bindAgentRuntimeSession, revokeAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -41,7 +37,7 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
   it("accepts a valid runtime session token before enforcement is enabled", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    const { token: runtimeSessionToken } = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
       method: "GET",
@@ -54,35 +50,6 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
     });
 
     expect(res.statusCode).toBe(200);
-  });
-
-  it("reuses a presented current owner-client runtime session token", async () => {
-    const app = getApp();
-    const { agent, clientId } = await createTestAgent(app);
-    const first = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
-    expect(first.reused).toBe(false);
-    const [before] = await app.db
-      .select({ metadata: agents.metadata, updatedAt: agents.updatedAt })
-      .from(agents)
-      .where(eq(agents.uuid, agent.uuid))
-      .limit(1);
-
-    const second = await bindAgentRuntimeSession(app.db, agent.uuid, clientId, first.token);
-
-    expect(second).toEqual({ token: first.token, reused: true });
-    const [afterReuse] = await app.db
-      .select({ metadata: agents.metadata, updatedAt: agents.updatedAt })
-      .from(agents)
-      .where(eq(agents.uuid, agent.uuid))
-      .limit(1);
-    expect(afterReuse).toEqual(before);
-
-    const third = await bindAgentRuntimeSession(app.db, agent.uuid, clientId, "not-current-token");
-
-    expect(third.reused).toBe(false);
-    expect(third.token).not.toBe(first.token);
-    await expect(validateAgentRuntimeSession(app.db, agent.uuid, clientId, first.token)).resolves.toBe(false);
-    await expect(validateAgentRuntimeSession(app.db, agent.uuid, clientId, third.token)).resolves.toBe(true);
   });
 
   it("accepts an invalid runtime session token before enforcement is enabled", async () => {
@@ -267,12 +234,13 @@ describe("runtime-bound agent HTTP enforcement", () => {
     });
 
     expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toContain(`Missing ${AGENT_RUNTIME_SESSION_HEADER} header`);
   });
 
   it("accepts non-human agent HTTP with the current runtime session token", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    const { token: runtimeSessionToken } = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
       method: "GET",
@@ -290,7 +258,7 @@ describe("runtime-bound agent HTTP enforcement", () => {
   it("accepts runtime session tokens from durable DB state without local WS ownership", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    const { token: runtimeSessionToken } = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
       method: "GET",
@@ -309,7 +277,7 @@ describe("runtime-bound agent HTTP enforcement", () => {
     const app = getApp();
     const sender = await createTestAgent(app, { name: `outbox-sender-${crypto.randomUUID().slice(0, 6)}` });
     const recipient = await createTestAgent(app, { name: `outbox-recipient-${crypto.randomUUID().slice(0, 6)}` });
-    const { token: runtimeSessionToken } = await bindAgentRuntimeSession(app.db, sender.agent.uuid, sender.clientId);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, sender.agent.uuid, sender.clientId);
 
     const chatRes = await sender.request(
       "POST",
@@ -412,7 +380,7 @@ describe("runtime-bound agent HTTP enforcement", () => {
   it("rejects stale runtime session tokens after DB revocation", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    const { token: runtimeSessionToken } = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
     await revokeAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
@@ -426,6 +394,7 @@ describe("runtime-bound agent HTTP enforcement", () => {
     });
 
     expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toContain("Invalid agent runtime session");
   });
 
   it("does not require runtime session tokens for human agents", async () => {
