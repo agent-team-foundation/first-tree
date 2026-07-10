@@ -822,10 +822,16 @@ function segmentReferencesSourceEvidence(segment: string): boolean {
 function segmentCanProduceIndependentEvidence(segment: string): boolean {
   const program = segmentProgram(segment);
   if (segmentReadsContent(segment)) return true;
-  if (["echo", "printf"].includes(program)) {
-    return countMatches(segment, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2;
-  }
   return ["node", "perl", "python", "python3", "ruby"].includes(program);
+}
+
+function unboundLiteralOutputSpoofsSourceEvidence(segments: readonly string[]): boolean {
+  const literalOutput = segments
+    .filter(
+      (segment) => ["echo", "printf"].includes(segmentProgram(segment)) && !segmentReferencesSourceEvidence(segment),
+    )
+    .join("\n");
+  return countMatches(literalOutput, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2;
 }
 
 function containsSourceFixtureEvidence(event: unknown): boolean {
@@ -846,7 +852,10 @@ function containsSourceFixtureEvidence(event: unknown): boolean {
       (segment) => segmentCanProduceIndependentEvidence(segment) && !segmentReferencesSourceEvidence(segment),
     );
     return (
-      hasSourceRead && !hasUnboundOutputProducer && countMatches(execution.output, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2
+      hasSourceRead &&
+      !hasUnboundOutputProducer &&
+      !unboundLiteralOutputSpoofsSourceEvidence(segments) &&
+      countMatches(execution.output, SOURCE_FIXTURE_EVIDENCE_HINTS) >= 2
     );
   });
 }

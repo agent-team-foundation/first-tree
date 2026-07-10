@@ -860,6 +860,36 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not allow split echo commands to manufacture source fixture evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-split-spoofed-source-evidence-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Apollo Console\nruntime coordination",
+              command:
+                "test -f worktrees/seed-source-repo/README.md && cat worktrees/seed-source-repo/README.md; echo 'Apollo Console'; echo 'runtime coordination'",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-phase2-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("fails bare-source protocol when first-tree-write required reading was not loaded", () => {
     expect(
       casePassed(
