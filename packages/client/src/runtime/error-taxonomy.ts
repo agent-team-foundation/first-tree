@@ -238,7 +238,11 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
   // Check class names FIRST so they win over loose substring heuristics
   // (e.g. "fetch failed" in an unrelated message accidentally classifying a
   // permanent identity error as transient network).
-  if (shape.name === "ClientUserMismatchError" || shape.name === "ClientOrgMismatchError") {
+  if (
+    shape.name === "ClientUserMismatchError" ||
+    shape.name === "ClientOrgMismatchError" ||
+    shape.name === "ClientRetiredError"
+  ) {
     return {
       kind: ERROR_KINDS.PERMANENT,
       strategy: NONE,

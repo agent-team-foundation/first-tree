@@ -278,6 +278,19 @@ export class ClientUserMismatchError extends Error {
   }
 }
 
+/**
+ * Thrown when the server refuses `client:register` because this local
+ * client identity was retired server-side. Retrying the same client id cannot
+ * recover; the operator must reset local identity and register a fresh client.
+ */
+export class ClientRetiredError extends Error {
+  readonly code = "CLIENT_RETIRED";
+  constructor(message = "Client has been retired") {
+    super(message);
+    this.name = "ClientRetiredError";
+  }
+}
+
 class ServerAuthRejectedError extends Error {
   readonly authCode: AuthRejectedCode | undefined;
   readonly authMessage: string | undefined;
@@ -1376,9 +1389,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const err =
         code === "CLIENT_USER_MISMATCH"
           ? new ClientUserMismatchError(message)
-          : code === "CLIENT_ORG_MISMATCH"
-            ? new ClientOrgMismatchError(message)
-            : new Error(`client:register rejected: ${message}`);
+          : code === "CLIENT_RETIRED"
+            ? new ClientRetiredError(message)
+            : code === "CLIENT_ORG_MISMATCH"
+              ? new ClientOrgMismatchError(message)
+              : new Error(`client:register rejected: ${message}`);
       this.lastHandshakeError = err;
       this.wsLogger.error({ code, message }, "client register rejected");
       this.emit("error", err);
