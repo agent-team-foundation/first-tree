@@ -1022,16 +1022,17 @@ describe("first-tree-seed grader", () => {
     ).toBe(true);
   });
 
-  it("passes bare-source protocol after the read worktree is safely cleaned up", () => {
+  it("does not pass worktree provenance after the read worktree is cleaned up", () => {
     const evalCase = findCase("bare-source-worktree-protocol");
     const metrics = baseMetrics({
       finalResponse: "I read the source worktree, cleaned it up, and propose a Phase 1 skeleton for approval.",
       sourceWorktreeAccessObserved: true,
       sourceWorktreeCreated: false,
+      sourceWorktreeMaterializedObserved: false,
     });
 
-    expect(casePassed(evalCase, metrics)).toBe(true);
-    expect(buildGrading(evalCase, metrics, true).scores.process_pass).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+    expect(buildGrading(evalCase, metrics, false).scores.process_pass).toBe(false);
   });
 
   it("does not pass cleanup when worktree materialization and source reads only failed", () => {
@@ -1086,7 +1087,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("records a completed worktree add as successful materialization", () => {
+  it("does not credit a worktree command without final managed state", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-successful-worktree-add-"));
     try {
       const metrics = deriveMetrics(
@@ -1109,7 +1110,67 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not treat argv consumed by a Git alias as a worktree add", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-git-alias-worktree-add-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "",
+              command: `git -C source-repos/source-repo -c alias.foo='!true' foo worktree add ${managedPath} origin/main`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not treat a shadowed Git shell function as a worktree add", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-git-function-worktree-add-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "",
+              command: `git() { return 0; }\ngit -C source-repos/source-repo worktree add ${managedPath} origin/main`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -1125,6 +1186,36 @@ describe("first-tree-seed grader", () => {
             event: {
               aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture\nready",
               command: `git -C source-repos/source-repo worktree add ${managedPath} origin/main; echo ready`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("requires the managed worktree add to be the standalone successful command", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-add-chain-"));
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "Preparing worktree (detached HEAD 1234567)\nHEAD is now at 1234567 fixture",
+              command: `git -C source-repos/source-repo worktree add ${managedPath} origin/main && true`,
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -1211,7 +1302,7 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
       expect(metrics.sourceEvidenceReadObserved).toBe(true);
       expect(metrics.directBareSourceContentReadObserved).toBe(false);
     } finally {
@@ -1375,6 +1466,44 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("credits final managed state linked to the declared bare source clone", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-managed-source-worktree-"));
+    const sourceOrigin = join(tempRoot, "source-origin");
+    const sourceRepo = join(tempRoot, "source-repos", "source-repo");
+    const managedPath = join(tempRoot, "worktrees", "seed-source-repo");
+    try {
+      mkdirSync(sourceOrigin, { recursive: true });
+      execFileSync("git", ["init", "-b", "main"], { cwd: sourceOrigin });
+      execFileSync("git", ["config", "user.email", "eval@example.com"], { cwd: sourceOrigin });
+      execFileSync("git", ["config", "user.name", "Eval"], { cwd: sourceOrigin });
+      writeFileSync(join(sourceOrigin, "README.md"), "# Apollo Console\nruntime coordination\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: sourceOrigin });
+      execFileSync("git", ["commit", "-m", "fixture"], { cwd: sourceOrigin });
+      mkdirSync(join(tempRoot, "source-repos"), { recursive: true });
+      mkdirSync(join(tempRoot, "worktrees"), { recursive: true });
+      execFileSync("git", ["clone", "--bare", sourceOrigin, sourceRepo]);
+      execFileSync("git", ["-C", sourceRepo, "worktree", "add", "--detach", managedPath, "main"]);
+      const sourceHead = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: managedPath,
+        encoding: "utf8",
+      }).trim();
+
+      const metrics = deriveMetrics(
+        [{ type: "fixture_setup_finished", sourceRepoHead: sourceHead }],
+        findCase("bare-source-worktree-protocol"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeCreated).toBe(true);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not treat an ordinary clone at the managed path as the declared source worktree", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-ordinary-clone-worktree-"));
     const sourceOrigin = join(tempRoot, "source-origin");
@@ -1395,7 +1524,29 @@ describe("first-tree-seed grader", () => {
       const sourceHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: managedPath, encoding: "utf8" }).trim();
 
       const metrics = deriveMetrics(
-        [{ type: "fixture_setup_finished", sourceRepoHead: sourceHead }],
+        [
+          { type: "fixture_setup_finished", sourceRepoHead: sourceHead },
+          {
+            event: {
+              aggregated_output: "",
+              command: `git -C source-repos/source-repo -c alias.foo='!true' foo worktree add ${managedPath} origin/main`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              aggregated_output: "Apollo Console\nruntime coordination",
+              command: `cat ${managedPath}/README.md`,
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
         findCase("bare-source-worktree-protocol"),
         fixtureValidation(),
         0,
@@ -1405,6 +1556,7 @@ describe("first-tree-seed grader", () => {
 
       expect(metrics.sourceWorktreeCreated).toBe(true);
       expect(metrics.sourceWorktreeMaterializedObserved).toBe(false);
+      expect(metrics.sourceEvidenceReadObserved).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -1875,6 +2027,75 @@ describe("first-tree-seed grader", () => {
         );
 
         expect(metrics.sourceEvidenceReadObserved, command).toBe(false);
+      }
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit source or history reads with hidden stdin redirection", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-hidden-redirection-"));
+    const cases = [
+      {
+        command: "cat worktrees/seed-source-repo/package.json -<context-tree/NODE.md",
+        evalCase: findCase("same-chat-phase2-continuation"),
+        output: "Apollo Console\nruntime coordination",
+        readMetric: "sourceEvidenceReadObserved" as const,
+      },
+      {
+        command: "head -n 50 worktrees/seed-source-repo/package.json -<context-tree/NODE.md",
+        evalCase: findCase("same-chat-phase2-continuation"),
+        output: "Apollo Console\nruntime coordination",
+        readMetric: "sourceEvidenceReadObserved" as const,
+      },
+      {
+        command: "tail -n 50 worktrees/seed-source-repo/package.json -<context-tree/NODE.md",
+        evalCase: findCase("same-chat-phase2-continuation"),
+        output: "Apollo Console\nruntime coordination",
+        readMetric: "sourceEvidenceReadObserved" as const,
+      },
+      {
+        command: "head -n $N worktrees/seed-source-repo/package.json",
+        evalCase: findCase("same-chat-phase2-continuation"),
+        output: "Apollo Console\nruntime coordination",
+        readMetric: "sourceEvidenceReadObserved" as const,
+      },
+      {
+        command: "head -n {5,context-tree/NODE.md} worktrees/seed-source-repo/package.json",
+        evalCase: findCase("same-chat-phase2-continuation"),
+        output: "Apollo Console\nruntime coordination",
+        readMetric: "sourceEvidenceReadObserved" as const,
+      },
+      {
+        command: "cat .first-tree-eval/chat-history.md -<context-tree/NODE.md",
+        evalCase: findCase("same-chat-phase2-continuation"),
+        output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+        readMetric: "chatHistoryReadObserved" as const,
+      },
+    ];
+    try {
+      for (const testCase of cases) {
+        const metrics = deriveMetrics(
+          [
+            {
+              event: {
+                aggregated_output: testCase.output,
+                command: testCase.command,
+                exit_code: 0,
+                status: "completed",
+                type: "command_execution",
+              },
+              type: "codex_event",
+            },
+          ],
+          testCase.evalCase,
+          fixtureValidation(),
+          0,
+          baseRunPaths(tempRoot),
+          join(tempRoot, "context-tree"),
+        );
+
+        expect(metrics[testCase.readMetric], testCase.command).toBe(false);
       }
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });

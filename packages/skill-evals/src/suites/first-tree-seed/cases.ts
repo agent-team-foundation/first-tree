@@ -26,7 +26,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "empty-tree-source-present",
     prompt:
-      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound source repo. Run the seed self-check first, then propose only the Phase 1 top + second-level skeleton for user approval.",
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound source repo. Run the seed self-check first, leave the managed source read worktree in place for final eval provenance, then propose only the Phase 1 top + second-level skeleton for user approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
@@ -128,7 +128,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "bare-source-worktree-protocol",
     prompt:
-      "Use first-tree-seed to inspect the bound source repo. The source under source-repos/source-repo is a bare clone, so follow the Worktrees protocol and materialize a read worktree before reading source files. Stop after proposing the Phase 1 skeleton for approval.",
+      "Use first-tree-seed to inspect the bound source repo. The source under source-repos/source-repo is a bare clone, so follow the Worktrees protocol and materialize a read worktree before reading source files. Leave that managed worktree in place for final eval provenance, and stop after proposing the Phase 1 skeleton for approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
@@ -238,7 +238,7 @@ export const FIRST_TREE_SEED_PERIODIC_CASES: readonly FirstTreeSeedEvalCase[] = 
     },
     id: "first-tree-seed-real-first-tree-source-periodic",
     prompt:
-      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol. For unambiguous eval evidence, make the managed worktree add a standalone successful command and run `cat worktrees/seed-source-repo/README.md | head -50` as a separate source read before any broader exploration. Stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol. For unambiguous eval evidence, make the managed worktree add a standalone successful command, leave that worktree in place for final provenance, and run `cat worktrees/seed-source-repo/README.md | head -50` as a separate source read before any broader exploration. Stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",

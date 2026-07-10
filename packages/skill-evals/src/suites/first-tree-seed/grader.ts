@@ -250,23 +250,6 @@ function shellCommandSegments(text: string): string[] {
   return shellCommandSegmentsWithConnectors(text).map((segment) => segment.text);
 }
 
-// For a successful shell execution, only the final `;`/newline-delimited
-// list determines the process exit code. When that list is a plain command or
-// an `&&` chain, exit 0 proves every segment in it ran successfully. An `||`
-// or pipeline does not provide that guarantee for each operand, so it earns no
-// positive execution credit here.
-function segmentsProvenSuccessfulByExitCode(command: string, exitCode: number | null): string[] {
-  if (exitCode !== 0) return [];
-  const segments = shellCommandSegmentsWithConnectors(command);
-  let finalListStart = 0;
-  for (let index = 1; index < segments.length; index++) {
-    if (segments[index]?.connectorBefore === ";") finalListStart = index;
-  }
-  const finalList = segments.slice(finalListStart);
-  if (finalList.some((segment) => segment.connectorBefore === "||" || segment.connectorBefore === "|")) return [];
-  return finalList.map((segment) => segment.text);
-}
-
 function commandTouchesSourceWorktree(text: string): boolean {
   return shellCommandSegments(text).some((segment) => segmentTouchesSourceWorktree(segment));
 }
@@ -275,50 +258,6 @@ function eventTouchesSourceWorktree(event: unknown): boolean {
   if (!isRecord(event)) return false;
   if (eventType(event) !== "codex_event") return false;
   return collectToolInputStrings(event.event).some((value) => commandTouchesSourceWorktree(value));
-}
-
-function eventSuccessfullyMaterializesSourceWorktree(event: unknown, workspacePath: string): boolean {
-  if (!isRecord(event) || eventType(event) !== "codex_event") return false;
-  const managedWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
-  const managedSourceRepoPath = normalize(join(workspacePath, "source-repos", "source-repo"));
-  return collectCommandExecutions(event.event).some((execution) => {
-    if (
-      execution.exitCode !== 0 ||
-      /(?:fatal:|invalid reference|no such file|not a git repository)/iu.test(execution.output)
-    ) {
-      return false;
-    }
-    const command = unwrapShellCommand(execution.command);
-    const isManagedWorktreeAdd = (segment: string): boolean => {
-      const words = shellWords(segment);
-      const program = (words[0] ?? "").split("/").pop() ?? "";
-      const gitCwdMatch = /(?:^|\s)-C\s+(?:"([^"]+)"|'([^']+)'|([^\s]+))/u.exec(segment);
-      const gitCwd = gitCwdMatch?.[1] ?? gitCwdMatch?.[2] ?? gitCwdMatch?.[3];
-      const resolvedGitCwd = gitCwd ? normalize(isAbsolute(gitCwd) ? gitCwd : resolve(workspacePath, gitCwd)) : null;
-      const worktreeIndex = words.findIndex((word, index) => word === "worktree" && words[index + 1] === "add");
-      let targetIndex = worktreeIndex + 2;
-      while (targetIndex >= 2 && targetIndex < words.length && words[targetIndex]?.startsWith("-")) {
-        const option = words[targetIndex];
-        targetIndex += ["-b", "-B", "--reason"].includes(option ?? "") ? 2 : 1;
-      }
-      const target = words[targetIndex];
-      const resolvedTarget = target ? normalize(isAbsolute(target) ? target : resolve(workspacePath, target)) : null;
-      return (
-        program === "git" &&
-        resolvedGitCwd === managedSourceRepoPath &&
-        worktreeIndex >= 0 &&
-        resolvedTarget === normalize(managedWorktreePath)
-      );
-    };
-    if (segmentsProvenSuccessfulByExitCode(command, execution.exitCode).some(isManagedWorktreeAdd)) {
-      return true;
-    }
-    // Do not infer success from Git-looking aggregate output: a skipped add can
-    // be followed by an unrelated command that prints the same text. Commands
-    // whose shell structure cannot prove the add ran are credited only through
-    // the independent final-filesystem validation below.
-    return false;
-  });
 }
 
 function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
@@ -900,6 +839,10 @@ function positionalShellArgs(segment: string, optionsWithValues: ReadonlySet<str
       optionsEnded = true;
       continue;
     }
+    if (word === "-") {
+      positionals.push(word);
+      continue;
+    }
     if (!optionsEnded && word.startsWith("-")) {
       if (optionsWithValues.has(word)) index++;
       continue;
@@ -910,6 +853,11 @@ function positionalShellArgs(segment: string, optionsWithValues: ReadonlySet<str
 }
 
 function trustedContentReaderProgram(segment: string): "cat" | "head" | "tail" | null {
+  // Reject shell syntax anywhere in the segment before option parsing. A token
+  // such as `-<other-file` is an input redirection at execution time, but an
+  // option-looking word to the lightweight parser; expansion/glob syntax has
+  // the same provenance ambiguity.
+  if (/[$`*?[\]{}()<>;&!~]/u.test(segment) || segment.includes("\n")) return null;
   const executable = shellWords(segment)[0] ?? "";
   const program = basename(executable);
   if (!["cat", "head", "tail"].includes(program)) return null;
@@ -947,7 +895,7 @@ function pathIsWithinRoot(value: string, root: string, workspacePath: string): b
   // Grade only literal operands. Shell expansion, globbing, brace expansion,
   // redirection, and control syntax can resolve somewhere different from the
   // lexical token the grader sees, so they cannot prove file provenance.
-  if (/[$`*?[\]{}()<>;&|!]/u.test(value)) return false;
+  if (/[$`*?[\]{}()<>;&|!~]/u.test(value) || value.includes("\n")) return false;
   const candidate = resolve(workspacePath, value);
   const relativePath = relative(root, candidate);
   return (
@@ -1170,7 +1118,6 @@ export function deriveMetrics(
   let writeSkillFileReadObserved = false;
   let workspaceManifestReadObserved = false;
   let sourceWorktreeAccessObserved = false;
-  let sourceWorktreeMaterializedObserved = false;
   const firstTreeArgv: string[][] = [];
   const firstTreeCalls: FirstTreeCall[] = [];
   const modelOutputTexts: string[] = [];
@@ -1191,10 +1138,6 @@ export function deriveMetrics(
     if (eventTouchesSourceWorktree(event)) {
       sourceWorktreeAccessObserved = true;
     }
-    if (eventSuccessfullyMaterializesSourceWorktree(event, paths.workspacePath)) {
-      sourceWorktreeMaterializedObserved = true;
-    }
-
     modelOutputTexts.push(...collectModelOutputText(event));
 
     if (!isRecord(event)) continue;
@@ -1242,7 +1185,11 @@ export function deriveMetrics(
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead, evalCase),
     sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
-    sourceWorktreeMaterializedObserved: sourceWorktreeMaterializedObserved || sourceWorktreeIsMaterialized,
+    // Command text cannot prove which executable or Git subcommand actually
+    // ran. Credit materialization only from the final clean managed worktree,
+    // at the expected source HEAD, whose git-common-dir is the declared bare
+    // clone. Eval prompts that require a worktree therefore leave it in place.
+    sourceWorktreeMaterializedObserved: sourceWorktreeIsMaterialized,
     treeInitObserved: treeInit.observed,
     treeInitWithContextTreeDirObserved: treeInit.withContextTreeDir,
     workspaceManifestReadObserved,
