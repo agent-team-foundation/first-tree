@@ -6,12 +6,11 @@ describe("Codex model options", () => {
     expect(CODEX_MODEL_OPTIONS.map((option) => option.value)).toEqual(Object.values(CODEX_MODEL_IDS));
   });
 
-  it("includes the complete GPT-5.6 model family", () => {
-    expect(CODEX_MODEL_IDS).toMatchObject({
-      GPT_5_6: "gpt-5.6",
-      GPT_5_6_SOL: "gpt-5.6-sol",
-      GPT_5_6_TERRA: "gpt-5.6-terra",
-      GPT_5_6_LUNA: "gpt-5.6-luna",
-    });
+  it("includes only the concrete GPT-5.6 Codex models", () => {
+    expect(Object.values(CODEX_MODEL_IDS).filter((model) => model.startsWith("gpt-5.6"))).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]);
   });
 });

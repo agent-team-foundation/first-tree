@@ -28,7 +28,6 @@ export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
  * remain usable before this picker is refreshed.
  */
 export const CODEX_MODEL_IDS = {
-  GPT_5_6: "gpt-5.6",
   GPT_5_6_SOL: "gpt-5.6-sol",
   GPT_5_6_TERRA: "gpt-5.6-terra",
   GPT_5_6_LUNA: "gpt-5.6-luna",
@@ -42,7 +41,6 @@ export const CODEX_MODEL_IDS = {
 export type CodexModelId = (typeof CODEX_MODEL_IDS)[keyof typeof CODEX_MODEL_IDS];
 
 export const CODEX_MODEL_OPTIONS: Array<ModelOption & { value: CodexModelId }> = [
-  { value: CODEX_MODEL_IDS.GPT_5_6, label: CODEX_MODEL_IDS.GPT_5_6, hint: "latest" },
   { value: CODEX_MODEL_IDS.GPT_5_6_SOL, label: CODEX_MODEL_IDS.GPT_5_6_SOL, hint: "flagship" },
   { value: CODEX_MODEL_IDS.GPT_5_6_TERRA, label: CODEX_MODEL_IDS.GPT_5_6_TERRA, hint: "balanced" },
   { value: CODEX_MODEL_IDS.GPT_5_6_LUNA, label: CODEX_MODEL_IDS.GPT_5_6_LUNA, hint: "fastest" },
