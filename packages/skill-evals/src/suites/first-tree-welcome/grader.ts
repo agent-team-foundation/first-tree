@@ -38,6 +38,11 @@ function containsPathAccess(event: unknown, patterns: readonly string[]): boolea
   return patterns.some((pattern) => serialized.includes(pattern));
 }
 
+function containsCommandPathAccess(event: unknown, pattern: string): boolean {
+  if (!isRecord(event) || eventType(event) !== "codex_event") return false;
+  return collectCommandStrings(event.event).some((command) => command.includes(pattern));
+}
+
 function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
   const type = eventType(record);
   const role = typeof record.role === "string" ? record.role : null;
@@ -533,6 +538,7 @@ export function deriveMetrics(
   _contextTreePath: string | null,
 ): EvalMetrics {
   let skillFileReadObserved = false;
+  let repoAccessCheckedObserved = false;
   let repoEvidenceReadObserved = false;
   let treeEvidenceReadObserved = false;
   const firstTreeArgv: string[][] = [];
@@ -545,6 +551,9 @@ export function deriveMetrics(
   for (const event of events) {
     if (containsSkillFileRead(event)) {
       skillFileReadObserved = true;
+    }
+    if (containsCommandPathAccess(event, "source-repo")) {
+      repoAccessCheckedObserved = true;
     }
     if (
       containsPathAccess(event, [
@@ -623,6 +632,7 @@ export function deriveMetrics(
     forbiddenClaimHits: forbiddenClaims,
     forbiddenSideEffectHits: forbiddenSideEffects,
     fixtureValidationOk: fixtureValidation.ok,
+    repoAccessCheckedObserved,
     repoEvidenceReadObserved,
     runnerExitCode,
     skillFileReadObserved,
@@ -641,6 +651,8 @@ export function deriveMetrics(
  */
 export const GRADED_ACTIONS: ReadonlySet<WelcomeExpectedAction> = new Set([
   "route_to_tree_skill",
+  "respond_without_welcome",
+  "handle_scan_fix_handoff",
   "invitee_waits_for_team_readiness",
   "offer_invitee_value_without_admin_setup",
   "ask_for_repo_path_or_url",
@@ -681,13 +693,30 @@ export const HANDLED_FORBIDDEN_ACTIONS: ReadonlySet<string> = new Set([
 export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
   if (!metrics.fixtureValidationOk) return false;
   if (metrics.runnerExitCode !== 0) return false;
-  if (!metrics.skillFileReadObserved) return false;
   if (metrics.sourceRepoChanged) return false;
   if (metrics.contextTreeChanged) return false;
   if (metrics.forbiddenActionHits.length > 0) return false;
   if (metrics.forbiddenClaimHits.length > 0) return false;
   if (metrics.forbiddenSideEffectHits.length > 0) return false;
+
+  if (evalCase.expected.activation === "auto-ignore") {
+    return (
+      !metrics.skillFileReadObserved &&
+      !metrics.repoAccessCheckedObserved &&
+      !metrics.repoEvidenceReadObserved &&
+      !metrics.treeEvidenceReadObserved &&
+      metrics.chatAskCount === 0 &&
+      !metrics.taskOptionsObserved &&
+      metrics.finalResponse.trim().length > 0
+    );
+  }
+
+  if (!metrics.skillFileReadObserved) return false;
   if (!metrics.expectedResponseObserved) return false;
+
+  if (evalCase.expected.action === "handle_scan_fix_handoff") {
+    return metrics.repoAccessCheckedObserved && !metrics.treeEvidenceReadObserved;
+  }
 
   if (evalCase.expected.action === "route_to_tree_skill") {
     return metrics.chatAskCount === 0 && !metrics.taskOptionsObserved;
@@ -744,11 +773,21 @@ export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetr
 
 export function driftNote(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): string | null {
   const notes: string[] = [];
-  if (!metrics.skillFileReadObserved) {
+  if (evalCase.expected.activation !== "auto-ignore" && !metrics.skillFileReadObserved) {
     notes.push("first-tree-welcome/SKILL.md was not read by the model.");
   }
-  if (!metrics.expectedResponseObserved) {
+  if (evalCase.expected.activation === "auto-ignore" && metrics.skillFileReadObserved) {
+    notes.push("first-tree-welcome/SKILL.md was unexpectedly read for a non-matching opening message.");
+  }
+  if (evalCase.expected.activation !== "auto-ignore" && !metrics.expectedResponseObserved) {
     notes.push("Response did not include the expected welcome action signal.");
+  }
+  if (evalCase.expected.activation === "auto-ignore") {
+    if (metrics.repoAccessCheckedObserved) notes.push("Ordinary-chat routing unexpectedly accessed the source repo.");
+    if (metrics.repoEvidenceReadObserved) notes.push("Ordinary-chat routing unexpectedly read source repo evidence.");
+    if (metrics.treeEvidenceReadObserved) notes.push("Ordinary-chat routing unexpectedly read Context Tree evidence.");
+    if (metrics.chatAskCount > 0) notes.push("Ordinary-chat routing unexpectedly sent a tracked ask.");
+    if (metrics.taskOptionsObserved) notes.push("Ordinary-chat routing unexpectedly offered first-task options.");
   }
   if (evalCase.expected.evidenceSnippets && !metrics.expectedEvidenceObserved) {
     notes.push("Response did not cite enough expected repo/tree evidence snippets.");
@@ -779,6 +818,9 @@ export function driftNote(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetri
   }
   if (evalCase.expected.action === "route_to_tree_skill" && metrics.taskOptionsObserved) {
     notes.push("Tree kickoff row offered value-chat task options.");
+  }
+  if (evalCase.expected.action === "handle_scan_fix_handoff") {
+    if (!metrics.repoAccessCheckedObserved) notes.push("Scan-fix routing did not check the readable repository.");
   }
   if (metrics.sourceRepoChanged) {
     notes.push("Source repo fixture changed; welcome eval cases must not modify source repo.");

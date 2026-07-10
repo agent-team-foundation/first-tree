@@ -55,6 +55,7 @@ export async function runFirstTreeWelcomeCase(
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
     driftNote: driftNote(evalCase, metrics),
+    expectedActivation: evalCase.expected.activation,
     expectedAction: evalCase.expected.action,
     firstResponseLatencyMs: observability.firstResponseLatencyMs,
     fixtureValidation,

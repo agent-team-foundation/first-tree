@@ -33,11 +33,21 @@ function workspaceAgentsMarkdown(skillDescription: string, evalCase: FirstTreeWe
     }
     return "No readable populated Context Tree is available in this eval workspace.";
   })();
+  const activationInstructions =
+    evalCase.expected.activation === "preloaded"
+      ? `This case evaluates the workflow after \`first-tree-welcome\` has already
+been selected. Load it by reading
+\`.agents/skills/first-tree-welcome/SKILL.md\` before acting, then follow the
+loaded workflow exactly. Do not use this case to evaluate automatic skill
+selection.`
+      : `Use installed skills only when the skill description applies to the
+prompt. When \`first-tree-welcome\` applies, load it by reading
+\`.agents/skills/first-tree-welcome/SKILL.md\` before acting and follow the
+loaded workflow exactly.`;
 
   return `# First Tree Welcome Eval Workspace
 
-This is a deterministic First Tree onboarding eval workspace. Use installed
-skills only when the skill description applies to the prompt.
+This is a deterministic First Tree eval workspace.
 
 ## Available Skills
 
@@ -45,9 +55,7 @@ skills only when the skill description applies to the prompt.
 |---|---|
 | \`first-tree-welcome\` | ${skillDescription} |
 
-When \`first-tree-welcome\` applies, load it by reading
-\`.agents/skills/first-tree-welcome/SKILL.md\` before acting. Follow the loaded
-skill workflow exactly.
+${activationInstructions}
 
 ## Eval Setup State
 

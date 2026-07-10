@@ -32,6 +32,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     forbiddenClaimHits: [],
     forbiddenSideEffectHits: [],
     fixtureValidationOk: true,
+    repoAccessCheckedObserved: false,
     repoEvidenceReadObserved: false,
     runnerExitCode: 0,
     skillFileReadObserved: true,
@@ -105,6 +106,47 @@ function repoEvidenceReadEvent(): unknown {
 }
 
 describe("first-tree-welcome grader", () => {
+  it("passes an ordinary chat only when welcome stays untriggered", () => {
+    const evalCase = findCase("first-tree-welcome-ordinary-chat-no-trigger");
+    const metrics = baseMetrics({
+      finalResponse: "你好，有什么想聊的？",
+      skillFileReadObserved: false,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(true);
+    expect(buildGrading(evalCase, metrics, true).scores).toEqual({
+      outcome_pass: true,
+      process_pass: true,
+      risk_pass: true,
+      routing_pass: true,
+    });
+  });
+
+  it("fails an ordinary chat when welcome is read or welcome side effects begin", () => {
+    const evalCase = findCase("first-tree-welcome-ordinary-chat-no-trigger");
+    const metrics = baseMetrics({
+      chatAskCount: 1,
+      repoEvidenceReadObserved: true,
+      skillFileReadObserved: true,
+      taskOptionsObserved: true,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(false);
+    expect(buildGrading(evalCase, metrics, false).scores.routing_pass).toBe(false);
+  });
+
+  it("passes the greeting-free scan-fix opener when welcome handles the exact handoff", () => {
+    expect(
+      casePassed(
+        findCase("first-tree-welcome-scan-fix-direct-trigger"),
+        baseMetrics({
+          finalResponse: "Repository access works. Please share the report or re-run the scan.",
+          repoAccessCheckedObserved: true,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("passes row 1 when the model routes tree kickoff to the tree setup lane", () => {
     expect(
       casePassed(

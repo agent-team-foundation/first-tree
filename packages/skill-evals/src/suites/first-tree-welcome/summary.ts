@@ -20,6 +20,18 @@ function fenced(value: string): string {
 
 function processPass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
   if (!metrics.fixtureValidationOk || metrics.runnerExitCode !== 0) return false;
+  if (evalCase.expected.activation === "auto-ignore") {
+    return (
+      !metrics.skillFileReadObserved &&
+      !metrics.repoAccessCheckedObserved &&
+      !metrics.repoEvidenceReadObserved &&
+      !metrics.treeEvidenceReadObserved &&
+      metrics.chatAskCount === 0
+    );
+  }
+  if (evalCase.expected.action === "handle_scan_fix_handoff") {
+    return metrics.skillFileReadObserved && metrics.repoAccessCheckedObserved && !metrics.treeEvidenceReadObserved;
+  }
   if (evalCase.expected.action === "route_to_tree_skill") {
     return metrics.chatAskCount === 0;
   }
@@ -54,7 +66,13 @@ function processPass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): 
 }
 
 function outcomePass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
+  if (evalCase.expected.activation === "auto-ignore") {
+    return metrics.finalResponse.trim().length > 0 && !metrics.taskOptionsObserved;
+  }
   if (!metrics.expectedResponseObserved) return false;
+  if (evalCase.expected.action === "handle_scan_fix_handoff") {
+    return true;
+  }
   if (evalCase.expected.action === "route_to_tree_skill") {
     return !metrics.taskOptionsObserved;
   }
@@ -106,14 +124,19 @@ export function buildGrading(
     metrics.forbiddenActionHits.length === 0 &&
     metrics.forbiddenClaimHits.length === 0 &&
     metrics.forbiddenSideEffectHits.length === 0;
+  const routingPass =
+    evalCase.expected.activation === "auto-ignore" ? !metrics.skillFileReadObserved : metrics.skillFileReadObserved;
 
   return {
     caseId: evalCase.id,
     evidence: [
-      evidence("routing_pass", `first-tree-welcome skill file read observed=${metrics.skillFileReadObserved}`),
+      evidence(
+        "routing_pass",
+        `expected activation=${evalCase.expected.activation}; first-tree-welcome skill file read observed=${metrics.skillFileReadObserved}`,
+      ),
       evidence(
         "process_pass",
-        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; repo evidence read=${metrics.repoEvidenceReadObserved}; tree evidence read=${metrics.treeEvidenceReadObserved}; chat asks=${metrics.chatAskCount}`,
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; repo access checked=${metrics.repoAccessCheckedObserved}; repo evidence read=${metrics.repoEvidenceReadObserved}; tree evidence read=${metrics.treeEvidenceReadObserved}; chat asks=${metrics.chatAskCount}`,
       ),
       evidence(
         "outcome_pass",
@@ -130,7 +153,7 @@ export function buildGrading(
       outcome_pass: outcomePass(evalCase, metrics),
       process_pass: processPass(evalCase, metrics),
       risk_pass: riskPass,
-      routing_pass: metrics.skillFileReadObserved,
+      routing_pass: routingPass,
     },
   };
 }
@@ -161,7 +184,9 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 
 - passed: ${markdownBool(summary.passed)}
 - expectedAction: ${summary.expectedAction}
+- expectedActivation: ${summary.expectedActivation}
 - skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
+- repoAccessCheckedObserved: ${markdownBool(summary.metrics.repoAccessCheckedObserved)}
 - repoEvidenceReadObserved: ${markdownBool(summary.metrics.repoEvidenceReadObserved)}
 - treeEvidenceReadObserved: ${markdownBool(summary.metrics.treeEvidenceReadObserved)}
 - expectedEvidenceObserved: ${markdownBool(summary.metrics.expectedEvidenceObserved)}
@@ -233,6 +258,7 @@ export function formatSummaryTable(batch: BatchSummary): string {
     summary.caseId,
     summary.expectedAction,
     String(summary.metrics.skillFileReadObserved),
+    String(summary.metrics.repoAccessCheckedObserved),
     String(summary.metrics.repoEvidenceReadObserved),
     String(summary.metrics.treeEvidenceReadObserved),
     String(summary.metrics.taskOptionsObserved),
@@ -247,6 +273,7 @@ export function formatSummaryTable(batch: BatchSummary): string {
     "case_id",
     "expected_action",
     "skill_file_read",
+    "repo_access",
     "repo_read",
     "tree_read",
     "task_options",

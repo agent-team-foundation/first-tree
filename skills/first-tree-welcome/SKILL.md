@@ -1,18 +1,25 @@
 ---
 name: first-tree-welcome
-version: 1.2.1
-description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
+version: 1.2.2
+description: Use only when the opening message matches a First Tree kickoff shape — "welcome aboard" together with either "Please help me get started with First Tree" or "Please help me get settled into this team on First Tree" — or explicitly asks to "fix the launch blockers found by my production readiness scan". Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
 # First Tree Welcome
 
 ## Scope
 
-Use this skill only when the chat is clearly the onboarding first chat created by
-First Tree, including natural messages such as "welcome aboard", "Please help me
-get started with First Tree", or "Please help me get settled into this team on
-First Tree." Do not use it for ordinary chats, PR reviews, repo scans, tree
-writes, or maintenance work.
+Use this skill only when the opening message matches one of these First Tree
+kickoff shapes:
+
+- **Onboarding first chat** — "welcome aboard" together with either "Please help
+  me get started with First Tree" or "Please help me get settled into this team
+  on First Tree".
+- **Production-scan fix first chat** — explicitly asks to "fix the launch blockers
+  found by my production readiness scan".
+
+Do not infer onboarding from the chat being new or from a generic greeting. Do
+not use this skill for ordinary chats, PR reviews, repo scans, tree writes, or
+maintenance work.
 
 Two look-alikes that are NOT this launcher, and one that routes by shape:
 
