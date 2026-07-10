@@ -156,6 +156,10 @@ function parseOpeningFence(line: string): FenceState | null {
   if (!marker) return null;
   const markerChar = marker[0];
   if (markerChar !== "`" && markerChar !== "~") return null;
+  // CommonMark: the info string of a backtick fence may not contain backticks
+  // (such a line is a paragraph with inline code, e.g. "```pnpm test``` to
+  // run"). Tilde-fence info strings have no such restriction.
+  if (markerChar === "`" && line.slice(match[0].length).includes("`")) return null;
   return { marker: markerChar, length: marker.length };
 }
 
