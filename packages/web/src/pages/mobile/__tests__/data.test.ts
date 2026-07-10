@@ -1,6 +1,12 @@
 import type { MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { countAttentionRows, countUnreadRows, mobileChatSignal, sortMobileChats } from "../data.js";
+import {
+  countAttentionRows,
+  countUnreadRows,
+  mobileChatSignal,
+  mobileFeedReasonLabel,
+  sortMobileChats,
+} from "../data.js";
 
 const NOW = "2026-07-09T10:00:00.000Z";
 
@@ -39,19 +45,27 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
 }
 
 describe("mobile chat projection", () => {
-  it("ranks answer-needed chats before failed, unread, working, and recent chats", () => {
+  it("uses canonical attention ordering and leaves unread/working/recent in time order", () => {
     const recent = chatRow({ chatId: "recent", lastMessageAt: "2026-07-09T10:05:00.000Z" });
-    const working = chatRow({ chatId: "working", busyAgentIds: ["agent-1"] });
-    const unread = chatRow({ chatId: "unread", unreadMentionCount: 2 });
-    const failed = chatRow({ chatId: "failed", failedAgentIds: ["agent-2"] });
-    const question = chatRow({ chatId: "question", openRequestCount: 1 });
+    const working = chatRow({
+      chatId: "working",
+      busyAgentIds: ["agent-1"],
+      lastMessageAt: "2026-07-09T10:04:00.000Z",
+    });
+    const unread = chatRow({ chatId: "unread", unreadMentionCount: 2, lastMessageAt: "2026-07-09T10:03:00.000Z" });
+    const failed = chatRow({
+      chatId: "failed",
+      failedAgentIds: ["agent-2"],
+      lastMessageAt: "2026-07-09T10:02:00.000Z",
+    });
+    const question = chatRow({ chatId: "question", openRequestCount: 1, lastMessageAt: "2026-07-09T10:01:00.000Z" });
 
     expect(sortMobileChats([recent, working, unread, failed, question]).map((row) => row.chatId)).toEqual([
-      "question",
       "failed",
-      "unread",
-      "working",
+      "question",
       "recent",
+      "working",
+      "unread",
     ]);
   });
 
@@ -65,8 +79,35 @@ describe("mobile chat projection", () => {
       chatRow({ chatId: "working", busyAgentIds: ["agent-2"] }),
     ];
 
-    expect(countAttentionRows(rows)).toBe(4);
+    expect(countAttentionRows(rows)).toBe(2);
     expect(countUnreadRows(rows)).toBe(1);
     expect(mobileChatSignal(explicitMention).label).toBe("Unread");
+    expect(mobileChatSignal(explicitMention).attention).toBe(false);
+  });
+
+  it("does not infer the requester from chat participants", () => {
+    expect(
+      mobileFeedReasonLabel(
+        chatRow({
+          openRequestCount: 1,
+          participants: [
+            {
+              agentId: "human-agent-self",
+              displayName: "Gandy",
+              type: "human",
+              avatarColorToken: null,
+              avatarImageUrl: null,
+            },
+            {
+              agentId: "unrelated-agent",
+              displayName: "Unrelated agent",
+              type: "agent",
+              avatarColorToken: null,
+              avatarImageUrl: null,
+            },
+          ],
+        }),
+      ),
+    ).toBe("Question waiting");
   });
 });

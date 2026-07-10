@@ -317,7 +317,7 @@ describe("extra preview pages", () => {
     expect(text(rendered.container)).toContain("Work feed");
     expect(text(rendered.container)).not.toContain("2 need attention");
     expect(text(rendered.container)).toContain("Release readiness");
-    expect(text(rendered.container)).toContain("Question from gandy-coder");
+    expect(text(rendered.container)).toContain("Question waiting");
     expect(text(rendered.container)).not.toContain("Needs attention");
     expect(text(rendered.container)).not.toContain("In progress");
     expect(rendered.container.querySelector("[data-mobile-feed]")).not.toBeNull();

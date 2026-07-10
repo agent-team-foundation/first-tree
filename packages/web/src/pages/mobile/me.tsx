@@ -5,6 +5,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { Avatar } from "../../components/avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { ThemeToggle } from "../../components/ui/theme-toggle.js";
+import { DISCORD_INVITE_URL } from "../../lib/community.js";
 import { MobilePage, MobileSection, mobileCardStyle } from "./components.js";
 
 export function MobileMePage() {
@@ -52,10 +53,10 @@ export function MobileMePage() {
 
         <MobileSection title="Support">
           <MobileExternalRow
-            href="https://first-tree.ai/support"
+            href={DISCORD_INVITE_URL}
             icon={<HelpCircle aria-hidden className="h-4 w-4" />}
-            title="Help and support"
-            detail="Open product help."
+            title="Community support"
+            detail="Open the First Tree Discord."
           />
         </MobileSection>
 

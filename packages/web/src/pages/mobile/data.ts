@@ -1,4 +1,5 @@
 import type { MeChatRow } from "@first-tree/shared";
+import { rowAttentionReason } from "../workspace/conversations/group-rows.js";
 
 export type MobileChatSignalTone = "needs-you" | "error" | "unread" | "working" | "idle";
 
@@ -10,18 +11,19 @@ export type MobileChatSignal = {
 };
 
 export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
-  if (row.openRequestCount > 0) {
+  const attentionReason = rowAttentionReason(row);
+  if (attentionReason === "failed") {
     return {
-      tone: "needs-you",
-      label: row.openRequestCount === 1 ? "Needs answer" : `${row.openRequestCount} questions`,
+      tone: "error",
+      label: row.failedAgentIds.length === 1 ? "Failed" : `${row.failedAgentIds.length} failed`,
       rank: 0,
       attention: true,
     };
   }
-  if (row.failedAgentIds.length > 0) {
+  if (attentionReason === "request") {
     return {
-      tone: "error",
-      label: row.failedAgentIds.length === 1 ? "Failed" : `${row.failedAgentIds.length} failed`,
+      tone: "needs-you",
+      label: row.openRequestCount === 1 ? "Needs answer" : `${row.openRequestCount} questions`,
       rank: 1,
       attention: true,
     };
@@ -32,21 +34,21 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
       label:
         row.unreadMentionCount === 0 || row.unreadMentionCount === 1 ? "Unread" : `${row.unreadMentionCount} unread`,
       rank: 2,
-      attention: true,
+      attention: false,
     };
   }
   if (row.busyAgentIds.length > 0 || row.liveActivity !== null) {
     return {
       tone: "working",
       label: row.liveActivity?.label ?? "Working",
-      rank: 3,
+      rank: 2,
       attention: false,
     };
   }
   return {
     tone: "idle",
     label: row.membershipKind === "watching" ? "Watching" : "Recent",
-    rank: 4,
+    rank: 2,
     attention: false,
   };
 }
@@ -55,16 +57,16 @@ export function mobileChatPreview(row: MeChatRow): string {
   return row.description?.trim() || row.lastMessagePreview?.trim() || "No messages yet.";
 }
 
-export function mobileFeedReasonLabel(row: MeChatRow, selfAgentId?: string): string {
-  if (row.openRequestCount > 0) {
+export function mobileFeedReasonLabel(row: MeChatRow): string {
+  const attentionReason = rowAttentionReason(row);
+  if (attentionReason === "failed") {
+    return row.failedAgentIds.length === 1 ? "Failed run" : `${row.failedAgentIds.length} failed runs`;
+  }
+  if (attentionReason === "request") {
     if (row.openRequestCount === 1) {
-      const source = firstOtherParticipantName(row, selfAgentId);
-      return source ? `Question from ${source}` : "Question waiting";
+      return "Question waiting";
     }
     return `${row.openRequestCount} questions waiting`;
-  }
-  if (row.failedAgentIds.length > 0) {
-    return row.failedAgentIds.length === 1 ? "Failed run" : `${row.failedAgentIds.length} failed runs`;
   }
   if (row.chatHasExplicitMentionToMe || row.unreadMentionCount > 0) {
     return row.unreadMentionCount > 1 ? `${row.unreadMentionCount} unread mentions` : "Unread mention";
@@ -98,9 +100,4 @@ function timestampValue(iso: string | null): number {
   if (!iso) return 0;
   const value = Date.parse(iso);
   return Number.isNaN(value) ? 0 : value;
-}
-
-function firstOtherParticipantName(row: MeChatRow, selfAgentId?: string): string | null {
-  const participant = row.participants.find((candidate) => candidate.agentId !== selfAgentId);
-  return participant?.displayName?.trim() || null;
 }

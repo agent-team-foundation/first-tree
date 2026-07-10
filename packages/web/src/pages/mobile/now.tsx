@@ -57,7 +57,7 @@ function MobileAttentionCard({ row, selfAgentId }: { row: MeChatRow; selfAgentId
   const signal = mobileChatSignal(row);
   const preview = mobileChatPreview(row);
   const actionLabel = primaryActionLabel(signal.tone);
-  const reasonLabel = mobileFeedReasonLabel(row, selfAgentId);
+  const reasonLabel = mobileFeedReasonLabel(row);
   const cardStyle = {
     ...mobileCardStyle(actionLabel ? "priorityFeed" : "feed"),
     textDecoration: "none",
@@ -155,7 +155,6 @@ function primaryActionLabel(tone: ReturnType<typeof mobileChatSignal>["tone"]): 
     case "error":
       return "Review";
     case "unread":
-      return "Read";
     case "working":
     case "idle":
       return null;

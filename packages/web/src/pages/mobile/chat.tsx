@@ -51,6 +51,7 @@ export function MobileChatPage() {
           narrow
           onShowConversations={clearChat}
           initialParticipantIds={parseParticipantList(searchParams)}
+          presentation="mobile"
         />
       </div>
     );
