@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agentConfigs } from "../db/schema/agent-configs.js";
+import { agents } from "../db/schema/agents.js";
 import { isEncryptedValue } from "../services/crypto.js";
 import { createTestAdmin, seedAgentFactory, useTestApp } from "./helpers.js";
 
@@ -194,6 +195,29 @@ describe("Admin agent-config API (Step 2)", () => {
       payload: { reasoningEffort: "xhigh" },
     });
     expect(bad.statusCode).toBe(400);
+  });
+
+  it("persists model-dependent max and ultra values for codex agents", async () => {
+    const app = getApp();
+    const req = await authedRequest(app);
+    const agent = await (await seedAgentFactory(app))({
+      name: `cfg-codex-effort-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+    });
+    await app.db.update(agents).set({ runtimeProvider: "codex" }).where(eq(agents.uuid, agent.uuid));
+
+    for (const [expectedVersion, reasoningEffort] of [
+      [1, "max"],
+      [2, "ultra"],
+    ] as const) {
+      const response = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+        expectedVersion,
+        payload: { reasoningEffort },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().payload).toMatchObject({ kind: "codex", reasoningEffort });
+      await app.configService.flush(agent.uuid);
+    }
   });
 
   it("PATCH with stale expectedVersion returns 409", async () => {

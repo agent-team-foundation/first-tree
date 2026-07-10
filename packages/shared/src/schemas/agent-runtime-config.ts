@@ -262,10 +262,13 @@ const claudeCodeTuiRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.ex
 const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   kind: z.literal("codex"),
   // Maps to codex-sdk ThreadOptions.modelReasoningEffort. Default "high"
-  // preserves the value the handler previously hardcoded. "minimal" is
+  // preserves the value the handler previously hardcoded. Newer Codex models
+  // additionally advertise provider-native "max" and "ultra" values. Support
+  // is model-dependent, so the runtime passes them through and lets the
+  // provider return an explicit compatibility error. "minimal" remains
   // intentionally excluded — it is incompatible with the default tool set and
   // breaks tool calls (see the codex handler's footgun notes).
-  reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).default("high"),
+  reasoningEffort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).default("high"),
 });
 
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
