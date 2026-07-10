@@ -41,7 +41,7 @@
     "dev": "tsx src/cli/index.ts",
     "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk && node ../../scripts/copy-client-runtime-templates.mjs apps/cli && node ../../scripts/copy-cli-tree-templates.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "node scripts/run-vitest-batches.mjs",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
     "prepack": "rm -rf skills && cp -R ../../skills .",
     "postpack": "rm -rf skills",
