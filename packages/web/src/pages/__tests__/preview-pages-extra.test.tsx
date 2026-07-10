@@ -13,6 +13,7 @@ import { ChatSummaryPreviewPage } from "../chat-summary-preview.js";
 import { CommandPalettePreviewPage } from "../command-palette-preview.js";
 import { ContextTreePreviewPage } from "../context-tree-preview.js";
 import { ConversationListPreviewPage } from "../conversation-list-preview.js";
+import { MobilePreviewPage } from "../mobile-preview.js";
 import { MockTeamStepsA, MockTeamStepsB, MockWelcomeCeremonial } from "../onboarding-team-steps-mocks.js";
 import { RequestDockPreviewPage } from "../request-dock-preview.js";
 import { ResourcesPreviewPage } from "../resources-preview.js";
@@ -305,6 +306,32 @@ describe("extra preview pages", () => {
     expect(text(rendered.container)).toContain("repo connected");
     expect(text(rendered.container)).toContain("no repo");
     expect(text(rendered.container)).toContain("acme/acme-api");
+
+    await cleanupRendered(rendered);
+  });
+
+  it("renders the mobile mock preview and opens a chat detail without auth", async () => {
+    const rendered = await renderPreview(<MobilePreviewPage />, "/preview/mobile");
+
+    expect(text(rendered.container)).toContain("Now");
+    expect(text(rendered.container)).toContain("Work feed");
+    expect(text(rendered.container)).not.toContain("2 need attention");
+    expect(text(rendered.container)).toContain("Release readiness");
+    expect(text(rendered.container)).toContain("Question waiting");
+    expect(text(rendered.container)).not.toContain("Needs attention");
+    expect(text(rendered.container)).not.toContain("In progress");
+    expect(rendered.container.querySelector("[data-mobile-feed]")).not.toBeNull();
+    expect(rendered.container.querySelector('[data-mobile-card="feed"]')).not.toBeNull();
+    expect(rendered.container.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
+
+    await click(buttonByText(rendered.container, "Chat"));
+    expect(text(rendered.container)).toContain("Chat");
+    expect(text(rendered.container)).toContain("Visual QA");
+    expect(rendered.container.querySelector('[data-mobile-card="list"]')).not.toBeNull();
+
+    await click(buttonByText(rendered.container, "Release readiness"));
+    expect(text(rendered.container)).toContain("Summary");
+    expect(text(rendered.container)).toContain("The mobile shell is ready for review");
 
     await cleanupRendered(rendered);
   });

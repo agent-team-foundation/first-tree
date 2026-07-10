@@ -789,7 +789,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("renders timeline chrome, sidebar controls, rename, restore, and read-only join states", async () => {
+  it("keeps full chat details on the generic narrow Workspace path", async () => {
     const { ChatView } = await import("../chat-view.js");
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
     const onShowConversations = vi.fn();
@@ -802,22 +802,58 @@ describe("ChatView", () => {
     await waitForText(container, "Launch planning");
     await waitForText(container, "Example recoverable runtime error");
     await waitForText(container, "Preview image for");
-    await waitForText(container, "Participants");
-    await waitForText(container, "Release checklist");
+    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
+    expect(container.textContent).toContain("GitHub");
+    expect(container.querySelector('button[aria-label$="Open participants."]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Show chat details"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Hide agent final messages"]')).toBeNull();
+    expect(buttonByTitle(container, "Click to rename")).toBeNull();
 
     await click(container.querySelector('button[aria-label="Show conversations"]'));
     expect(onShowConversations).toHaveBeenCalledTimes(1);
 
-    await click(buttonByTitle(container, "Click to rename"));
-    const renameInput = container.querySelector<HTMLInputElement>("input");
-    if (!renameInput) throw new Error("Rename input missing");
-    await setValue(renameInput, "Renamed launch");
-    await click(buttonByTitle(container, "Save"));
-    await waitForCondition(() => chatMocks.renameChat.mock.calls.length > 0, "Expected rename");
-    expect(chatMocks.renameChat).toHaveBeenCalledWith("chat-1", "Renamed launch");
+    await click(container.querySelector('button[aria-label="Hide chat options"]'));
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
 
-    await click(container.querySelector('button[aria-label="Dismiss"]'));
+    await act(async () => root.unmount());
+  });
 
+  it("uses a participants-only sheet for mobile chat detail", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
+    const onShowConversations = vi.fn();
+    const { container, root } = await renderDom(
+      <ChatView
+        agentId="agent-1"
+        chatId="chat-1"
+        narrow
+        presentation="mobile"
+        onShowConversations={onShowConversations}
+      />,
+      undefined,
+      "/",
+    );
+
+    await waitForText(container, "Launch planning");
+    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
+
+    await click(container.querySelector('button[aria-label="Show chat options"]'));
+    await waitForText(container, "Participants · 4");
+    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).not.toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
+    expect(container.textContent).toContain("Add");
+    expect(container.textContent).not.toContain("GitHub");
+
+    await click(container.querySelector('button[aria-label="Close participants"]'));
+    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("renders restore and read-only join states", async () => {
+    const { ChatView } = await import("../chat-view.js");
     const deleted = chatDetail({ engagementStatus: "deleted", title: "Deleted launch" });
     chatMocks.getChat.mockResolvedValue(deleted);
     const deletedView = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
@@ -844,8 +880,6 @@ describe("ChatView", () => {
     await click(buttonByText(readOnly.container, "Join to reply"));
     expect(onJoin).toHaveBeenCalledTimes(1);
     await act(async () => readOnly.root.unmount());
-
-    await act(async () => root.unmount());
   });
 
   it("renders provider retry events as non-fatal timeline rows when severity is not error", async () => {

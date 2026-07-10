@@ -110,6 +110,34 @@
   --text-title--letter-spacing: -0.2px;
   --text-title--font-weight: 600;
 
+  /* Mobile work-surface typography. Kept as a local scale so dense desktop
+     surfaces can stay compact while phone views remain readable at hand-held
+     distance. */
+  --text-mobile-caption: 12px;
+  --text-mobile-caption--line-height: 1.35;
+  --text-mobile-caption--letter-spacing: 0;
+  --text-mobile-caption--font-weight: 500;
+
+  --text-mobile-label: 12px;
+  --text-mobile-label--line-height: 1.4;
+  --text-mobile-label--letter-spacing: 0;
+  --text-mobile-label--font-weight: 600;
+
+  --text-mobile-body: 14px;
+  --text-mobile-body--line-height: 1.45;
+  --text-mobile-body--letter-spacing: 0;
+  --text-mobile-body--font-weight: 400;
+
+  --text-mobile-subtitle: 15px;
+  --text-mobile-subtitle--line-height: 1.35;
+  --text-mobile-subtitle--letter-spacing: 0;
+  --text-mobile-subtitle--font-weight: 600;
+
+  --text-mobile-title: 18px;
+  --text-mobile-title--line-height: 1.25;
+  --text-mobile-title--letter-spacing: 0;
+  --text-mobile-title--font-weight: 600;
+
   /* Marketing-tier typography — used by the public landing page only.
      Dashboard surfaces should keep using the dense scale above (eyebrow → title);
      these three tiers exist so the landing hero / section headings / lead
@@ -476,6 +504,7 @@
   --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
   --sp-95: 23.75rem; /* 380px — chat-description popover card width (~60ch) */
+  --mobile-tabbar-height: 3.5rem; /* 56px */
 
   /* Agent detail content rail — one uniform readable width across every tab
      (header, tabs, and content all share it), centered like the context / team

@@ -66,12 +66,14 @@ export function ChatByIdView({
   narrow,
   onShowConversations,
   onClearChat = null,
+  presentation = "workspace",
   isTrial = false,
 }: {
   chatId: string;
   narrow: boolean;
   onShowConversations: (() => void) | null;
   onClearChat?: (() => void) | null;
+  presentation?: "workspace" | "mobile";
   /** Trial surface: forwarded to ChatView to hide chat-management escape
    *  hatches (add participant, agent pause/resume). */
   isTrial?: boolean;
@@ -210,6 +212,7 @@ export function ChatByIdView({
         // hides some surfaces, but not the per-message hovercard).
         isTrial={isTrial}
         titleFallback={chatDetail?.title ?? null}
+        presentation={presentation}
         joinAction={{
           onJoin: () => joinMut.mutate(),
           joining: joinMut.isPending,
@@ -228,6 +231,7 @@ export function ChatByIdView({
       initialChatDetail={chatDetail}
       narrow={narrow}
       onShowConversations={onShowConversations}
+      presentation={presentation}
       isTrial={isTrial}
     />
   );

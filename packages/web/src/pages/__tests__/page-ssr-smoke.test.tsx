@@ -1223,9 +1223,17 @@ describe("page SSR smoke coverage", () => {
     );
 
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
-    expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, createClient())).toContain(
-      "Participants",
+    const narrowRendered = renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, createClient());
+    expect(narrowRendered).toContain("Hide chat options");
+    expect(narrowRendered).toContain("Participants");
+    expect(narrowRendered).toContain("GitHub");
+
+    const mobileRendered = renderWithClient(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" />,
+      createClient(),
     );
+    expect(mobileRendered).toContain("Show chat options");
+    expect(mobileRendered).not.toContain("Participants");
   });
 
   it("renders onboarding steps and reusable onboarding UI states", async () => {
