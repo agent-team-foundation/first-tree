@@ -40,6 +40,8 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -233,6 +235,8 @@ describe("splitAttentionRows — predicate", () => {
         openRequestCount: 1,
         unreadMentionCount: 0,
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
       }),
     ];
     const { attention } = splitAttentionRows(rows);
@@ -264,6 +268,8 @@ describe("splitAttentionRows — predicate", () => {
         lastMessageAt: null,
         unreadMentionCount: 1,
         chatHasExplicitMentionToMe: true,
+        pinnedAt: null,
+        activityAt: null,
       }),
     ];
     const { attention, rest } = splitAttentionRows(rows);
@@ -281,6 +287,8 @@ describe("splitAttentionRows — predicate", () => {
         lastMessageAt: null,
         unreadMentionCount: 1,
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
       }),
     ];
     const { attention, rest } = splitAttentionRows(rows);
@@ -319,6 +327,8 @@ describe("splitAttentionRows — predicate", () => {
         openRequestCount: 1,
         unreadMentionCount: 1,
         chatHasExplicitMentionToMe: true,
+        pinnedAt: null,
+        activityAt: null,
       }),
     ];
     const { attention } = splitAttentionRows(rows);
@@ -333,6 +343,8 @@ describe("splitAttentionRows — predicate", () => {
         failedAgentIds: ["a"],
         unreadMentionCount: 1,
         chatHasExplicitMentionToMe: true,
+        pinnedAt: null,
+        activityAt: null,
       }),
     ];
     const { attention } = splitAttentionRows(rows);

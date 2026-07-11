@@ -191,6 +191,8 @@ function meChatRow(overrides: Partial<MeChatRow> & { chatId: string }): MeChatRo
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -281,12 +283,16 @@ describe("ChatByIdView and CenterPanel", () => {
       chatId: "chat-1",
       unreadMentionCount: 2,
       chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
     });
     const otherUnread = meChatRow({
       chatId: "chat-2",
       title: "Other chat",
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
     });
     queryClient.setQueryData<ListMeChatsResponse>(allKey, { rows: [currentUnread, otherUnread], nextCursor: null });
     queryClient.setQueryData<ListMeChatsResponse>(unreadKey, { rows: [currentUnread, otherUnread], nextCursor: null });
@@ -304,10 +310,14 @@ describe("ChatByIdView and CenterPanel", () => {
     expect(patchedAll?.rows.find((row) => row.chatId === "chat-1")).toMatchObject({
       unreadMentionCount: 0,
       chatHasExplicitMentionToMe: false,
+      pinnedAt: null,
+      activityAt: null,
     });
     expect(patchedAll?.rows.find((row) => row.chatId === "chat-2")).toMatchObject({
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
     });
     const patchedUnread = queryClient.getQueryData<ListMeChatsResponse>(unreadKey);
     expect(patchedUnread?.rows.map((row) => row.chatId)).toEqual(["chat-2"]);

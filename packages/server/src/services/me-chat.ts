@@ -29,6 +29,7 @@ import {
   type ListMeChatsResponse,
   type LiveActivity,
   type MeChatLeaveResponse,
+  type MeChatPinResponse,
   type MeChatReadResponse,
   type MeChatRow,
   type MeChatSourceCounts,
@@ -130,6 +131,29 @@ export async function setChatEngagement(
       target: [chatUserState.chatId, chatUserState.agentId],
       set: { engagementStatus: status },
     });
+}
+
+/**
+ * Set or clear the caller's pin for this chat. UPSERT into `chat_user_state`
+ * — `pinned_at = now()` to pin, `null` to unpin. Idempotent; mirrors
+ * `setChatEngagement`. Pin is private per-user state, so a write only ever
+ * touches the caller's own `(chat_id, agent_id)` row and never another user's.
+ */
+export async function pinMeChat(
+  db: Database,
+  chatId: string,
+  agentId: string,
+  pinned: boolean,
+): Promise<MeChatPinResponse> {
+  const pinnedAt = pinned ? new Date() : null;
+  await db
+    .insert(chatUserState)
+    .values({ chatId, agentId, pinnedAt })
+    .onConflictDoUpdate({
+      target: [chatUserState.chatId, chatUserState.agentId],
+      set: { pinnedAt },
+    });
+  return { chatId, pinnedAt: pinnedAt?.toISOString() ?? null };
 }
 
 /**
@@ -338,11 +362,13 @@ export async function listMeChats(
       c.parent_chat_id      AS parent_chat_id,
       c.last_message_at     AS last_message_at,
       c.last_message_preview AS last_message_preview,
+      c.activity_at         AS activity_at,
       cm.access_mode AS access_mode,
       cm.role AS membership_role,
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
       COALESCE(cus.open_request_count, 0) AS open_request_count,
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
+      cus.pinned_at AS pinned_at,
       ${chatSourceSqlExpression} AS source,
       c.metadata->>'entityType' AS entity_type,
       CASE
@@ -382,11 +408,13 @@ export async function listMeChats(
     parent_chat_id: string | null;
     last_message_at: Date | string | null;
     last_message_preview: string | null;
+    activity_at: Date | string | null;
     access_mode: "speaker" | "watcher";
     membership_role: string;
     unread_mention_count: number;
     open_request_count: number;
     engagement_status: ChatEngagementStatus;
+    pinned_at: Date | string | null;
     source: ChatSource;
     entity_type: string | null;
     chat_has_explicit_mention_to_me: boolean;
@@ -572,10 +600,12 @@ export async function listMeChats(
       participantCount: participants.length,
       lastMessageAt: toDate(r.last_message_at)?.toISOString() ?? null,
       lastMessagePreview: r.last_message_preview,
+      activityAt: toDate(r.activity_at)?.toISOString() ?? null,
       unreadMentionCount: r.unread_mention_count,
       openRequestCount: r.open_request_count,
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
+      pinnedAt: toDate(r.pinned_at)?.toISOString() ?? null,
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
       busyAgentIds: busyByChat.get(r.chat_id) ?? [],

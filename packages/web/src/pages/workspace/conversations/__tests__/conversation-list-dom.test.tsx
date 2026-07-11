@@ -76,6 +76,8 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -86,6 +88,8 @@ const BASE_ROWS: MeChatRow[] = [
     failedAgentIds: ["agent-1"],
     unreadMentionCount: 3,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
   }),
   row({
     chatId: "chat-needs",
@@ -96,6 +100,8 @@ const BASE_ROWS: MeChatRow[] = [
     openRequestCount: 1,
     unreadMentionCount: 1,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
     lastMessageAt: null,
     lastMessagePreview: null,
   }),

@@ -676,6 +676,7 @@ export async function updateChatMetadata(
     topic?: string | null;
     description?: string | null;
     descriptionUpdatedAt?: Date;
+    activityAt?: Date;
     updatedAt: Date;
   } = { updatedAt: now };
   if (patch.topic !== undefined) {
@@ -697,6 +698,9 @@ export async function updateChatMetadata(
     descriptionChanged = (current?.description ?? null) !== nextDescription;
     if (descriptionChanged) {
       set.descriptionUpdatedAt = now;
+      // A genuine description change is real work (an agent updating task
+      // state), so it floats the chat in the recency-sorted conversation list.
+      set.activityAt = now;
     }
   }
   const [updated] = await db.update(chats).set(set).where(eq(chats.id, chatId)).returning();
