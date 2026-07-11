@@ -11,6 +11,10 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
+import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
 import { createMeChat } from "../services/me-chat.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
@@ -88,7 +92,7 @@ describe("POST /chats/:chatId/pin", () => {
     expect(res.json<{ pinnedAt: string | null }>().pinnedAt).not.toBeNull();
   });
 
-  it("returns 404 for a caller without chat access (different org, anti-enumeration)", async () => {
+  it("returns 404 for a same-org caller who is not a chat member (anti-enumeration)", async () => {
     const app = getApp();
     const ownerSide = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: "pin-peer-iso" });
@@ -101,6 +105,45 @@ describe("POST /chats/:chatId/pin", () => {
       method: "POST",
       url: `/api/v1/chats/${encodeURIComponent(chatId)}/pin`,
       headers: { authorization: `Bearer ${outsider.accessToken}` },
+      payload: { pinned: true },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("returns 404 for a caller in a different organization (cross-org boundary)", async () => {
+    const app = getApp();
+    const caller = await createTestAdmin(app); // default org
+
+    // A genuinely separate organization B, with its own agent + a chat that
+    // lives entirely in B (valid org/agent/participant records). The caller has
+    // no membership in B, so requireChatAccess resolves the chat's org (B) and
+    // the cross-org `resolveCallerInOrg` branch rejects with 404.
+    const orgB = `org-pin-${crypto.randomUUID().slice(0, 6)}`;
+    await app.db.insert(organizations).values({ id: orgB, name: orgB.slice(0, 30), displayName: "Org B" });
+    const botUuid = crypto.randomUUID();
+    await app.db.insert(agents).values({
+      uuid: botUuid,
+      name: `bot-b-${crypto.randomUUID().slice(0, 6)}`,
+      organizationId: orgB,
+      type: "agent",
+      displayName: "Bot B",
+      inboxId: `inbox_${botUuid}`,
+      // FK is unconstrained across orgs in the schema; mirrors the cross-org
+      // pollution suite's convention for building a side-org agent cheaply.
+      managerId: caller.memberId,
+    });
+    const chatIdB = crypto.randomUUID();
+    await app.db.insert(chats).values({ id: chatIdB, organizationId: orgB, type: "direct" });
+    await app.db
+      .insert(chatMembership)
+      .values({ chatId: chatIdB, agentId: botUuid, role: "member", accessMode: "speaker" });
+
+    expect(caller.organizationId).not.toBe(orgB);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${encodeURIComponent(chatIdB)}/pin`,
+      headers: { authorization: `Bearer ${caller.accessToken}` },
       payload: { pinned: true },
     });
     expect(res.statusCode).toBe(404);
