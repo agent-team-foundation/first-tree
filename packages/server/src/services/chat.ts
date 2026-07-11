@@ -9,7 +9,7 @@ import {
   parseLandingCampaignTrialChatMetadata,
   type SendMessage,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -676,7 +676,7 @@ export async function updateChatMetadata(
     topic?: string | null;
     description?: string | null;
     descriptionUpdatedAt?: Date;
-    activityAt?: Date;
+    activityAt?: SQL;
     updatedAt: Date;
   } = { updatedAt: now };
   if (patch.topic !== undefined) {
@@ -700,7 +700,8 @@ export async function updateChatMetadata(
       set.descriptionUpdatedAt = now;
       // A genuine description change is real work (an agent updating task
       // state), so it floats the chat in the recency-sorted conversation list.
-      set.activityAt = now;
+      // Monotonic via GREATEST so an out-of-order commit can't move it back.
+      set.activityAt = sql`GREATEST(${chats.activityAt}, ${now.toISOString()}::timestamptz)`;
     }
   }
   const [updated] = await db.update(chats).set(set).where(eq(chats.id, chatId)).returning();

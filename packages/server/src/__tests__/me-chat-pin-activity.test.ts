@@ -128,6 +128,34 @@ describe("pinMeChat + chats.activity_at", () => {
     expect((await activityAtOf(app, chatId))?.getTime()).toBe(before?.getTime());
   });
 
+  it("activity_at is monotonic: an older qualifying event committing last cannot move it backwards", async () => {
+    const app = getApp();
+    const { admin, chatId } = await makeChat(app);
+
+    const newer = new Date(Date.now() + 120_000);
+    const older = new Date(Date.now() + 60_000);
+
+    const send = (contentPreview: string, at: Date) =>
+      applyAfterFanOut(app.db, {
+        chatId,
+        messageId: crypto.randomUUID(),
+        senderId: admin.humanAgentUuid,
+        mentionedAgentIds: [],
+        contentPreview,
+        messageCreatedAt: at,
+        bumpForAgentFinalText: false,
+      });
+
+    // Newer event first sets activity_at to the newer time.
+    await send("newer", newer);
+    expect((await activityAtOf(app, chatId))?.getTime()).toBe(newer.getTime());
+
+    // An OLDER event reaching the update last must NOT roll activity_at back
+    // (GREATEST keeps the newer value).
+    await send("older", older);
+    expect((await activityAtOf(app, chatId))?.getTime()).toBe(newer.getTime());
+  });
+
   it("activity_at bumps on a real description change but not on a topic rename", async () => {
     const app = getApp();
     const { chatId } = await makeChat(app);
