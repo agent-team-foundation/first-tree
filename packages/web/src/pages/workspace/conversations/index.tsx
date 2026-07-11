@@ -120,6 +120,7 @@ export function ConversationList({
 
   const {
     data,
+    dataUpdatedAt,
     isLoading,
     isLoadingError,
     refetch,
@@ -190,29 +191,34 @@ export function ConversationList({
     return rows;
   }, [data]);
 
-  // Buckets are recomputed whenever the rows or group mode change.
-  // Day-rollover (a chat that was "Today" at 23:59 should drift into
-  // "Yesterday" after midnight) is handled implicitly by the 30s
-  // `useInfiniteQuery` refetch — the refetched response changes
-  // `data`'s identity, which invalidates `allRows` and this memo. A
-  // user who leaves the rail open past midnight without a refetch
-  // (e.g. an inactive tab the browser throttles) won't see the bucket
-  // shift until the next refetch lands; that's an acceptable degree
-  // of staleness for a presentational concern.
+  // Bucket by recency against a fresh `now`. Row meta (`formatRowTime`:
+  // now / 5m / 3h) and the Today / Yesterday buckets are clock-derived, so
+  // they must re-evaluate on the 30s refetch cadence. TanStack Query
+  // structurally shares a structurally-identical successful response, so on a
+  // quiet list `data` (and thus `allRows`) keeps its identity across a refetch
+  // and neither this memo nor a render would otherwise fire. `dataUpdatedAt`
+  // advances on every successful refetch and is a tracked result field, so
+  // depending on it both forces a re-render (refreshing the inline
+  // `formatRowTime` calls) and re-runs this memo with a new `now`. A tab
+  // throttled past a refetch stays stale until the next one lands — acceptable
+  // for a presentational concern.
+  //
   // Hoist attention chats (failed + open request) into a pinned section at
   // the top WITHOUT touching cursor pagination or reordering the main list:
   // partition them out, group the rest as usual, then prepend a synthetic
   // "Needs attention" bucket (failed > request). A plain unread mention /
   // red dot deliberately does NOT pin, so the list stays stable. A chat
   // appears in exactly one place (pinned OR its normal group), never both.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `dataUpdatedAt` is the successful-refetch time tick — it re-runs this memo with a fresh `now` (and re-renders the clock-derived row times) even when the payload is structurally identical.
   const buckets = useMemo(() => {
+    const now = new Date();
     const { attention, rest } = splitAttentionRows(allRows);
-    if (attention.length === 0) return groupRows(allRows, group);
+    if (attention.length === 0) return groupRows(allRows, group, now);
     return [
       { key: "needs-attention", label: "Needs attention", rows: attention, defaultCollapsed: false },
-      ...groupRows(rest, group),
+      ...groupRows(rest, group, now),
     ];
-  }, [allRows, group]);
+  }, [allRows, group, dataUpdatedAt]);
 
   const totalUnread = useMemo(() => allRows.reduce((acc, r) => acc + (r.unreadMentionCount > 0 ? 1 : 0), 0), [allRows]);
   const isDraftActive = selectedChatId === DRAFT_CHAT_ID;

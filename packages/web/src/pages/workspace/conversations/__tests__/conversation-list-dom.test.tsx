@@ -533,4 +533,39 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("No conversations yet.");
     expect(container.textContent).not.toContain("Couldn't load conversations");
   });
+
+  it("refreshes clock-derived row times after a successful refetch with an unchanged payload", async () => {
+    // Fake only the clock so `flush()`'s real setTimeout still resolves.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
+    try {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } },
+      });
+      // Each fetch returns a fresh object with structurally-identical rows, so
+      // React Query keeps `data` identity across refetches (structural sharing).
+      meChatMocks.listMeChats.mockReset();
+      meChatMocks.listMeChats.mockImplementation(async () => ({
+        rows: [row({ chatId: "chat-time", title: "Timed chat", lastMessageAt: "2026-05-28T11:58:00.000Z" })],
+        nextCursor: null,
+      }));
+
+      const container = await renderDom(<StatefulList rows={[]} nextCursor={null} />, client);
+      expect(rowButton(container, "Timed chat").textContent).toContain("2m");
+
+      // Advance an hour, then a successful (structurally identical) refetch. The
+      // relative time must refresh even though `data` keeps its identity — the
+      // component tracks `dataUpdatedAt` as the successful-refetch clock.
+      vi.setSystemTime(new Date("2026-05-28T13:00:00.000Z"));
+      await act(async () => {
+        await client.refetchQueries({ queryKey: ["me", "chats"] });
+      });
+      await flush();
+
+      expect(rowButton(container, "Timed chat").textContent).toContain("1h");
+      expect(rowButton(container, "Timed chat").textContent).not.toContain("2m");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
