@@ -288,6 +288,7 @@ describe("api wrapper paths", () => {
     });
     expect(apiMock.get).toHaveBeenCalledWith(
       "/orgs/current/chats?limit=10&cursor=next&filter=unread&engagement=active&origin=manual%2Cgithub%2Cagent&with=agent-1%2Cagent-2&watching=1",
+      undefined,
     );
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/chats", {
       mode: "task",

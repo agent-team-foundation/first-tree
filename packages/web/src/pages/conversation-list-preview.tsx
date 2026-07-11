@@ -218,7 +218,9 @@ function seededClient(): QueryClient {
       },
     },
   });
-  const page = (rows: MeChatRow[]) => ({ rows, nextCursor: null });
+  // `ConversationList` reads via `useInfiniteQuery`, so seeded cache entries
+  // must be the `InfiniteData` shape (`{ pages, pageParams }`).
+  const page = (rows: MeChatRow[]) => ({ pages: [{ rows, nextCursor: null }], pageParams: [undefined] });
   // Triad views — keys mirror `ConversationList`'s queryKey shape exactly:
   // ["me","chats", filter, engagement, watching, origin, with].
   client.setQueryData(["me", "chats", "all", "active", false, null, null], page(ACTIVE_ALL));

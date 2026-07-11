@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatSource, MeChatRow } from "@first-tree/shared";
+import type { ChatSource, ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -122,6 +122,18 @@ const BASE_ROWS: MeChatRow[] = [
   }),
 ];
 
+// The rail now uses `useInfiniteQuery`, so seeded cache entries must be the
+// `InfiniteData` shape (`{ pages, pageParams }`) rather than a bare response.
+function page(
+  rows: MeChatRow[],
+  nextCursor: string | null = null,
+): {
+  pages: ListMeChatsResponse[];
+  pageParams: Array<string | undefined>;
+} {
+  return { pages: [{ rows, nextCursor }], pageParams: [undefined] };
+}
+
 function createClient(rows = BASE_ROWS, nextCursor: string | null = "cursor-1"): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -129,15 +141,12 @@ function createClient(rows = BASE_ROWS, nextCursor: string | null = "cursor-1"):
       mutations: { retry: false },
     },
   });
-  queryClient.setQueryData(["me", "chats", "all", "active", false, null, null], { rows, nextCursor });
-  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual,github", "agent-1"], {
-    rows: [],
-    nextCursor: null,
-  });
-  queryClient.setQueryData(["me", "chats", "all", "archived", false, null, null], {
-    rows: [row({ chatId: "chat-archived", title: "Archived review", engagementStatus: "archived" })],
-    nextCursor: null,
-  });
+  queryClient.setQueryData(["me", "chats", "all", "active", false, null, null], page(rows, nextCursor));
+  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual,github", "agent-1"], page([], null));
+  queryClient.setQueryData(
+    ["me", "chats", "all", "archived", false, null, null],
+    page([row({ chatId: "chat-archived", title: "Archived review", engagementStatus: "archived" })], null),
+  );
   return queryClient;
 }
 
@@ -290,14 +299,17 @@ describe("ConversationList", () => {
     expect(onNewChat).toHaveBeenCalledTimes(1);
 
     await click(buttonByText(container, "Load more"));
-    expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
-      filter: "all",
-      engagement: "active",
-      watching: undefined,
-      origin: undefined,
-      with: undefined,
-      cursor: "cursor-1",
-    });
+    expect(meChatMocks.listMeChats).toHaveBeenCalledWith(
+      {
+        filter: "all",
+        engagement: "active",
+        watching: undefined,
+        origin: undefined,
+        with: undefined,
+        cursor: "cursor-1",
+      },
+      { signal: expect.anything() },
+    );
     expect(container.textContent).toContain("Loaded more");
 
     await click(container.querySelector('button[aria-label="Manage chat"]'));
@@ -323,13 +335,17 @@ describe("ConversationList", () => {
 
     await click(buttonByText(container, "Unread"));
     await flush();
-    expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
-      filter: "unread",
-      engagement: "active",
-      watching: undefined,
-      origin: ["manual", "github"],
-      with: undefined,
-    });
+    expect(meChatMocks.listMeChats).toHaveBeenCalledWith(
+      {
+        filter: "unread",
+        engagement: "active",
+        watching: undefined,
+        origin: ["manual", "github"],
+        with: undefined,
+        cursor: undefined,
+      },
+      { signal: expect.anything() },
+    );
 
     await click(
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset all") ?? null,
@@ -349,13 +365,17 @@ describe("ConversationList", () => {
       [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Active")) ?? null,
     );
     await flush();
-    expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
-      filter: "all",
-      engagement: "archived",
-      watching: undefined,
-      origin: undefined,
-      with: undefined,
-    });
+    expect(meChatMocks.listMeChats).toHaveBeenCalledWith(
+      {
+        filter: "all",
+        engagement: "archived",
+        watching: undefined,
+        origin: undefined,
+        with: undefined,
+        cursor: undefined,
+      },
+      { signal: expect.anything() },
+    );
     expect(container.textContent).toContain("Older");
   });
 
@@ -379,7 +399,10 @@ describe("ConversationList", () => {
     meChatMocks.listMeChats.mockRejectedValueOnce(new Error("cursor expired"));
     const error = await renderDom(<StatefulList />);
     await click(buttonByText(error, "Load more"));
-    expect(error.textContent).toContain("cursor expired");
+    // A failed "Load more" surfaces a retry affordance instead of the empty
+    // state or a leaked raw error string.
+    expect(error.textContent).toContain("Couldn't load more");
+    expect(error.textContent).not.toContain("No conversations yet.");
     await act(async () => root?.unmount());
     root = null;
 
@@ -398,13 +421,17 @@ describe("ConversationList", () => {
 
     await click(buttonByText(container, "Unread"));
 
-    expect(meChatMocks.listMeChats).toHaveBeenCalledWith({
-      filter: "unread",
-      engagement: "active",
-      watching: undefined,
-      origin: undefined,
-      with: undefined,
-    });
+    expect(meChatMocks.listMeChats).toHaveBeenCalledWith(
+      {
+        filter: "unread",
+        engagement: "active",
+        watching: undefined,
+        origin: undefined,
+        with: undefined,
+        cursor: undefined,
+      },
+      { signal: expect.anything() },
+    );
     expect(buttonByText(container, "Unread").getAttribute("aria-pressed")).toBe("true");
     expect(buttonByText(container, "All").getAttribute("aria-pressed")).toBe("false");
     expect(container.textContent).toContain("No unread conversations.");
@@ -432,5 +459,78 @@ describe("ConversationList", () => {
     for (const title of ["Has summary", "No summary", "Empty chat"]) {
       expect(rowButton(container, title).querySelector('[data-testid="row-description-skeleton"]')).toBeNull();
     }
+  });
+
+  it("shows an error with retry when the first page fails, not an empty state", async () => {
+    const errorClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } },
+    });
+    meChatMocks.listMeChats.mockReset();
+    meChatMocks.listMeChats.mockRejectedValue(new Error("network down"));
+
+    const container = await renderDom(<StatefulList rows={[]} nextCursor={null} />, errorClient);
+
+    // A failed first page must NOT masquerade as the "nothing here yet" state.
+    expect(container.textContent).not.toContain("No conversations yet.");
+    expect(container.textContent).toContain("Couldn't load conversations");
+    expect(buttonByText(container, "Retry")).toBeTruthy();
+  });
+
+  it("recovers when the first-page error is retried", async () => {
+    const retryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } },
+    });
+    meChatMocks.listMeChats.mockReset();
+    meChatMocks.listMeChats
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValue({ rows: [row({ chatId: "chat-ok", title: "Recovered chat" })], nextCursor: null });
+
+    const container = await renderDom(<StatefulList rows={[]} nextCursor={null} />, retryClient);
+    expect(container.textContent).toContain("Couldn't load conversations");
+
+    await click(buttonByText(container, "Retry"));
+    expect(container.textContent).toContain("Recovered chat");
+    expect(container.textContent).not.toContain("Couldn't load conversations");
+  });
+
+  it("de-duplicates a chat that appears on more than one page", async () => {
+    const dupClient = createClient([row({ chatId: "chat-dup", title: "Duplicated chat" })], "cursor-1");
+    meChatMocks.listMeChats.mockReset();
+    // A background refetch can pull a page-2 chat into page 1, so the same
+    // chatId briefly lives on two pages. The rail must render it once.
+    meChatMocks.listMeChats.mockResolvedValue({
+      rows: [row({ chatId: "chat-dup", title: "Duplicated chat" }), row({ chatId: "chat-two", title: "Second chat" })],
+      nextCursor: null,
+    });
+
+    const container = await renderDom(<StatefulList />, dupClient);
+    await click(buttonByText(container, "Load more"));
+
+    const dupRows = [...container.querySelectorAll("button")].filter((b) => b.textContent?.includes("Duplicated chat"));
+    expect(dupRows.length).toBe(1);
+    expect(container.textContent).toContain("Second chat");
+  });
+
+  it("keeps the empty state when a background refetch fails, not an error", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } },
+    });
+    meChatMocks.listMeChats.mockReset();
+    // First load succeeds with no chats; the next (background) refetch fails.
+    meChatMocks.listMeChats
+      .mockResolvedValueOnce({ rows: [], nextCursor: null })
+      .mockRejectedValue(new Error("refetch blip"));
+
+    const container = await renderDom(<StatefulList rows={[]} nextCursor={null} />, client);
+    expect(container.textContent).toContain("No conversations yet.");
+
+    // React Query retains the (empty) data on a refetch failure, so this must
+    // NOT flip a legitimately-empty list into the first-load error state.
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["me", "chats"] }).catch(() => undefined);
+    });
+    await flush();
+    expect(container.textContent).toContain("No conversations yet.");
+    expect(container.textContent).not.toContain("Couldn't load conversations");
   });
 });

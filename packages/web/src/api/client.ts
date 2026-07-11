@@ -168,8 +168,11 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
   return refreshPromise;
 }
 
-async function request<T>(path: string, options?: { method?: string; body?: unknown }): Promise<T> {
-  const { method = "GET", body } = options ?? {};
+async function request<T>(
+  path: string,
+  options?: { method?: string; body?: unknown; signal?: AbortSignal },
+): Promise<T> {
+  const { method = "GET", body, signal } = options ?? {};
 
   // No path rewriting here — callers prefix org-scoped paths with `withOrg` /
   // `withOrgAt` before passing in; everything else (`/me/...`, `/auth/...`,
@@ -184,6 +187,7 @@ async function request<T>(path: string, options?: { method?: string; body?: unkn
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     });
   };
 
@@ -274,7 +278,7 @@ export async function apiFetchRaw(
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, options?: { signal?: AbortSignal }) => request<T>(path, options),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
