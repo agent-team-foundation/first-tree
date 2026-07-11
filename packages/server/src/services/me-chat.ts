@@ -135,9 +135,12 @@ export async function setChatEngagement(
 
 /**
  * Set or clear the caller's pin for this chat. UPSERT into `chat_user_state`
- * — `pinned_at = now()` to pin, `null` to unpin. Idempotent; mirrors
- * `setChatEngagement`. Pin is private per-user state, so a write only ever
- * touches the caller's own `(chat_id, agent_id)` row and never another user's.
+ * — `pinned_at = now()` to pin, `null` to unpin. Fully idempotent, including
+ * the timestamp: `pinned_at` is the stable within-pinned-group sort anchor, so
+ * re-pinning an already-pinned chat MUST keep the original stamp — an HTTP
+ * retry or double-click must not silently reorder it. Pin is private per-user
+ * state, so a write only ever touches the caller's own `(chat_id, agent_id)`
+ * row and never another user's. Returns the persisted `pinned_at`.
  */
 export async function pinMeChat(
   db: Database,
@@ -145,15 +148,19 @@ export async function pinMeChat(
   agentId: string,
   pinned: boolean,
 ): Promise<MeChatPinResponse> {
-  const pinnedAt = pinned ? new Date() : null;
-  await db
+  const now = new Date();
+  const [row] = await db
     .insert(chatUserState)
-    .values({ chatId, agentId, pinnedAt })
+    .values({ chatId, agentId, pinnedAt: pinned ? now : null })
     .onConflictDoUpdate({
       target: [chatUserState.chatId, chatUserState.agentId],
-      set: { pinnedAt },
-    });
-  return { chatId, pinnedAt: pinnedAt?.toISOString() ?? null };
+      // COALESCE keeps an existing non-null anchor and only stamps `now()` on a
+      // fresh pin; unpin always clears it. (The Date is bound as an ISO string
+      // + cast because a raw `sql` template can't serialize a Date directly.)
+      set: { pinnedAt: pinned ? sql`COALESCE(${chatUserState.pinnedAt}, ${now.toISOString()}::timestamptz)` : null },
+    })
+    .returning({ pinnedAt: chatUserState.pinnedAt });
+  return { chatId, pinnedAt: row?.pinnedAt?.toISOString() ?? null };
 }
 
 /**

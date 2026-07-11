@@ -73,8 +73,12 @@ describe("pinMeChat + chats.activity_at", () => {
     expect(pinnedRow?.pinnedAt).not.toBeNull();
     expect(new Date(pinnedRow?.pinnedAt ?? 0).getTime()).toBe(new Date(pinned.pinnedAt ?? 0).getTime());
 
-    // Idempotent: a second pin keeps a single row for the caller.
-    await pinMeChat(app.db, chatId, admin.humanAgentUuid, true);
+    // Idempotent on the timestamp too: re-pinning keeps a single row AND the
+    // original pinned_at anchor (a retry / double-click must not reorder the
+    // chat, since pinned_at is the within-group sort key). The intervening DB
+    // round-trips guarantee a later wall-clock, so an overwrite would differ.
+    const repinned = await pinMeChat(app.db, chatId, admin.humanAgentUuid, true);
+    expect(new Date(repinned.pinnedAt ?? 0).getTime()).toBe(new Date(pinned.pinnedAt ?? 0).getTime());
     const callerRows = (await app.db.select().from(chatUserState).where(eq(chatUserState.chatId, chatId))).filter(
       (r) => r.agentId === admin.humanAgentUuid,
     );
