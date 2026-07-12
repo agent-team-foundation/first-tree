@@ -925,7 +925,8 @@ describe("codex app-server handler extra branches", () => {
     const successFake = new FakeAppServerClient();
     const successToken = makeDeliveryToken();
     const successHandler = makeHandler(successFake);
-    const successCtx = makeContext();
+    const successLog = vi.fn<(message: string) => void>();
+    const successCtx = makeContext({ log: successLog });
     const successSendMessage = vi.fn<SessionContext["sdk"]["sendMessage"]>().mockResolvedValue(sentMessageResponse());
     successCtx.sdk.sendMessage = successSendMessage;
 
@@ -957,6 +958,13 @@ describe("codex app-server handler extra branches", () => {
       completion: "consumed",
       reason: "usage_limit_notice_posted",
     });
+    // The usage-limit turn must leave a slot-log line (issue #1732): external
+    // log watchers (account-failover automation) tail client.log and can only
+    // react if the failure is logged with the stable provider_usage_limit tag.
+    const successLogLines = successLog.mock.calls.map(([line]) => line);
+    expect(successLogLines.some((line) => line.includes("provider_usage_limit"))).toBe(true);
+    expect(successLogLines.some((line) => line.includes("usage limit reached"))).toBe(true);
+    expect(successLogLines.some((line) => line.includes("usage exhausted"))).toBe(true);
     await successHandler.shutdown();
 
     const failureFake = new FakeAppServerClient();
