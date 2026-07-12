@@ -6,7 +6,7 @@ labels: question
 assignees: ""
 ---
 
-Before posting, review [SUPPORT.md](../../SUPPORT.md). Do not disclose suspected vulnerabilities here; follow [SECURITY.md](../../SECURITY.md) instead.
+Before posting, review [SUPPORT.md](https://github.com/agent-team-foundation/first-tree/blob/main/SUPPORT.md). Do not disclose suspected vulnerabilities here; follow [SECURITY.md](https://github.com/agent-team-foundation/first-tree/blob/main/SECURITY.md) instead.
 
 ## Affected Surface
 
