@@ -527,26 +527,25 @@ export function nextParamsForGroup(current: URLSearchParams, mode: GroupMode): U
 }
 
 /**
- * Pure URL transition that strips every rail filter dimension in one
- * shot. Used by the rail's "Clear" affordance. Exported for unit tests.
+ * Pure URL transition for the `⚙` popover's "Reset" (and the filter-chip
+ * "Clear"). Exported for unit tests. Resets exactly the popover's OWN
+ * dimensions — Source (`?origin=`), Participants (`?with=`), and Status
+ * (`?engagement=` → default `active`) — which are the three dimensions the
+ * popover surfaces and the badge counts.
  *
- * Done in a single mutation because the rail filters live on independent
- * URL keys (`?unread=`, `?watching=`, `?origin=`, `?with=`, `?engagement=`);
- * running the per-key setters back-to-back would re-derive each call from
- * the same stale `searchParams` snapshot, so only the last write would win.
+ * Done in a single mutation because those keys are independent; running the
+ * per-key setters back-to-back would re-derive each call from the same stale
+ * `searchParams` snapshot, so only the last write would win.
  *
- * Scope (`?engagement=`) IS cleared (reset to the default `active`): it now
- * lives inside the `⚙` popover and counts toward the popover's active-filter
- * badge, so the popover's "Reset all" must actually reset it — otherwise the
- * list stays Status-limited with the badge still lit after a Reset.
- *
- * Grouping (`?group=`, a view-mode, not a filter) and the selected chat
- * (`?c=`) are deliberately preserved — the user expects them to survive.
+ * The header triad (`?unread=` / `?watching=`) is deliberately NOT cleared:
+ * All / Unread / Watching is a separate, always-visible control that lives
+ * outside the popover and isn't counted by its badge, so resetting it here
+ * would be an invisible side effect of a button that reads as "reset the
+ * filters I can see". Grouping (`?group=`, a view-mode) and the selected chat
+ * (`?c=`) are likewise preserved — the user expects them to survive.
  */
 export function nextParamsForClearFilters(current: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(current);
-  next.delete("unread");
-  next.delete("watching");
   next.delete("origin");
   next.delete("with");
   next.delete("engagement");

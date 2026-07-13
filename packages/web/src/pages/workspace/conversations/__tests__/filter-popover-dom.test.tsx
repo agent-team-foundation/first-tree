@@ -204,7 +204,9 @@ describe("FilterPopover", () => {
     expect(onParticipantsChange).toHaveBeenLastCalledWith(["agent-1"]);
     expect(checkboxByLabel("Nova").checked).toBe(true);
 
-    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Reset all") ?? null);
+    // The footer "Reset" is the LAST such button — the per-section Source /
+    // Participants "Reset" links share the label and render before it.
+    await click([...document.body.querySelectorAll("button")].filter((b) => b.textContent === "Reset").at(-1) ?? null);
     expect(onResetAll).toHaveBeenCalledTimes(1);
     await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Done") ?? null);
     expect(document.body.textContent).not.toContain("Source");

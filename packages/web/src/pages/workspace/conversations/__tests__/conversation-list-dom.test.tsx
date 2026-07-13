@@ -375,8 +375,10 @@ describe("ConversationList", () => {
       { signal: expect.anything() },
     );
 
+    // Footer "Reset" is the LAST such button (per-section Source "Reset" renders
+    // first once Source is narrowed).
     await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset all") ?? null,
+      [...document.body.querySelectorAll("button")].filter((button) => button.textContent === "Reset").at(-1) ?? null,
     );
     expect(container.textContent).not.toContain("Filters");
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
@@ -606,6 +608,46 @@ describe("ConversationList", () => {
     );
 
     expect(buttonByText(container, "Load more")).toBeTruthy();
+  });
+
+  it("de-duplicates a Needs-attention chat — renders exactly once", async () => {
+    // Count-guard the attention half of the priority dedup (the Pinned half is
+    // guarded above). A regression narrowing `priorityIds` to pinned-only would
+    // double-render every attention row; `.toContain` would miss it, this won't.
+    const rows = [
+      row({ chatId: "chat-att", title: "Attention chat", failedAgentIds: ["agent-1"] }),
+      row({ chatId: "chat-plain2", title: "Plain two" }),
+    ];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    const attRows = [...container.querySelectorAll("button")].filter((b) => b.textContent?.includes("Attention chat"));
+    expect(attRows.length).toBe(1);
+    expect(container.textContent).toContain("Needs attention");
+  });
+
+  it("shows the ⚙ badge as a DIMENSION count (monotonic), driven by the real component", async () => {
+    // Guards the production `popoverFilterCount` (index.tsx), NOT the harness
+    // copy: narrowing Source from 2 sources to 1 must NOT drop the badge, and a
+    // narrowed Source + non-default Status reads 2 (dimensions), not 3 (values).
+    const container = await renderDom(<StatefulList selectedChatId={null} />);
+    const trigger = () => container.querySelector<HTMLButtonElement>('button[aria-label="Filter"]');
+    expect(trigger()?.textContent ?? "").not.toMatch(/[0-9]/);
+
+    await click(trigger() ?? null);
+    const labelByText = (t: string): Element | null =>
+      [...document.body.querySelectorAll("label")].find((l) => l.textContent?.includes(t)) ?? null;
+    await click(labelByText("Archived")); // Status → non-default (dimension 1)
+    await click(labelByText("Agent")); // Source → 2 of 3 selected (dimension 2)
+    await flush();
+    expect(trigger()?.textContent).toContain("2");
+    expect(trigger()?.textContent).not.toContain("3");
+
+    await click(labelByText("GitHub")); // Source → 1 of 3: dimension count stays 2
+    await flush();
+    expect(trigger()?.textContent).toContain("2");
   });
 
   it("keeps the empty state when a background refetch fails, not an error", async () => {

@@ -53,14 +53,13 @@ type FilterPopoverProps = {
   participants: ReadonlyArray<string>;
   onParticipantsChange: (next: ReadonlyArray<string>) => void;
   /**
-   * Clears every rail filter dimension in one URL mutation. The popover
-   * delegates "Reset all" to this so the reset doesn't have to call
-   * `onOriginChange([])` back-to-back with the others — those calls would
-   * each derive from the same render-stale `searchParams` snapshot and the
-   * later `setSearchParams` would clobber the earlier (same bug as Phase
-   * A's two-setter Clear). Also covers `with` (participants), which the
-   * popover doesn't surface on its own but which the URL can carry today
-   * via hand-typed parameters.
+   * Resets the popover's OWN filter dimensions — Source (`origin`),
+   * Participants (`with`), and Status (`engagement`) — in one URL mutation.
+   * The "Reset" button delegates to this so the reset doesn't call
+   * `onOriginChange([])` back-to-back with the others — those calls would each
+   * derive from the same render-stale `searchParams` snapshot and the later
+   * `setSearchParams` would clobber the earlier. The header triad (All /
+   * Unread / Watching) is a separate control and is deliberately NOT reset here.
    */
   onResetAll: () => void;
   /**
@@ -85,7 +84,8 @@ type FilterPopoverProps = {
  *   - Participants — an optional additive OR-picker over the org's addressable
  *     agents (empty = no constraint).
  * Each control writes through to the URL immediately, so "Done" is just a
- * dismiss; "Reset all" restores Active + all sources + no participants.
+ * dismiss; "Reset" restores Active + all sources + no participants (the header
+ * triad is a separate control and is left as-is).
  *
  * The primary engagement triad (All / Unread / Watching) and Group-by both live
  * in the header, not here.
@@ -237,7 +237,7 @@ export function FilterPopover({
                 color: "var(--primary)",
               }}
             >
-              Reset all
+              Reset
             </button>
             <button
               type="button"
@@ -374,7 +374,10 @@ function ParticipantsSection({
     const next = new Set(participantSet);
     if (next.has(uuid)) next.delete(uuid);
     else next.add(uuid);
-    onParticipantsChange([...next]);
+    // Emit in a canonical (sorted) order so picking A-then-B and B-then-A yield
+    // the same `?with=` — one react-query cache key, not two, for a logically
+    // identical OR-filter (mirrors Source's canonical re-emit).
+    onParticipantsChange([...next].sort());
   };
   const resetParticipants = (): void => onParticipantsChange([]);
 

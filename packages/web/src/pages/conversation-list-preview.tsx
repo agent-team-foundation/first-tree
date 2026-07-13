@@ -259,6 +259,18 @@ function seededClient(): QueryClient {
   // Name-map source consumed by `useAgentNameMap` (empty is fine — the
   // preview doesn't surface participant chips).
   client.setQueryData(["managed-agents", "name-map"], []);
+  // Addressable roster for the ⚙ filter's Participants OR-picker — so the
+  // picker renders the real checkbox list offline instead of the (correct but
+  // demo-unfriendly) "Couldn't load people." no-backend state.
+  client.setQueryData(["agents", "org-list", { addressableOnly: true }], {
+    items: [
+      { uuid: "agent-nova", displayName: "nova" },
+      { uuid: "agent-design", displayName: "design-critique" },
+      { uuid: "agent-market", displayName: "marketing-writer" },
+      { uuid: "agent-res", displayName: "research" },
+    ],
+    nextCursor: null,
+  });
   return client;
 }
 
@@ -285,13 +297,13 @@ export function ConversationListPreviewPage() {
     setWatching(view === "watching");
   };
   const onClearFilters = (): void => {
-    // Mirror the shipped `nextParamsForClearFilters`: Reset all clears every
-    // filter dimension INCLUDING Status (engagement → default "active"), so
-    // the gear badge and list both return to the unfiltered default.
+    // Mirror the shipped `nextParamsForClearFilters`: "Reset" resets the
+    // popover's OWN dimensions — Source, Participants, and Status (engagement →
+    // default "active") — which are exactly what the gear badge counts. The
+    // header triad (All / Unread / Watching) is a separate control and is left
+    // untouched.
     setOrigin([]);
     setParticipants([]);
-    setUnread(false);
-    setWatching(false);
     setEngagement("active");
   };
 
@@ -350,7 +362,7 @@ export function ConversationListPreviewPage() {
           </div>
           <p className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-4)" }}>
             Status (Active/Archived/All) + Source live in the ⚙ filter; picking a non-Active Status shows a count badge
-            on ⚙, and <strong>Reset all</strong> clears it back to default.
+            on ⚙, and <strong>Reset</strong> clears the ⚙ filters back to default (the header triad is left as-is).
           </p>
         </div>
         <ThemeToggleCorner />
