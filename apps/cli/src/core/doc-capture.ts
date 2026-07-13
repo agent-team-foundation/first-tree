@@ -65,7 +65,9 @@ export async function captureOutboundDocs(
   }
 }
 
-async function resolveChatOrgId(sdk: FirstTreeHubSDK, chatId: string): Promise<string | null> {
+/** Shared with `image-capture.ts` so image capture resolves the upload org the
+ *  exact same way (from the target chat). */
+export async function resolveChatOrgId(sdk: FirstTreeHubSDK, chatId: string): Promise<string | null> {
   try {
     const detail = await sdk.getChatDetail(chatId);
     return typeof detail.organizationId === "string" && detail.organizationId.length > 0 ? detail.organizationId : null;
@@ -74,7 +76,9 @@ async function resolveChatOrgId(sdk: FirstTreeHubSDK, chatId: string): Promise<s
   }
 }
 
-function resolveSelfFenceFromEnv(env: NodeJS.ProcessEnv): SelfFence | null {
+/** Shared with `image-capture.ts` so image capture resolves the send-side
+ *  workspace fence from the exact same runtime-provided env vars. */
+export function resolveSelfFenceFromEnv(env: NodeJS.ProcessEnv): SelfFence | null {
   const agentHome = env.FIRST_TREE_DOC_AGENT_HOME;
   if (agentHome) {
     const singleRepoLocalPath = env.FIRST_TREE_DOC_REPO_LOCAL_PATH;

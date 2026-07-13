@@ -73,7 +73,7 @@ export { type CodexBrowserLoginOptions, runCodexBrowserLogin } from "./runtime/c
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
 export { Deduplicator } from "./runtime/deduplicator.js";
-export type { SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
+export type { AttachmentUploader, SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
 export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";
 export type { Classification, ErrorKind, ErrorSource, RetryStrategy } from "./runtime/error-taxonomy.js";
 export { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
@@ -86,6 +86,8 @@ export type {
   SessionMessage,
 } from "./runtime/handler.js";
 export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handler.js";
+export type { BuildImageAttachmentsOptions, BuildMessageImageSnapshotsResult } from "./runtime/image-snapshots.js";
+export { buildMessageImageSnapshots } from "./runtime/image-snapshots.js";
 export { InputController } from "./runtime/input-controller.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";

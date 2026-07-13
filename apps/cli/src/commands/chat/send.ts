@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
+import { captureOutboundImages, toOutboundImageMessage } from "../../core/image-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { guardInlineShellResidue, looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
@@ -141,6 +142,23 @@ export function registerChatSendCommand(chat: Command): void {
         // attachment store and attaching generic refs. Pure pass-through
         // outside an agent session.
         const captured = await captureOutboundDocs(content ?? "", { sdk, chatId });
+
+        // Capture workspace images the (doc-rewritten) body references and, when
+        // any resolve, convert this into a human-identical image send: a
+        // `format: "file"` batch whose caption is the image-stripped body and
+        // whose attachments are the uploaded refs. Only text/markdown bodies are
+        // eligible — a `card` body is not an image batch. Pure pass-through
+        // otherwise.
+        const imageEligible = options.format === "text" || options.format === "markdown";
+        const capturedImages = imageEligible
+          ? await captureOutboundImages(captured.content, { sdk, chatId })
+          : { caption: captured.content, imageRefs: [] };
+        const { format: outboundFormat, content: outboundContent } = toOutboundImageMessage(
+          options.format,
+          captured.content,
+          capturedImages,
+        );
+
         const cliBodyOrigin =
           options.messageFile !== undefined
             ? CLI_BODY_ORIGINS.MESSAGE_FILE
@@ -161,8 +179,8 @@ export function registerChatSendCommand(chat: Command): void {
             : metadataWithBodyOrigin;
 
         const result = await sdk.sendMessage(chatId, {
-          format: options.format,
-          content: captured.content,
+          format: outboundFormat,
+          content: outboundContent,
           metadata: outboundMetadata,
           source: "cli",
           // Server resolves the name against the chat's participant list and
