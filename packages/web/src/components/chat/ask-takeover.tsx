@@ -35,7 +35,12 @@ import { AtSign, Paperclip, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { usePendingAttachments } from "../../lib/use-pending-attachments.js";
-import { MentionAutocompletePopover, type MentionCandidate, useMentionAutocomplete } from "../mention-autocomplete.js";
+import {
+  composerPickerVisible,
+  MentionAutocompletePopover,
+  type MentionCandidate,
+  useMentionAutocomplete,
+} from "../mention-autocomplete.js";
 import { MentionHighlightOverlay } from "../mention-highlight-overlay.js";
 import { FileChip } from "../ui/file-chip.js";
 import { Markdown } from "../ui/markdown.js";
@@ -274,10 +279,11 @@ export function AskTakeover({
   // behind it can draw the actual glyphs (PR 1256). An opaque textarea
   // background sits *above* that overlay and hides the typed text — the
   // white-on-white regression this restores. Mirrors chat-view's composer.
+  // Radius lives in `.ask-answer-field` (index.css), not inline, so the phone
+  // weld rule can flatten the top corners while the portal picker is docked.
   const fieldChrome = {
     position: "relative" as const,
     border: "var(--hairline) solid var(--border-strong)",
-    borderRadius: "var(--radius-input)",
     background: "var(--bg)",
   };
 
@@ -312,7 +318,17 @@ export function AskTakeover({
    *  as the sole box on a free-text ask): mention autocomplete + highlight +
    *  image paste, with the text drawn by the mirror overlay. */
   const renderAnswerInput = (placeholder: string, minHeight: number) => (
-    <div style={fieldChrome}>
+    <div
+      className="ask-answer-field"
+      // Phone-only weld: flatten the field's top corners while the portal picker
+      // is docked flush above it (`.ask-answer-field[data-picker-open]` in
+      // index.css). composerPickerVisible keeps a trial `@` (no panel rendered)
+      // from welding an empty field.
+      data-picker-open={
+        composerPickerVisible({ isTrial, mentionOpen: mention.trigger != null, slashOpen: false }) ? "true" : undefined
+      }
+      style={fieldChrome}
+    >
       {/* No mention autocomplete on the trial answer input (single agent). */}
       {isTrial ? null : (
         <MentionAutocompletePopover
@@ -321,6 +337,13 @@ export function AskTakeover({
           highlightIndex={mention.highlightIndex}
           anchorRef={taRef}
           onPick={mention.pick}
+          // Phone: portal the picker out of the answer card's scroll clip so its
+          // first/active candidates stay visible. Wider viewports keep the
+          // in-flow float (the card is tall enough there not to clip).
+          portal={viewport === "narrow"}
+          // Dismiss (not just hide) when the field scrolls out of the card so the
+          // now-invisible picker can't be Enter-selected.
+          onDismiss={mention.dismiss}
         />
       )}
       <MentionHighlightOverlay

@@ -702,4 +702,80 @@ describe("AskTakeover", () => {
     await keyDown(window, "Enter");
     expect(onReply).toHaveBeenCalledWith({ content: "looks risky", mentions: [], images: [] });
   });
+
+  it("narrow: portals the @picker, then dismisses it (no hidden Enter selection) when the field leaves its scrollport", async () => {
+    // Controlled rAF (the portal loop reschedules itself, so an immediate rAF
+    // would recurse); drive one frame manually after moving the field.
+    let rafCb: FrameRequestCallback | null = null;
+    const origRaf = globalThis.requestAnimationFrame;
+    const origCancel = globalThis.cancelAnimationFrame;
+    const origMatchMedia = window.matchMedia;
+    globalThis.requestAnimationFrame = (cb: FrameRequestCallback) => {
+      rafCb = cb;
+      return 1;
+    };
+    globalThis.cancelAnimationFrame = () => {
+      rafCb = null;
+    };
+    // Force the phone-width viewport so AskTakeover opts into portal mode
+    // (useWorkspaceViewport → "narrow" when no wider query matches).
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    // Mutable field rect (starts inside the scrollport); the answer scroller is
+    // the element with inline `overflow-y: auto`.
+    const field = { top: 300, bottom: 340, left: 20, right: 340, width: 320, height: 40 };
+    const PORT = { top: 100, bottom: 500, left: 0, right: 360, width: 360, height: 400 } as DOMRect;
+    const realGetComputedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("ask-answer-field")) return field as DOMRect;
+      if (this.style?.overflowY === "auto") return PORT;
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 } as DOMRect;
+    });
+    vi.spyOn(window, "getComputedStyle").mockImplementation((el: Element) => {
+      if ((el as HTMLElement).style?.overflowY === "auto") return { overflowY: "auto" } as CSSStyleDeclaration;
+      return realGetComputedStyle(el);
+    });
+
+    try {
+      const c = await renderDom(
+        <AskTakeover
+          body="# Pick"
+          payload={{ multiSelect: false }}
+          mentionCandidates={CANDIDATES}
+          onReply={() => {}}
+          onSkip={() => {}}
+        />,
+      );
+      const ta = freeTextBox(c);
+      if (!ta) throw new Error("free-text input missing");
+      await setValue(ta, "@");
+
+      // AskTakeover wired `portal`: a body-portaled picker appears (not in-flow).
+      const panel = document.body.querySelector<HTMLElement>('[role="listbox"]');
+      expect(panel).not.toBeNull();
+      expect(panel?.classList.contains("mention-popover--portal")).toBe(true);
+
+      // Field scrolls fully above its scrollport top → picker dismissed.
+      field.top = 10;
+      field.bottom = 50;
+      await act(async () => rafCb?.(0));
+      expect(document.body.querySelector('[role="listbox"]')).toBeNull();
+
+      // AskTakeover wired `onDismiss`: Enter now commits nothing (no hidden row).
+      await keyDown(ta, "Enter");
+      expect(ta.value).toBe("@");
+    } finally {
+      globalThis.requestAnimationFrame = origRaf;
+      globalThis.cancelAnimationFrame = origCancel;
+      window.matchMedia = origMatchMedia;
+    }
+  });
 });

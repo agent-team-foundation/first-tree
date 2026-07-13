@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Avatar } from "./avatar.js";
 
 /**
@@ -549,6 +550,60 @@ export function useMentionAutocomplete({
 }
 
 /**
+ * True when `field` is fully outside `port` on the vertical axis — the field has
+ * scrolled past its clipping scrollport, so a panel glued above it would float
+ * over unrelated content (or off-screen). The portal picker uses this to
+ * dismiss (not just hide) so an invisible panel is never keyboard-selectable.
+ */
+export function fieldOutOfScrollport(
+  field: { top: number; bottom: number },
+  port: { top: number; bottom: number },
+): boolean {
+  return field.bottom <= port.top || field.top >= port.bottom;
+}
+
+/** One `.mention-option` row (`min-height: 2.875rem` = 46). */
+const PORTAL_MIN_PANEL = 46;
+/** Portal panel height cap (`.mention-popover--portal max-height: 16rem`). */
+const PORTAL_MAX_PANEL = 256;
+
+/**
+ * Placement for the upward-docked portal panel, or `null` to dismiss. The panel
+ * welds its bottom to the field top and grows upward, so it must be clamped to
+ * the space above the field within the visible viewport — otherwise its top
+ * (first/active, Enter-selected) rows render above the viewport top, off-screen
+ * yet selectable. Dismiss when the field is out of its scrollport, or when there
+ * isn't room above it for even the active row (a hidden active row is worse than
+ * no picker). Pure so the geometry is unit-testable without layout.
+ */
+export function portalPanelPlacement(opts: {
+  field: { top: number; bottom: number };
+  port: { top: number; bottom: number };
+  viewportTop: number;
+}): { maxHeight: number } | null {
+  const { field, port, viewportTop } = opts;
+  if (fieldOutOfScrollport(field, port)) return null;
+  const available = field.top - viewportTop;
+  if (available < PORTAL_MIN_PANEL) return null;
+  return { maxHeight: Math.min(available, PORTAL_MAX_PANEL) };
+}
+
+/**
+ * Nearest scrolling ancestor of `el` — the element whose `overflow` clips an
+ * in-flow descendant. Used by the portal picker to bound visibility to the
+ * actual clipping scrollport rather than the layout viewport.
+ */
+function nearestScrollableAncestor(el: HTMLElement): HTMLElement | null {
+  let node = el.parentElement;
+  while (node) {
+    const oy = getComputedStyle(node).overflowY;
+    if (oy === "auto" || oy === "scroll") return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/**
  * Popover body. Expects `anchorRef` to point at a textarea so the popover
  * can sit directly above it (the textarea is at the bottom of the chat
  * view; dropping above avoids covering the input while typing).
@@ -559,59 +614,180 @@ export function MentionAutocompletePopover({
   highlightIndex,
   onPick,
   anchorRef,
+  portal = false,
+  onDismiss,
 }: {
   trigger: ActiveTrigger | null;
   results: MentionCandidate[];
   highlightIndex: number;
   onPick: (candidate: MentionCandidate) => void;
   anchorRef: { current: HTMLTextAreaElement | null };
+  /** Render into a `document.body` portal with fixed positioning so the panel
+   *  escapes an ancestor's overflow clip. AskTakeover's answer field lives in a
+   *  scrolling card that clips an in-flow panel docked above it (hiding the
+   *  first / active candidates — a wrong-selection hazard). Only hosts inside a
+   *  clipping scroller pass this; the panel is positioned flush above the field
+   *  and re-measures every frame while open. See `.mention-popover--portal` in
+   *  index.css. Same idiom as `ui/popover.tsx` / `ui/hover-card.tsx`. */
+  portal?: boolean;
+  /** Portal only: called when the field scrolls fully out of its clipping
+   *  scrollport. The host dismisses the trigger so a panel the user can no
+   *  longer see is never keyboard-selectable (visibility atomic with the
+   *  active-row selection). Wire to the mention hook's `dismiss`. */
+  onDismiss?: () => void;
 }) {
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [fixedRect, setFixedRect] = useState<{
+    left: number;
+    width: number;
+    bottom: number;
+    maxHeight: number;
+  } | null>(null);
+  // Keep the latest onDismiss without re-running the positioning effect (the
+  // host passes a fresh closure each render).
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
 
-  // Scroll the active row into view when the highlight changes.
-  useEffect(() => {
+  const open = trigger != null && results.length > 0 && anchorRef.current != null;
+
+  // Scroll the active row into view when the highlight changes — and also when
+  // the portal clamp shrinks the panel (`fixedRect.maxHeight`), which can push a
+  // previously-visible highlighted row below the smaller viewport while the
+  // highlight index is unchanged, hiding an Enter-selectable active row.
+  // `useLayoutEffect` so it re-establishes visibility before paint (no flash of
+  // the hidden active row); the `maxHeight` dep runs it only on a committed
+  // clamp change, not on every rAF frame.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fixedRect.maxHeight IS the trigger — re-run on a committed clamp shrink to re-scroll the active row, even though the body reads the row via the DOM, not the value.
+  useLayoutEffect(() => {
     const el = popoverRef.current?.querySelector<HTMLElement>(`[data-mention-index="${highlightIndex}"]`);
     el?.scrollIntoView({ block: "nearest" });
-  }, [highlightIndex]);
+  }, [highlightIndex, fixedRect?.maxHeight]);
+
+  // Portal positioning: keep the fixed panel flush above the anchor's field. A
+  // requestAnimationFrame loop re-measures every frame while open, so the panel
+  // stays glued through ANY anchor movement — inner-scroller scroll, keyboard,
+  // resize, and in-card reflow that moves the field without a scroll/resize
+  // event or a field size change (which scroll listeners + ResizeObserver miss).
+  // The field is the anchor textarea's parent (popover + textarea are siblings
+  // inside it) — measuring the field welds the panel to its outer edge. setState
+  // bails when the rect is unchanged, so idle frames don't re-render.
+  useLayoutEffect(() => {
+    if (!portal || !open) {
+      setFixedRect(null);
+      return;
+    }
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const field = anchor.parentElement ?? anchor;
+    // Boundary = the clipping scrollport (the ancestor whose overflow does the
+    // clipping), not the window: the field can scroll out of the card's scroller
+    // while still inside the layout viewport.
+    const scrollport = nearestScrollableAncestor(field);
+    let raf = 0;
+    let dismissed = false;
+    const measure = () => {
+      const r = field.getBoundingClientRect();
+      const portRect = scrollport ? scrollport.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+      // Top of the visible viewport (shifts under pinch-zoom; 0 normally).
+      const viewportTop = window.visualViewport ? window.visualViewport.offsetTop : 0;
+      // null → dismiss: the field left its scrollport, or there isn't room above
+      // it (within the viewport) for even the active row. Otherwise the panel is
+      // height-clamped so its top (first/active) rows never render above the
+      // viewport — off-screen but still Enter-selectable.
+      const placement = portalPanelPlacement({ field: r, port: portRect, viewportTop });
+      if (!placement) {
+        setFixedRect(null);
+        if (!dismissed) {
+          dismissed = true;
+          onDismissRef.current?.();
+        }
+        return;
+      }
+      setFixedRect((prev) => {
+        const next = {
+          left: r.left,
+          width: r.width,
+          bottom: window.innerHeight - r.top,
+          maxHeight: placement.maxHeight,
+        };
+        return prev &&
+          prev.left === next.left &&
+          prev.width === next.width &&
+          prev.bottom === next.bottom &&
+          prev.maxHeight === next.maxHeight
+          ? prev
+          : next;
+      });
+    };
+    const tick = () => {
+      measure();
+      raf = requestAnimationFrame(tick);
+    };
+    measure(); // sync first measure so the panel never paints at (0,0)
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [portal, open, anchorRef]);
 
   if (!trigger || results.length === 0) return null;
   const anchor = anchorRef.current;
   if (!anchor) return null;
 
+  const ambiguous = ambiguousDisplayNames(results);
+  const rows = results.map((c, i) => {
+    const active = i === highlightIndex;
+    return (
+      <button
+        key={c.agentId}
+        type="button"
+        role="option"
+        aria-selected={active}
+        data-mention-index={i}
+        title={c.name ? `@${c.name}` : undefined}
+        onMouseDown={(e) => {
+          // preventDefault keeps the textarea focused so `selectionStart`
+          // can still be used to compute the insertion point.
+          e.preventDefault();
+          onPick(c);
+        }}
+        className="mention-option flex w-full items-center px-3 py-1.5 text-left text-body"
+        style={{
+          background: active ? "var(--bg-hover)" : "transparent",
+          color: "var(--fg)",
+          border: "none",
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <AgentOption candidate={c} ambiguous={ambiguous} />
+      </button>
+    );
+  });
+
+  if (portal) {
+    // Skip the first paint until measured (avoids a flash at 0,0).
+    if (!fixedRect) return null;
+    return createPortal(
+      <div
+        ref={popoverRef}
+        role="listbox"
+        aria-label="Mention suggestions"
+        className="mention-popover mention-popover--portal"
+        style={{
+          left: fixedRect.left,
+          width: fixedRect.width,
+          bottom: fixedRect.bottom,
+          maxHeight: fixedRect.maxHeight,
+        }}
+      >
+        {rows}
+      </div>,
+      document.body,
+    );
+  }
+
   return (
     <div ref={popoverRef} role="listbox" aria-label="Mention suggestions" className="mention-popover">
-      {(() => {
-        const ambiguous = ambiguousDisplayNames(results);
-        return results.map((c, i) => {
-          const active = i === highlightIndex;
-          return (
-            <button
-              key={c.agentId}
-              type="button"
-              role="option"
-              aria-selected={active}
-              data-mention-index={i}
-              title={c.name ? `@${c.name}` : undefined}
-              onMouseDown={(e) => {
-                // preventDefault keeps the textarea focused so `selectionStart`
-                // can still be used to compute the insertion point.
-                e.preventDefault();
-                onPick(c);
-              }}
-              className="mention-option flex w-full items-center px-3 py-1.5 text-left text-body"
-              style={{
-                background: active ? "var(--bg-hover)" : "transparent",
-                color: "var(--fg)",
-                border: "none",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              <AgentOption candidate={c} ambiguous={ambiguous} />
-            </button>
-          );
-        });
-      })()}
+      {rows}
     </div>
   );
 }
