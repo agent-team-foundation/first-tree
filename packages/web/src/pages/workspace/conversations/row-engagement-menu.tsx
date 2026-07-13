@@ -1,9 +1,10 @@
-import { CHAT_ENGAGEMENT_STATUSES, type ChatEngagementStatus } from "@first-tree/shared";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { CHAT_ENGAGEMENT_STATUSES, type ChatEngagementStatus, type ListMeChatsResponse } from "@first-tree/shared";
+import { type InfiniteData, useMutation, useQueryClient } from "@tanstack/react-query";
 import { patchChatEngagement } from "../../../api/chats.js";
 import { markMeChatUnread, pinMeChat } from "../../../api/me-chats.js";
 import { type RowAction, RowActionsMenu } from "../../../components/ui/row-actions-menu.js";
 import { useToast } from "../../../components/ui/toast.js";
+import { applyOptimisticPin } from "./optimistic-pin.js";
 
 const { ACTIVE, ARCHIVED, DELETED } = CHAT_ENGAGEMENT_STATUSES;
 
@@ -50,10 +51,15 @@ function actionsFor({
   return [];
 }
 
-// Hover-reveal: hidden until the row is hovered or the dropdown is open
-// (aria-expanded surfaces via the underlying button). `focus-visible` instead
-// of `focus` keeps the trigger from sticking visible after a mouse click.
-const TRIGGER_HOVER_REVEAL = "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100";
+// Hover-reveal on fine (mouse) pointers: hidden until the row is hovered or the
+// dropdown is open (aria-expanded surfaces via the underlying button).
+// `focus-visible` instead of `focus` keeps the trigger from sticking visible
+// after a mouse click. On COARSE (touch) pointers there is no hover and a tap
+// rarely fires `focus-visible`, so hover-only would leave the kebab — the only
+// Pin entry point — permanently invisible and untappable on phones and the
+// narrow-overlay rail; `pointer-coarse:opacity-100` keeps it always shown there.
+const TRIGGER_HOVER_REVEAL =
+  "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 pointer-coarse:opacity-100";
 
 export function RowEngagementMenu({
   chatId,
@@ -81,22 +87,56 @@ export function RowEngagementMenu({
     onSuccess: invalidate,
   });
   // Pin toggles the caller's private `pinned_at`; the server re-projects the
-  // Pinned group, so we invalidate to pick up the regrouping. Because the row
-  // only visibly regroups after that refetch lands (a plain invalidate, not an
-  // optimistic move — the optimistic reorder is PR5), a success toast confirms
-  // the write so the delayed regroup never reads as a no-op. A failed write
-  // surfaces its own toast rather than silently leaving the row where it was.
+  // Pinned group. The row moves OPTIMISTICALLY (`applyOptimisticPin` reorders
+  // the cached list into / out of the Pinned group) so the regroup is instant
+  // instead of waiting on the round-trip + refetch. On failure the SAME helper
+  // re-applies the ORIGINAL state — a targeted revert of just this chat rather
+  // than a whole-cache snapshot restore, so a concurrent pin of a *different*
+  // chat isn't clobbered — and the trailing invalidate reconciles exact ordering.
+  //
+  // The `["me","chats"]` prefix also matches NON-infinite caches: the command
+  // palette (`["me","chats","palette"]`) and the mobile lists store a bare
+  // `ListMeChatsResponse` (no `pages`). Skip those here — feeding one to the
+  // InfiniteData transform would throw on `data.pages` — and let the trailing
+  // invalidate refetch them. Mirrors the shape guard in `chat-by-id.tsx`.
+  const applyPinToCaches = (nextPinned: boolean): void => {
+    const nowIso = new Date().toISOString();
+    queryClient.setQueriesData<InfiniteData<ListMeChatsResponse> | ListMeChatsResponse>(
+      { queryKey: ["me", "chats"] },
+      (old) => (old && "pages" in old ? applyOptimisticPin(old, chatId, nextPinned, nowIso) : old),
+    );
+  };
+  // The submitted direction is the mutation VARIABLE (`nextPinned`), captured at
+  // click time — NOT the live `pinned` prop. `onMutate` flips `pinned` (an
+  // Attention row that gets pinned stays in its bucket and rerenders in place),
+  // and TanStack Query re-binds the pending mutation's callbacks to the newest
+  // render's closures; reading `pinned` in onSuccess/onError would then observe
+  // the post-optimistic value and report / revert the WRONG direction.
   const pinMut = useMutation({
-    mutationFn: () => pinMeChat(chatId, !pinned),
-    onSuccess: () => {
-      invalidate();
-      addToast({ title: pinned ? "Unpinned" : "Pinned" });
+    // Serialize pin/unpin of the SAME chat so a rapid pin -> unpin can't reach
+    // the server out of order and settle on the stale value; different chats
+    // still run concurrently.
+    scope: { id: `chat-pin:${chatId}` },
+    mutationFn: (nextPinned: boolean) => pinMeChat(chatId, nextPinned),
+    onMutate: async (nextPinned: boolean) => {
+      // Freeze in-flight me-chats refetches (the list polls every 30s) so a
+      // stale response can't clobber the optimistic cache mid-flight.
+      await queryClient.cancelQueries({ queryKey: ["me", "chats"] });
+      applyPinToCaches(nextPinned);
     },
-    onError: () =>
+    onError: (_err, nextPinned) => {
+      // Targeted revert of just this chat to its pre-mutation state, then a toast
+      // rather than silently leaving the row where the optimistic move put it.
+      applyPinToCaches(!nextPinned);
       addToast({
-        title: pinned ? "Couldn't unpin" : "Couldn't pin",
+        title: nextPinned ? "Couldn't pin" : "Couldn't unpin",
         description: "The change wasn't saved — try again.",
-      }),
+      });
+    },
+    onSuccess: (_data, nextPinned) => addToast({ title: nextPinned ? "Pinned" : "Unpinned" }),
+    // Reconcile with server truth (exact pinnedAt / ordering, plus the
+    // non-infinite palette / mobile caches skipped above) after either outcome.
+    onSettled: () => invalidate(),
   });
 
   const actions = actionsFor({
@@ -105,7 +145,8 @@ export function RowEngagementMenu({
     pinned,
     runEngagement: (next) => engagementMut.mutate(next),
     runMarkUnread: () => markUnreadMut.mutate(),
-    runTogglePin: () => pinMut.mutate(),
+    // Capture the target direction at click time (before onMutate flips `pinned`).
+    runTogglePin: () => pinMut.mutate(!pinned),
   });
   return <RowActionsMenu actions={actions} ariaLabel="Manage chat" triggerClassName={TRIGGER_HOVER_REVEAL} />;
 }

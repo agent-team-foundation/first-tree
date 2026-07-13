@@ -549,6 +549,10 @@ export function ConversationList({
                       <button
                         type="button"
                         onClick={() => onSelectChat(row.chatId)}
+                        // Selection is otherwise conveyed only visually (tint +
+                        // left bar); expose it to assistive tech too, mirroring
+                        // the New-chat button's `aria-current`.
+                        aria-current={isSelected ? "page" : undefined}
                         className={cn(
                           "w-full text-left transition-colors flex items-center",
                           "hover:bg-[var(--bg-hover)]",
@@ -591,10 +595,13 @@ export function ConversationList({
                         >
                           {row.title}
                         </span>
-                        {/* Right meta cluster — single line. Hidden on hover so
-                            the row's engagement menu can take the corner. */}
+                        {/* Right meta cluster — single line. Yields the top-right
+                            corner to the row's engagement kebab so the two never
+                            overlap: hidden on hover / when the menu is open, and
+                            ALSO on coarse (touch) pointers, where the kebab is
+                            always shown (no hover to reveal it). */}
                         <span
-                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0 pointer-coarse:opacity-0"
                           style={{ gap: 6 }}
                         >
                           {isWatching && (
@@ -700,9 +707,10 @@ function GroupDropdown({ group, onGroupChange }: { group: GroupMode; onGroupChan
           }}
         >
           {/* Grouping-mode icon carries the "group by" affordance; the visible
-              label stays compact (`Time` / `Source`) for the narrow rail. */}
+              label stays a single compact word (`Recent` / `Source`) with
+              `nowrap` so it never wraps to two lines in the narrow rail header. */}
           <ListTree size={13} strokeWidth={1.75} style={{ color: "var(--fg-4)" }} aria-hidden />
-          <span>{current?.label ?? "Time"}</span>
+          <span className="whitespace-nowrap">{current?.label ?? "Recent"}</span>
           <ChevronDown size={12} strokeWidth={1.75} />
         </button>
       )}

@@ -155,6 +155,7 @@ describe("createNotifier", () => {
       throw new Error("consumer failed");
     });
     const chatUpdatedSecond = vi.fn();
+    const meChatsChanged = vi.fn();
     const agentRoute = vi.fn(() => {
       throw new Error("consumer failed");
     });
@@ -172,6 +173,7 @@ describe("createNotifier", () => {
     notifier.onChatAudience(chatAudienceSecond);
     notifier.onChatUpdated(chatUpdated);
     notifier.onChatUpdated(chatUpdatedSecond);
+    notifier.onMeChatsChanged(meChatsChanged);
     notifier.onAgentRouteChange(agentRoute);
     notifier.onAgentRouteChange(agentRouteSecond);
     await notifier.start();
@@ -188,6 +190,8 @@ describe("createNotifier", () => {
     listeners.get("chat_message_events")?.("bad");
     listeners.get("chat_audience_events")?.("chat_1");
     listeners.get("chat_updated_events")?.("chat_1");
+    listeners.get("me_chats_changed")?.("human_1:org_1");
+    listeners.get("me_chats_changed")?.("bad");
     listeners.get("agent_route_events")?.(
       JSON.stringify({
         agentId: "agent_1",
@@ -226,6 +230,9 @@ describe("createNotifier", () => {
     expect(chatMessage).toHaveBeenCalledWith({ chatId: "chat_1", messageId: "msg_1" });
     expect(chatAudienceSecond).toHaveBeenCalledWith({ chatId: "chat_1" });
     expect(chatUpdatedSecond).toHaveBeenCalledWith({ chatId: "chat_1" });
+    expect(meChatsChanged).toHaveBeenCalledWith({ humanAgentId: "human_1", organizationId: "org_1" });
+    // The malformed "bad" payload (no colon) is dropped, not passed through.
+    expect(meChatsChanged).toHaveBeenCalledTimes(1);
     expect(agentRouteSecond).toHaveBeenCalledWith({
       agentId: "agent_1",
       agentType: "codex",
@@ -239,7 +246,7 @@ describe("createNotifier", () => {
 
     await notifier.stop();
     await notifier.stop();
-    expect(unlisteners).toHaveLength(10);
+    expect(unlisteners).toHaveLength(11);
     for (const unlisten of unlisteners) {
       expect(unlisten).toHaveBeenCalledTimes(1);
     }

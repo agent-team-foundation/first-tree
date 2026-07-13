@@ -504,7 +504,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { chatId: string } }>("/:chatId/pin", async (request) => {
     const { scope } = await requireChatAccess(request, app.db);
     const { pinned } = pinMeChatSchema.parse(request.body);
-    return pinMeChat(app.db, request.params.chatId, scope.humanAgentId, pinned);
+    const result = await pinMeChat(app.db, request.params.chatId, scope.humanAgentId, pinned);
+    // Fan a PRIVATE me-chats invalidation to the caller's OTHER devices so the
+    // pin regroups everywhere in realtime. User-scoped (never broadcast to other
+    // members — pin state is private per-user); fire-and-forget, the 30s
+    // me-chats poll is the durable floor.
+    void app.notifier.notifyMeChatsChanged(scope.humanAgentId, scope.organizationId);
+    return result;
   });
 
   /** POST /chats/:chatId/participants — add speaking participants. Idempotent. */

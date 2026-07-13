@@ -15,6 +15,7 @@ type CapturedHandlers = {
   sessionRuntime?: (payload: { agentId: string; chatId: string; organizationId: string }) => void;
   chatMessage?: (payload: { chatId: string; messageId: string }) => void;
   chatUpdated?: (payload: { chatId: string }) => void;
+  meChatsChanged?: (payload: { humanAgentId: string; organizationId: string }) => void;
 };
 
 function makeNotifier(handlers: CapturedHandlers): Notifier {
@@ -34,6 +35,9 @@ function makeNotifier(handlers: CapturedHandlers): Notifier {
     onChatUpdated: (handler: NonNullable<CapturedHandlers["chatUpdated"]>) => {
       handlers.chatUpdated = handler;
     },
+    onMeChatsChanged: (handler: NonNullable<CapturedHandlers["meChatsChanged"]>) => {
+      handlers.meChatsChanged = handler;
+    },
     onConfigChange: vi.fn(),
     onRuntimeStateChange: vi.fn(),
     onChatAudience: vi.fn(),
@@ -49,6 +53,7 @@ function makeNotifier(handlers: CapturedHandlers): Notifier {
     notifyChatMessage: vi.fn(),
     notifyChatAudience: vi.fn(),
     notifyChatUpdated: vi.fn(),
+    notifyMeChatsChanged: vi.fn(),
     notifyAgentRouteChange: vi.fn(),
     pushFrameToInbox: vi.fn(),
     start: vi.fn(),
@@ -259,5 +264,34 @@ describe("Admin WS route edge paths", () => {
     await waitForAsyncDispatch();
 
     expect(active.send).toHaveBeenCalledTimes(4);
+  });
+
+  it("fans a me-chats:changed frame only to the acting user's own sockets in that org", async () => {
+    const handlers: CapturedHandlers = {};
+    // The mock db resolves every handshake to humanAgentId "human-1"; the org is
+    // taken from the request path, so `own` (org-1) and `otherOrg` (org-2) share
+    // a user but differ by org — enough to exercise both filter dimensions.
+    const db = makeDb({});
+    const { app, getRoute } = makeApp(db);
+    await orgWsRoutes(makeNotifier(handlers), JWT_SECRET)(app as never);
+    const route = getRoute();
+    const token = await signToken({ sub: "user-1", type: "access" });
+
+    const own = makeSocket();
+    const otherOrg = makeSocket();
+    await route(own.socket, request(token, "org-1"));
+    await route(otherOrg.socket, request(token, "org-2"));
+
+    // The acting user's own pin in their org → delivered to `own` only.
+    handlers.meChatsChanged?.({ humanAgentId: "human-1", organizationId: "org-1" });
+    // A DIFFERENT user's pin in the same org → delivered to nobody. This is the
+    // privacy boundary: pin state is private and must never reach another member.
+    handlers.meChatsChanged?.({ humanAgentId: "human-2", organizationId: "org-1" });
+    // The same user, a different org → delivered to nobody here (org-scoped).
+    handlers.meChatsChanged?.({ humanAgentId: "human-1", organizationId: "org-3" });
+
+    expect(sentPayloads(own.send).map((payload) => payload.type)).toEqual(["admin:connected", "me-chats:changed"]);
+    // The other-org socket (same user) never sees org-1's pin.
+    expect(sentPayloads(otherOrg.send).map((payload) => payload.type)).toEqual(["admin:connected"]);
   });
 });
