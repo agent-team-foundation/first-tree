@@ -416,8 +416,8 @@
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.06);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08);
   /* Upward cast of --shadow-md, for panels docked flush above a surface (e.g.
-     the mobile mention popover) that must lift off the content above without
-     casting a shadow down onto the surface welded below them. */
+     the mobile mention popover) that must lift off the content above them
+     without casting a shadow down onto the surface welded below. */
   --shadow-md-up: 0 -4px 12px oklch(0 0 0 / 0.08);
 
   /* State pairs for callouts / inline notices (light mode).
@@ -919,32 +919,22 @@
   }
 }
 
-/* @mention / recipient-picker popover (MentionAutocompletePopover), anchored
-   to the composer's relative wrapper.
-
-   Desktop: a compact panel floating just above the textarea.
-
-   Phone (<48rem): the desktop float is a poor fit — capped at 360px and
-   left-aligned, it is narrower than the message column, so the message behind
-   it pokes out on the right (looks broken), and the gap above the input makes
-   it read as a detached overlay rather than part of the composer. On phones we
-   stretch the panel to the full composer width and dock it flush to the input's
-   top edge, so it reads as one surface growing upward out of the input. */
-
-/* The editable composer input card (chat-view). Radius lives here (not inline)
-   so the phone-only weld rule below can flatten its top corners while the
-   mention panel is docked above it. */
+/* The chat composer card. Radius lives here (not inline) so the phone-only weld
+   rule below can flatten its top corners while a picker panel is docked flush
+   above it. */
 .composer-card {
   border-radius: var(--radius-panel);
 }
 
-.mention-popover {
+/* Shared base for the composer picker popovers — the `@`mention list and the
+   `/`slash-command list. Desktop presentation: a compact panel floating just
+   above the input. Each keeps its own min/max width below. */
+.mention-popover,
+.slash-popover {
   position: absolute;
   z-index: 20;
   left: 0;
   bottom: calc(100% + var(--sp-1));
-  min-width: 240px;
-  max-width: 360px;
   max-height: 14rem;
   overflow: auto;
   background: var(--bg-raised);
@@ -952,47 +942,54 @@
   border-radius: var(--radius-panel);
   box-shadow: var(--shadow-md);
 }
+.mention-popover {
+  min-width: 240px;
+  max-width: 360px;
+}
+.slash-popover {
+  min-width: 280px;
+  max-width: 420px;
+  max-height: 18rem;
+}
 
 @media (max-width: 47.999rem) {
-  /* The full-width dock/weld is scoped to the Chat composer host, whose
-     `.composer-card` implements the matching flattened-top state below. The
-     other two hosts of this shared popover (AskTakeover answer box,
-     NewChatDraft recipient input) do NOT flatten their input, so welding a
-     square-bottomed panel onto their still-rounded chrome would reproduce the
-     very seam this rule removes. They keep the compact float on phones; a full
-     mobile treatment for those surfaces is a separate follow-up. */
-  .composer-card .mention-popover {
+  /* Phone: a composer picker popover spans the full input width and docks flush
+     to the input's top edge, so panel + input read as one surface instead of a
+     narrow float that lets the row behind it poke out on the right. Opt-in via
+     the `.composer-input` host marker — a future consumer of these shared
+     popovers can't silently inherit the dock without a participating input. */
+  .composer-input .mention-popover,
+  .composer-input .slash-popover {
+    left: 0;
     right: 0;
     min-width: 0;
     max-width: none;
-    /* Flush to the input's top edge — no gap — so panel + input read as one. */
     bottom: 100%;
     max-height: 16rem;
-    /* Round only the top; the bottom butts seamlessly against the input. Match
-       the composer card's --radius-panel so the welded panel + input read as a
-       single 6px-rounded surface. */
+    /* Rounded top (panel radius), squared bottom butting the input. */
     border-radius: var(--radius-panel) var(--radius-panel) 0 0;
     border-bottom-color: transparent;
-    /* Lift off the messages above with a genuinely top-only shadow. A blurred
-       box-shadow spreads in every direction, so a negative Y offset alone still
-       paints a lower lobe (offsetY + blur = 8px) down onto the welded input —
-       visible as a dark seam, worst in dark mode. Clip everything at/below the
-       panel's bottom edge so only the upward lobe survives; the panel and input
-       then read as one continuous surface. */
+    /* Genuinely top-only shadow: a blurred box-shadow spreads in every
+       direction, so a negative Y offset alone still paints a lower lobe
+       (offsetY + blur = 8px) down onto the input — a dark seam, worst in dark
+       mode. Clip at/below the panel's bottom edge so only the upward lobe
+       survives and panel + input read as one continuous surface. */
     box-shadow: var(--shadow-md-up);
     clip-path: inset(-18px 0 0 0);
   }
-  /* Comfortable thumb targets on touch: the 28px avatar + py-1.5 row is ~40px;
-     lift the whole row to the ~46px iOS tap floor. Global — a bigger tap target
-     helps every host and introduces no seam. */
-  .mention-option {
+  /* Comfortable touch targets (28px avatar + py-1.5 row is ~40px → ~46px iOS
+     floor). No seam, so applied to every host. */
+  .mention-option,
+  .slash-option {
     min-height: 2.875rem;
   }
-  /* Complete the weld: while the mention panel is docked above it, the composer
-     card drops its top rounding so the panel's flat bottom meets a flat top —
-     one continuous surface. Desktop keeps the float + gap, so its corners stay
-     rounded (this rule is phone-only). */
-  .composer-card[data-mention-open="true"] {
+  /* The chat composer has a clean top edge flush against the panel, so it drops
+     its top rounding while a picker is open → the panel's flat bottom meets a
+     flat top, one continuous surface. A host whose picker docks above a mid-card
+     text row (NewChatDraft: a chip row sits above the field) omits
+     `data-picker-open`, keeping its corners — the panel is still full-width,
+     just not corner-welded. */
+  .composer-card[data-picker-open="true"] {
     border-top-left-radius: 0;
     border-top-right-radius: 0;
   }

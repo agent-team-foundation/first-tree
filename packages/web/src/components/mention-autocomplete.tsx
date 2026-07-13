@@ -413,6 +413,22 @@ export function buildMentionInsert(
 }
 
 /**
+ * Whether a composer host should enter its phone "welded" state — i.e. flatten
+ * its top corners because a picker panel is actually docked flush above it.
+ *
+ * True only when a panel is *visible*. Trial composers keep the mention/slash
+ * hooks live (so `@`/`/` still drive keyboard handling) but intentionally render
+ * no panel, so a trial trigger must NOT weld the host — that would square the
+ * input's top corners with nothing docked above them. A shared predicate so a
+ * welding host's open-state can't drift from its panel render guard (the chat
+ * composer today; other hosts when they adopt the dock).
+ */
+export function composerPickerVisible(opts: { isTrial: boolean; mentionOpen: boolean; slashOpen: boolean }): boolean {
+  if (opts.isTrial) return false;
+  return opts.mentionOpen || opts.slashOpen;
+}
+
+/**
  * Handle mapped keyboard events from the host textarea so the caller can
  * wire them into its own `onKeyDown`. Returns true when the event was
  * consumed (i.e. caller should `preventDefault`).

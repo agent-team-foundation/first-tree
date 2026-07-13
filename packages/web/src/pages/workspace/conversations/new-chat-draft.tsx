@@ -742,7 +742,11 @@ export function NewChatDraft({
                 )}
               </div>
             )}
-            <div style={{ position: "relative" }}>
+            {/* `composer-input` opts the mention popover into the phone full-width
+                dock. No `data-picker-open`: the popover docks above the message
+                textarea, which sits below the chip row (not at the card's top
+                edge), so the panel is full-width but not corner-welded. */}
+            <div className="composer-input" style={{ position: "relative" }}>
               <MentionAutocompletePopover
                 trigger={mention.trigger}
                 results={mention.results}
