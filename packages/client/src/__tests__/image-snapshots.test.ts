@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -125,6 +125,14 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(res.strippedText).toBe("![a](shots/filter.png)");
   });
 
+  it("handles a pathological `![![![…` body in linear time (ReDoS guard)", async () => {
+    const { uploader } = stubUploader();
+    // With an ambiguous regex this backtracks polynomially; the linear regex
+    // returns immediately. The vitest per-test timeout is the guard.
+    const res = await buildMessageImageSnapshots(`${"![".repeat(50000)}(x`, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(0);
+  });
+
   it("does NOT capture an image mention inside a fenced or inline code span", async () => {
     const { uploader, uploads } = stubUploader();
     const body = ["用法：`![logo](shots/filter.png)`", "", "```md", "![x](diagram.webp)", "```"].join("\n");
@@ -132,6 +140,32 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(res.imageRefs).toHaveLength(0);
     expect(uploads).toHaveLength(0);
     expect(res.strippedText).toBe(body); // code samples preserved verbatim
+  });
+
+  it("respects a longer closing fence and an unclosed (EOF) fence", async () => {
+    const { uploader } = stubUploader();
+    // 3-backtick open closed by a 4-backtick line — CommonMark closes here.
+    const longerClose = ["````", "![a](shots/filter.png)", "````"].join("\n");
+    const r1 = await buildMessageImageSnapshots(longerClose, root, opts(uploader));
+    expect(r1.imageRefs).toHaveLength(0);
+    expect(r1.strippedText).toBe(longerClose);
+    // Unclosed fence extends to end-of-input.
+    const unclosed = ["```md", "![b](diagram.webp)"].join("\n");
+    const r2 = await buildMessageImageSnapshots(unclosed, root, opts(uploader));
+    expect(r2.imageRefs).toHaveLength(0);
+    expect(r2.strippedText).toBe(unclosed);
+  });
+
+  it("skips an oversized file via stat, without reading its bytes", async () => {
+    // Sparse 11MB file: stat.size is over the 10MB cap, but no bytes allocate.
+    const big = join(root, "huge.png");
+    await writeFile(big, Buffer.alloc(0));
+    await truncate(big, 11 * 1024 * 1024);
+    const { uploader, uploads } = stubUploader();
+    const res = await buildMessageImageSnapshots("![big](huge.png) 和 ![ok](shots/filter.png)", root, opts(uploader));
+    expect(res.imageRefs.map((r) => r.filename)).toEqual(["filter.png"]); // only the small one
+    expect(res.skipped).toBe(1);
+    expect(uploads.map((u) => u.filename)).toEqual(["filter.png"]);
   });
 
   it("captures an image with a markdown title and strips the whole span", async () => {

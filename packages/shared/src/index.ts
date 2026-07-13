@@ -16,7 +16,12 @@ export {
   locateDocAnchors,
 } from "./doc-anchor.js";
 // -- Mention extraction (shared by the server fan-out resolver and other readers) --
-export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
+export {
+  type BarePathMatch,
+  fencedCodeBlockRanges,
+  scanBareDocPathTokens,
+  stripDocPathLineSuffix,
+} from "./lib/doc-link-scan.js";
 export {
   buildWorkspaceDocKey,
   isCanonicalDocLinkPath,

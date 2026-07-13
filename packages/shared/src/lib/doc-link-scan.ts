@@ -171,6 +171,45 @@ function isClosingFence(line: string, fence: FenceState): boolean {
 }
 
 /**
+ * Character ranges covered by fenced code blocks (``` ``` ``` ``` / `~~~`),
+ * using the same CommonMark fence rules as {@link scanBareDocPathTokens}: a
+ * closing fence must be the same marker char and at least as long as the
+ * opener, and an unclosed fence extends to end-of-input. Returned as
+ * `[start, end)` offsets into `text`. Callers (e.g. the image-capture scanner)
+ * use these to avoid treating markdown shown inside a code sample as a live
+ * construct.
+ */
+export function fencedCodeBlockRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const lines = text.split(/(\r?\n)/);
+  let fence: FenceState | null = null;
+  let fenceStart = 0;
+  let absoluteOffset = 0;
+  for (const line of lines) {
+    if (line === "\n" || line === "\r\n") {
+      absoluteOffset += line.length;
+      continue;
+    }
+    if (fence) {
+      if (isClosingFence(line, fence)) {
+        ranges.push({ start: fenceStart, end: absoluteOffset + line.length });
+        fence = null;
+      }
+      absoluteOffset += line.length;
+      continue;
+    }
+    const opening = parseOpeningFence(line);
+    if (opening) {
+      fence = opening;
+      fenceStart = absoluteOffset;
+    }
+    absoluteOffset += line.length;
+  }
+  if (fence) ranges.push({ start: fenceStart, end: text.length });
+  return ranges;
+}
+
+/**
  * Strip the `:line[:col]` suffix that agents often append to file references.
  * Returns the path portion (without the trailing line/column digits) so
  * callers can hand it to `normalizeDocLinkPath`. We accept and discard the

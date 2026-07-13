@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import {
+  fencedCodeBlockRanges,
   IMAGE_MIME_TO_EXT,
   type ImageRefContent,
   MAX_ATTACHMENT_BYTES,
@@ -159,12 +160,18 @@ async function captureAndUpload(
   mime: SupportedImageMime,
   opts: BuildImageAttachmentsOptions,
 ): Promise<ImageRefContent | null> {
+  // Enforce the size cap from `stat` BEFORE reading, so a huge (or sparse)
+  // `.png` can't make us allocate its bytes into memory (up to 20 files upload
+  // concurrently — reading first would risk an OOM before the size check).
   let bytes: Buffer;
   try {
+    const st = await stat(file);
+    if (st.size === 0 || st.size > MAX_ATTACHMENT_BYTES) return null;
     bytes = await readFile(file);
   } catch {
     return null;
   }
+  // Re-check post-read against a race (file grown between stat and read).
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_ATTACHMENT_BYTES) return null;
 
   const filename = basename(writtenPath);
@@ -207,7 +214,11 @@ function basename(p: string): string {
 function collectImageOccurrences(text: string): ImageOccurrence[] {
   const out: ImageOccurrence[] = [];
   const codeRanges = codeSpanRanges(text);
-  const re = /!\[(?:[^\]\\]|\\.)*\]\((\S+?)(?:\s+"[^"]*")?\)/g;
+  // BOUNDED quantifiers keep this linear: without a length cap, `[^\]\n]*`
+  // rescans to end-of-input at every `![` start, so a pathological `![![![…`
+  // body is O(n²) (CodeQL polynomial-ReDoS). Alt text ≤512 and path ≤2048 are
+  // far beyond any real image mention and cap the per-attempt work.
+  const re = /!\[[^\]\n]{0,512}\]\(([^\s)"]{1,2048})(?:\s+"[^"]*")?\)/g;
   let match: RegExpExecArray | null = re.exec(text);
   while (match !== null) {
     const whole = match[0];
@@ -222,20 +233,15 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
   return out;
 }
 
-/** Byte ranges covered by fenced code blocks (``` / ~~~) and inline code
- *  spans, computed once so an image mention inside a code sample is skipped.
- *  Fenced blocks are matched first and their spans exclude any inline backtick
- *  inside them from being treated as a separate span. */
+/** Byte ranges covered by fenced code blocks and inline code spans, so an image
+ *  mention inside a code sample is skipped. Fenced blocks use the shared
+ *  CommonMark scanner (`fencedCodeBlockRanges` — handles a longer closing fence
+ *  and an unclosed fence extending to EOF); single-line inline spans are added
+ *  when not already inside a fence. */
 function codeSpanRanges(text: string): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = [];
-  const fenced = /^[ \t]*(`{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm;
-  let m: RegExpExecArray | null = fenced.exec(text);
-  while (m !== null) {
-    ranges.push({ start: m.index, end: m.index + m[0].length });
-    m = fenced.exec(text);
-  }
-  const inline = /`+[^`\n]*`+/g;
-  m = inline.exec(text);
+  const ranges = fencedCodeBlockRanges(text);
+  const inline = /`[^`\n]*`/g;
+  let m: RegExpExecArray | null = inline.exec(text);
   while (m !== null) {
     const start = m.index;
     if (!isInsideRange(start, ranges)) ranges.push({ start, end: start + m[0].length });
