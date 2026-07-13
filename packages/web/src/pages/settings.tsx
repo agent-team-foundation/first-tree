@@ -74,7 +74,7 @@ const ITEMS: Item[] = [
   {
     to: "/settings/resources",
     label: "Resources",
-    description: "Team defaults and opt-in resources your agents load at runtime.",
+    description: "Team defaults and opt-in resources your agents load when they start.",
   },
   {
     to: "/settings/github",

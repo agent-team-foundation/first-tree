@@ -278,7 +278,7 @@ function RetireConfirmDialog(props: {
   const impactLine = checking
     ? "Checking impact…"
     : count === undefined
-      ? "This removes the resource from the team's runtime defaults."
+      ? "This removes the resource from the team's defaults."
       : count === 0
         ? "No agents currently use this resource."
         : `This will update ${count} agent${count === 1 ? "" : "s"} that use this resource.`;

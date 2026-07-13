@@ -1,6 +1,6 @@
 import type { CapabilityEntry, ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   disconnectClient,
@@ -23,7 +23,14 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../components/ui/dense-table.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { Section } from "../components/ui/section.js";
@@ -354,14 +361,14 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               <DialogHeader>
                 <DialogTitle>Retire Computer</DialogTitle>
               </DialogHeader>
-              <p className="text-body" style={{ color: "var(--fg-3)" }}>
+              <DialogDescription>
                 Permanently remove{" "}
                 <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmRetire.hostname ?? confirmRetire.id.slice(0, 8)}
                 </span>
                 . Retiring is blocked while an agent is still assigned to this computer — delete those agents first
                 (reassigning isn't available yet).
-              </p>
+              </DialogDescription>
               {getClientAgents(confirmRetire.id).length > 0 && (
                 <div
                   className="p-2 rounded-[var(--radius-input)]"
@@ -427,13 +434,13 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               <DialogHeader>
                 <DialogTitle>Disconnect Computer</DialogTitle>
               </DialogHeader>
-              <p className="text-body" style={{ color: "var(--fg-3)" }}>
+              <DialogDescription>
                 This will disconnect{" "}
                 <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmDisconnect.hostname ?? confirmDisconnect.id.slice(0, 8)}
                 </span>{" "}
                 and affect all agents on this computer:
-              </p>
+              </DialogDescription>
               <ul className="space-y-1">
                 {getClientAgents(confirmDisconnect.id).length === 0 ? (
                   <li className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -732,7 +739,7 @@ function CapabilityMatrix({ capabilities, os }: { capabilities: ClientCapabiliti
   const empty = Object.keys(capabilities).length === 0;
   return (
     <>
-      <UppercaseLabel style={{ display: "block", marginBottom: "var(--sp-1_5)" }}>Coding agents</UppercaseLabel>
+      <UppercaseLabel style={{ display: "block", marginBottom: "var(--sp-1_5)" }}>Runtimes</UppercaseLabel>
       {empty ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Capabilities not yet reported. Reconnect this computer to refresh.
@@ -760,7 +767,7 @@ function ProviderRow({
   const label = PROVIDER_LABEL[provider];
   if (!entry) {
     return (
-      <div className="flex items-center gap-2.5 text-body" style={{ color: "var(--fg-4)" }}>
+      <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
         <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
           {label}
         </span>
@@ -777,21 +784,19 @@ function ProviderRow({
           <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
-          <span className="text-caption inline-flex items-center gap-1" style={{ color: "var(--success)" }}>
-            <Check className="h-3.5 w-3.5" />
-            installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
+          <span className="text-caption" style={{ color: "var(--success)" }}>
+            ✓ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
           </span>
         </div>
       );
     case "missing":
       return (
-        <div className="flex items-center gap-2.5 text-body" style={{ color: "var(--fg-4)" }}>
+        <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
           <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
-          <span className="text-caption inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
-            <X className="h-3.5 w-3.5" />
-            {providerInstallHint(provider, os, entry.error)}
+          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+            ✗ {providerInstallHint(provider, os, entry.error)}
           </span>
         </div>
       );
