@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.2.5
+version: 0.3.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Bootstrap a team's Context Tree from readable source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or GitHub URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR is merged.
@@ -22,7 +22,7 @@ not here.
 
 | Use `first-tree-seed`                                                 | Use a different skill                                                                                |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| The team has no tree yet, **or** a bound tree with no domain structure (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental source-driven write)       |
+| The team has no tree yet, **or** a bound tree with no normal domain structure per the generated policy's content classes | The tree already has a normal domain structure → `first-tree-write` (incremental source-driven write) |
 | First content pass on resolved readable sources                       | Broad maintenance or drift-audit work on an existing tree                                            |
 | Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
 
@@ -32,16 +32,14 @@ through `first-tree-write` or a focused maintenance task. The one exception is
 the verified Phase 2 continuation from this setup chat after its Phase 1 PR was
 merged; that is completion of the same seed, not a second seed.
 
-## Required Reading
+## Policy Baseline
 
-Before drafting anything, load this skill. The hard rules it carries
-govern every node this skill writes — seed does not invent its own
-rules, it observes the existing ones during a special lifecycle phase.
-
-1. **`../first-tree-write/SKILL.md`** — the Context Tree operating
-   guide. Carries the source-system boundary, the Double Test, the
-   Content Model (what / why / who), Node Shape, Hard Rules 1–9.
-   **Every node this skill creates must satisfy those hard rules.**
+Before drafting anything, load this skill and use the generated Context Tree
+Policy already present in `AGENTS.md` / `CLAUDE.md` as the content baseline.
+Every node this skill creates must satisfy that policy: durable decision,
+current truth, rationale, source-system boundary, Double Test, smallest correct
+edit, no implementation detail, no history, and no actionable future work in
+normal tree content.
 
 ## Resolve the tree's state (three states; stop on refuse)
 
@@ -192,24 +190,27 @@ by `tree init` or another authoritative command:
 - **A suspended install:** `tree init` prints the installation-settings URL —
   relay it and say to reactivate the First Tree App installation there.
 
-**B — Bound but unseeded.** The tree is bound and holds at most the
-bootstrap set — a root `NODE.md`, a `members/` index, and creator member
-node(s) — with **no top-level domain directory** yet. This is the normal
-seed entry, whether the bootstrap came from state A's `tree init` above or
-from an earlier provision. Proceed to Phase 1. Phase 1 layers the domain
-skeleton + `raw-context` **on top of** whatever bootstrap nodes already
-exist: **extend** the root `NODE.md` index and the `members/` tree rather
-than recreating them (a bootstrap root node / members index is expected,
-not a conflict).
+**B — Bound but unseeded.** The tree is bound and holds at most non-normal
+supporting/member structure under the generated policy's content classes,
+with **no normal top-level domain directory** yet.
+This is the normal seed entry, whether the bootstrap came from state A's
+`tree init` above or from an earlier provision. Proceed to Phase 1. Phase 1
+layers the normal domain skeleton plus any missing supporting/member structure
+on top of whatever bootstrap nodes already exist: **extend** the root `NODE.md`
+index and supporting trees rather than recreating them.
 
 **C — Already seeded.** Outside the verified Phase 2 continuation above, the
-tree has one or more **top-level domain
+tree has one or more **normal top-level domain
 directories** — any directory directly under `<workspaceRoot>/<manifest.tree>/`
-other than `.git/`, `.first-tree/`, `.github/`, `members/`, and
+other than `.git/`, `.first-tree/`, `.github/`, `members/`, `raw-context/`, and
 dotfile-prefixed dirs. Refuse with a one-line explanation pointing at
 `first-tree-write` for incremental source-driven writes, or ask for a
 focused maintenance scope. Do **not** delete nodes to force a re-seed —
 that is human-owned.
+
+The generated policy's archive/supporting and member content classes are not
+normal domains. A tree that has only those non-normal classes plus bootstrap
+nodes is still unseeded for this skill's purposes.
 
 ### Resolve readable sources
 
@@ -357,15 +358,14 @@ Aggregate observations across all sources, then abstract:
   organisation are the strongest signals. For `product/` and
   `customer/`, README positioning and marketing-site content are the
   strongest signals.
-- **Supporting structure is automatic, not a candidate.** Ensure
-  `members/<owner>/NODE.md` (owner = most-active recent
-  contributor of the largest source) and `raw-context/NODE.md` (the
-  intake bucket for meeting notes and explorations) exist — state A's
-  `tree init` may have already created a `members/` index and the
-  creator's member node, so **extend those rather than recreating
-  them** (add the computed owner if it differs from the creator). These
-  are scaffolding, not concern axes; do not put them in the user
-  checklist as toggles — but **do compute the primary owner now**
+- **Supporting structure is automatic, not a candidate.** Ensure the
+  generated policy's member content and archive/supporting intake nodes
+  exist — in today's tree shape, `members/<owner>/NODE.md` and
+  `raw-context/NODE.md`. State A's `tree init` may have already created a
+  member index and creator node, so **extend those rather than recreating
+  them** (add the computed owner if it differs from the creator). These are
+  scaffolding, not concern axes; do not put them in the user checklist as
+  toggles — but **do compute the primary owner now**
   (one `git log` per source, seconds) and show the derived name in
   the confirmation message, so the user confirms structure and owner
   in one round-trip instead of being asked twice.
@@ -379,12 +379,11 @@ Aggregate observations across all sources, then abstract:
   sources; listing OFF candidates shows the user what was looked at
   and rejected, which is itself information.
 
-The `first-tree-write` hard rule "add a directory only when ≥3
-leaves are present or expected" applies as written. Phase 1 may open
-a domain when ≥3 leaves are **foreseeable**; Phase 2's job is to
-land them. There is no separate "provisional" lifecycle — a domain
-that ends Phase 2 with 0 leaves is ordinary follow-up maintenance
-later.
+The generated policy's "add a directory only when the domain shape justifies
+it" rule applies here as the ≥3 leaves threshold: Phase 1 may open a domain
+when ≥3 leaves are **foreseeable**; Phase 2's job is to land them. There is no
+separate "provisional" lifecycle — a domain that ends Phase 2 with 0 leaves is
+ordinary follow-up maintenance later.
 
 ### User confirmation
 
@@ -427,12 +426,11 @@ echo back. "open system and ops, skip customer, also add compliance"
 is a complete answer; interpret it and restate the final set in one
 line before writing.
 
-**This user-checklist step is what satisfies `first-tree-write`'s
-"top-level domains require explicit human-owner approval" rule.**
-The main agent proposes candidates with evidence; the human is the
-one who actually opens each one. Without an explicit "yes" from the
-user, do not create any top-level domain — even ones marked
-"recommended ON".
+**This user-checklist step is what satisfies the policy requirement that
+top-level domains require explicit human-owner approval.** The main agent
+proposes candidates with evidence; the human is the one who actually opens
+each one. Without an explicit "yes" from the user, do not create any top-level
+domain — even ones marked "recommended ON".
 
 ### What to write
 
@@ -518,8 +516,7 @@ Notes on defaults:
   user's reason if given). Do not list the source PRs / commits — the
   audit trail is `git log`.
 - Run `first-tree tree verify --tree-path <tree>` locally before
-  opening the PR. Non-zero exit blocks (`first-tree-write` Hard
-  Rule 5).
+  opening the PR. Non-zero exit blocks.
 - Stop after the PR is open. Do **not** start Phase 2 work until the
   user has explicitly merged PR1.
 
@@ -686,10 +683,10 @@ Each sub-agent receives:
 - The list of resolved sources and their on-disk paths.
 - The time budget (default 15 minutes wall-clock; the main agent
   may set a lower budget for thin domains).
-- The hard rules from `first-tree-write` (loaded by reference).
+- The generated Context Tree Policy plus the seed-specific hard rules below.
 - The **leaf shape target**: **up to ~60 lines** per leaf, structured
   as `## Decision` / `## Rationale` / `## Constraints` (matching
-  `first-tree-write`'s node shape; omit a section you don't need).
+  the normal node shape; omit a section you don't need).
   Shorter is better when the signal is thin — a six-line node that
   captures the decision cleanly beats a sixty-line node that buries
   it; do not pad to hit a length. Consistently longer is a smell
@@ -847,8 +844,7 @@ tree is fully usable but empty; later writes go through
 
 ## Hard Rules
 
-These are inherited from `first-tree-write` and listed here only to
-make them visible at the seed-specific surface.
+These apply the generated Context Tree Policy to the seed-specific surface.
 
 - **Smallest correct edit.** A six-line NODE.md that captures the
   domain's charter beats a sixty-line one that buries it. Phase 1
@@ -863,8 +859,7 @@ make them visible at the seed-specific surface.
   `git log`. Do not preface a node with "Originally we…" or
   "Update 2026-XX-XX:".
 - **`first-tree tree verify` must pass before PR1 and PR2 land.**
-  Hard Rule 5 from `first-tree-write`. Non-zero exit blocks the
-  commit.
+  Non-zero exit blocks the commit.
 - **Ownership changes go through humans.** Phase 1 sets `owners` to
   the workspace's primary owner as the default; reassignment is the
   user's job, not the agent's.
@@ -892,6 +887,5 @@ make them visible at the seed-specific surface.
 
 ## References
 
-- [`../first-tree-write/SKILL.md`](../first-tree-write/SKILL.md)
-  — Context Tree operating guide, Hard Rules 1–9, Node Shape,
-  source-system boundary
+The generated `AGENTS.md` / `CLAUDE.md` briefing carries the shared Context
+Tree Policy. This skill carries only the empty-tree bootstrap workflow.

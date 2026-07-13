@@ -9,12 +9,10 @@ import type { RunPaths } from "../../core/types.js";
 import type { FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const SEED_SKILL_NAME = "first-tree-seed";
-const WRITE_SKILL_NAME = "first-tree-write";
 
 function workspaceAgentsMarkdown(
   workspacePath: string,
   seedDescription: string,
-  writeDescription: string,
   evalCase: FirstTreeSeedEvalCase,
 ): string {
   const sourceRepoPath = join(workspacePath, "source-repos", "source-repo");
@@ -57,12 +55,20 @@ only when the skill description applies to the prompt.
 | Skill | Load when |
 |---|---|
 | \`first-tree-seed\` | ${seedDescription} |
-| \`first-tree-write\` | ${writeDescription} |
 
 When \`first-tree-seed\` applies, load it by reading
-\`.agents/skills/first-tree-seed/SKILL.md\` before acting. The seed skill may
-also require reading \`.agents/skills/first-tree-write/SKILL.md\`; that file is
-installed in this workspace.
+\`.agents/skills/first-tree-seed/SKILL.md\` before acting. The generated
+Context Tree Policy below is the shared content baseline for seed.
+
+## Context Tree Policy
+
+The tree records durable decisions, constraints, ownership, and cross-domain
+relationships; source repos record implementation detail. Use the Double Test:
+a candidate belongs only when it establishes or changes a decision future
+agents must respect and remains durable if the triggering commit or PR is
+rewritten. Capture current truth and rationale, not history, PR references, or
+actionable future work. Normal tree content is canonical; archive/supporting
+and member content are non-normal classes with narrower authority.
 
 ## Eval Workspace State
 
@@ -106,15 +112,9 @@ inside this eval workspace.
 
 function installSeedSkills(repoRoot: string, workspacePath: string, evalCase: FirstTreeSeedEvalCase): void {
   const seedMarkdown = installRepoSkill(repoRoot, workspacePath, SEED_SKILL_NAME);
-  const writeMarkdown = installRepoSkill(repoRoot, workspacePath, WRITE_SKILL_NAME);
   writeText(
     join(workspacePath, "AGENTS.md"),
-    workspaceAgentsMarkdown(
-      workspacePath,
-      parseSkillDescription(seedMarkdown),
-      parseSkillDescription(writeMarkdown),
-      evalCase,
-    ),
+    workspaceAgentsMarkdown(workspacePath, parseSkillDescription(seedMarkdown), evalCase),
   );
 }
 

@@ -176,7 +176,7 @@ describe("bootstrap edge coverage", () => {
 
     expect(logs).toEqual([
       "First-tree skills install skipped: tree installer unavailable",
-      "Core skill install skipped: core installer unavailable",
+      "First-tree skill install skipped: core installer unavailable",
     ]);
   });
 
@@ -189,7 +189,7 @@ describe("bootstrap edge coverage", () => {
         bundledSkillsRoot: join(tmpBase, "missing-skills"),
         log: (msg) => logs.push(msg),
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       installCoreSkills({
         workspacePath: tmpBase,
@@ -197,7 +197,8 @@ describe("bootstrap edge coverage", () => {
         log: (msg) => logs.push(msg),
       }),
     ).toBe(false);
-    expect(logs.join("\n")).toContain("failed first-tree-read");
-    expect(logs.join("\n")).toContain("failed first-tree-welcome");
+    expect(logs.join("\n")).toContain("First-tree skills: no skills configured");
+    expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-read)");
+    expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-welcome)");
   });
 });

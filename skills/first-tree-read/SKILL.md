@@ -17,6 +17,18 @@ skill does not own broad drift audits; when the user asks whether the
 tree is generally up to date, report that no shipped broad-audit skill
 is available and ask for a specific source artifact or scope.
 
+## Authority Boundary
+
+Apply the generated Context Tree Policy's content classes and drift-authority
+rules before treating a file as current truth. Normal content is the canonical
+decision/constraint source; non-normal classes have narrower authority and
+should be labeled separately when they affect an answer.
+
+Do not promote non-normal content into canonical tree facts. If normal content
+requires non-normal material to be understood, report a tree hygiene concern.
+If code and tree content conflict, follow the generated policy's code-vs-tree
+drift rule.
+
 ## Workflow
 
 ### 1. Resolve the context repo
@@ -86,7 +98,7 @@ matter. Prefer reading:
 - parent `NODE.md` files for the matched domain
 - specific leaf files matched by the query
 - `soft_links` targets from matched files when they affect the task
-- `members/<id>/NODE.md` only when ownership or review scope matters
+- member content only when ownership or review scope matters
 
 ### 4. Use `first-tree tree tree` to select files
 

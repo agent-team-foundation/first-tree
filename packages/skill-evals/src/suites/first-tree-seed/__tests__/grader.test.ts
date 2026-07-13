@@ -29,7 +29,7 @@ function findCase(id: string): FirstTreeSeedEvalCase {
   return evalCase;
 }
 
-function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
+function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
   return {
     approvalRequestObserved: true,
     chatHistoryReadObserved: true,
@@ -57,7 +57,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     treeInitObserved: false,
     treeInitWithContextTreeDirObserved: false,
     workspaceManifestReadObserved: true,
-    writeSkillFileReadObserved: true,
+    writeSkillFileReadObserved: false,
     ...overrides,
   };
 }
@@ -137,23 +137,6 @@ describe("first-tree-seed grader", () => {
         }),
       ),
     ).toBe(false);
-  });
-
-  it("fails empty-tree source-present when first-tree-write required reading was not loaded", () => {
-    const evalCase = findCase("empty-tree-source-present");
-    const metrics = baseMetrics({
-      writeSkillFileReadObserved: false,
-    });
-
-    expect(casePassed(evalCase, metrics)).toBe(false);
-
-    const grading = buildGrading(evalCase, metrics, casePassed(evalCase, metrics));
-    expect(grading.scores).toEqual({
-      outcome_pass: true,
-      process_pass: true,
-      risk_pass: true,
-      routing_pass: false,
-    });
   });
 
   it("requires a positive Phase 2 continuation and does not misread no-App prose as an App requirement", () => {
@@ -959,7 +942,7 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
-              aggregated_output: "Required Reading: read ../first-tree-write/SKILL.md before drafting seed content.",
+              aggregated_output: "Later incremental updates go through first-tree-write.",
               command: "sed -n '1,160p' .agents/skills/first-tree-seed/SKILL.md",
               type: "command_execution",
             },
@@ -975,36 +958,7 @@ describe("first-tree-seed grader", () => {
 
       expect(metrics.seedSkillFileReadObserved).toBe(true);
       expect(metrics.writeSkillFileReadObserved).toBe(false);
-      expect(
-        casePassed(findCase("empty-tree-source-present"), baseMetrics({ writeSkillFileReadObserved: false })),
-      ).toBe(false);
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("counts installed first-tree-write skill path reads as write-skill reads", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-write-skill-read-"));
-    try {
-      const metrics = deriveMetrics(
-        [
-          {
-            event: {
-              aggregated_output: "# First Tree Write",
-              command: "sed -n '1,160p' .agents/skills/first-tree-seed/../first-tree-write/SKILL.md",
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-        ],
-        findCase("empty-tree-source-present"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
-
-      expect(metrics.writeSkillFileReadObserved).toBe(true);
+      expect(casePassed(findCase("empty-tree-source-present"), baseMetrics())).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -2554,17 +2508,6 @@ describe("first-tree-seed grader", () => {
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
-  });
-
-  it("fails bare-source protocol when first-tree-write required reading was not loaded", () => {
-    expect(
-      casePassed(
-        findCase("bare-source-worktree-protocol"),
-        baseMetrics({
-          writeSkillFileReadObserved: false,
-        }),
-      ),
-    ).toBe(false);
   });
 
   it("detects direct reads from the bare source path", () => {

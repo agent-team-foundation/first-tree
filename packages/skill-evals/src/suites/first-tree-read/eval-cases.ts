@@ -48,7 +48,13 @@ export const FIRST_TREE_READ_EVAL_CASES: readonly SkillEvalCase[] = [
         runtimeBoundary: "generated briefing fixture only; not live First Tree Cloud E2E",
       },
       fixture: {
-        installedSkills: ["first-tree-welcome", "first-tree-read", "first-tree-seed", "first-tree-write"],
+        installedSkills: [
+          "first-tree-welcome",
+          "first-tree-read",
+          "first-tree-seed",
+          "first-tree-write",
+          "first-tree-file-bug",
+        ],
         workspaceKind: evalCase.workspaceKind,
       },
       id: evalCase.id,

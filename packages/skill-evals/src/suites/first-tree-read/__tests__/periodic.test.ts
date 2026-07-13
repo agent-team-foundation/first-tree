@@ -52,11 +52,18 @@ describe("first-tree-read periodic cases", () => {
       expect(briefing).toContain("first-tree-seed");
       expect(briefing).toContain("first-tree-welcome");
       expect(briefing).toContain("first-tree-write");
+      expect(briefing).toContain("first-tree-file-bug");
       expect(existsSync(join(paths.workspacePath, ".first-tree-workspace", "identity.json"))).toBe(true);
       expect(lstatSync(claudePath).isSymbolicLink()).toBe(true);
       expect(readlinkSync(claudePath)).toBe("AGENTS.md");
 
-      for (const skill of ["first-tree-welcome", "first-tree-read", "first-tree-seed", "first-tree-write"]) {
+      for (const skill of [
+        "first-tree-welcome",
+        "first-tree-read",
+        "first-tree-seed",
+        "first-tree-write",
+        "first-tree-file-bug",
+      ]) {
         expect(existsSync(join(paths.workspacePath, ".agents", "skills", skill, "SKILL.md"))).toBe(true);
         expect(lstatSync(join(paths.workspacePath, ".claude", "skills", skill)).isSymbolicLink()).toBe(true);
       }

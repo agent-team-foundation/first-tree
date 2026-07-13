@@ -1332,7 +1332,6 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
   if (evalCase.expected.action === "propose_phase1_skeleton") {
     return (
-      metrics.writeSkillFileReadObserved &&
       (evalCase.expected.requireWorktree
         ? metrics.sourceWorktreeMaterializedObserved
         : !metrics.sourceWorktreeCreated && !metrics.sourceWorktreeAccessObserved) &&
@@ -1345,7 +1344,6 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
   if (evalCase.expected.action === "materialize_bare_worktree") {
     return (
-      metrics.writeSkillFileReadObserved &&
       metrics.sourceWorktreeMaterializedObserved &&
       metrics.sourceEvidenceReadObserved &&
       metrics.skeletonObserved &&
@@ -1403,7 +1401,6 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
   if (evalCase.expected.action === "continue_phase2") {
     return (
-      metrics.writeSkillFileReadObserved &&
       metrics.sourceWorktreeMaterializedObserved &&
       metrics.sourceEvidenceReadObserved &&
       metrics.phase2ContinuationObserved &&
@@ -1434,14 +1431,6 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) {
     notes.push("Source evidence from the materialized worktree was not read.");
-  }
-  if (
-    (evalCase.expected.action === "propose_phase1_skeleton" ||
-      evalCase.expected.action === "materialize_bare_worktree" ||
-      evalCase.expected.action === "continue_phase2") &&
-    !metrics.writeSkillFileReadObserved
-  ) {
-    notes.push("first-tree-write/SKILL.md was not read before proposing the Phase 1 skeleton.");
   }
   if (metrics.directBareSourceContentReadObserved) {
     notes.push("Model attempted to read source files directly from the bare source repo path.");
