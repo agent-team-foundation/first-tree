@@ -1525,6 +1525,15 @@ export function ChatView({
   // reading column.
   const storedSidebarPref = useRef<boolean | null>(loadSidebarOpen());
   const useMobileDetailsSheet = presentation === "mobile";
+  // Touch-optimized composer: on the phone surface the action toolbar moves
+  // out of the textarea's bottom-padding overlay into a normal flow row, tap
+  // targets grow to the ~44 touch minimum, the box rests at one line, the placeholder drops
+  // the desktop keyboard-shortcut teaching text, and Enter inserts a newline
+  // (soft keyboards have no Shift+Enter, so send is the button only). Gated on
+  // the mobile route rather than a viewport query so the structural + sizing
+  // changes flip together with one signal; font-size stays synced separately
+  // via the `--composer-font-size` zoom guard on both the textarea and mirror.
+  const composerMobile = presentation === "mobile";
   const [showSidebar, setShowSidebar] = useState<boolean>(storedSidebarPref.current ?? false);
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const detailsOpen = useMobileDetailsSheet ? showMobileDetails : showSidebar;
@@ -4076,7 +4085,11 @@ export function ChatView({
                           style={{
                             position: "absolute",
                             right: 8,
-                            bottom: 44,
+                            // Floats just above the send button, which points the
+                            // arrow at it. The send cluster sits higher on mobile
+                            // (larger button in the flow-row toolbar) than in the
+                            // desktop overlay strip, so lift the tip to match.
+                            bottom: composerMobile ? 52 : 44,
                             zIndex: 5,
                             pointerEvents: "none",
                             maxWidth: "calc(100% - var(--sp-4))",
@@ -4127,8 +4140,11 @@ export function ChatView({
                                     position: "absolute",
                                     top: 1,
                                     right: 1,
-                                    width: 14,
-                                    height: 14,
+                                    // Mobile: bump the corner × so it's tappable;
+                                    // kept modest so it doesn't swamp the small
+                                    // thumbnail. Desktop stays smaller.
+                                    width: composerMobile ? 20 : 14,
+                                    height: composerMobile ? 20 : 14,
                                     borderRadius: "50%",
                                     background: "var(--color-overlay-scrim)",
                                     border: "none",
@@ -4140,7 +4156,7 @@ export function ChatView({
                                     padding: 0,
                                   }}
                                 >
-                                  <X className="h-2 w-2" />
+                                  <X className={composerMobile ? "h-3 w-3" : "h-2 w-2"} />
                                 </button>
                               </div>
                             ) : (
@@ -4153,8 +4169,10 @@ export function ChatView({
                                     onClick={() => removeAttachment(att.id)}
                                     aria-label={`Remove ${att.file.name}`}
                                     style={{
-                                      width: 14,
-                                      height: 14,
+                                      // Mobile: a roomier tap target on the file chip's
+                                      // remove ×; desktop stays small.
+                                      width: composerMobile ? 26 : 14,
+                                      height: composerMobile ? 26 : 14,
                                       borderRadius: "50%",
                                       background: "var(--color-overlay-scrim)",
                                       border: "none",
@@ -4166,7 +4184,7 @@ export function ChatView({
                                       padding: 0,
                                     }}
                                   >
-                                    <X className="h-2 w-2" />
+                                    <X className={composerMobile ? "h-3.5 w-3.5" : "h-2 w-2"} />
                                   </button>
                                 }
                               />
@@ -4207,7 +4225,12 @@ export function ChatView({
                           textareaRef={textareaRef}
                           chipClassName="mention-text"
                           mirrorStyle={{
-                            padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                            // Bottom padding tracks the textarea: on mobile the
+                            // toolbar leaves the textarea's padding strip, so both
+                            // drop to a symmetric inset and stay glyph-aligned.
+                            padding: composerMobile
+                              ? "var(--sp-2_25) var(--sp-3)"
+                              : "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                             // Tracks the textarea, which the mobile zoom guard
                             // (index.css) raises to the iOS no-zoom floor on
                             // phone widths; reading the same var keeps mirror
@@ -4305,7 +4328,13 @@ export function ChatView({
                                     // shows only while empty; once the user types it's
                                     // gone, and the tip bubble covers a blocked send.
                                     "In a group, @mention who this is for"
-                                  : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                                  : composerMobile
+                                    ? // Mobile: drop the desktop keyboard-shortcut
+                                      // teaching text — `/` and `@` live in the
+                                      // toolbar and there's no keyboard hint to give
+                                      // on a touch surface. Keep it to the bare prompt.
+                                      `Message @${displayName}`
+                                    : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
                           rows={2}
                           onKeyDown={(e) => {
@@ -4326,7 +4355,11 @@ export function ChatView({
                               // sending or moving the cursor.
                               if (mention.handleKey(e)) return;
                             }
-                            if (e.key === "Enter" && !e.shiftKey) {
+                            // Mobile soft keyboards have no Shift+Enter, so Enter
+                            // inserts a newline; sending is the button only. Desktop
+                            // keeps Enter-to-send. Popover key handling above still
+                            // claims Enter first (pick a mention / command).
+                            if (!composerMobile && e.key === "Enter" && !e.shiftKey) {
                               e.preventDefault();
                               handleSend();
                             }
@@ -4334,7 +4367,14 @@ export function ChatView({
                           disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                           className="mention-composer-textarea w-full outline-none text-subtitle font-normal placeholder:text-muted-foreground"
                           style={{
-                            padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                            // Mobile: the toolbar is a flow row below, not an overlay
+                            // inside the textarea, so the padding is symmetric (no
+                            // tall bottom strip) and the box rests at one line and
+                            // auto-grows. Desktop keeps the 2-line contract + bottom
+                            // strip that houses the absolute toolbar.
+                            padding: composerMobile
+                              ? "var(--sp-2_25) var(--sp-3)"
+                              : "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                             background: "transparent",
                             border: "none",
                             // `rows={2}` alone won't survive the auto-resize hook:
@@ -4342,12 +4382,13 @@ export function ChatView({
                             // which collapses an empty textarea to ~1 line and
                             // breaks chat-view's pre-auto-grow 2-line contract.
                             // CSS `min-height` is a hard floor that wins over the
-                            // hook's inline `height`, so we restate the 2-line
-                            // starting size here: 2 line-heights + top + bottom
-                            // padding. Cap at 10.5rem (~8 visible lines) so long
+                            // hook's inline `height`, so we restate the starting
+                            // size here. Cap at 10.5rem (~8 visible lines) so long
                             // pastes scroll inside instead of pushing the footer
                             // toolbar off-screen.
-                            minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
+                            minHeight: composerMobile
+                              ? "calc(1lh + var(--sp-2_25) + var(--sp-2_25))"
+                              : "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
                             maxHeight: "10.5rem",
                             overflowY: "auto",
                             resize: "none",
@@ -4374,27 +4415,39 @@ export function ChatView({
                       </div>
                       <div
                         className="flex items-center justify-between text-caption"
-                        style={{
-                          position: "absolute",
-                          bottom: 6,
-                          left: 10,
-                          right: 10,
-                          color: "var(--fg-4)",
-                          // This toolbar sits inside the textarea's bottom-padding
-                          // strip (`--sp-7_5`). The textarea above carries
-                          // `zIndex: 1` (caret-over-overlay fix), which would
-                          // otherwise hit-test ABOVE this z-auto row — the
-                          // buttons stay visible through the textarea's
-                          // transparent background but every click lands on the
-                          // textarea instead (send/@/attach appear dead; only
-                          // Enter works). Stack the toolbar higher so it gets
-                          // pointer events back.
-                          zIndex: 2,
-                        }}
+                        style={
+                          composerMobile
+                            ? {
+                                // Mobile: a normal flow row below the textarea — no
+                                // overlay, so it can't overlap text and its larger tap
+                                // targets don't have to fit inside a thin strip. Top
+                                // padding trims because the textarea's own bottom
+                                // padding already sits above.
+                                padding: "0 var(--sp-1) var(--sp-1)",
+                                color: "var(--fg-4)",
+                              }
+                            : {
+                                position: "absolute",
+                                bottom: 6,
+                                left: 10,
+                                right: 10,
+                                color: "var(--fg-4)",
+                                // This toolbar sits inside the textarea's bottom-padding
+                                // strip (`--sp-7_5`). The textarea above carries
+                                // `zIndex: 1` (caret-over-overlay fix), which would
+                                // otherwise hit-test ABOVE this z-auto row — the
+                                // buttons stay visible through the textarea's
+                                // transparent background but every click lands on the
+                                // textarea instead (send/@/attach appear dead; only
+                                // Enter works). Stack the toolbar higher so it gets
+                                // pointer events back.
+                                zIndex: 2,
+                              }
+                        }
                       >
                         {/* Trial: no @mention / attach affordances — just type + send. */}
                         {!isTrial && (
-                          <span className="mono flex items-center" style={{ gap: 10 }}>
+                          <span className="mono flex items-center" style={{ gap: composerMobile ? 2 : 10 }}>
                             <button
                               type="button"
                               onClick={() => {
@@ -4430,9 +4483,12 @@ export function ChatView({
                                 padding: 0,
                                 display: "inline-flex",
                                 alignItems: "center",
+                                // Mobile: grow the tap target to the touch minimum
+                                // (icon stays small, centered).
+                                ...(composerMobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
                               }}
                             >
-                              <AtSign className="h-3.5 w-3.5" />
+                              <AtSign className={composerMobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
                             </button>
                             <button
                               type="button"
@@ -4450,9 +4506,12 @@ export function ChatView({
                                 padding: 0,
                                 display: "inline-flex",
                                 alignItems: "center",
+                                // Mobile: grow the tap target to the touch minimum
+                                // (icon stays small, centered).
+                                ...(composerMobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
                               }}
                             >
-                              <Paperclip className="h-3.5 w-3.5" />
+                              <Paperclip className={composerMobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
                             </button>
                             <input
                               ref={fileInputRef}
@@ -4491,7 +4550,11 @@ export function ChatView({
                             title={
                               sendBlockedByMentionGate
                                 ? "@mention someone to send — a group message must address someone"
-                                : "Send (Enter)"
+                                : // On mobile Enter inserts a newline, so the button is
+                                  // the only way to send — don't advertise the Enter shortcut.
+                                  composerMobile
+                                  ? "Send"
+                                  : "Send (Enter)"
                             }
                             aria-label="Send"
                             className={cn(
@@ -4500,15 +4563,16 @@ export function ChatView({
                               sendDisabled && "cursor-not-allowed",
                             )}
                             style={{
-                              width: 28,
-                              height: 28,
-                              borderRadius: "var(--radius-input)",
+                              // Mobile: larger send that clears the touch minimum; desktop stays small.
+                              width: composerMobile ? 40 : 28,
+                              height: composerMobile ? 40 : 28,
+                              borderRadius: composerMobile ? 10 : "var(--radius-input)",
                               background: "var(--fg)",
                               color: "var(--bg-raised)",
                               border: "none",
                             }}
                           >
-                            <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                            <ArrowUp className={composerMobile ? "h-5 w-5" : "h-3.5 w-3.5"} strokeWidth={2.5} />
                           </button>
                         </span>
                       </div>
