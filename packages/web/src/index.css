@@ -1162,6 +1162,29 @@
   }
 }
 
+/* Mobile install ("add to home screen") guide — docked bottom sheet slides up,
+   scrim fades in. Mirrors the toast/mention entrance vocabulary. */
+@keyframes mobile-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.mobile-sheet-in {
+  animation: mobile-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.mobile-scrim-in {
+  animation: subtle-fade 180ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-sheet-in,
+  .mobile-scrim-in {
+    animation: none;
+  }
+}
+
 /* Left-aligned content column that fills the shared 960 canvas, matching the
    Team / Agent Detail tabs (same `--sp-2 --sp-5 --sp-7` content padding under a
    PageHeader). No min-height / centering — the page used to render as a

@@ -131,6 +131,12 @@ const MobilePreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/mobile-preview.js").then((module) => ({ default: module.MobilePreviewPage })))
   : null;
 
+const InstallGuidePreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/install-guide-preview.js").then((module) => ({ default: module.InstallGuidePreviewPage })),
+    )
+  : null;
+
 const TeamSwitcherPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/team-switcher-preview.js").then((module) => ({ default: module.TeamSwitcherPreviewPage })),
@@ -293,6 +299,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <MobilePreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {InstallGuidePreviewPage ? (
+                <Route
+                  path="/preview/install-guide"
+                  element={
+                    <Suspense fallback={null}>
+                      <InstallGuidePreviewPage />
                     </Suspense>
                   }
                 />
