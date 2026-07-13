@@ -954,7 +954,14 @@
 }
 
 @media (max-width: 47.999rem) {
-  .mention-popover {
+  /* The full-width dock/weld is scoped to the Chat composer host, whose
+     `.composer-card` implements the matching flattened-top state below. The
+     other two hosts of this shared popover (AskTakeover answer box,
+     NewChatDraft recipient input) do NOT flatten their input, so welding a
+     square-bottomed panel onto their still-rounded chrome would reproduce the
+     very seam this rule removes. They keep the compact float on phones; a full
+     mobile treatment for those surfaces is a separate follow-up. */
+  .composer-card .mention-popover {
     right: 0;
     min-width: 0;
     max-width: none;
@@ -971,7 +978,8 @@
     box-shadow: var(--shadow-md-up);
   }
   /* Comfortable thumb targets on touch: the 28px avatar + py-1.5 row is ~40px;
-     lift the whole row to the ~46px iOS tap floor. */
+     lift the whole row to the ~46px iOS tap floor. Global — a bigger tap target
+     helps every host and introduces no seam. */
   .mention-option {
     min-height: 2.875rem;
   }
