@@ -973,9 +973,14 @@
        single 6px-rounded surface. */
     border-radius: var(--radius-panel) var(--radius-panel) 0 0;
     border-bottom-color: transparent;
-    /* Lift off the messages above without casting a shadow down onto the input
-       welded below (a downward --shadow-md would break the "one surface" look). */
+    /* Lift off the messages above with a genuinely top-only shadow. A blurred
+       box-shadow spreads in every direction, so a negative Y offset alone still
+       paints a lower lobe (offsetY + blur = 8px) down onto the welded input —
+       visible as a dark seam, worst in dark mode. Clip everything at/below the
+       panel's bottom edge so only the upward lobe survives; the panel and input
+       then read as one continuous surface. */
     box-shadow: var(--shadow-md-up);
+    clip-path: inset(-18px 0 0 0);
   }
   /* Comfortable thumb targets on touch: the 28px avatar + py-1.5 row is ~40px;
      lift the whole row to the ~46px iOS tap floor. Global — a bigger tap target
