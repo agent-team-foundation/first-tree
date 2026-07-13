@@ -10,19 +10,36 @@ describe("me-chat encodeCursor / decodeCursor", () => {
     expect(decoded?.chatId).toBe("chat-123");
   });
 
-  it("rejects a cursor with an empty timestamp part (activity_at is never null)", () => {
-    expect(decodeCursor(Buffer.from("|chat-no-ts", "utf8").toString("base64url"))).toBeNull();
+  it("emits a versioned payload (v2 prefix)", () => {
+    const cursor = encodeCursor(new Date("2026-05-06T10:24:00.000Z"), "chat-123");
+    expect(Buffer.from(cursor, "base64url").toString("utf8")).toBe("v2|2026-05-06T10:24:00.000Z|chat-123");
+  });
+
+  it("rejects an unversioned pre-PR cursor rather than reinterpreting it", () => {
+    // The old shape was `<lastMessageAt>|<chatId>` (2 parts) — indistinguishable
+    // from a raw activity cursor, so it MUST be rejected across the rollout, not
+    // resumed from a wrong boundary.
+    const legacy = Buffer.from("2026-05-06T10:24:00.000Z|chat-123", "utf8").toString("base64url");
+    expect(decodeCursor(legacy)).toBeNull();
+  });
+
+  it("rejects a cursor with a different version", () => {
+    const wrongVersion = Buffer.from("v1|2026-05-06T10:24:00.000Z|chat-123", "utf8").toString("base64url");
+    expect(decodeCursor(wrongVersion)).toBeNull();
+  });
+
+  it("rejects a v2 cursor with an empty timestamp or chat id", () => {
+    expect(decodeCursor(Buffer.from("v2||chat-no-ts", "utf8").toString("base64url"))).toBeNull();
+    expect(decodeCursor(Buffer.from("v2|2026-05-06T10:24:00.000Z|", "utf8").toString("base64url"))).toBeNull();
   });
 
   it("returns null for malformed cursor strings", () => {
     expect(decodeCursor("not-a-cursor")).toBeNull();
     expect(decodeCursor("")).toBeNull();
-    // base64-decodable but no separator
+    // base64-decodable but no separators
     expect(decodeCursor(Buffer.from("nosep", "utf8").toString("base64url"))).toBeNull();
-    // separator but empty chatId
-    expect(decodeCursor(Buffer.from("ts|", "utf8").toString("base64url"))).toBeNull();
-    // bad timestamp
-    expect(decodeCursor(Buffer.from("not-a-date|chat", "utf8").toString("base64url"))).toBeNull();
+    // right version + shape but a bad timestamp
+    expect(decodeCursor(Buffer.from("v2|not-a-date|chat", "utf8").toString("base64url"))).toBeNull();
   });
 
   it("returns null when base64 decoding throws", () => {

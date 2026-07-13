@@ -56,24 +56,36 @@ import { ensureCanJoin, joinAsParticipant, leaveAsParticipant, resolveChatMember
 // Cursor encoding
 // ---------------------------------------------------------------------------
 //
-// Cursor is `<activityAtIso>|<chatId>`. Encoded base64url so it survives
-// query strings without escaping. Sort ordering is
-// `(activity_at DESC, chat_id DESC)`. `chats.activity_at` is NOT NULL, so —
-// unlike the pre-PR `last_message_at` cursor — there is no null-timestamp case.
+// Cursor is `v2|<activityAtIso>|<chatId>`, base64url so it survives query
+// strings. Sort ordering is `(activity_at DESC, chat_id DESC)`; `activity_at`
+// is NOT NULL, so there is no null-timestamp case.
+//
+// The `v2` version prefix is load-bearing: the PRE-PR cursor was
+// `<lastMessageAt>|<chatId>` — an INDISTINGUISHABLE shape whose timestamp meant
+// `last_message_at`, not `activity_at`. Without the version, a browser holding
+// an old `nextCursor` across the server rollout would pass validation and
+// resume from a wrong boundary (silently skipping / repeating chats whenever
+// the two timestamps differ). Versioning makes an old cursor fail to decode so
+// it is rejected (400 → the client restarts from page 1) rather than
+// misinterpreted.
+
+const CURSOR_VERSION = "v2";
 
 export function encodeCursor(activityAt: Date, chatId: string): string {
-  const payload = `${activityAt.toISOString()}|${chatId}`;
+  const payload = `${CURSOR_VERSION}|${activityAt.toISOString()}|${chatId}`;
   return Buffer.from(payload, "utf8").toString("base64url");
 }
 
 export function decodeCursor(cursor: string): { activityAt: Date; chatId: string } | null {
   try {
     const decoded = Buffer.from(cursor, "base64url").toString("utf8");
-    const sep = decoded.indexOf("|");
-    if (sep < 0) return null;
-    const tsPart = decoded.slice(0, sep);
-    const chatId = decoded.slice(sep + 1);
-    if (!chatId || tsPart.length === 0) return null;
+    // Exactly `<version>|<iso>|<chatId>` (chat ids are UUIDs — never contain
+    // `|`). An old unversioned cursor (`<iso>|<chatId>`) is 2 parts, so it — and
+    // anything else malformed — is rejected rather than reinterpreted.
+    const parts = decoded.split("|");
+    if (parts.length !== 3) return null;
+    const [version, tsPart, chatId] = parts;
+    if (version !== CURSOR_VERSION || !tsPart || !chatId) return null;
     const activityAt = new Date(tsPart);
     if (Number.isNaN(activityAt.getTime())) return null;
     return { activityAt, chatId };
