@@ -127,7 +127,7 @@ export function ContextTreeSettingsPanel() {
               />
               <SettingsField
                 label="Branch"
-                hint="Branch checked out by client agents on startup."
+                hint="Branch your agents check out on startup."
                 value={branch}
                 onChange={setBranch}
                 mono
@@ -169,16 +169,13 @@ function BoundTree({
 }) {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <div className="flex items-baseline justify-between" style={{ gap: "var(--sp-3)" }}>
-        <span className="text-label" style={{ color: "var(--fg-3)" }}>
-          Your team's Context Tree
-        </span>
-        {isAdmin ? (
+      {isAdmin ? (
+        <div className="flex justify-end">
           <Button type="button" variant="link" className="h-auto p-0" onClick={onToggleEdit}>
             {editing ? "Close" : "Edit"}
           </Button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
       <span className="text-body mono" style={{ color: "var(--fg)", wordBreak: "break-all" }}>
         {repo}
       </span>
@@ -331,7 +328,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
   return (
     <Section
       title={titleWithSemantics("Context Reviewer", justSaved)}
-      description="Assign one of your agents to automatically review Context Tree pull requests."
+      description="Assign an agent to review Context Tree PRs."
     >
       <div style={{ paddingTop: "var(--sp-4)" }}>
         {!hasBinding ? (

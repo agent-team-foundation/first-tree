@@ -1,5 +1,6 @@
 import { Check, Loader2 } from "lucide-react";
 import { type ReactNode, useId } from "react";
+import { Button } from "./button.js";
 
 /**
  * Vertical-layout field row for Settings panels.
@@ -118,11 +119,9 @@ function SavedIndicator() {
 }
 
 /**
- * Compact Save affordance — a bordered icon button that sits flush next
- * to the input. The border is a single hairline at rest (no fill, no
- * shadow) so the shape is legible as a clickable target without
- * dominating the form row. Hover lifts the bg + ink for a clear active
- * state; focus-visible draws the neutral focus ring for keyboard users.
+ * Compact Save affordance — a bordered outline icon button that sits flush
+ * next to the input, sharing the standard Button treatment (rest border,
+ * hover fill, focus-visible ring) instead of a bespoke inline style.
  *
  * Spinner replaces ✓ during the in-flight mutation. Tooltip + aria-label
  * preserve the affordance's name despite the iconless label.
@@ -130,29 +129,8 @@ function SavedIndicator() {
 export function SettingsSaveButton({ pending, disabled = false }: { pending: boolean; disabled?: boolean }) {
   const isDisabled = pending || disabled;
   return (
-    <button
-      type="submit"
-      disabled={isDisabled}
-      aria-label="Save"
-      title="Save"
-      className="settings-save-button"
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        width: "var(--sp-8)",
-        background: "transparent",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-input)",
-        padding: 0,
-        cursor: isDisabled ? "default" : "pointer",
-        color: "var(--fg-3)",
-        opacity: isDisabled ? 0.5 : 1,
-        transition: "color 0.15s, background 0.15s, border-color 0.15s",
-      }}
-    >
+    <Button type="submit" variant="outline" size="icon" disabled={isDisabled} aria-label="Save" title="Save">
       {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-    </button>
+    </Button>
   );
 }

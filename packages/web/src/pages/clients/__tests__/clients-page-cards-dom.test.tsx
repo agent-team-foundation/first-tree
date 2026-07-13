@@ -473,7 +473,7 @@ describe("ClientsPage computer cards", () => {
     await click(container.querySelector('button[aria-label="Computer actions"]'));
     await click(exactButton(container, "Disconnect"));
     await waitForText(document.body, "Disconnect Computer");
-    await waitForText(document.body, "No bound agents");
+    await waitForText(document.body, "No agents on this computer");
     await click(exactButton(document.body, "Cancel"));
     await waitForCondition(
       () => !document.body.textContent?.includes("Disconnect Computer"),

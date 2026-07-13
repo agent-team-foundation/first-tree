@@ -1,6 +1,6 @@
 import type { CapabilityEntry, ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   disconnectClient,
@@ -23,6 +23,7 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../components/ui/dense-table.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { Section } from "../components/ui/section.js";
@@ -340,35 +341,36 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         />
 
         {confirmRetire && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
-            <div
-              className="max-w-md w-full"
-              style={{
-                background: "var(--bg-raised)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-panel)",
-                padding: "var(--sp-6)",
-                boxShadow: "var(--shadow-md)",
-              }}
-            >
-              <h3 className="text-subtitle mb-2">Retire Computer</h3>
-              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
+          <Dialog
+            open
+            onOpenChange={(open) => {
+              if (!open) {
+                setConfirmRetire(null);
+                setRetireError(null);
+              }
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Retire Computer</DialogTitle>
+              </DialogHeader>
+              <p className="text-body" style={{ color: "var(--fg-3)" }}>
                 Permanently remove{" "}
                 <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmRetire.hostname ?? confirmRetire.id.slice(0, 8)}
                 </span>
-                . Retire refuses if any agent is still pinned to this computer — you must delete those agents first
-                (reassign is not available in this milestone).
+                . Retiring is blocked while an agent is still assigned to this computer — delete those agents first
+                (reassigning isn't available yet).
               </p>
               {getClientAgents(confirmRetire.id).length > 0 && (
                 <div
-                  className="mb-3 p-2 rounded-[var(--radius-input)]"
+                  className="p-2 rounded-[var(--radius-input)]"
                   style={{
                     background: "var(--state-blocked-soft)",
                     border: "var(--hairline) solid var(--state-blocked-border)",
                   }}
                 >
-                  <div className="text-label mb-1">Agents currently bound to this computer (delete them first):</div>
+                  <div className="text-label mb-1">Agents on this computer (delete them first):</div>
                   <ul className="text-body space-y-0.5">
                     {getClientAgents(confirmRetire.id).map((a) => (
                       <li key={a.agentId} className="font-medium">
@@ -380,7 +382,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               )}
               {retireError && (
                 <div
-                  className="mb-3 p-2 rounded-[var(--radius-input)] text-body"
+                  className="p-2 rounded-[var(--radius-input)] text-body"
                   style={{
                     background: "var(--state-error-soft)",
                     border: "var(--hairline) solid var(--state-error-border)",
@@ -390,7 +392,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   {retireError}
                 </div>
               )}
-              <div className="flex justify-end gap-2">
+              <DialogFooter>
                 <Button
                   variant="outline"
                   size="sm"
@@ -409,35 +411,33 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 >
                   {retireMut.isPending ? "Retiring…" : "Retire"}
                 </Button>
-              </div>
-            </div>
-          </div>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         )}
 
         {confirmDisconnect && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
-            <div
-              className="max-w-md w-full"
-              style={{
-                background: "var(--bg-raised)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-panel)",
-                padding: "var(--sp-6)",
-                boxShadow: "var(--shadow-md)",
-              }}
-            >
-              <h3 className="text-subtitle mb-2">Disconnect Computer</h3>
-              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
+          <Dialog
+            open
+            onOpenChange={(open) => {
+              if (!open) setConfirmDisconnect(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Disconnect Computer</DialogTitle>
+              </DialogHeader>
+              <p className="text-body" style={{ color: "var(--fg-3)" }}>
                 This will disconnect{" "}
                 <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmDisconnect.hostname ?? confirmDisconnect.id.slice(0, 8)}
                 </span>{" "}
-                and affect all bound agents:
+                and affect all agents on this computer:
               </p>
-              <ul className="mb-4 space-y-1">
+              <ul className="space-y-1">
                 {getClientAgents(confirmDisconnect.id).length === 0 ? (
                   <li className="text-body" style={{ color: "var(--fg-3)" }}>
-                    No bound agents
+                    No agents on this computer
                   </li>
                 ) : (
                   getClientAgents(confirmDisconnect.id).map((a) => (
@@ -448,7 +448,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   ))
                 )}
               </ul>
-              <div className="flex justify-end gap-2">
+              <DialogFooter>
                 <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect(null)}>
                   Cancel
                 </Button>
@@ -460,9 +460,9 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 >
                   {disconnectMut.isPending ? "Disconnecting…" : "Disconnect"}
                 </Button>
-              </div>
-            </div>
-          </div>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         )}
 
         {clientsLoading ? (
@@ -732,7 +732,7 @@ function CapabilityMatrix({ capabilities, os }: { capabilities: ClientCapabiliti
   const empty = Object.keys(capabilities).length === 0;
   return (
     <>
-      <UppercaseLabel style={{ display: "block", marginBottom: "var(--sp-1_5)" }}>Runtimes</UppercaseLabel>
+      <UppercaseLabel style={{ display: "block", marginBottom: "var(--sp-1_5)" }}>Coding agents</UppercaseLabel>
       {empty ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Capabilities not yet reported. Reconnect this computer to refresh.
@@ -760,7 +760,7 @@ function ProviderRow({
   const label = PROVIDER_LABEL[provider];
   if (!entry) {
     return (
-      <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
+      <div className="flex items-center gap-2.5 text-body" style={{ color: "var(--fg-4)" }}>
         <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
           {label}
         </span>
@@ -777,19 +777,21 @@ function ProviderRow({
           <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
-          <span className="text-caption" style={{ color: "var(--success)" }}>
-            ✓ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
+          <span className="text-caption inline-flex items-center gap-1" style={{ color: "var(--success)" }}>
+            <Check className="h-3.5 w-3.5" />
+            installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
           </span>
         </div>
       );
     case "missing":
       return (
-        <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
+        <div className="flex items-center gap-2.5 text-body" style={{ color: "var(--fg-4)" }}>
           <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
             {label}
           </span>
-          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            ✗ {providerInstallHint(provider, os, entry.error)}
+          <span className="text-caption inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
+            <X className="h-3.5 w-3.5" />
+            {providerInstallHint(provider, os, entry.error)}
           </span>
         </div>
       );
@@ -947,7 +949,7 @@ function ClientRow({
             {boundAgents.length > 0 && (
               <>
                 <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: "var(--sp-1_5)" }}>
-                  Bound agents · {boundAgents.length}
+                  Agents · {boundAgents.length}
                 </UppercaseLabel>
                 <div className="flex flex-col gap-1">
                   {boundAgents.map((a) => (
