@@ -549,6 +549,10 @@ export function ConversationList({
                       <button
                         type="button"
                         onClick={() => onSelectChat(row.chatId)}
+                        // Selection is otherwise conveyed only visually (tint +
+                        // left bar); expose it to assistive tech too, mirroring
+                        // the New-chat button's `aria-current`.
+                        aria-current={isSelected ? "page" : undefined}
                         className={cn(
                           "w-full text-left transition-colors flex items-center",
                           "hover:bg-[var(--bg-hover)]",

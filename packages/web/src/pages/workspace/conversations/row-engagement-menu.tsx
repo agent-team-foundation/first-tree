@@ -50,10 +50,15 @@ function actionsFor({
   return [];
 }
 
-// Hover-reveal: hidden until the row is hovered or the dropdown is open
-// (aria-expanded surfaces via the underlying button). `focus-visible` instead
-// of `focus` keeps the trigger from sticking visible after a mouse click.
-const TRIGGER_HOVER_REVEAL = "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100";
+// Hover-reveal on fine (mouse) pointers: hidden until the row is hovered or the
+// dropdown is open (aria-expanded surfaces via the underlying button).
+// `focus-visible` instead of `focus` keeps the trigger from sticking visible
+// after a mouse click. On COARSE (touch) pointers there is no hover and a tap
+// rarely fires `focus-visible`, so hover-only would leave the kebab — the only
+// Pin entry point — permanently invisible and untappable on phones and the
+// narrow-overlay rail; `pointer-coarse:opacity-100` keeps it always shown there.
+const TRIGGER_HOVER_REVEAL =
+  "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 pointer-coarse:opacity-100";
 
 export function RowEngagementMenu({
   chatId,
