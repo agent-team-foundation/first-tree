@@ -10,6 +10,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const meChatMocks = vi.hoisted(() => ({
   markMeChatUnread: vi.fn(),
+  pinMeChat: vi.fn(),
 }));
 
 const chatMocks = vi.hoisted(() => ({
@@ -20,6 +21,10 @@ vi.mock("../../../../api/me-chats.js", () => meChatMocks);
 vi.mock("../../../../api/chats.js", () => ({
   patchChatEngagement: chatMocks.patchChatEngagement,
 }));
+// The menu's pin mutation surfaces failures via a toast; the harness renders no
+// ToastProvider, so stub the hook (its addToast is exercised in a failure test).
+const toastMocks = vi.hoisted(() => ({ addToast: vi.fn() }));
+vi.mock("../../../../components/ui/toast.js", () => ({ useToast: () => toastMocks }));
 
 let root: Root | null = null;
 let queryClient: QueryClient | null = null;
@@ -76,6 +81,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
   meChatMocks.markMeChatUnread.mockResolvedValue(undefined);
+  meChatMocks.pinMeChat.mockResolvedValue({ chatId: "chat", pinnedAt: null });
   chatMocks.patchChatEngagement.mockResolvedValue(undefined);
   root = null;
   queryClient = null;
@@ -89,7 +95,9 @@ afterEach(async () => {
 
 describe("RowEngagementMenu", () => {
   it("marks active chats unread and invalidates chat caches", async () => {
-    const dom = await render(<RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} />);
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
+    );
     const invalidate = vi.spyOn(queryClient as QueryClient, "invalidateQueries");
 
     await click(manageButton(dom));
@@ -102,7 +110,9 @@ describe("RowEngagementMenu", () => {
   });
 
   it("disables mark-unread when the active row already has unread work", async () => {
-    const dom = await render(<RowEngagementMenu chatId="chat-unread" status="active" hasUnread={true} />);
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-unread" status="active" hasUnread={true} pinned={false} />,
+    );
 
     await click(manageButton(dom));
     const markUnread = menuItem("Mark as unread");
@@ -113,7 +123,9 @@ describe("RowEngagementMenu", () => {
   });
 
   it("archives and deletes active chats through engagement mutations", async () => {
-    const dom = await render(<RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} />);
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
+    );
 
     await click(manageButton(dom));
     await click(menuItem("Archive"));
@@ -127,7 +139,9 @@ describe("RowEngagementMenu", () => {
   });
 
   it("offers archived-row recovery without the active-only mark-unread action", async () => {
-    const dom = await render(<RowEngagementMenu chatId="chat-archived" status="archived" hasUnread={false} />);
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-archived" status="archived" hasUnread={false} pinned={false} />,
+    );
 
     await click(manageButton(dom));
     expect(document.body.textContent).toContain("Unarchive");
@@ -141,8 +155,51 @@ describe("RowEngagementMenu", () => {
   });
 
   it("renders no menu for deleted rows", async () => {
-    const dom = await render(<RowEngagementMenu chatId="chat-deleted" status="deleted" hasUnread={false} />);
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-deleted" status="deleted" hasUnread={false} pinned={false} />,
+    );
 
     expect(manageButton(dom)).toBeNull();
+  });
+
+  it("pins an unpinned chat and invalidates the list caches", async () => {
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
+    );
+    const invalidate = vi.spyOn(queryClient as QueryClient, "invalidateQueries");
+
+    await click(manageButton(dom));
+    await click(menuItem("Pin"));
+
+    expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-active", true);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["me", "chats"] });
+    // A success toast confirms the write — the row only regroups once the
+    // invalidate-driven refetch lands, so silence would read as a no-op.
+    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Pinned" }));
+  });
+
+  it("offers Unpin on a pinned chat and toggles it off", async () => {
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-pinned" status="active" hasUnread={false} pinned={true} />,
+    );
+
+    await click(manageButton(dom));
+    expect(document.body.textContent).toContain("Unpin");
+    await click(menuItem("Unpin"));
+
+    expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-pinned", false);
+    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Unpinned" }));
+  });
+
+  it("shows an error toast when a pin write fails", async () => {
+    meChatMocks.pinMeChat.mockRejectedValueOnce(new Error("nope"));
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
+    );
+
+    await click(manageButton(dom));
+    await click(menuItem("Pin"));
+
+    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Couldn't pin" }));
   });
 });

@@ -138,6 +138,15 @@ describe("parseOriginList", () => {
   it("trims whitespace and dedupes", () => {
     expect(parseOriginList(paramsOf("origin=manual,%20github%20,manual"))).toEqual(["manual", "github"]);
   });
+
+  it("normalizes the full valid set to unrestricted [] (legacy / shared URL)", () => {
+    // A `?origin=manual,github,agent` URL (e.g. from the pre-redesign checkbox UI)
+    // lists every source → semantically unrestricted, same as no `?origin=`. It
+    // must NOT render a chip per source + a badge, so the parser collapses it to [].
+    expect(parseOriginList(paramsOf("origin=manual,github,agent"))).toEqual([]);
+    // Order / dupes don't matter — a full set in any form collapses to [].
+    expect(parseOriginList(paramsOf("origin=agent,manual,github,manual"))).toEqual([]);
+  });
 });
 
 describe("parseParticipantList", () => {
@@ -167,6 +176,11 @@ describe("nextParamsForOrigin", () => {
     expect(result.has("origin")).toBe(false);
   });
 
+  it("drops the key when handed the full valid set (== unrestricted)", () => {
+    const result = nextParamsForOrigin(paramsOf(""), ["manual", "github", "agent"]);
+    expect(result.has("origin")).toBe(false);
+  });
+
   it("clears the chat selection (narrowing can hide the current chat)", () => {
     const result = nextParamsForOrigin(paramsOf("c=abc&origin=manual"), ["github"]);
     expect(result.has("c")).toBe(false);
@@ -192,24 +206,32 @@ describe("nextParamsForParticipants", () => {
 });
 
 describe("nextParamsForClearFilters", () => {
-  it("strips every rail filter dimension in a single mutation", () => {
-    // The Clear handler must clear `unread` / `watching` / `origin` /
-    // `with` atomically because two sequential `setSearchParams` calls
-    // would each derive from the same render-stale params and the
-    // second would clobber the first.
+  it("clears the popover's own dimensions (Source / Participants / Status) in one mutation", () => {
+    // Origin / with / engagement are cleared atomically — two sequential
+    // `setSearchParams` calls would each derive from the same render-stale
+    // params and the second would clobber the first.
     const result = nextParamsForClearFilters(
       paramsOf("unread=1&watching=1&origin=manual,github&with=agent-a,agent-b&engagement=archived"),
     );
-    expect(result.has("unread")).toBe(false);
-    expect(result.has("watching")).toBe(false);
-    expect(result.has("engagement")).toBe(false);
     expect(result.has("origin")).toBe(false);
     expect(result.has("with")).toBe(false);
+    expect(result.has("engagement")).toBe(false);
+  });
+
+  it("leaves the header triad (unread / watching) untouched — it is a separate control", () => {
+    // The All / Unread / Watching triad lives outside the popover and isn't
+    // counted by its badge, so "Reset" must NOT silently flip it back to All.
+    const withUnread = nextParamsForClearFilters(paramsOf("unread=1&origin=manual"));
+    expect(withUnread.get("unread")).toBe("1");
+    expect(withUnread.has("origin")).toBe(false);
+    const withWatching = nextParamsForClearFilters(paramsOf("watching=1&engagement=archived"));
+    expect(withWatching.get("watching")).toBe("1");
+    expect(withWatching.has("engagement")).toBe(false);
   });
 
   it("resets Status (engagement) to default but preserves chat selection + grouping", () => {
     // Status lives in the ⚙ popover and counts toward its active-filter
-    // badge, so "Reset all" must clear it too; `?group=` (view-mode) and
+    // badge, so "Reset" must clear it too; `?group=` (view-mode) and
     // `?c=` (selection) survive.
     const result = nextParamsForClearFilters(paramsOf("unread=1&c=abc&engagement=archived&group=source"));
     expect(result.has("engagement")).toBe(false);

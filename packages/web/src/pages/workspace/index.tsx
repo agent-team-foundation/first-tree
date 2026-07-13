@@ -86,7 +86,11 @@ export function parseOriginList(params: URLSearchParams): ChatSource[] {
     seen.add(t);
     out.push(t);
   }
-  return out;
+  // The full valid set is the "unrestricted" wire — identical to no `?origin=`.
+  // Canonicalize a legacy/shared URL that lists every source (e.g. one produced
+  // by the pre-redesign checkbox UI) to [] so the rail doesn't render a chip per
+  // source + a badge for a result the server treats as unfiltered.
+  return out.length === CHAT_SOURCES.length ? [] : out;
 }
 
 /**
@@ -488,8 +492,12 @@ export function nextParamsForRailFilter(current: URLSearchParams, view: RailFilt
 export function nextParamsForOrigin(current: URLSearchParams, origins: ReadonlyArray<ChatSource>): URLSearchParams {
   const next = new URLSearchParams(current);
   const unique = Array.from(new Set(origins));
-  if (unique.length === 0) next.delete("origin");
-  else next.set("origin", unique.join(","));
+  // Full valid set == unrestricted (mirror `parseOriginList`): drop the key so
+  // the canonical "unfiltered" state stays the bare URL even if a caller passes
+  // the complete set explicitly.
+  const canonical = unique.length === CHAT_SOURCES.length ? [] : unique;
+  if (canonical.length === 0) next.delete("origin");
+  else next.set("origin", canonical.join(","));
   // Origin narrowing can hide the currently-selected chat from the rail
   // (e.g. flipping off PR origin while a PR chat is selected). Drop the
   // selection so the right pane mirrors the new view — same rationale
@@ -527,26 +535,25 @@ export function nextParamsForGroup(current: URLSearchParams, mode: GroupMode): U
 }
 
 /**
- * Pure URL transition that strips every rail filter dimension in one
- * shot. Used by the rail's "Clear" affordance. Exported for unit tests.
+ * Pure URL transition for the `⚙` popover's "Reset" (and the filter-chip
+ * "Clear"). Exported for unit tests. Resets exactly the popover's OWN
+ * dimensions — Source (`?origin=`), Participants (`?with=`), and Status
+ * (`?engagement=` → default `active`) — which are the three dimensions the
+ * popover surfaces and the badge counts.
  *
- * Done in a single mutation because the rail filters live on independent
- * URL keys (`?unread=`, `?watching=`, `?origin=`, `?with=`, `?engagement=`);
- * running the per-key setters back-to-back would re-derive each call from
- * the same stale `searchParams` snapshot, so only the last write would win.
+ * Done in a single mutation because those keys are independent; running the
+ * per-key setters back-to-back would re-derive each call from the same stale
+ * `searchParams` snapshot, so only the last write would win.
  *
- * Scope (`?engagement=`) IS cleared (reset to the default `active`): it now
- * lives inside the `⚙` popover and counts toward the popover's active-filter
- * badge, so the popover's "Reset all" must actually reset it — otherwise the
- * list stays Status-limited with the badge still lit after a Reset.
- *
- * Grouping (`?group=`, a view-mode, not a filter) and the selected chat
- * (`?c=`) are deliberately preserved — the user expects them to survive.
+ * The header triad (`?unread=` / `?watching=`) is deliberately NOT cleared:
+ * All / Unread / Watching is a separate, always-visible control that lives
+ * outside the popover and isn't counted by its badge, so resetting it here
+ * would be an invisible side effect of a button that reads as "reset the
+ * filters I can see". Grouping (`?group=`, a view-mode) and the selected chat
+ * (`?c=`) are likewise preserved — the user expects them to survive.
  */
 export function nextParamsForClearFilters(current: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(current);
-  next.delete("unread");
-  next.delete("watching");
   next.delete("origin");
   next.delete("with");
   next.delete("engagement");

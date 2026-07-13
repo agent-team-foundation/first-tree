@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatSource, ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
+import type { ChatSource, ListMeChatsResponse, MeChatPriorityRows, MeChatRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -19,6 +19,14 @@ const chatMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../../api/me-chats.js", () => meChatMocks);
+// Rows render RowEngagementMenu, which uses the toast hook; the harness has no
+// ToastProvider, so stub it.
+vi.mock("../../../../components/ui/toast.js", () => ({ useToast: () => ({ addToast: vi.fn() }) }));
+// The filter popover fetches the org roster for its Participants picker; stub it
+// so the list doesn't hit the network under test.
+vi.mock("../../../../lib/use-org-agents.js", () => ({
+  useOrgAgents: () => ({ data: { items: [] }, isLoading: false }),
+}));
 vi.mock("../../../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/chats.js")>()),
   patchChatEngagement: chatMocks.patchChatEngagement,
@@ -76,8 +84,8 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -128,8 +136,20 @@ const BASE_ROWS: MeChatRow[] = [
   }),
 ];
 
-// The rail now uses `useInfiniteQuery`, so seeded cache entries must be the
-// `InfiniteData` shape (`{ pages, pageParams }`) rather than a bare response.
+// Model the server priority projection the way the wire does: attention = the
+// failed / open-request rows (server order preserved), pinned = pinned rows not
+// already in attention. Ordinary `rows` stay ADDITIVE (they still include the
+// priority chats); the component de-duplicates them against the groups.
+function priorityFrom(rows: MeChatRow[]): MeChatPriorityRows {
+  const attention = rows.filter((r) => r.failedAgentIds.length > 0 || r.openRequestCount > 0);
+  const attentionIds = new Set(attention.map((r) => r.chatId));
+  const pinned = rows.filter((r) => r.pinnedAt !== null && !attentionIds.has(r.chatId));
+  return { attention, pinned };
+}
+
+// The rail uses `useInfiniteQuery`, so seeded cache entries must be the
+// `InfiniteData` shape (`{ pages, pageParams }`). Priority groups ride on the
+// FIRST page only, matching the server contract.
 function page(
   rows: MeChatRow[],
   nextCursor: string | null = null,
@@ -138,7 +158,7 @@ function page(
   pageParams: Array<string | undefined>;
 } {
   return {
-    pages: [{ rows, nextCursor, priorityRows: { attention: [], pinned: [] } }],
+    pages: [{ rows, nextCursor, priorityRows: priorityFrom(rows) }],
     pageParams: [undefined],
   };
 }
@@ -332,11 +352,10 @@ describe("ConversationList", () => {
     expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith("chat-failed", "archived");
 
     await click(container.querySelector('button[aria-label="Filter"]'));
+    // Source now defaults to all-checked (no zero-source state); unchecking Agent
+    // narrows to Human + GitHub, which the Unread assertion below expects.
     await click(
-      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Human")) ?? null,
-    );
-    await click(
-      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("GitHub")) ?? null,
+      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Agent")) ?? null,
     );
     expect(container.textContent).toContain("Filters");
     expect(container.textContent).toContain("Human");
@@ -356,14 +375,18 @@ describe("ConversationList", () => {
       { signal: expect.anything() },
     );
 
+    // Footer "Reset" is the LAST such button (per-section Source "Reset" renders
+    // first once Source is narrowed).
     await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset all") ?? null,
+      [...document.body.querySelectorAll("button")].filter((button) => button.textContent === "Reset").at(-1) ?? null,
     );
     expect(container.textContent).not.toContain("Filters");
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
 
     await click(container.querySelector('button[aria-haspopup="listbox"]'));
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Time") ?? null);
+    await click(
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Recent activity") ?? null,
+    );
     expect(container.textContent).toContain("Older");
 
     await click(container.querySelector('button[aria-label="Filter"]'));
@@ -518,6 +541,113 @@ describe("ConversationList", () => {
     const dupRows = [...container.querySelectorAll("button")].filter((b) => b.textContent?.includes("Duplicated chat"));
     expect(dupRows.length).toBe(1);
     expect(container.textContent).toContain("Second chat");
+  });
+
+  it("renders a Pinned group from the server projection and shows the pinned chat once", async () => {
+    // A pinned row (server `priorityRows.pinned`) hoists into a "Pinned" group and
+    // is de-duplicated OUT of the ordinary recency list — shown exactly once.
+    const rows = [
+      row({ chatId: "chat-pinned", title: "Pinned thread", pinnedAt: "2026-05-20T09:00:00.000Z" }),
+      row({ chatId: "chat-plain", title: "Plain thread" }),
+    ];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    // The collapsible "Pinned" group header renders (group headers carry
+    // `aria-expanded`; row buttons and the Manage-chat trigger do not carry the
+    // "Pinned" label).
+    const pinnedHeader = [...container.querySelectorAll("button[aria-expanded]")].find((b) =>
+      b.textContent?.includes("Pinned"),
+    );
+    expect(pinnedHeader).toBeTruthy();
+    const pinnedRows = [...container.querySelectorAll("button")].filter((b) =>
+      b.textContent?.includes("Pinned thread"),
+    );
+    expect(pinnedRows.length).toBe(1);
+    expect(container.textContent).toContain("Plain thread");
+  });
+
+  it("does not show the empty state when the only chat is a pinned chat", async () => {
+    // Regression (both PR4 reviews): `rows` is additive and every priority chat is
+    // de-duplicated OUT of the recency list, so an all-priority list has an empty
+    // recency list. The empty state must key off the WHOLE rendered set —
+    // otherwise "No conversations yet" paints directly above the Pinned group.
+    const rows = [row({ chatId: "chat-only-pinned", title: "Only pinned", pinnedAt: "2026-05-20T09:00:00.000Z" })];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    expect(container.textContent).not.toContain("No conversations yet.");
+    expect(container.textContent).toContain("Pinned");
+    expect(container.textContent).toContain("Only pinned");
+  });
+
+  it("does not show the empty state when the only chat needs attention", async () => {
+    const rows = [row({ chatId: "chat-only-failed", title: "Only failed", failedAgentIds: ["agent-1"] })];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    expect(container.textContent).not.toContain("No conversations yet.");
+    expect(container.textContent).toContain("Needs attention");
+    expect(container.textContent).toContain("Only failed");
+  });
+
+  it("shows Load more when the whole first page is priority rows but more pages remain", async () => {
+    // The recency list is empty on page 1 (its one row deduped into Pinned), yet
+    // more ordinary chats wait on page 2 — "Load more" must still render (keyed
+    // off the whole rendered set) so they stay reachable.
+    const rows = [row({ chatId: "chat-page1-pin", title: "Page one pin", pinnedAt: "2026-05-20T09:00:00.000Z" })];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor="cursor-1" selectedChatId={null} />,
+      createClient(rows, "cursor-1"),
+    );
+
+    expect(buttonByText(container, "Load more")).toBeTruthy();
+  });
+
+  it("de-duplicates a Needs-attention chat — renders exactly once", async () => {
+    // Count-guard the attention half of the priority dedup (the Pinned half is
+    // guarded above). A regression narrowing `priorityIds` to pinned-only would
+    // double-render every attention row; `.toContain` would miss it, this won't.
+    const rows = [
+      row({ chatId: "chat-att", title: "Attention chat", failedAgentIds: ["agent-1"] }),
+      row({ chatId: "chat-plain2", title: "Plain two" }),
+    ];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    const attRows = [...container.querySelectorAll("button")].filter((b) => b.textContent?.includes("Attention chat"));
+    expect(attRows.length).toBe(1);
+    expect(container.textContent).toContain("Needs attention");
+  });
+
+  it("shows the ⚙ badge as a DIMENSION count (monotonic), driven by the real component", async () => {
+    // Guards the production `popoverFilterCount` (index.tsx), NOT the harness
+    // copy: narrowing Source from 2 sources to 1 must NOT drop the badge, and a
+    // narrowed Source + non-default Status reads 2 (dimensions), not 3 (values).
+    const container = await renderDom(<StatefulList selectedChatId={null} />);
+    const trigger = () => container.querySelector<HTMLButtonElement>('button[aria-label="Filter"]');
+    expect(trigger()?.textContent ?? "").not.toMatch(/[0-9]/);
+
+    await click(trigger() ?? null);
+    const labelByText = (t: string): Element | null =>
+      [...document.body.querySelectorAll("label")].find((l) => l.textContent?.includes(t)) ?? null;
+    await click(labelByText("Archived")); // Status → non-default (dimension 1)
+    await click(labelByText("Agent")); // Source → 2 of 3 selected (dimension 2)
+    await flush();
+    expect(trigger()?.textContent).toContain("2");
+    expect(trigger()?.textContent).not.toContain("3");
+
+    await click(labelByText("GitHub")); // Source → 1 of 3: dimension count stays 2
+    await flush();
+    expect(trigger()?.textContent).toContain("2");
   });
 
   it("keeps the empty state when a background refetch fails, not an error", async () => {

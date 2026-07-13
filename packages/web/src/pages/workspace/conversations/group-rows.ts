@@ -114,10 +114,24 @@ function bucketForRecency(iso: string | null, now: Date): RecencyBucketKey {
   return "older";
 }
 
+/**
+ * The row's "recent activity" instant — `activity_at` (GREATEST of last message,
+ * a genuine description change, and creation), the same key the server orders
+ * ordinary rows by. Falling back to `last_message_at` keeps an old server (or an
+ * unparsed row) without `activity_at` from sinking every chat to the bottom.
+ * Using it for BOTH the recency bucket and the displayed time keeps the client
+ * grouping/label consistent with the server order — otherwise a chat whose
+ * description changed today (new activity, old last message) would sort to the
+ * top server-side yet land under a collapsed "Older" bucket here.
+ */
+export function rowActivityInstant(r: MeChatRow): string | null {
+  return r.activityAt ?? r.lastMessageAt;
+}
+
 function groupByRecency(rows: ReadonlyArray<MeChatRow>, now: Date): ReadonlyArray<GroupBucket> {
   const map = new Map<RecencyBucketKey, MeChatRow[]>();
   for (const r of rows) {
-    const key = bucketForRecency(r.lastMessageAt, now);
+    const key = bucketForRecency(rowActivityInstant(r), now);
     const list = map.get(key);
     if (list) list.push(r);
     else map.set(key, [r]);
@@ -248,34 +262,4 @@ export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
  */
 export function rowIsFailed(r: MeChatRow): boolean {
   return r.failedAgentIds.length > 0;
-}
-
-/**
- * Partition rows into the pinned "Needs attention" set and the rest. Within
- * the attention bucket, sort by `ATTENTION_PRIORITY` (stable within tier,
- * so source order is preserved among rows of the same reason). The caller
- * hoists `attention` into a single pinned bucket at the top and groups
- * `rest` normally, so a chat appears in exactly one place.
- *
- * ⚠️ Operates on the already-loaded rows only: an attention chat outside the
- * loaded page(s) is not pinned (page-local v1; the cross-page pinned query is
- * a follow-up).
- */
-export function splitAttentionRows(rows: ReadonlyArray<MeChatRow>): { attention: MeChatRow[]; rest: MeChatRow[] } {
-  const attention: MeChatRow[] = [];
-  const rest: MeChatRow[] = [];
-  for (const r of rows) {
-    if (rowAttentionReason(r) !== null) attention.push(r);
-    else rest.push(r);
-  }
-  attention.sort((a, b) => {
-    const ra = rowAttentionReason(a);
-    const rb = rowAttentionReason(b);
-    // Defensive guard — both are non-null by construction (only rows with a
-    // reason entered `attention`), but a runtime check is cheaper than a TS
-    // `as` cast and respects the repo's "no `as` assertions" rule (CLAUDE.md).
-    if (ra === null || rb === null) return 0;
-    return ATTENTION_PRIORITY.indexOf(ra) - ATTENTION_PRIORITY.indexOf(rb);
-  });
-  return { attention, rest };
 }

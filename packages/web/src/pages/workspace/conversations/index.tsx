@@ -1,4 +1,4 @@
-import type { ChatEngagementView, ChatSource, MeChatRow } from "@first-tree/shared";
+import type { ChatEngagementView, ChatSource, MeChatPriorityRows, MeChatRow } from "@first-tree/shared";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Eye, ListTree, Plus, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -11,7 +11,7 @@ import { Popover } from "../../../components/ui/popover.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn, formatRowTime } from "../../../lib/utils.js";
 import { FilterPopover, GROUP_OPTIONS, originLabel } from "./filter-popover.js";
-import { type GroupMode, groupRows, rowIsFailed, splitAttentionRows } from "./group-rows.js";
+import { type GroupBucket, type GroupMode, groupRows, rowActivityInstant, rowIsFailed } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -34,6 +34,10 @@ import { RowEngagementMenu } from "./row-engagement-menu.js";
  */
 
 export const DRAFT_CHAT_ID = "draft" as const;
+
+// Stable identity for the "no priority groups" case so the derived memos below
+// don't re-run every render on a fresh object literal.
+const EMPTY_PRIORITY: MeChatPriorityRows = { attention: [], pinned: [] };
 
 /**
  * Primary engagement filter — the single-select triad in the header.
@@ -178,49 +182,86 @@ export function ConversationList({
   // list and a stable React key. No per-page staleness sieve is needed — the
   // infinite query refetches every loaded page on `refetchInterval`, so each
   // row's `busyAgentIds` is refreshed on the same cadence.
+  // The server supplies the whole-matching-set priority groups on the FIRST
+  // page (attention + pinned); later pages carry them empty. `rows` is additive
+  // — a priority chat is repeated in the ordinary stream — so we de-duplicate the
+  // recency list against the priority ids and render each chat exactly once.
+  const priorityRows = data?.pages[0]?.priorityRows ?? EMPTY_PRIORITY;
+  const priorityIds = useMemo(
+    () => new Set([...priorityRows.attention, ...priorityRows.pinned].map((r) => r.chatId)),
+    [priorityRows],
+  );
+
+  // Flatten every loaded page into the ordinary recency list, de-duplicating by
+  // chatId AND dropping any chat already shown in a priority group. A background
+  // refetch can briefly leave a chatId on two pages until the tail refetches;
+  // keeping the first occurrence yields a duplicate-free list and a stable key.
   const allRows = useMemo(() => {
     const seen = new Set<string>();
     const rows: MeChatRow[] = [];
     for (const page of data?.pages ?? []) {
       for (const chatRow of page.rows) {
-        if (seen.has(chatRow.chatId)) continue;
+        if (seen.has(chatRow.chatId) || priorityIds.has(chatRow.chatId)) continue;
         seen.add(chatRow.chatId);
         rows.push(chatRow);
       }
     }
     return rows;
-  }, [data]);
+  }, [data, priorityIds]);
 
-  // Bucket by recency against a fresh `now`. Row meta (`formatRowTime`:
-  // now / 5m / 3h) and the Today / Yesterday buckets are clock-derived, so
-  // they must re-evaluate on the 30s refetch cadence. TanStack Query
-  // structurally shares a structurally-identical successful response, so on a
-  // quiet list `data` (and thus `allRows`) keeps its identity across a refetch
-  // and neither this memo nor a render would otherwise fire. `dataUpdatedAt`
-  // advances on every successful refetch and is a tracked result field, so
-  // depending on it both forces a re-render (refreshing the inline
-  // `formatRowTime` calls) and re-runs this memo with a new `now`. A tab
-  // throttled past a refetch stays stale until the next one lands — acceptable
-  // for a presentational concern.
-  //
-  // Hoist attention chats (failed + open request) into a pinned section at
-  // the top WITHOUT touching cursor pagination or reordering the main list:
-  // partition them out, group the rest as usual, then prepend a synthetic
-  // "Needs attention" bucket (failed > request). A plain unread mention /
-  // red dot deliberately does NOT pin, so the list stays stable. A chat
-  // appears in exactly one place (pinned OR its normal group), never both.
+  // Render order: Needs attention → Pinned → the recency groups. Attention and
+  // Pinned come straight from the server projection (viewer-scoped failed / open
+  // request, and the viewer's private pins — both extracted across the whole
+  // MATCHING set, not just the loaded page), so a low-activity pin or a failure
+  // deep in history still surfaces at the top. An empty group is omitted; a plain
+  // unread mention still never pins. Row meta (`formatRowTime`) and the Today /
+  // Yesterday buckets are clock-derived, so they must re-evaluate on the 30s
+  // refetch cadence — TanStack Query structurally shares an identical successful
+  // response, so `dataUpdatedAt` (a tracked field advancing on every successful
+  // refetch) is the dep that both re-renders the clock-derived times and re-runs
+  // this memo with a fresh `now`.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `dataUpdatedAt` is the successful-refetch time tick — it re-runs this memo with a fresh `now` (and re-renders the clock-derived row times) even when the payload is structurally identical.
-  const buckets = useMemo(() => {
+  const buckets = useMemo<GroupBucket[]>(() => {
     const now = new Date();
-    const { attention, rest } = splitAttentionRows(allRows);
-    if (attention.length === 0) return groupRows(allRows, group, now);
-    return [
-      { key: "needs-attention", label: "Needs attention", rows: attention, defaultCollapsed: false },
-      ...groupRows(rest, group, now),
-    ];
-  }, [allRows, group, dataUpdatedAt]);
+    const groups: GroupBucket[] = [];
+    if (priorityRows.attention.length > 0) {
+      groups.push({
+        key: "needs-attention",
+        label: "Needs attention",
+        rows: priorityRows.attention,
+        defaultCollapsed: false,
+      });
+    }
+    if (priorityRows.pinned.length > 0) {
+      groups.push({ key: "pinned", label: "Pinned", rows: priorityRows.pinned, defaultCollapsed: false });
+    }
+    groups.push(...groupRows(allRows, group, now));
+    return groups;
+  }, [allRows, priorityRows, group, dataUpdatedAt]);
 
-  const totalUnread = useMemo(() => allRows.reduce((acc, r) => acc + (r.unreadMentionCount > 0 ? 1 : 0), 0), [allRows]);
+  // Whether ANY row renders — an ordinary recency row OR a server priority-group
+  // row (Needs attention / Pinned). The empty / loading / load-more gates key off
+  // THIS, not `allRows.length`: `rows` is additive and every priority chat is
+  // de-duplicated OUT of `allRows`, so an all-priority list (a new user whose one
+  // chat is pinned or has a failed agent) has `allRows.length === 0` while the
+  // rail is NOT empty. Gating the empty state on `allRows.length` there would
+  // paint "No conversations yet" directly above a populated Pinned /
+  // Needs-attention group, and hide "Load more" when the whole first page is
+  // priority rows but more ordinary chats wait on the next page. `.some(rows>0)`
+  // (not `buckets.length`) because `groupRows([])` returns a single label-less
+  // zero-row spacer bucket, so the bucket count is never 0.
+  const hasAnyRow = buckets.some((b) => b.rows.length > 0);
+
+  // Page-local unread count across every rendered chat (priority groups +
+  // ordinary rows). The global server aggregate is deferred to a later PR.
+  const totalUnread = useMemo(
+    () =>
+      [...priorityRows.attention, ...priorityRows.pinned, ...allRows].reduce(
+        (acc, r) => acc + (r.unreadMentionCount > 0 ? 1 : 0),
+        0,
+      ),
+    [priorityRows, allRows],
+  );
   const isDraftActive = selectedChatId === DRAFT_CHAT_ID;
   // The chip row mirrors only origin + participants (the removable
   // multi-selects). Scope is surfaced by the popover badge, not a chip.
@@ -257,10 +298,15 @@ export function ConversationList({
     });
   };
 
-  // The `⚙` popover badge counts the *secondary* filters it hides from the
-  // header: origin, participants, and a non-default scope. The primary
-  // triad (unread / watching) lives in the header and is not counted here.
-  const popoverFilterCount = origin.length + participants.length + (engagement !== "active" ? 1 : 0);
+  // The `⚙` popover badge counts the *secondary* filter DIMENSIONS it hides
+  // from the header: Source (any narrowing), Participants (any selection), and a
+  // non-default Status. It counts dimensions, NOT selected values, so it stays
+  // monotonic — narrowing Source from three sources to one must not make the
+  // badge fall from 3 to 1, and an all-sources selection normalizes to the
+  // unrestricted wire so it correctly reads 0. The primary triad (unread /
+  // watching) lives in the header and is not counted here.
+  const popoverFilterCount =
+    (origin.length > 0 ? 1 : 0) + (participants.length > 0 ? 1 : 0) + (engagement !== "active" ? 1 : 0);
 
   const resolveAgentName = useAgentNameMap();
 
@@ -325,6 +371,8 @@ export function ConversationList({
             onOriginChange={onOriginChange}
             engagement={engagement}
             onEngagementChange={onEngagementChange}
+            participants={participants}
+            onParticipantsChange={onParticipantsChange}
             onResetAll={onClearFilters}
             activeCount={popoverFilterCount}
           />
@@ -408,7 +456,7 @@ export function ConversationList({
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">
-        {isLoading && allRows.length === 0 && (
+        {isLoading && !hasAnyRow && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             Loading…
           </div>
@@ -418,7 +466,7 @@ export function ConversationList({
             `isLoadingError` (not `isError`) is deliberate: a failed background
             refetch keeps the prior data, so gating on `isError` would flip a
             legitimately-empty list into an error on a transient 30s-refetch blip. */}
-        {isLoadingError && allRows.length === 0 && (
+        {isLoadingError && !hasAnyRow && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             <p style={{ margin: 0 }}>{"Couldn't load conversations."}</p>
             <button
@@ -438,7 +486,7 @@ export function ConversationList({
             </button>
           </div>
         )}
-        {!isLoading && !isLoadingError && allRows.length === 0 && (
+        {!isLoading && !isLoadingError && !hasAnyRow && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             <p style={{ margin: 0 }}>{emptyCopy.title}</p>
             <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
@@ -479,6 +527,11 @@ export function ConversationList({
                   const hasUnread = row.unreadMentionCount > 0;
                   const failed = rowIsFailed(row);
                   const isWatching = row.membershipKind === "watching";
+                  // Show the "recent activity" instant (activityAt — includes a
+                  // genuine description change), the same key the row is grouped
+                  // and server-sorted by, so a Today-activity chat never displays
+                  // a stale message age. Falls back to lastMessageAt for skew.
+                  const rowTime = rowActivityInstant(row);
                   // Density "C": single-line rows. Attention is carried by the
                   // avatar corner mark, while the left bar remains the selected
                   // affordance only.
@@ -540,9 +593,9 @@ export function ConversationList({
                           )}
                           {row.busyAgentIds.length > 0 ? (
                             <ActivityDots />
-                          ) : row.lastMessageAt ? (
+                          ) : rowTime ? (
                             <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                              {formatRowTime(row.lastMessageAt)}
+                              {formatRowTime(rowTime)}
                             </span>
                           ) : null}
                         </span>
@@ -554,7 +607,12 @@ export function ConversationList({
                           right: "var(--sp-3)",
                         }}
                       >
-                        <RowEngagementMenu chatId={row.chatId} status={row.engagementStatus} hasUnread={hasUnread} />
+                        <RowEngagementMenu
+                          chatId={row.chatId}
+                          status={row.engagementStatus}
+                          hasUnread={hasUnread}
+                          pinned={row.pinnedAt !== null}
+                        />
                       </div>
                     </div>
                   );
@@ -562,7 +620,7 @@ export function ConversationList({
             </div>
           );
         })}
-        {hasNextPage && allRows.length > 0 && (
+        {hasNextPage && hasAnyRow && (
           <div style={{ padding: "var(--sp-2) var(--sp-3)" }}>
             <button
               type="button"

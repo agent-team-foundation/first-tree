@@ -7,7 +7,6 @@ import {
   readStoredGroupMode,
   rowAttentionReason,
   rowIsFailed,
-  splitAttentionRows,
   storeGroupMode,
 } from "../conversations/group-rows.js";
 
@@ -40,8 +39,8 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -122,6 +121,23 @@ describe("groupRows — recency", () => {
     const rows = [row({ id: "old", lastMessageAt: offsetIso(-24 * 14) })]; // 2 weeks back
     const buckets = groupRows(rows, "recency", NOW);
     expect(buckets[0]?.key).toBe("older");
+  });
+
+  it("buckets by activityAt (recent activity), not lastMessageAt", () => {
+    // Description-only update today: last message is 2 weeks old (would sink to
+    // "Older") but activityAt is 2h ago → must land in Today, matching the
+    // server's activityAt ordering rather than hiding under a collapsed bucket.
+    const rows = [row({ id: "desc-today", lastMessageAt: offsetIso(-24 * 14), activityAt: offsetIso(-2) })];
+    const buckets = groupRows(rows, "recency", NOW);
+    expect(buckets.map((b) => b.key)).toEqual(["today"]);
+  });
+
+  it("falls back to lastMessageAt when activityAt is null (version skew)", () => {
+    // An old server predating activity_at sends it null → bucket on lastMessageAt
+    // so the row isn't wrongly sunk to Older.
+    const rows = [row({ id: "skew", lastMessageAt: offsetIso(-2), activityAt: null })];
+    const buckets = groupRows(rows, "recency", NOW);
+    expect(buckets.map((b) => b.key)).toEqual(["today"]);
   });
 
   it("sinks NULL timestamp rows into older", () => {
@@ -209,199 +225,138 @@ describe("groupRows — source", () => {
   });
 });
 
-// Chat-granularity predicate.
-// R1 (mine-failed via failedAgentIds), R2 (open question directed at me via
-// openRequestCount > 0 — ANSWER-cleared, so reading the chat does not unpin).
-// A plain unread mention / red dot is deliberately NOT a pinning rule: the
-// list stays stable and only an ask (R2) or a broken agent (R1) reorders it.
-// See the rule ladder in group-rows.ts.
-describe("splitAttentionRows — predicate", () => {
-  it("R1: mine-failed → attention bucket, failed tier", () => {
-    const rows = [row({ id: "r1", lastMessageAt: null, failedAgentIds: ["mine"] })];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["r1"]);
-    expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
+// Chat-granularity attention predicate (`rowAttentionReason`, still consumed by
+// the mobile rail via `mobile/data.ts`). The list-side splitting + failed-first
+// ordering now lives on the server (see `me-chat-priority.test.ts`); these cases
+// lock only the front-end PREDICATE: R1 (mine-failed via failedAgentIds), R2
+// (open question directed at me via openRequestCount > 0 — ANSWER-cleared, so
+// reading the chat does not unpin). A plain unread mention / red dot is
+// deliberately NOT a pinning rule. See the rule ladder in group-rows.ts.
+describe("rowAttentionReason — predicate", () => {
+  it("R1: mine-failed → failed reason", () => {
+    const r = row({ id: "r1", lastMessageAt: null, failedAgentIds: ["mine"] });
+    expect(rowAttentionReason(r)).toBe("failed");
+    expect(rowIsFailed(r)).toBe(true);
   });
 
-  it("R2: open request, no unread → attention bucket, request tier", () => {
+  it("R2: open request, no unread → request reason", () => {
     // The core scenario: a `chat ask` (request) chat the human has already READ
     // but not answered. `unreadMentionCount` is 0 (read-cleared), yet the open
-    // request keeps the row pinned — it must not leave "Needs attention"
-    // until the question is answered or closed.
-    const rows = [
-      row({
-        id: "r2-open",
-        lastMessageAt: null,
-        openRequestCount: 1,
-        unreadMentionCount: 0,
-        chatHasExplicitMentionToMe: false,
-        pinnedAt: null,
-        activityAt: null,
-      }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["r2-open"]);
-    expect(attention[0] && rowAttentionReason(attention[0])).toBe("request");
+    // request keeps the row pinned until the question is answered or closed.
+    const r = row({
+      id: "r2-open",
+      lastMessageAt: null,
+      openRequestCount: 1,
+      unreadMentionCount: 0,
+      chatHasExplicitMentionToMe: false,
+      pinnedAt: null,
+      activityAt: null,
+    });
+    expect(rowAttentionReason(r)).toBe("request");
   });
 
-  it("R2 cleared: request answered (count back to 0) → NOT attention", () => {
-    const rows = [
-      row({
-        id: "r2-answered",
-        lastMessageAt: null,
-        openRequestCount: 0,
-        unreadMentionCount: 0,
-      }),
-    ];
-    const { attention, rest } = splitAttentionRows(rows);
-    expect(attention).toEqual([]);
-    expect(rest.map((r) => r.chatId)).toEqual(["r2-answered"]);
+  it("R2 cleared: request answered (count back to 0) → no reason", () => {
+    const r = row({ id: "r2-answered", lastMessageAt: null, openRequestCount: 0, unreadMentionCount: 0 });
+    expect(rowAttentionReason(r)).toBeNull();
   });
 
-  it("unread + explicit @<me> → NOT attention (red dot does not pin)", () => {
-    // A plain unread mention bumps the red-dot counter but no longer hoists
-    // the chat: pinning is reserved for an ask (R2) or a broken agent (R1),
-    // so the list stays stable. The row stays in its normal recency group.
-    const rows = [
-      row({
-        id: "r2",
-        lastMessageAt: null,
-        unreadMentionCount: 1,
-        chatHasExplicitMentionToMe: true,
-        pinnedAt: null,
-        activityAt: null,
-      }),
-    ];
-    const { attention, rest } = splitAttentionRows(rows);
-    expect(attention).toEqual([]);
-    expect(rest.map((r) => r.chatId)).toEqual(["r2"]);
+  it("unread + explicit @<me> → no reason (red dot does not pin)", () => {
+    // A plain unread mention bumps the red-dot counter but does not hoist the
+    // chat: pinning is reserved for an ask (R2) or a broken agent (R1).
+    const r = row({
+      id: "r2",
+      lastMessageAt: null,
+      unreadMentionCount: 1,
+      chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
+    });
+    expect(rowAttentionReason(r)).toBeNull();
   });
 
-  it("unread 1-on-1 implicit auto-mention → NOT attention", () => {
+  it("unread 1-on-1 implicit auto-mention → no reason", () => {
     // In a 1v1, agent → human plain "ack" bumps the v1 red-dot counter but
     // `metadata.mentions` is empty (`chatHasExplicitMentionToMe: false`).
-    // Like any unread mention, it must NOT pin.
-    const rows = [
-      row({
-        id: "r2-implicit",
-        lastMessageAt: null,
-        unreadMentionCount: 1,
-        chatHasExplicitMentionToMe: false,
-        pinnedAt: null,
-        activityAt: null,
-      }),
-    ];
-    const { attention, rest } = splitAttentionRows(rows);
-    expect(attention).toEqual([]);
-    expect(rest.map((r) => r.chatId)).toEqual(["r2-implicit"]);
+    const r = row({
+      id: "r2-implicit",
+      lastMessageAt: null,
+      unreadMentionCount: 1,
+      chatHasExplicitMentionToMe: false,
+      pinnedAt: null,
+      activityAt: null,
+    });
+    expect(rowAttentionReason(r)).toBeNull();
   });
 
-  it("quiet row → NOT attention", () => {
-    const rows = [row({ id: "quiet", lastMessageAt: null })];
-    const { attention, rest } = splitAttentionRows(rows);
-    expect(attention).toEqual([]);
-    expect(rest.map((r) => r.chatId)).toEqual(["quiet"]);
+  it("quiet row → no reason", () => {
+    expect(rowAttentionReason(row({ id: "quiet", lastMessageAt: null }))).toBeNull();
   });
 
-  it("priority: failed > request; a plain mention stays unpinned", () => {
-    // The mention-only row "m" is NOT hoisted; only failed + request pin,
-    // with failed first.
-    const rows = [
-      row({ id: "m", lastMessageAt: null, unreadMentionCount: 1, chatHasExplicitMentionToMe: true }),
-      row({ id: "q", lastMessageAt: null, openRequestCount: 1 }),
-      row({ id: "f", lastMessageAt: null, failedAgentIds: ["y"] }),
-    ];
-    const { attention, rest } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["f", "q"]);
-    expect(rest.map((r) => r.chatId)).toEqual(["m"]);
+  it("failed + request carry a reason; a plain mention does not", () => {
+    // Only failed + request earn a reason; a mention-only row does not. The
+    // failed-first ORDERING across rows is a server concern (me-chat-priority).
+    const mention = row({ id: "m", lastMessageAt: null, unreadMentionCount: 1, chatHasExplicitMentionToMe: true });
+    const request = row({ id: "q", lastMessageAt: null, openRequestCount: 1 });
+    const failed = row({ id: "f", lastMessageAt: null, failedAgentIds: ["y"] });
+    expect(rowAttentionReason(mention)).toBeNull();
+    expect(rowAttentionReason(request)).toBe("request");
+    expect(rowAttentionReason(failed)).toBe("failed");
   });
 
-  it("request + unread mention on the same row → pins as request", () => {
+  it("request + unread mention on the same row → request", () => {
     // A fresh `chat ask` (request) is typically also an unread explicit
-    // mention. The request pins it (the mention half is irrelevant to
-    // ordering), and it stays pinned as `request` after the mention is read.
-    const rows = [
-      row({
-        id: "qm",
-        lastMessageAt: null,
-        openRequestCount: 1,
-        unreadMentionCount: 1,
-        chatHasExplicitMentionToMe: true,
-        pinnedAt: null,
-        activityAt: null,
-      }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention[0] && rowAttentionReason(attention[0])).toBe("request");
+    // mention. The request wins, and it stays `request` after the mention is read.
+    const r = row({
+      id: "qm",
+      lastMessageAt: null,
+      openRequestCount: 1,
+      unreadMentionCount: 1,
+      chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
+    });
+    expect(rowAttentionReason(r)).toBe("request");
   });
 
-  it("failed + unread mention on the same row → pins as failed", () => {
-    const rows = [
-      row({
-        id: "fm",
-        lastMessageAt: null,
-        failedAgentIds: ["a"],
-        unreadMentionCount: 1,
-        chatHasExplicitMentionToMe: true,
-        pinnedAt: null,
-        activityAt: null,
-      }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention[0] && rowAttentionReason(attention[0])).toBe("failed");
+  it("failed + unread mention on the same row → failed", () => {
+    const r = row({
+      id: "fm",
+      lastMessageAt: null,
+      failedAgentIds: ["a"],
+      unreadMentionCount: 1,
+      chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
+    });
+    expect(rowAttentionReason(r)).toBe("failed");
   });
 
-  it("stable sort within tier preserves input order", () => {
-    const rows = [
-      row({ id: "f1", lastMessageAt: null, failedAgentIds: ["a"] }),
-      row({ id: "f2", lastMessageAt: null, failedAgentIds: ["b"] }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["f1", "f2"]);
-  });
-
-  it("boundary A: my failed agent, caller is watcher → still attention", () => {
+  it("boundary A: my failed agent, caller is watcher → still failed", () => {
     // Server already narrows `failedAgentIds` to mine regardless of membership.
     // The front-end predicate stays membership-agnostic for R1, so the row
     // pins even when membershipKind is "watching" — boundary A locked.
-    const rows = [
-      row({
-        id: "rA",
-        lastMessageAt: null,
-        failedAgentIds: ["mine"],
-        membershipKind: "watching",
-      }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["rA"]);
-    expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
+    const r = row({ id: "rA", lastMessageAt: null, failedAgentIds: ["mine"], membershipKind: "watching" });
+    expect(rowAttentionReason(r)).toBe("failed");
+    expect(rowIsFailed(r)).toBe(true);
   });
 });
 
-// Version-skew safety: the web client casts the server response as-is and
-// does NOT run rows through `meChatRowSchema.parse`, so the zod
-// `.default(...)` only applies server-side. The predicate must therefore
-// tolerate an `undefined` field from an old server by degrading that rule
-// to "off" rather than mispinning.
-describe("splitAttentionRows — version skew (old server, new web)", () => {
+// Version-skew safety: the web client casts the server response as-is and does
+// NOT run rows through `meChatRowSchema.parse`, so the zod `.default(...)` only
+// applies server-side. The predicate must therefore tolerate an `undefined`
+// field from an old server by degrading that rule to "off" rather than mispinning.
+describe("rowAttentionReason — version skew (old server, new web)", () => {
   it("missing openRequestCount (undefined) → R2 disabled", () => {
-    // `undefined > 0` is `false` — an old server build that predates the
-    // field degrades the request rule to "off" rather than mispinning.
-    const stale = {
-      ...row({ id: "stale-r2", lastMessageAt: null }),
-    };
+    // `undefined > 0` is `false` — an old server build that predates the field
+    // degrades the request rule to "off" rather than mispinning.
+    const stale = { ...row({ id: "stale-r2", lastMessageAt: null }) };
     delete (stale as { openRequestCount?: number }).openRequestCount;
-    const { attention, rest } = splitAttentionRows([stale]);
-    expect(attention).toEqual([]);
-    expect(rest.map((r) => r.chatId)).toEqual(["stale-r2"]);
+    expect(rowAttentionReason(stale)).toBeNull();
   });
 
   it("missing field still lets R1 (failedAgentIds) fire", () => {
-    const stale = {
-      ...row({ id: "stale-r1", lastMessageAt: null, failedAgentIds: ["mine"] }),
-    };
+    const stale = { ...row({ id: "stale-r1", lastMessageAt: null, failedAgentIds: ["mine"] }) };
     delete (stale as { chatHasExplicitMentionToMe?: boolean }).chatHasExplicitMentionToMe;
-    const { attention } = splitAttentionRows([stale]);
-    expect(attention.map((r) => r.chatId)).toEqual(["stale-r1"]);
+    expect(rowAttentionReason(stale)).toBe("failed");
   });
 });

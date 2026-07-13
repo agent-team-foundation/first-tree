@@ -1,4 +1,4 @@
-import type { ChatEngagementView, ChatSource, MeChatRow } from "@first-tree/shared";
+import type { ChatEngagementView, ChatSource, MeChatPriorityRows, MeChatRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { GroupMode } from "./workspace/conversations/group-rows.js";
@@ -44,8 +44,8 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -109,6 +109,8 @@ const NORMAL_ROWS: MeChatRow[] = [
     participants: [NOVA],
     lastMessageAt: minutesAgo(34),
     lastMessagePreview: "let's split the token service out first",
+    // Pinned so the preview demonstrates the Pinned group + the row Unpin action.
+    pinnedAt: minutesAgo(200),
   }),
   row({
     chatId: "c-group",
@@ -227,8 +229,20 @@ function seededClient(): QueryClient {
     },
   });
   // `ConversationList` reads via `useInfiniteQuery`, so seeded cache entries
-  // must be the `InfiniteData` shape (`{ pages, pageParams }`).
-  const page = (rows: MeChatRow[]) => ({ pages: [{ rows, nextCursor: null }], pageParams: [undefined] });
+  // must be the `InfiniteData` shape (`{ pages, pageParams }`). Model the server
+  // priority projection so the preview shows the Needs attention + Pinned groups
+  // (attention = failed / open-request rows; pinned = pinned rows not in
+  // attention). Ordinary rows stay additive; the component de-dupes them.
+  const priorityFrom = (rows: MeChatRow[]): MeChatPriorityRows => {
+    const attention = rows.filter((r) => r.failedAgentIds.length > 0 || r.openRequestCount > 0);
+    const attentionIds = new Set(attention.map((r) => r.chatId));
+    const pinned = rows.filter((r) => r.pinnedAt !== null && !attentionIds.has(r.chatId));
+    return { attention, pinned };
+  };
+  const page = (rows: MeChatRow[]) => ({
+    pages: [{ rows, nextCursor: null, priorityRows: priorityFrom(rows) }],
+    pageParams: [undefined],
+  });
   // Triad views — keys mirror `ConversationList`'s queryKey shape exactly:
   // ["me","chats", filter, engagement, watching, origin, with].
   client.setQueryData(["me", "chats", "all", "active", false, null, null], page(ACTIVE_ALL));
@@ -245,6 +259,18 @@ function seededClient(): QueryClient {
   // Name-map source consumed by `useAgentNameMap` (empty is fine — the
   // preview doesn't surface participant chips).
   client.setQueryData(["managed-agents", "name-map"], []);
+  // Addressable roster for the ⚙ filter's Participants OR-picker — so the
+  // picker renders the real checkbox list offline instead of the (correct but
+  // demo-unfriendly) "Couldn't load people." no-backend state.
+  client.setQueryData(["agents", "org-list", { addressableOnly: true }], {
+    items: [
+      { uuid: "agent-nova", displayName: "nova" },
+      { uuid: "agent-design", displayName: "design-critique" },
+      { uuid: "agent-market", displayName: "marketing-writer" },
+      { uuid: "agent-res", displayName: "research" },
+    ],
+    nextCursor: null,
+  });
   return client;
 }
 
@@ -271,13 +297,13 @@ export function ConversationListPreviewPage() {
     setWatching(view === "watching");
   };
   const onClearFilters = (): void => {
-    // Mirror the shipped `nextParamsForClearFilters`: Reset all clears every
-    // filter dimension INCLUDING Status (engagement → default "active"), so
-    // the gear badge and list both return to the unfiltered default.
+    // Mirror the shipped `nextParamsForClearFilters`: "Reset" resets the
+    // popover's OWN dimensions — Source, Participants, and Status (engagement →
+    // default "active") — which are exactly what the gear badge counts. The
+    // header triad (All / Unread / Watching) is a separate control and is left
+    // untouched.
     setOrigin([]);
     setParticipants([]);
-    setUnread(false);
-    setWatching(false);
     setEngagement("active");
   };
 
@@ -336,7 +362,7 @@ export function ConversationListPreviewPage() {
           </div>
           <p className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-4)" }}>
             Status (Active/Archived/All) + Source live in the ⚙ filter; picking a non-Active Status shows a count badge
-            on ⚙, and <strong>Reset all</strong> clears it back to default.
+            on ⚙, and <strong>Reset</strong> clears the ⚙ filters back to default (the header triad is left as-is).
           </p>
         </div>
         <ThemeToggleCorner />

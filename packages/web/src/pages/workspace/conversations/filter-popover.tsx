@@ -1,6 +1,8 @@
 import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
 import { Check, Filter } from "lucide-react";
+import { useId } from "react";
 import { Popover } from "../../../components/ui/popover.js";
+import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import type { GroupMode } from "./group-rows.js";
 
 /**
@@ -33,7 +35,7 @@ export function originLabel(source: ChatSource): string {
  * popover — grouping is a view-mode preference, not a daily-touch control.
  */
 export const GROUP_OPTIONS: ReadonlyArray<{ value: GroupMode; label: string }> = [
-  { value: "recency", label: "Time" },
+  { value: "recency", label: "Recent activity" },
   { value: "source", label: "Source" },
 ];
 
@@ -44,14 +46,20 @@ type FilterPopoverProps = {
   engagement: ChatEngagementView;
   onEngagementChange: (next: ChatEngagementView) => void;
   /**
-   * Clears every rail filter dimension in one URL mutation. The popover
-   * delegates "Reset all" to this so the reset doesn't have to call
-   * `onOriginChange([])` back-to-back with the others — those calls would
-   * each derive from the same render-stale `searchParams` snapshot and the
-   * later `setSearchParams` would clobber the earlier (same bug as Phase
-   * A's two-setter Clear). Also covers `with` (participants), which the
-   * popover doesn't surface on its own but which the URL can carry today
-   * via hand-typed parameters.
+   * Participants filter — an optional additive OR-picker over people/agents the
+   * viewer can see. Empty = no constraint (the default); a stream matches when
+   * ANY selected identity is a speaker. Carried on the URL as `?with=`.
+   */
+  participants: ReadonlyArray<string>;
+  onParticipantsChange: (next: ReadonlyArray<string>) => void;
+  /**
+   * Resets the popover's OWN filter dimensions — Source (`origin`),
+   * Participants (`with`), and Status (`engagement`) — in one URL mutation.
+   * The "Reset" button delegates to this so the reset doesn't call
+   * `onOriginChange([])` back-to-back with the others — those calls would each
+   * derive from the same render-stale `searchParams` snapshot and the later
+   * `setSearchParams` would clobber the earlier. The header triad (All /
+   * Unread / Watching) is a separate control and is deliberately NOT reset here.
    */
   onResetAll: () => void;
   /**
@@ -66,45 +74,66 @@ type FilterPopoverProps = {
 
 /**
  * Filter popover — the workspace rail's `⚙` button + panel. Holds the
- * secondary, lower-frequency controls so the header collapses to a single
- * row (New chat + the All / Unread / Watching triad + this button):
- * Status (Active/Archived checkboxes) + multi-select Source. Each control
- * writes through to the URL immediately, so "Done" is just a dismiss.
+ * secondary, lower-frequency controls so the header collapses to a single row
+ * (New chat + the All / Unread / Watching triad + this button), following the
+ * tree 721 rail-filter contract:
+ *   - Status — exclusive Active / Archived / All (Active is the default + reset
+ *     target);
+ *   - Source — a NON-EMPTY additive selection over creation origin (default all,
+ *     no zero-source state);
+ *   - Participants — an optional additive OR-picker over the org's addressable
+ *     agents (empty = no constraint).
+ * Each control writes through to the URL immediately, so "Done" is just a
+ * dismiss; "Reset" restores Active + all sources + no participants (the header
+ * triad is a separate control and is left as-is).
  *
- * The primary engagement triad (All / Unread / Watching) and Group-by both
- * live in the header, not here. Participants picker is
- * intentionally absent: the `?with=` wire is plumbed end-to-end (URL parser
- * + listMeChats) but the picker UI is a follow-up; users who need it today
- * can hand-type `?with=…` and the rail narrows accordingly.
+ * The primary engagement triad (All / Unread / Watching) and Group-by both live
+ * in the header, not here.
  */
 export function FilterPopover({
   origin,
   onOriginChange,
   engagement,
   onEngagementChange,
+  participants,
+  onParticipantsChange,
   onResetAll,
   activeCount,
 }: FilterPopoverProps) {
+  // Source is a NON-EMPTY additive selection over creation origin (tree 721).
+  // `origin: []` is the wire's "unrestricted" (all sources) state — display it as
+  // every box checked rather than an empty list whose hidden meaning is "all".
+  const allSources = ORIGIN_OPTIONS.map((o) => o.value);
+  const sourceSelected = origin.length === 0 ? new Set<ChatSource>(allSources) : new Set(origin);
   const toggleOrigin = (src: ChatSource): void => {
-    const set = new Set(origin);
-    if (set.has(src)) set.delete(src);
-    else set.add(src);
-    // Re-emit in canonical order so the resulting URL is stable
-    // regardless of which checkbox the user clicked first.
-    onOriginChange(ORIGIN_OPTIONS.map((o) => o.value).filter((v) => set.has(v)));
+    const next = new Set(sourceSelected);
+    if (next.has(src)) {
+      if (next.size === 1) return; // forbid the zero-source state — the last stays
+      next.delete(src);
+    } else {
+      next.add(src);
+    }
+    // Re-emit in canonical order for a stable URL; the FULL set normalizes back to
+    // the empty/unrestricted wire so "all sources" never counts as active narrowing.
+    const selected = allSources.filter((v) => next.has(v));
+    onOriginChange(selected.length === allSources.length ? [] : selected);
   };
   const resetOrigin = (): void => onOriginChange([]);
 
-  // Status is two checkboxes (Active / Archived) that map onto the single
-  // `engagement` value — composable like Source, so "both checked" = the old
-  // "Both" and there's no redundant third option. Empty (neither checked)
-  // means "no constraint" → all, matching Source's "none = all" convention.
-  const activeChecked = engagement === "active" || engagement === "all";
-  const archivedChecked = engagement === "archived" || engagement === "all";
-  const pairToEngagement = (active: boolean, archived: boolean): ChatEngagementView =>
-    active && !archived ? "active" : archived && !active ? "archived" : "all";
-  const toggleActive = (): void => onEngagementChange(pairToEngagement(!activeChecked, archivedChecked));
-  const toggleArchived = (): void => onEngagementChange(pairToEngagement(activeChecked, !archivedChecked));
+  // Status is the viewer's engagement projection — one MUTUALLY EXCLUSIVE
+  // selection (tree 721): `Active` (default + reset target) / `Archived` / `All`
+  // (their union, still excluding deleted). A radio group, not the old
+  // composable checkbox pair, so the visible state can never read as an empty
+  // "means everything" selection.
+  const STATUS_OPTIONS: ReadonlyArray<{ value: ChatEngagementView; label: string }> = [
+    { value: "active", label: "Active" },
+    { value: "archived", label: "Archived" },
+    { value: "all", label: "All" },
+  ];
+  // Per-instance radio-group name so two `FilterPopover`s mounted at once (a
+  // future split view) can't have their native radios merged into one browser
+  // group, where arrow-key focus and checked-grouping would bleed across panels.
+  const statusRadioName = useId();
 
   return (
     <Popover
@@ -114,7 +143,6 @@ export function FilterPopover({
         <button
           type="button"
           onClick={toggle}
-          aria-pressed={open}
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-label="Filter"
@@ -150,8 +178,15 @@ export function FilterPopover({
             >
               Status
             </header>
-            <FilterCheckbox label="Active" checked={activeChecked} onChange={toggleActive} />
-            <FilterCheckbox label="Archived" checked={archivedChecked} onChange={toggleArchived} />
+            {STATUS_OPTIONS.map((opt) => (
+              <FilterRadio
+                key={opt.value}
+                name={statusRadioName}
+                label={opt.label}
+                checked={engagement === opt.value}
+                onChange={() => onEngagementChange(opt.value)}
+              />
+            ))}
           </section>
 
           <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
@@ -175,11 +210,13 @@ export function FilterPopover({
               <FilterCheckbox
                 key={opt.value}
                 label={opt.label}
-                checked={origin.includes(opt.value)}
+                checked={sourceSelected.has(opt.value)}
                 onChange={() => toggleOrigin(opt.value)}
               />
             ))}
           </section>
+
+          <ParticipantsSection participants={participants} onParticipantsChange={onParticipantsChange} />
 
           <div
             className="flex items-center"
@@ -200,7 +237,7 @@ export function FilterPopover({
                 color: "var(--primary)",
               }}
             >
-              Reset all
+              Reset
             </button>
             <button
               type="button"
@@ -233,8 +270,11 @@ export function FilterPopover({
  */
 function FilterCheckbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
   return (
+    // `focus-within` puts a visible ring on the row when the `sr-only` input is
+    // keyboard-focused (WCAG 2.4.7) — the clipped native input has no visible
+    // focus of its own.
     <label
-      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)] focus-within:ring-1 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-[var(--bg-raised)]"
       style={{
         gap: "var(--sp-1_5)",
         padding: "var(--sp-0_75) var(--sp-1)",
@@ -259,5 +299,143 @@ function FilterCheckbox({ label, checked, onChange }: { label: string; checked: 
       <span>{label}</span>
       <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />
     </label>
+  );
+}
+
+/**
+ * Single-select sibling of `FilterCheckbox` for the exclusive Status axis. The
+ * native `<input type=radio>` is `sr-only` so keyboard + screen-reader semantics
+ * stay native (arrow-keys move within the radiogroup); the visible ring + filled
+ * dot are decoration reflecting the checked state.
+ */
+function FilterRadio({
+  name,
+  label,
+  checked,
+  onChange,
+}: {
+  name: string;
+  label: string;
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    // `focus-within` ring for the same reason as `FilterCheckbox` — the native
+    // radio is `sr-only`, so the row carries the visible keyboard focus.
+    <label
+      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)] focus-within:ring-1 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-[var(--bg-raised)]"
+      style={{
+        gap: "var(--sp-1_5)",
+        padding: "var(--sp-0_75) var(--sp-1)",
+        borderRadius: 4,
+        color: "var(--fg-2)",
+      }}
+    >
+      <span
+        aria-hidden
+        className="inline-flex items-center justify-center shrink-0"
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: "50%",
+          border: `var(--hairline) solid ${checked ? "var(--primary)" : "var(--border)"}`,
+        }}
+      >
+        {checked && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--primary)" }} />}
+      </span>
+      <span>{label}</span>
+      <input type="radio" name={name} checked={checked} onChange={onChange} className="sr-only" />
+    </label>
+  );
+}
+
+/**
+ * Participants OR-picker — the org's addressable (speaker-eligible) agents and
+ * humans. Empty selection = no constraint (the default); each checked identity
+ * is an additive OR match, carried on the URL as `?with=`.
+ *
+ * Extracted into its own component (rather than inlined in `FilterPopover`) so
+ * its `useOrgAgents` roster fetch + 30s poll only run while the popover panel is
+ * OPEN: `Popover` conditionally renders its panel, so this component unmounts on
+ * close and a never-opened filter costs no background roster poll for the whole
+ * session.
+ */
+function ParticipantsSection({
+  participants,
+  onParticipantsChange,
+}: {
+  participants: ReadonlyArray<string>;
+  onParticipantsChange: (next: ReadonlyArray<string>) => void;
+}) {
+  const agentsQuery = useOrgAgents({ addressableOnly: true });
+  const participantOptions = agentsQuery.data?.items ?? [];
+  const participantSet = new Set(participants);
+  const toggleParticipant = (uuid: string): void => {
+    const next = new Set(participantSet);
+    if (next.has(uuid)) next.delete(uuid);
+    else next.add(uuid);
+    // Emit in a canonical (sorted) order so picking A-then-B and B-then-A yield
+    // the same `?with=` — one react-query cache key, not two, for a logically
+    // identical OR-filter (mirrors Source's canonical re-emit).
+    onParticipantsChange([...next].sort());
+  };
+  const resetParticipants = (): void => onParticipantsChange([]);
+
+  return (
+    <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+      <header
+        className="flex items-center justify-between text-eyebrow"
+        style={{ color: "var(--fg-4)", textTransform: "uppercase", paddingBottom: "var(--sp-0_5)" }}
+      >
+        <span>Participants</span>
+        {participants.length > 0 && (
+          <button
+            type="button"
+            onClick={resetParticipants}
+            className="text-label cursor-pointer"
+            style={{ background: "transparent", border: 0, padding: 0, color: "var(--primary)" }}
+          >
+            Reset
+          </button>
+        )}
+      </header>
+      {agentsQuery.isError && participantOptions.length === 0 ? (
+        // A failed INITIAL load (no cached roster) shows an error + retry rather
+        // than masquerading as "No people to filter by." A *background* refetch
+        // failure keeps the prior `data` (TanStack v5), so we keep rendering the
+        // stale options below instead of replacing a usable picker with this panel.
+        <div className="flex items-center justify-between" style={{ padding: "var(--sp-0_75) var(--sp-1)" }}>
+          <span className="text-label" style={{ color: "var(--fg-4)" }}>
+            {"Couldn't load people."}
+          </span>
+          <button
+            type="button"
+            onClick={() => agentsQuery.refetch()}
+            className="text-label cursor-pointer"
+            style={{ background: "transparent", border: 0, padding: 0, color: "var(--primary)" }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : participantOptions.length === 0 ? (
+        <p className="text-label" style={{ color: "var(--fg-4)", padding: "var(--sp-0_75) var(--sp-1)" }}>
+          {agentsQuery.isLoading ? "Loading…" : "No people to filter by."}
+        </p>
+      ) : (
+        // Empty selection = no constraint, so every box starts UNCHECKED (unlike
+        // Source). Any checked identity is an OR match. Scrollable so a large
+        // roster doesn't blow out the popover height.
+        <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 168 }}>
+          {participantOptions.map((agent) => (
+            <FilterCheckbox
+              key={agent.uuid}
+              label={agent.displayName}
+              checked={participantSet.has(agent.uuid)}
+              onChange={() => toggleParticipant(agent.uuid)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
