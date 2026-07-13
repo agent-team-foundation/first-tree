@@ -719,6 +719,18 @@
     }
   }
 
+  /* Installed WebKit apps with viewport-fit=cover report dynamic viewport
+     heights without the safe-area insets (WebKit 254868). There is no browser
+     chrome to track in standalone mode, so use the full viewport height there
+     and keep the 100dvh behavior for ordinary mobile browser tabs. */
+  @supports (-webkit-touch-callout: none) {
+    @media (display-mode: standalone) {
+      .h-dvh-screen {
+        height: 100vh;
+      }
+    }
+  }
+
   /* Reserve the top safe-area inset (notch / status bar) so a full-height
      shell without its own top chrome does not render content under the
      status bar on notched devices. */

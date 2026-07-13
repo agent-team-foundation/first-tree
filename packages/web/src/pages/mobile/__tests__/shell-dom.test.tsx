@@ -115,14 +115,14 @@ describe("MobileShell", () => {
     expect(harness.container.textContent).not.toContain("Current team");
   });
 
-  it("sizes the live shell to the dynamic viewport and reserves the top safe area", async () => {
+  it("uses the mobile viewport utility and reserves the top safe area", async () => {
     renderShell(harness, "/m/now");
     await harness.flush();
 
-    // Dynamic-viewport height comes from the .h-dvh-screen utility (100vh
-    // fallback + 100dvh override), not a raw inline 100vh that overflows the
-    // visible viewport on mobile browsers while the address bar is shown. The
-    // top safe-area inset is reserved via .pt-safe-top so content does not
+    // Viewport height comes from the .h-dvh-screen utility: dynamic viewport
+    // sizing for browser tabs and the WebKit standalone 100vh override live in
+    // CSS, rather than an inline height that cannot distinguish display mode.
+    // The top safe-area inset is reserved via .pt-safe-top so content does not
     // render under the status bar on notched devices.
     const shell = harness.container.querySelector(".h-dvh-screen");
     expect(shell).not.toBeNull();
