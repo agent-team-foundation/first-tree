@@ -142,6 +142,18 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(res.strippedText).toBe(body); // fenced code sample preserved verbatim
   });
 
+  it("honors backslash-escape parity on the leading bang", async () => {
+    const { uploader } = stubUploader();
+    // Odd run → the `!` is escaped → literal, not captured.
+    const one = await buildMessageImageSnapshots("see \\![x](shots/filter.png)", root, opts(uploader));
+    expect(one.imageRefs).toHaveLength(0);
+    // Even run → the backslashes are literal, the image is LIVE → captured.
+    const two = await buildMessageImageSnapshots("see \\\\![x](shots/filter.png)", root, opts(uploader));
+    expect(two.imageRefs).toHaveLength(1);
+    const three = await buildMessageImageSnapshots("see \\\\\\![x](shots/filter.png)", root, opts(uploader));
+    expect(three.imageRefs).toHaveLength(0);
+  });
+
   it("DOES capture an image written inside inline code (fenced-only exclusion scope)", async () => {
     // Deliberate scope: only fenced blocks are excluded. An image embed inside
     // inline code is rare and treated as a live embed.

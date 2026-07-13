@@ -217,8 +217,8 @@ function basename(p: string): string {
 function collectImageOccurrences(text: string): ImageOccurrence[] {
   // Guard: skip capture on an absurdly large body so a pathological message can
   // never make a synchronous `chat send` appear to hang. Capture is
-  // best-effort, so a >1MB body just sends verbatim.
-  if (text.length > MAX_IMAGE_SCAN_BYTES) return [];
+  // best-effort, so an over-length body just sends verbatim.
+  if (text.length > MAX_IMAGE_SCAN_CHARS) return [];
 
   // Cheap first pass: find the candidate image embeds with the BOUNDED regex
   // (bounded quantifiers keep it linear — an unbounded `[^\]\n]*` would rescan
@@ -232,8 +232,13 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
     const whole = match[0];
     const target = match[1];
     const start = match.index;
-    const prev = start > 0 ? text[start - 1] : "";
-    if (prev !== "\\" && target && !hasUrlScheme(target)) {
+    // CommonMark escape parity: `!` is escaped only by an ODD run of
+    // backslashes. `\![](x)` is an escaped literal (skip); `\\![](x)` is a
+    // literal backslash + a LIVE image (do not skip).
+    let backslashes = 0;
+    for (let p = start - 1; p >= 0 && text[p] === "\\"; p -= 1) backslashes += 1;
+    const escaped = backslashes % 2 === 1;
+    if (!escaped && target && !hasUrlScheme(target)) {
       candidates.push({ writtenPath: target, start, end: start + whole.length });
     }
     match = re.exec(text);
@@ -260,9 +265,10 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
   return out;
 }
 
-/** Backstop on the body size we will scan for image embeds — bounds worst-case
- *  work on a synchronous send. Far above any real chat message. */
-const MAX_IMAGE_SCAN_BYTES = 1024 * 1024;
+/** Backstop on the body length (UTF-16 code units) we will scan for image
+ *  embeds — bounds worst-case work on a synchronous send. ~1 million chars is
+ *  far above any real chat message. */
+const MAX_IMAGE_SCAN_CHARS = 1024 * 1024;
 
 /** True for an absolute URL scheme (`http:`, `https:`, `data:`, …). A Windows
  *  drive prefix like `C:` is not treated as a scheme (single-letter). */

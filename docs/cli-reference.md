@@ -419,7 +419,7 @@ EOF
 # and an image shown inside a fenced code block (``` … ```) is left as a
 # literal sample (an image written inside inline `code` is treated as a live
 # embed). Capture is best-effort and never blocks the send, and is skipped
-# entirely for a body larger than 1 MB (which is then sent verbatim). An image
+# entirely for a body longer than ~1 million characters (then sent verbatim). An image
 # that is too large (>10 MB), unreadable, or beyond the 20-per-message cap is
 # skipped: if no image in the message captured, the body is sent unchanged (the
 # skipped embed stays as text); if at least one sibling image did capture — so
