@@ -1,4 +1,4 @@
-import type { ChatEngagementView, ChatSource, MeChatRow } from "@first-tree/shared";
+import type { ChatEngagementView, ChatSource, MeChatPriorityRows, MeChatRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { GroupMode } from "./workspace/conversations/group-rows.js";
@@ -109,6 +109,8 @@ const NORMAL_ROWS: MeChatRow[] = [
     participants: [NOVA],
     lastMessageAt: minutesAgo(34),
     lastMessagePreview: "let's split the token service out first",
+    // Pinned so the preview demonstrates the Pinned group + the row Unpin action.
+    pinnedAt: minutesAgo(200),
   }),
   row({
     chatId: "c-group",
@@ -227,8 +229,20 @@ function seededClient(): QueryClient {
     },
   });
   // `ConversationList` reads via `useInfiniteQuery`, so seeded cache entries
-  // must be the `InfiniteData` shape (`{ pages, pageParams }`).
-  const page = (rows: MeChatRow[]) => ({ pages: [{ rows, nextCursor: null }], pageParams: [undefined] });
+  // must be the `InfiniteData` shape (`{ pages, pageParams }`). Model the server
+  // priority projection so the preview shows the Needs attention + Pinned groups
+  // (attention = failed / open-request rows; pinned = pinned rows not in
+  // attention). Ordinary rows stay additive; the component de-dupes them.
+  const priorityFrom = (rows: MeChatRow[]): MeChatPriorityRows => {
+    const attention = rows.filter((r) => r.failedAgentIds.length > 0 || r.openRequestCount > 0);
+    const attentionIds = new Set(attention.map((r) => r.chatId));
+    const pinned = rows.filter((r) => r.pinnedAt !== null && !attentionIds.has(r.chatId));
+    return { attention, pinned };
+  };
+  const page = (rows: MeChatRow[]) => ({
+    pages: [{ rows, nextCursor: null, priorityRows: priorityFrom(rows) }],
+    pageParams: [undefined],
+  });
   // Triad views — keys mirror `ConversationList`'s queryKey shape exactly:
   // ["me","chats", filter, engagement, watching, origin, with].
   client.setQueryData(["me", "chats", "all", "active", false, null, null], page(ACTIVE_ALL));
