@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { readTreeState, type TreeMode } from "./binding-state.js";
+import { inspectRepoInfraMarkdownFile } from "./content-class.js";
 import { ensureTrailingNewline } from "./shared.js";
 
 const TREE_IDENTITY_BEGIN = "<!-- BEGIN FIRST-TREE-TREE-IDENTITY -->";
@@ -149,12 +150,12 @@ function writeIdentityFile(path: string, identity: TreeIdentityContract): SyncAc
 export function readManagedTreeIdentity(root: string): ManagedTreeIdentity | undefined {
   for (const file of TREE_IDENTITY_FILES) {
     const path = join(root, file);
-
-    if (!existsSync(path)) {
+    const inspected = inspectRepoInfraMarkdownFile(root, file);
+    if (inspected.kind !== "valid") {
       continue;
     }
 
-    const parsed = parseManagedTreeIdentity(readFileSync(path, "utf-8"));
+    const parsed = parseManagedTreeIdentity(inspected.source);
 
     if (parsed !== undefined) {
       return {

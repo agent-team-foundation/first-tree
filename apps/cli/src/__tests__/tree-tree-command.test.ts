@@ -280,7 +280,7 @@ describe("tree tree renderer", () => {
     expect(output).not.toContain(".turbo");
   });
 
-  it("treats blank optional metadata as absent", () => {
+  it("does not render nodes with invalid optional metadata", () => {
     const root = makeTreeFixture();
     const blank = join(root, "blank-description");
     mkdirSync(blank, { recursive: true });
@@ -289,8 +289,7 @@ describe("tree tree renderer", () => {
       `${frontmatter("title: Blank Description\nowners: [alice]\ndescription: '   '\n")}# Blank\n`,
     );
 
-    expect(renderContextTree(root)).toContain("blank-description/ [Blank Description]\n");
-    expect(renderContextTree(root)).not.toContain("Blank Description] ->");
+    expect(renderContextTree(root)).not.toContain("blank-description/");
   });
 
   it("rejects roots and targets that are not valid Context Tree directories", () => {

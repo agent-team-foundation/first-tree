@@ -720,7 +720,7 @@ owners: [alice, bob]
 Useful optional frontmatter: \`description\`, \`soft_links\`,
 \`lastReviewed\`, and \`decisionLocksCode\`. \`lastReviewed\` records an actual
 owner review; update it only through that review/audit workflow, never during
-a source-backed write. Use \`owners: [*]\` only when a human explicitly opens
+a source-backed write. Use \`owners: ["*"]\` only when a human explicitly opens
 ownership to everyone. Metadata supports scanning, routing, and responsibility.
 
 Prefer body sections in this order, omitting any that do not apply:

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -73,7 +73,8 @@ describe("buildScaffoldFiles", () => {
   it("produces a minimal tree that passes `tree verify`", () => {
     const dir = makeTempDir();
     writeScaffold(dir, buildScaffoldFiles({ title: "Acme", ownerLogin: "octocat", withWorkflow: false }));
-    expect(verifyTreeRoot(dir).ok).toBe(true);
+    expect(readFileSync(join(dir, "NODE.md"), "utf-8")).not.toContain("validationPolicyVersion");
+    expect(verifyTreeRoot(dir)).toMatchObject({ findings: [], ok: true });
   });
 
   it("reports root NODE frontmatter problems", () => {
@@ -108,6 +109,7 @@ describe("buildScaffoldFiles", () => {
   it("uses the current repo root when tree verify omits --tree-path", () => {
     const dir = makeTempDir();
     writeScaffold(dir, buildScaffoldFiles({ title: "Acme", ownerLogin: "octocat", withWorkflow: false }));
+    mkdirSync(join(dir, ".git"));
     process.chdir(dir);
     const command = new Command("verify");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
