@@ -1061,9 +1061,9 @@ function ParticipantChips({
             background: "transparent",
             color: "var(--fg-3)",
             cursor: "pointer",
-            // Mobile: enlarge to a real tap target (matches the chip height so
-            // the row stays tidy). Desktop keeps the compact affordance.
-            ...(mobile ? { minWidth: 40, minHeight: 32 } : {}),
+            // Mobile: a full 44 touch target matching the composer controls;
+            // desktop keeps the compact affordance.
+            ...(mobile ? { minWidth: 44, minHeight: 44 } : {}),
           }}
         >
           <Plus className={mobile ? "h-4 w-4" : "h-3 w-3"} />

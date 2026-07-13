@@ -207,14 +207,15 @@ export function AgentToken({
           style={{
             display: "inline-flex",
             alignItems: "center",
-            justifyContent: "center",
             border: "none",
             background: "none",
             padding: 0,
             cursor: "pointer",
             color: "var(--fg-3)",
-            // Mobile: a roomier tap target (kept modest so it doesn't bloat the chip).
-            ...(mobile ? { width: 26, height: 26 } : {}),
+            // Mobile: a full 44 touch target that clears the minimum the composer
+            // controls use; the × glyph stays small, just centered in the box.
+            // Desktop keeps the compact, hover-revealed × unchanged.
+            ...(mobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
           }}
         >
           <X className={mobile ? "h-4 w-4" : "h-3 w-3"} />

@@ -2050,10 +2050,14 @@ describe("ChatView", () => {
     if (!send || !addBtn || !chipRemove) throw new Error("Mobile new-chat controls missing");
     // Composer send clears the touch minimum (mobile prop reached the composer).
     expect(Number.parseInt(send.style.width, 10)).toBe(44);
-    // The [+] add-participant button is enlarged for touch.
-    expect(Number.parseInt(addBtn.style.minWidth, 10)).toBe(40);
-    // The seeded chip's remove × is always visible on mobile (no hover on touch).
+    // The [+] add-participant button is a full 44x44 touch target.
+    expect(Number.parseInt(addBtn.style.minWidth, 10)).toBe(44);
+    expect(Number.parseInt(addBtn.style.minHeight, 10)).toBe(44);
+    // The seeded chip's remove × is always visible on mobile (no hover on touch)
+    // and is a full 44x44 hit area.
     expect(chipRemove.className).not.toContain("opacity-0");
+    expect(Number.parseInt(chipRemove.style.width, 10)).toBe(44);
+    expect(Number.parseInt(chipRemove.style.height, 10)).toBe(44);
 
     // Enter inserts a newline; it does not create the chat (button-only submit).
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
