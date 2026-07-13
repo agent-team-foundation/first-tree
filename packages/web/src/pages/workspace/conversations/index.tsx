@@ -353,6 +353,8 @@ export function ConversationList({
             onOriginChange={onOriginChange}
             engagement={engagement}
             onEngagementChange={onEngagementChange}
+            participants={participants}
+            onParticipantsChange={onParticipantsChange}
             onResetAll={onClearFilters}
             activeCount={popoverFilterCount}
           />

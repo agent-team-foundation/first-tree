@@ -8,6 +8,20 @@ import { FilterPopover, originLabel } from "../filter-popover.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+// The popover fetches the org roster for the Participants picker; stub it with a
+// fixed two-agent list so the picker renders without a QueryClient.
+vi.mock("../../../../lib/use-org-agents.js", () => ({
+  useOrgAgents: () => ({
+    data: {
+      items: [
+        { uuid: "agent-1", displayName: "Nova" },
+        { uuid: "agent-2", displayName: "Design Critique" },
+      ],
+    },
+    isLoading: false,
+  }),
+}));
+
 let root: Root | null = null;
 
 async function flush(): Promise<void> {
@@ -50,14 +64,17 @@ const radioByLabel = (label: string): HTMLInputElement => inputByLabel(label, "r
 function StatefulFilter({
   onOriginChange,
   onEngagementChange,
+  onParticipantsChange,
   onResetAll,
 }: {
   onOriginChange: (origin: ReadonlyArray<ChatSource>) => void;
   onEngagementChange: (engagement: ChatEngagementView) => void;
+  onParticipantsChange: (participants: ReadonlyArray<string>) => void;
   onResetAll: () => void;
 }) {
   const [origin, setOrigin] = useState<ChatSource[]>(["github", "agent"]);
   const [engagement, setEngagement] = useState<ChatEngagementView>("archived");
+  const [participants, setParticipants] = useState<string[]>([]);
   return (
     <FilterPopover
       origin={origin}
@@ -70,12 +87,18 @@ function StatefulFilter({
         setEngagement(next);
         onEngagementChange(next);
       }}
+      participants={participants}
+      onParticipantsChange={(next) => {
+        setParticipants([...next]);
+        onParticipantsChange(next);
+      }}
       onResetAll={() => {
         setOrigin([]);
         setEngagement("active");
+        setParticipants([]);
         onResetAll();
       }}
-      activeCount={origin.length + (engagement !== "active" ? 1 : 0)}
+      activeCount={origin.length + participants.length + (engagement !== "active" ? 1 : 0)}
     />
   );
 }
@@ -102,11 +125,13 @@ describe("FilterPopover", () => {
   it("status is exclusive; source defaults to all with no zero-source state; reset + done", async () => {
     const onOriginChange = vi.fn();
     const onEngagementChange = vi.fn();
+    const onParticipantsChange = vi.fn();
     const onResetAll = vi.fn();
     const container = await renderDom(
       <StatefulFilter
         onOriginChange={onOriginChange}
         onEngagementChange={onEngagementChange}
+        onParticipantsChange={onParticipantsChange}
         onResetAll={onResetAll}
       />,
     );
@@ -155,6 +180,14 @@ describe("FilterPopover", () => {
     await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Reset") ?? null);
     expect(onOriginChange).toHaveBeenLastCalledWith([]);
     expect(checkboxByLabel("Human").checked).toBe(true);
+
+    // Participants OR-picker: the org roster renders; the default is no
+    // constraint (every box unchecked). Toggling an agent adds it to `with`.
+    expect(document.body.textContent).toContain("Participants");
+    expect(checkboxByLabel("Nova").checked).toBe(false);
+    await click(checkboxByLabel("Nova"));
+    expect(onParticipantsChange).toHaveBeenLastCalledWith(["agent-1"]);
+    expect(checkboxByLabel("Nova").checked).toBe(true);
 
     await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Reset all") ?? null);
     expect(onResetAll).toHaveBeenCalledTimes(1);

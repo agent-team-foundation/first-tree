@@ -1,6 +1,7 @@
 import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
 import { Check, Filter } from "lucide-react";
 import { Popover } from "../../../components/ui/popover.js";
+import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import type { GroupMode } from "./group-rows.js";
 
 /**
@@ -44,6 +45,13 @@ type FilterPopoverProps = {
   engagement: ChatEngagementView;
   onEngagementChange: (next: ChatEngagementView) => void;
   /**
+   * Participants filter — an optional additive OR-picker over people/agents the
+   * viewer can see. Empty = no constraint (the default); a stream matches when
+   * ANY selected identity is a speaker. Carried on the URL as `?with=`.
+   */
+  participants: ReadonlyArray<string>;
+  onParticipantsChange: (next: ReadonlyArray<string>) => void;
+  /**
    * Clears every rail filter dimension in one URL mutation. The popover
    * delegates "Reset all" to this so the reset doesn't have to call
    * `onOriginChange([])` back-to-back with the others — those calls would
@@ -66,22 +74,28 @@ type FilterPopoverProps = {
 
 /**
  * Filter popover — the workspace rail's `⚙` button + panel. Holds the
- * secondary, lower-frequency controls so the header collapses to a single
- * row (New chat + the All / Unread / Watching triad + this button):
- * Status (Active/Archived checkboxes) + multi-select Source. Each control
- * writes through to the URL immediately, so "Done" is just a dismiss.
+ * secondary, lower-frequency controls so the header collapses to a single row
+ * (New chat + the All / Unread / Watching triad + this button), following the
+ * tree #721 rail-filter contract:
+ *   - Status — exclusive Active / Archived / All (Active is the default + reset
+ *     target);
+ *   - Source — a NON-EMPTY additive selection over creation origin (default all,
+ *     no zero-source state);
+ *   - Participants — an optional additive OR-picker over the org's addressable
+ *     agents (empty = no constraint).
+ * Each control writes through to the URL immediately, so "Done" is just a
+ * dismiss; "Reset all" restores Active + all sources + no participants.
  *
- * The primary engagement triad (All / Unread / Watching) and Group-by both
- * live in the header, not here. Participants picker is
- * intentionally absent: the `?with=` wire is plumbed end-to-end (URL parser
- * + listMeChats) but the picker UI is a follow-up; users who need it today
- * can hand-type `?with=…` and the rail narrows accordingly.
+ * The primary engagement triad (All / Unread / Watching) and Group-by both live
+ * in the header, not here.
  */
 export function FilterPopover({
   origin,
   onOriginChange,
   engagement,
   onEngagementChange,
+  participants,
+  onParticipantsChange,
   onResetAll,
   activeCount,
 }: FilterPopoverProps) {
@@ -115,6 +129,19 @@ export function FilterPopover({
     { value: "archived", label: "Archived" },
     { value: "all", label: "All" },
   ];
+
+  // Participants OR-picker — the org's addressable (speaker-eligible) agents.
+  // Empty selection = no constraint; toggling is additive (any = a match).
+  const agentsQuery = useOrgAgents({ addressableOnly: true });
+  const participantOptions = agentsQuery.data?.items ?? [];
+  const participantSet = new Set(participants);
+  const toggleParticipant = (uuid: string): void => {
+    const next = new Set(participantSet);
+    if (next.has(uuid)) next.delete(uuid);
+    else next.add(uuid);
+    onParticipantsChange([...next]);
+  };
+  const resetParticipants = (): void => onParticipantsChange([]);
 
   return (
     <Popover
@@ -195,6 +222,44 @@ export function FilterPopover({
                 onChange={() => toggleOrigin(opt.value)}
               />
             ))}
+          </section>
+
+          <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+            <header
+              className="flex items-center justify-between text-eyebrow"
+              style={{ color: "var(--fg-4)", textTransform: "uppercase", paddingBottom: "var(--sp-0_5)" }}
+            >
+              <span>Participants</span>
+              {participants.length > 0 && (
+                <button
+                  type="button"
+                  onClick={resetParticipants}
+                  className="text-label cursor-pointer"
+                  style={{ background: "transparent", border: 0, padding: 0, color: "var(--primary)" }}
+                >
+                  Reset
+                </button>
+              )}
+            </header>
+            {participantOptions.length === 0 ? (
+              <p className="text-label" style={{ color: "var(--fg-4)", padding: "var(--sp-0_75) var(--sp-1)" }}>
+                {agentsQuery.isLoading ? "Loading…" : "No people to filter by."}
+              </p>
+            ) : (
+              // Empty selection = no constraint, so every box starts UNCHECKED
+              // (unlike Source). Any checked identity is an OR match. Scrollable
+              // so a large roster doesn't blow out the popover height.
+              <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 168 }}>
+                {participantOptions.map((agent) => (
+                  <FilterCheckbox
+                    key={agent.uuid}
+                    label={agent.displayName}
+                    checked={participantSet.has(agent.uuid)}
+                    onChange={() => toggleParticipant(agent.uuid)}
+                  />
+                ))}
+              </div>
+            )}
           </section>
 
           <div
