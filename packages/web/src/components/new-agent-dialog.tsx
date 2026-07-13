@@ -10,7 +10,7 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
+import { type ConnectTokenResponse, getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
 import { checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
@@ -237,8 +237,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // generate one when 0 clients are connected; the dialog then shows the
   // real channel-aware install/login command instead of a useless
   // bare-command hint (codex review caught this). We hold the full
-  // bootstrap string from the server response so the package and CLI names stay
-  // a server-side concern — if it ever changes the dialog won't drift.
+  // bootstrap string from the server response so installer URLs and CLI names
+  // stay a server-side concern — if either changes the dialog won't drift.
   const [connectToken, setConnectToken] = useState<string | null>(null);
   const [connectCommand, setConnectCommand] = useState<string | null>(null);
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(null);
@@ -461,10 +461,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{ token: string; expiresIn: number; command: string; bootstrapCommand: string }>(
-          "/me/connect-tokens",
-          {},
-        );
+        const r = await api.post<ConnectTokenResponse>("/me/connect-tokens", {});
         if (cancelled) return;
         setConnectToken(r.token);
         setConnectCommand(r.bootstrapCommand);
@@ -886,12 +883,13 @@ function ZeroComputerBlock({
         Run this on the machine where this agent should live. We&apos;ll pick it up here automatically.
       </div>
       <div className="flex items-stretch gap-2 min-w-0">
-        <code
-          className="block flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-caption px-2 py-1.5 bg-muted/50 border border-border rounded-[var(--radius-input)]"
+        <pre
+          className="m-0 flex-1 min-w-0 overflow-x-auto whitespace-pre-wrap break-words font-mono text-caption px-2 py-1.5 bg-muted/50 border border-border rounded-[var(--radius-input)]"
           title={command ?? undefined}
+          style={{ overflowWrap: "anywhere" }}
         >
-          {command ?? "Generating token…"}
-        </code>
+          <code>{command ?? "Generating token…"}</code>
+        </pre>
         <Button type="button" variant="outline" size="sm" onClick={onCopy} disabled={!command} className="shrink-0">
           {copied ? "Copied" : "Copy"}
         </Button>

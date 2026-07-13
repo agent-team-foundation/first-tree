@@ -533,6 +533,13 @@
       "when": 1783501214695,
       "tag": "0075_right_jigsaw",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1783752407120,
+      "tag": "0076_lazy_risque",
+      "breakpoints": true
     }
   ]
 }

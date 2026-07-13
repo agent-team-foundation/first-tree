@@ -14,23 +14,33 @@ human-friendly index over them.
 
 ## Install
 
+Production:
+
 ```bash
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
-~/.local/bin/first-tree --version
+~/.local/bin/first-tree login <connect-code>
 ```
 
-The default public install path is portable and bundles Node.js. The binary
-lives at `first-tree`; the short alias `ft` is also installed.
-
-The npm global install path remains supported for operators and fallback
-installs:
+Staging:
 
 ```bash
-npm install -g first-tree
-first-tree --version
+curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+~/.local/bin/first-tree-staging login <connect-code>
 ```
 
-npm mode uses your system Node.js runtime and requires Node.js ≥ 22.13.
+The public shell installers support macOS and Linux and bundle Node.js. They
+install channel-specific binaries under `~/.local/bin`: `first-tree` / `ft`
+for production and `first-tree-staging` / `fts` for staging. The full path in
+the login command works immediately, before the current shell reloads `PATH`.
+The two lines are intentionally independent and do not provide shell-level
+transaction protection: when pasted together, an install-line failure does not
+automatically prevent the login line from running, and POSIX `sh` does not
+guarantee that `curl | sh` preserves a `curl` failure status.
+
+For self-hosted deployments, use the two-line command returned by the web
+console. It includes the server and portable download-base overrides when
+needed. Development builds continue to use `scripts/dev-install.sh` and
+`first-tree-dev login <connect-code>`.
 
 ## Global flags
 
@@ -164,8 +174,8 @@ the new bits, then restart the client service. If no server URL is configured
 yet, `upgrade` falls back to the current channel's latest release data directly
 so the update path still works before login/config. Portable installs download
 the channel manifest and verified tarball, including the bundled Node.js
-runtime. npm installs run `npm install -g` against the channel package and keep
-using the system Node.js runtime.
+runtime. Existing npm-mode installs retain their package-manager update path
+and continue using the system Node.js runtime.
 
 | Flag | Effect |
 |---|---|
@@ -173,15 +183,15 @@ using the system Node.js runtime.
 | `--no-restart` | Install the new version and refresh the supervisor definition, but leave the running service alone. Used for staged rollouts. |
 
 Refusing to run from a source checkout (anywhere under a `.git`
-ancestor) is intentional — keeps a dev build from accidentally
-`npm i -g`-overwriting a prod global. For local development use
+ancestor) is intentional — it keeps a dev build from accidentally overwriting
+a hosted-channel installation. For local development use
 `scripts/dev-install.sh` (see [docs/development/local-dev-isolation.md](development/local-dev-isolation.md)).
 
-In npm mode, `upgrade` checks the target package's `engines.node` metadata
-before install when npm can provide it. If the target requires a newer Node.js
-than the current process is running, the command fails before install with a
-system-Node upgrade hint and a portable-install migration hint. npm-mode
-updates do not replace Node.js themselves.
+For an existing npm-mode installation, `upgrade` checks the target package's
+`engines.node` metadata before install when npm can provide it. If the target
+requires a newer Node.js than the current process is running, the command fails
+before install with a system-Node upgrade hint and a shell-installer migration
+hint. npm-mode updates do not replace Node.js themselves.
 
 ---
 
@@ -262,6 +272,7 @@ through the Admin API.
 first-tree agent config
 ├── show <agent>
 ├── set-model <agent> <model>                       # alias: opus | sonnet | haiku, or full id (e.g. claude-opus-4-7)
+├── set-reasoning-effort <agent> <level>
 ├── prompt show <agent> [--raw]                     # per-agent prompt fragment; --raw is verbatim (round-trippable)
 ├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.
 │                                                   #   Rejects copies of the assembled AGENTS.md (generated marker /
@@ -274,6 +285,12 @@ first-tree agent config
 ├── add-repo <agent> <url> [--ref <branch>] [--path <local>]
 └── dry-run <agent> -f <patch.json>                 # validate + diff, no persist
 ```
+
+Reasoning effort values are provider-specific. Claude Code and Claude Code
+TUI accept `""` (inherit the operator's local setting), `low`, `medium`,
+`high`, or `max`. Codex accepts `low`, `medium`, `high`, `xhigh`, `max`, or
+`ultra`; availability of the higher levels is model-dependent and rejected
+combinations are reported by the provider.
 
 ### agent bind
 
@@ -615,7 +632,7 @@ first-tree daemon
 | `status` | Local service state + server binding + auth health. Runs in well under a second. |
 | `doctor` | Walk Node version, config, server reachability, WS, agent registrations, the installed service file, **and the runtime providers** — each step reported. The runtime-provider rows run the real launch-verified probe (a 1-turn model call for `claude-code`, a `codex doctor` handshake for `codex`), so `doctor` makes live provider calls; it is a deliberate diagnostic, not a hot path. |
 | `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). This is the manual refresh for a client's advertised capabilities after a provider is installed / logged in. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
-| `install-codex` | Install the native Codex runtime engine on this machine (`npm install -g @openai/codex`). First Tree does not bundle the ~225MB native `codex` binary by default — the runtime resolves a system `codex` on PATH — so this is the on-demand remediation when the `codex` capability probes as `missing`. Runs the same tracked-subprocess install path as self-update, then re-probes so the freshly installed binary is reflected. Purely local (no credentials). `--spec <spec>` picks an npm dist-tag or exact version (default `latest`); `--json` emits the post-install capability snapshot as the `{ ok, data }` envelope. |
+| `install-codex` | Install the native Codex runtime engine on this machine (`npm install -g @openai/codex`). First Tree does not bundle the ~225MB native `codex` binary by default — the runtime resolves an external `codex` from PATH, known install locations, or the macOS ChatGPT/Codex desktop app — so this is the on-demand remediation when the `codex` capability probes as `missing`. Runs the same tracked-subprocess install path as self-update, then re-probes so the freshly installed binary is reflected. Purely local (no credentials). `--spec <spec>` picks an npm dist-tag or exact version (default `latest`); `--json` emits the post-install capability snapshot as the `{ ok, data }` envelope. |
 | `install-claude` | Install the native Claude Code runtime engine on this machine (`npm install -g @anthropic-ai/claude-code`). First Tree does not bundle the ~210MB native `claude` binary by default — the runtime resolves a system `claude` (env override / PATH / well-known install dirs) — so this is the on-demand remediation when the `claude-code` capability probes as `missing`. Runs the same tracked-subprocess install path as self-update, then re-probes so the freshly installed binary is reflected. Purely local (no credentials). `--spec <spec>` picks an npm dist-tag or exact version (default `latest`); `--json` emits the post-install capability snapshot as the `{ ok, data }` envelope. |
 
 **Capability refresh timing.** The daemon launch-probes runtime providers at
@@ -844,6 +861,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
 | `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used to stamp the issuer on short connect codes and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
+| `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL` | Base URL for the prod/staging portable installer and artifact mirror. Do not include a channel suffix; the server appends the channel's `publicInstallerPath` (for example, `prod/install.sh`). | `https://download.first-tree.ai/releases` |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |

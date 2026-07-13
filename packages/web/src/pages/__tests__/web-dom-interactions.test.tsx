@@ -27,7 +27,6 @@ const activityMocks = vi.hoisted(() => ({
 const agentApiMocks = vi.hoisted(() => ({
   checkAgentNameAvailability: vi.fn(),
   createAgent: vi.fn(),
-  getAgent: vi.fn(),
   getNewChatDefaultCandidates: vi.fn(),
   listAgents: vi.fn(),
   listManagedAgents: vi.fn(),
@@ -39,7 +38,9 @@ const agentConfigMocks = vi.hoisted(() => ({
 }));
 
 const attachmentMocks = vi.hoisted(() => ({
+  uploadAttachment: vi.fn(),
   uploadImageAttachment: vi.fn(),
+  uploadMimeFor: vi.fn((file: File) => file.type || "application/octet-stream"),
 }));
 
 const chatApiMocks = vi.hoisted(() => ({
@@ -203,6 +204,8 @@ vi.mock("../../lib/visibility-interval.js", () => ({
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
+const PROD_INSTALLER_URL = "https://download.first-tree.ai/releases/prod/install.sh";
+const PROD_BOOTSTRAP_COMMAND = `curl -fsSL ${PROD_INSTALLER_URL} | sh\n~/.local/bin/first-tree login connect-token`;
 
 const AGENT_NAMES: Record<string, string> = {
   "agent-1": "Nova",
@@ -628,7 +631,7 @@ beforeEach(() => {
     expiresIn: 600,
     command: "first-tree-dev login connect-token",
     bootstrapCommand: "first-tree-dev login connect-token",
-    npmSpec: null,
+    installerUrl: null,
     binName: "first-tree-dev",
   });
   activityMocks.disconnectClient.mockResolvedValue({ disconnected: true, agentIds: ["agent-1"] });
@@ -637,7 +640,6 @@ beforeEach(() => {
   agentApiMocks.createAgent.mockResolvedValue(
     agent({ uuid: "agent-created", name: "deploy-bot", displayName: "Deploy Bot" }),
   );
-  agentApiMocks.getAgent.mockResolvedValue(agent({ clientId: "client-bound" }));
   agentApiMocks.getNewChatDefaultCandidates.mockResolvedValue({
     agent: agent({ uuid: "agent-1" }),
   });
@@ -683,7 +685,15 @@ beforeEach(() => {
     updatedAt: NOW,
     updatedBy: "member-self",
   });
-  attachmentMocks.uploadImageAttachment.mockResolvedValue({ id: "uploaded-image", mimeType: "image/png", size: 3 });
+  attachmentMocks.uploadAttachment.mockImplementation(async (file: File) => ({
+    id: file.name === "brief.pdf" ? "11111111-1111-4111-8111-111111111111" : "uploaded-image",
+    mimeType: file.type || "application/octet-stream",
+    filename: file.name,
+    sizeBytes: file.size,
+    uploadedBy: "member-self",
+    createdAt: NOW,
+  }));
+  attachmentMocks.uploadImageAttachment.mockImplementation((file: File) => attachmentMocks.uploadAttachment(file));
   chatApiMocks.createAgentChat.mockResolvedValue({ id: "chat-onboarding" });
   chatApiMocks.readFileAsBase64.mockResolvedValue("base64");
   chatApiMocks.sendChatMessage.mockResolvedValue(undefined);
@@ -799,10 +809,10 @@ beforeEach(() => {
   clientApiMocks.post.mockResolvedValue({
     token: "connect-token",
     expiresIn: 600,
-    command: "first-tree-dev login connect-token",
-    bootstrapCommand: "first-tree-dev login connect-token",
-    npmSpec: null,
-    binName: "first-tree-dev",
+    command: "first-tree login connect-token",
+    bootstrapCommand: PROD_BOOTSTRAP_COMMAND,
+    installerUrl: PROD_INSTALLER_URL,
+    binName: "first-tree",
   });
 });
 
@@ -847,9 +857,9 @@ describe("web DOM interaction coverage", () => {
     await renderDom(<NewAgentDialog open onOpenChange={() => undefined} onCreated={() => undefined} />);
 
     await waitForText("No computer connected yet.");
-    await waitForText("first-tree-dev login connect-token");
+    await waitForText("~/.local/bin/first-tree login connect-token");
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Copy") ?? null);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree-dev login connect-token");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(PROD_BOOTSTRAP_COMMAND);
   });
 
   it("renders ClientsPage admin groups, member empty state, and fallback banner", async () => {
@@ -1115,7 +1125,7 @@ describe("web DOM interaction coverage", () => {
     await setValue(textarea, "@design image attached");
     await keyDown(textarea, "Enter");
     await waitForCondition(() => meChatMocks.createMeTaskChat.mock.calls.length > 0, "Expected image task create");
-    expect(attachmentMocks.uploadImageAttachment).toHaveBeenCalledWith(dropped);
+    expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(dropped);
     expect(imageStoreMocks.putImage).toHaveBeenCalledWith({
       imageId: "uploaded-image",
       base64: "base64",
@@ -1168,6 +1178,47 @@ describe("web DOM interaction coverage", () => {
     });
     expect(onCreated).toHaveBeenCalledWith("image-only-chat");
     await unmountRoot(imageOnly.root);
+
+    meChatMocks.createMeTaskChat.mockClear();
+    meChatMocks.createMeTaskChat.mockResolvedValueOnce({ chatId: "document-only-chat" });
+    const documentOnly = await renderDom(<NewChatDraft onCreated={onCreated} initialParticipantIds={["agent-1"]} />);
+    await waitForText("Nova", documentOnly.container);
+    const documentOnlyInput = documentOnly.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!documentOnlyInput) throw new Error("Document-only file input missing");
+    const documentFile = new File(["pdf"], "brief.pdf", { type: "application/pdf" });
+    await changeFiles(documentOnlyInput, [documentFile]);
+    await waitForText("brief.pdf", documentOnly.container);
+    await click(documentOnly.container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(
+      () => meChatMocks.createMeTaskChat.mock.calls.length > 0,
+      "Expected document-only task create",
+    );
+    expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(documentFile);
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-1"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "",
+        metadata: {
+          attachments: [
+            {
+              attachmentId: "11111111-1111-4111-8111-111111111111",
+              kind: "file",
+              mimeType: "application/pdf",
+              filename: "brief.pdf",
+              size: 3,
+            },
+          ],
+        },
+        source: "web",
+      },
+    });
+    expect(onCreated).toHaveBeenCalledWith("document-only-chat");
+    await unmountRoot(documentOnly.root);
   });
 
   it("searches, keyboard-selects, and closes AddParticipantDropdown", async () => {
@@ -1416,53 +1467,6 @@ describe("web DOM interaction coverage", () => {
     authMock.value = { ...authMock.value, onboardingCompletedAt: "2026-05-02T00:00:00.000Z" };
     const completed = await renderDom(<SettingsOnboardingPage />);
     expect(completed.container.textContent).toBe("");
-  });
-
-  it("builds LastStepModal command, copies it, skips install on dev, and fires onBound", async () => {
-    const { LastStepModal } = await import("../../components/last-step-modal.js");
-    const onBound = vi.fn();
-    const onClose = vi.fn();
-
-    const unboundAgent = { ...agent({ name: "deploy bot", uuid: "agent-new" }), clientId: null };
-    const modal = await renderDom(<LastStepModal agent={unboundAgent} open onClose={onClose} onBound={onBound} />);
-    await waitForText("first-tree-dev agent add", document.body);
-    expect(document.body.textContent).toContain(
-      "first-tree-dev agent add 'deploy bot' --agent-id agent-new && first-tree-dev login connect-token",
-    );
-    expect(document.body.textContent).not.toContain("npm install -g");
-    await click(document.body.querySelector("button"));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "first-tree-dev agent add 'deploy bot' --agent-id agent-new && first-tree-dev login connect-token",
-    );
-    await waitForText("Waiting for your computer to connect", document.body);
-    for (let index = 0; index < 20 && onBound.mock.calls.length === 0; index += 1) {
-      await flush();
-    }
-    expect(onBound).toHaveBeenCalledWith(expect.objectContaining({ clientId: "client-bound" }));
-    await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("Skip for now")) ??
-        null,
-    );
-    expect(onClose).toHaveBeenCalled();
-    await unmountRoot(modal.root);
-
-    activityMocks.generateConnectToken.mockResolvedValueOnce({
-      token: "prod-token",
-      expiresIn: 600,
-      command: "first-tree login prod-token",
-      bootstrapCommand: "npm install -g first-tree\nfirst-tree login prod-token",
-      npmSpec: "first-tree",
-      binName: "first-tree",
-    });
-    await renderDom(
-      <LastStepModal
-        agent={agent({ clientId: "client-1", name: "nova" })}
-        open
-        onClose={() => undefined}
-        onBound={() => undefined}
-      />,
-    );
-    await waitForText("npm install -g first-tree", document.body);
   });
 
   it("switches orgs and opens setup actions from the TeamSwitcher, and signs out from the UserMenu", async () => {
@@ -2197,9 +2201,8 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("builds a missing tree from the Context page entry via agent-seed (no provisioning)", async () => {
+  it("opens the chat-first tree setup from Context without provisioning or repo registration", async () => {
     const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-    orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
 
     const view = await renderDom(<ContextTreeBuildEntry />);
     await waitForText("Build your Context Tree", view.container);
@@ -2207,21 +2210,22 @@ describe("web DOM interaction coverage", () => {
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Build your Context Tree")) ??
         null) as HTMLButtonElement | null,
     );
-    await waitForText("Building", view.container);
+    await waitForCondition(
+      () => onboardingEventMocks.treeSetupStartChat.mock.calls.length === 1,
+      "Expected the Context entry to open the tree setup chat",
+    );
 
-    // agentSeed default: no Cloud provisioning. The agent sets the tree up from
-    // its actual state, launched through the org-level tree-setup chat.
     expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();
+    expect(resourceMocks.listTeamResourcesForOrg).not.toHaveBeenCalled();
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+    expect(githubMocks.listOrgGithubRepos).not.toHaveBeenCalled();
     expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
     expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledTimes(1);
-    expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Please build out our Context Tree from our connected code"),
-        topic: "Set up shared context",
-        complete: true,
-      }),
-    );
+    expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      agentUuid: "agent-1",
+    });
     await unmountRoot(view.root);
   });
 

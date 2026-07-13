@@ -110,6 +110,34 @@
   --text-title--letter-spacing: -0.2px;
   --text-title--font-weight: 600;
 
+  /* Mobile work-surface typography. Kept as a local scale so dense desktop
+     surfaces can stay compact while phone views remain readable at hand-held
+     distance. */
+  --text-mobile-caption: 12px;
+  --text-mobile-caption--line-height: 1.35;
+  --text-mobile-caption--letter-spacing: 0;
+  --text-mobile-caption--font-weight: 500;
+
+  --text-mobile-label: 12px;
+  --text-mobile-label--line-height: 1.4;
+  --text-mobile-label--letter-spacing: 0;
+  --text-mobile-label--font-weight: 600;
+
+  --text-mobile-body: 14px;
+  --text-mobile-body--line-height: 1.45;
+  --text-mobile-body--letter-spacing: 0;
+  --text-mobile-body--font-weight: 400;
+
+  --text-mobile-subtitle: 15px;
+  --text-mobile-subtitle--line-height: 1.35;
+  --text-mobile-subtitle--letter-spacing: 0;
+  --text-mobile-subtitle--font-weight: 600;
+
+  --text-mobile-title: 18px;
+  --text-mobile-title--line-height: 1.25;
+  --text-mobile-title--letter-spacing: 0;
+  --text-mobile-title--font-weight: 600;
+
   /* Marketing-tier typography — used by the public landing page only.
      Dashboard surfaces should keep using the dense scale above (eyebrow → title);
      these three tiers exist so the landing hero / section headings / lead
@@ -476,6 +504,7 @@
   --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
   --sp-95: 23.75rem; /* 380px — chat-description popover card width (~60ch) */
+  --mobile-tabbar-height: 3.5rem; /* 56px */
 
   /* Agent detail content rail — one uniform readable width across every tab
      (header, tabs, and content all share it), centered like the context / team
@@ -643,6 +672,15 @@
     text-rendering: optimizeLegibility;
     font-synthesis: none;
   }
+  /* iOS standalone Web Apps can leave a root scroll range equal to the
+     Home Indicator safe area after the keyboard closes. Mobile pages own
+     their scrolling, so lock every document-level box while the guard is
+     mounted and let the bounded page scroller handle touch movement. */
+  html.ios-standalone-root-scroll-guard,
+  html.ios-standalone-root-scroll-guard body,
+  html.ios-standalone-root-scroll-guard #root {
+    overflow: hidden;
+  }
   ::selection {
     background: var(--brand-bg);
     color: var(--fg);
@@ -672,6 +710,35 @@
   }
   .tnum {
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Dynamic viewport height with a universal fallback: `100vh` ships as the
+     base for browsers without `dvh`, then `100dvh` overrides where supported
+     (iOS 15.4+, Chrome 108+) so a full-height shell tracks the mobile URL-bar /
+     home-indicator resize instead of overflowing the visible viewport. Split
+     into a base rule + `@supports` override rather than two `height`
+     declarations in one rule, which inline styles cannot express and the
+     linter flags as a duplicate property. */
+  .h-dvh-screen {
+    height: 100vh;
+  }
+  @supports (height: 100dvh) {
+    .h-dvh-screen {
+      height: 100dvh;
+    }
+  }
+
+  /* Reserve the top safe-area inset (notch / status bar) so a full-height
+     shell without its own top chrome does not render content under the
+     status bar on notched devices. */
+  .pt-safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  /* Reserve the bottom safe-area inset (home indicator) for a viewport-fixed
+     overlay whose own scroll surface reaches the bottom edge. */
+  .pb-safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   /* Surface utilities — consolidate Panel / PageHeader / Tab containers.

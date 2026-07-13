@@ -361,13 +361,13 @@ describe("small API route handlers", () => {
     });
   });
 
-  it("returns a source bootstrap when portable mode has no public installer for the channel", async () => {
+  it("fails closed when a hosted channel has no portable installer metadata", async () => {
     vi.doMock("@first-tree/shared/channel", () => ({
       getChannelConfig: vi.fn(() => ({
         binName: "first-tree-test",
         defaultServerUrl: "https://first-tree.example",
         packageName: "first-tree-test",
-        portable: { publicInstallerPath: null },
+        portable: { downloadBaseUrl: null, publicInstallerPath: null },
       })),
     }));
     routeMocks.generateConnectToken.mockResolvedValue({ token: "code_123", expiresIn: 600 });
@@ -376,7 +376,7 @@ describe("small API route handlers", () => {
       config: {
         auth: { connectTokenExpiry: "10m" },
         channel: "staging",
-        connectBootstrap: { method: "portable", portableDownloadBaseUrl: "https://download.example/releases" },
+        connectBootstrap: { portableDownloadBaseUrl: "https://download.example/releases" },
         server: { publicUrl: "https://first-tree.example/app/" },
       },
     });
@@ -390,16 +390,7 @@ describe("small API route handlers", () => {
         protocol: "https",
         user: { userId: "user_1" },
       }),
-    ).resolves.toMatchObject({
-      binName: "first-tree-test",
-      bootstrapCommand: "first-tree-test login code_123",
-      command: "first-tree-test login code_123",
-      expiresIn: 600,
-      installMethod: "source",
-      installerUrl: null,
-      npmSpec: "first-tree-test",
-      token: "code_123",
-    });
+    ).rejects.toThrow("Portable installer metadata is missing for the staging channel");
     expect(routeMocks.generateConnectToken).toHaveBeenCalledWith(
       { name: "db" },
       "user_1",
@@ -408,13 +399,60 @@ describe("small API route handlers", () => {
     );
   });
 
+  it("shell-quotes an unsafe connect code without putting it in the installer URL", async () => {
+    vi.doMock("@first-tree/shared/channel", () => ({
+      getChannelConfig: vi.fn(() => ({
+        binName: "first-tree",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        packageName: "first-tree",
+        portable: {
+          downloadBaseUrl: "https://download.first-tree.ai/releases",
+          publicInstallerPath: "prod/install.sh",
+        },
+      })),
+    }));
+    const token = "code'$(id);x";
+    routeMocks.generateConnectToken.mockResolvedValue({ token, expiresIn: 600 });
+    const { meRoutes } = await import("../api/me.js");
+    const { app, routes } = makeApp({
+      config: {
+        auth: { connectTokenExpiry: "10m" },
+        channel: "prod",
+        connectBootstrap: { portableDownloadBaseUrl: "https://download.first-tree.ai/releases" },
+        server: { publicUrl: "https://cloud.first-tree.ai" },
+      },
+    });
+
+    await meRoutes(app as never);
+    const result = (await route(routes, "POST", "/me/connect-tokens").handler({
+      headers: {},
+      hostname: "ignored.local",
+      protocol: "https",
+      user: { userId: "user_1" },
+    })) as {
+      bootstrapCommand: string;
+      command: string;
+      installerUrl: string;
+      token: string;
+    };
+
+    expect(result.token).toBe(token);
+    expect(result.command).toBe("first-tree login 'code'\\''$(id);x'");
+    expect(result.bootstrapCommand).toBe(
+      `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n` +
+        `~/.local/bin/first-tree login 'code'\\''$(id);x'`,
+    );
+    expect(result.installerUrl).toBe("https://download.first-tree.ai/releases/prod/install.sh");
+    expect(result.installerUrl).not.toContain(token);
+  });
+
   it("covers /me organization create, join, leave, and onboarding membership edge routes", async () => {
     const { meRoutes } = await import("../api/me.js");
     const appBase = {
       config: {
         auth: { connectTokenExpiry: "10m" },
         channel: "dev",
-        connectBootstrap: { method: "npm", portableDownloadBaseUrl: "https://download.example/releases" },
+        connectBootstrap: { portableDownloadBaseUrl: "https://download.example/releases" },
         docs: { enabled: true },
         growth: {},
         server: { publicUrl: "https://first-tree.example" },

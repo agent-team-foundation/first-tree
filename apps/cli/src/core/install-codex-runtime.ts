@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { classify, ERROR_KINDS, getChildProcessRegistry } from "@first-tree/client";
+import { resolveNpmInvocation } from "./npm-invocation.js";
 import { print } from "./output.js";
 
 /**
@@ -8,8 +8,9 @@ import { print } from "./output.js";
  * exposes a `codex` executable on PATH (and pulls the platform-specific
  * `@openai/codex-{platform}` binary as an optionalDependency). This is the
  * package First Tree intentionally does NOT bundle by default — the runtime
- * resolves a system `codex` on PATH, and this one-click install is the
- * remediation when none exists.
+ * resolves an external `codex` from PATH, well-known install locations, or the
+ * macOS ChatGPT/Codex desktop app, and this one-click install is the remediation
+ * when none exists.
  */
 const CODEX_RUNTIME_PACKAGE = "@openai/codex";
 
@@ -27,14 +28,6 @@ function isSafeInstallSpec(spec: string): boolean {
   return /^[A-Za-z0-9.+-]+$/.test(spec);
 }
 
-/** Pick the `npm` binary, preferring the sibling of the launching Node. */
-function resolveNpmCommand(): string {
-  const binName = process.platform === "win32" ? "npm.cmd" : "npm";
-  const sibling = join(dirname(process.execPath), binName);
-  if (existsSync(sibling)) return sibling;
-  return "npm";
-}
-
 function parseInstalledVersion(stdout: string): string | null {
   // npm prints `+ @openai/codex@0.140.0` (legacy) or `added 1 package` lines.
   const match = stdout.match(/@openai\/codex@(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)/);
@@ -45,7 +38,7 @@ function parseInstalledVersion(stdout: string): string | null {
  * Install the native Codex runtime globally (`npm install -g @openai/codex@<spec>`).
  *
  * This is the daemon's one-click remediation for a host with no `codex` on
- * PATH: it runs the same tracked-subprocess install path the CLI self-update
+ * any supported location: it runs the same tracked-subprocess install path the CLI self-update
  * uses (reaped on shutdown, hard-timeout, error-taxonomy classification), then
  * the caller is expected to re-probe the codex capability so the new binary is
  * picked up via PATH resolution. Does not exit the process.
@@ -61,14 +54,27 @@ export async function installCodexRuntime(spec = "latest"): Promise<InstallCodex
   }
 
   return new Promise((resolvePromise) => {
-    const npmCmd = resolveNpmCommand();
-    const npmArgs = ["install", "-g", `${CODEX_RUNTIME_PACKAGE}@${spec}`];
-    const { child } = getChildProcessRegistry().spawn(npmCmd, npmArgs, {
-      category: "npm-install",
-      label: `npm install -g ${CODEX_RUNTIME_PACKAGE}@${spec}`,
-      timeoutMs: CODEX_INSTALL_TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const npm = resolveNpmInvocation(["install", "-g", `${CODEX_RUNTIME_PACKAGE}@${spec}`]);
+    let child: ChildProcess;
+    try {
+      ({ child } = getChildProcessRegistry().spawn(npm.command, npm.args, {
+        category: "npm-install",
+        label: `npm install -g ${CODEX_RUNTIME_PACKAGE}@${spec}`,
+        timeoutMs: CODEX_INSTALL_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: npm.shell,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const classification = classify(err, { source: "update" });
+      resolvePromise({
+        ok: false,
+        reason: message,
+        retryable: classification.kind === ERROR_KINDS.TRANSIENT,
+        reasonCode: classification.reasonCode,
+      });
+      return;
+    }
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];

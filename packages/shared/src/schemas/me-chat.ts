@@ -349,6 +349,22 @@ export const meChatRowSchema = z.object({
    * new web during a web-ahead-of-server rollout. R1 (failed) keeps firing.
    */
   chatHasExplicitMentionToMe: z.boolean().default(false),
+  /**
+   * Per-user pin timestamp (ISO), or null when not pinned. Private per-user
+   * state from `chat_user_state.pinned_at` — one user pinning a chat never
+   * affects another. `.default(null)` for version skew: a server build that
+   * predates this column returns no value, which must read as "not pinned"
+   * rather than `undefined`.
+   */
+  pinnedAt: z.string().nullable().default(null),
+  /**
+   * Work-activity timestamp (ISO) — the conversation list's recency sort key.
+   * `max(last_message_at, description_updated_at, created_at)`, advanced only by
+   * real work (a new message or a genuine description change), never by topic
+   * rename / read / pin / archive / participant / runtime busy. `.default(null)`
+   * for version skew; the server always populates it once the column ships.
+   */
+  activityAt: z.string().nullable().default(null),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
@@ -381,6 +397,19 @@ export const meChatUnreadResponseSchema = z.object({
   unreadMentionCount: z.number().int(),
 });
 export type MeChatUnreadResponse = z.infer<typeof meChatUnreadResponseSchema>;
+
+/** Body for `POST /chats/:chatId/pin` — pin (`true`) or unpin (`false`). */
+export const pinMeChatSchema = z.object({
+  pinned: z.boolean(),
+});
+export type PinMeChat = z.infer<typeof pinMeChatSchema>;
+
+export const meChatPinResponseSchema = z.object({
+  chatId: z.string(),
+  /** ISO pin timestamp when pinned, null when unpinned. */
+  pinnedAt: z.string().nullable(),
+});
+export type MeChatPinResponse = z.infer<typeof meChatPinResponseSchema>;
 
 export const meChatLeaveResponseSchema = z.object({
   chatId: z.string(),

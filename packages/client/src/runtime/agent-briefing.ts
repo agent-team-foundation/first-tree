@@ -587,7 +587,7 @@ function cliOverviewBlock(bin: string): string {
   return `## CLI Overview
 
 Use \`${bin} chat …\` for messaging, \`${bin} agent …\` for self-introspection, \`${bin} daemon …\` for read-only daemon status/doctor, \`${bin} github …\` for follow/unfollow/following, \`${bin} tree verify\` for Context Tree validation, and \`${bin} tree tree\` for hierarchy browsing.
-Operator-only commands (\`login\`, \`daemon install\`, \`agent create / bind\`) run from the web console or a human terminal — **never from inside a running agent**. Context Tree binding is operator-owned too, with one sanctioned in-agent exception: on a **build / set up the Context Tree** task, \`first-tree-seed\` may create + bind directly for a **confirmed org admin** with authenticated \`gh\`; ask a human only if the caller is not an admin or \`gh\` is unauthenticated. Full surface: \`docs/cli-reference.md\`.`;
+Operator-only commands (\`login\`, \`daemon install\`, \`agent create / bind\`) run from the web console or a human terminal — **never from inside a running agent**. Context Tree binding is operator-owned too, with one sanctioned in-agent exception: on a **build / set up the Context Tree** task, load \`first-tree-seed\` and run its \`tree init\` path directly. The command validates admin/auth and fails closed; do not pre-confirm admin or ask who will bind. Surface the exact gap only if the command actually fails. Full surface: \`docs/cli-reference.md\`.`;
 }
 
 // --- # Context Tree ---------------------------------------------------------
@@ -769,7 +769,7 @@ This briefing was generated without a bound Context Tree. Before concluding
 there is no tree to read, re-check the workspace binding. If a tree is now
 bound, load \`first-tree-read\`; if no binding exists and the task needs durable
 cross-domain context, surface that gap to a human. If the task is the initial
-tree bootstrap from connected sources, load \`first-tree-seed\`.`);
+tree bootstrap from readable sources, load \`first-tree-seed\`.`);
   }
 
   if (contextTreePath) {
@@ -800,7 +800,7 @@ tree node prose.`);
 This briefing was generated without a bound Context Tree. Before a
 source-backed tree edit, re-check the workspace binding. If a tree is now
 bound, load \`first-tree-write\`; if no binding exists, do not attempt the edit.
-For the team's first tree from connected sources, load \`first-tree-seed\`;
+For the team's first tree from readable sources, load \`first-tree-seed\`;
 otherwise surface the missing binding/setup gap to a human.`);
   }
 
@@ -840,10 +840,9 @@ The Context Tree for this workspace lives at:
   } else {
     // Tree-less stub. For ordinary tasks, binding stays operator-owned —
     // surface the gap rather than self-serving a bind. The ONE sanctioned
-    // in-agent path is the seed skill's `tree init` create + bind, for a
-    // confirmed org admin on a build/set-up-the-tree task (#844 removed the
-    // retired `first-tree-onboarding` provisioning flow; #1379 added
-    // `tree init` as the admin create+bind path this carve-out points to).
+    // in-agent path is the seed skill's `tree init` create + bind. The command
+    // validates admin/auth itself; pre-confirmation would block the chat-first
+    // setup path before its fail-closed gate can run.
     blocks.push(`## Tree Location
 
 At briefing generation time this agent had no Context Tree bound. Re-check the
@@ -851,10 +850,10 @@ binding if the user says a tree was created or bound during the session. For an
 ordinary task that needs persistent cross-domain context and no tree exists,
 surface that gap to a human — binding is normally an operator action from the
 web console. The one exception is a **build / set up the Context Tree** task:
-there the seed skill's own create + bind is the sanctioned path for a
-**confirmed org admin** with authenticated \`gh\` — run it directly and proceed,
-never a "who runs the bind?" question; stop and ask a human only if the caller
-is not an admin or \`gh\` is unauthenticated.`);
+there the seed skill's own create + bind is the sanctioned path — run its
+\`tree init\` directly without pre-confirming admin or asking "who runs the
+bind?". The command validates admin/auth and fails closed; surface the exact
+gap only after an actual command failure.`);
   }
 
   return blocks.join("\n\n");
@@ -901,7 +900,7 @@ function firstTreeFamilyMap(contextTreePath: string | null): string {
 
 These First Tree skills are installed in every workspace. Each row's
 \`description\` drives progressive disclosure. If the task is to build the
-team's Context Tree from the connected code, load \`first-tree-seed\`. If a
+team's Context Tree from readable sources, load \`first-tree-seed\`. If a
 read/write task needs a tree that is not bound yet, use the Tree Location
 guidance above to surface/setup/seed first.
 
@@ -910,7 +909,7 @@ guidance above to surface/setup/seed first.
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
-| \`first-tree-seed\` | set up the team's Context Tree from the connected sources when it has no domain structure yet — creates + binds the repo if none exists, else fills a bound-but-empty tree; refuses once the tree has domain structure |
+| \`first-tree-seed\` | set up the team's Context Tree from readable sources — declared workspace repos or a local Git repo / GitHub URL supplied in chat; creates + binds the tree if none exists, fills a bound-but-empty tree, and can continue Phase 2 in the same setup chat after Phase 1 merges |
 | \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
   }
   return `## First Tree Family
@@ -926,7 +925,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
-| \`first-tree-seed\`    | no domain structure yet — bootstrap the team's Context Tree from its sources (create + bind if none exists, else fill a bound-but-empty tree); refuses once the tree has domain structure |
+| \`first-tree-seed\`    | bootstrap the team's Context Tree from readable sources (declared repos or a local Git repo / GitHub URL supplied in chat); create + bind if none exists, fill a bound-but-empty tree, or continue Phase 2 in the same setup chat after Phase 1 merges |
 | \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
 }
 

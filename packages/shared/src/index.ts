@@ -158,6 +158,14 @@ export {
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";
 export {
+  COMPOSER_ACCEPT_ATTRIBUTE,
+  classifyComposerUpload,
+  OFFICE_EXTENSIONS,
+  OFFICE_MIME_TO_EXTENSION,
+  TEXT_NATIVE_EXTENSIONS,
+  type UploadClassification,
+} from "./schemas/attachment-classification.js";
+export {
   ATTACHMENT_KINDS,
   type AttachmentKind,
   type AttachmentRef,
@@ -544,6 +552,7 @@ export {
   type MeChatLeaveResponse,
   type MeChatMembershipKind,
   type MeChatParticipant,
+  type MeChatPinResponse,
   type MeChatReadResponse,
   type MeChatRow,
   type MeChatSourceCounts,
@@ -552,10 +561,13 @@ export {
   meChatLeaveResponseSchema,
   meChatMembershipKindSchema,
   meChatParticipantSchema,
+  meChatPinResponseSchema,
   meChatReadResponseSchema,
   meChatRowSchema,
   meChatSourceCountsSchema,
   meChatUnreadResponseSchema,
+  type PinMeChat,
+  pinMeChatSchema,
 } from "./schemas/me-chat.js";
 export {
   type DocSnapshotFailReason,

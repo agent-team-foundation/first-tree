@@ -123,20 +123,22 @@ start work.
 
 See the [Quickstart](docs/quickstart.md) for the full walkthrough.
 
-At the "connect a computer" step, setup gives you the command to install the
-CLI and link the machine:
+At the "connect a computer" step, setup gives you the channel-aware commands
+to install the CLI and link the machine. Hosted production uses:
 
 ```bash
-# Use the exact command shown in the web console; production portable installs
-# have this shape:
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ~/.local/bin/first-tree login <connect-code>
 ```
 
-The portable installer bundles Node.js, so new users do not need to install
-Node separately. The npm global install path (`npm install -g first-tree`) is
-still supported for operators and fallback installs; npm mode uses your system
-Node runtime.
+Use the exact commands shown in the web console, especially for staging or a
+self-hosted deployment. The macOS/Linux installer bundles Node.js, so new
+users do not need to install Node separately. The two lines are intentionally
+independent and do not provide shell-level transaction protection: when pasted
+together, an install-line failure does not automatically prevent the login line
+from running, and POSIX `sh` does not guarantee that `curl | sh` preserves a
+`curl` failure status. The explicit `~/.local/bin` path works immediately, even
+before the shell reloads its `PATH`.
 
 ## CLI
 

@@ -38,16 +38,33 @@ describe("kickoffOnboardingSchema", () => {
 });
 
 describe("treeSetupKickoffSchema", () => {
-  it("accepts a dedicated tree setup kickoff without a kind discriminator", () => {
-    const parsed = treeSetupKickoffSchema.parse({
-      organizationId: "org-1",
-      agentUuid: "agent-1",
-      bootstrap: "Set up shared context.",
-      topic: "Set up shared context",
-      complete: false,
-    });
+  it("accepts only the selected agent for the dedicated setup intent", () => {
+    const parsed = treeSetupKickoffSchema.parse({ agentUuid: "agent-1" });
 
     expect(parsed).not.toHaveProperty("kind");
-    expect(parsed.topic).toBe("Set up shared context");
+    expect(parsed).not.toHaveProperty("organizationId");
+    expect(parsed).not.toHaveProperty("complete");
+    expect(parsed).toEqual({ agentUuid: "agent-1" });
+  });
+
+  it("rejects org scope and onboarding completion controls in the body", () => {
+    expect(
+      treeSetupKickoffSchema.safeParse({
+        organizationId: "org-1",
+        agentUuid: "agent-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      treeSetupKickoffSchema.safeParse({
+        agentUuid: "agent-1",
+        complete: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      treeSetupKickoffSchema.safeParse({
+        agentUuid: "agent-1",
+        bootstrap: "Client-controlled setup semantics.",
+      }).success,
+    ).toBe(false);
   });
 });

@@ -131,6 +131,26 @@ describe("FirstTreeHubSDK comprehensive wrappers", () => {
     expect(requestInit(fetchMock, 0).headers).not.toMatchObject({ "Content-Type": "application/json" });
   });
 
+  it("resolves the runtime session token for each request", async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ accessToken: "outbox-token-1", expiresIn: 60 }),
+      jsonResponse({ accessToken: "outbox-token-2", expiresIn: 60 }),
+    );
+    let runtimeSessionToken = "runtime-session-1";
+    const sdk = makeSdk({ runtimeSessionToken: () => runtimeSessionToken });
+
+    await expect(sdk.createAgentOutboxToken("chat-1")).resolves.toMatchObject({ accessToken: "outbox-token-1" });
+    runtimeSessionToken = "runtime-session-2";
+    await expect(sdk.createAgentOutboxToken("chat-2")).resolves.toMatchObject({ accessToken: "outbox-token-2" });
+
+    expect(requestInit(fetchMock, 0).headers).toMatchObject({
+      [AGENT_RUNTIME_SESSION_HEADER]: "runtime-session-1",
+    });
+    expect(requestInit(fetchMock, 1).headers).toMatchObject({
+      [AGENT_RUNTIME_SESSION_HEADER]: "runtime-session-2",
+    });
+  });
+
   it("builds chat and GitHub entity wrapper paths, bodies, and queries", async () => {
     const fetchMock = mockFetch(
       jsonResponse({ chatIds: ["chat-1", "chat-2"] }),

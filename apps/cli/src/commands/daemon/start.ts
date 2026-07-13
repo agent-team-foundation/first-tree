@@ -2,6 +2,7 @@ import { join } from "node:path";
 import {
   applyClientLoggerConfig,
   ClientOrgMismatchError,
+  ClientRetiredError,
   ClientUserMismatchError,
   captureClientException,
   configureClientLoggerForService,
@@ -435,6 +436,24 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // Keep process alive
         await new Promise(() => {});
       } catch (error) {
+        if (error instanceof ClientRetiredError) {
+          const resetCommand = `${binName} computer reset`;
+          const loginCommand = `${binName} login <code>`;
+          if (daemonOutput) {
+            writeStatus(
+              "✗",
+              `client identity has been retired (${error.message}); run \`${resetCommand}\`, then run \`${loginCommand}\` with a fresh connect code.`,
+            );
+            process.exit(1);
+          }
+          writeLine("\n");
+          writeLine("  ⚠️  This machine's client identity has been retired.\n");
+          writeLine(`     Server message: ${error.message}\n`);
+          writeLine(
+            `  Back up local workspaces if needed, run \`${resetCommand}\`, then run \`${loginCommand}\` with a fresh connect code.\n\n`,
+          );
+          process.exit(1);
+        }
         if (error instanceof ClientUserMismatchError) {
           if (daemonOutput) {
             writeStatus(

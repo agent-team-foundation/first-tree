@@ -25,7 +25,7 @@ export type ListMeChatsParams = Partial<
   Pick<ListMeChatsQuery, "cursor" | "limit" | "filter" | "engagement" | "origin" | "with" | "watching">
 >;
 
-export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResponse> {
+export function listMeChats(params?: ListMeChatsParams, opts?: { signal?: AbortSignal }): Promise<ListMeChatsResponse> {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
@@ -39,7 +39,9 @@ export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResp
   if (params?.with && params.with.length > 0) qs.set("with", params.with.join(","));
   if (params?.watching) qs.set("watching", "1");
   const query = qs.toString();
-  return api.get<ListMeChatsResponse>(withOrg(`/chats${query ? `?${query}` : ""}`));
+  // `opts.signal` lets React Query cancel the in-flight request when the
+  // filter/cursor changes, so a superseded page never lands.
+  return api.get<ListMeChatsResponse>(withOrg(`/chats${query ? `?${query}` : ""}`), opts);
 }
 
 export function listMeChatSourceCounts(params?: { engagement?: ChatEngagementView }): Promise<MeChatSourceCounts> {

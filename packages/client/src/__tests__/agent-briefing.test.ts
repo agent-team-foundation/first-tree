@@ -519,14 +519,25 @@ describe("buildAgentBriefing — Context Tree", () => {
 
   it("surfaces tree-less binding as a human/operator gap", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
+    const cli = briefing.slice(
+      briefing.indexOf("## CLI Overview"),
+      briefing.indexOf("# Context Tree (First Tree Managed)"),
+    );
     const tree = topLevelSection(briefing, "# Context Tree (First Tree Managed)");
+    expect(cli).toContain("run its `tree init` path directly");
+    expect(cli).toContain("do not pre-confirm admin or ask who will bind");
+    expect(cli).toContain("only if the command actually fails");
+    expect(cli).not.toContain("confirmed org admin");
     expect(tree).toContain("At briefing generation time this agent had no Context Tree bound");
     expect(tree).toContain("Re-check the\nbinding if the user says a tree was created or bound during the session");
     expect(tree).toMatch(/surface that\s+gap to a human/);
     expect(tree).toContain("operator action");
     expect(tree).toContain("build / set up the Context Tree");
-    expect(tree).toContain("confirmed org admin");
-    expect(tree).toContain('"who runs the bind?"');
+    expect(tree).toContain("without pre-confirming admin");
+    expect(tree).toContain('asking "who runs the\nbind?"');
+    expect(tree).toContain("validates admin/auth and fails closed");
+    expect(tree).toContain("only after an actual command failure");
+    expect(tree).not.toContain("confirmed org admin");
     expect(tree).not.toContain("first-tree-onboarding");
   });
 

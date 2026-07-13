@@ -165,8 +165,14 @@ accepts the source row id as an alias.
   maintenance;
 - missing source clone stops on incomplete provisioning instead of partial
   seed;
+- an unbound workspace routes through `tree init --dir <managed tree path>`
+  before Phase 1;
 - bare source repos are read through a materialized read worktree, not as
-  checkouts.
+  checkouts;
+- an empty manifest may use a readable local checkout supplied in chat without
+  requiring GitHub App installation or team-resource registration;
+- an approved Phase 1 skeleton in the same visible setup chat routes to Phase 2
+  instead of being refused as an unrelated populated tree.
 
 `eval:quality -- --suite first-tree-seed` runs the `empty-tree-source-present`
 deterministic gate first. If that hard-rule gate passes, the quality judge

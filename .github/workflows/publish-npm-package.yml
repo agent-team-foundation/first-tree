@@ -227,12 +227,12 @@ jobs:
           ACTIONS_FEISHU_TAG: "v1.3.1"
           INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
           INPUT_MESSAGE_TYPE: "post"
-          INPUT_TITLE: ${{ job.status == 'success' && 'npm prod publish ✅ 成功' || 'npm prod publish ❌ 失败' }}
+          INPUT_TITLE: ${{ job.status == 'success' && 'first-tree prod release ✅ 成功' || 'first-tree prod release ❌ 失败' }}
           INPUT_CONTENT: |
             发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
             Package: ${{ steps.release.outputs.package_name || 'first-tree' }}
             Version: ${{ steps.release.outputs.package_version || 'unresolved' }}
-            Install: npm install -g first-tree@latest
+            Install: curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
@@ -432,17 +432,17 @@ jobs:
             --skip-build
 
       - name: Send feishu message
-        if: ${{ failure() || steps.version.outputs.publish == 'true' }}
+        if: ${{ failure() || steps.version.outputs.publish == 'true' || steps.version.outputs.publish == 'false' }}
         env:
           ACTIONS_FEISHU_TAG: "v1.3.1"
           INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
           INPUT_MESSAGE_TYPE: "post"
-          INPUT_TITLE: ${{ job.status == 'success' && 'npm staging publish ✅ 成功' || 'npm staging publish ❌ 失败' }}
+          INPUT_TITLE: ${{ job.status == 'success' && 'first-tree staging release ✅ 成功' || 'first-tree staging release ❌ 失败' }}
           INPUT_CONTENT: |
             发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
             Package: first-tree-staging
             Version: ${{ steps.version.outputs.staging_version || 'unresolved' }}
-            Install: npm install -g first-tree-staging@latest
+            Install: curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [[ -z "${INPUT_WEBHOOK:-}" ]]; then

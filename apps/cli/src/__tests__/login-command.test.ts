@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import type { ClientConfig } from "@first-tree/shared/config";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +9,7 @@ const cliFetchMock = vi.hoisted(() => vi.fn());
 const getClientServiceStatusMock = vi.hoisted(() => vi.fn());
 const installClientServiceMock = vi.hoisted(() => vi.fn());
 const isServiceSupportedMock = vi.hoisted(() => vi.fn());
+const restartClientServiceMock = vi.hoisted(() => vi.fn());
 const stopClientServiceMock = vi.hoisted(() => vi.fn());
 const clientRuntimeMock = vi.hoisted(() => vi.fn());
 const createApiNameResolverMock = vi.hoisted(() => vi.fn());
@@ -16,6 +18,7 @@ const ensureFreshAccessTokenMock = vi.hoisted(() => vi.fn());
 const handleClientOrgMismatchMock = vi.hoisted(() => vi.fn());
 const migrateLocalAgentDirsMock = vi.hoisted(() => vi.fn());
 const promptUpdateMock = vi.hoisted(() => vi.fn());
+const switchLocalClientForLoginMock = vi.hoisted(() => vi.fn());
 const stderrMock = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 const exitMock = vi.spyOn(process, "exit").mockImplementation((() => {
   throw new Error("process.exit");
@@ -30,6 +33,7 @@ vi.mock("../core/service-install.js", async (importOriginal) => ({
   getClientServiceStatus: getClientServiceStatusMock,
   installClientService: installClientServiceMock,
   isServiceSupported: isServiceSupportedMock,
+  restartClientService: restartClientServiceMock,
   stopClientService: stopClientServiceMock,
 }));
 
@@ -53,6 +57,19 @@ vi.mock("../core/client-reidentify.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../core/client-reidentify.js")>()),
   handleClientOrgMismatch: handleClientOrgMismatchMock,
 }));
+
+vi.mock("../core/client-switch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../core/client-switch.js")>();
+  return {
+    ...actual,
+    switchLocalClientForLogin: (...args: Parameters<typeof actual.switchLocalClientForLogin>) => {
+      if (switchLocalClientForLoginMock.getMockImplementation()) {
+        return switchLocalClientForLoginMock(...args);
+      }
+      return actual.switchLocalClientForLogin(...args);
+    },
+  };
+});
 
 vi.mock("../core/update-glue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../core/update-glue.js")>()),
@@ -93,7 +110,7 @@ async function runLogin(args: string[]): Promise<void> {
 }
 
 async function waitForAsyncWork(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -101,6 +118,87 @@ async function waitForAsyncWork(predicate: () => boolean): Promise<void> {
 
 function credentialsPath(): string {
   return join(home, "config", "credentials.json");
+}
+
+function moveIfExists(source: string, target: string): void {
+  if (!existsSync(source)) return;
+  mkdirSync(dirname(target), { recursive: true });
+  rmSync(target, { recursive: true, force: true });
+  renameSync(source, target);
+}
+
+function readClientIdFromYaml(path: string): string {
+  const match = readFileSync(path, "utf8").match(/\bid:\s*(client_[a-f0-9]{8})\b/);
+  if (!match) throw new Error(`missing client id in ${path}`);
+  return match[1];
+}
+
+async function simulateSuccessfulLocalClientSwitch(opts: {
+  existingCredentials?: { serverUrl: string };
+  previousOwnerSub?: string;
+  targetTokens: { accessToken: string; refreshToken: string; serverUrl: string };
+  targetOwnerSub: string;
+}): Promise<ClientConfig> {
+  const configDir = join(home, "config");
+  const dataDir = join(home, "data");
+  const oldClientId = readClientIdFromYaml(join(configDir, "client.yaml"));
+  const newClientId = "client_11223344";
+  const oldUserId = opts.previousOwnerSub ?? "user-old";
+  const oldServerUrl = opts.existingCredentials?.serverUrl ?? "http://first-tree.test";
+  const parkedRoot = join(home, "parked-clients", oldClientId);
+
+  moveIfExists(join(configDir, "client.yaml"), join(parkedRoot, "config", "client.yaml"));
+  moveIfExists(join(configDir, "agents"), join(parkedRoot, "config", "agents"));
+  moveIfExists(join(dataDir, "sessions"), join(parkedRoot, "data", "sessions"));
+  moveIfExists(join(dataDir, "workspaces"), join(parkedRoot, "data", "workspaces"));
+
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    join(configDir, "client.yaml"),
+    `server:\n  url: ${opts.targetTokens.serverUrl}\nclient:\n  id: ${newClientId}\n`,
+  );
+  writeFileSync(credentialsPath(), JSON.stringify(opts.targetTokens));
+  mkdirSync(join(home, "parked-clients"), { recursive: true });
+  writeFileSync(
+    join(home, "parked-clients", "index.json"),
+    JSON.stringify({
+      version: 1,
+      activeClientId: newClientId,
+      accountDefaults: {
+        [`${oldServerUrl}\n${oldUserId}`]: oldClientId,
+        [`${opts.targetTokens.serverUrl}\n${opts.targetOwnerSub}`]: newClientId,
+      },
+      clients: {
+        [oldClientId]: {
+          clientId: oldClientId,
+          userId: oldUserId,
+          serverUrl: oldServerUrl,
+          storage: "parked",
+          parkedPath: parkedRoot,
+          updatedAt: new Date().toISOString(),
+        },
+        [newClientId]: {
+          clientId: newClientId,
+          userId: opts.targetOwnerSub,
+          serverUrl: opts.targetTokens.serverUrl,
+          storage: "active-root",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    }),
+  );
+
+  return {
+    server: { url: opts.targetTokens.serverUrl },
+    client: { id: newClientId },
+    update: {
+      policy: "prompt",
+      restart_quiet_seconds: 30,
+      restart_check_interval_seconds: 10,
+      prompt_timeout_seconds: 60,
+    },
+    logLevel: "info",
+  };
 }
 
 function writeCredentials(memberId: string, serverUrl = "http://old.test", sub = "user-old"): void {
@@ -254,6 +352,7 @@ beforeEach(() => {
   getClientServiceStatusMock.mockReset();
   installClientServiceMock.mockReset();
   isServiceSupportedMock.mockReset();
+  restartClientServiceMock.mockReset();
   stopClientServiceMock.mockReset();
   clientRuntimeMock.mockReset();
   createApiNameResolverMock.mockReset();
@@ -262,6 +361,7 @@ beforeEach(() => {
   handleClientOrgMismatchMock.mockReset();
   migrateLocalAgentDirsMock.mockReset();
   promptUpdateMock.mockReset();
+  switchLocalClientForLoginMock.mockReset();
   stderrMock.mockClear();
   exitMock.mockClear();
   exitMock.mockImplementation((() => {
@@ -278,6 +378,7 @@ beforeEach(() => {
     logDir: join(home, "logs"),
   });
   isServiceSupportedMock.mockReturnValue(false);
+  restartClientServiceMock.mockReturnValue({ ok: true });
   stopClientServiceMock.mockReturnValue({ ok: true });
   createApiNameResolverMock.mockReturnValue({ resolveName: vi.fn(async () => "nova") });
   createExecuteUpdateMock.mockReturnValue(async () => undefined);
@@ -304,6 +405,9 @@ afterEach(() => {
   if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
   else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
   process.exitCode = undefined;
+  // Drop mock call history so the large command-graph suite cannot retain
+  // multi-MB argument snapshots across the 29 login cases in one worker.
+  vi.clearAllMocks();
 });
 
 // `runLogin` dynamic-imports `commands/login.js` on every test run, which
@@ -405,6 +509,7 @@ describe("login command", { timeout: 60_000 }, () => {
   });
 
   it("parks the old local client when --force-switch confirms a short-code account switch", async () => {
+    switchLocalClientForLoginMock.mockImplementation(simulateSuccessfulLocalClientSwitch);
     process.env.FIRST_TREE_SERVER_URL = "http://first-tree.test";
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
@@ -444,6 +549,7 @@ describe("login command", { timeout: 60_000 }, () => {
   });
 
   it("parks the old local client and creates a new active client when --force-switch confirms non-TTY switching", async () => {
+    switchLocalClientForLoginMock.mockImplementation(simulateSuccessfulLocalClientSwitch);
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
     mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
@@ -542,6 +648,28 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(output).not.toContain("ACCOUNT_SWITCH_REQUIRES_PURGE");
   });
 
+  it("refuses reused local client identity when the server reports it retired", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    writeCredentials("member-new", "http://first-tree.test", "user-new");
+    isServiceSupportedMock.mockReturnValue(true);
+    cliFetchMock
+      .mockResolvedValueOnce(response(200, { accessToken: jwt({ sub: "user-new" }), refreshToken: "r1" }))
+      .mockResolvedValueOnce(response(200, { id: "client_aabbccdd", status: "retired" }));
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" })])).rejects.toThrow("process.exit");
+
+    expect(cliFetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://first-tree.test/api/v1/clients/client_aabbccdd",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(installClientServiceMock).not.toHaveBeenCalled();
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("CLIENT_RETIRED_REQUIRES_RESET");
+    expect(output).toContain("first-tree-dev computer reset");
+  });
+
   it("allows reconnect with preserved client identity and local agent state when credentials are missing", async () => {
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
@@ -551,7 +679,7 @@ describe("login command", { timeout: 60_000 }, () => {
 
     await runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"]);
 
-    expect(cliFetchMock).toHaveBeenCalledTimes(1);
+    expect(cliFetchMock).toHaveBeenCalledTimes(2);
     expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("Authenticated");
@@ -559,6 +687,7 @@ describe("login command", { timeout: 60_000 }, () => {
   });
 
   it("switches local clients when credentials are missing but remembered owner differs", async () => {
+    switchLocalClientForLoginMock.mockImplementation(simulateSuccessfulLocalClientSwitch);
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
     mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
@@ -582,6 +711,7 @@ describe("login command", { timeout: 60_000 }, () => {
   });
 
   it("switches when credentials match the target user but remembered owner still belongs to the old client", async () => {
+    switchLocalClientForLoginMock.mockImplementation(simulateSuccessfulLocalClientSwitch);
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
     writeCredentials("member-new", "http://first-tree.test", "user-new");
@@ -718,6 +848,48 @@ describe("login command", { timeout: 60_000 }, () => {
     expect(output).toContain("Background service installed (launchd)");
     expect(output).toContain(join(home, "logs"));
     expect(clientRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("restarts an already-active background service after login refreshes it", async () => {
+    isServiceSupportedMock.mockReturnValue(true);
+    getClientServiceStatusMock.mockReturnValue({
+      platform: "task-scheduler",
+      state: "active",
+      label: "\\FirstTree\\first-tree-dev",
+      logDir: join(home, "logs"),
+    });
+    installClientServiceMock.mockReturnValue({
+      platform: "task-scheduler",
+      logDir: join(home, "logs"),
+    });
+    restartClientServiceMock.mockReturnValue({ ok: true });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" })]);
+
+    expect(installClientServiceMock).toHaveBeenCalled();
+    expect(restartClientServiceMock).toHaveBeenCalled();
+    expect(clientRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("fails login when an already-active background service cannot restart after refresh", async () => {
+    isServiceSupportedMock.mockReturnValue(true);
+    getClientServiceStatusMock.mockReturnValue({
+      platform: "task-scheduler",
+      state: "active",
+      label: "\\FirstTree\\first-tree-dev",
+      logDir: join(home, "logs"),
+    });
+    installClientServiceMock.mockReturnValue({
+      platform: "task-scheduler",
+      logDir: join(home, "logs"),
+    });
+    restartClientServiceMock.mockReturnValue({ ok: false, reason: "still running" });
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" })])).rejects.toThrow("process.exit");
+
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Background service refreshed but restart failed: still running");
+    expect(output).toContain("first-tree-dev daemon restart");
   });
 
   it("prints cancellation when inline runtime start is interrupted by the prompt layer", async () => {

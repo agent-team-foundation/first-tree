@@ -264,10 +264,10 @@ describe("server config", () => {
     expect(config.rateLimit).toEqual({ max: 1234 });
   });
 
-  it("resolves connect bootstrap portable env overrides", async () => {
+  it("ignores the removed bootstrap method env and resolves the portable base URL", async () => {
     const configDir = makeTempConfigDir();
     stubRequiredProductionConfig();
-    vi.stubEnv("FIRST_TREE_CONNECT_BOOTSTRAP_METHOD", "portable");
+    vi.stubEnv("FIRST_TREE_CONNECT_BOOTSTRAP_METHOD", "npm");
     vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", "https://downloads.example.test");
 
     const config = await initConfig({
@@ -277,9 +277,9 @@ describe("server config", () => {
     });
 
     expect(config.connectBootstrap).toEqual({
-      method: "portable",
       portableDownloadBaseUrl: "https://downloads.example.test",
     });
+    expect(serverConfigSchema.connectBootstrap).not.toHaveProperty("method");
   });
 
   it("uses inbox delivery fairness defaults when the inbox group is active", () => {

@@ -2,16 +2,19 @@ import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
-export type SeedTreeState = "empty" | "nonempty" | "unbound";
-export type SeedSourceRepoState = "bare-readable" | "missing" | "real-first-tree-bare-readable";
+export type SeedTreeState = "empty" | "nonempty" | "phase1-approved" | "unbound";
+export type SeedSourceRepoState = "bare-readable" | "chat-local-readable" | "missing" | "real-first-tree-bare-readable";
+export type SeedChatHistoryState = "absent" | "approved-phase1";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
   | "report_missing_source"
   | "materialize_bare_worktree"
-  | "create_tree_via_init";
+  | "create_tree_via_init"
+  | "continue_phase2";
 
 export type FirstTreeSeedFixture = {
+  chatHistoryState?: SeedChatHistoryState;
   sourceRepoState: SeedSourceRepoState;
   treeState: SeedTreeState;
 };
@@ -19,6 +22,7 @@ export type FirstTreeSeedFixture = {
 export type FirstTreeSeedExpected = {
   action: SeedExpectedAction;
   approvalHints?: readonly string[];
+  requireChatHistoryRead?: boolean;
   requireSourceRead: boolean;
   requireWorktree: boolean;
   responseHints: readonly string[];
@@ -65,6 +69,7 @@ export type FixtureValidation = {
 
 export type EvalMetrics = {
   approvalRequestObserved: boolean;
+  chatHistoryReadObserved: boolean;
   contextTreeChanged: boolean;
   contextTreeStatus: string;
   directBareSourceContentReadObserved: boolean;
@@ -74,7 +79,10 @@ export type EvalMetrics = {
   forbiddenActionHits: readonly string[];
   forbiddenSideEffectHits: readonly string[];
   fixtureValidationOk: boolean;
+  githubAppRequirementObserved: boolean;
+  phase2ContinuationObserved: boolean;
   phase2LeafContentObserved: boolean;
+  phase2RefusalObserved: boolean;
   runnerExitCode: number | null;
   seedSkillFileReadObserved: boolean;
   skeletonObserved: boolean;
@@ -86,6 +94,7 @@ export type EvalMetrics = {
   // a Phase-1 add/read/cleanup sequence cannot erase it.
   sourceWorktreeAccessObserved: boolean;
   sourceWorktreeCreated: boolean;
+  sourceWorktreeMaterializedObserved: boolean;
   treeInitObserved: boolean;
   treeInitWithContextTreeDirObserved: boolean;
   workspaceManifestReadObserved: boolean;

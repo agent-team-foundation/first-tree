@@ -8,8 +8,9 @@ import { ConfigRow } from "./flat-section.js";
  * help copy are provider-specific (no abstraction over the providers):
  *   - claude-code maps to the SDK `effort` (low/medium/high/max), plus an
  *     "" inherit option that defers to the operator's local effortLevel.
- *   - codex maps to `modelReasoningEffort` (low/medium/high/xhigh); "minimal"
- *     is excluded because it breaks the default tool set.
+ *   - codex maps to its provider-native effort (low/medium/high/xhigh/max/ultra).
+ *     The higher values are model-dependent; "minimal" is excluded because it
+ *     breaks the default tool set.
  */
 
 const CLAUDE_EFFORT_OPTIONS: SelectOption[] = [
@@ -20,11 +21,13 @@ const CLAUDE_EFFORT_OPTIONS: SelectOption[] = [
   { value: "max", label: "max", hint: "Opus only" },
 ];
 
-const CODEX_EFFORT_OPTIONS: SelectOption[] = [
+export const CODEX_EFFORT_OPTIONS: SelectOption[] = [
   { value: "low", label: "low", hint: "fastest" },
   { value: "medium", label: "medium" },
   { value: "high", label: "high", hint: "default" },
-  { value: "xhigh", label: "xhigh", hint: "most" },
+  { value: "xhigh", label: "xhigh" },
+  { value: "max", label: "max", hint: "model-dependent" },
+  { value: "ultra", label: "ultra", hint: "deepest; model-dependent" },
 ];
 
 const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
@@ -38,7 +41,7 @@ const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
 const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   "claude-code": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   "claude-code-tui": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
-  codex: "Applies to new sessions. Higher means more reasoning per turn.",
+  codex: "Applies to new sessions. Higher means more reasoning per turn; max and ultra require a compatible model.",
 };
 
 export type ReasoningEffortSectionProps = {

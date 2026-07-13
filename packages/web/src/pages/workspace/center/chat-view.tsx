@@ -5,6 +5,7 @@ import {
   CHAT_ENGAGEMENT_STATUSES,
   type ChatDetail,
   type ChatParticipantDetail,
+  COMPOSER_ACCEPT_ATTRIBUTE,
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
@@ -19,9 +20,11 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   ArrowUp,
   AtSign,
   Check,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
@@ -30,6 +33,7 @@ import {
   PanelRight,
   Paperclip,
   X,
+  X as XIcon,
 } from "lucide-react";
 import {
   memo,
@@ -48,7 +52,12 @@ import { useSearchParams } from "react-router";
 import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
-import { fetchAttachmentBase64, uploadImageAttachment } from "../../../api/attachments.js";
+import {
+  downloadAttachment,
+  fetchAttachmentBase64,
+  uploadAttachment,
+  uploadMimeFor,
+} from "../../../api/attachments.js";
 import {
   type FileMessageContent,
   getChat,
@@ -111,6 +120,7 @@ import {
   useSlashCommand,
 } from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
+import { FileChip } from "../../../components/ui/file-chip.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
@@ -127,7 +137,7 @@ import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
-import { usePendingImages } from "../../../lib/use-pending-images.js";
+import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
 import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js";
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
@@ -137,6 +147,7 @@ import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
+import { ParticipantsSection } from "../right-sidebar/participants-section.js";
 import { ChatSummary } from "./chat-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
@@ -588,6 +599,15 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
     }
     return map;
   }, [msg.metadata]);
+  // Attachment refs to render as download chips: everything in
+  // `metadata.attachments` that is NOT already surfaced as an inline
+  // `[display](attachment:<id>)` link in the body (the agent doc-capture
+  // flow, which keeps its drawer link). Human composer uploads carry the ref
+  // with no inline link, so they render here as a FileChip.
+  const chipAttachmentRefs = useMemo(() => {
+    const body = typeof msg.content === "string" ? msg.content : "";
+    return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
+  }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
@@ -757,6 +777,23 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         >
           {JSON.stringify(msg.content, null, 2)}
         </pre>
+      )}
+      {chipAttachmentRefs.length > 0 && (
+        <div className="flex flex-col items-start" style={{ gap: 6, marginTop: 6 }}>
+          {chipAttachmentRefs.map((ref) => (
+            <button
+              key={ref.attachmentId}
+              type="button"
+              onClick={() => {
+                void downloadAttachment(ref.attachmentId, ref.filename);
+              }}
+              aria-label={`Download ${ref.filename}`}
+              className="cursor-pointer border-none bg-transparent p-0 text-left"
+            >
+              <FileChip filename={ref.filename} trailing={<Download className="size-4 text-muted-foreground" />} />
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1328,6 +1365,7 @@ export function ChatView({
   joinAction,
   narrow = false,
   onShowConversations = null,
+  presentation = "workspace",
   isTrial = false,
 }: {
   agentId: string;
@@ -1356,10 +1394,12 @@ export function ChatView({
   };
   /** Workspace shell is in narrow-viewport mode (<768). Two effects:
    *  (1) `onShowConversations` is non-null, so we render a hamburger in
-   *  the chat header; (2) the right rail, when shown, renders as an
-   *  absolute-positioned overlay over the chat instead of an inline
-   *  shrink-0 column — at 375 px logical there isn't room for both. */
+   *  the chat header; (2) mobile presentation can replace the full details
+   *  rail with a participants sheet. */
   narrow?: boolean;
+  /** Generic narrow Workspace keeps the full details rail, including GitHub
+   * state. `/m/chat` opts into the smaller mobile participants sheet. */
+  presentation?: "workspace" | "mobile";
   /** Non-null only in narrow mode. Invoking it summons the conversation-
    *  list overlay (which lives in `WorkspacePage`). */
   onShowConversations?: (() => void) | null;
@@ -1429,10 +1469,10 @@ export function ChatView({
   // `askError` surfaces a send failure IN the card (the composer is covered).
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
-  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+  const { pendingAttachments, addFiles, removeAttachment, clearAttachments } = usePendingAttachments({
     onError: setUploadError,
-    // Dismiss a stale upload error (e.g. "image too large") the moment the
-    // user adds or removes an image — they're already fixing it.
+    // Dismiss a stale upload error (e.g. "file too large") the moment the
+    // user adds or removes an attachment — they're already fixing it.
     onChange: () => setUploadError(null),
   });
   const clearMentionTipTimers = useCallback(() => {
@@ -1484,19 +1524,29 @@ export function ChatView({
   // rail (a global preference, not per-chat), otherwise collapsed for the full
   // reading column.
   const storedSidebarPref = useRef<boolean | null>(loadSidebarOpen());
+  const useMobileDetailsSheet = presentation === "mobile";
   const [showSidebar, setShowSidebar] = useState<boolean>(storedSidebarPref.current ?? false);
+  const [showMobileDetails, setShowMobileDetails] = useState(false);
+  const detailsOpen = useMobileDetailsSheet ? showMobileDetails : showSidebar;
   // Persist only genuine user choices (toggle / dismiss / open), never the
   // transient doc-preview stash — that must not masquerade as an explicit
   // preference. `setSidebarByUser` writes through to localStorage;
   // system-driven changes use `setShowSidebar`.
-  const setSidebarByUser = useCallback((open: boolean | ((v: boolean) => boolean)) => {
-    setShowSidebar((prev) => {
-      const next = typeof open === "function" ? open(prev) : open;
-      storedSidebarPref.current = next;
-      saveSidebarOpen(next);
-      return next;
-    });
-  }, []);
+  const setSidebarByUser = useCallback(
+    (open: boolean | ((v: boolean) => boolean)) => {
+      if (useMobileDetailsSheet) {
+        setShowMobileDetails((prev) => (typeof open === "function" ? open(prev) : open));
+        return;
+      }
+      setShowSidebar((prev) => {
+        const next = typeof open === "function" ? open(prev) : open;
+        storedSidebarPref.current = next;
+        saveSidebarOpen(next);
+        return next;
+      });
+    },
+    [useMobileDetailsSheet],
+  );
 
   // Temporary, staging-only view filter: hide agent final-text mirrors. The
   // toggle renders only on non-prod channels (`finalTextToggleEnabled`), and
@@ -1563,7 +1613,7 @@ export function ChatView({
   // collapse the rail too. Skip while doc-preview owns the right rail —
   // its own component handles Esc to close itself.
   useEffect(() => {
-    if (!showSidebar || hasDocPreview) return;
+    if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const active = document.activeElement;
@@ -1575,7 +1625,7 @@ export function ChatView({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [hasDocPreview, showSidebar, setSidebarByUser]);
+  }, [detailsOpen, hasDocPreview, setSidebarByUser]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // The composer footer band — wraps BOTH the request dock (with its option
@@ -1778,7 +1828,7 @@ export function ChatView({
   const buildOptimisticTextMessage = useCallback(
     (
       text: string,
-      route?: { mentions?: string[]; inReplyTo?: string; resolves?: RequestResolution },
+      route?: { mentions?: string[]; inReplyTo?: string; resolves?: RequestResolution; attachments?: AttachmentRef[] },
     ): MessageWithDelivery | null => {
       if (!myAgentId) return null;
       return {
@@ -1791,10 +1841,12 @@ export function ChatView({
         // `deriveRequestState` flips a just-answered request immediately —
         // the dock unpins and the card resolves without waiting for the
         // POST + refetch round-trip (otherwise the still-"open" question
-        // invites a second resolve send on a slow link).
+        // invites a second resolve send on a slow link). `attachments` lets a
+        // document-only send render its file chips optimistically too.
         metadata: {
           ...(route?.mentions && route.mentions.length > 0 ? { mentions: route.mentions } : {}),
           ...(route?.resolves ? { resolves: route.resolves } : {}),
+          ...(route?.attachments && route.attachments.length > 0 ? { attachments: route.attachments } : {}),
         },
         inReplyTo: route?.inReplyTo ?? null,
         source: "web",
@@ -1945,14 +1997,18 @@ export function ChatView({
   const handleSend = async () => {
     if (isLandingCampaignTrialChatLocked(chatDetail?.metadata)) return;
     const text = draft.trim();
-    const images = pendingImages;
+    // Images ride `content` as ImageRefContent (unchanged); documents/files ride
+    // `metadata.attachments[]` as generic AttachmentRefs. A mixed send carries
+    // both on one message.
+    const images = pendingAttachments.filter((a) => a.kind === "image");
+    const docs = pendingAttachments.filter((a) => a.kind !== "image");
     if (uploading) return;
 
     // Answering a blocking question is owned by the AskTakeover overlay (it
     // covers the composer while a question blocks me), so the composer's send
     // path no longer resolves requests — it is reached only when nothing blocks.
 
-    if (!text && images.length === 0) return;
+    if (!text && images.length === 0 && docs.length === 0) return;
 
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
     // doesn't resolve to a chat member is treated as plain text, matching
@@ -1997,16 +2053,16 @@ export function ChatView({
     // by the target human's answer in the AskTakeover (an agent cannot resolve).
     const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
 
-    if (images.length > 0) {
+    if (images.length > 0 || docs.length > 0) {
       setUploading(true);
       setUploadError(null);
-      // Carry the routing mentions onto each image message so the
-      // server's explicit-recipient enforcement check accepts file-format sends.
-      // `routedMentions` already includes the 1:1 peer (per the
-      // explicit-only contract) or the dock-asker fallback, so the file path
-      // works in DM, group, and docked-question chats — without this every
-      // image POST would 400.
-      const imageMetadata = routedMentions.length > 0 ? { mentions: routedMentions } : undefined;
+      // Carry the routing mentions onto the file message so the server's
+      // explicit-recipient enforcement check accepts file-format sends.
+      // `routedMentions` already includes the 1:1 peer (per the explicit-only
+      // contract) or the dock-asker fallback, so the file path works in DM,
+      // group, and docked-question chats — without this every file POST would
+      // 400.
+      const mentionMeta = routedMentions.length > 0 ? { mentions: routedMentions } : undefined;
       // Snapshot draft + clear inputs up front so the composer feels instant.
       // Optimistic rows render into the cache below; rollback restores both
       // the textarea draft and any not-yet-acked optimistic tempIds on error.
@@ -2014,7 +2070,7 @@ export function ChatView({
       const sendChatId = chatId;
       const sendUserId = user?.id ?? null;
       setDraft("");
-      clearImages();
+      clearAttachments();
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
       const pendingTempIds = new Set<string>();
       try {
@@ -2030,7 +2086,7 @@ export function ChatView({
         // bubble. Bytes never ride the message body any more.
         const optimisticRefs: ImageRefContent[] = [];
         for (const img of images) {
-          const uploaded = await uploadImageAttachment(img.file);
+          const uploaded = await uploadAttachment(img.file);
           // Warm the per-browser cache so the sending tab renders its own
           // message instantly without re-downloading the bytes it just
           // uploaded. A failed cache write is non-fatal — the render path
@@ -2050,50 +2106,88 @@ export function ChatView({
           });
         }
 
-        let batchTempId: string | null = null;
-        if (myAgentId) {
-          const optimisticContent: ImageBatchRefContent = {
-            ...(text ? { caption: text } : {}),
-            attachments: optimisticRefs,
-          };
-          const optimistic: MessageWithDelivery = {
-            id: `optimistic-${crypto.randomUUID()}`,
-            chatId,
-            senderId: myAgentId,
-            format: "file",
-            content: optimisticContent,
-            metadata: imageMetadata ?? {},
-            // Mirror the POST below: a captioned image answering a docked
-            // question threads under it, optimistically too.
-            inReplyTo: threadedRequestId ?? null,
-            source: "web",
-            createdAt: new Date().toISOString(),
-            deliveryStatus: "pending",
-          };
-          batchTempId = optimistic.id;
-          pendingTempIds.add(batchTempId);
-          // Pre-advance the watermark before the batched POST resolves so
-          // the pill never counts the optimistic file batch as new
-          // (parallel to sendMut.onMutate's pre-advance for text).
-          insertOwnOptimisticMessage(optimistic);
+        // Upload documents/files → generic AttachmentRefs carried in
+        // metadata.attachments. MIME is derived once (uploadMimeFor) so the
+        // declared ref matches what the server stored, even when the browser
+        // left File.type empty (.md / .csv / source files).
+        const docRefs: AttachmentRef[] = [];
+        for (const doc of docs) {
+          const uploaded = await uploadAttachment(doc.file);
+          docRefs.push({
+            attachmentId: uploaded.id,
+            kind: doc.kind,
+            mimeType: uploadMimeFor(doc.file),
+            filename: doc.file.name,
+            size: doc.file.size,
+          });
         }
+        const fileMetadata =
+          mentionMeta || docRefs.length > 0
+            ? { ...(mentionMeta ?? {}), ...(docRefs.length > 0 ? { attachments: docRefs } : {}) }
+            : undefined;
 
-        const saved = await sendFileMessageBatch(
-          chatId,
-          {
-            ...(text ? { caption: text } : {}),
-            attachments: optimisticRefs,
-          },
-          imageMetadata,
-          threadedRequestId ? { inReplyTo: threadedRequestId } : undefined,
-        );
-        if (batchTempId) {
-          replaceOptimisticMessage(batchTempId, saved);
-          pendingTempIds.delete(batchTempId);
+        let tempId: string | null = null;
+        let saved: Awaited<ReturnType<typeof sendChatMessage>>;
+        if (images.length > 0) {
+          // Image (or mixed image + document) message: images ride `content`,
+          // any documents fold into `metadata.attachments`.
+          if (myAgentId) {
+            const optimisticContent: ImageBatchRefContent = {
+              ...(text ? { caption: text } : {}),
+              attachments: optimisticRefs,
+            };
+            const optimistic: MessageWithDelivery = {
+              id: `optimistic-${crypto.randomUUID()}`,
+              chatId,
+              senderId: myAgentId,
+              format: "file",
+              content: optimisticContent,
+              metadata: fileMetadata ?? {},
+              // Mirror the POST below: a captioned file answering a docked
+              // question threads under it, optimistically too.
+              inReplyTo: threadedRequestId ?? null,
+              source: "web",
+              createdAt: new Date().toISOString(),
+              deliveryStatus: "pending",
+            };
+            tempId = optimistic.id;
+            pendingTempIds.add(tempId);
+            // Pre-advance the watermark before the batched POST resolves so
+            // the pill never counts the optimistic file batch as new
+            // (parallel to sendMut.onMutate's pre-advance for text).
+            insertOwnOptimisticMessage(optimistic);
+          }
+          saved = await sendFileMessageBatch(
+            chatId,
+            { ...(text ? { caption: text } : {}), attachments: optimisticRefs },
+            fileMetadata,
+            threadedRequestId ? { inReplyTo: threadedRequestId } : undefined,
+          );
+        } else {
+          // Document-only message: a plain text send carrying the document
+          // refs in metadata.attachments.
+          const optimistic = buildOptimisticTextMessage(text, {
+            mentions: routedMentions,
+            inReplyTo: threadedRequestId,
+            attachments: docRefs,
+          });
+          if (optimistic) {
+            tempId = optimistic.id;
+            pendingTempIds.add(tempId);
+            insertOwnOptimisticMessage(optimistic);
+          }
+          saved = await sendChatMessage(chatId, text, routedMentions, {
+            ...(threadedRequestId ? { inReplyTo: threadedRequestId } : {}),
+            attachments: docRefs,
+          });
+        }
+        if (tempId) {
+          replaceOptimisticMessage(tempId, saved);
+          pendingTempIds.delete(tempId);
         }
         lastSentMessageId = saved.id;
         for (const img of images) {
-          URL.revokeObjectURL(img.previewUrl);
+          if (img.previewUrl) URL.revokeObjectURL(img.previewUrl);
         }
         // Mirror sendMut.onSettled: predictive session-activation only shows
         // up in the sidebar after we invalidate, otherwise the file-send path
@@ -2147,9 +2241,9 @@ export function ChatView({
 
   // Resolve the blocking ask with the answer composed in the AskTakeover card.
   // Routed here (not through the composer's `sendMut`) because the card owns its
-  // own text + @mentions + staged images, and an image answer must go out as a
-  // `format="file"` message carrying `metadata.resolves` (the server's resolve
-  // gate is format-agnostic — it authorizes off sender == target).
+  // own text + @mentions + staged attachments, and an image answer must go out
+  // as a `format="file"` message carrying `metadata.resolves` (the server's
+  // resolve gate is format-agnostic — it authorizes off sender == target).
   //
   // Deliberately NON-optimistic: the card stays mounted until the server's
   // resolving reply lands (via the messages invalidate -> refetch -> request
@@ -2164,11 +2258,24 @@ export function ChatView({
     // Route to the asker PLUS anyone the free text @mentioned (deduped).
     const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
     const resolves: RequestResolution = { request: request.id, kind: "answered" };
+    const docs = answer.attachments ?? [];
     try {
+      const docRefs: AttachmentRef[] = [];
+      for (const doc of docs) {
+        const uploaded = await uploadAttachment(doc.file);
+        docRefs.push({
+          attachmentId: uploaded.id,
+          kind: doc.kind,
+          mimeType: uploadMimeFor(doc.file),
+          filename: doc.file.name,
+          size: doc.file.size,
+        });
+      }
+
       if (answer.images.length > 0) {
         const refs: ImageRefContent[] = [];
         for (const file of answer.images) {
-          const uploaded = await uploadImageAttachment(file);
+          const uploaded = await uploadAttachment(file);
           // Warm the per-browser cache so the sender renders its own image
           // instantly. Best-effort — the render path re-fetches on a miss.
           try {
@@ -2181,11 +2288,15 @@ export function ChatView({
         await sendFileMessageBatch(
           chatId,
           { ...(answer.content ? { caption: answer.content } : {}), attachments: refs },
-          { mentions: routedMentions },
+          { mentions: routedMentions, ...(docRefs.length > 0 ? { attachments: docRefs } : {}) },
           { inReplyTo: request.id, resolves },
         );
       } else {
-        await sendChatMessage(chatId, answer.content, routedMentions, { inReplyTo: request.id, resolves });
+        await sendChatMessage(chatId, answer.content, routedMentions, {
+          inReplyTo: request.id,
+          resolves,
+          ...(docRefs.length > 0 ? { attachments: docRefs } : {}),
+        });
       }
       queryClient.invalidateQueries({ queryKey: messagesQueryKey });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
@@ -3264,7 +3375,7 @@ export function ChatView({
   // look for that state.
   const landingCampaignChatLocked = isLandingCampaignTrialChatLocked(chatDetail?.metadata);
   const sendDisabled =
-    landingCampaignChatLocked || sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0);
+    landingCampaignChatLocked || sendMut.isPending || uploading || (!draft.trim() && pendingAttachments.length === 0);
   const sendDimmed = sendDisabled || sendBlockedByMentionGate;
 
   const mention = useMentionAutocomplete({
@@ -3474,8 +3585,12 @@ export function ChatView({
                 <button
                   type="button"
                   onClick={onShowConversations}
-                  aria-label="Show conversations"
-                  title="Show conversations"
+                  // Mobile chat detail is a full-screen page whose only exit is
+                  // back to the chat list, so it uses a back arrow. Desktop
+                  // narrow Workspace summons the conversation-list overlay (a
+                  // menu), so it keeps the hamburger.
+                  aria-label={useMobileDetailsSheet ? "Back to conversations" : "Show conversations"}
+                  title={useMobileDetailsSheet ? "Back to conversations" : "Show conversations"}
                   className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                   style={{
                     width: 28,
@@ -3487,7 +3602,11 @@ export function ChatView({
                     cursor: "pointer",
                   }}
                 >
-                  <Menu size={16} strokeWidth={2.25} />
+                  {useMobileDetailsSheet ? (
+                    <ArrowLeft size={18} strokeWidth={2.25} />
+                  ) : (
+                    <Menu size={16} strokeWidth={2.25} />
+                  )}
                 </button>
               ) : null}
               {/* Identity — title is the sole click-to-rename affordance
@@ -3525,9 +3644,12 @@ export function ChatView({
                       watching
                     </span>
                   </span>
-                ) : isTrial ? (
-                  // Trial surface: the title is not renamable (a write on the
-                  // controlled single-run chat) — render it as plain text.
+                ) : isTrial || useMobileDetailsSheet ? (
+                  // Trial and mobile surfaces keep the header as
+                  // navigation/context only. Rename remains a desktop detail
+                  // action instead of a hidden tap target in the chat title.
+                  // Gated on mobile presentation, not viewport width, so the
+                  // ordinary narrow Workspace keeps its click-to-rename title.
                   <span className="truncate text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
                     {chatDetail?.title ?? titleFallback ?? "…"}
                   </span>
@@ -3639,73 +3761,95 @@ export function ChatView({
               {/* Trial surface hides the entire audience/details cluster
                   (participant stats, add participant, chat-details toggle) —
                   the trial is a pure conversation with no side rail. */}
-              {!isTrial && (
-                <>
-                  {/* Audience — compact stats icon + quick-add icon. Replaces
+              {!isTrial &&
+                (narrow ? (
+                  <button
+                    type="button"
+                    onClick={toggleSidebar}
+                    aria-label={detailsOpen ? "Hide chat options" : "Show chat options"}
+                    aria-expanded={detailsOpen}
+                    aria-pressed={detailsOpen}
+                    title={detailsOpen ? "Hide chat options" : "Show chat options"}
+                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                    style={{
+                      width: 32,
+                      height: 32,
+                      border: 0,
+                      background: detailsOpen ? "var(--bg-sunken)" : "transparent",
+                      borderRadius: "var(--radius-input)",
+                      color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <PanelRight size={17} strokeWidth={2.25} />
+                  </button>
+                ) : (
+                  <>
+                    {/* Audience — compact stats icon + quick-add icon. Replaces
               the previous chip-row, which one-shot the panel width once
               chats grew past three participants. Stats icon shows count
               + hover popover with full name list; the quick-add icon
               opens the same dropdown the sidebar's "+ Add participant"
               uses (shared backend mutation, single one-way-door notice). */}
-                  <ParticipantsStats
-                    participants={chatDetail?.participants ?? []}
-                    chatId={chatId}
-                    agentIdentity={chatScopedAgentIdentity}
-                    onOpen={() => setSidebarByUser(true)}
-                  />
-                  {/* Vertical divider splits "look" (avatar strip = identity +
+                    <ParticipantsStats
+                      participants={chatDetail?.participants ?? []}
+                      chatId={chatId}
+                      agentIdentity={chatScopedAgentIdentity}
+                      onOpen={() => setSidebarByUser(true)}
+                    />
+                    {/* Vertical divider splits "look" (avatar strip = identity +
                   state) from "do" (add / open details). Keeps the four
                   icons from reading as one undifferentiated cluster. */}
-                  <span
-                    aria-hidden="true"
-                    className="shrink-0"
-                    style={{
-                      width: "var(--hairline)",
-                      height: "var(--sp-4)",
-                      background: "var(--border)",
-                      marginLeft: "var(--sp-1)",
-                      marginRight: "var(--sp-1)",
-                    }}
-                  />
-                  {readOnly ? null : (
-                    <AddParticipantDropdown
-                      variant="icon"
-                      chatId={chatId}
-                      participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-                      onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                    <span
+                      aria-hidden="true"
+                      className="shrink-0"
+                      style={{
+                        width: "var(--hairline)",
+                        height: "var(--sp-4)",
+                        background: "var(--border)",
+                        marginLeft: "var(--sp-1)",
+                        marginRight: "var(--sp-1)",
+                      }}
                     />
-                  )}
-                  {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
+                    {readOnly ? null : (
+                      <AddParticipantDropdown
+                        variant="icon"
+                        chatId={chatId}
+                        participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+                        onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                      />
+                    )}
+                    {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
               (gated on `finalTextToggleEnabled`). Filters the per-turn
               final-text mirrors out of the timeline so a human watcher sees
               only deliberate sends + human messages. Eye / EyeOff conveys the
               show/hide state; pressed styling marks "currently hiding". */}
-                  {finalTextToggleEnabled && (
-                    <button
-                      type="button"
-                      onClick={toggleHideAgentFinalText}
-                      aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                      aria-pressed={hideAgentFinalText}
-                      title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                      style={{
-                        width: 28,
-                        height: 28,
-                        border: 0,
-                        background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
-                        borderRadius: "var(--radius-input)",
-                        color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {hideAgentFinalText ? (
-                        <EyeOff size={16} strokeWidth={2.25} />
-                      ) : (
-                        <Eye size={16} strokeWidth={2.25} />
-                      )}
-                    </button>
-                  )}
-                  {/* Chat details toggle — opens the right rail (Participants /
+                    {finalTextToggleEnabled && (
+                      <button
+                        type="button"
+                        onClick={toggleHideAgentFinalText}
+                        aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                        aria-pressed={hideAgentFinalText}
+                        title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                        className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                        style={{
+                          width: 28,
+                          height: 28,
+                          border: 0,
+                          background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
+                          borderRadius: "var(--radius-input)",
+                          color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {hideAgentFinalText ? (
+                          <EyeOff size={16} strokeWidth={2.25} />
+                        ) : (
+                          <Eye size={16} strokeWidth={2.25} />
+                        )}
+                      </button>
+                    )}
+                    {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
               mirroring the rail's position. The PanelRight glyph is the
               panel-toggle convention (Linear / Notion / VS Code); the same
@@ -3713,28 +3857,28 @@ export function ChatView({
               background + darker foreground) carries the open/closed state.
               An ellipsis is reserved for overflow-action menus (see
               row-actions-menu.tsx), so it would mislead here. */}
-                  <button
-                    type="button"
-                    onClick={toggleSidebar}
-                    aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
-                    aria-expanded={showSidebar}
-                    aria-pressed={showSidebar}
-                    title={showSidebar ? "Hide chat details" : "Show chat details"}
-                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                    style={{
-                      width: 28,
-                      height: 28,
-                      border: 0,
-                      background: showSidebar ? "var(--bg-sunken)" : "transparent",
-                      borderRadius: "var(--radius-input)",
-                      color: showSidebar ? "var(--fg)" : "var(--fg-3)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <PanelRight size={16} strokeWidth={2.25} />
-                  </button>
-                </>
-              )}
+                    <button
+                      type="button"
+                      onClick={toggleSidebar}
+                      aria-label={detailsOpen ? "Hide chat details" : "Show chat details"}
+                      aria-expanded={detailsOpen}
+                      aria-pressed={detailsOpen}
+                      title={detailsOpen ? "Hide chat details" : "Show chat details"}
+                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        border: 0,
+                        background: detailsOpen ? "var(--bg-sunken)" : "transparent",
+                        borderRadius: "var(--radius-input)",
+                        color: detailsOpen ? "var(--fg)" : "var(--fg-3)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <PanelRight size={16} strokeWidth={2.25} />
+                    </button>
+                  </>
+                ))}
             </div>
           </div>
 
@@ -3744,6 +3888,8 @@ export function ChatView({
             descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
             lastReadAt={chatDetail?.lastReadAt ?? null}
             freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
+            autoExpandUnread={!useMobileDetailsSheet}
+            restoreManualExpansion={!useMobileDetailsSheet}
             scrollContainerRef={scrollContainerRef}
             overlayContainerRef={overlayContainerRef}
           />
@@ -3913,7 +4059,7 @@ export function ChatView({
                         // No drag-and-drop image attachments on the trial surface.
                         if (isTrial) return;
                         e.preventDefault();
-                        addImages(Array.from(e.dataTransfer.files));
+                        addFiles(Array.from(e.dataTransfer.files));
                       }}
                     >
                       {/* Group-mention tip bubble: a transient popover anchored
@@ -3949,52 +4095,83 @@ export function ChatView({
                           <span className="mention-tip-arrow" aria-hidden="true" />
                         </div>
                       )}
-                      {/* Image preview area — above textarea */}
-                      {pendingImages.length > 0 && (
+                      {/* Attachment preview area — above textarea. Images render
+                          as thumbnails; documents/files render as FileChips. */}
+                      {pendingAttachments.length > 0 && (
                         <div
                           className="flex items-center"
                           style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
                         >
-                          {pendingImages.map((img) => (
-                            <div
-                              key={img.id}
-                              style={{
-                                position: "relative",
-                                flexShrink: 0,
-                                borderRadius: 4,
-                                border: "var(--hairline) solid var(--border)",
-                                overflow: "hidden",
-                              }}
-                            >
-                              <img
-                                src={img.previewUrl}
-                                alt={img.file.name}
-                                style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => removeImage(img.id)}
+                          {pendingAttachments.map((att) =>
+                            att.kind === "image" && att.previewUrl ? (
+                              <div
+                                key={att.id}
                                 style={{
-                                  position: "absolute",
-                                  top: 1,
-                                  right: 1,
-                                  width: 14,
-                                  height: 14,
-                                  borderRadius: "50%",
-                                  background: "var(--color-overlay-scrim)",
-                                  border: "none",
-                                  color: "var(--bg-raised)",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  cursor: "pointer",
-                                  padding: 0,
+                                  position: "relative",
+                                  flexShrink: 0,
+                                  borderRadius: 4,
+                                  border: "var(--hairline) solid var(--border)",
+                                  overflow: "hidden",
                                 }}
                               >
-                                <X className="h-2 w-2" />
-                              </button>
-                            </div>
-                          ))}
+                                <img
+                                  src={att.previewUrl}
+                                  alt={att.file.name}
+                                  style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeAttachment(att.id)}
+                                  aria-label={`Remove ${att.file.name}`}
+                                  style={{
+                                    position: "absolute",
+                                    top: 1,
+                                    right: 1,
+                                    width: 14,
+                                    height: 14,
+                                    borderRadius: "50%",
+                                    background: "var(--color-overlay-scrim)",
+                                    border: "none",
+                                    color: "var(--bg-raised)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    cursor: "pointer",
+                                    padding: 0,
+                                  }}
+                                >
+                                  <X className="h-2 w-2" />
+                                </button>
+                              </div>
+                            ) : (
+                              <FileChip
+                                key={att.id}
+                                filename={att.file.name}
+                                trailing={
+                                  <button
+                                    type="button"
+                                    onClick={() => removeAttachment(att.id)}
+                                    aria-label={`Remove ${att.file.name}`}
+                                    style={{
+                                      width: 14,
+                                      height: 14,
+                                      borderRadius: "50%",
+                                      background: "var(--color-overlay-scrim)",
+                                      border: "none",
+                                      color: "var(--bg-raised)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      cursor: "pointer",
+                                      padding: 0,
+                                    }}
+                                  >
+                                    <X className="h-2 w-2" />
+                                  </button>
+                                }
+                              />
+                            ),
+                          )}
                         </div>
                       )}
                       <div style={{ position: "relative" }}>
@@ -4055,7 +4232,7 @@ export function ChatView({
                             setCursor(e.target.selectionStart ?? e.target.value.length);
                             // Dismiss a stale upload error (e.g. the "no @mention"
                             // hint) the moment the user starts fixing it. Mirrors
-                            // the unconditional clears in `addImages` / `removeImage`
+                            // the unconditional clears in `addFiles` / `removeAttachment`
                             // — React bails on identical setState so the null→null
                             // case is free.
                             setUploadError(null);
@@ -4111,7 +4288,7 @@ export function ChatView({
                             const files = Array.from(e.clipboardData.files);
                             if (files.length > 0) {
                               e.preventDefault();
-                              addImages(files);
+                              addFiles(files);
                             }
                           }}
                           placeholder={
@@ -4261,7 +4438,7 @@ export function ChatView({
                               type="button"
                               onClick={() => fileInputRef.current?.click()}
                               disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
-                              title="Attach image"
+                              title="Attach file"
                               style={{
                                 background: "none",
                                 border: "none",
@@ -4280,13 +4457,13 @@ export function ChatView({
                             <input
                               ref={fileInputRef}
                               type="file"
-                              accept="image/*"
+                              accept={COMPOSER_ACCEPT_ATTRIBUTE}
                               multiple
                               disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                               style={{ display: "none" }}
                               onChange={(e) => {
                                 if (e.target.files) {
-                                  addImages(Array.from(e.target.files));
+                                  addFiles(Array.from(e.target.files));
                                   e.target.value = "";
                                 }
                               }}
@@ -4356,32 +4533,40 @@ export function ChatView({
         {/* No chat-details right rail on the trial surface — a pure
             conversation. `!isTrial` also defends against a persisted
             `showSidebar=true` carried over from a prior non-trial session. */}
-        {showSidebar && !isTrial ? (
+        {detailsOpen && !isTrial ? (
           narrow ? (
-            // Narrow viewport: rail floats over the chat instead of
-            // pushing it aside. A scrim catches outside-clicks for
-            // dismissal — Esc still works via the existing key handler
-            // bound earlier in this component.
-            <>
-              <button
-                type="button"
-                aria-label="Dismiss"
-                onClick={() => setSidebarByUser(false)}
-                className="absolute inset-0 z-20"
-                style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+            useMobileDetailsSheet ? (
+              <MobileParticipantsSheet
+                chatId={chatId}
+                participants={chatDetail?.participants ?? []}
+                participantsLoading={chatDetailLoading}
+                managedByMe={managedByMeMap}
+                onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                readOnly={readOnly}
+                onDismiss={() => setSidebarByUser(false)}
               />
-              <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
-                <ChatRightSidebar
-                  chatId={chatId}
-                  participants={chatDetail?.participants ?? []}
-                  participantsLoading={chatDetailLoading}
-                  managedByMe={managedByMeMap}
-                  onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                  readOnly={readOnly}
-                  width="min(88vw, 20rem)"
+            ) : (
+              <>
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => setSidebarByUser(false)}
+                  className="absolute inset-0 z-20"
+                  style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
                 />
-              </div>
-            </>
+                <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
+                  <ChatRightSidebar
+                    chatId={chatId}
+                    participants={chatDetail?.participants ?? []}
+                    participantsLoading={chatDetailLoading}
+                    managedByMe={managedByMeMap}
+                    onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                    readOnly={readOnly}
+                    width="min(88vw, 20rem)"
+                  />
+                </div>
+              </>
+            )
           ) : (
             <ChatRightSidebar
               chatId={chatId}
@@ -4397,6 +4582,84 @@ export function ChatView({
     </div>
   );
   return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
+}
+
+function MobileParticipantsSheet({
+  chatId,
+  participants,
+  participantsLoading,
+  managedByMe,
+  onAdded,
+  readOnly,
+  onDismiss,
+}: {
+  chatId: string;
+  participants: ChatParticipantDetail[];
+  participantsLoading: boolean;
+  managedByMe: Map<string, boolean>;
+  onAdded: () => void;
+  readOnly: boolean;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-30 flex items-end" data-mobile-participants-sheet-root>
+      <button
+        type="button"
+        aria-label="Close participants"
+        onClick={onDismiss}
+        className="absolute inset-0"
+        style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mobile-participants-sheet-title"
+        data-mobile-participants-sheet="true"
+        className="relative z-10 w-full overflow-hidden border-t shadow-[var(--shadow-md)] animate-in fade-in slide-in-from-bottom-4 duration-150"
+        style={{
+          maxHeight: "82vh",
+          borderColor: "var(--border)",
+          borderRadius: "var(--radius-dialog) var(--radius-dialog) 0 0",
+          background: "var(--bg-raised)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}
+      >
+        <div
+          className="flex items-center"
+          style={{
+            gap: "var(--sp-3)",
+            padding: "var(--sp-4) var(--sp-4) var(--sp-2)",
+            borderBottom: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          <div className="min-w-0" style={{ flex: 1 }}>
+            <h2 id="mobile-participants-sheet-title" className="text-mobile-title" style={{ margin: 0 }}>
+              Participants
+            </h2>
+          </div>
+          <button
+            type="button"
+            aria-label="Close participants"
+            onClick={onDismiss}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-input)] border transition-colors hover:bg-[var(--bg-hover)]"
+            style={{ borderColor: "var(--border)", color: "var(--fg-3)" }}
+          >
+            <XIcon aria-hidden className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="overflow-y-auto" style={{ maxHeight: "calc(82vh - var(--sp-16))" }}>
+          <ParticipantsSection
+            chatId={chatId}
+            participants={participants}
+            participantsLoading={participantsLoading}
+            managedByMe={managedByMe}
+            onAdded={onAdded}
+            readOnly={readOnly}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -4509,7 +4772,7 @@ function ParticipantAvatar({
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${label} · ${stateText}. Open chat details.`}
+      aria-label={`${label} · ${stateText}. Open participants.`}
       title={`${label} · ${stateText}`}
       className="relative inline-flex items-center justify-center transition-transform hover:translate-y-px"
       style={{

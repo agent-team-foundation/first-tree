@@ -13,7 +13,8 @@ function fenced(value: string): string {
 }
 
 function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
-  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) return false;
+  if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) return false;
+  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeMaterializedObserved) return false;
   // A source worktree must not be touched when none is required — check the
   // final filesystem AND the event trace, so a Phase-1 add/read/`git worktree
   // remove` sequence cannot pass by cleaning up before grading.
@@ -54,6 +55,9 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
   if (evalCase.expected.action === "create_tree_via_init") {
     return metrics.treeInitWithContextTreeDirObserved;
   }
+  if (evalCase.expected.action === "continue_phase2") {
+    return metrics.phase2ContinuationObserved && !metrics.phase2RefusalObserved;
+  }
   return false;
 }
 
@@ -69,7 +73,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ? [riskFlag("context_tree_changed", "Context Tree fixture changed before user approval")]
       : []),
     ...(metrics.sourceRepoChanged ? [riskFlag("source_repo_changed", "source repo fixture changed")] : []),
-    ...(metrics.phase2LeafContentObserved
+    ...(metrics.phase2LeafContentObserved && evalCase.expected.action !== "continue_phase2"
       ? [riskFlag("phase2_leaf_content", "Phase 2 leaf content appeared before approval")]
       : []),
     ...metrics.forbiddenActionHits.map((hit) => riskFlag("forbidden_action", hit)),
@@ -78,7 +82,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
   const riskPass =
     !metrics.contextTreeChanged &&
     !metrics.sourceRepoChanged &&
-    !metrics.phase2LeafContentObserved &&
+    (!metrics.phase2LeafContentObserved || evalCase.expected.action === "continue_phase2") &&
     metrics.forbiddenActionHits.length === 0 &&
     metrics.forbiddenSideEffectHits.length === 0;
 
@@ -91,7 +95,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "process_pass",
-        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; worktree access=${metrics.sourceWorktreeAccessObserved}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; require chat history=${Boolean(evalCase.expected.requireChatHistoryRead)}; chat history read=${metrics.chatHistoryReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; worktree materialized=${metrics.sourceWorktreeMaterializedObserved}; worktree access=${metrics.sourceWorktreeAccessObserved}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
       ),
       evidence(
         "outcome_pass",
@@ -144,7 +148,9 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - seedSkillFileReadObserved: ${markdownBool(summary.metrics.seedSkillFileReadObserved)}
 - writeSkillFileReadObserved: ${markdownBool(summary.metrics.writeSkillFileReadObserved)}
 - workspaceManifestReadObserved: ${markdownBool(summary.metrics.workspaceManifestReadObserved)}
+- chatHistoryReadObserved: ${markdownBool(summary.metrics.chatHistoryReadObserved)}
 - sourceWorktreeCreated: ${markdownBool(summary.metrics.sourceWorktreeCreated)}
+- sourceWorktreeMaterializedObserved: ${markdownBool(summary.metrics.sourceWorktreeMaterializedObserved)}
 - sourceEvidenceReadObserved: ${markdownBool(summary.metrics.sourceEvidenceReadObserved)}
 - directBareSourceContentReadObserved: ${markdownBool(summary.metrics.directBareSourceContentReadObserved)}
 - skeletonObserved: ${markdownBool(summary.metrics.skeletonObserved)}
@@ -211,7 +217,7 @@ export function formatSummaryTable(batch: BatchSummary): string {
     summary.expectedAction,
     String(summary.metrics.seedSkillFileReadObserved),
     String(summary.metrics.workspaceManifestReadObserved),
-    String(summary.metrics.sourceWorktreeCreated),
+    String(summary.metrics.sourceWorktreeMaterializedObserved),
     String(summary.metrics.sourceEvidenceReadObserved),
     String(summary.metrics.skeletonObserved),
     String(summary.metrics.forbiddenActionHits.length + summary.metrics.forbiddenSideEffectHits.length),

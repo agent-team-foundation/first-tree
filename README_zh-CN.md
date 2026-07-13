@@ -79,14 +79,19 @@ First Tree 围绕 Context Tree 连接五个部分：
 
 完整步骤见 [Quickstart](docs/quickstart.md)。
 
-走到“连接一台电脑”这步时，引导流程会给你安装 CLI、把这台机器登入的命令：
+走到“连接一台电脑”这步时，引导流程会给出与发布通道匹配的 CLI 安装和登录
+命令。托管生产环境使用：
 
 ```bash
-npm install -g first-tree
-first-tree login <connect-code>
+curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
+~/.local/bin/first-tree login <connect-code>
 ```
 
-二进制名为 `first-tree`；同时安装短别名 `ft`。
+请以 Web 控制台显示的命令为准，尤其是在使用 staging 或自托管部署时。
+macOS/Linux 安装脚本已内置 Node.js，无需另行安装。为保持易读，这两行命令
+相互独立，不提供 shell 级事务保护：整段粘贴时，安装行失败不会自动阻止登录
+行运行，POSIX `sh` 也不保证 `curl | sh` 保留 `curl` 的失败状态。登录命令
+显式使用 `~/.local/bin`，因此即使当前 shell 尚未刷新 `PATH` 也能立即执行。
 
 ## CLI
 

@@ -26,7 +26,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "empty-tree-source-present",
     prompt:
-      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound source repo. Run the seed self-check first, then propose only the Phase 1 top + second-level skeleton for user approval.",
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound source repo. Run the seed self-check first, leave the managed source read worktree in place for final eval provenance, then propose only the Phase 1 top + second-level skeleton for user approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
@@ -128,11 +128,91 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "bare-source-worktree-protocol",
     prompt:
-      "Use first-tree-seed to inspect the bound source repo. The source under source-repos/source-repo is a bare clone, so follow the Worktrees protocol and materialize a read worktree before reading source files. Stop after proposing the Phase 1 skeleton for approval.",
+      "Use first-tree-seed to inspect the bound source repo. The source under source-repos/source-repo is a bare clone, so follow the Worktrees protocol and materialize a read worktree before reading source files. Leave that managed worktree in place for final eval provenance, and stop after proposing the Phase 1 skeleton for approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
     tags: ["bare-source", "worktree-protocol"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "propose_phase1_skeleton",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: false,
+      responseHints: ["Phase 1", "skeleton", "approval"],
+      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+    },
+    fixture: {
+      sourceRepoState: "chat-local-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["phase2_leaf_content_before_approval", "skip_user_confirmation", "require_github_app"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "empty-manifest-chat-source",
+    prompt:
+      "Use first-tree-seed to bootstrap the empty Context Tree. The workspace manifest intentionally declares no sources; in this setup chat I have provided the readable local checkout at ./provided-source. Use that source directly, do not require a GitHub App or team resource registration, and stop after the Phase 1 skeleton proposal for approval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["chat-source", "empty-manifest", "no-app-gate"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "continue_phase2",
+      requireChatHistoryRead: true,
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["Phase 2", "leaf"],
+    },
+    fixture: {
+      chatHistoryState: "approved-phase1",
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["refuse_nonempty_tree", "restart_phase1", "require_github_app"],
+      sideEffects: ["tree_pr", "source_write", "github"],
+    },
+    id: "same-chat-phase2-continuation",
+    prompt:
+      "Continue this Context Tree setup after I merged the Phase 1 PR. Load first-tree-seed and apply the generated Context Tree Policy. Before deciding whether the populated-tree exception applies, inspect the equivalent visible prior-turn transcript at ./.first-tree-eval/chat-history.md and verify that this same chat contains the Phase 1 proposal, my approval, and the PR handoff. Run `cat ./.first-tree-eval/chat-history.md` as its own command so its evidence is not mixed with another file's output. Then re-resolve the same readable source: use a standalone successful `git worktree add` with the absolute workspace target `$(pwd)/worktrees/seed-source-repo`, without cleanup or another Git operation in that command. In a separate command, run `cat worktrees/seed-source-repo/README.md | head -50` so actual source evidence is not mixed or truncated; a filename listing alone is insufficient. Route to Phase 2 leaf drafting only after those checks. Respect the eval workspace rule against actually writing or opening a PR.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["same-chat", "phase2", "continuation"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "refuse_nonempty_tree",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["history", "populated", "first-tree-write", "focused maintenance", "cannot continue"],
+    },
+    fixture: {
+      chatHistoryState: "absent",
+      sourceRepoState: "bare-readable",
+      treeState: "phase1-approved",
+    },
+    forbidden: {
+      actions: ["continue_phase2", "continue_seed", "phase1_skeleton"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "phase1-shaped-tree-without-same-chat-history-refuses",
+    prompt:
+      "I claim the Phase 1 skeleton is merged and ask you to continue, but this chat has no visible prior proposal, approval, or PR-handoff transcript. Use first-tree-seed to classify the populated tree: read the workspace manifest for the state check, but do not treat the tree shape or my current-message claim as same-chat authorization. Do not explore source or write anything.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["same-chat", "phase2", "missing-history", "negative"],
     tier: "gate",
   },
 ];
@@ -158,7 +238,7 @@ export const FIRST_TREE_SEED_PERIODIC_CASES: readonly FirstTreeSeedEvalCase[] = 
     },
     id: "first-tree-seed-real-first-tree-source-periodic",
     prompt:
-      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol, inspect source evidence, and stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol. For unambiguous eval evidence, make the managed worktree add a standalone successful command, leave that worktree in place for final provenance, and run `cat worktrees/seed-source-repo/README.md | head -50` as a separate source read before any broader exploration. Stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
@@ -175,8 +255,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
       validator: "case schema and lifecycle fixture shape",
     },
     fixture: {
-      sourceRepoStates: ["bare-readable", "missing", "real-first-tree-bare-readable"],
-      treeStates: ["empty", "nonempty", "unbound"],
+      sourceRepoStates: ["bare-readable", "chat-local-readable", "missing", "real-first-tree-bare-readable"],
+      treeStates: ["empty", "nonempty", "phase1-approved", "unbound"],
     },
     id: FLOOR_CASE_ID,
     skill: "first-tree-seed",
@@ -191,8 +271,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
 function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly string[] {
   const errors: string[] = [];
   const gateCases = cases.filter((evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "gate");
-  if (gateCases.length !== 5) {
-    errors.push(`seed suite must declare 5 gate cases, found ${gateCases.length}.`);
+  if (gateCases.length !== 8) {
+    errors.push(`seed suite must declare 8 gate cases, found ${gateCases.length}.`);
   }
   const periodicCases = cases.filter(
     (evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "periodic",
@@ -206,12 +286,15 @@ function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly s
       errors.push(`${evalCase.id}: fixture must be an object.`);
       continue;
     }
-    const fixture = evalCase.fixture as { sourceRepoState?: unknown; treeState?: unknown };
+    const fixture = evalCase.fixture as { chatHistoryState?: unknown; sourceRepoState?: unknown; treeState?: unknown };
     if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.sourceRepoState !== "string") {
       errors.push(`${evalCase.id}: live fixture must declare sourceRepoState.`);
     }
     if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.treeState !== "string") {
       errors.push(`${evalCase.id}: live fixture must declare treeState.`);
+    }
+    if (fixture.treeState === "phase1-approved" && typeof fixture.chatHistoryState !== "string") {
+      errors.push(`${evalCase.id}: phase1-approved fixture must declare chatHistoryState.`);
     }
   }
   return errors;

@@ -183,19 +183,20 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
 }
 
 /**
- * The terminal one-liner(s) the user pastes to connect a computer. Renders
- * whatever lines the server's bootstrap command contains — typically two
- * (`npm install -g …` then `<binName> login <code>`), but dev channels
- * return only the login line, and a future channel might add more. Each
- * line nowraps and ellipsizes on overflow so a long opaque token shows as
- * much as fits without word-breaking; Copy puts the full multi-line command
- * on the clipboard regardless of what's visible.
+ * The terminal command(s) the user pastes to connect a computer. Renders
+ * whatever lines the server's bootstrap command contains — hosted channels
+ * currently return a readable installer pipeline followed by an independent
+ * `~/.local/bin/<binName> login <code>` command, while dev returns only its
+ * source-installed login command. The hosted lines intentionally have no
+ * shell-level transaction or failure guard between them. Each line nowraps
+ * and ellipsizes on overflow so a long opaque token shows as much as fits
+ * without word-breaking; Copy puts the full multi-line command on the
+ * clipboard regardless of what's visible.
  *
- * The previous implementation pattern-matched lines by prefix
- * (`startsWith("npm")` / `startsWith("first-tree")`), which was fragile —
- * adding a new prefix (yarn / pnpm / `cd …`) would silently drop content
- * from the visible box while Copy still worked. The current pass-through
- * trusts the server: render the lines it gave us, in order.
+ * The previous implementation pattern-matched lines by command prefix, which
+ * was fragile: adding a new command or environment assignment could silently
+ * drop content from the visible box while Copy still worked. The current
+ * pass-through trusts the server and renders the lines it gave us, in order.
  */
 export function CommandBox({
   command,

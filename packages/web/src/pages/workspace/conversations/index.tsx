@@ -1,7 +1,7 @@
-import { type ChatEngagementView, type ChatSource, type MeChatRow, RUNTIME_STALE_MS } from "@first-tree/shared";
-import { useQuery } from "@tanstack/react-query";
+import type { ChatEngagementView, ChatSource, MeChatRow } from "@first-tree/shared";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Eye, ListTree, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { ActivityDots } from "../../../components/chat/activity-dots.js";
@@ -99,19 +99,6 @@ export function ConversationList({
   onGroupChange: (next: GroupMode) => void;
 }) {
   const { agentId: selfAgentId } = useAuth();
-  // Pages loaded via `Load more` carry a `fetchedAt` timestamp so the busy
-  // dot can be aged out on those rows. The parent useQuery refetches every
-  // 30s and re-discovers stale `runtime_state_at` for the first page, but
-  // extraPages bypass react-query entirely — without this stamp, a row from
-  // an older page whose agent crashed mid-turn would keep flashing busy
-  // forever. The render path drops busyAgentIds on rows from pages older
-  // than RUNTIME_STALE_MS (60s) plus one refetchInterval (30s) — total
-  // worst-case stuck-busy window ~90s on these rows, vs ≤60s for the first
-  // page that refetches directly. No UX disruption from the user's
-  // loaded position.
-  const [extraPages, setExtraPages] = useState<Array<{ fetchedAt: number; rows: MeChatRow[] }>>([]);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [moreError, setMoreError] = useState<string | null>(null);
   // Per-bucket collapse override. Absence in the map means "use the
   // bucket's defaultCollapsed". Session-scoped — not worth a URL slot
   // because it's purely a presentation preference and any reload that
@@ -131,11 +118,24 @@ export function ConversationList({
   const originParam = origin.length > 0 ? [...origin] : undefined;
   const withParam = participants.length > 0 ? [...participants] : undefined;
 
-  const { data, isLoading, dataUpdatedAt } = useQuery({
+  const {
+    data,
+    dataUpdatedAt,
+    isLoading,
+    isLoadingError,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useInfiniteQuery({
     // `origin` / `with` are arrays — react-query needs a stable key
     // signature, so we serialise them into the query key the same way
     // the wire does. Empty array collapses to `null` so an unchanged
-    // "no filter" state doesn't churn the key.
+    // "no filter" state doesn't churn the key. A filter change swaps the
+    // whole query (with its own page list) atomically — react-query
+    // isolates cache entries by key, so a superseded response can never
+    // bleed into the new filter's list.
     queryKey: [
       "me",
       "chats",
@@ -145,127 +145,80 @@ export function ConversationList({
       originParam ? originParam.join(",") : null,
       withParam ? withParam.join(",") : null,
     ] as const,
-    queryFn: () =>
-      listMeChats({
-        filter,
-        engagement,
-        watching: watchingParam,
-        origin: originParam,
-        with: withParam,
-      }),
+    queryFn: ({ pageParam, signal }) =>
+      listMeChats(
+        {
+          filter,
+          engagement,
+          watching: watchingParam,
+          origin: originParam,
+          with: withParam,
+          cursor: pageParam,
+        },
+        { signal },
+      ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     // Bounded refetch is the safety floor for the per-chat composite
     // signals projected onto each row: `busyAgentIds` lights the chat-list
     // dot for the working / codex-no-events case, and the only way the
-    // dot self-heals after a client crash is for a fresh `listMeChats`
-    // to discover `runtime_state_at` aged past `RUNTIME_STALE_MS` (60s)
-    // — the server emits no notification when staleness is reached
-    // passively. Without this interval the dot would stay lit forever
-    // until some unrelated invalidation. 30s matches the
-    // `chat-agent-status` query, so the first-page stuck-busy window is
-    // bounded by RUNTIME_STALE_MS (60s) + one refetch (30s) ≈ 90s upper.
+    // dot self-heals after a client crash is for a fresh `listMeChats` to
+    // discover `runtime_state_at` aged past `RUNTIME_STALE_MS` (60s) — the
+    // server emits no notification when staleness is reached passively. An
+    // infinite query refetches every loaded page on each interval, so every
+    // row (not just the first page) self-heals within `RUNTIME_STALE_MS` +
+    // one refetch (~90s). 30s matches the `chat-agent-status` query.
     refetchInterval: 30_000,
   });
 
-  // Mirror in an effect so a URL-only change (browser back/forward, deep
-  // link, parent-driven toggle) can't bleed previous-view rows into the
-  // new list. Identity-only deps; the body doesn't read them.
-  //
-  // `origin` and `participants` are arrays — their object identity changes
-  // on every render even when the contents are unchanged, which would
-  // re-fire the effect every paint. We collapse each into a stable string
-  // key (their canonical URL serialisation) so the effect only fires on
-  // actual content changes.
-  const originKey = origin.join(",");
-  const participantsKey = participants.join(",");
-  // biome-ignore lint/correctness/useExhaustiveDependencies: these are triggers, not reads
-  useEffect(() => {
-    setExtraPages((prev) => (prev.length > 0 ? [] : prev));
-    setMoreError(null);
-  }, [filter, engagement, watching, originKey, participantsKey]);
-
-  const baseRows = data?.rows ?? [];
-  // Render-time staleness sieve for extraPages: any row whose page was
-  // fetched > RUNTIME_STALE_MS (60s) ago has its `busyAgentIds` blanked.
-  // The check tracks the server's fail-closed window but the recompute
-  // cadence is bounded by react-query's refetchInterval (30s), so the
-  // real upper bound is `RUNTIME_STALE_MS + refetchInterval` ≈ 90s on
-  // extraPage rows specifically (vs ≤60s on the first page, which
-  // refetches directly). `dataUpdatedAt` (set on every successful
-  // refetch, even when content is structurally identical) is the time
-  // anchor — `baseRows` identity can stay stable across refetches when
-  // structural sharing kicks in, so depending on it alone would leave
-  // a memo that never re-evaluates `Date.now()` and an old extraPage
-  // row could keep flashing busy forever. Rationale: see the comment on
-  // the `extraPages` declaration.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: dataUpdatedAt is the time-tick that drives stale recomputation; not a value read
+  // Flatten every loaded page into one list, de-duplicating by chatId. A
+  // background refetch can pull a chat from a later page onto page 1 when it
+  // gets fresh activity, briefly leaving the same chatId on two pages until
+  // the tail refetches; keeping the first occurrence yields a duplicate-free
+  // list and a stable React key. No per-page staleness sieve is needed — the
+  // infinite query refetches every loaded page on `refetchInterval`, so each
+  // row's `busyAgentIds` is refreshed on the same cadence.
   const allRows = useMemo(() => {
-    const now = Date.now();
-    const expanded: MeChatRow[] = [];
-    for (const page of extraPages) {
-      const stale = now - page.fetchedAt > RUNTIME_STALE_MS;
-      for (const row of page.rows) {
-        expanded.push(stale && row.busyAgentIds.length > 0 ? { ...row, busyAgentIds: [] } : row);
+    const seen = new Set<string>();
+    const rows: MeChatRow[] = [];
+    for (const page of data?.pages ?? []) {
+      for (const chatRow of page.rows) {
+        if (seen.has(chatRow.chatId)) continue;
+        seen.add(chatRow.chatId);
+        rows.push(chatRow);
       }
     }
-    return [...baseRows, ...expanded];
-  }, [baseRows, extraPages, dataUpdatedAt]);
+    return rows;
+  }, [data]);
 
-  // Buckets are recomputed whenever the rows or group mode change.
-  // Day-rollover (a chat that was "Today" at 23:59 should drift into
-  // "Yesterday" after midnight) is handled implicitly by the 15 s
-  // `useQuery` refetch on the parent query — the refetched response
-  // changes `data.rows`' identity, which invalidates this memo. A
-  // user who leaves the rail open past midnight without a refetch
-  // (e.g. an inactive tab the browser throttles) won't see the bucket
-  // shift until the next refetch lands; that's an acceptable degree
-  // of staleness for a presentational concern.
+  // Bucket by recency against a fresh `now`. Row meta (`formatRowTime`:
+  // now / 5m / 3h) and the Today / Yesterday buckets are clock-derived, so
+  // they must re-evaluate on the 30s refetch cadence. TanStack Query
+  // structurally shares a structurally-identical successful response, so on a
+  // quiet list `data` (and thus `allRows`) keeps its identity across a refetch
+  // and neither this memo nor a render would otherwise fire. `dataUpdatedAt`
+  // advances on every successful refetch and is a tracked result field, so
+  // depending on it both forces a re-render (refreshing the inline
+  // `formatRowTime` calls) and re-runs this memo with a new `now`. A tab
+  // throttled past a refetch stays stale until the next one lands — acceptable
+  // for a presentational concern.
+  //
   // Hoist attention chats (failed + open request) into a pinned section at
   // the top WITHOUT touching cursor pagination or reordering the main list:
   // partition them out, group the rest as usual, then prepend a synthetic
   // "Needs attention" bucket (failed > request). A plain unread mention /
   // red dot deliberately does NOT pin, so the list stays stable. A chat
   // appears in exactly one place (pinned OR its normal group), never both.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `dataUpdatedAt` is the successful-refetch time tick — it re-runs this memo with a fresh `now` (and re-renders the clock-derived row times) even when the payload is structurally identical.
   const buckets = useMemo(() => {
+    const now = new Date();
     const { attention, rest } = splitAttentionRows(allRows);
-    if (attention.length === 0) return groupRows(allRows, group);
+    if (attention.length === 0) return groupRows(allRows, group, now);
     return [
       { key: "needs-attention", label: "Needs attention", rows: attention, defaultCollapsed: false },
-      ...groupRows(rest, group),
+      ...groupRows(rest, group, now),
     ];
-  }, [allRows, group]);
-
-  // Track the cursor for follow-up page loads. Mirrored from the latest
-  // base-query response: any background refetch resets `nextCursor` so the
-  // "Load more" button reflects the freshest tail.
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const baseCursor = data?.nextCursor ?? null;
-  useEffect(() => {
-    setNextCursor(baseCursor);
-  }, [baseCursor]);
-
-  const handleLoadMore = async (): Promise<void> => {
-    if (loadingMore) return;
-    const cursor = nextCursor;
-    if (!cursor) return;
-    setLoadingMore(true);
-    setMoreError(null);
-    try {
-      const next = await listMeChats({
-        filter,
-        engagement,
-        watching: watchingParam,
-        origin: originParam,
-        with: withParam,
-        cursor,
-      });
-      setExtraPages((prev) => [...prev, { fetchedAt: Date.now(), rows: next.rows }]);
-      setNextCursor(next.nextCursor);
-    } catch (err) {
-      setMoreError(err instanceof Error ? err.message : "Failed to load more");
-    } finally {
-      setLoadingMore(false);
-    }
-  };
+  }, [allRows, group, dataUpdatedAt]);
 
   const totalUnread = useMemo(() => allRows.reduce((acc, r) => acc + (r.unreadMentionCount > 0 ? 1 : 0), 0), [allRows]);
   const isDraftActive = selectedChatId === DRAFT_CHAT_ID;
@@ -460,7 +413,32 @@ export function ConversationList({
             Loading…
           </div>
         )}
-        {!isLoading && allRows.length === 0 && (
+        {/* A failed FIRST load (error with no data) surfaces an error + retry,
+            never falling through to the "No conversations yet" empty state.
+            `isLoadingError` (not `isError`) is deliberate: a failed background
+            refetch keeps the prior data, so gating on `isError` would flip a
+            legitimately-empty list into an error on a transient 30s-refetch blip. */}
+        {isLoadingError && allRows.length === 0 && (
+          <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
+            <p style={{ margin: 0 }}>{"Couldn't load conversations."}</p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="text-label cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
+              style={{
+                marginTop: "var(--sp-2)",
+                padding: "var(--sp-0_5) var(--sp-2)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
+                background: "var(--bg-sunken)",
+                color: "var(--fg-2)",
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {!isLoading && !isLoadingError && allRows.length === 0 && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             <p style={{ margin: 0 }}>{emptyCopy.title}</p>
             <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
@@ -584,12 +562,12 @@ export function ConversationList({
             </div>
           );
         })}
-        {nextCursor && allRows.length > 0 && (
+        {hasNextPage && allRows.length > 0 && (
           <div style={{ padding: "var(--sp-2) var(--sp-3)" }}>
             <button
               type="button"
-              onClick={handleLoadMore}
-              disabled={loadingMore}
+              onClick={() => fetchNextPage()}
+              disabled={isFetchingNextPage}
               className="w-full text-body mono"
               style={{
                 padding: "var(--sp-1_25) var(--sp-2)",
@@ -597,15 +575,23 @@ export function ConversationList({
                 borderRadius: "var(--radius-input)",
                 background: "var(--bg-sunken)",
                 color: "var(--fg-2)",
-                cursor: loadingMore ? "default" : "pointer",
-                opacity: loadingMore ? 0.6 : 1,
+                cursor: isFetchingNextPage ? "default" : "pointer",
+                opacity: isFetchingNextPage ? 0.6 : 1,
               }}
             >
-              {loadingMore ? "Loading…" : "Load more"}
+              {isFetchingNextPage ? "Loading…" : "Load more"}
             </button>
-            {moreError && (
+            {isFetchNextPageError && (
               <p className="mono text-caption" style={{ color: "var(--state-error)", marginTop: 4 }}>
-                {moreError}
+                {"Couldn't load more. "}
+                <button
+                  type="button"
+                  onClick={() => fetchNextPage()}
+                  className="cursor-pointer"
+                  style={{ border: 0, background: "transparent", padding: 0, color: "var(--primary)" }}
+                >
+                  Retry
+                </button>
               </p>
             )}
           </div>

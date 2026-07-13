@@ -1,6 +1,29 @@
 import type { Event } from "@sentry/react";
-import { describe, expect, it } from "vitest";
-import { resolveWebSentryConfig, sanitizeWebSentryEvent } from "../sentry.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureReactRootError, initWebSentry, resolveWebSentryConfig, sanitizeWebSentryEvent } from "../sentry.js";
+
+const sentryMocks = vi.hoisted(() => ({
+  captureException: vi.fn(),
+  init: vi.fn(),
+  isEnabled: vi.fn(),
+  setTag: vi.fn(),
+  withScope: vi.fn(),
+}));
+
+vi.mock("@sentry/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/react")>()),
+  captureException: sentryMocks.captureException,
+  init: sentryMocks.init,
+  isEnabled: sentryMocks.isEnabled,
+  setTag: sentryMocks.setTag,
+  withScope: sentryMocks.withScope,
+}));
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 describe("resolveWebSentryConfig", () => {
   it("defaults to enabled when a DSN is configured", () => {
@@ -22,6 +45,100 @@ describe("resolveWebSentryConfig", () => {
     } as ImportMetaEnv);
 
     expect(config.enabled).toBe(false);
+  });
+
+  it("normalizes explicit config values and rejects invalid sample rates", () => {
+    const config = resolveWebSentryConfig({
+      MODE: "development",
+      VITE_SENTRY_DSN: "  https://public@example.ingest.sentry.io/1  ",
+      VITE_SENTRY_ENABLED: "YES",
+      VITE_SENTRY_ENVIRONMENT: "  staging  ",
+      VITE_SENTRY_RELEASE: "  first-tree-web@custom  ",
+      VITE_SENTRY_TRACES_SAMPLE_RATE: "2",
+    } as ImportMetaEnv);
+
+    expect(config).toMatchObject({
+      enabled: true,
+      dsn: "https://public@example.ingest.sentry.io/1",
+      environment: "staging",
+      release: "first-tree-web@custom",
+      sampleRate: 0.1,
+    });
+  });
+
+  it("uses production only on the production host and accepts bounded sample rates", () => {
+    vi.stubGlobal("window", { location: { hostname: "cloud.first-tree.ai" } });
+
+    const config = resolveWebSentryConfig({
+      MODE: "development",
+      VITE_SENTRY_ENABLED: "1",
+      VITE_SENTRY_TRACES_SAMPLE_RATE: "0.75",
+    } as ImportMetaEnv);
+
+    expect(config.environment).toBe("production");
+    expect(config.sampleRate).toBe(0.75);
+  });
+});
+
+describe("initWebSentry", () => {
+  it("does not initialize when disabled or missing a DSN", () => {
+    vi.stubEnv("VITE_SENTRY_DSN", "");
+    vi.stubEnv("VITE_SENTRY_ENABLED", "true");
+
+    initWebSentry();
+
+    expect(sentryMocks.init).not.toHaveBeenCalled();
+  });
+
+  it("initializes Sentry with sanitizers and release tags", () => {
+    vi.stubEnv("VITE_SENTRY_DSN", "https://public@example.ingest.sentry.io/1");
+    vi.stubEnv("VITE_SENTRY_ENABLED", "true");
+    vi.stubEnv("VITE_SENTRY_ENVIRONMENT", "staging");
+    vi.stubEnv("VITE_SENTRY_RELEASE", "first-tree-web@sha");
+    vi.stubEnv("VITE_SENTRY_TRACES_SAMPLE_RATE", "0.5");
+
+    initWebSentry();
+
+    const options = sentryMocks.init.mock.calls[0]?.[0];
+    expect(options).toMatchObject({
+      dsn: "https://public@example.ingest.sentry.io/1",
+      environment: "staging",
+      release: "first-tree-web@sha",
+      tracesSampleRate: 0.5,
+      sendDefaultPii: false,
+      maxBreadcrumbs: 0,
+    });
+    expect(options?.beforeSend?.({ message: "Bearer secret-token" }).message).toBe("Bearer [REDACTED]");
+    expect(options?.beforeSendTransaction?.({ transaction: "/invite/raw-token?x=1" }).transaction).toBe(
+      "/invite/[token]",
+    );
+    expect(sentryMocks.setTag).toHaveBeenCalledWith("first_tree.surface", "web");
+    expect(sentryMocks.setTag).toHaveBeenCalledWith("first_tree.git_sha", "test");
+  });
+});
+
+describe("captureReactRootError", () => {
+  it("skips disabled Sentry clients", () => {
+    sentryMocks.isEnabled.mockReturnValue(false);
+
+    captureReactRootError(new Error("boom"), { componentStack: "stack" });
+
+    expect(sentryMocks.withScope).not.toHaveBeenCalled();
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+  });
+
+  it("captures enabled root errors with the React component stack", () => {
+    const setContext = vi.fn();
+    const error = new Error("boom");
+    sentryMocks.isEnabled.mockReturnValue(true);
+    sentryMocks.withScope.mockImplementation((callback: (scope: { setContext: typeof setContext }) => void) => {
+      callback({ setContext });
+    });
+
+    captureReactRootError(error, { componentStack: "at App" });
+
+    expect(setContext).toHaveBeenCalledWith("react", { componentStack: "at App" });
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(error);
   });
 });
 
@@ -108,5 +225,45 @@ describe("sanitizeWebSentryEvent", () => {
       refreshToken: "[REDACTED]",
     });
     expect(event.exception?.values?.[0]?.value).toBe("OAuth failed at /auth/github/complete");
+  });
+
+  it("scrubs arrays, non-string headers, relative routes, and invalid URLs", () => {
+    const rawEvent: Event = {
+      request: {
+        url: "/invite/local-token?access_token=secret",
+        headers: {
+          "x-count": "3",
+          "x-api-key": "secret",
+          cookie: "session=secret",
+        },
+      },
+      transaction: "not a url /auth/github/complete?code=secret",
+      extra: {
+        redirects: ["/invite/array-token?token=secret", { password: "secret", value: "Bearer nested-token" }, 42],
+      },
+      message: "send apiKey=secret and oauth_code=abc",
+    };
+    const event = sanitizeWebSentryEvent(rawEvent, {
+      enabled: true,
+      dsn: "https://public@example.ingest.sentry.io/1",
+      environment: "production",
+      release: "first-tree-web@test-sha",
+      buildId: "test-sha",
+      sampleRate: 0.1,
+    });
+
+    expect(event.request?.url).toBe("/invite/[token]");
+    expect(event.request?.headers).toEqual({
+      "x-count": "3",
+      "x-api-key": "[REDACTED]",
+      cookie: "[REDACTED]",
+    });
+    expect(event.transaction).toBe("/not%20a%20url%20/auth/github/complete");
+    expect(event.extra?.redirects).toEqual([
+      "/invite/[token]",
+      { password: "[REDACTED]", value: "Bearer [REDACTED]" },
+      42,
+    ]);
+    expect(event.message).toBe("send apiKey=[REDACTED] and oauth_code=[REDACTED]");
   });
 });

@@ -1,5 +1,6 @@
 import {
   AGENT_FINAL_TEXT_METADATA_KEY,
+  attachmentRefsFromMetadata,
   CLI_BODY_ORIGIN_METADATA_KEY,
   CLI_BODY_ORIGINS,
   extractCaption,
@@ -98,9 +99,10 @@ const PLACEHOLDER_BODY_SENTINELS = new Set(["placeholder", "todo", "fixme", "tbd
  * fallback) surfaces as an error the caller must fix instead of a meaningless
  * message — for a `request`, a blocking ask card the target human must skip.
  */
-function validateTextBody(content: string, isRequest: boolean): void {
+function validateTextBody(content: string, isRequest: boolean, allowEmptyWithAttachments = false): void {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
+    if (!isRequest && allowEmptyWithAttachments) return;
     throw new BadRequestError(
       isRequest
         ? "An ask ('request') needs a non-empty body — the question/background IS the message content."
@@ -167,7 +169,10 @@ function allowsCliEscapedNewlineBody(data: SendMessage, metadata: Record<string,
 // Structural param (not `SendMessage`) so the edit path can reuse it against
 // the effective post-edit `{ format, content }`, where `format` is a plain
 // string off the stored row.
-function validateMessageContent(data: { format: string; content: unknown }): void {
+function validateMessageContent(
+  data: { format: string; content: unknown },
+  opts?: { hasAttachmentRefs?: boolean },
+): void {
   if (data.format === "file") {
     validateFileContent(data.content);
     return;
@@ -175,7 +180,7 @@ function validateMessageContent(data: { format: string; content: unknown }): voi
   // Non-string content (card / reference object shapes) is out of scope here;
   // only string-bearing bodies are guarded against empty / placeholder sends.
   if (typeof data.content === "string") {
-    validateTextBody(data.content, data.format === "request");
+    validateTextBody(data.content, data.format === "request", opts?.hasAttachmentRefs === true);
   }
 }
 
@@ -226,6 +231,19 @@ export type SendMessageResult = {
   message: typeof messages.$inferSelect;
   /** Inbox IDs that received this message (for notification). */
   recipients: string[];
+  /**
+   * Present only when an internal caller explicitly defers effects until its
+   * own outer transaction commits. Pass this to
+   * `runDeferredSendMessagePostCommitEffects` exactly once after commit.
+   */
+  deferredPostCommitEffects?: DeferredSendMessagePostCommitEffects;
+};
+
+export type DeferredSendMessagePostCommitEffects = {
+  chatId: string;
+  messageId: string;
+  organizationId: string;
+  recipientAgentIds: string[];
 };
 
 export type SendMessageOptions = {
@@ -307,6 +325,14 @@ export type SendMessageOptions = {
    * `github-event-card.tsx#isTrustedGithubDispatcherMessage`.
    */
   allowSystemSender?: boolean;
+  /**
+   * Trusted-internal escape hatch for a send performed inside an existing
+   * outer database transaction. When enabled, session activation and the
+   * workspace kick are returned as a descriptor instead of running before
+   * that outer transaction commits. The caller MUST flush the descriptor
+   * with `runDeferredSendMessagePostCommitEffects` after commit.
+   */
+  deferPostCommitEffects?: boolean;
 };
 
 export type SendIntentParticipant = {
@@ -336,9 +362,11 @@ export function preflightMessageSendIntent(input: {
   const options = input.options ?? {};
   const { chatId, senderId, senderType, data, participants } = input;
 
-  validateMessageContent(data);
-
   const rawIncomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+  const hasAttachmentRefs = attachmentRefsFromMetadata(rawIncomingMeta).length > 0;
+
+  validateMessageContent(data, { hasAttachmentRefs });
+
   const allowEscapedNewlineBody = allowsCliEscapedNewlineBody(data, rawIncomingMeta);
 
   let effectiveContent: SendMessage["content"] = data.content;
@@ -357,7 +385,7 @@ export function preflightMessageSendIntent(input: {
   // what gets normalized and persisted, so guard it here too — before mention
   // normalization can salvage an empty body into a bare "@name".
   if (typeof effectiveContent === "string") {
-    validateTextBody(effectiveContent, data.format === "request");
+    validateTextBody(effectiveContent, data.format === "request", hasAttachmentRefs);
   }
 
   const incomingMeta = stripUntrustedMetadataKeys(rawIncomingMeta, options);
@@ -554,7 +582,7 @@ export async function sendMessage(
   data: SendMessage,
   options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
-  validateMessageContent(data);
+  validateMessageContent(data, { hasAttachmentRefs: attachmentRefsFromMetadata(data.metadata).length > 0 });
   return withSpan("inbox.enqueue", messageAttrs({ chatId, senderAgentId: senderId, source: data.source }), () =>
     sendMessageInner(db, chatId, senderId, data, options),
   );
@@ -906,36 +934,58 @@ async function sendMessageInner(
     };
   });
 
-  // Predictive session-state activation: after the main transaction commits,
-  // best-effort upsert an `active` agent_chat_sessions row for every notify=true
-  // recipient so the First Tree UI list refreshes immediately on send (see M-plan
-  // §8 R7 / §5 invariant #2 — notifier=undefined keeps NOTIFY scoped to First Tree UI,
-  // touchPresenceLastSeen=false avoids polluting the client's heartbeat).
-  // Failure is logged but never thrown: the message is durable, and the
-  // client's later `session:state: active` frame self-heals the row.
+  const postCommitEffects: DeferredSendMessagePostCommitEffects = {
+    chatId,
+    messageId: txResult.message.id,
+    organizationId: txResult.organizationId,
+    recipientAgentIds: txResult.recipientAgentIds,
+  };
+  if (!options.deferPostCommitEffects) {
+    await runDeferredSendMessagePostCommitEffects(db, postCommitEffects);
+  }
+
+  return {
+    message: txResult.message,
+    recipients: txResult.recipients,
+    ...(options.deferPostCommitEffects ? { deferredPostCommitEffects: postCommitEffects } : {}),
+  };
+}
+
+/**
+ * Run the non-transactional effects for a durable message. Ordinary sends call
+ * this immediately after their own transaction commits. A caller that sent
+ * through an existing outer transaction uses the deferred descriptor and
+ * invokes this helper only after that outer transaction has committed.
+ */
+export async function runDeferredSendMessagePostCommitEffects(
+  db: Database,
+  effects: DeferredSendMessagePostCommitEffects,
+): Promise<void> {
+  // Predictive session-state activation: best-effort upsert an `active`
+  // agent_chat_sessions row for every notify=true recipient so the First Tree
+  // UI list refreshes immediately on send. Failure is logged but never thrown:
+  // the message is durable, and a later session-state frame self-heals the row.
   const settled = await Promise.allSettled(
-    txResult.recipientAgentIds.map((agentId) =>
-      upsertSessionState(db, agentId, chatId, "active", txResult.organizationId, undefined, {
+    effects.recipientAgentIds.map((agentId) =>
+      upsertSessionState(db, agentId, effects.chatId, "active", effects.organizationId, undefined, {
         touchPresenceLastSeen: false,
       }),
     ),
   );
   for (let i = 0; i < settled.length; i++) {
-    const r = settled[i];
-    if (r?.status === "rejected") {
+    const result = settled[i];
+    if (result?.status === "rejected") {
       log.error(
-        { err: r.reason, chatId, agentId: txResult.recipientAgentIds[i] },
+        { err: result.reason, chatId: effects.chatId, agentId: effects.recipientAgentIds[i] },
         "predictive session activation failed",
       );
     }
   }
 
   // Best-effort chat-first workspace kick — speakers also get the existing
-  // inbox NOTIFY; this is what reaches watcher rows (no inbox entry → no
-  // wake-up otherwise). Failure is dropped; web reconnect refetches.
-  fireChatMessageKick(chatId, txResult.message.id);
-
-  return { message: txResult.message, recipients: txResult.recipients };
+  // inbox NOTIFY; this reaches watcher rows with no inbox entry. Failure is
+  // dropped; web reconnect refetches.
+  fireChatMessageKick(effects.chatId, effects.messageId);
 }
 
 /**
@@ -1010,7 +1060,10 @@ export async function editMessage(
       senderType: senderRow.type,
       content: data.content,
     });
-    validateMessageContent({ format: data.format ?? msg.format, content: effectiveContent });
+    validateMessageContent(
+      { format: data.format ?? msg.format, content: effectiveContent },
+      { hasAttachmentRefs: attachmentRefsFromMetadata(msg.metadata ?? undefined).length > 0 },
+    );
     setClause.content = effectiveContent;
   }
 

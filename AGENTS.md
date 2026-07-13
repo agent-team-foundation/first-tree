@@ -38,7 +38,7 @@ Full CLI commands and env vars live in [docs/cli-reference.md](docs/cli-referenc
 ## Required Reading By Topic
 
 - **HTTP routes, JWT auth, scope helpers, or multi-org behavior:** read [docs/development/http-path-conventions.md](docs/development/http-path-conventions.md) before editing. It is the single source of truth.
-- **Onboarding kickoff/chat-start behavior:** read [docs/development/onboarding-kickoff-contract.md](docs/development/onboarding-kickoff-contract.md) before editing `/me/onboarding/kickoff`, `/me/onboarding/tree-setup/kickoff`, or the client inbound prompt formatting.
+- **Onboarding kickoff/chat-start behavior:** read [docs/development/onboarding-kickoff-contract.md](docs/development/onboarding-kickoff-contract.md) before editing `/me/onboarding/kickoff`, `/orgs/:orgId/context-tree/setup-chat`, or the client inbound prompt formatting.
 - **Running an in-tree CLI next to prod/staging:** use `scripts/dev-install.sh` and read [docs/development/local-dev-isolation.md](docs/development/local-dev-isolation.md).
 
 ## Repo-Local Skills

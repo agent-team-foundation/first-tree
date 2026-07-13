@@ -259,16 +259,19 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   // their primary local-execution surface. Landing campaign trials are forced
   // through the app-server handler, which supplies a custom managed permissions
   // profile instead of this SDK-only legacy sandbox field.
+  const reasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
     sandboxMode: "danger-full-access",
     approvalPolicy: "never",
     // Operator-configured reasoning effort. Defaults to "high" (the value this
-    // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
-    // is a subset of the SDK's ModelReasoningEffort and deliberately omits
-    // "minimal", which is incompatible with the default tool set (footgun F3).
-    modelReasoningEffort: payload.kind === "codex" ? payload.reasoningEffort : "high",
+    // previously hard-coded). Codex CLI/app-server 0.144.1 accepts the newer
+    // provider-native "max" and "ultra" values, but the SDK's TypeScript union
+    // still stops at "xhigh" even though its runtime serializer forwards the
+    // literal as `model_reasoning_effort`. Keep this assertion isolated at the
+    // third-party boundary until the upstream declaration catches up.
+    modelReasoningEffort: reasoningEffort as ThreadOptions["modelReasoningEffort"],
     webSearchEnabled: false,
     additionalDirectories,
   };

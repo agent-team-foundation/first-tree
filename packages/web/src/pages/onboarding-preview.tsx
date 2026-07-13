@@ -47,11 +47,12 @@ const ORG_ID = "org-acme";
 const TEAM_NAME = "Gandy's team";
 const TREE_URL = "https://github.com/acme/context-tree";
 const DEFAULT_AGENT_NAME = "gandy assistant";
-// Mirror the real prod bootstrap shape (server fills the channel's actual
-// package + bin name — `first-tree` on prod; see api/me.ts) so the gallery
-// reads true for design review instead of showing literal <package>/<binName>
-// placeholders a real user never sees.
-const SAMPLE_CLI = "npm install -g first-tree\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
+// Mirror the real prod bootstrap shape (server fills the channel's installer
+// URL + bin name — `first-tree` on prod; see api/me.ts) so the gallery reads
+// true for design review instead of showing placeholders a real user never sees.
+const SAMPLE_CLI =
+  "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+  "~/.local/bin/first-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 const GITHUB_ACCESS_GROUP = "GitHub access states";
 
 const NOW_ISO = new Date().toISOString();
@@ -395,13 +396,6 @@ type WizardSpec = {
    * status appears. Mirrors the per-tab key StepConnectCode sets.
    */
   seedInstallAttempt?: boolean;
-  /**
-   * Render connect-computer in its "stuck" state so the Node.js recovery line
-   * appears. The real state is gated on a 75s internal timer (STUCK_AFTER_MS)
-   * that fixtures can't force, so the preview seeds it directly via
-   * StepConnectComputer's `initialStuck` prop.
-   */
-  connectStuck?: boolean;
 };
 
 // Per-tab marker StepConnectCode reads to detect "came back without an install"
@@ -499,14 +493,6 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.readyMulti } },
   },
-  {
-    id: "admin-cc-stuck",
-    label: "Waiting · Node.js hint",
-    group: "Connect-computer states",
-    role: "admin",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
-  },
-
   {
     id: "admin-ca-form",
     label: "Create agent",
@@ -834,14 +820,14 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
   };
 }
 
-function StepBody({ step, connectStuck }: { step: PreviewStepId; connectStuck?: boolean }): ReactNode {
+function StepBody({ step }: { step: PreviewStepId }): ReactNode {
   switch (step) {
     case "create-team":
       return <StepTeam />;
     case "connect-code":
       return <StepConnectCode />;
     case "connect-computer":
-      return <StepConnectComputer initialStuck={connectStuck} />;
+      return <StepConnectComputer />;
     case "create-agent":
       return <StepCreateAgent />;
     case "start-chat":
@@ -941,7 +927,7 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   };
 
   const Shell = OnboardingShell;
-  const body = spec.body ?? <StepBody step={spec.step} connectStuck={spec.connectStuck} />;
+  const body = spec.body ?? <StepBody step={spec.step} />;
 
   return (
     <QueryClientProvider client={queryClient}>

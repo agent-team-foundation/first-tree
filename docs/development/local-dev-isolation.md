@@ -2,8 +2,8 @@
 
 This repo's CLI is a long-running background service on the developer's
 machine. Most of us run prod (`first-tree`) or staging
-(`first-tree-staging`) somewhere — installed globally via npm and kept
-alive by systemd / launchd / Task Scheduler. The in-tree dev build must
+(`first-tree-staging`) somewhere — installed through the channel's shell
+installer and kept alive by systemd / launchd. The in-tree dev build must
 coexist with both without touching their state.
 
 The multi-env split (see [`MIGRATION.md`](../../MIGRATION.md) Phase 2)
@@ -17,8 +17,8 @@ already have.
 | Channel | Install via | Bin | Default home | Supervisor identifier |
 |---|---|---|---|---|
 | dev | `scripts/dev-install.sh` (in-tree, symlinked) | `first-tree-dev` / `ftd` | `~/.first-tree-dev/` | `first-tree-dev.service` / `\FirstTree\first-tree-dev` |
-| staging | `npm i -g first-tree-staging` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` / `\FirstTree\first-tree-staging` |
-| prod | `npm i -g first-tree` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` / `\FirstTree\first-tree` |
+| staging | `curl -fsSL https://download.first-tree.ai/releases/staging/install.sh \| sh` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` / `\FirstTree\first-tree-staging` |
+| prod | `curl -fsSL https://download.first-tree.ai/releases/prod/install.sh \| sh` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` / `\FirstTree\first-tree` |
 
 Each install registers as a separate `clientId` on whichever server it
 connects to (dev → local server, staging → `dev.cloud.first-tree.ai`,
@@ -93,22 +93,28 @@ If you need to swap dev for staging without `git pull`, install staging
 side-by-side:
 
 ```bash
-npm i -g first-tree-staging
-first-tree-staging login <staging-token>
+curl -fsSL https://download.first-tree.ai/releases/staging/install.sh | sh
+```
+
+After the installer completes successfully, sign in with the staging binary:
+
+```bash
+~/.local/bin/first-tree-staging login <connect-code>
 # now both `first-tree-dev daemon status` and `first-tree-staging daemon status` work
 ```
 
 ## When to use which install
 
 - **`scripts/dev-install.sh`** — actively iterating on CLI / client /
-  shared code. Build is local, no server or npm upgrade round-trip.
+  shared code. Build is local, with no hosted release round-trip.
   `upgrade` short-circuits because `detectInstallMode()` returns
   `"source"`.
 - **Direct `pnpm --filter ... dev`** — running parts of the system in
   isolation (server-only, web-only) where you don't need the full CLI
   surface. `tsx` runs against source.
-- **`npm i -g first-tree-staging`** — when you want to test against the
-  exact bits that team members run. Coexists with dev install; data
+- **The staging shell installer** — when you want to test the exact portable
+  bits that team members run. It coexists with the dev install; binaries live
+  under `~/.local/bin`, release data has its own staging prefix, and client data
   stays in `~/.first-tree-staging/`.
 
 ## What `dev-install.sh` does NOT isolate
@@ -116,11 +122,12 @@ first-tree-staging login <staging-token>
 - The PostgreSQL database. The server uses one shared DB by default. If
   you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
   use a separate DB URL via `FIRST_TREE_DATABASE_URL`.
-- Global npm packages. If you have both staging and prod installed,
-  upgrading either (e.g. via `first-tree-staging upgrade`) follows that
-  channel's configured server target and affects your machine-wide install.
-  `--latest` bypasses the server and goes directly to npm. Dev is immune
-  because its source-checkout install mode short-circuits the upgrade path.
+- Hosted-channel release data. If you have both staging and prod portable
+  installs, upgrading either (for example, via `first-tree-staging upgrade`)
+  follows that channel's configured server target and updates only that
+  channel's portable prefix. Existing legacy npm-mode installs retain their
+  machine-wide global npm update behavior. Dev is immune because its
+  source-checkout install mode short-circuits the upgrade path.
 
 ## Tearing down a dev install
 

@@ -1,5 +1,48 @@
-import { describe, expect, it } from "vitest";
-import { extractChannel, extractGrowthLandingPagesEnabled } from "../use-server-channel.js";
+// @vitest-environment happy-dom
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { api } from "../../api/client.js";
+import {
+  extractChannel,
+  extractGrowthLandingPagesEnabled,
+  useGrowthLandingPagesEnabled,
+  useGrowthLandingPagesState,
+  useServerChannelState,
+} from "../use-server-channel.js";
+
+vi.mock("../../api/client.js", () => ({
+  api: {
+    get: vi.fn(),
+  },
+}));
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+Object.assign(window, { IS_REACT_ACT_ENVIRONMENT: true });
+
+type ObservedBootstrap = {
+  channel: ReturnType<typeof useServerChannelState>;
+  growth: ReturnType<typeof useGrowthLandingPagesState>;
+  growthEnabled: boolean;
+};
+
+let root: Root | null = null;
+let queryClient: QueryClient | null = null;
+
+afterEach(() => {
+  if (root) {
+    act(() => root?.unmount());
+    root = null;
+  }
+  queryClient?.clear();
+  queryClient = null;
+  document.body.innerHTML = "";
+  vi.clearAllMocks();
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  Object.assign(window, { IS_REACT_ACT_ENVIRONMENT: true });
+});
 
 /**
  * Pure-function unit tests for public bootstrap-config probes. The hook wires
@@ -40,3 +83,64 @@ describe("extractGrowthLandingPagesEnabled", () => {
     expect(extractGrowthLandingPagesEnabled({ growthLandingPagesEnabled: 1 })).toBe(false);
   });
 });
+
+describe("server bootstrap hooks", () => {
+  it("reads channel and growth flags from the public bootstrap config", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ channel: "staging", growthLandingPagesEnabled: true });
+
+    const observed = await renderBootstrapProbe();
+
+    expect(api.get).toHaveBeenCalledWith("/bootstrap/config");
+    expect(observed.channel).toEqual({ channel: "staging", settled: true });
+    expect(observed.growth).toEqual({ enabled: true, settled: true });
+    expect(observed.growthEnabled).toBe(true);
+  });
+
+  it("settles to safe defaults when the bootstrap config request fails", async () => {
+    vi.mocked(api.get).mockRejectedValueOnce(new Error("bootstrap unavailable"));
+
+    const observed = await renderBootstrapProbe();
+
+    expect(observed.channel).toEqual({ channel: null, settled: true });
+    expect(observed.growth).toEqual({ enabled: false, settled: true });
+    expect(observed.growthEnabled).toBe(false);
+  });
+});
+
+async function renderBootstrapProbe(): Promise<ObservedBootstrap> {
+  const observedRef: { current: ObservedBootstrap | null } = { current: null };
+
+  function Probe(): null {
+    observedRef.current = {
+      channel: useServerChannelState(),
+      growth: useGrowthLandingPagesState(),
+      growthEnabled: useGrowthLandingPagesEnabled(),
+    };
+    return null;
+  }
+
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+  queryClient = client;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+
+  await act(async () => {
+    root?.render(createElement(QueryClientProvider, { client }, createElement(Probe)));
+  });
+
+  for (let i = 0; i < 10; i += 1) {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    const observed = observedRef.current;
+    if (observed?.channel.settled && observed.growth.settled) return observed;
+  }
+  throw new Error("server bootstrap probe did not settle");
+}

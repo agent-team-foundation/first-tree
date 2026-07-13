@@ -295,6 +295,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? ["agent-1"],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? true,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -598,8 +600,14 @@ function createClient(): QueryClient {
       topic: "Launch planning",
     },
   ]);
-  queryClient.setQueryData(["me", "chats", "all", "active", false, null, null], {
-    rows: [
+  // The rail reads via `useInfiniteQuery`, so seed the `InfiniteData` shape.
+  const meInfinite = (rows: ReturnType<typeof chatRow>[]) => ({
+    pages: [{ rows, nextCursor: null }],
+    pageParams: [undefined],
+  });
+  queryClient.setQueryData(
+    ["me", "chats", "all", "active", false, null, null],
+    meInfinite([
       chatRow(),
       chatRow({
         chatId: "chat-2",
@@ -609,22 +617,21 @@ function createClient(): QueryClient {
         unreadMentionCount: 0,
         busyAgentIds: [],
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
         engagementStatus: "archived",
         lastMessageAt: "2026-05-27T09:00:00.000Z",
         lastMessagePreview: "Looks good.",
       }),
-    ],
-    nextCursor: null,
-  });
+    ]),
+  );
   // The triad is single-select: rendering with both `unread` + `watching`
   // canonicalizes to Unread, so the component requests watchingParam=false
   // (the 5th key slot) even though the smoke render passes both.
-  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], {
-    rows: [chatRow()],
-    nextCursor: null,
-  });
-  queryClient.setQueryData(["me", "chats", "all", "archived", false, null, null], {
-    rows: [
+  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], meInfinite([chatRow()]));
+  queryClient.setQueryData(
+    ["me", "chats", "all", "archived", false, null, null],
+    meInfinite([
       chatRow({
         chatId: "chat-2",
         title: "Archived design review",
@@ -633,11 +640,12 @@ function createClient(): QueryClient {
         unreadMentionCount: 0,
         busyAgentIds: [],
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
         engagementStatus: "archived",
       }),
-    ],
-    nextCursor: null,
-  });
+    ]),
+  );
   queryClient.setQueryData(["chat-detail", "chat-1"], chatDetail());
   queryClient.setQueryData(["chat-messages-cache", "chat-1"], CHAT_MESSAGES.items.slice(0, 1));
   queryClient.setQueryData(["chat-messages", "chat-1"], CHAT_MESSAGES);
@@ -750,7 +758,9 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
       okRuntimes: ["claude-code", "codex"],
       selectedRuntime: "claude-code",
       setSelectedRuntime: () => undefined,
-      cliCommand: "npm install -g first-tree\nfirst-tree login connect-token",
+      cliCommand:
+        "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+        "~/.local/bin/first-tree login connect-token",
       tokenError: null,
       retry: () => undefined,
     },
@@ -1220,9 +1230,17 @@ describe("page SSR smoke coverage", () => {
     );
 
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
-    expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, createClient())).toContain(
-      "Participants",
+    const narrowRendered = renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" narrow />, createClient());
+    expect(narrowRendered).toContain("Hide chat options");
+    expect(narrowRendered).toContain("Participants");
+    expect(narrowRendered).toContain("GitHub");
+
+    const mobileRendered = renderWithClient(
+      <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" />,
+      createClient(),
     );
+    expect(mobileRendered).toContain("Show chat options");
+    expect(mobileRendered).not.toContain("Participants");
   });
 
   it("renders onboarding steps and reusable onboarding UI states", async () => {
@@ -1238,7 +1256,12 @@ describe("page SSR smoke coverage", () => {
 
     const html = renderPage(
       <>
-        <CommandBox command="npm install -g first-tree\nfirst-tree login token" />
+        <CommandBox
+          command={
+            "curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh\n" +
+            "~/.local/bin/first-tree login token"
+          }
+        />
         <FlowNote tone="info">Heads up</FlowNote>
         <StatusRow state="waiting" label="Waiting now" />
         <StatusRow state="ok" label="Connected now" />

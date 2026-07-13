@@ -17,9 +17,8 @@ and you can leave and resume later. This page mirrors that flow.
 ## Before you start
 
 - A **GitHub account** to sign in with.
-- A macOS or Linux computer where your agent will run. The default portable
-  install bundles Node.js, so Node does not need to be installed separately.
-  If you choose the npm fallback path, that machine needs Node.js ≥ 22.13.
+- A macOS or Linux computer where your agent will run. The shell installer
+  bundles Node.js, so Node does not need to be installed separately.
 
 ## 1. Sign in and name your team
 
@@ -33,14 +32,21 @@ Your agent runs on a real machine, so the next step links one to your team.
 Copy the command the page shows and run it in a terminal on that machine:
 
 ```bash
-# Use the exact command from the page; production portable installs have this shape:
 curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ~/.local/bin/first-tree login <connect-code>
 ```
 
-This installs the CLI and signs the computer in. The npm global install path
-(`npm install -g first-tree`) remains available for operators and fallback
-installs, but it uses your system Node runtime. `first-tree login`:
+This is the exact command for hosted production. Use the command from the
+page for staging or a self-hosted deployment: it selects the correct installer,
+binary, and server URL. The explicit `~/.local/bin` path works before a shell
+reload adds that directory to `PATH`.
+
+The first line streams the installer to `sh`; the second line signs the
+computer in. They are intentionally independent and do not provide shell-level
+transaction protection: when pasted together, an install-line failure does not
+automatically prevent the login line from running, and POSIX `sh` does not
+guarantee that `curl | sh` preserves a `curl` failure status.
+`first-tree login`:
 
 - Exchanges the short connect code against the CLI channel's default server
   URL. Use `FIRST_TREE_SERVER_URL` for a custom deployment. Connect URLs are

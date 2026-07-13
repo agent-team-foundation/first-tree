@@ -87,18 +87,13 @@ export const kickoffOnboardingSchema = z
 export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
 
 /**
- * Body for `POST /me/onboarding/tree-setup/kickoff` — the dedicated Context
- * Tree setup chat. Kept separate from the first-chat kickoff so that tree setup
- * has an org-level idempotency key and no intro/work/tree discriminator leaks
- * into the general onboarding chat contract.
+ * Body for `POST /orgs/:orgId/context-tree/setup-chat` — the dedicated Context
+ * Tree setup chat. Organization scope comes from the route, and tree setup
+ * never changes onboarding completion state.
  */
 export const treeSetupKickoffSchema = z
   .object({
-    organizationId: z.string().min(1),
     agentUuid: z.string().min(1),
-    bootstrap: z.string().min(1),
-    topic: z.string().trim().min(1).max(120).optional(),
-    complete: z.boolean().optional(),
   })
   .strict();
 export type TreeSetupKickoff = z.infer<typeof treeSetupKickoffSchema>;

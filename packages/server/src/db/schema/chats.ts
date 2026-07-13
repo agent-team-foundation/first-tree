@@ -54,11 +54,28 @@ export const chats = pgTable(
      */
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     lastMessagePreview: text("last_message_preview"),
+    /**
+     * Work-activity timestamp — the conversation list's recency sort key.
+     * Advances on real work: a new message, or a genuine `description` change
+     * (see `chat-projection.ts` / `updateChatMetadata`); NOT on topic rename,
+     * read/unread, pin, archive, participant changes, or runtime busy/idle — so
+     * the rail floats a chat only when its work actually moved, not on transient
+     * signals. Initialised to the row's creation time (`defaultNow()`), so a
+     * brand-new chat with no messages still sorts by when it was created;
+     * existing rows are backfilled to
+     * `max(last_message_at, description_updated_at, created_at)`.
+     */
+    activityAt: timestamp("activity_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index("idx_chats_org_last_message").on(table.organizationId, desc(table.lastMessageAt)),
+    /**
+     * Recency sort for the conversation list — `(org, activity_at DESC)` matches
+     * the `listMeChats` ORDER BY once it sorts by activity (server-ordering PR).
+     */
+    index("idx_chats_org_activity").on(table.organizationId, desc(table.activityAt)),
     uniqueIndex("uq_chats_onboarding_kickoff_key").on(table.onboardingKickoffKey),
   ],
 );

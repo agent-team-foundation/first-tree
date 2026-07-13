@@ -44,6 +44,8 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -73,6 +75,8 @@ const ATTENTION_ROWS: MeChatRow[] = [
     participants: [NOVA],
     unreadMentionCount: 1,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
     lastMessageAt: minutesAgo(6),
     lastMessagePreview: "baixiaohang: please review the tag plan.",
   }),
@@ -86,6 +90,8 @@ const NORMAL_ROWS: MeChatRow[] = [
     participants: [DESIGN],
     unreadMentionCount: 2,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
     lastMessageAt: minutesAgo(12),
     lastMessagePreview: "baixiaohang: can you take a look at the second variant?",
   }),
@@ -136,6 +142,8 @@ const NORMAL_ROWS: MeChatRow[] = [
     participants: [NOVA, DESIGN, RESEARCH],
     unreadMentionCount: 5,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
     lastMessageAt: minutesAgo(70),
     lastMessagePreview: "research: cut RC2?",
   }),
@@ -218,7 +226,9 @@ function seededClient(): QueryClient {
       },
     },
   });
-  const page = (rows: MeChatRow[]) => ({ rows, nextCursor: null });
+  // `ConversationList` reads via `useInfiniteQuery`, so seeded cache entries
+  // must be the `InfiniteData` shape (`{ pages, pageParams }`).
+  const page = (rows: MeChatRow[]) => ({ pages: [{ rows, nextCursor: null }], pageParams: [undefined] });
   // Triad views — keys mirror `ConversationList`'s queryKey shape exactly:
   // ["me","chats", filter, engagement, watching, origin, with].
   client.setQueryData(["me", "chats", "all", "active", false, null, null], page(ACTIVE_ALL));

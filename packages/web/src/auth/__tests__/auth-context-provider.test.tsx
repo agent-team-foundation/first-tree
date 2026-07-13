@@ -109,6 +109,11 @@ function createStorage(): Storage {
   };
 }
 
+function tokenWithPayload(payload: unknown): string {
+  const encoded = btoa(JSON.stringify(payload)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `header.${encoded}.signature`;
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -184,6 +189,66 @@ describe("AuthProvider", () => {
     expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
     expect(latestAuth?.role).toBe("member");
     expect(flagsMocks.clearOnboardingJoinPath).toHaveBeenCalled();
+  });
+
+  it("preseeds the selected organization from the stored token subject before /me settles", async () => {
+    localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+
+    await renderAuth();
+
+    expect(apiMocks.setApiSelectedOrganizationId.mock.calls[0]?.[0]).toBe("org-2");
+    expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
+  });
+
+  it("ignores unreadable persisted organization storage and rolls back failed dismiss", async () => {
+    const throwingStorage = {
+      get length() {
+        return 0;
+      },
+      clear: () => undefined,
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      key: () => null,
+      removeItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    } satisfies Storage;
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: throwingStorage });
+    Object.defineProperty(window, "localStorage", { configurable: true, value: throwingStorage });
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    apiMocks.apiGet.mockResolvedValueOnce({
+      user: { id: "user-1", username: "gandy", displayName: "Gandy", avatarUrl: null },
+      memberships: [
+        {
+          ...MEMBERSHIPS[0],
+          onboardingSuppressedAt: "2026-05-01T00:00:00.000Z",
+          onboardingSuppressedReason: "finish_later",
+        },
+      ],
+      defaultOrganizationId: "org-1",
+      onboarding: { step: "create_agent", dismissedAt: null, completedAt: null },
+    });
+
+    await renderAuth();
+    apiMocks.apiPatch.mockRejectedValueOnce(new Error("network"));
+    await act(async () => {
+      await latestAuth?.dismissOnboarding();
+    });
+
+    expect(apiMocks.setApiSelectedOrganizationId).toHaveBeenCalledWith(null);
+    expect(latestAuth?.onboardingDismissedAt).toBe("2026-05-01T00:00:00.000Z");
+    expect(latestAuth?.currentMembership?.onboardingSuppressedReason).toBe("finish_later");
   });
 
   it("does not fall back to another membership's onboarding stamps when selected membership stamps are null", async () => {
