@@ -30,7 +30,7 @@ function decodeTarget(target: string): string {
 }
 
 function isWindowsAbsoluteTarget(target: string): boolean {
-  return /^[a-z]:[\\/]/iu.test(target) || /^\\\\[^\\]+\\[^\\]+/u.test(target);
+  return /^[a-z]:[\\/]/iu.test(target) || /^\\/u.test(target);
 }
 
 export function isTreeLocalTarget(target: string): boolean {

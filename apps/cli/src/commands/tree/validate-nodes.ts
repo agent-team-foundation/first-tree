@@ -193,6 +193,16 @@ export function collectNodeValidationFindings(treeRoot: string): NodeValidationR
   for (const file of content.files) {
     scannedByContentClass[file.contentClass] += 1;
 
+    if (file.unresolved) {
+      addFinding(
+        findings,
+        VALIDATION_CODES.markdownFileSymlinkBroken,
+        file.relativePath,
+        "Markdown file symlink target cannot be resolved",
+      );
+      continue;
+    }
+
     if (file.escaped) {
       addFinding(
         findings,

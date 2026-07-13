@@ -91,6 +91,50 @@ describe("tree verify strict content policy", () => {
     );
   });
 
+  it("rejects dangling Markdown symlinks before content-class skips", (ctx) => {
+    const root = makeValidTree();
+    write(join(root, "raw-context", "placeholder.md"), "archive\n");
+    try {
+      symlinkSync("missing.md", join(root, "dangling.md"));
+      symlinkSync("missing.md", join(root, "raw-context", "dangling.md"));
+      symlinkSync("missing.md", join(root, "AGENTS.md"));
+      symlinkSync("missing.md", join(root, "WHITEPAPER.md"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const findings = verifyTreeRoot(root).findings;
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "TREE_MARKDOWN_FILE_SYMLINK_BROKEN", path: "dangling.md" }),
+        expect.objectContaining({
+          code: "TREE_MARKDOWN_FILE_SYMLINK_BROKEN",
+          path: "raw-context/dangling.md",
+        }),
+        expect.objectContaining({ code: "TREE_MARKDOWN_FILE_SYMLINK_BROKEN", path: "AGENTS.md" }),
+      ]),
+    );
+    expect(findings.some((finding) => finding.path === "WHITEPAPER.md")).toBe(false);
+  });
+
+  it("reports a dangling root NODE.md symlink precisely", (ctx) => {
+    const root = makeValidTree();
+    rmSync(join(root, "NODE.md"));
+    try {
+      symlinkSync("missing.md", join(root, "NODE.md"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const summary = verifyTreeRoot(root);
+
+    expect(summary.findings).toContainEqual(
+      expect.objectContaining({ code: "TREE_MARKDOWN_FILE_SYMLINK_BROKEN", path: "NODE.md" }),
+    );
+    expect(summary.checks.rootNodeFrontmatter.errors).toEqual(["Root NODE.md symlink target cannot be resolved."]);
+  });
+
   it("rejects escaping archive and repo-infra Markdown symlinks before class skips", (ctx) => {
     const root = makeValidTree();
     const outside = makeTempDir();
@@ -148,6 +192,7 @@ describe("tree verify strict content policy", () => {
     write(join(outside, "NODE.md"), node("Outside"));
     try {
       symlinkSync("system", join(root, "system-alias"), "dir");
+      symlinkSync("system", join(root, "WHITEPAPER.md"), "dir");
       symlinkSync(outside, join(root, "outside-alias"), "dir");
     } catch {
       ctx.skip("Symlink creation is not supported in this environment.");
@@ -162,6 +207,10 @@ describe("tree verify strict content policy", () => {
         expect.objectContaining({
           code: "TREE_DIRECTORY_SYMLINK_PATH_ESCAPE",
           path: "outside-alias",
+        }),
+        expect.objectContaining({
+          code: "TREE_DIRECTORY_SYMLINK_UNSUPPORTED",
+          path: "WHITEPAPER.md",
         }),
       ]),
     );
@@ -284,12 +333,16 @@ describe("tree verify strict content policy", () => {
 
   it("treats Windows drive and UNC absolute paths as escaping tree-local targets", () => {
     const root = makeValidTree();
-    write(join(root, "system", "links.md"), node("Links", "[drive](C:/outside.md)\n"));
+    write(join(root, "system", "links.md"), node("Links", "[drive](C:/outside.md)\n[root-relative](\\outside.md)\n"));
 
-    expect(verifyTreeRoot(root).findings).toContainEqual(
-      expect.objectContaining({ code: "TREE_MARKDOWN_LINK_PATH_ESCAPE", target: "C:/outside.md" }),
+    expect(verifyTreeRoot(root).findings).toEqual(
+      expect.arrayContaining(
+        ["C:/outside.md", "\\outside.md"].map((target) =>
+          expect.objectContaining({ code: "TREE_MARKDOWN_LINK_PATH_ESCAPE", target }),
+        ),
+      ),
     );
-    for (const target of ["C:/outside.md", "C:\\outside.md", "\\\\server\\share\\outside.md"]) {
+    for (const target of ["C:/outside.md", "C:\\outside.md", "\\outside.md", "\\\\server\\share\\outside.md"]) {
       expect(
         resolveLocalTreeTarget({ sourcePath: "system/links.md", target, treeRoot: root, softLink: false }),
       ).toMatchObject({ escaped: true, exists: false });

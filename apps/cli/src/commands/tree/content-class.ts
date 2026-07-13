@@ -13,6 +13,7 @@ export type ContextMarkdownFile = {
   contentClass: ContextContentClass;
   escaped: boolean;
   relativePath: string;
+  unresolved: boolean;
 };
 
 export type ContextDirectorySymlink = {
@@ -111,6 +112,20 @@ export function collectContextMarkdownContent(treeRoot: string): ContextMarkdown
             continue;
           }
         } catch {
+          if (MANAGED_SYMLINK_PATHS.has(relativePath)) {
+            continue;
+          }
+          if (entry.name.endsWith(".md")) {
+            files.push({
+              absolutePath,
+              canonicalContentClass: contentClass,
+              canonicalRelativePath: relativePath,
+              contentClass,
+              escaped: false,
+              relativePath,
+              unresolved: true,
+            });
+          }
           continue;
         }
       }
@@ -154,6 +169,7 @@ export function collectContextMarkdownContent(treeRoot: string): ContextMarkdown
         contentClass,
         escaped,
         relativePath,
+        unresolved: false,
       });
     }
   }

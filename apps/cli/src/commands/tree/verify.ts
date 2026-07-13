@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { Command } from "commander";
@@ -96,12 +96,14 @@ const ROOT_METADATA_CODES = new Set<ValidationCode>([
   VALIDATION_CODES.titleInvalid,
   VALIDATION_CODES.ownersMissing,
   VALIDATION_CODES.ownersInvalid,
+  VALIDATION_CODES.markdownFileSymlinkBroken,
   VALIDATION_CODES.markdownFilePathEscape,
 ]);
 
 function rootNodeExists(path: string): boolean {
   try {
-    return statSync(path).isFile();
+    const entry = lstatSync(path);
+    return entry.isFile() || entry.isSymbolicLink();
   } catch {
     return false;
   }
@@ -120,6 +122,8 @@ function formatRootNodeError(finding: TreeValidationFinding): string {
       return "Root NODE.md is missing owners.";
     case VALIDATION_CODES.markdownFilePathEscape:
       return "Root NODE.md resolves outside the Context Tree root.";
+    case VALIDATION_CODES.markdownFileSymlinkBroken:
+      return "Root NODE.md symlink target cannot be resolved.";
     default:
       return formatValidationFinding(finding);
   }
