@@ -33,6 +33,7 @@
     "@openai/codex-sdk": "^0.144.1",
     "@sentry/node": "^10.62.0",
     "ejs": "^6.0.1",
+    "mdast-util-from-markdown": "^2.0.3",
     "pino": "^9.5.0",
     "semver": "^7.6.3",
     "ws": "^8.20.0",

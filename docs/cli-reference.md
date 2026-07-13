@@ -410,6 +410,25 @@ EOF
 # Stdin bodies are never checked — piping is also the escape hatch for
 # intentionally sending literal `\n` text.
 
+# Embed a workspace image — a markdown image `![alt](path)` in a `chat send`
+# body whose target is an image (png/jpeg/gif/webp) inside the agent's own
+# workspace is uploaded at send time and delivered as a real inline chat image
+# (the same shape a human composer upload uses), so recipients see the picture
+# instead of a broken local path. Only explicit `![...](...)` embeds are
+# captured (a bare filename is left as text), only the sender's own workspace,
+# and an image shown inside a block code sample the renderer recognizes (a
+# fenced block at any container depth, or an indented code block) is left as a
+# literal sample (an image written inside inline `code` is treated as a live
+# embed). Capture is best-effort and never blocks the send, and is skipped
+# entirely for a body longer than ~1 million characters (then sent verbatim). An image
+# that is too large (>10 MB), unreadable, or beyond the 20-per-message cap is
+# skipped: if no image in the message captured, the body is sent unchanged (the
+# skipped embed stays as text); if at least one sibling image did capture — so
+# the message becomes an image send — every workspace-image embed is removed
+# from the caption, so a skipped one is dropped rather than left as a path that
+# would render broken.
+echo 'Latest run: ![chart](reports/latency.png)' | first-tree chat send code-agent -f markdown
+
 # Ask a human a tracked question (red-dot + blocks the chat for them until they
 # answer). `chat ask` targets a single human; the message body IS the ask and
 # must be decision-self-sufficient for a reader who remembers nothing of the

@@ -604,9 +604,17 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
   // `metadata.attachments` that is NOT already surfaced as an inline
   // `[display](attachment:<id>)` link in the body (the agent doc-capture
   // flow, which keeps its drawer link). Human composer uploads carry the ref
-  // with no inline link, so they render here as a FileChip.
+  // with no inline link, so they render here as a FileChip. For a `file`
+  // image-batch message the linked body lives in the batch `caption` (a doc +
+  // image agent send: image thumbnails + a doc link in the caption), so read
+  // that too — otherwise the doc would double-render as caption link AND chip.
   const chipAttachmentRefs = useMemo(() => {
-    const body = typeof msg.content === "string" ? msg.content : "";
+    const body =
+      typeof msg.content === "string"
+        ? msg.content
+        : isImageBatchRefContent(msg.content)
+          ? (msg.content.caption ?? "")
+          : "";
     return attachmentRefsFromMetadata(msg.metadata).filter((ref) => !body.includes(`attachment:${ref.attachmentId}`));
   }, [msg.metadata, msg.content]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
