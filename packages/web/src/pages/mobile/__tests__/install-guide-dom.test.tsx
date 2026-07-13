@@ -60,15 +60,17 @@ describe("InstallGuideSheet", () => {
     expect(sheet?.textContent).toContain("Install app");
   });
 
-  it("traps focus inside the sheet on Shift+Tab from the dialog root", () => {
+  it("wraps Shift+Tab from the dialog root to the last in-dialog control", () => {
     harness.render(<InstallGuideSheet mode="ios" onInstall={vi.fn()} onClose={vi.fn()} />);
     const dialog = harness.container.querySelector<HTMLElement>('[data-mobile-install-sheet="true"]');
-    // Auto-pop lands initial focus on the dialog root; Shift+Tab must not escape
-    // backward to the scrim (which is outside the dialog).
+    // Auto-pop lands initial focus on the dialog root (outside the focusable
+    // set). Shift+Tab must wrap to the LAST in-dialog control ("Got it") — not
+    // fall through to the scrim, and not simply stay parked on the root.
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true }));
     const active = document.activeElement;
     expect(dialog?.contains(active)).toBe(true);
-    expect(active?.getAttribute("aria-label")).not.toBe("Dismiss");
+    expect(active?.tagName).toBe("BUTTON");
+    expect(active?.textContent).toContain("Got it");
   });
 
   it("dismisses on scrim click and Escape", () => {

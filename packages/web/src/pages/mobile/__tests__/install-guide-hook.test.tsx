@@ -67,7 +67,7 @@ describe("install prompt capture lifecycle", () => {
     expect(readMode()).toBe("native");
   });
 
-  it("ignores beforeinstallprompt off the supported mobile flow (no preventDefault)", async () => {
+  it("ignores beforeinstallprompt off the supported platform (no preventDefault)", async () => {
     setUserAgent(DESKTOP_UA);
     const readMode = await renderModeProbe();
 
