@@ -1,9 +1,10 @@
-import { CHAT_ENGAGEMENT_STATUSES, type ChatEngagementStatus } from "@first-tree/shared";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { CHAT_ENGAGEMENT_STATUSES, type ChatEngagementStatus, type ListMeChatsResponse } from "@first-tree/shared";
+import { type InfiniteData, useMutation, useQueryClient } from "@tanstack/react-query";
 import { patchChatEngagement } from "../../../api/chats.js";
 import { markMeChatUnread, pinMeChat } from "../../../api/me-chats.js";
 import { type RowAction, RowActionsMenu } from "../../../components/ui/row-actions-menu.js";
 import { useToast } from "../../../components/ui/toast.js";
+import { applyOptimisticPin } from "./optimistic-pin.js";
 
 const { ACTIVE, ARCHIVED, DELETED } = CHAT_ENGAGEMENT_STATUSES;
 
@@ -86,22 +87,38 @@ export function RowEngagementMenu({
     onSuccess: invalidate,
   });
   // Pin toggles the caller's private `pinned_at`; the server re-projects the
-  // Pinned group, so we invalidate to pick up the regrouping. Because the row
-  // only visibly regroups after that refetch lands (a plain invalidate, not an
-  // optimistic move — the optimistic reorder is PR5), a success toast confirms
-  // the write so the delayed regroup never reads as a no-op. A failed write
+  // Pinned group. The row moves OPTIMISTICALLY (`applyOptimisticPin` reorders
+  // the cached list into / out of the Pinned group on click) so the regroup is
+  // instant instead of waiting on the round-trip + refetch. The trailing
+  // invalidate reconciles the exact `pinnedAt` / ordering with the server; a
+  // success toast confirms the write, and a failure rolls the cache back and
   // surfaces its own toast rather than silently leaving the row where it was.
   const pinMut = useMutation({
     mutationFn: () => pinMeChat(chatId, !pinned),
-    onSuccess: () => {
-      invalidate();
-      addToast({ title: pinned ? "Unpinned" : "Pinned" });
+    onMutate: async () => {
+      const nextPinned = !pinned;
+      // Freeze in-flight me-chats refetches (the list polls every 30s) so a
+      // stale response can't clobber the optimistic cache mid-flight.
+      await queryClient.cancelQueries({ queryKey: ["me", "chats"] });
+      const previous = queryClient.getQueriesData<InfiniteData<ListMeChatsResponse>>({ queryKey: ["me", "chats"] });
+      const nowIso = new Date().toISOString();
+      queryClient.setQueriesData<InfiniteData<ListMeChatsResponse>>({ queryKey: ["me", "chats"] }, (old) =>
+        old ? applyOptimisticPin(old, chatId, nextPinned, nowIso) : old,
+      );
+      return { previous };
     },
-    onError: () =>
+    onError: (_err, _vars, ctx) => {
+      // Restore every list snapshot we overwrote.
+      for (const [key, snapshot] of ctx?.previous ?? []) queryClient.setQueryData(key, snapshot);
       addToast({
         title: pinned ? "Couldn't unpin" : "Couldn't pin",
         description: "The change wasn't saved — try again.",
-      }),
+      });
+    },
+    onSuccess: () => addToast({ title: pinned ? "Unpinned" : "Pinned" }),
+    // Reconcile with server truth after either outcome; on error this refetches
+    // the corrected state after the rollback above.
+    onSettled: () => invalidate(),
   });
 
   const actions = actionsFor({

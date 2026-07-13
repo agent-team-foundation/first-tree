@@ -708,4 +708,15 @@ describe("ConversationList", () => {
       vi.useRealTimers();
     }
   });
+
+  it("marks the selected row with aria-current and reveals the row-actions kebab on touch", async () => {
+    const container = await renderDom(<StatefulList selectedChatId="chat-manual" />);
+    // Row selection is exposed to assistive tech (was tint + left bar only).
+    expect(rowButton(container, "Manual planning").getAttribute("aria-current")).toBe("page");
+    expect(rowButton(container, "Broken deploy").getAttribute("aria-current")).toBeNull();
+    // The row-actions kebab (the only Pin entry point) reveals on coarse (touch)
+    // pointers, not hover-only, so Pin is reachable on phones / the narrow overlay.
+    const kebab = container.querySelector('button[aria-label="Manage chat"]');
+    expect(kebab?.className).toContain("pointer-coarse:opacity-100");
+  });
 });
