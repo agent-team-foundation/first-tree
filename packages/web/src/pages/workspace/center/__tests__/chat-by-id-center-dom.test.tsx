@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { ChatDetail, ChatParticipantDetail, ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { type InfiniteData, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -288,8 +288,17 @@ describe("ChatByIdView and CenterPanel", () => {
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
     });
-    queryClient.setQueryData<ListMeChatsResponse>(allKey, { rows: [currentUnread, otherUnread], nextCursor: null });
-    queryClient.setQueryData<ListMeChatsResponse>(unreadKey, { rows: [currentUnread, otherUnread], nextCursor: null });
+    // The desktop rail stores InfiniteData (`useInfiniteQuery`); the command
+    // palette stores a bare ListMeChatsResponse. Seed both so the mark-read
+    // patch is exercised against each cache shape it must handle.
+    const paletteKey = ["me", "chats", "palette"];
+    const infinite = (rows: MeChatRow[]): InfiniteData<ListMeChatsResponse> => ({
+      pages: [{ rows, nextCursor: null }],
+      pageParams: [undefined],
+    });
+    queryClient.setQueryData<InfiniteData<ListMeChatsResponse>>(allKey, infinite([currentUnread, otherUnread]));
+    queryClient.setQueryData<InfiniteData<ListMeChatsResponse>>(unreadKey, infinite([currentUnread, otherUnread]));
+    queryClient.setQueryData<ListMeChatsResponse>(paletteKey, { rows: [currentUnread, otherUnread], nextCursor: null });
 
     const { container, root } = await renderDom(
       <ChatByIdView chatId="chat-1" narrow onShowConversations={onShowConversations} />,
@@ -300,17 +309,22 @@ describe("ChatByIdView and CenterPanel", () => {
     expect(chatMocks.getChat).toHaveBeenCalledWith("chat-1");
     expect(meChatMocks.markMeChatRead).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).not.toHaveBeenCalled();
-    const patchedAll = queryClient.getQueryData<ListMeChatsResponse>(allKey);
-    expect(patchedAll?.rows.find((row) => row.chatId === "chat-1")).toMatchObject({
+    const allRows = queryClient.getQueryData<InfiniteData<ListMeChatsResponse>>(allKey)?.pages.flatMap((p) => p.rows);
+    expect(allRows?.find((row) => row.chatId === "chat-1")).toMatchObject({
       unreadMentionCount: 0,
       chatHasExplicitMentionToMe: false,
     });
-    expect(patchedAll?.rows.find((row) => row.chatId === "chat-2")).toMatchObject({
+    expect(allRows?.find((row) => row.chatId === "chat-2")).toMatchObject({
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
     });
-    const patchedUnread = queryClient.getQueryData<ListMeChatsResponse>(unreadKey);
-    expect(patchedUnread?.rows.map((row) => row.chatId)).toEqual(["chat-2"]);
+    const unreadRows = queryClient
+      .getQueryData<InfiniteData<ListMeChatsResponse>>(unreadKey)
+      ?.pages.flatMap((p) => p.rows);
+    expect(unreadRows?.map((row) => row.chatId)).toEqual(["chat-2"]);
+    // The bare-response (palette / mobile) shape is patched in place too.
+    const patchedPalette = queryClient.getQueryData<ListMeChatsResponse>(paletteKey);
+    expect(patchedPalette?.rows.find((row) => row.chatId === "chat-1")).toMatchObject({ unreadMentionCount: 0 });
     expect(chatViewMocks.props.at(-1)).toMatchObject({
       agentId: "agent-1",
       chatId: "chat-1",

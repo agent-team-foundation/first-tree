@@ -598,8 +598,14 @@ function createClient(): QueryClient {
       topic: "Launch planning",
     },
   ]);
-  queryClient.setQueryData(["me", "chats", "all", "active", false, null, null], {
-    rows: [
+  // The rail reads via `useInfiniteQuery`, so seed the `InfiniteData` shape.
+  const meInfinite = (rows: ReturnType<typeof chatRow>[]) => ({
+    pages: [{ rows, nextCursor: null }],
+    pageParams: [undefined],
+  });
+  queryClient.setQueryData(
+    ["me", "chats", "all", "active", false, null, null],
+    meInfinite([
       chatRow(),
       chatRow({
         chatId: "chat-2",
@@ -613,18 +619,15 @@ function createClient(): QueryClient {
         lastMessageAt: "2026-05-27T09:00:00.000Z",
         lastMessagePreview: "Looks good.",
       }),
-    ],
-    nextCursor: null,
-  });
+    ]),
+  );
   // The triad is single-select: rendering with both `unread` + `watching`
   // canonicalizes to Unread, so the component requests watchingParam=false
   // (the 5th key slot) even though the smoke render passes both.
-  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], {
-    rows: [chatRow()],
-    nextCursor: null,
-  });
-  queryClient.setQueryData(["me", "chats", "all", "archived", false, null, null], {
-    rows: [
+  queryClient.setQueryData(["me", "chats", "unread", "active", false, "manual", "agent-1"], meInfinite([chatRow()]));
+  queryClient.setQueryData(
+    ["me", "chats", "all", "archived", false, null, null],
+    meInfinite([
       chatRow({
         chatId: "chat-2",
         title: "Archived design review",
@@ -635,9 +638,8 @@ function createClient(): QueryClient {
         chatHasExplicitMentionToMe: false,
         engagementStatus: "archived",
       }),
-    ],
-    nextCursor: null,
-  });
+    ]),
+  );
   queryClient.setQueryData(["chat-detail", "chat-1"], chatDetail());
   queryClient.setQueryData(["chat-messages-cache", "chat-1"], CHAT_MESSAGES.items.slice(0, 1));
   queryClient.setQueryData(["chat-messages", "chat-1"], CHAT_MESSAGES);
