@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { readSourceState, type SourceBindingMode, type TreeMode } from "./binding-state.js";
+import { inspectRepoInfraMarkdownFile } from "./content-class.js";
 import { parseGitHubRemoteUrl } from "./shared.js";
 
 export type SourceIntegrationFile = "AGENTS.md" | "CLAUDE.md";
@@ -155,20 +155,12 @@ export function parseManagedSourceBindingText(text: string): ParsedSourceBinding
 export function readManagedSourceBinding(root: string): ManagedSourceBinding | undefined {
   for (const file of SOURCE_INTEGRATION_FILES) {
     const path = join(root, file);
-
-    if (!existsSync(path)) {
+    const inspected = inspectRepoInfraMarkdownFile(root, file);
+    if (inspected.kind !== "valid") {
       continue;
     }
 
-    try {
-      if (!statSync(path).isFile()) {
-        continue;
-      }
-    } catch {
-      continue;
-    }
-
-    const parsed = parseManagedSourceBindingText(readFileSync(path, "utf-8"));
+    const parsed = parseManagedSourceBindingText(inspected.source);
 
     if (parsed !== undefined) {
       return {

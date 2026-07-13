@@ -286,6 +286,39 @@ describe("tree verify strict content policy", () => {
     );
   });
 
+  it("reports invalid managed paths before source and tree identity preflight", (ctx) => {
+    const outside = makeTempDir();
+    write(
+      join(outside, "source.md"),
+      "<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->\nFIRST-TREE-BINDING-MODE: standalone-source\nFIRST-TREE-TREE-REPO-SLUG: acme/context\n<!-- END FIRST-TREE-SOURCE-INTEGRATION -->\n",
+    );
+
+    const escapingRoot = makeValidTree();
+    try {
+      symlinkSync(join(outside, "source.md"), join(escapingRoot, "AGENTS.md"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+    expect(verifyTreeRoot(escapingRoot).findings).toContainEqual(
+      expect.objectContaining({ code: "TREE_MARKDOWN_FILE_PATH_ESCAPE", path: "AGENTS.md" }),
+    );
+
+    const mixedRoot = makeValidTree();
+    write(join(mixedRoot, "system", "NODE.md"), node("System"));
+    write(
+      join(mixedRoot, "CLAUDE.md"),
+      "<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->\nFIRST-TREE-BINDING-MODE: standalone-source\nFIRST-TREE-TREE-REPO-SLUG: acme/context\n<!-- END FIRST-TREE-SOURCE-INTEGRATION -->\n",
+    );
+    try {
+      symlinkSync("system", join(mixedRoot, "AGENTS.md"), "dir");
+    } catch {
+      ctx.skip("Directory symlink creation is not supported in this environment.");
+    }
+    expect(verifyTreeRoot(mixedRoot).findings).toContainEqual(
+      expect.objectContaining({ code: "TREE_DIRECTORY_SYMLINK_UNSUPPORTED", path: "AGENTS.md" }),
+    );
+  });
+
   it("reports member directory symlinks once without following them", (ctx) => {
     const root = makeValidTree();
     const outside = makeTempDir();

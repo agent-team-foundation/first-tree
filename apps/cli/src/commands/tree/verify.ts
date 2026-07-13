@@ -5,9 +5,10 @@ import type { Command } from "commander";
 
 import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { readSourceBindingContract } from "./binding-contract.js";
+import { readSourceBindingContract, SOURCE_INTEGRATION_FILES } from "./binding-contract.js";
 import { TREE_PROGRESS_FILE } from "./binding-state.js";
 import type { ContextContentClassCounts } from "./content-class.js";
+import { inspectRepoInfraMarkdownFile } from "./content-class.js";
 import { resolveRepoRoot } from "./shared.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
 import { collectMemberValidationFindings, formatLegacyMemberError } from "./validate-members.js";
@@ -143,7 +144,14 @@ function formatRootNodeError(finding: TreeValidationFinding): string {
 }
 
 export function verifyTreeRoot(targetRoot: string): VerifySummary {
-  if (readSourceBindingContract(targetRoot) !== undefined && readTreeIdentityContract(targetRoot) === undefined) {
+  const invalidManagedPath = SOURCE_INTEGRATION_FILES.some(
+    (file) => inspectRepoInfraMarkdownFile(targetRoot, file).kind === "invalid",
+  );
+  if (
+    !invalidManagedPath &&
+    readSourceBindingContract(targetRoot) !== undefined &&
+    readTreeIdentityContract(targetRoot) === undefined
+  ) {
     throw new Error(formatSourceRepoError(targetRoot));
   }
 
