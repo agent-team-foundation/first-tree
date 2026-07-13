@@ -4044,14 +4044,18 @@ export function ChatView({
                         the composer. */}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                     <div
+                      className="composer-card"
+                      // Phone-only: flatten the card's top corners while the mention
+                      // panel is docked flush above it so the two read as one welded
+                      // surface (see `.composer-card[data-mention-open]` in index.css).
+                      data-mention-open={mention.trigger != null ? "true" : undefined}
                       style={{
                         position: "relative",
                         border: "var(--hairline) solid var(--border)",
-                        borderRadius: 6,
                         // Raised surface (`--bg-raised`) lifts the composer above
                         // the timeline (`--bg`) so it reads as a focused input card
                         // rather than blending into the page; the hairline border
-                        // still defines its edge.
+                        // still defines its edge. Radius lives in `.composer-card`.
                         background: "var(--bg-raised)",
                       }}
                       onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
