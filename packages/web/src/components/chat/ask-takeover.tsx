@@ -141,7 +141,10 @@ export function AskTakeover({
   const [freeText, setFreeText] = useState("");
   const [cursor, setCursor] = useState(0);
   // Tighten the horizontal padding on phone widths so the card uses the
-  // available width instead of burning it on gutters.
+  // available width instead of burning it on gutters. Note this keys off the
+  // measured *viewport width*, whereas the touch-target / Enter behavior keys
+  // off the `mobile` *route* prop — two intentionally distinct axes (a narrow
+  // desktop window wants tighter gutters but not phone-sized tap targets).
   const viewport = useWorkspaceViewport();
   const padX = viewport === "narrow" ? "var(--sp-4)" : "var(--sp-6)";
   // Keep the card (and its pinned footer) above the on-screen keyboard.

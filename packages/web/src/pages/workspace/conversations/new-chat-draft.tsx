@@ -837,7 +837,7 @@ export function NewChatDraft({
                   disabled={sending || createMut.isPending}
                   title="Attach file"
                   aria-label="Attach file"
-                  className="inline-flex items-center justify-center"
+                  className={cn("inline-flex items-center", mobile && "justify-center")}
                   style={{
                     background: "none",
                     border: "none",
