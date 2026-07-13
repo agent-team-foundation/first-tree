@@ -29,8 +29,15 @@ function decodeTarget(target: string): string {
   }
 }
 
+function isWindowsAbsoluteTarget(target: string): boolean {
+  return /^[a-z]:[\\/]/iu.test(target) || /^\\\\[^\\]+\\[^\\]+/u.test(target);
+}
+
 export function isTreeLocalTarget(target: string): boolean {
   const trimmed = target.trim();
+  if (isWindowsAbsoluteTarget(decodeTarget(stripQueryAndFragment(trimmed)))) {
+    return true;
+  }
   return (
     trimmed.length > 0 && !trimmed.startsWith("#") && !trimmed.startsWith("//") && !/^[a-z][a-z\d+.-]*:/iu.test(trimmed)
   );
@@ -63,9 +70,19 @@ export function resolveLocalTreeTarget(options: {
     return null;
   }
 
-  const withoutSuffix = decodeTarget(stripQueryAndFragment(options.target.trim())).replace(/\\/gu, "/");
+  const decodedTarget = decodeTarget(stripQueryAndFragment(options.target.trim()));
+  const withoutSuffix = decodedTarget.replace(/\\/gu, "/");
   if (withoutSuffix.length === 0) {
     return null;
+  }
+
+  if (isWindowsAbsoluteTarget(decodedTarget)) {
+    return {
+      contentClass: classifyContextContent(withoutSuffix),
+      escaped: true,
+      exists: false,
+      relativePath: withoutSuffix,
+    };
   }
 
   const sourceDirectory = posix.dirname(options.sourcePath);
@@ -77,7 +94,7 @@ export function resolveLocalTreeTarget(options: {
   const absoluteRoot = resolve(options.treeRoot);
   const absoluteTarget = resolve(absoluteRoot, relativePath);
   const lexicalEscape = !pathIsInside(absoluteRoot, absoluteTarget);
-  const contentClass = classifyContextContent(relativePath);
+  let contentClass = classifyContextContent(relativePath);
 
   if (lexicalEscape) {
     return { contentClass, escaped: true, exists: false, relativePath };
@@ -94,6 +111,7 @@ export function resolveLocalTreeTarget(options: {
     if (!pathIsInside(realRoot, realTarget)) {
       return { contentClass, escaped: true, exists: true, relativePath };
     }
+    contentClass = classifyContextContent(relative(realRoot, realTarget).replace(/\\/gu, "/"));
   } catch {
     return { contentClass, escaped: false, exists: false, relativePath };
   }

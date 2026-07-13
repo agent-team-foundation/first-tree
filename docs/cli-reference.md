@@ -720,8 +720,9 @@ an otherwise tree-local Markdown target may be absent; external links, anchors,
 and plain prose that explains the archive class remain allowed. JSON output
 preserves the existing summary and adds stable findings plus per-class scan
 counts. Context Tree domain directories must not be symlinks; Markdown file
-symlinks are validated and must resolve inside the tree, except for the managed
-`WHITEPAPER.md` pointer. This is a breaking tightening for trees that relied on legacy metadata
+symlinks are validated, must resolve inside the tree, and must not cross content
+classes, except for the managed root-level `WHITEPAPER.md` pointer. This is a
+breaking tightening for trees that relied on legacy metadata
 or normal-to-archive links: mechanical syntax can be corrected directly, while
 ownership assignments and promotion of durable archive content require human
 or source-backed decisions. Run `first-tree tree verify --help` for options.

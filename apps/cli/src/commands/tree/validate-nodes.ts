@@ -193,10 +193,6 @@ export function collectNodeValidationFindings(treeRoot: string): NodeValidationR
   for (const file of content.files) {
     scannedByContentClass[file.contentClass] += 1;
 
-    if (file.contentClass === "repo-infra" || file.contentClass === "archive-supporting") {
-      continue;
-    }
-
     if (file.escaped) {
       addFinding(
         findings,
@@ -204,6 +200,21 @@ export function collectNodeValidationFindings(treeRoot: string): NodeValidationR
         file.relativePath,
         "Markdown file resolves outside the Context Tree root",
       );
+      continue;
+    }
+
+    if (file.canonicalContentClass !== file.contentClass) {
+      addFinding(
+        findings,
+        VALIDATION_CODES.markdownFileContentClassMismatch,
+        file.relativePath,
+        `Markdown file symlink crosses content-class boundary from ${file.contentClass} to ${file.canonicalContentClass}`,
+        file.canonicalRelativePath,
+      );
+      continue;
+    }
+
+    if (file.contentClass === "repo-infra" || file.contentClass === "archive-supporting") {
       continue;
     }
 

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveLocalTreeTarget } from "../commands/tree/context-links.js";
 import { registerTreeCommands } from "../commands/tree/index.js";
 import { renderContextTree } from "../commands/tree/tree.js";
 import { VERIFY_USAGE, verifyCommand, verifyTreeRoot } from "../commands/tree/verify.js";
@@ -90,6 +91,56 @@ describe("tree verify strict content policy", () => {
     );
   });
 
+  it("rejects escaping archive and repo-infra Markdown symlinks before class skips", (ctx) => {
+    const root = makeValidTree();
+    const outside = makeTempDir();
+    write(join(outside, "outside.md"), node("Outside"));
+    write(join(root, "raw-context", "placeholder.md"), "archive\n");
+    write(join(root, "system", "NODE.md"), node("System"));
+    try {
+      symlinkSync(join(outside, "outside.md"), join(root, "raw-context", "escaped.md"));
+      symlinkSync(join(outside, "outside.md"), join(root, "AGENTS.md"));
+      symlinkSync(join(outside, "outside.md"), join(root, "system", "WHITEPAPER.md"));
+      symlinkSync(join(outside, "outside.md"), join(root, "WHITEPAPER.md"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const findings = verifyTreeRoot(root).findings;
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "TREE_MARKDOWN_FILE_PATH_ESCAPE", path: "raw-context/escaped.md" }),
+        expect.objectContaining({ code: "TREE_MARKDOWN_FILE_PATH_ESCAPE", path: "AGENTS.md" }),
+        expect.objectContaining({ code: "TREE_MARKDOWN_FILE_PATH_ESCAPE", path: "system/WHITEPAPER.md" }),
+      ]),
+    );
+    expect(findings.some((finding) => finding.path === "WHITEPAPER.md")).toBe(false);
+  });
+
+  it("rejects Markdown symlink aliases across content-class boundaries", (ctx) => {
+    const root = makeValidTree();
+    write(join(root, "raw-context", "proposal.md"), "archive\n");
+    write(join(root, "system", "links.md"), node("Links", "[archive](../alias.md)\n", "soft_links: [/alias.md]\n"));
+    try {
+      symlinkSync("raw-context/proposal.md", join(root, "alias.md"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    expect(verifyTreeRoot(root).findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "TREE_MARKDOWN_FILE_CONTENT_CLASS_MISMATCH",
+          path: "alias.md",
+          target: "raw-context/proposal.md",
+        }),
+        expect.objectContaining({ code: "TREE_SOFT_LINK_ARCHIVE_DEPENDENCY", target: "/alias.md" }),
+        expect.objectContaining({ code: "TREE_MARKDOWN_LINK_ARCHIVE_DEPENDENCY", target: "../alias.md" }),
+      ]),
+    );
+  });
+
   it("rejects in-tree and escaping directory symlinks explicitly", (ctx) => {
     const root = makeValidTree();
     const outside = makeTempDir();
@@ -114,6 +165,29 @@ describe("tree verify strict content policy", () => {
         }),
       ]),
     );
+  });
+
+  it("reports member directory symlinks once without following them", (ctx) => {
+    const root = makeValidTree();
+    const outside = makeTempDir();
+    write(join(outside, "NODE.md"), "# invalid external member\n");
+    try {
+      symlinkSync("..", join(root, "members", "alice", "loop"), "dir");
+      symlinkSync(outside, join(root, "members", "alice", "outside"), "dir");
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    const findings = verifyTreeRoot(root).findings;
+
+    expect(findings.filter((finding) => finding.path === "members/alice/loop")).toEqual([
+      expect.objectContaining({ code: "TREE_DIRECTORY_SYMLINK_UNSUPPORTED" }),
+    ]);
+    expect(findings.filter((finding) => finding.path === "members/alice/outside")).toEqual([
+      expect.objectContaining({ code: "TREE_DIRECTORY_SYMLINK_PATH_ESCAPE" }),
+    ]);
+    expect(findings.some((finding) => finding.path.includes("loop/loop"))).toBe(false);
+    expect(findings.some((finding) => finding.path.includes("outside/NODE.md"))).toBe(false);
   });
 
   it.each([
@@ -206,6 +280,28 @@ describe("tree verify strict content policy", () => {
       ]),
     );
     expect(findings.some((finding) => finding.target === "missing.md")).toBe(false);
+  });
+
+  it("treats Windows drive and UNC absolute paths as escaping tree-local targets", () => {
+    const root = makeValidTree();
+    write(join(root, "system", "links.md"), node("Links", "[drive](C:/outside.md)\n"));
+
+    expect(verifyTreeRoot(root).findings).toContainEqual(
+      expect.objectContaining({ code: "TREE_MARKDOWN_LINK_PATH_ESCAPE", target: "C:/outside.md" }),
+    );
+    for (const target of ["C:/outside.md", "C:\\outside.md", "\\\\server\\share\\outside.md"]) {
+      expect(
+        resolveLocalTreeTarget({ sourcePath: "system/links.md", target, treeRoot: root, softLink: false }),
+      ).toMatchObject({ escaped: true, exists: false });
+    }
+    expect(
+      resolveLocalTreeTarget({
+        sourcePath: "system/links.md",
+        target: "https://example.com",
+        treeRoot: root,
+        softLink: false,
+      }),
+    ).toBeNull();
   });
 
   it("allows prose, external links, anchors, and member-to-archive links", () => {

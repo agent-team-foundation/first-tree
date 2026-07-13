@@ -8,6 +8,8 @@ export type ContextContentClassCounts = Record<ContextContentClass, number>;
 
 export type ContextMarkdownFile = {
   absolutePath: string;
+  canonicalContentClass: ContextContentClass;
+  canonicalRelativePath: string;
   contentClass: ContextContentClass;
   escaped: boolean;
   relativePath: string;
@@ -26,7 +28,7 @@ export type ContextMarkdownCollection = {
 
 const GENERATED_DIRECTORY_NAMES = new Set(["node_modules", "__pycache__", "dist", "build", ".next", ".turbo"]);
 const REPO_INFRA_MARKDOWN_FILES = new Set(["AGENTS.md", "CLAUDE.md"]);
-const MANAGED_SYMLINK_FILES = new Set(["WHITEPAPER.md"]);
+const MANAGED_SYMLINK_PATHS = new Set(["WHITEPAPER.md"]);
 
 export function toTreeRelativePosixPath(treeRoot: string, targetPath: string): string {
   return relative(treeRoot, targetPath).replace(/\\/gu, "/");
@@ -80,6 +82,7 @@ function pathIsInside(root: string, target: string): boolean {
 export function collectContextMarkdownContent(treeRoot: string): ContextMarkdownCollection {
   const directorySymlinks: ContextDirectorySymlink[] = [];
   const files: ContextMarkdownFile[] = [];
+  const realTreeRoot = realpathSync(treeRoot);
 
   function walk(directoryPath: string): void {
     for (const entry of readDirectoryEntries(directoryPath)) {
@@ -116,7 +119,7 @@ export function collectContextMarkdownContent(treeRoot: string): ContextMarkdown
         continue;
       }
 
-      if (symbolicLink && MANAGED_SYMLINK_FILES.has(entry.name)) {
+      if (symbolicLink && MANAGED_SYMLINK_PATHS.has(relativePath)) {
         continue;
       }
 
@@ -129,15 +132,29 @@ export function collectContextMarkdownContent(treeRoot: string): ContextMarkdown
       }
 
       let escaped = false;
+      let canonicalContentClass = contentClass;
+      let canonicalRelativePath = relativePath;
       if (symbolicLink) {
         try {
-          escaped = !pathIsInside(realpathSync(treeRoot), realpathSync(absolutePath));
+          const realTarget = realpathSync(absolutePath);
+          escaped = !pathIsInside(realTreeRoot, realTarget);
+          canonicalRelativePath = toTreeRelativePosixPath(realTreeRoot, realTarget);
+          if (!escaped) {
+            canonicalContentClass = classifyContextContent(canonicalRelativePath);
+          }
         } catch {
           continue;
         }
       }
 
-      files.push({ absolutePath, contentClass, escaped, relativePath });
+      files.push({
+        absolutePath,
+        canonicalContentClass,
+        canonicalRelativePath,
+        contentClass,
+        escaped,
+        relativePath,
+      });
     }
   }
 

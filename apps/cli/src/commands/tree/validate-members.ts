@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { toTreeRelativePosixPath } from "./content-class.js";
@@ -114,7 +114,31 @@ export function collectMemberValidationFindings(treeRoot: string): MemberValidat
   const membersDir = join(treeRoot, "members");
   const findings: TreeValidationFinding[] = [];
 
-  if (!existsSync(membersDir) || !statSync(membersDir).isDirectory()) {
+  if (!existsSync(membersDir)) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.membersDirectoryMissing,
+      "members/",
+      `Members directory not found: ${membersDir}`,
+    );
+    return { findings };
+  }
+
+  try {
+    const membersStat = lstatSync(membersDir);
+    if (membersStat.isSymbolicLink()) {
+      return { findings };
+    }
+    if (!membersStat.isDirectory()) {
+      addFinding(
+        findings,
+        VALIDATION_CODES.membersDirectoryMissing,
+        "members/",
+        `Members directory not found: ${membersDir}`,
+      );
+      return { findings };
+    }
+  } catch {
     addFinding(
       findings,
       VALIDATION_CODES.membersDirectoryMissing,
@@ -129,16 +153,14 @@ export function collectMemberValidationFindings(treeRoot: string): MemberValidat
   // Top-level directories under members are member nodes. Nested directories
   // may be personal containers; nested NODE.md files still use this contract.
   function walk(dir: string, requireNode: boolean): void {
-    for (const child of readdirSync(dir).sort()) {
-      const childPath = join(dir, child);
-
-      try {
-        if (!statSync(childPath).isDirectory()) {
-          continue;
-        }
-      } catch {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isDirectory()) {
         continue;
       }
+      const childPath = join(dir, entry.name);
 
       const nodePath = join(childPath, "NODE.md");
       if (!existsSync(nodePath)) {

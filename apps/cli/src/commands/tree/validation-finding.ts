@@ -13,6 +13,7 @@ export const VALIDATION_CODES = {
   markdownPathEscape: "TREE_MARKDOWN_LINK_PATH_ESCAPE",
   markdownArchiveDependency: "TREE_MARKDOWN_LINK_ARCHIVE_DEPENDENCY",
   markdownFilePathEscape: "TREE_MARKDOWN_FILE_PATH_ESCAPE",
+  markdownFileContentClassMismatch: "TREE_MARKDOWN_FILE_CONTENT_CLASS_MISMATCH",
   directorySymlinkUnsupported: "TREE_DIRECTORY_SYMLINK_UNSUPPORTED",
   directorySymlinkPathEscape: "TREE_DIRECTORY_SYMLINK_PATH_ESCAPE",
   memberFrontmatterMissing: "TREE_MEMBER_FRONTMATTER_MISSING",
