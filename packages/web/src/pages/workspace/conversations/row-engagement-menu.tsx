@@ -81,11 +81,17 @@ export function RowEngagementMenu({
     onSuccess: invalidate,
   });
   // Pin toggles the caller's private `pinned_at`; the server re-projects the
-  // Pinned group, so we invalidate to pick up the regrouping. A failed write
-  // surfaces a toast rather than silently leaving the row where it was.
+  // Pinned group, so we invalidate to pick up the regrouping. Because the row
+  // only visibly regroups after that refetch lands (a plain invalidate, not an
+  // optimistic move — the optimistic reorder is PR5), a success toast confirms
+  // the write so the delayed regroup never reads as a no-op. A failed write
+  // surfaces its own toast rather than silently leaving the row where it was.
   const pinMut = useMutation({
     mutationFn: () => pinMeChat(chatId, !pinned),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      addToast({ title: pinned ? "Unpinned" : "Pinned" });
+    },
     onError: () =>
       addToast({
         title: pinned ? "Couldn't unpin" : "Couldn't pin",

@@ -173,6 +173,9 @@ describe("RowEngagementMenu", () => {
 
     expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-active", true);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["me", "chats"] });
+    // A success toast confirms the write — the row only regroups once the
+    // invalidate-driven refetch lands, so silence would read as a no-op.
+    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Pinned" }));
   });
 
   it("offers Unpin on a pinned chat and toggles it off", async () => {
@@ -185,6 +188,7 @@ describe("RowEngagementMenu", () => {
     await click(menuItem("Unpin"));
 
     expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-pinned", false);
+    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Unpinned" }));
   });
 
   it("shows an error toast when a pin write fails", async () => {

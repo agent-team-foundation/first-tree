@@ -8,18 +8,30 @@ import { FilterPopover, originLabel } from "../filter-popover.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-// The popover fetches the org roster for the Participants picker; stub it with a
-// fixed two-agent list so the picker renders without a QueryClient.
+// The popover fetches the org roster for the Participants picker; drive it from a
+// mutable result (reset in `beforeEach`) so tests can exercise the loaded and
+// error states without a QueryClient. `mock`-prefixed so vitest's hoisted
+// `vi.mock` factory may reference it.
+type MockAgentsResult = {
+  data: { items: Array<{ uuid: string; displayName: string }> } | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  refetch: () => void;
+};
+const mockAgentsDefault: MockAgentsResult = {
+  data: {
+    items: [
+      { uuid: "agent-1", displayName: "Nova" },
+      { uuid: "agent-2", displayName: "Design Critique" },
+    ],
+  },
+  isLoading: false,
+  isError: false,
+  refetch: () => {},
+};
+let mockAgentsResult: MockAgentsResult = mockAgentsDefault;
 vi.mock("../../../../lib/use-org-agents.js", () => ({
-  useOrgAgents: () => ({
-    data: {
-      items: [
-        { uuid: "agent-1", displayName: "Nova" },
-        { uuid: "agent-2", displayName: "Design Critique" },
-      ],
-    },
-    isLoading: false,
-  }),
+  useOrgAgents: () => mockAgentsResult,
 }));
 
 let root: Root | null = null;
@@ -98,13 +110,14 @@ function StatefulFilter({
         setParticipants([]);
         onResetAll();
       }}
-      activeCount={origin.length + participants.length + (engagement !== "active" ? 1 : 0)}
+      activeCount={(origin.length > 0 ? 1 : 0) + (participants.length > 0 ? 1 : 0) + (engagement !== "active" ? 1 : 0)}
     />
   );
 }
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  mockAgentsResult = mockAgentsDefault;
 });
 
 afterEach(async () => {
@@ -137,7 +150,9 @@ describe("FilterPopover", () => {
     );
 
     const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Filter"]');
-    expect(trigger?.textContent).toContain("3");
+    // Badge counts DIMENSIONS, not values: narrowed Source (1) + non-default
+    // Status (1) = 2, regardless of how many individual sources are picked.
+    expect(trigger?.textContent).toContain("2");
     await click(trigger ?? null);
 
     expect(document.body.textContent).toContain("Status");
@@ -193,5 +208,23 @@ describe("FilterPopover", () => {
     expect(onResetAll).toHaveBeenCalledTimes(1);
     await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Done") ?? null);
     expect(document.body.textContent).not.toContain("Source");
+  });
+
+  it("surfaces an error + retry when the participants roster fails to load", async () => {
+    // A failed roster load must NOT read as an empty "No people to filter by."
+    const refetch = vi.fn();
+    mockAgentsResult = { data: undefined, isLoading: false, isError: true, refetch };
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
+    );
+    await click(container.querySelector('button[aria-label="Filter"]'));
+
+    expect(document.body.textContent).toContain("Couldn't load people.");
+    expect(document.body.textContent).not.toContain("No people to filter by.");
+    const retry = [...document.body.querySelectorAll("button")].find((b) => b.textContent === "Retry");
+    expect(retry).toBeTruthy();
+    await click(retry ?? null);
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

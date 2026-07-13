@@ -84,8 +84,8 @@ function row(overrides: Partial<MeChatRow> & { chatId: string; title: string }):
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -539,6 +539,73 @@ describe("ConversationList", () => {
     const dupRows = [...container.querySelectorAll("button")].filter((b) => b.textContent?.includes("Duplicated chat"));
     expect(dupRows.length).toBe(1);
     expect(container.textContent).toContain("Second chat");
+  });
+
+  it("renders a Pinned group from the server projection and shows the pinned chat once", async () => {
+    // A pinned row (server `priorityRows.pinned`) hoists into a "Pinned" group and
+    // is de-duplicated OUT of the ordinary recency list — shown exactly once.
+    const rows = [
+      row({ chatId: "chat-pinned", title: "Pinned thread", pinnedAt: "2026-05-20T09:00:00.000Z" }),
+      row({ chatId: "chat-plain", title: "Plain thread" }),
+    ];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    // The collapsible "Pinned" group header renders (group headers carry
+    // `aria-expanded`; row buttons and the Manage-chat trigger do not carry the
+    // "Pinned" label).
+    const pinnedHeader = [...container.querySelectorAll("button[aria-expanded]")].find((b) =>
+      b.textContent?.includes("Pinned"),
+    );
+    expect(pinnedHeader).toBeTruthy();
+    const pinnedRows = [...container.querySelectorAll("button")].filter((b) =>
+      b.textContent?.includes("Pinned thread"),
+    );
+    expect(pinnedRows.length).toBe(1);
+    expect(container.textContent).toContain("Plain thread");
+  });
+
+  it("does not show the empty state when the only chat is a pinned chat", async () => {
+    // Regression (both PR4 reviews): `rows` is additive and every priority chat is
+    // de-duplicated OUT of the recency list, so an all-priority list has an empty
+    // recency list. The empty state must key off the WHOLE rendered set —
+    // otherwise "No conversations yet" paints directly above the Pinned group.
+    const rows = [row({ chatId: "chat-only-pinned", title: "Only pinned", pinnedAt: "2026-05-20T09:00:00.000Z" })];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    expect(container.textContent).not.toContain("No conversations yet.");
+    expect(container.textContent).toContain("Pinned");
+    expect(container.textContent).toContain("Only pinned");
+  });
+
+  it("does not show the empty state when the only chat needs attention", async () => {
+    const rows = [row({ chatId: "chat-only-failed", title: "Only failed", failedAgentIds: ["agent-1"] })];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    expect(container.textContent).not.toContain("No conversations yet.");
+    expect(container.textContent).toContain("Needs attention");
+    expect(container.textContent).toContain("Only failed");
+  });
+
+  it("shows Load more when the whole first page is priority rows but more pages remain", async () => {
+    // The recency list is empty on page 1 (its one row deduped into Pinned), yet
+    // more ordinary chats wait on page 2 — "Load more" must still render (keyed
+    // off the whole rendered set) so they stay reachable.
+    const rows = [row({ chatId: "chat-page1-pin", title: "Page one pin", pinnedAt: "2026-05-20T09:00:00.000Z" })];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor="cursor-1" selectedChatId={null} />,
+      createClient(rows, "cursor-1"),
+    );
+
+    expect(buttonByText(container, "Load more")).toBeTruthy();
   });
 
   it("keeps the empty state when a background refetch fails, not an error", async () => {

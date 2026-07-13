@@ -239,6 +239,19 @@ export function ConversationList({
     return groups;
   }, [allRows, priorityRows, group, dataUpdatedAt]);
 
+  // Whether ANY row renders — an ordinary recency row OR a server priority-group
+  // row (Needs attention / Pinned). The empty / loading / load-more gates key off
+  // THIS, not `allRows.length`: `rows` is additive and every priority chat is
+  // de-duplicated OUT of `allRows`, so an all-priority list (a new user whose one
+  // chat is pinned or has a failed agent) has `allRows.length === 0` while the
+  // rail is NOT empty. Gating the empty state on `allRows.length` there would
+  // paint "No conversations yet" directly above a populated Pinned /
+  // Needs-attention group, and hide "Load more" when the whole first page is
+  // priority rows but more ordinary chats wait on the next page. `.some(rows>0)`
+  // (not `buckets.length`) because `groupRows([])` returns a single label-less
+  // zero-row spacer bucket, so the bucket count is never 0.
+  const hasAnyRow = buckets.some((b) => b.rows.length > 0);
+
   // Page-local unread count across every rendered chat (priority groups +
   // ordinary rows). The global server aggregate is deferred to a later PR.
   const totalUnread = useMemo(
@@ -285,10 +298,15 @@ export function ConversationList({
     });
   };
 
-  // The `⚙` popover badge counts the *secondary* filters it hides from the
-  // header: origin, participants, and a non-default scope. The primary
-  // triad (unread / watching) lives in the header and is not counted here.
-  const popoverFilterCount = origin.length + participants.length + (engagement !== "active" ? 1 : 0);
+  // The `⚙` popover badge counts the *secondary* filter DIMENSIONS it hides
+  // from the header: Source (any narrowing), Participants (any selection), and a
+  // non-default Status. It counts dimensions, NOT selected values, so it stays
+  // monotonic — narrowing Source from three sources to one must not make the
+  // badge fall from 3 to 1, and an all-sources selection normalizes to the
+  // unrestricted wire so it correctly reads 0. The primary triad (unread /
+  // watching) lives in the header and is not counted here.
+  const popoverFilterCount =
+    (origin.length > 0 ? 1 : 0) + (participants.length > 0 ? 1 : 0) + (engagement !== "active" ? 1 : 0);
 
   const resolveAgentName = useAgentNameMap();
 
@@ -438,7 +456,7 @@ export function ConversationList({
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">
-        {isLoading && allRows.length === 0 && (
+        {isLoading && !hasAnyRow && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             Loading…
           </div>
@@ -448,7 +466,7 @@ export function ConversationList({
             `isLoadingError` (not `isError`) is deliberate: a failed background
             refetch keeps the prior data, so gating on `isError` would flip a
             legitimately-empty list into an error on a transient 30s-refetch blip. */}
-        {isLoadingError && allRows.length === 0 && (
+        {isLoadingError && !hasAnyRow && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             <p style={{ margin: 0 }}>{"Couldn't load conversations."}</p>
             <button
@@ -468,7 +486,7 @@ export function ConversationList({
             </button>
           </div>
         )}
-        {!isLoading && !isLoadingError && allRows.length === 0 && (
+        {!isLoading && !isLoadingError && !hasAnyRow && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             <p style={{ margin: 0 }}>{emptyCopy.title}</p>
             <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
@@ -597,7 +615,7 @@ export function ConversationList({
             </div>
           );
         })}
-        {hasNextPage && allRows.length > 0 && (
+        {hasNextPage && hasAnyRow && (
           <div style={{ padding: "var(--sp-2) var(--sp-3)" }}>
             <button
               type="button"
