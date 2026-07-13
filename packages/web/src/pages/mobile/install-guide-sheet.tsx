@@ -40,16 +40,24 @@ export function InstallGuideSheet({
         return;
       }
       if (event.key !== "Tab" || !node) return;
-      const focusables = node.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
+      const focusables = [
+        ...node.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ];
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
       if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
+      const active = document.activeElement as HTMLElement | null;
+      // Focus sitting on the dialog root (initial) or escaped outside the set:
+      // pull it back to the first/last control so Tab never leaves the sheet.
+      if (!active || !focusables.includes(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && active === first) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
+      } else if (!event.shiftKey && active === last) {
         event.preventDefault();
         first.focus();
       }

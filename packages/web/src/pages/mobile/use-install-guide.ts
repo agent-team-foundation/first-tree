@@ -24,25 +24,42 @@ type BeforeInstallPromptEvent = Event & {
 export type InstallGuideMode = "native" | "ios" | "android-manual";
 export type InstallOutcome = "accepted" | "dismissed" | "unavailable";
 
-// Module-level singleton: the event can fire before the mobile shell mounts, so
-// we start listening at import time and replay the captured event to React.
+// Module-level singleton snapshot: the events can fire before the mobile shell
+// mounts, so we start listening at import time and replay state to React. The
+// snapshot object is only replaced on a real change, so useSyncExternalStore's
+// getSnapshot stays stable (no tearing / render loops). `installed` is part of
+// the snapshot so an install completed from Chrome's menu/omnibox (the Android
+// manual path, where `prompt` is already null) still re-renders consumers.
+type InstallSnapshot = { prompt: BeforeInstallPromptEvent | null; installed: boolean };
+
+const EMPTY_SNAPSHOT: InstallSnapshot = { prompt: null, installed: false };
+
 let deferredPrompt: BeforeInstallPromptEvent | null = null;
+let installedFlag = false;
+let snapshot: InstallSnapshot = EMPTY_SNAPSHOT;
 const subscribers = new Set<() => void>();
 
-function emit(): void {
+function publish(): void {
+  snapshot = { prompt: deferredPrompt, installed: installedFlag };
   for (const notify of subscribers) notify();
 }
 
 if (typeof window !== "undefined") {
+  installedFlag = readInstallGuideState().installed;
+  snapshot = { prompt: null, installed: installedFlag };
   window.addEventListener("beforeinstallprompt", (event) => {
+    // Only intercept on Android, where we render a replacement (the sheet). On
+    // desktop/other surfaces we leave the browser's own install UI untouched.
+    if (detectPlatform() !== "android") return;
     event.preventDefault();
     deferredPrompt = event as BeforeInstallPromptEvent;
-    emit();
+    publish();
   });
   window.addEventListener("appinstalled", () => {
     deferredPrompt = null;
+    installedFlag = true;
     markInstalled();
-    emit();
+    publish();
   });
 }
 
@@ -51,8 +68,8 @@ function subscribePrompt(callback: () => void): () => void {
   return () => subscribers.delete(callback);
 }
 
-function getPromptSnapshot(): BeforeInstallPromptEvent | null {
-  return deferredPrompt;
+function getSnapshot(): InstallSnapshot {
+  return snapshot;
 }
 
 /** Which sheet variant to render, or null when there is nothing to install to. */
@@ -69,9 +86,10 @@ export function useInstallPrompt(): {
   mode: InstallGuideMode | null;
   install: () => Promise<InstallOutcome>;
 } {
-  const prompt = useSyncExternalStore(subscribePrompt, getPromptSnapshot, () => null);
+  const snap = useSyncExternalStore(subscribePrompt, getSnapshot, () => EMPTY_SNAPSHOT);
   const platform = useMemo(() => detectPlatform(), []);
-  const mode = resolveMode(platform, prompt !== null);
+  // Once installed, there is nothing to promote — hides every surface reactively.
+  const mode = snap.installed ? null : resolveMode(platform, snap.prompt !== null);
 
   const install = useCallback(async (): Promise<InstallOutcome> => {
     if (!deferredPrompt) return "unavailable";
@@ -79,7 +97,7 @@ export function useInstallPrompt(): {
     await event.prompt();
     const choice = await event.userChoice;
     deferredPrompt = null;
-    emit();
+    publish();
     return choice.outcome;
   }, []);
 
