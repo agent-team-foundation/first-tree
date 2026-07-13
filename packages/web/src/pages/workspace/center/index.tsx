@@ -66,6 +66,7 @@ export function CenterPanel({
         onCreated={onSelectChat}
         onShowConversations={onShowConversations}
         initialParticipantIds={initialParticipantIds}
+        mobile={presentation === "mobile"}
       />
     );
   }

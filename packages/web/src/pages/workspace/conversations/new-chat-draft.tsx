@@ -77,8 +77,13 @@ export function NewChatDraft({
   onCreated,
   onShowConversations = null,
   initialParticipantIds,
+  mobile = false,
 }: {
   onCreated: (chatId: string) => void;
+  /** Touch surface (the mobile route): enlarge tap targets to the touch
+   *  minimum and make Enter insert a newline (send is the button only),
+   *  matching the mobile chat composer. */
+  mobile?: boolean;
   /** Non-null only in narrow-viewport mode — renders a hamburger in the
    *  top-left corner that summons the conversation-list overlay. Without
    *  it, narrow users who land on a draft URL have no path back to their
@@ -687,8 +692,9 @@ export function NewChatDraft({
                           position: "absolute",
                           top: 1,
                           right: 1,
-                          width: 14,
-                          height: 14,
+                          // Mobile: roomier corner × (kept modest vs the thumbnail).
+                          width: mobile ? 20 : 14,
+                          height: mobile ? 20 : 14,
                           borderRadius: "50%",
                           background: "var(--color-overlay-scrim)",
                           border: "none",
@@ -700,7 +706,7 @@ export function NewChatDraft({
                           padding: 0,
                         }}
                       >
-                        <X className="h-2 w-2" />
+                        <X className={mobile ? "h-3 w-3" : "h-2 w-2"} />
                       </button>
                     </div>
                   ) : (
@@ -714,8 +720,9 @@ export function NewChatDraft({
                           title="Remove file"
                           aria-label={`Remove ${att.file.name}`}
                           style={{
-                            width: 14,
-                            height: 14,
+                            // Mobile: roomier tap target on the file chip's × .
+                            width: mobile ? 26 : 14,
+                            height: mobile ? 26 : 14,
                             borderRadius: "50%",
                             background: "var(--color-overlay-scrim)",
                             border: "none",
@@ -727,7 +734,7 @@ export function NewChatDraft({
                             padding: 0,
                           }}
                         >
-                          <X className="h-2 w-2" />
+                          <X className={mobile ? "h-3.5 w-3.5" : "h-2 w-2"} />
                         </button>
                       }
                     />
@@ -767,7 +774,9 @@ export function NewChatDraft({
                 onKeyDown={(e) => {
                   if (e.nativeEvent.isComposing) return;
                   if (mention.handleKey(e)) return;
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  // Mobile soft keyboards have no Shift+Enter, so Enter inserts a
+                  // newline; sending is the button only. Desktop keeps Enter-to-send.
+                  if (!mobile && e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void handleSend();
                   }
@@ -828,16 +837,18 @@ export function NewChatDraft({
                   disabled={sending || createMut.isPending}
                   title="Attach file"
                   aria-label="Attach file"
-                  className="inline-flex items-center"
+                  className={cn("inline-flex items-center", mobile && "justify-center")}
                   style={{
                     background: "none",
                     border: "none",
                     cursor: sending || createMut.isPending ? "not-allowed" : "pointer",
                     color: "var(--fg-3)",
                     padding: 0,
+                    // Mobile: grow the tap target to the touch minimum.
+                    ...(mobile ? { width: 44, height: 44 } : {}),
                   }}
                 >
-                  <Paperclip className="h-3.5 w-3.5" />
+                  <Paperclip className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
                 </button>
                 <input
                   ref={fileInputRef}
@@ -863,22 +874,24 @@ export function NewChatDraft({
                   type="button"
                   onClick={() => void handleSend()}
                   disabled={!canSend}
-                  title={sendBlockedReason ?? "Send (Enter)"}
+                  title={sendBlockedReason ?? (mobile ? "Send" : "Send (Enter)")}
                   aria-label="Send"
                   className={cn(
                     "inline-flex items-center justify-center transition-opacity",
                     !canSend && "opacity-40 cursor-not-allowed",
                   )}
                   style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "var(--radius-input)",
+                    // Mobile: 44 hit area (the only send path there — Enter inserts
+                    // a newline); desktop stays compact.
+                    width: mobile ? 44 : 28,
+                    height: mobile ? 44 : 28,
+                    borderRadius: mobile ? 12 : "var(--radius-input)",
                     background: "var(--fg)",
                     color: "var(--bg-raised)",
                     border: "none",
                   }}
                 >
-                  <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  <ArrowUp className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} strokeWidth={2.5} />
                 </button>
               </span>
             </div>

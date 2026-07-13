@@ -663,4 +663,43 @@ describe("AskTakeover", () => {
     // The opaque fill now lives on the wrapper so the field still reads as a box.
     expect(ta.parentElement?.style.background).toBe("var(--bg)");
   });
+
+  it("mobile: enlarged tap targets, Enter does not reply (Reply button is the only submit)", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} mobile />,
+    );
+    const reply = btn(c, "Reply");
+    const atBtn = c.querySelector<HTMLButtonElement>('button[aria-label="Mention an agent"]');
+    const attachBtn = c.querySelector<HTMLButtonElement>('button[aria-label="Attach file"]');
+    if (!reply || !atBtn || !attachBtn) throw new Error("Mobile ask controls missing");
+    // Tap targets clear the touch minimum.
+    expect(Number.parseInt(reply.style.height, 10)).toBe(44);
+    expect(Number.parseInt(atBtn.style.width, 10)).toBe(44);
+    expect(Number.parseInt(attachBtn.style.width, 10)).toBe(44);
+
+    // Enter inserts a newline (does not resolve); the Reply button submits.
+    const ta = freeTextBox(c);
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "looks risky");
+    await keyDown(window, "Enter");
+    expect(onReply).not.toHaveBeenCalled();
+    await click(reply);
+    expect(onReply).toHaveBeenCalledWith({ content: "looks risky", mentions: [], images: [] });
+  });
+
+  it("desktop: compact controls and Enter resolves the ask", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} />,
+    );
+    const reply = btn(c, "Reply");
+    if (!reply) throw new Error("Reply button missing");
+    expect(Number.parseInt(reply.style.height, 10)).toBe(34);
+    const ta = freeTextBox(c);
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "looks risky");
+    await keyDown(window, "Enter");
+    expect(onReply).toHaveBeenCalledWith({ content: "looks risky", mentions: [], images: [] });
+  });
 });
