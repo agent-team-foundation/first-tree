@@ -89,6 +89,23 @@ describe("applyOptimisticPin", () => {
     expect(pageAt(next, 0).rows.find((r) => r.chatId === "p")?.pinnedAt).toBeNull();
   });
 
+  it("drops a Pinned-only chat from the list on unpin (no loaded rows fallback) until refetch", () => {
+    // A low-activity pin surfaced via the projection but sitting beyond the
+    // loaded ordinary-rows window: unpinning removes it from `pinned` with no
+    // `rows` copy to fall back into, so it leaves the rail until the trailing
+    // invalidate refetches it at its true (off-first-page) recency slot. The
+    // end state is correct — this only documents the transient.
+    const data = infinite([
+      page({
+        priorityRows: { attention: [], pinned: [row({ chatId: "p", pinnedAt: EARLIER })] },
+        rows: [row({ chatId: "other" })],
+      }),
+    ]);
+    const next = applyOptimisticPin(data, "p", false, NOW);
+    expect(pageAt(next, 0).priorityRows.pinned).toHaveLength(0);
+    expect(pageAt(next, 0).rows.map((r) => r.chatId)).toEqual(["other"]);
+  });
+
   it("keeps an attention chat in attention when pinned (attention wins) and only flips pinnedAt", () => {
     const data = infinite([
       page({ priorityRows: { attention: [row({ chatId: "f" })], pinned: [] }, rows: [row({ chatId: "g" })] }),

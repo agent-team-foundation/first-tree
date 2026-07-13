@@ -704,9 +704,10 @@ function GroupDropdown({ group, onGroupChange }: { group: GroupMode; onGroupChan
           }}
         >
           {/* Grouping-mode icon carries the "group by" affordance; the visible
-              label stays compact (`Time` / `Source`) for the narrow rail. */}
+              label stays a single compact word (`Recent` / `Source`) with
+              `nowrap` so it never wraps to two lines in the narrow rail header. */}
           <ListTree size={13} strokeWidth={1.75} style={{ color: "var(--fg-4)" }} aria-hidden />
-          <span>{current?.label ?? "Time"}</span>
+          <span className="whitespace-nowrap">{current?.label ?? "Recent"}</span>
           <ChevronDown size={12} strokeWidth={1.75} />
         </button>
       )}

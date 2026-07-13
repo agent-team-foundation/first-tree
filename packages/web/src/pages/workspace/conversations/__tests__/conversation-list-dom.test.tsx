@@ -385,8 +385,9 @@ describe("ConversationList", () => {
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
 
     await click(container.querySelector('button[aria-haspopup="listbox"]'));
+    // Target the listbox option (not the trigger, which now also reads "Recent").
     await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Recent activity") ?? null,
+      [...document.body.querySelectorAll('[role="option"]')].find((button) => button.textContent === "Recent") ?? null,
     );
     expect(container.textContent).toContain("Older");
 
