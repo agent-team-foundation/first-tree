@@ -1,5 +1,5 @@
 import type { MeMembership, OrgBrief } from "@first-tree/shared";
-import { ChevronRight, ExternalLink, HelpCircle, Loader2, LogOut, Palette, X } from "lucide-react";
+import { ChevronRight, ExternalLink, HelpCircle, Loader2, LogOut, Palette, Smartphone, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../auth/auth-context.js";
 import { Avatar } from "../../components/avatar.js";
@@ -7,6 +7,9 @@ import { Button } from "../../components/ui/button.js";
 import { ThemeToggle } from "../../components/ui/theme-toggle.js";
 import { DISCORD_INVITE_URL } from "../../lib/community.js";
 import { MobilePage, MobileSection, mobileCardStyle } from "./components.js";
+import { InstallGuideSheet } from "./install-guide-sheet.js";
+import { isStandalone } from "./install-guide-state.js";
+import { useInstallPrompt } from "./use-install-guide.js";
 
 export function MobileMePage() {
   const { user, teamDisplayName, role, logout } = useAuth();
@@ -50,6 +53,8 @@ export function MobileMePage() {
             />
           </MobilePanel>
         </MobileSection>
+
+        <MobileInstallEntry />
 
         <MobileSection title="Support">
           <MobileExternalRow
@@ -302,6 +307,58 @@ function MobileTeamSwitcher({
             </div>
           </div>
         </div>
+      ) : null}
+    </>
+  );
+}
+
+// Permanent "add to home screen" entry — always reachable even after the
+// auto-guide is dismissed. Manual opens never count toward the auto-show cap.
+function MobileInstallEntry() {
+  const { mode, install } = useInstallPrompt();
+  const standalone = useMemo(() => isStandalone(), []);
+  const [open, setOpen] = useState(false);
+
+  if (standalone || mode === null) return null;
+
+  return (
+    <>
+      <MobileSection title="App">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            ...mobileCardStyle("panel"),
+            gap: "var(--sp-3)",
+            border: "var(--hairline) solid var(--border)",
+            color: "var(--fg)",
+            cursor: "pointer",
+          }}
+          data-mobile-card="panel"
+        >
+          <span className="shrink-0" style={{ color: "var(--fg-3)" }}>
+            <Smartphone aria-hidden className="h-4 w-4" />
+          </span>
+          <div className="min-w-0" style={{ flex: 1 }}>
+            <p className="text-mobile-subtitle" style={{ margin: 0 }}>
+              Add to Home Screen
+            </p>
+            <p className="text-mobile-body" style={{ color: "var(--fg-3)", margin: "var(--sp-0_5) 0 0" }}>
+              Install First Tree as an app for instant, full-screen access.
+            </p>
+          </div>
+          <ChevronRight aria-hidden className="h-4 w-4 shrink-0" style={{ color: "var(--fg-4)" }} />
+        </button>
+      </MobileSection>
+      {open ? (
+        <InstallGuideSheet
+          mode={mode}
+          onInstall={() => {
+            void install().finally(() => setOpen(false));
+          }}
+          onClose={() => setOpen(false)}
+        />
       ) : null}
     </>
   );

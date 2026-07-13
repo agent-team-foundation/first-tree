@@ -7,6 +7,8 @@ import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { MobileBottomTabs } from "./components.js";
 import { countAttentionRows, countUnreadRows } from "./data.js";
+import { InstallGuideSheet } from "./install-guide-sheet.js";
+import { useInstallGuideAuto } from "./use-install-guide.js";
 
 export function MobileShell() {
   const {
@@ -31,6 +33,13 @@ export function MobileShell() {
     refetchInterval: 30_000,
   });
 
+  const selectedChatId = searchParams.get("c");
+  const immersiveChat = location.pathname === "/m/chat" && selectedChatId !== null;
+  const rows = tabCountsQuery.data?.rows ?? [];
+
+  // Kept above the onboarding early-return so hook order stays unconditional.
+  const installGuide = useInstallGuideAuto({ hasContent: rows.length > 0, immersive: immersiveChat });
+
   if (
     shouldEnterOnboarding({
       meLoaded,
@@ -43,10 +52,6 @@ export function MobileShell() {
     return <Navigate to="/onboarding" replace />;
   }
 
-  const selectedChatId = searchParams.get("c");
-  const immersiveChat = location.pathname === "/m/chat" && selectedChatId !== null;
-  const rows = tabCountsQuery.data?.rows ?? [];
-
   return (
     <div className="h-dvh-screen pt-safe-top flex flex-col overflow-hidden" style={{ background: "var(--bg)" }}>
       <TeamSwitchOverlay />
@@ -56,6 +61,9 @@ export function MobileShell() {
       {immersiveChat ? null : (
         <MobileBottomTabs attentionCount={countAttentionRows(rows)} unreadCount={countUnreadRows(rows)} />
       )}
+      {installGuide.open && installGuide.mode ? (
+        <InstallGuideSheet mode={installGuide.mode} onInstall={installGuide.install} onClose={installGuide.dismiss} />
+      ) : null}
     </div>
   );
 }
