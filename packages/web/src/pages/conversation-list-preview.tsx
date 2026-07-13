@@ -256,21 +256,12 @@ function seededClient(): QueryClient {
   // narrows visibly instead of blanking.
   client.setQueryData(["me", "chats", "all", "active", false, "manual", null], page(bySource(ACTIVE_ALL, "manual")));
   client.setQueryData(["me", "chats", "all", "active", false, "github", null], page(bySource(ACTIVE_ALL, "github")));
-  // Name-map source consumed by `useAgentNameMap` (empty is fine — the
-  // preview doesn't surface participant chips).
+  // Name-map source consumed by `useAgentNameMap` (empty is fine). The ⚙
+  // Participants picker is search-only: its live typeahead results + selected
+  // chips need a backend, so this offline preview only demonstrates the search
+  // input + the "Type to search people." empty state — results, chips, and the
+  // filtered/no-match/error branches are covered by the DOM tests.
   client.setQueryData(["managed-agents", "name-map"], []);
-  // Addressable roster for the ⚙ filter's Participants OR-picker — so the
-  // picker renders the real checkbox list offline instead of the (correct but
-  // demo-unfriendly) "Couldn't load people." no-backend state.
-  client.setQueryData(["agents", "org-list", { addressableOnly: true }], {
-    items: [
-      { uuid: "agent-nova", displayName: "nova" },
-      { uuid: "agent-design", displayName: "design-critique" },
-      { uuid: "agent-market", displayName: "marketing-writer" },
-      { uuid: "agent-res", displayName: "research" },
-    ],
-    nextCursor: null,
-  });
   return client;
 }
 
