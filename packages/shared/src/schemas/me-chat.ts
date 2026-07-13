@@ -368,9 +368,43 @@ export const meChatRowSchema = z.object({
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
+/**
+ * Priority groups extracted server-side across the *full* matching set (not
+ * just the loaded page), rendered above the ordinary list. Every chat appears
+ * in at most one place — attention > pinned > ordinary `rows` — so the client
+ * never has to de-duplicate a chat across groups.
+ *   - `attention`: chats needing the viewer now — a caller-managed speaker in
+ *     `failed`, or an open request to the viewer — ordered failed-first, then
+ *     by `activityAt` DESC.
+ *   - `pinned`: the viewer's pinned chats (private per-user state), ordered by
+ *     `pinnedAt` DESC, excluding any already surfaced in `attention`.
+ * `.default({...})` for version skew: a web bundle ahead of a server that
+ * predates these groups reads them as empty rather than `undefined`.
+ */
+export const meChatPriorityRowsSchema = z
+  .object({
+    attention: z.array(meChatRowSchema),
+    pinned: z.array(meChatRowSchema),
+  })
+  .default({ attention: [], pinned: [] });
+export type MeChatPriorityRows = z.infer<typeof meChatPriorityRowsSchema>;
+
 export const listMeChatsResponseSchema = z.object({
+  priorityRows: meChatPriorityRowsSchema,
   rows: z.array(meChatRowSchema),
   nextCursor: z.string().nullable(),
+  /**
+   * Page-independent aggregate counters over the viewer's chats.
+   *   - `unread`: total chats with an unread mention for the viewer
+   *     (org-scoped, non-deleted) — the global "you have N unread" signal, not
+   *     narrowed by the transient filter. `.default` for the same version-skew
+   *     reason as `priorityRows`.
+   */
+  counts: z
+    .object({
+      unread: z.number().int(),
+    })
+    .default({ unread: 0 }),
 });
 export type ListMeChatsResponse = z.infer<typeof listMeChatsResponseSchema>;
 

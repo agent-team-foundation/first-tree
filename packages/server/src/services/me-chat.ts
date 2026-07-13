@@ -294,69 +294,91 @@ function participantsFilterSql(agentIds: ReadonlyArray<string>): SQL {
 // List
 // ---------------------------------------------------------------------------
 
+const toChatDate = (v: Date | string | null): Date | null => {
+  if (v === null) return null;
+  return v instanceof Date ? v : new Date(v);
+};
+
 /**
- * GET /me/chats — cursor-paginated conversation list.
+ * Raw row shape returned by `selectMeChatRawRows` — the single-stream
+ * projection every `listMeChats` sub-query (ordinary page, global pinned,
+ * global attention candidates) shares so the three row sets are byte-identical
+ * in shape.
+ */
+type RawMeChatRow = {
+  chat_id: string;
+  type: string;
+  topic: string | null;
+  description: string | null;
+  parent_chat_id: string | null;
+  last_message_at: Date | string | null;
+  last_message_preview: string | null;
+  activity_at: Date | string | null;
+  access_mode: "speaker" | "watcher";
+  membership_role: string;
+  unread_mention_count: number;
+  open_request_count: number;
+  engagement_status: ChatEngagementStatus;
+  pinned_at: Date | string | null;
+  source: ChatSource;
+  entity_type: string | null;
+  chat_has_explicit_mention_to_me: boolean;
+};
+
+/** First-wins de-dup by `chat_id` (a chat can be both pinned and an attention candidate). */
+function dedupeRawByChatId(rows: RawMeChatRow[]): RawMeChatRow[] {
+  const seen = new Set<string>();
+  const out: RawMeChatRow[] = [];
+  for (const r of rows) {
+    if (seen.has(r.chat_id)) continue;
+    seen.add(r.chat_id);
+    out.push(r);
+  }
+  return out;
+}
+
+/**
+ * The single-stream projection behind every `listMeChats` sub-query. Keeping
+ * ONE SELECT guarantees the ordinary / pinned / attention row sets are
+ * shape-identical — same columns, same source / entity / explicit-mention
+ * derivation — so a chat looks the same wherever it surfaces.
  *
  * SQL strategy:
- *   - Single-stream query: `chats JOIN chat_membership LEFT JOIN
- *     chat_user_state`. The membership row carries access_mode
- *     (speaker → "participant" / watcher → "watching"); the user
- *     state row supplies the unread counter (COALESCE → 0 when
- *     row is missing).
- *   - Filter `parent_chat_id IS NULL` defensively. First Tree has no sub-chat
- *     product layer (see first-tree-context PR #281); the column is
- *     decision-inert scaffolding, so any historical non-null row stays
- *     hidden from the conversation list.
- *   - Filter `c.organization_id = ?` to defend against historical
- *     cross-org pollution rows that may still reference the caller
- *     (see fix/cross-org-direct-chat-pollution).
- *   - Sort `(last_message_at DESC NULLS LAST, chat_id DESC)`.
- *   - Cursor narrows the result to rows STRICTLY before the cursor.
- *   - Followed by a participants-list lookup for the page only.
+ *   - `chats JOIN chat_membership LEFT JOIN chat_user_state`. Membership
+ *     carries access_mode (speaker → participant / watcher → watching); user
+ *     state supplies the unread + pin + engagement columns (COALESCE defaults
+ *     when the lazy row is missing).
+ *   - `parent_chat_id IS NULL` — First Tree has no sub-chat product layer
+ *     (first-tree-context PR #281); any historical non-null row stays hidden.
+ *   - `c.organization_id = ?` — defend against historical cross-org membership
+ *     pollution (fix/cross-org-direct-chat-pollution) that would otherwise leak
+ *     into the list and 404 on click via `requireChatAccess`.
+ *   - `chat_has_explicit_mention_to_me` scans the caller's unread window for a
+ *     message whose `metadata.mentions` contains the caller's uuid,
+ *     distinguishing an explicit `@me` from the v1 1-on-1 implicit DM
+ *     auto-mention (services/message.ts `dmAutoProjection`).
+ *
+ * `filters` carries the view-scoped predicates (unread / watching / engagement
+ * / origin / participants), computed once and reused verbatim so every group
+ * honours the active filter identically. `extra` is the per-sub-query predicate
+ * (pinned / attention-candidate / cursor + priority-exclusion). `limit === null`
+ * runs unbounded — the priority groups are naturally bounded by the user's pins
+ * / open requests / managed agents.
  */
-export async function listMeChats(
+async function selectMeChatRawRows(
   db: Database,
-  humanAgentId: string,
-  callerMemberId: string,
-  organizationId: string,
-  query: ListMeChatsQuery,
-): Promise<ListMeChatsResponse> {
-  const limit = query.limit;
-  const cursor = query.cursor ? decodeCursor(query.cursor) : null;
-  if (query.cursor && !cursor) {
-    throw new BadRequestError("Invalid cursor");
-  }
-
-  const filterUnreadOnly = query.filter === "unread";
-  const filterWatchingOnly = query.watching === true;
-  const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
-  const originPredicate = query.origin ? originsFilterSql(query.origin) : sql`TRUE`;
-  const participantsPredicate = query.with ? participantsFilterSql(query.with) : sql`TRUE`;
-
-  // Cursor predicate (sort: activity_at DESC, chat_id DESC). `chats.activity_at`
-  // is NOT NULL, so this is a plain keyset with no null-timestamp branches.
-  // postgres-js can't serialize a JS Date through a raw sql template without
-  // column metadata; pre-stringify to ISO so the param goes through as text and
-  // the `::timestamptz` cast handles the rest.
-  const cursorTsIso = cursor ? cursor.activityAt.toISOString() : null;
-  const cursorPredicate = !cursor
-    ? sql`TRUE`
-    : sql`(c.activity_at < ${cursorTsIso}::timestamptz
-           OR (c.activity_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
-
-  // postgres-js returns timestamptz as ISO strings when bound through
-  // a raw sql template; coerce below so the response uses ISO
-  // strings consistently.
-  //
-  // The `chat_has_explicit_mention_to_me` correlated subquery scans the
-  // caller's unread window (`m.created_at > last_read_at`) for any message
-  // whose `metadata.mentions` JSONB array contains the caller's
-  // human-agent uuid. Distinguishes explicit `@<me>` from the v1 1-on-1
-  // implicit DM auto-mention (services/message.ts:282 `dmAutoProjection`),
-  // which bumps `unread_mention_count` for the red dot but never writes
-  // the recipient into `metadata.mentions`. Uses the existing
-  // `idx_messages_chat_time` for the chat+window scan.
-  const rawRows = (await db.execute(sql`
+  params: {
+    humanAgentId: string;
+    organizationId: string;
+    filters: SQL;
+    extra: SQL;
+    orderBy: SQL;
+    limit: number | null;
+  },
+): Promise<RawMeChatRow[]> {
+  const { humanAgentId, organizationId, filters, extra, orderBy, limit } = params;
+  const limitClause = limit === null ? sql`` : sql`LIMIT ${limit}`;
+  return (await db.execute(sql`
     SELECT
       c.id                  AS chat_id,
       c.type                AS type,
@@ -389,58 +411,36 @@ export async function listMeChats(
       LEFT JOIN chat_user_state cus
         ON cus.chat_id = c.id AND cus.agent_id = ${humanAgentId}
      WHERE c.parent_chat_id IS NULL
-       /* Scope to the caller's org. Without this, cross-org dirty
-          chats whose chat_membership still references the caller's
-          human agent (historical pollution — see
-          fix/cross-org-direct-chat-pollution) would leak into the
-          list and 404 on click via requireChatAccess. */
        AND c.organization_id = ${organizationId}
-       AND (${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
-       AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
-       AND ${engagementPredicate}
-       AND ${originPredicate}
-       AND ${participantsPredicate}
-       AND ${cursorPredicate}
-     ORDER BY c.activity_at DESC, c.id DESC
-     LIMIT ${limit + 1}
-  `)) as unknown as Array<{
-    chat_id: string;
-    type: string;
-    topic: string | null;
-    description: string | null;
-    parent_chat_id: string | null;
-    last_message_at: Date | string | null;
-    last_message_preview: string | null;
-    activity_at: Date | string | null;
-    access_mode: "speaker" | "watcher";
-    membership_role: string;
-    unread_mention_count: number;
-    open_request_count: number;
-    engagement_status: ChatEngagementStatus;
-    pinned_at: Date | string | null;
-    source: ChatSource;
-    entity_type: string | null;
-    chat_has_explicit_mention_to_me: boolean;
-  }>;
+       AND ${filters}
+       AND ${extra}
+     ORDER BY ${orderBy}
+     ${limitClause}
+  `)) as unknown as RawMeChatRow[];
+}
 
-  const toDate = (v: Date | string | null): Date | null => {
-    if (v === null) return null;
-    return v instanceof Date ? v : new Date(v);
-  };
+/**
+ * Hydrate raw rows into `MeChatRow`s: participant chips, the live-dot / failed
+ * / busy status projections (shared with `GET /chats/:id/agent-status`), and
+ * the first-message title fallback. Returns `failedByChat` so the caller can
+ * build the "Needs attention" group without re-deriving composite status in
+ * SQL. `managedAgentIds` is the caller-scoped "mine" set (computed once and
+ * shared across the priority + ordinary passes) that narrows `failed` to the
+ * caller's own agents. `withTurnText: false` — the chat-list never renders turn
+ * narration.
+ */
+async function enrichMeChatRows(
+  db: Database,
+  rawRows: RawMeChatRow[],
+  params: { humanAgentId: string; managedAgentIds: ReadonlySet<string> },
+): Promise<{ rows: MeChatRow[]; failedByChat: Map<string, string[]> }> {
+  const { humanAgentId, managedAgentIds } = params;
+  if (rawRows.length === 0) return { rows: [], failedByChat: new Map() };
 
-  const hasMore = rawRows.length > limit;
-  const pageRaw = hasMore ? rawRows.slice(0, limit) : rawRows;
-  const last = pageRaw[pageRaw.length - 1];
-  const lastActivity = last ? toDate(last.activity_at) : null;
-  const nextCursor = hasMore && last && lastActivity ? encodeCursor(lastActivity, last.chat_id) : null;
+  const chatIds = rawRows.map((r) => r.chat_id);
 
-  if (pageRaw.length === 0) return { rows: [], nextCursor: null };
-
-  const chatIds = pageRaw.map((r) => r.chat_id);
-
-  // Lookup participants (speakers only — watchers do not appear in the
-  // conversation row's participant chip list). Drives the participant chips
-  // AND the per-chat non-human speaker set the status projections filter on.
+  // Speakers only — watchers do not appear in the row's participant chips. Also
+  // drives the per-chat non-human speaker set the status projections filter on.
   const participantRows = await db
     .select({
       chatId: chatMembership.chatId,
@@ -458,8 +458,6 @@ export async function listMeChats(
     .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
-  // Per-chat non-human speaker set — the filter for the failed / live-dot
-  // projections below (pending is intentionally NOT speaker-filtered).
   const nonHumanSpeakersByChat = new Map<string, Set<string>>();
   for (const p of participantRows) {
     const list = participantsByChat.get(p.chatId) ?? [];
@@ -486,38 +484,9 @@ export async function listMeChats(
     }
   }
 
-  // One producer for every per-(agent,chat) status signal this list needs
-  // (live-dot / failed), shared with `GET /chats/:id/agent-status`.
-  // `withTurnText: false` — the chat-list never renders the turn narration
-  // (only the compose status bar does). Each signal is projected below.
+  // One producer for every per-(agent,chat) status signal (live-dot / failed /
+  // busy), shared with `GET /chats/:id/agent-status`.
   const statusByChat = await resolveAgentChatStatuses(db, chatIds, { withTurnText: false });
-
-  // Manager-scope: non-human agent UUIDs the caller manages
-  // (`agents.manager_id = caller.member_id`). Drives the "mine" narrowing on
-  // the `failedAgentIds` projection below — so a watcher (or peer speaker) is
-  // no longer pinned into "Needs attention" by someone else's broken agent.
-  //
-  // The `ne(type, 'human')` guard excludes the caller's own human agent (which
-  // is self-managed, `manager_id = caller.member_id` per `createTestAdmin` /
-  // `createMember`). Today the downstream projection is safe regardless —
-  // `resolveAgentChatStatuses` already filters non-human, so a human agent in
-  // this set never reaches the loop. The guard is defensive: if a future
-  // change ever surfaces human statuses (e.g. an "adapter offline" signal),
-  // we don't want the caller's own human agent's main accidentally flowing
-  // into `failedAgentIds`. Belt-and-braces flagged in PR #579 review.
-  //
-  // One indexed read via `idx_agents_manager`. Filtering by `manager_id` alone
-  // (no `organization_id` clause) is sufficient — `members.id` is unique per
-  // (user, org) so any agent whose manager is `callerMemberId` is necessarily
-  // in the caller's org. An extra `organization_id` clause would silently drop
-  // a legitimate "mine" agent in the (rare) case where the create-time
-  // invariant `agents.organization_id == manager.organization_id` was broken
-  // by a buggy admin path. Read-side trusts the invariant; write-side guards.
-  const managedRows = await db
-    .select({ uuid: agents.uuid })
-    .from(agents)
-    .where(and(eq(agents.managerId, callerMemberId), ne(agents.type, "human")));
-  const managedAgentIds = new Set(managedRows.map((r) => r.uuid));
 
   const liveActivityByChat = new Map<string, LiveActivity>();
   const failedByChat = new Map<string, string[]>();
@@ -525,9 +494,8 @@ export async function listMeChats(
 
   for (const [chatId, statuses] of statusByChat) {
     const speakers = nonHumanSpeakersByChat.get(chatId);
-    // live-dot: freshest activity among non-human SPEAKERS. (Narrowed from the
-    // old session-holder source — drops stray dots from agents that left the
-    // chat, and never lights for a human predictive-active session.)
+    // live-dot: freshest activity among non-human SPEAKERS (drops stray dots
+    // from agents that left the chat; never lights for a human session).
     let freshest: { activity: LiveActivity; startedMs: number } | null = null;
     const failed: string[] = [];
     const busy: string[] = [];
@@ -538,14 +506,11 @@ export async function listMeChats(
         const startedMs = new Date(s.activity.startedAt).getTime();
         if (!freshest || startedMs > freshest.startedMs) freshest = { activity: s.activity, startedMs };
       }
-      // failed — speaker-filtered AND narrowed to "mine" (R1). A peer's broken
-      // agent in a chat I'm in no longer pins my row to "Needs attention".
+      // failed — speaker-filtered AND narrowed to "mine" (R1): a peer's broken
+      // agent in a shared chat no longer pins my row to "Needs attention".
       if (isSpeaker && s.main === "failed" && isMine) failed.push(s.agentId);
-      // busy = speakers with composite `working` (the D-axis truth from
-      // `agent_chat_sessions.runtime_state`). Drives the chat-list activity
-      // indicator authoritatively, so it lights even when a runtime emits
-      // no intermediate session_events (codex no-events case) — the gap
-      // `liveActivity` alone can never cover. NOT narrowed to mine — "someone
+      // busy — speakers with composite `working` (the D-axis truth from
+      // `agent_chat_sessions.runtime_state`). NOT narrowed to mine — "someone
       // is working" is informational, not an attention signal.
       if (isSpeaker && s.working) busy.push(s.agentId);
     }
@@ -554,12 +519,8 @@ export async function listMeChats(
     if (busy.length > 0) busyByChat.set(chatId, busy);
   }
 
-  // First-message lookup for auto-title fallback. Mirrors
-  // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
-  // logic is the same as before the schema refactor — first-message
-  // resolution is a `messages` concern, independent of the membership
-  // tables.
-  const chatIdsNeedingFirstMessage = pageRaw
+  // First-message lookup for the auto-title fallback (only chats with no topic).
+  const chatIdsNeedingFirstMessage = rawRows
     .filter((r) => r.topic === null || r.topic.length === 0)
     .map((r) => r.chat_id);
   const firstMessageRows =
@@ -577,17 +538,13 @@ export async function listMeChats(
     if (s) firstMessageSummary.set(row.chatId, s);
   }
 
-  const rows: MeChatRow[] = pageRaw.map((r) => {
+  const rows: MeChatRow[] = rawRows.map((r) => {
     const participants = participantsByChat.get(r.chat_id) ?? [];
     const title = resolveChatTitle(r.topic, firstMessageSummary.get(r.chat_id) ?? null, participants, humanAgentId);
     const isSpeaker = r.access_mode === "speaker";
-    // Narrow the raw `metadata->>'entityType'` text to the
-    // `GithubEntityType` literal union when it matches a known value,
-    // otherwise null. Github rows always have a `entityType` set by
-    // the webhook writer (see `chat-metadata.ts`'s discriminated
-    // union); the explicit narrowing rejects values we don't ship —
-    // e.g. metadata hand-edited via SQL or an in-flight rollout that
-    // introduces a new entity type before shared/web learn about it.
+    // Narrow raw `metadata->>'entityType'` to the `GithubEntityType` union when
+    // it matches a known value, else null (rejects version-skew / hand-edited
+    // values).
     const entityType: MeChatRow["entityType"] =
       r.source === "github" && r.entity_type !== null && isKnownGithubEntityType(r.entity_type) ? r.entity_type : null;
     return {
@@ -602,14 +559,14 @@ export async function listMeChats(
       description: r.description,
       participants,
       participantCount: participants.length,
-      lastMessageAt: toDate(r.last_message_at)?.toISOString() ?? null,
+      lastMessageAt: toChatDate(r.last_message_at)?.toISOString() ?? null,
       lastMessagePreview: r.last_message_preview,
-      activityAt: toDate(r.activity_at)?.toISOString() ?? null,
+      activityAt: toChatDate(r.activity_at)?.toISOString() ?? null,
       unreadMentionCount: r.unread_mention_count,
       openRequestCount: r.open_request_count,
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
-      pinnedAt: toDate(r.pinned_at)?.toISOString() ?? null,
+      pinnedAt: toChatDate(r.pinned_at)?.toISOString() ?? null,
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
       busyAgentIds: busyByChat.get(r.chat_id) ?? [],
@@ -617,7 +574,181 @@ export async function listMeChats(
     };
   });
 
-  return { rows, nextCursor };
+  return { rows, failedByChat };
+}
+
+/**
+ * GET /me/chats — cursor-paginated conversation list with server-side priority
+ * projection.
+ *
+ * The response is three groups, computed so every chat appears in AT MOST ONE
+ * of them (attention > pinned > ordinary `rows`):
+ *   1. `priorityRows.attention` — extracted across the *full* matching set (not
+ *      just the loaded page): a caller-managed non-human speaker in `failed`,
+ *      OR an open request to the caller. Ordered failed-first then activity DESC.
+ *   2. `priorityRows.pinned` — the caller's pinned chats (private per-user
+ *      state), `pinned_at` DESC, minus anything already in attention.
+ *   3. `rows` — the ordinary activity-ordered page, EXCLUDING every priority
+ *      chat id, keyset-paginated on `activity_at`.
+ * Plus `counts.unread`, a page-independent global aggregate.
+ *
+ * `failed` is a composite status derived by `resolveAgentChatStatuses`, not a
+ * column, so attention is built via a bounded CANDIDATE set (open request OR a
+ * caller-managed non-human speaker present) that the enrichment pass resolves
+ * canonically — never a SQL re-implementation of the status folding.
+ *
+ * NOTE (v1 cost): the priority groups + `counts.unread` are recomputed on every
+ * page; the web reads them from the first page only. The sets are bounded
+ * (pins / open requests / managed agents), but `resolveAgentChatStatuses` runs
+ * on the candidate set each call — a fair follow-up is to gate the priority
+ * work on `cursor === null` once the client contract is settled.
+ */
+export async function listMeChats(
+  db: Database,
+  humanAgentId: string,
+  callerMemberId: string,
+  organizationId: string,
+  query: ListMeChatsQuery,
+): Promise<ListMeChatsResponse> {
+  const limit = query.limit;
+  const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+  if (query.cursor && !cursor) {
+    throw new BadRequestError("Invalid cursor");
+  }
+
+  const filterUnreadOnly = query.filter === "unread";
+  const filterWatchingOnly = query.watching === true;
+  const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
+  const originPredicate = query.origin ? originsFilterSql(query.origin) : sql`TRUE`;
+  const participantsPredicate = query.with ? participantsFilterSql(query.with) : sql`TRUE`;
+
+  // View-scoped filters shared by every group (ordinary + priority) so the
+  // active filter narrows all of them identically.
+  const filters = sql`(${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
+       AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
+       AND ${engagementPredicate}
+       AND ${originPredicate}
+       AND ${participantsPredicate}`;
+
+  // Caller-scoped "mine" set — the non-human agents the caller manages
+  // (`agents.manager_id = caller.member_id`, one indexed read via
+  // `idx_agents_manager`). Shared across the priority + ordinary enrichment
+  // passes and drives the "mine" narrowing on `failed`. The `ne(type, 'human')`
+  // guard excludes the caller's own self-managed human agent — defensive today
+  // (`resolveAgentChatStatuses` already filters non-human) but belt-and-braces
+  // if a future change ever surfaces human statuses. Filtering by `manager_id`
+  // alone is sufficient: `members.id` is unique per (user, org), so any agent
+  // whose manager is `callerMemberId` is necessarily in the caller's org.
+  const managedRows = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(eq(agents.managerId, callerMemberId), ne(agents.type, "human")));
+  const managedAgentIds = new Set(managedRows.map((r) => r.uuid));
+
+  const activityOrder = sql`c.activity_at DESC, c.id DESC`;
+
+  // --- Global attention candidates ---------------------------------------
+  // Bounded set the enrichment pass resolves into the attention group: any chat
+  // with an open request OR a caller-managed non-human speaker present. The
+  // `EXISTS` is speaker + non-human + manager-scoped so a chat only becomes a
+  // candidate for MY broken agent, never a peer's.
+  const managedSpeakerExists = sql`EXISTS (
+    SELECT 1 FROM chat_membership cm_s
+      JOIN agents a_s ON a_s.uuid = cm_s.agent_id
+     WHERE cm_s.chat_id = c.id
+       AND cm_s.access_mode = 'speaker'
+       AND a_s.type <> 'human'
+       AND a_s.manager_id = ${callerMemberId})`;
+  const attnCandidateRaw = await selectMeChatRawRows(db, {
+    humanAgentId,
+    organizationId,
+    filters,
+    extra: sql`(COALESCE(cus.open_request_count, 0) > 0 OR ${managedSpeakerExists})`,
+    orderBy: activityOrder,
+    limit: null,
+  });
+
+  // --- Global pinned ------------------------------------------------------
+  const pinnedRaw = await selectMeChatRawRows(db, {
+    humanAgentId,
+    organizationId,
+    filters,
+    extra: sql`cus.pinned_at IS NOT NULL`,
+    orderBy: sql`cus.pinned_at DESC, c.id DESC`,
+    limit: null,
+  });
+
+  // Enrich the priority union once (candidates ∪ pinned; disjoint from the
+  // ordinary page, which excludes them). `failedByChat` splits attention below.
+  const priorityRawUnion = dedupeRawByChatId([...attnCandidateRaw, ...pinnedRaw]);
+  const { rows: priorityRowsFlat, failedByChat } = await enrichMeChatRows(db, priorityRawUnion, {
+    humanAgentId,
+    managedAgentIds,
+  });
+  const priorityRowById = new Map(priorityRowsFlat.map((r) => [r.chatId, r]));
+
+  // Attention = candidates that actually qualify (failed OR open request),
+  // ordered failed-first then by activity. Each candidate slice is already
+  // activity DESC from the query and `filter` preserves order.
+  const attnQualified = attnCandidateRaw.filter((r) => failedByChat.has(r.chat_id) || r.open_request_count > 0);
+  const attention = [
+    ...attnQualified.filter((r) => failedByChat.has(r.chat_id)),
+    ...attnQualified.filter((r) => !failedByChat.has(r.chat_id)),
+  ]
+    .map((r) => priorityRowById.get(r.chat_id))
+    .filter((r): r is MeChatRow => r !== undefined);
+  const attentionIds = new Set(attention.map((r) => r.chatId));
+
+  // Pinned excludes anything already surfaced in attention (attention wins),
+  // preserving the `pinned_at` DESC order.
+  const pinned = pinnedRaw
+    .filter((r) => !attentionIds.has(r.chat_id))
+    .map((r) => priorityRowById.get(r.chat_id))
+    .filter((r): r is MeChatRow => r !== undefined);
+
+  // --- Ordinary page ------------------------------------------------------
+  // Excludes every priority chat id so a chat appears exactly once. The
+  // exclusion holds on ALL pages (priority chats can have any activity_at), so
+  // a pinned/attention chat never re-surfaces in a later ordinary page.
+  const priorityIds = new Set<string>([...attentionIds, ...pinned.map((r) => r.chatId)]);
+  const cursorTsIso = cursor ? cursor.activityAt.toISOString() : null;
+  const cursorPredicate = !cursor
+    ? sql`TRUE`
+    : sql`(c.activity_at < ${cursorTsIso}::timestamptz
+           OR (c.activity_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
+  const exclusionPredicate =
+    priorityIds.size === 0
+      ? sql`TRUE`
+      : sql`c.id NOT IN (${sql.join(
+          [...priorityIds].map((id) => sql`${id}`),
+          sql.raw(", "),
+        )})`;
+  const ordinaryRaw = await selectMeChatRawRows(db, {
+    humanAgentId,
+    organizationId,
+    filters,
+    extra: sql`${cursorPredicate} AND ${exclusionPredicate}`,
+    orderBy: activityOrder,
+    limit: limit + 1,
+  });
+
+  const hasMore = ordinaryRaw.length > limit;
+  const pageRaw = hasMore ? ordinaryRaw.slice(0, limit) : ordinaryRaw;
+  const last = pageRaw[pageRaw.length - 1];
+  const lastActivity = last ? toChatDate(last.activity_at) : null;
+  const nextCursor = hasMore && last && lastActivity ? encodeCursor(lastActivity, last.chat_id) : null;
+  const { rows } = await enrichMeChatRows(db, pageRaw, { humanAgentId, managedAgentIds });
+
+  // Page-independent global aggregate ("you have N unread"), not narrowed by
+  // the transient filter — matches the existing totalUnread pill semantics.
+  const unread = await countUnreadMeChats(db, humanAgentId, organizationId);
+
+  return {
+    priorityRows: { attention, pinned },
+    rows,
+    nextCursor,
+    counts: { unread },
+  };
 }
 
 /**

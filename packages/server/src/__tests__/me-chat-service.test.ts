@@ -181,12 +181,17 @@ describe("chat-first workspace service layer", () => {
       metadata: { mentions: [owner.humanAgentUuid] },
     });
 
+    // The `request` message opens a request to the human, so the chat surfaces
+    // in the attention group, not the ordinary `rows` — search all groups.
+    const findChat = (res: Awaited<ReturnType<typeof listMeChats>>) =>
+      [...res.priorityRows.attention, ...res.priorityRows.pinned, ...res.rows].find((r) => r.chatId === chatId);
+
     const before = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
     });
-    expect(before.rows.find((r) => r.chatId === chatId)).toMatchObject({
+    expect(findChat(before)).toMatchObject({
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
     });
@@ -197,7 +202,7 @@ describe("chat-first workspace service layer", () => {
       filter: "all",
       engagement: "all",
     });
-    expect(after.rows.find((r) => r.chatId === chatId)).toMatchObject({
+    expect(findChat(after)).toMatchObject({
       unreadMentionCount: 0,
       chatHasExplicitMentionToMe: false,
     });
