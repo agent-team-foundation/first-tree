@@ -38,6 +38,15 @@ const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
  */
 const CHAT_UPDATED_CHANNEL = "chat_updated_events";
 const AGENT_ROUTE_CHANNEL = "agent_route_events";
+/**
+ * A viewer's PRIVATE me-chats projection changed (currently: they pinned or
+ * unpinned a chat). Carries `<humanAgentId>:<organizationId>` so the WS layer
+ * can fan a bare `me-chats:changed` invalidation to ONLY that user's own
+ * sockets in that org. Pin state is private per-user and must never reach
+ * another member's devices — so unlike `chat_updated_events` (audience-scoped
+ * to every chat member), this channel is user-scoped.
+ */
+const ME_CHATS_CHANNEL = "me_chats_changed";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -88,6 +97,7 @@ export type AgentRouteChangePayload = {
   reason: string;
 };
 export type AgentRouteChangeHandler = (payload: AgentRouteChangePayload) => void;
+export type MeChatsChangedHandler = (payload: { humanAgentId: string; organizationId: string }) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
@@ -127,6 +137,13 @@ export type Notifier = {
   notifyChatAudience(chatId: string): Promise<void>;
   /** Chat metadata changed (description / topic): kick admin WS sockets to invalidate `["chat-detail", chatId]` + `["me","chats"]`. */
   notifyChatUpdated(chatId: string): Promise<void>;
+  /**
+   * A viewer's private me-chats list changed (pin / unpin). Kicks ONLY that
+   * user's own admin WS sockets (in `organizationId`) to invalidate
+   * `["me","chats"]`, so the change syncs across their devices without ever
+   * touching another member's sockets.
+   */
+  notifyMeChatsChanged(humanAgentId: string, organizationId: string): Promise<void>;
   /** Agent runtime route changed: fan local WS detach/pin handling to every server replica. */
   notifyAgentRouteChange(payload: AgentRouteChangePayload): Promise<void>;
   /**
@@ -153,6 +170,8 @@ export type Notifier = {
   onChatAudience(handler: ChatAudienceChangeHandler): void;
   /** Register a handler for chat:updated (metadata change) notifications. */
   onChatUpdated(handler: ChatUpdatedChangeHandler): void;
+  /** Register a handler for per-user me-chats invalidations (pin / unpin). */
+  onMeChatsChanged(handler: MeChatsChangedHandler): void;
   /** Register a handler for agent runtime route changes. */
   onAgentRouteChange(handler: AgentRouteChangeHandler): void;
   /** Start listening for PG notifications */
@@ -171,6 +190,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   const chatAudienceHandlers: ChatAudienceChangeHandler[] = [];
   const chatUpdatedHandlers: ChatUpdatedChangeHandler[] = [];
+  const meChatsChangedHandlers: MeChatsChangedHandler[] = [];
   const agentRouteHandlers: AgentRouteChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
@@ -181,6 +201,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
   let unlistenChatAudienceFn: (() => Promise<void>) | null = null;
   let unlistenChatUpdatedFn: (() => Promise<void>) | null = null;
+  let unlistenMeChatsChangedFn: (() => Promise<void>) | null = null;
   let unlistenAgentRouteFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
@@ -306,6 +327,15 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifyMeChatsChanged(humanAgentId: string, organizationId: string) {
+      try {
+        await listenClient`SELECT pg_notify(${ME_CHATS_CHANNEL}, ${`${humanAgentId}:${organizationId}`})`;
+      } catch {
+        // fire-and-forget — realtime is best-effort; the 30s me-chats poll and
+        // web reconnect refetch are the durable fallback.
+      }
+    },
+
     async notifyAgentRouteChange(payload: AgentRouteChangePayload) {
       try {
         await listenClient`SELECT pg_notify(${AGENT_ROUTE_CHANNEL}, ${JSON.stringify(payload)})`;
@@ -364,6 +394,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onChatUpdated(handler: ChatUpdatedChangeHandler) {
       chatUpdatedHandlers.push(handler);
+    },
+
+    onMeChatsChanged(handler: MeChatsChangedHandler) {
+      meChatsChangedHandlers.push(handler);
     },
 
     onAgentRouteChange(handler: AgentRouteChangeHandler) {
@@ -515,6 +549,24 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       });
       unlistenChatUpdatedFn = chatUpdatedResult.unlisten;
 
+      const meChatsChangedResult = await listenClient.listen(ME_CHATS_CHANNEL, (payload) => {
+        if (!payload) return;
+        // payload format: "humanAgentId:organizationId" — both are UUIDs (no
+        // colons), so the first separator wins.
+        const sep = payload.indexOf(":");
+        if (sep <= 0) return;
+        const humanAgentId = payload.slice(0, sep);
+        const organizationId = payload.slice(sep + 1);
+        for (const handler of meChatsChangedHandlers) {
+          try {
+            handler({ humanAgentId, organizationId });
+          } catch {
+            // swallow — handler errors must not poison fan-out
+          }
+        }
+      });
+      unlistenMeChatsChangedFn = meChatsChangedResult.unlisten;
+
       const agentRouteResult = await listenClient.listen(AGENT_ROUTE_CHANNEL, (payload) => {
         if (!payload) return;
         try {
@@ -581,6 +633,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenChatUpdatedFn) {
         await unlistenChatUpdatedFn();
         unlistenChatUpdatedFn = null;
+      }
+      if (unlistenMeChatsChangedFn) {
+        await unlistenMeChatsChangedFn();
+        unlistenMeChatsChangedFn = null;
       }
       if (unlistenAgentRouteFn) {
         await unlistenAgentRouteFn();
