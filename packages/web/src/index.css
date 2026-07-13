@@ -86,21 +86,21 @@
   --text-eyebrow--letter-spacing: 0.1em;
   --text-eyebrow--font-weight: 600;
 
-  --text-caption: 10px;
+  --text-caption: 11px;
   --text-caption--line-height: 1.4;
   --text-caption--letter-spacing: 0.06em;
   --text-caption--font-weight: 500;
 
-  --text-label: 11px;
+  --text-label: 12px;
   --text-label--line-height: 1.4;
   --text-label--letter-spacing: 0.02em;
   --text-label--font-weight: 500;
 
-  --text-body: 12px;
+  --text-body: 13px;
   --text-body--line-height: 1.5;
   --text-body--font-weight: 400;
 
-  --text-subtitle: 13px;
+  --text-subtitle: 14px;
   --text-subtitle--line-height: 1.35;
   --text-subtitle--letter-spacing: -0.1px;
   --text-subtitle--font-weight: 600;
@@ -2089,7 +2089,7 @@ tr[data-interactive]:hover {
    ----------------------------------------------------------------------------
    iOS Safari auto-zooms the viewport when a focused <input>/<textarea>/<select>
    resolves to a font-size below 16px. Our dense type scale puts most controls
-   at 12–13px (text-body / text-subtitle), so every tap on the composer zoomed
+   at 13–14px (text-body / text-subtitle), so every tap on the composer zoomed
    the page. On phone-width viewports, raise every form control to the 16px
    threshold so focusing one never triggers the zoom.
 

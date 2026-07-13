@@ -200,10 +200,10 @@ Three marketing tiers for the public landing page only.
 | Tier | Size | Weight | Typical use |
 |------|------|--------|-------------|
 | `text-eyebrow` | 10px | 600 | all-caps kickers (0.1em tracking) |
-| `text-caption` | 10px | 500 | dense metadata |
-| `text-label` | 11px | 500 | form labels, chips |
-| `text-body` | 12px | 400 | body copy, buttons |
-| `text-subtitle` | 13px | 600 | row titles (**default body size**) |
+| `text-caption` | 11px | 500 | dense metadata |
+| `text-label` | 12px | 500 | form labels, chips |
+| `text-body` | 13px | 400 | body copy, buttons |
+| `text-subtitle` | 14px | 600 | row titles (**default body size**) |
 | `text-title` | 16px | 600 | section / page titles |
 | — marketing — | | | |
 | `text-lead` | 18px | 400 | landing lead copy |
@@ -350,7 +350,7 @@ through to system fonts.
   FOUT stability) → system stack (incl. PingFang SC / Microsoft YaHei for CJK).
 - **Mono:** JetBrains Mono (400–600) → ui-monospace stack.
 
-Body defaults: 13px / 1.45, `cv11 ss01 ss03` features, `tabular-nums`,
+Body defaults: 14px / 1.45, `cv11 ss01 ss03` features, `tabular-nums`,
 antialiased, `font-synthesis: none`.
 
 ---
