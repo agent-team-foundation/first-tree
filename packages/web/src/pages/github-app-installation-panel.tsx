@@ -452,16 +452,19 @@ function InstallationAction({
   disconnectMutation: ReturnType<typeof useMutation<void, Error, void>>;
 }) {
   if (installation.status === "connectable") {
-    // Only the row whose id matches the in-flight mutation is disabled / shows
-    // "Connecting…"; other connectable rows stay interactive so a mis-click can
-    // be re-aimed without waiting out the first connect.
+    // Disable every connectable row while any connect is in flight, not just the
+    // clicked one: the server enforces one installation per team, so two racing
+    // POSTs are decided by whichever write lands first (the loser 409s). If a
+    // second row could fire mid-flight, the final binding would be that race's
+    // winner, not the user's last click — so serialize connects here. Only the
+    // row actually being connected shows the "Connecting…" label.
     const connecting = connectMutation.isPending && connectMutation.variables === installation.installationId;
     return (
       <Button
         type="button"
         size="sm"
         onClick={() => connectMutation.mutate(installation.installationId)}
-        disabled={connecting}
+        disabled={connectMutation.isPending}
       >
         {connecting ? "Connecting…" : "Connect"}
       </Button>
