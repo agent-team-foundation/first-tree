@@ -4336,7 +4336,11 @@ export function ChatView({
                                       `Message @${displayName}`
                                     : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
-                          rows={2}
+                          // The auto-resize hook measures `scrollHeight` after
+                          // `height:auto`, which reverts the box to this `rows` count —
+                          // so `rows` (not just min-height) sets the empty resting
+                          // height. Mobile rests at one line; desktop keeps two.
+                          rows={composerMobile ? 1 : 2}
                           onKeyDown={(e) => {
                             // Skip while an IME is composing so Enter confirms the
                             // candidate instead of sending / picking a mention.
@@ -4563,10 +4567,13 @@ export function ChatView({
                               sendDisabled && "cursor-not-allowed",
                             )}
                             style={{
-                              // Mobile: larger send that clears the touch minimum; desktop stays small.
-                              width: composerMobile ? 40 : 28,
-                              height: composerMobile ? 40 : 28,
-                              borderRadius: composerMobile ? 10 : "var(--radius-input)",
+                              // Mobile: a 44-unit hit area to clear the touch minimum —
+                              // this is the ONLY send path on mobile (Enter inserts a
+                              // newline), so it must not fall below the floor. Desktop
+                              // stays compact. Icon stays visually small either way.
+                              width: composerMobile ? 44 : 28,
+                              height: composerMobile ? 44 : 28,
+                              borderRadius: composerMobile ? 12 : "var(--radius-input)",
                               background: "var(--fg)",
                               color: "var(--bg-raised)",
                               border: "none",

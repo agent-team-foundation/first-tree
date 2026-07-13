@@ -1941,6 +1941,91 @@ describe("ChatView", () => {
     await act(async () => empty.root.unmount());
   });
 
+  function directDetail(): ChatDetail {
+    return chatDetail({
+      id: "chat-empty",
+      title: "Empty direct",
+      type: "direct",
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+  }
+
+  it("mobile composer: one-line rest, 44-unit send hit area, simplified placeholder, Enter does not send", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-empty" narrow presentation="mobile" />,
+      (queryClient) => {
+        seedChat(queryClient, directDetail(), messages([]));
+        queryClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+      },
+      "/",
+    );
+    await waitForText(container, "Send a message to start the conversation");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+    if (!textarea || !send) throw new Error("Mobile composer missing");
+
+    // Resting height is one row: the auto-resize hook measures the `rows`-sized
+    // empty box, so `rows` (not just the min-height floor) must drop to 1.
+    expect(Number(textarea.rows)).toBe(1);
+    // Send is the ONLY send path on mobile (Enter inserts a newline), so its hit
+    // area must clear the touch minimum.
+    expect(Number.parseInt(send.style.width, 10)).toBe(44);
+    expect(Number.parseInt(send.style.height, 10)).toBe(44);
+    // Placeholder drops the desktop keyboard-shortcut teaching text.
+    await setValue(textarea, "");
+    expect(textarea.placeholder).not.toContain("for commands");
+    expect(textarea.placeholder).not.toContain("to mention");
+
+    // Enter inserts a newline and sends nothing; the button is the only send.
+    await setValue(textarea, "hello there");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+    await click(send);
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected button send on mobile");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-empty", "hello there", ["agent-1"]);
+
+    await act(async () => root.unmount());
+  });
+
+  it("desktop composer unchanged: two-row rest, compact send, full placeholder, Enter sends", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-empty" />,
+      (queryClient) => {
+        seedChat(queryClient, directDetail(), messages([]));
+        queryClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+      },
+      "/",
+    );
+    await waitForText(container, "Send a message to start the conversation");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+    if (!textarea || !send) throw new Error("Desktop composer missing");
+
+    expect(Number(textarea.rows)).toBe(2);
+    expect(Number.parseInt(send.style.width, 10)).toBe(28);
+    expect(Number.parseInt(send.style.height, 10)).toBe(28);
+    await setValue(textarea, "");
+    expect(textarea.placeholder).toContain("for commands");
+
+    // Desktop keeps Enter-to-send.
+    await setValue(textarea, "hello there");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected Enter send on desktop");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-empty", "hello there", ["agent-1"]);
+
+    await act(async () => root.unmount());
+  });
+
   it("renders an agent worktree-path link as plain text while keeping real web links (issue 831)", async () => {
     const { ChatView } = await import("../chat-view.js");
     const worktree = "/Users/u/.first-tree/data/workspaces/a/worktrees/build-tree";
