@@ -212,30 +212,54 @@ function basename(p: string): string {
  * image, and capturing would destructively strip a code sample.
  */
 function collectImageOccurrences(text: string): ImageOccurrence[] {
-  const out: ImageOccurrence[] = [];
-  const codeRanges = markdownCodeSpanRanges(text);
-  // BOUNDED quantifiers keep this linear: without a length cap, `[^\]\n]*`
-  // rescans to end-of-input at every `![` start, so a pathological `![![![…`
-  // body is O(n²) (CodeQL polynomial-ReDoS). Alt text ≤512 and path ≤2048 are
-  // far beyond any real image mention and cap the per-attempt work.
+  // Guard: skip capture on an absurdly large body so a pathological message can
+  // never make a synchronous `chat send` appear to hang. Capture is
+  // best-effort, so a >1MB body just sends verbatim.
+  if (text.length > MAX_IMAGE_SCAN_BYTES) return [];
+
+  // Cheap first pass: find the candidate image embeds with the BOUNDED regex
+  // (bounded quantifiers keep it linear — an unbounded `[^\]\n]*` would rescan
+  // to EOF at every `![`). Only when there IS a candidate do we compute the
+  // (more expensive) code-span ranges — an ordinary text-only send pays nothing
+  // here.
   const re = /!\[[^\]\n]{0,512}\]\(([^\s)"]{1,2048})(?:\s+"[^"]*")?\)/g;
+  const candidates: ImageOccurrence[] = [];
   let match: RegExpExecArray | null = re.exec(text);
   while (match !== null) {
     const whole = match[0];
     const target = match[1];
     const start = match.index;
     const prev = start > 0 ? text[start - 1] : "";
-    if (prev !== "\\" && target && !hasUrlScheme(target) && !isInsideRange(start, codeRanges)) {
-      out.push({ writtenPath: target, start, end: start + whole.length });
+    if (prev !== "\\" && target && !hasUrlScheme(target)) {
+      candidates.push({ writtenPath: target, start, end: start + whole.length });
     }
     match = re.exec(text);
+  }
+  if (candidates.length === 0) return [];
+
+  // Filter out candidates that sit inside a markdown code span (a shown sample,
+  // not an embed). `markdownCodeSpanRanges` is sorted by start, and candidates
+  // are already in source order, so a single monotonic cursor over the ranges
+  // decides all candidates in O(candidates + ranges) — no per-candidate scan.
+  const codeRanges = markdownCodeSpanRanges(text);
+  const out: ImageOccurrence[] = [];
+  let ri = 0;
+  for (const c of candidates) {
+    while (ri < codeRanges.length) {
+      const r = codeRanges[ri];
+      if (r && r.end <= c.start) ri += 1;
+      else break;
+    }
+    const r = codeRanges[ri];
+    const inside = r !== undefined && c.start >= r.start && c.start < r.end;
+    if (!inside) out.push(c);
   }
   return out;
 }
 
-function isInsideRange(pos: number, ranges: Array<{ start: number; end: number }>): boolean {
-  return ranges.some((r) => pos >= r.start && pos < r.end);
-}
+/** Backstop on the body size we will scan for image embeds — bounds worst-case
+ *  work on a synchronous send. Far above any real chat message. */
+const MAX_IMAGE_SCAN_BYTES = 1024 * 1024;
 
 /** True for an absolute URL scheme (`http:`, `https:`, `data:`, …). A Windows
  *  drive prefix like `C:` is not treated as a scheme (single-letter). */

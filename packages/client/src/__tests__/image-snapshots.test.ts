@@ -151,6 +151,28 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(res.strippedText).toBe(body);
   });
 
+  it("captures an image after a blank line even when an earlier backtick is unclosed", async () => {
+    // The lone backtick and the image are in different paragraphs, so the tick
+    // does not pair across the blank line — the image is live, and captured.
+    const { uploader } = stubUploader();
+    const body = "here is `an open tick\n\n![img](shots/filter.png) done";
+    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(1);
+  });
+
+  it("stays fast with many fenced blocks and skips a >1MB body (guard)", async () => {
+    const { uploader } = stubUploader();
+    // Many tiny fenced blocks + a real image — must not blow up (linear).
+    const manyFences = `${"```\nx\n```\n\n".repeat(20000)}![img](shots/filter.png)`;
+    const r1 = await buildMessageImageSnapshots(manyFences, root, opts(uploader));
+    expect(r1.imageRefs).toHaveLength(1);
+    // A body over the scan cap is sent verbatim (best-effort capture skipped).
+    const huge = `${"x".repeat(1024 * 1024 + 1)}\n![img](shots/filter.png)`;
+    const r2 = await buildMessageImageSnapshots(huge, root, opts(uploader));
+    expect(r2.imageRefs).toHaveLength(0);
+    expect(r2.strippedText).toBe(huge);
+  });
+
   it("does NOT capture an image inside a multiline inline code span", async () => {
     const { uploader, uploads } = stubUploader();
     const body = "before `line 1\n![x](shots/filter.png)\nline 3` after";

@@ -264,9 +264,26 @@ describe("markdownCodeSpanRanges", () => {
     expect(covered("a ``x ``` y`` b")).toEqual(["``x ``` y``"]);
   });
 
-  it("covers an inline code span that contains a line ending (multiline)", () => {
+  it("covers an inline code span that contains a soft line ending (multiline)", () => {
     const text = "before `line 1\nstill code` after";
     expect(covered(text)).toEqual(["`line 1\nstill code`"]);
+  });
+
+  it("does NOT pair inline delimiters across a blank-line paragraph boundary", () => {
+    // The two backticks are in different paragraphs; neither pairs, so no span.
+    expect(covered("before `line 1\n\ncode` after")).toEqual([]);
+  });
+
+  it("keeps a longer non-closing run inside the span (exact-length close only)", () => {
+    // `` opener, a stray ````` (len 5) run, then the real `` close.
+    expect(covered("a ``x ````` y`` b")).toEqual(["``x ````` y``"]);
+  });
+
+  it("stays fast on a large body of many unmatched distinct-length runs (linear)", () => {
+    // Previously O(n × distinct-lengths): every unmatched opener rescanned.
+    const parts: string[] = [];
+    for (let k = 1; k <= 1000; k += 1) parts.push(`${"`".repeat(k)}x`);
+    expect(markdownCodeSpanRanges(parts.join(""))).toEqual([]); // all unmatched → no spans, returns quickly
   });
 
   it("does not treat inline backticks inside a fenced block as separate spans", () => {
