@@ -218,18 +218,16 @@ describe("first-tree-welcome floor invariants", () => {
     expect(yamlDescription).toContain("repo scans");
   });
 
-  it("keeps both agent-briefing welcome rows on exact kickoff shapes", () => {
-    // agent-briefing.ts ships TWO `first-tree-welcome` "Load when" rows (the
-    // tree-less and tree-bound briefing variants) — routing hints the agent
-    // reads. If either omits the scan / tree-setup exclusion it can misroute a
-    // scan-first chat into the welcome launcher. Bind both so neither drifts back
-    // to an un-hardened hint.
+  it("keeps one shared agent-briefing welcome definition on exact kickoff shapes", () => {
+    // The tree-less and tree-bound maps render one shared definition. Keep the
+    // source-level floor focused on the exact trigger; the client rendering test
+    // binds both generated rows to SKILL.md and checks each appears once.
     const briefing = readFileSync(join(process.cwd(), "../client/src/runtime/agent-briefing.ts"), "utf8");
-    const exactKickoffRows =
-      briefing.match(
-        /first-tree-welcome.*"welcome aboard" plus either "Please help me get started with First Tree" or "Please help me get settled into this team on First Tree".*explicitly asking to "fix the launch blockers found by my production readiness scan"/g,
-      ) ?? [];
-    expect(exactKickoffRows.length, "both welcome skill-map rows must require an exact kickoff shape").toBe(2);
+    const skillDescription = skillMarkdown.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+    const sharedDefinitionCount = briefing.split(skillDescription).length - 1;
+
+    expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
+    expect(sharedDefinitionCount, "the briefing source must define the canonical welcome description once").toBe(1);
     // The retired un-hardened hints must be gone.
     expect(briefing).not.toContain("onboarding welcome / intro / value-first first chat");
     expect(briefing).not.toContain("onboarding system messages ask for welcome");

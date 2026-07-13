@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -536,6 +536,24 @@ describe("buildAgentBriefing — Context Tree", () => {
 });
 
 describe("buildAgentBriefing — Skills", () => {
+  it("renders the canonical welcome routing description once in each family map", () => {
+    const testFileDir = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(testFileDir, "..", "..", "..", "..");
+    const skillMarkdown = readFileSync(join(repoRoot, "skills", "first-tree-welcome", "SKILL.md"), "utf8");
+    const skillDescription = skillMarkdown.match(/^description:\s*(.*)$/mu)?.[1];
+
+    expect(skillDescription).toBeTruthy();
+    for (const contextTreePath of [null, "/tree"] as const) {
+      const skillMap = topLevelSection(
+        buildAgentBriefing(makeOpts({ contextTreePath })),
+        "# Skills (First Tree Managed)",
+      );
+      const welcomeRows = skillMap.split("\n").filter((line) => line.startsWith("| `first-tree-welcome` |"));
+
+      expect(welcomeRows).toEqual([`| \`first-tree-welcome\` | ${skillDescription} |`]);
+    }
+  });
+
   it("lists only shipped First Tree family skills", () => {
     const testFileDir = dirname(fileURLToPath(import.meta.url));
     const repoRoot = resolve(testFileDir, "..", "..", "..", "..");

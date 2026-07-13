@@ -807,6 +807,8 @@ function firstTreeFamilyMap(contextTreePath: string | null): string {
   // agent to load a payload that isn't there; omitting an installed one leaves
   // it with no First Tree routing surface. Tests lock this against the
   // installer constants and the repo's `skills/` directory.
+  const welcomeRow = `| \`first-tree-welcome\` | ${FIRST_TREE_WELCOME_LOAD_WHEN} |`;
+
   if (contextTreePath === null) {
     // Tree-less: only the core skills are on disk — `first-tree-welcome` plus
     // the from-zero build pair (`first-tree-seed` and its `first-tree-write`
@@ -824,7 +826,7 @@ to build the team's Context Tree from the connected code, load
 
 | Skill | Load when |
 |---|---|
-| \`first-tree-welcome\` | an opening message containing "welcome aboard" plus either "Please help me get started with First Tree" or "Please help me get settled into this team on First Tree", or explicitly asking to "fix the launch blockers found by my production readiness scan"; not an ordinary, repo-scan, or tree-setup chat |
+${welcomeRow}
 | \`first-tree-seed\` | set up the team's Context Tree from the connected sources when it has no domain structure yet — creates + binds the repo if none exists, else fills a bound-but-empty tree; refuses once the tree has domain structure |
 | \`first-tree-write\` | pulled in by \`first-tree-seed\` as its authoring dependency (source-driven tree writes) |
 | \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
@@ -840,12 +842,18 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 
 | Skill | Load when |
 |---|---|
-| \`first-tree-welcome\` | an opening message containing "welcome aboard" plus either "Please help me get started with First Tree" or "Please help me get settled into this team on First Tree", or explicitly asking to "fix the launch blockers found by my production readiness scan"; not an ordinary, repo-scan, or tree-setup chat |
+${welcomeRow}
 | \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-seed\`    | no domain structure yet — bootstrap the team's Context Tree from its sources (create + bind if none exists, else fill a bound-but-empty tree); refuses once the tree has domain structure |
 | \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
 }
+
+// Keep the welcome routing contract identical in the mutually exclusive
+// tree-less and tree-bound briefing variants. The client test binds this text
+// to the shipped SKILL.md frontmatter so the routing surfaces cannot drift.
+const FIRST_TREE_WELCOME_LOAD_WHEN =
+  'Use only when the opening message matches a First Tree kickoff shape — "welcome aboard" together with either "Please help me get started with First Tree" or "Please help me get settled into this team on First Tree" — or explicitly asks to "fix the launch blockers found by my production readiness scan". Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.';
 
 /**
  * Names of the First Tree skill payloads listed in the Skill Map. Exported
