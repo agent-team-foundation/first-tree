@@ -4,6 +4,7 @@ import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
 import { act, type ReactElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetParticipantNameCacheForTests } from "../../../../lib/participant-name-cache.js";
 import { FilterPopover, originLabel } from "../filter-popover.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -34,6 +35,9 @@ vi.mock("../../../../lib/use-org-agents.js", () => ({
     const roster = [
       { uuid: "agent-1", displayName: "Nova" },
       { uuid: "agent-2", displayName: "Design Critique" },
+      // Past the identity-map cap: the name map mock returns the raw id for this
+      // one, so only the search-fed name cache can label it.
+      { uuid: "agent-3", displayName: "Zara" },
     ];
     const q = query.trim().toLowerCase();
     const items = q.length === 0 ? [] : roster.filter((a) => a.displayName.toLowerCase().includes(q));
@@ -139,6 +143,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   mockSearchOverride = null;
   mockDebounceLag = null;
+  __resetParticipantNameCacheForTests();
 });
 
 afterEach(async () => {
@@ -329,5 +334,44 @@ describe("FilterPopover", () => {
     await typeSearch("zzz"); // raw "zzz" !== debounced "zz" → still settling
     expect(document.body.textContent).toContain("Searching…");
     expect(document.body.textContent).not.toContain("No people match");
+  });
+
+  it("keeps a stale result visible but non-toggleable while a newer term settles", async () => {
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
+    );
+    await click(container.querySelector('button[aria-label="Filter"]'));
+    await typeSearch("nova");
+    expect(checkboxByLabel("Nova").disabled).toBe(false);
+
+    // Type a NEW term but freeze the debounce behind it: the old Nova row is now
+    // stale (input says "design", results still reflect "nova"). It stays visible
+    // but disabled so a pick can't land on a query the user no longer sees.
+    mockDebounceLag = "nova";
+    await typeSearch("design");
+    expect(document.body.textContent).toContain("Nova");
+    expect(checkboxByLabel("Nova").disabled).toBe(true);
+  });
+
+  it("retains a searched name past the identity-map cap on its chip across close/reopen", async () => {
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
+    );
+    const openFilter = (): Promise<void> => click(container.querySelector('button[aria-label="Filter"]'));
+    await openFilter();
+    // Zara is absent from the identity-map mock (it returns her raw id), so only
+    // the search-fed cache can name her chip.
+    await typeSearch("zara");
+    await click(checkboxByLabel("Zara"));
+    expect(document.body.textContent).toContain("@Zara");
+
+    // Close the popover (the section unmounts) then reopen — the chip must still
+    // read "@Zara", not the raw uuid, because the name cache outlives the panel.
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Done") ?? null);
+    await openFilter();
+    expect(document.body.textContent).toContain("@Zara");
+    expect(document.body.textContent).not.toContain("agent-3");
   });
 });

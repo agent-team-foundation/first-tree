@@ -8,6 +8,7 @@ import { ActivityDots } from "../../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { Button } from "../../../components/ui/button.js";
 import { Popover } from "../../../components/ui/popover.js";
+import { useParticipantNames } from "../../../lib/participant-name-cache.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn, formatRowTime } from "../../../lib/utils.js";
 import { FilterPopover, GROUP_OPTIONS, originLabel } from "./filter-popover.js";
@@ -309,6 +310,9 @@ export function ConversationList({
     (origin.length > 0 ? 1 : 0) + (participants.length > 0 ? 1 : 0) + (engagement !== "active" ? 1 : 0);
 
   const resolveAgentName = useAgentNameMap();
+  // Names learned from participant search (covers identities past the 100-row
+  // identity-map cap); falls back to the identity map for never-searched ids.
+  const cachedName = useParticipantNames();
 
   const removeOrigin = (src: ChatSource): void => {
     onOriginChange(origin.filter((s) => s !== src));
@@ -432,7 +436,7 @@ export function ConversationList({
             {participants.map((agentId) => (
               <FilterChip
                 key={`with-${agentId}`}
-                label={`@${resolveAgentName(agentId)}`}
+                label={`@${cachedName(agentId) ?? resolveAgentName(agentId)}`}
                 onClear={() => removeParticipant(agentId)}
               />
             ))}

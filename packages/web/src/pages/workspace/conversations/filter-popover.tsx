@@ -1,7 +1,8 @@
 import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
 import { Check, Filter, X } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Popover } from "../../../components/ui/popover.js";
+import { rememberParticipantNames, useParticipantNames } from "../../../lib/participant-name-cache.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useDebouncedValue } from "../../../lib/use-debounced-value.js";
 import { useOrgAgentsSearch } from "../../../lib/use-org-agents.js";
@@ -270,13 +271,24 @@ export function FilterPopover({
  * the visible square + Check icon are pure decoration that reflects
  * the input's checked state.
  */
-function FilterCheckbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
+function FilterCheckbox({
+  label,
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+}) {
   return (
     // `focus-within` puts a visible ring on the row when the `sr-only` input is
     // keyboard-focused (WCAG 2.4.7) — the clipped native input has no visible
-    // focus of its own.
+    // focus of its own. When `disabled` (a stale search row still settling) the
+    // row dims and cannot be toggled.
     <label
-      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)] focus-within:ring-1 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-[var(--bg-raised)]"
+      className={`inline-flex items-center text-label transition-colors focus-within:ring-1 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-[var(--bg-raised)] ${disabled ? "cursor-default opacity-50" : "cursor-pointer hover:bg-[var(--bg-hover)]"}`}
       style={{
         gap: "var(--sp-1_5)",
         padding: "var(--sp-0_75) var(--sp-1)",
@@ -299,7 +311,7 @@ function FilterCheckbox({ label, checked, onChange }: { label: string; checked: 
         {checked && <Check size={10} strokeWidth={3} />}
       </span>
       <span>{label}</span>
-      <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />
+      <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} className="sr-only" />
     </label>
   );
 }
@@ -387,15 +399,18 @@ function ParticipantsSection({
   // exists to reach — still shows a name on its chip; `useAgentNameMap` alone
   // caps at 100. Falls back to the name map for a `?with=` selection restored
   // from the URL in a later session.
-  const [pickedNames, setPickedNames] = useState<Record<string, string>>({});
-  const chipName = (uuid: string): string => pickedNames[uuid] ?? resolveName(uuid);
+  const cachedName = useParticipantNames();
+  const chipName = (uuid: string): string => cachedName(uuid) ?? resolveName(uuid);
 
   const toggle = (uuid: string, displayName: string): void => {
     const next = new Set(participantSet);
     if (next.has(uuid)) next.delete(uuid);
     else {
       next.add(uuid);
-      setPickedNames((prev) => (prev[uuid] === displayName ? prev : { ...prev, [uuid]: displayName }));
+      // Cache the picked name so its chip stays readable for an identity past the
+      // identity-map cap, across popover close/reopen and on the persistent rail
+      // chip (both read the shared cache).
+      rememberParticipantNames([{ uuid, displayName }]);
     }
     // Canonical (sorted) order so picking A-then-B and B-then-A yield the same
     // `?with=` — one react-query cache key for a logically identical OR-filter.
@@ -403,10 +418,19 @@ function ParticipantsSection({
   };
   const remove = (uuid: string): void => onParticipantsChange(participants.filter((p) => p !== uuid));
 
-  const results = trimmed.length > 0 ? (resultsQuery.data?.items ?? []) : [];
+  const resultItems = resultsQuery.data?.items;
+  const results = trimmed.length > 0 ? (resultItems ?? []) : [];
+  // Cache every result's name (not only picks) so a selection made from an
+  // earlier / different search still resolves on its chip.
+  useEffect(() => {
+    if (resultItems && resultItems.length > 0) {
+      rememberParticipantNames(resultItems.map((a) => ({ uuid: a.uuid, displayName: a.displayName })));
+    }
+  }, [resultItems]);
   // The rendered results trail the input by the debounce + the in-flight fetch;
   // treat that window as "searching" so an empty list never falsely reads "no
-  // match" for a term the user just finished typing.
+  // match" for a term the user just finished typing — and stale rows stay
+  // non-interactive (disabled) until the rendered query matches the input.
   const searching = search.trim() !== trimmed || resultsQuery.isFetching;
   const statusStyle = { color: "var(--fg-4)", padding: "var(--sp-0_75) var(--sp-1)" };
 
@@ -490,6 +514,9 @@ function ParticipantsSection({
               label={agent.displayName}
               checked={participantSet.has(agent.uuid)}
               onChange={() => toggle(agent.uuid, agent.displayName)}
+              // Stale rows (a newer term is settling) stay visible but can't be
+              // toggled, so a pick always matches the query the user sees.
+              disabled={searching}
             />
           ))}
         </div>
