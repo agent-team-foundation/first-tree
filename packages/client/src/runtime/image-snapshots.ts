@@ -1,10 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import {
+  fencedCodeBlockRanges,
   IMAGE_MIME_TO_EXT,
   type ImageRefContent,
   MAX_ATTACHMENT_BYTES,
   MAX_BATCH_ATTACHMENTS,
-  markdownCodeSpanRanges,
   type SupportedImageMime,
 } from "@first-tree/shared";
 import {
@@ -207,9 +207,12 @@ function basename(p: string): string {
  * image-extension path. A leading `!` is required (that is what distinguishes an
  * image from a doc link); a `\` before the `!` escapes it, and any URL-scheme
  * target (`http://`, `data:`) is skipped — those already render inline and are
- * not workspace files. Mentions inside fenced (``` ```) or inline (`` ` ``) code
- * are skipped too: there the agent is SHOWING the markdown, not embedding an
- * image, and capturing would destructively strip a code sample.
+ * not workspace files. Mentions inside a fenced code block (``` ``` ``` ``` /
+ * `~~~`) are skipped — there the agent is SHOWING the markdown, not embedding an
+ * image, and capturing would destructively strip the code sample. Inline code
+ * (`` `![](x)` ``) is intentionally NOT excluded: it is a rare place to write a
+ * full image embed, and fenced-only exclusion sidesteps the CommonMark
+ * inline-parsing edge cases a hand-rolled scanner cannot match the renderer on.
  */
 function collectImageOccurrences(text: string): ImageOccurrence[] {
   // Guard: skip capture on an absurdly large body so a pathological message can
@@ -237,11 +240,11 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
   }
   if (candidates.length === 0) return [];
 
-  // Filter out candidates that sit inside a markdown code span (a shown sample,
-  // not an embed). `markdownCodeSpanRanges` is sorted by start, and candidates
+  // Filter out candidates that sit inside a fenced code block (a shown sample,
+  // not an embed). `fencedCodeBlockRanges` is in source order, and candidates
   // are already in source order, so a single monotonic cursor over the ranges
   // decides all candidates in O(candidates + ranges) — no per-candidate scan.
-  const codeRanges = markdownCodeSpanRanges(text);
+  const codeRanges = fencedCodeBlockRanges(text);
   const out: ImageOccurrence[] = [];
   let ri = 0;
   for (const c of candidates) {

@@ -171,37 +171,26 @@ function isClosingFence(line: string, fence: FenceState): boolean {
 }
 
 /**
- * Character ranges covered by markdown code — fenced blocks
- * (``` ``` ``` ``` / `~~~`) AND inline code spans (`` `…` ``, `` ``…`` ``, any
- * backtick-run length) — using the same CommonMark rules as
- * {@link scanBareDocPathTokens}: a closing fence must be the same marker char
- * and at least as long as the opener, an unclosed fence extends to
- * end-of-input, and an inline span closes on a backtick run of EXACTLY the
- * opener length. Inline spans may cross soft line breaks but NOT a blank-line
- * paragraph boundary and NOT a fenced block, so scanning is done per paragraph
- * region between fences/blank lines. The whole pass is linear in the text
- * length (fences via one line scan; inline via tokenize-once + a precomputed
- * next-equal-length-run index per region — no rescans). Returned as
- * `[start, end)` offsets, sorted by start (callers rely on that for a
- * monotonic-cursor lookup).
+ * Character ranges covered by FENCED code blocks (``` ``` ``` ``` / `~~~`),
+ * using the same CommonMark fence rules as {@link scanBareDocPathTokens}: a
+ * closing fence must be the same marker char and at least as long as the
+ * opener, and an unclosed fence extends to end-of-input. Returned as
+ * `[start, end)` offsets, in order (a fenced block is line-anchored, so the
+ * pass is a single linear line scan).
+ *
+ * Inline code spans are intentionally NOT covered: the image-capture caller
+ * excludes only fenced blocks (the case where agents actually paste multi-line
+ * markdown/code samples), which sidesteps the CommonMark inline-parsing edge
+ * cases (paragraph/heading/list boundaries, escapes, multi-tick runs) that a
+ * hand-rolled inline scanner cannot match against the renderer. An `![](x)`
+ * inside inline code is rare and treated as a live embed.
  */
-export function markdownCodeSpanRanges(text: string): Array<{ start: number; end: number }> {
-  const fenced: Array<{ start: number; end: number }> = [];
-  const inline: Array<{ start: number; end: number }> = [];
+export function fencedCodeBlockRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
   const lines = text.split(/(\r?\n)/);
   let fence: FenceState | null = null;
   let fenceStart = 0;
   let absoluteOffset = 0;
-  // Current paragraph region [paraStart, paraEnd) of contiguous non-blank,
-  // non-fence lines; -1 when between paragraphs. Inline spans never cross it.
-  let paraStart = -1;
-  let paraEnd = -1;
-  const flushParagraph = (): void => {
-    if (paraStart >= 0) collectInlineCodeInRegion(text, paraStart, paraEnd, inline);
-    paraStart = -1;
-    paraEnd = -1;
-  };
-
   for (const line of lines) {
     if (line === "\n" || line === "\r\n") {
       absoluteOffset += line.length;
@@ -209,7 +198,7 @@ export function markdownCodeSpanRanges(text: string): Array<{ start: number; end
     }
     if (fence) {
       if (isClosingFence(line, fence)) {
-        fenced.push({ start: fenceStart, end: absoluteOffset + line.length });
+        ranges.push({ start: fenceStart, end: absoluteOffset + line.length });
         fence = null;
       }
       absoluteOffset += line.length;
@@ -217,76 +206,13 @@ export function markdownCodeSpanRanges(text: string): Array<{ start: number; end
     }
     const opening = parseOpeningFence(line);
     if (opening) {
-      flushParagraph();
       fence = opening;
       fenceStart = absoluteOffset;
-      absoluteOffset += line.length;
-      continue;
     }
-    if (/^[ \t]*$/.test(line)) {
-      flushParagraph(); // blank line — paragraph boundary
-      absoluteOffset += line.length;
-      continue;
-    }
-    if (paraStart < 0) paraStart = absoluteOffset;
-    paraEnd = absoluteOffset + line.length;
     absoluteOffset += line.length;
   }
-  flushParagraph();
-  if (fence) fenced.push({ start: fenceStart, end: text.length });
-
-  // Both lists are individually ordered; combine and sort so the result is
-  // sorted by start (the caller relies on that for a monotonic-cursor lookup).
-  return [...fenced, ...inline].sort((x, y) => x.start - y.start);
-}
-
-/**
- * Collect inline code span ranges within one paragraph region `[start, end)`.
- * Tokenize the backtick runs once, precompute for each run the next run of the
- * SAME length (a single right-to-left pass), then pair each opener with its
- * next-equal-length run — an opener with no equal-length successor is literal.
- * O(runs) with no per-opener rescan.
- */
-function collectInlineCodeInRegion(
-  text: string,
-  start: number,
-  end: number,
-  out: Array<{ start: number; end: number }>,
-): void {
-  const runs: Array<{ start: number; end: number; len: number }> = [];
-  for (let i = start; i < end; ) {
-    if (text[i] !== "`") {
-      i += 1;
-      continue;
-    }
-    let j = i;
-    while (j < end && text[j] === "`") j += 1;
-    runs.push({ start: i, end: j, len: j - i });
-    i = j;
-  }
-  if (runs.length < 2) return;
-
-  const nextSameLen = new Array<number>(runs.length).fill(-1);
-  const lastByLen = new Map<number, number>();
-  for (let k = runs.length - 1; k >= 0; k -= 1) {
-    const run = runs[k];
-    if (!run) continue;
-    const seen = lastByLen.get(run.len);
-    nextSameLen[k] = seen === undefined ? -1 : seen;
-    lastByLen.set(run.len, k);
-  }
-
-  for (let k = 0; k < runs.length; ) {
-    const opener = runs[k];
-    const close = nextSameLen[k] ?? -1;
-    const closer = close === -1 ? undefined : runs[close];
-    if (opener && closer) {
-      out.push({ start: opener.start, end: closer.end });
-      k = close + 1;
-    } else {
-      k += 1;
-    }
-  }
+  if (fence) ranges.push({ start: fenceStart, end: text.length });
+  return ranges;
 }
 
 /**
@@ -334,27 +260,11 @@ function findInlineCodeSpans(line: string): Array<{ start: number; end: number }
     }
     const start = idx;
     while (line[idx] === "`") idx += 1;
-    const openLen = idx - start;
-    // Close only on a backtick run of EXACTLY openLen — a longer run is not a
-    // close, so advance by whole runs rather than substring-matching (which
-    // would end an N-tick span inside an N+1-tick run).
-    let closeEnd = -1;
-    for (let k = idx; k < line.length; ) {
-      if (line[k] !== "`") {
-        k += 1;
-        continue;
-      }
-      let runEnd = k;
-      while (runEnd < line.length && line[runEnd] === "`") runEnd += 1;
-      if (runEnd - k === openLen) {
-        closeEnd = runEnd;
-        break;
-      }
-      k = runEnd;
-    }
-    if (closeEnd === -1) continue;
-    ranges.push({ start, end: closeEnd });
-    idx = closeEnd;
+    const ticks = line.slice(start, idx);
+    const end = line.indexOf(ticks, idx);
+    if (end === -1) continue;
+    ranges.push({ start, end: end + ticks.length });
+    idx = end + ticks.length;
   }
   return ranges;
 }

@@ -416,13 +416,16 @@ EOF
 # (the same shape a human composer upload uses), so recipients see the picture
 # instead of a broken local path. Only explicit `![...](...)` embeds are
 # captured (a bare filename is left as text), only the sender's own workspace,
-# and images shown inside code spans are left as literal samples. Capture is
-# best-effort and never blocks the send. An image that is too large (>10 MB),
-# unreadable, or beyond the 20-per-message cap is skipped: if no image in the
-# message captured, the body is sent unchanged (the skipped embed stays as
-# text); if at least one sibling image did capture — so the message becomes an
-# image send — every workspace-image embed is removed from the caption, so a
-# skipped one is dropped rather than left as a path that would render broken.
+# and an image shown inside a fenced code block (``` … ```) is left as a
+# literal sample (an image written inside inline `code` is treated as a live
+# embed). Capture is best-effort and never blocks the send, and is skipped
+# entirely for a body larger than 1 MB (which is then sent verbatim). An image
+# that is too large (>10 MB), unreadable, or beyond the 20-per-message cap is
+# skipped: if no image in the message captured, the body is sent unchanged (the
+# skipped embed stays as text); if at least one sibling image did capture — so
+# the message becomes an image send — every workspace-image embed is removed
+# from the caption, so a skipped one is dropped rather than left as a path that
+# would render broken.
 echo 'Latest run: ![chart](reports/latency.png)' | first-tree chat send code-agent -f markdown
 
 # Ask a human a tracked question (red-dot + blocks the chat for them until they

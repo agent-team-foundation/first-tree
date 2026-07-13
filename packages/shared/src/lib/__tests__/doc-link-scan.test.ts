@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { markdownCodeSpanRanges, scanBareDocPathTokens, stripDocPathLineSuffix } from "../doc-link-scan.js";
+import { fencedCodeBlockRanges, scanBareDocPathTokens, stripDocPathLineSuffix } from "../doc-link-scan.js";
 
 function tokens(text: string): string[] {
   return scanBareDocPathTokens(text).map((m) => m.raw);
@@ -228,13 +228,15 @@ describe("stripDocPathLineSuffix", () => {
   });
 });
 
-describe("markdownCodeSpanRanges", () => {
+describe("fencedCodeBlockRanges", () => {
   function covered(text: string): string[] {
-    return markdownCodeSpanRanges(text).map((r) => text.slice(r.start, r.end));
+    return fencedCodeBlockRanges(text).map((r) => text.slice(r.start, r.end));
   }
 
-  it("returns no ranges when there is no code", () => {
-    expect(markdownCodeSpanRanges("plain text\nno code here")).toEqual([]);
+  it("returns no ranges when there is no fenced block", () => {
+    expect(fencedCodeBlockRanges("plain text\nno code here")).toEqual([]);
+    // Inline code is intentionally NOT covered (fenced-only exclusion).
+    expect(fencedCodeBlockRanges("use `code` here")).toEqual([]);
   });
 
   it("covers a simple backtick and tilde fence", () => {
@@ -250,43 +252,10 @@ describe("markdownCodeSpanRanges", () => {
 
   it("extends an unclosed fence to end of input", () => {
     const text = "intro\n```\nnever closed";
-    expect(markdownCodeSpanRanges(text)).toEqual([{ start: 6, end: text.length }]);
+    expect(fencedCodeBlockRanges(text)).toEqual([{ start: 6, end: text.length }]);
   });
 
-  it("covers single- and multi-backtick inline spans (delimiter-aware)", () => {
-    expect(covered("use `code` here")).toEqual(["`code`"]);
-    // A double-backtick span may contain single backticks; closes on ``.
-    expect(covered("a ``x `y` z`` b")).toEqual(["``x `y` z``"]);
-  });
-
-  it("closes an inline span only on an EXACT-length backtick run (not a longer one)", () => {
-    // `` opener, a stray ``` run (not a close), then the real `` close.
-    expect(covered("a ``x ``` y`` b")).toEqual(["``x ``` y``"]);
-  });
-
-  it("covers an inline code span that contains a soft line ending (multiline)", () => {
-    const text = "before `line 1\nstill code` after";
-    expect(covered(text)).toEqual(["`line 1\nstill code`"]);
-  });
-
-  it("does NOT pair inline delimiters across a blank-line paragraph boundary", () => {
-    // The two backticks are in different paragraphs; neither pairs, so no span.
-    expect(covered("before `line 1\n\ncode` after")).toEqual([]);
-  });
-
-  it("keeps a longer non-closing run inside the span (exact-length close only)", () => {
-    // `` opener, a stray ````` (len 5) run, then the real `` close.
-    expect(covered("a ``x ````` y`` b")).toEqual(["``x ````` y``"]);
-  });
-
-  it("stays fast on a large body of many unmatched distinct-length runs (linear)", () => {
-    // Previously O(n × distinct-lengths): every unmatched opener rescanned.
-    const parts: string[] = [];
-    for (let k = 1; k <= 1000; k += 1) parts.push(`${"`".repeat(k)}x`);
-    expect(markdownCodeSpanRanges(parts.join(""))).toEqual([]); // all unmatched → no spans, returns quickly
-  });
-
-  it("does not treat inline backticks inside a fenced block as separate spans", () => {
-    expect(covered("```\n`inside`\n```")).toEqual(["```\n`inside`\n```"]);
+  it("covers multiple fenced blocks in order", () => {
+    expect(covered("```\na\n```\n\n```\nb\n```")).toEqual(["```\na\n```", "```\nb\n```"]);
   });
 });

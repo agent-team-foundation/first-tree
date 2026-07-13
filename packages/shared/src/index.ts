@@ -18,7 +18,7 @@ export {
 // -- Mention extraction (shared by the server fan-out resolver and other readers) --
 export {
   type BarePathMatch,
-  markdownCodeSpanRanges,
+  fencedCodeBlockRanges,
   scanBareDocPathTokens,
   stripDocPathLineSuffix,
 } from "./lib/doc-link-scan.js";

@@ -133,30 +133,20 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(res.imageRefs).toHaveLength(0);
   });
 
-  it("does NOT capture an image mention inside a fenced or inline code span", async () => {
+  it("does NOT capture an image mention inside a fenced code block", async () => {
     const { uploader, uploads } = stubUploader();
-    const body = ["用法：`![logo](shots/filter.png)`", "", "```md", "![x](diagram.webp)", "```"].join("\n");
+    const body = ["说明：", "", "```md", "![x](diagram.webp)", "```"].join("\n");
     const res = await buildMessageImageSnapshots(body, root, opts(uploader));
     expect(res.imageRefs).toHaveLength(0);
     expect(uploads).toHaveLength(0);
-    expect(res.strippedText).toBe(body); // code samples preserved verbatim
+    expect(res.strippedText).toBe(body); // fenced code sample preserved verbatim
   });
 
-  it("does NOT capture an image inside a multi-backtick inline code span", async () => {
-    const { uploader, uploads } = stubUploader();
-    const body = "示例 ``![x](shots/filter.png)`` 完";
-    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
-    expect(res.imageRefs).toHaveLength(0);
-    expect(uploads).toHaveLength(0);
-    expect(res.strippedText).toBe(body);
-  });
-
-  it("captures an image after a blank line even when an earlier backtick is unclosed", async () => {
-    // The lone backtick and the image are in different paragraphs, so the tick
-    // does not pair across the blank line — the image is live, and captured.
+  it("DOES capture an image written inside inline code (fenced-only exclusion scope)", async () => {
+    // Deliberate scope: only fenced blocks are excluded. An image embed inside
+    // inline code is rare and treated as a live embed.
     const { uploader } = stubUploader();
-    const body = "here is `an open tick\n\n![img](shots/filter.png) done";
-    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    const res = await buildMessageImageSnapshots("示例 `![x](shots/filter.png)` 完", root, opts(uploader));
     expect(res.imageRefs).toHaveLength(1);
   });
 
@@ -171,15 +161,6 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     const r2 = await buildMessageImageSnapshots(huge, root, opts(uploader));
     expect(r2.imageRefs).toHaveLength(0);
     expect(r2.strippedText).toBe(huge);
-  });
-
-  it("does NOT capture an image inside a multiline inline code span", async () => {
-    const { uploader, uploads } = stubUploader();
-    const body = "before `line 1\n![x](shots/filter.png)\nline 3` after";
-    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
-    expect(res.imageRefs).toHaveLength(0);
-    expect(uploads).toHaveLength(0);
-    expect(res.strippedText).toBe(body);
   });
 
   it("preserves blank lines inside an unrelated fenced block when stripping a later image", async () => {
