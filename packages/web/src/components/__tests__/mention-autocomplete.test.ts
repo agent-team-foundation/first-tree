@@ -5,8 +5,10 @@ import {
   type CandidateDivider,
   composerPickerVisible,
   detectMentionTrigger,
+  fieldOutOfScrollport,
   groupAndSortCandidates,
   type MentionCandidate,
+  portalPanelPlacement,
   rankCandidates,
 } from "../mention-autocomplete.js";
 
@@ -376,5 +378,55 @@ describe("composerPickerVisible", () => {
   it("never welds on the trial composer, even with a live trigger — trial renders no panel", () => {
     expect(composerPickerVisible({ isTrial: true, mentionOpen: false, slashOpen: true })).toBe(false);
     expect(composerPickerVisible({ isTrial: true, mentionOpen: true, slashOpen: true })).toBe(false);
+  });
+});
+
+describe("fieldOutOfScrollport", () => {
+  const port = { top: 100, bottom: 500 };
+
+  it("is in view while the field overlaps the scrollport", () => {
+    expect(fieldOutOfScrollport({ top: 400, bottom: 440 }, port)).toBe(false);
+    // partially above the top still counts as in view (some rows visible)
+    expect(fieldOutOfScrollport({ top: 80, bottom: 130 }, port)).toBe(false);
+    // partially below the bottom still counts as in view
+    expect(fieldOutOfScrollport({ top: 470, bottom: 520 }, port)).toBe(false);
+  });
+
+  it("is out of view when fully above the scrollport top (dismiss)", () => {
+    expect(fieldOutOfScrollport({ top: 40, bottom: 90 }, port)).toBe(true);
+    // touching edge (bottom === port.top) counts as out
+    expect(fieldOutOfScrollport({ top: 60, bottom: 100 }, port)).toBe(true);
+  });
+
+  it("is out of view when fully below the scrollport bottom (dismiss)", () => {
+    expect(fieldOutOfScrollport({ top: 540, bottom: 580 }, port)).toBe(true);
+    // touching edge (top === port.bottom) counts as out
+    expect(fieldOutOfScrollport({ top: 500, bottom: 560 }, port)).toBe(true);
+  });
+});
+
+describe("portalPanelPlacement", () => {
+  const port = { top: 0, bottom: 800 };
+
+  it("clamps max height to the space above the field, capped at 16rem (256)", () => {
+    expect(portalPanelPlacement({ field: { top: 60, bottom: 100 }, port, viewportTop: 0 })).toEqual({ maxHeight: 60 });
+    // plenty of room above → capped at the 16rem panel max
+    expect(portalPanelPlacement({ field: { top: 400, bottom: 440 }, port, viewportTop: 0 })).toEqual({
+      maxHeight: 256,
+    });
+  });
+
+  it("subtracts the visual-viewport top offset from the available space", () => {
+    expect(portalPanelPlacement({ field: { top: 120, bottom: 160 }, port, viewportTop: 40 })).toEqual({
+      maxHeight: 80,
+    });
+  });
+
+  it("dismisses (null) when the field is out of its scrollport", () => {
+    expect(portalPanelPlacement({ field: { top: 850, bottom: 890 }, port, viewportTop: 0 })).toBeNull();
+  });
+
+  it("dismisses (null) when there isn't room above the field for even one row", () => {
+    expect(portalPanelPlacement({ field: { top: 30, bottom: 70 }, port, viewportTop: 0 })).toBeNull();
   });
 });

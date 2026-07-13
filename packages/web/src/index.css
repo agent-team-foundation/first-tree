@@ -952,6 +952,35 @@
   max-height: 18rem;
 }
 
+/* The ask answer box. Radius lives here (not inline) so the phone weld rule can
+   flatten its top corners while the portal picker is docked above it. */
+.ask-answer-field {
+  border-radius: var(--radius-input);
+}
+
+/* Portal variant (AskTakeover): the panel renders in a `document.body` portal
+   with fixed positioning (left/width/bottom set inline from the field rect) so
+   it escapes the answer card's overflow clip — an in-flow panel docked above
+   the field would be cut off, hiding the first/active candidates. Full field
+   width, welded flush above the field with a top-only shadow: the same look as
+   the in-flow docks, without the clip. Used only on phones (the host gates the
+   portal on viewport width). Same portal idiom as ui/popover.tsx /
+   ui/hover-card.tsx (fixed, body-portaled, z above the modal scrim). */
+.mention-popover--portal {
+  position: fixed;
+  /* Between the ask scrim (z-index 30) and the Radix modal layer (dialog /
+     command palette, z-index 50): the picker sits above the ask card but never
+     over a modal opened on top (e.g. Cmd+K with an active `@`). */
+  z-index: 40;
+  min-width: 0;
+  max-width: none;
+  max-height: 16rem;
+  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+  border-bottom-color: transparent;
+  box-shadow: var(--shadow-md-up);
+  clip-path: inset(-18px 0 0 0);
+}
+
 @media (max-width: 47.999rem) {
   /* Phone: a composer picker popover spans the full input width and docks flush
      to the input's top edge, so panel + input read as one surface instead of a
@@ -983,13 +1012,15 @@
   .slash-option {
     min-height: 2.875rem;
   }
-  /* The chat composer has a clean top edge flush against the panel, so it drops
-     its top rounding while a picker is open → the panel's flat bottom meets a
-     flat top, one continuous surface. A host whose picker docks above a mid-card
-     text row (NewChatDraft: a chip row sits above the field) omits
-     `data-picker-open`, keeping its corners — the panel is still full-width,
-     just not corner-welded. */
-  .composer-card[data-picker-open="true"] {
+  /* Welding hosts have a clean top edge flush against the panel, so they drop
+     their top rounding while a picker is open → the panel's flat bottom meets a
+     flat top, one continuous surface. Chat composer = in-flow dock; ask answer
+     box = portal dock (`.mention-popover--portal`). A host whose picker docks
+     above a mid-card text row (NewChatDraft: a chip row sits above the field)
+     omits `data-picker-open`, keeping its corners — full-width, not corner-
+     welded. */
+  .composer-card[data-picker-open="true"],
+  .ask-answer-field[data-picker-open="true"] {
     border-top-left-radius: 0;
     border-top-right-radius: 0;
   }
