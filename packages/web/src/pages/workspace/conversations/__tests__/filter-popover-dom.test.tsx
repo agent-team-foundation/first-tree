@@ -229,4 +229,24 @@ describe("FilterPopover", () => {
     await click(retry ?? null);
     expect(refetch).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the cached roster on a background refetch error (v5 retains data)", async () => {
+    // TanStack v5 sets isError while retaining prior data on a background poll
+    // failure — the picker must keep rendering the stale options, not flip to the
+    // blocking error panel.
+    mockAgentsResult = {
+      data: { items: [{ uuid: "agent-1", displayName: "Nova" }] },
+      isLoading: false,
+      isError: true,
+      refetch: () => {},
+    };
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
+    );
+    await click(container.querySelector('button[aria-label="Filter"]'));
+
+    expect(document.body.textContent).toContain("Nova");
+    expect(document.body.textContent).not.toContain("Couldn't load people.");
+  });
 });

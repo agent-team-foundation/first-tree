@@ -86,7 +86,11 @@ export function parseOriginList(params: URLSearchParams): ChatSource[] {
     seen.add(t);
     out.push(t);
   }
-  return out;
+  // The full valid set is the "unrestricted" wire — identical to no `?origin=`.
+  // Canonicalize a legacy/shared URL that lists every source (e.g. one produced
+  // by the pre-redesign checkbox UI) to [] so the rail doesn't render a chip per
+  // source + a badge for a result the server treats as unfiltered.
+  return out.length === CHAT_SOURCES.length ? [] : out;
 }
 
 /**
@@ -488,8 +492,12 @@ export function nextParamsForRailFilter(current: URLSearchParams, view: RailFilt
 export function nextParamsForOrigin(current: URLSearchParams, origins: ReadonlyArray<ChatSource>): URLSearchParams {
   const next = new URLSearchParams(current);
   const unique = Array.from(new Set(origins));
-  if (unique.length === 0) next.delete("origin");
-  else next.set("origin", unique.join(","));
+  // Full valid set == unrestricted (mirror `parseOriginList`): drop the key so
+  // the canonical "unfiltered" state stays the bare URL even if a caller passes
+  // the complete set explicitly.
+  const canonical = unique.length === CHAT_SOURCES.length ? [] : unique;
+  if (canonical.length === 0) next.delete("origin");
+  else next.set("origin", canonical.join(","));
   // Origin narrowing can hide the currently-selected chat from the rail
   // (e.g. flipping off PR origin while a PR chat is selected). Drop the
   // selection so the right pane mirrors the new view — same rationale

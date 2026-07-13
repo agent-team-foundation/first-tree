@@ -399,10 +399,11 @@ function ParticipantsSection({
           </button>
         )}
       </header>
-      {agentsQuery.isError ? (
-        // A failed roster load says so (with a retry) rather than masquerading as
-        // "No people to filter by." — an empty roster and a fetch error are
-        // distinct states that must not read identically.
+      {agentsQuery.isError && participantOptions.length === 0 ? (
+        // A failed INITIAL load (no cached roster) shows an error + retry rather
+        // than masquerading as "No people to filter by." A *background* refetch
+        // failure keeps the prior `data` (TanStack v5), so we keep rendering the
+        // stale options below instead of replacing a usable picker with this panel.
         <div className="flex items-center justify-between" style={{ padding: "var(--sp-0_75) var(--sp-1)" }}>
           <span className="text-label" style={{ color: "var(--fg-4)" }}>
             {"Couldn't load people."}

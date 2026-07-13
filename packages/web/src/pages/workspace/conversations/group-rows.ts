@@ -114,10 +114,24 @@ function bucketForRecency(iso: string | null, now: Date): RecencyBucketKey {
   return "older";
 }
 
+/**
+ * The row's "recent activity" instant — `activity_at` (GREATEST of last message,
+ * a genuine description change, and creation), the same key the server orders
+ * ordinary rows by. Falling back to `last_message_at` keeps an old server (or an
+ * unparsed row) without `activity_at` from sinking every chat to the bottom.
+ * Using it for BOTH the recency bucket and the displayed time keeps the client
+ * grouping/label consistent with the server order — otherwise a chat whose
+ * description changed today (new activity, old last message) would sort to the
+ * top server-side yet land under a collapsed "Older" bucket here.
+ */
+export function rowActivityInstant(r: MeChatRow): string | null {
+  return r.activityAt ?? r.lastMessageAt;
+}
+
 function groupByRecency(rows: ReadonlyArray<MeChatRow>, now: Date): ReadonlyArray<GroupBucket> {
   const map = new Map<RecencyBucketKey, MeChatRow[]>();
   for (const r of rows) {
-    const key = bucketForRecency(r.lastMessageAt, now);
+    const key = bucketForRecency(rowActivityInstant(r), now);
     const list = map.get(key);
     if (list) list.push(r);
     else map.set(key, [r]);

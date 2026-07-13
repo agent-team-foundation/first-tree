@@ -138,6 +138,15 @@ describe("parseOriginList", () => {
   it("trims whitespace and dedupes", () => {
     expect(parseOriginList(paramsOf("origin=manual,%20github%20,manual"))).toEqual(["manual", "github"]);
   });
+
+  it("normalizes the full valid set to unrestricted [] (legacy / shared URL)", () => {
+    // A `?origin=manual,github,agent` URL (e.g. from the pre-redesign checkbox UI)
+    // lists every source → semantically unrestricted, same as no `?origin=`. It
+    // must NOT render a chip per source + a badge, so the parser collapses it to [].
+    expect(parseOriginList(paramsOf("origin=manual,github,agent"))).toEqual([]);
+    // Order / dupes don't matter — a full set in any form collapses to [].
+    expect(parseOriginList(paramsOf("origin=agent,manual,github,manual"))).toEqual([]);
+  });
 });
 
 describe("parseParticipantList", () => {
@@ -164,6 +173,11 @@ describe("nextParamsForOrigin", () => {
 
   it("removes the key on an empty list (canonical home URL stays bare)", () => {
     const result = nextParamsForOrigin(paramsOf("origin=manual"), []);
+    expect(result.has("origin")).toBe(false);
+  });
+
+  it("drops the key when handed the full valid set (== unrestricted)", () => {
+    const result = nextParamsForOrigin(paramsOf(""), ["manual", "github", "agent"]);
     expect(result.has("origin")).toBe(false);
   });
 

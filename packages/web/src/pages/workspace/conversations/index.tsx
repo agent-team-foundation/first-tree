@@ -11,7 +11,7 @@ import { Popover } from "../../../components/ui/popover.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn, formatRowTime } from "../../../lib/utils.js";
 import { FilterPopover, GROUP_OPTIONS, originLabel } from "./filter-popover.js";
-import { type GroupBucket, type GroupMode, groupRows, rowIsFailed } from "./group-rows.js";
+import { type GroupBucket, type GroupMode, groupRows, rowActivityInstant, rowIsFailed } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -527,6 +527,11 @@ export function ConversationList({
                   const hasUnread = row.unreadMentionCount > 0;
                   const failed = rowIsFailed(row);
                   const isWatching = row.membershipKind === "watching";
+                  // Show the "recent activity" instant (activityAt — includes a
+                  // genuine description change), the same key the row is grouped
+                  // and server-sorted by, so a Today-activity chat never displays
+                  // a stale message age. Falls back to lastMessageAt for skew.
+                  const rowTime = rowActivityInstant(row);
                   // Density "C": single-line rows. Attention is carried by the
                   // avatar corner mark, while the left bar remains the selected
                   // affordance only.
@@ -588,9 +593,9 @@ export function ConversationList({
                           )}
                           {row.busyAgentIds.length > 0 ? (
                             <ActivityDots />
-                          ) : row.lastMessageAt ? (
+                          ) : rowTime ? (
                             <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                              {formatRowTime(row.lastMessageAt)}
+                              {formatRowTime(rowTime)}
                             </span>
                           ) : null}
                         </span>

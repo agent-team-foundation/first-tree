@@ -39,8 +39,8 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -121,6 +121,23 @@ describe("groupRows — recency", () => {
     const rows = [row({ id: "old", lastMessageAt: offsetIso(-24 * 14) })]; // 2 weeks back
     const buckets = groupRows(rows, "recency", NOW);
     expect(buckets[0]?.key).toBe("older");
+  });
+
+  it("buckets by activityAt (recent activity), not lastMessageAt", () => {
+    // Description-only update today: last message is 2 weeks old (would sink to
+    // "Older") but activityAt is 2h ago → must land in Today, matching the
+    // server's activityAt ordering rather than hiding under a collapsed bucket.
+    const rows = [row({ id: "desc-today", lastMessageAt: offsetIso(-24 * 14), activityAt: offsetIso(-2) })];
+    const buckets = groupRows(rows, "recency", NOW);
+    expect(buckets.map((b) => b.key)).toEqual(["today"]);
+  });
+
+  it("falls back to lastMessageAt when activityAt is null (version skew)", () => {
+    // An old server predating activity_at sends it null → bucket on lastMessageAt
+    // so the row isn't wrongly sunk to Older.
+    const rows = [row({ id: "skew", lastMessageAt: offsetIso(-2), activityAt: null })];
+    const buckets = groupRows(rows, "recency", NOW);
+    expect(buckets.map((b) => b.key)).toEqual(["today"]);
   });
 
   it("sinks NULL timestamp rows into older", () => {
