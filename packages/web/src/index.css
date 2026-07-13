@@ -415,6 +415,10 @@
 
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.06);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08);
+  /* Upward cast of --shadow-md, for panels docked flush above a surface (e.g.
+     the mobile mention popover) that must lift off the content above without
+     casting a shadow down onto the surface welded below them. */
+  --shadow-md-up: 0 -4px 12px oklch(0 0 0 / 0.08);
 
   /* State pairs for callouts / inline notices (light mode).
      soft variants feed bg utilities; strong variants feed both text and
@@ -622,6 +626,7 @@
 
   --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.4);
+  --shadow-md-up: 0 -4px 12px oklch(0 0 0 / 0.4);
 
   /* State pairs — dark-mode variants (softer bg, higher-L fg for contrast). */
   --bg-error-soft: oklch(0.28 0.06 25);
@@ -911,6 +916,72 @@
   .mention-tip,
   .mention-tip.mention-tip-out {
     animation: none;
+  }
+}
+
+/* @mention / recipient-picker popover (MentionAutocompletePopover), anchored
+   to the composer's relative wrapper.
+
+   Desktop: a compact panel floating just above the textarea.
+
+   Phone (<48rem): the desktop float is a poor fit — capped at 360px and
+   left-aligned, it is narrower than the message column, so the message behind
+   it pokes out on the right (looks broken), and the gap above the input makes
+   it read as a detached overlay rather than part of the composer. On phones we
+   stretch the panel to the full composer width and dock it flush to the input's
+   top edge, so it reads as one surface growing upward out of the input. */
+
+/* The editable composer input card (chat-view). Radius lives here (not inline)
+   so the phone-only weld rule below can flatten its top corners while the
+   mention panel is docked above it. */
+.composer-card {
+  border-radius: var(--radius-panel);
+}
+
+.mention-popover {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  bottom: calc(100% + var(--sp-1));
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 14rem;
+  overflow: auto;
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-md);
+}
+
+@media (max-width: 47.999rem) {
+  .mention-popover {
+    right: 0;
+    min-width: 0;
+    max-width: none;
+    /* Flush to the input's top edge — no gap — so panel + input read as one. */
+    bottom: 100%;
+    max-height: 16rem;
+    /* Round only the top; the bottom butts seamlessly against the input. Match
+       the composer card's --radius-panel so the welded panel + input read as a
+       single 6px-rounded surface. */
+    border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+    border-bottom-color: transparent;
+    /* Lift off the messages above without casting a shadow down onto the input
+       welded below (a downward --shadow-md would break the "one surface" look). */
+    box-shadow: var(--shadow-md-up);
+  }
+  /* Comfortable thumb targets on touch: the 28px avatar + py-1.5 row is ~40px;
+     lift the whole row to the ~46px iOS tap floor. */
+  .mention-option {
+    min-height: 2.875rem;
+  }
+  /* Complete the weld: while the mention panel is docked above it, the composer
+     card drops its top rounding so the panel's flat bottom meets a flat top —
+     one continuous surface. Desktop keeps the float + gap, so its corners stay
+     rounded (this rule is phone-only). */
+  .composer-card[data-mention-open="true"] {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
   }
 }
 

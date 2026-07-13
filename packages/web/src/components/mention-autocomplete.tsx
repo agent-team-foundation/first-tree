@@ -1,7 +1,6 @@
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "../lib/utils.js";
 import { Avatar } from "./avatar.js";
 
 /**
@@ -564,22 +563,7 @@ export function MentionAutocompletePopover({
   if (!anchor) return null;
 
   return (
-    <div
-      ref={popoverRef}
-      role="listbox"
-      aria-label="Mention suggestions"
-      className={cn(
-        "absolute z-20 max-h-56 overflow-auto rounded-[var(--radius-panel)] border shadow-[var(--shadow-md)]",
-      )}
-      style={{
-        bottom: "calc(100% + var(--sp-1))",
-        left: 0,
-        minWidth: 240,
-        maxWidth: 360,
-        background: "var(--bg-raised)",
-        borderColor: "var(--border)",
-      }}
-    >
+    <div ref={popoverRef} role="listbox" aria-label="Mention suggestions" className="mention-popover">
       {(() => {
         const ambiguous = ambiguousDisplayNames(results);
         return results.map((c, i) => {
@@ -598,7 +582,7 @@ export function MentionAutocompletePopover({
                 e.preventDefault();
                 onPick(c);
               }}
-              className="flex w-full items-center px-3 py-1.5 text-left text-body"
+              className="mention-option flex w-full items-center px-3 py-1.5 text-left text-body"
               style={{
                 background: active ? "var(--bg-hover)" : "transparent",
                 color: "var(--fg)",
