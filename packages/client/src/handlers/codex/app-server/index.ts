@@ -1250,6 +1250,16 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           message: "codex usage limit reached: turn completed without a usable model response",
         },
       });
+      // Slot-log line for external log watchers (e.g. account-failover
+      // automation tailing client.log) — the sdk runtime's usage-limit branch
+      // already logs; keep the `provider_usage_limit` tag stable.
+      sessionCtx.log(
+        `codex app-server usage limit reached (provider_usage_limit) chatId=${sessionCtx.chatId}: ${
+          usageLimitFailure && turn.failure
+            ? `turn failed with usage-limit error: ${turn.failure.message}`
+            : "empty turn, model not invoked (zero token delta)"
+        }; posting a chat notice instead of silently acking the message`,
+      );
       // Post the usage-limit notice as a deliberate, chat-visible runtime
       // message — an EXPLICIT send, not the retired final-text forward
       // (`forwardResult` no longer delivers). It rides the `agent-final-text`
