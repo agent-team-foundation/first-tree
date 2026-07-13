@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 
 import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetParticipantNameCacheForTests } from "../../../../lib/participant-name-cache.js";
 import { FilterPopover, originLabel } from "../filter-popover.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -22,8 +22,14 @@ let mockDebounceLag: string | null = null;
 vi.mock("../../../../lib/use-debounced-value.js", () => ({
   useDebouncedValue: (value: string) => (mockDebounceLag === null ? value : mockDebounceLag),
 }));
+// The identity map is mutable so a test can simulate a rename (the authoritative
+// roster refreshing) and prove it supersedes a cached search label. Unresolved
+// ids return the raw id, mirroring the real `useAgentNameMap`.
+const defaultNameResolve = (id: string): string =>
+  id === "agent-1" ? "Nova" : id === "agent-2" ? "Design Critique" : id;
+let mockNameResolve: (id: string) => string = defaultNameResolve;
 vi.mock("../../../../lib/use-agent-name-map.js", () => ({
-  useAgentNameMap: () => (id: string) => (id === "agent-1" ? "Nova" : id === "agent-2" ? "Design Critique" : id),
+  useAgentNameMap: () => (id: string) => mockNameResolve(id),
 }));
 let mockSearchOverride: {
   data: { items: Array<{ uuid: string; displayName: string }> } | undefined;
@@ -58,9 +64,13 @@ async function flush(): Promise<void> {
 async function renderDom(element: ReactElement): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
+  // The participant-name cache is a react-query entry, so each case renders
+  // under a fresh client — an org switch / logout that calls `queryClient.clear()`
+  // is modeled as a new client (the cache is scoped to it, not a module global).
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root = createRoot(container);
   await act(async () => {
-    root?.render(element);
+    root?.render(<QueryClientProvider client={queryClient}>{element}</QueryClientProvider>);
   });
   await flush();
   return container;
@@ -102,15 +112,17 @@ function StatefulFilter({
   onEngagementChange,
   onParticipantsChange,
   onResetAll,
+  initialParticipants = [],
 }: {
   onOriginChange: (origin: ReadonlyArray<ChatSource>) => void;
   onEngagementChange: (engagement: ChatEngagementView) => void;
   onParticipantsChange: (participants: ReadonlyArray<string>) => void;
   onResetAll: () => void;
+  initialParticipants?: string[];
 }) {
   const [origin, setOrigin] = useState<ChatSource[]>(["github", "agent"]);
   const [engagement, setEngagement] = useState<ChatEngagementView>("archived");
-  const [participants, setParticipants] = useState<string[]>([]);
+  const [participants, setParticipants] = useState<string[]>(initialParticipants);
   return (
     <FilterPopover
       origin={origin}
@@ -143,7 +155,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   mockSearchOverride = null;
   mockDebounceLag = null;
-  __resetParticipantNameCacheForTests();
+  mockNameResolve = defaultNameResolve;
 });
 
 afterEach(async () => {
@@ -373,5 +385,60 @@ describe("FilterPopover", () => {
     await openFilter();
     expect(document.body.textContent).toContain("@Zara");
     expect(document.body.textContent).not.toContain("agent-3");
+  });
+
+  it("lets a refreshed identity-map name supersede a cached search label", async () => {
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
+    );
+    await click(container.querySelector('button[aria-label="Filter"]'));
+    await typeSearch("nova");
+    await click(checkboxByLabel("Nova")); // caches "Nova"
+
+    // A rename lands on the authoritative roster (which polls / invalidates);
+    // the chip must show the fresh name, not the cached one.
+    mockNameResolve = (id) => (id === "agent-1" ? "Nova (renamed)" : defaultNameResolve(id));
+    await typeSearch(""); // any state change re-renders the section
+    const renamed = [...document.body.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "Remove Nova (renamed)",
+    );
+    expect(renamed).toBeTruthy();
+    const stale = [...document.body.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "Remove Nova",
+    );
+    expect(stale).toBeFalsy();
+  });
+
+  it("scopes cached search labels to the react-query client — a fresh scope starts empty", async () => {
+    const noop = (): void => {};
+    // Scope A (client A): search + select Zara → her name is cached in A.
+    const a = await renderDom(
+      <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
+    );
+    await click(a.querySelector('button[aria-label="Filter"]'));
+    await typeSearch("zara");
+    await click(checkboxByLabel("Zara"));
+    expect(document.body.textContent).toContain("@Zara");
+    await act(async () => root?.unmount());
+    root = null;
+    document.body.innerHTML = "";
+
+    // Scope B: a fresh client — as after an org switch / logout, where the app
+    // calls `queryClient.clear()`, so the cache (a react-query entry) is gone —
+    // with Zara pre-selected via URL but never searched here. Her chip must fall
+    // back to the raw uuid, never leaking scope A's cached "Zara".
+    const b = await renderDom(
+      <StatefulFilter
+        onOriginChange={noop}
+        onEngagementChange={noop}
+        onParticipantsChange={noop}
+        onResetAll={noop}
+        initialParticipants={["agent-3"]}
+      />,
+    );
+    await click(b.querySelector('button[aria-label="Filter"]'));
+    expect(document.body.textContent).toContain("@agent-3");
+    expect(document.body.textContent).not.toContain("@Zara");
   });
 });

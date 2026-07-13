@@ -1,4 +1,5 @@
 import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, Filter, X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Popover } from "../../../components/ui/popover.js";
@@ -399,8 +400,14 @@ function ParticipantsSection({
   // exists to reach — still shows a name on its chip; `useAgentNameMap` alone
   // caps at 100. Falls back to the name map for a `?with=` selection restored
   // from the URL in a later session.
+  const queryClient = useQueryClient();
   const cachedName = useParticipantNames();
-  const chipName = (uuid: string): string => cachedName(uuid) ?? resolveName(uuid);
+  // Authoritative identity map wins (a rename refreshes it); the search-fed cache
+  // only fills the gap for an id past the map's 100-row page.
+  const chipName = (uuid: string): string => {
+    const authoritative = resolveName(uuid);
+    return authoritative !== uuid ? authoritative : (cachedName(uuid) ?? uuid);
+  };
 
   const toggle = (uuid: string, displayName: string): void => {
     const next = new Set(participantSet);
@@ -409,8 +416,8 @@ function ParticipantsSection({
       next.add(uuid);
       // Cache the picked name so its chip stays readable for an identity past the
       // identity-map cap, across popover close/reopen and on the persistent rail
-      // chip (both read the shared cache).
-      rememberParticipantNames([{ uuid, displayName }]);
+      // chip (both read the shared, org/auth-scoped cache).
+      rememberParticipantNames(queryClient, [{ uuid, displayName }]);
     }
     // Canonical (sorted) order so picking A-then-B and B-then-A yield the same
     // `?with=` — one react-query cache key for a logically identical OR-filter.
@@ -424,9 +431,12 @@ function ParticipantsSection({
   // earlier / different search still resolves on its chip.
   useEffect(() => {
     if (resultItems && resultItems.length > 0) {
-      rememberParticipantNames(resultItems.map((a) => ({ uuid: a.uuid, displayName: a.displayName })));
+      rememberParticipantNames(
+        queryClient,
+        resultItems.map((a) => ({ uuid: a.uuid, displayName: a.displayName })),
+      );
     }
-  }, [resultItems]);
+  }, [resultItems, queryClient]);
   // The rendered results trail the input by the debounce + the in-flight fetch;
   // treat that window as "searching" so an empty list never falsely reads "no
   // match" for a term the user just finished typing — and stale rows stay

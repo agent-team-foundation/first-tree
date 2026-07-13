@@ -1,57 +1,47 @@
-import { useSyncExternalStore } from "react";
+import { type QueryClient, useQuery } from "@tanstack/react-query";
 
 /**
- * A tiny session-lifetime cache of participant `uuid -> displayName`, populated
- * from `useOrgAgentsSearch` result rows.
+ * A cache of participant `uuid -> displayName` learned from
+ * `useOrgAgentsSearch` result rows, held INSIDE react-query so it shares the
+ * org/auth lifecycle: a `queryClient.clear()` on organization switch or logout
+ * wipes it like every other cached query, and it is never a second,
+ * un-invalidated source of truth living at module scope.
  *
- * The Participants filter is search-only, so a viewer can select an identity
- * that sorts past the org-list 100-row first page — exactly who the at-scale
- * search exists to reach. `useAgentNameMap` only knows that first page, so
- * without this cache such a selection renders as a raw UUID on its filter chips
- * the moment it leaves the visible result rows: in the rail's persistent chip
- * row, and in the popover chip after the panel closes and reopens (the picking
- * component unmounts each time). This cache lives at module scope so a name
- * learned from any search survives those remounts and is shared by both chip
- * surfaces; it falls back to the identity map for names it has never seen.
+ * Its only job is a FALLBACK label for an identity the authoritative
+ * `useAgentNameMap` cannot resolve — one that sorts past the org-list 100-row
+ * first page, exactly who the at-scale participant search reaches. Chip
+ * consumers always PREFER the authoritative map (so a rename, which invalidates
+ * `["agents"]` and refreshes the map, immediately wins) and read this cache
+ * only for ids the map still returns unresolved.
  */
-const names = new Map<string, string>();
-const listeners = new Set<() => void>();
-// A fresh snapshot identity on every change so `useSyncExternalStore` re-renders;
-// stable between changes so `getSnapshot` never loops.
-let snapshot: ReadonlyMap<string, string> = new Map(names);
+const PARTICIPANT_NAME_CACHE_KEY = ["participant-name-cache"] as const;
+type NameMap = Readonly<Record<string, string>>;
 
-function emit(): void {
-  snapshot = new Map(names);
-  for (const listener of listeners) listener();
-}
-
-/** Record display names seen in a search result set. Idempotent + no-op if unchanged. */
-export function rememberParticipantNames(agents: ReadonlyArray<{ uuid: string; displayName: string }>): void {
-  let changed = false;
-  for (const agent of agents) {
-    if (agent.displayName && names.get(agent.uuid) !== agent.displayName) {
-      names.set(agent.uuid, agent.displayName);
-      changed = true;
+/** Record the display names seen in a participant search result set. */
+export function rememberParticipantNames(
+  queryClient: QueryClient,
+  agents: ReadonlyArray<{ uuid: string; displayName: string }>,
+): void {
+  queryClient.setQueryData<NameMap>(PARTICIPANT_NAME_CACHE_KEY, (prev) => {
+    const base = prev ?? {};
+    let next: Record<string, string> | null = null;
+    for (const agent of agents) {
+      if (agent.displayName && base[agent.uuid] !== agent.displayName) {
+        next = next ?? { ...base };
+        next[agent.uuid] = agent.displayName;
+      }
     }
-  }
-  if (changed) emit();
+    return next ?? base;
+  });
 }
 
-/** Test-only: clear the module cache so cases don't leak names into each other. */
-export function __resetParticipantNameCacheForTests(): void {
-  names.clear();
-  emit();
-}
-
-/** Subscribe to the cache; returns a resolver `uuid -> name | undefined`. */
+/** Subscribe to the fallback cache; returns a resolver `uuid -> name | undefined`. */
 export function useParticipantNames(): (uuid: string) => string | undefined {
-  const map = useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => snapshot,
-    () => snapshot,
-  );
-  return (uuid: string) => map.get(uuid);
+  const { data } = useQuery<NameMap>({
+    queryKey: PARTICIPANT_NAME_CACHE_KEY,
+    queryFn: () => ({}),
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+  });
+  return (uuid: string) => data?.[uuid];
 }

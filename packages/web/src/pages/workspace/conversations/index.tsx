@@ -310,9 +310,14 @@ export function ConversationList({
     (origin.length > 0 ? 1 : 0) + (participants.length > 0 ? 1 : 0) + (engagement !== "active" ? 1 : 0);
 
   const resolveAgentName = useAgentNameMap();
-  // Names learned from participant search (covers identities past the 100-row
-  // identity-map cap); falls back to the identity map for never-searched ids.
+  // Names learned from participant search cover identities past the 100-row
+  // identity-map cap. The authoritative map wins (a rename refreshes it); the
+  // search-fed cache only fills the gap for ids it still can't resolve.
   const cachedName = useParticipantNames();
+  const participantChipName = (id: string): string => {
+    const authoritative = resolveAgentName(id);
+    return authoritative !== id ? authoritative : (cachedName(id) ?? id);
+  };
 
   const removeOrigin = (src: ChatSource): void => {
     onOriginChange(origin.filter((s) => s !== src));
@@ -436,7 +441,7 @@ export function ConversationList({
             {participants.map((agentId) => (
               <FilterChip
                 key={`with-${agentId}`}
-                label={`@${cachedName(agentId) ?? resolveAgentName(agentId)}`}
+                label={`@${participantChipName(agentId)}`}
                 onClear={() => removeParticipant(agentId)}
               />
             ))}
