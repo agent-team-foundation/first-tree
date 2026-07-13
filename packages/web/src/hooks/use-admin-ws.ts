@@ -276,6 +276,13 @@ function broadcast(msg: WsMessage) {
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       }
+    } else if (msg.type === "me-chats:changed") {
+      // The viewer's OWN private me-chats projection changed on another device
+      // (a pin / unpin). The server sends this frame only to this user's own
+      // sockets (never broadcast — pin state is private), so a bare list
+      // invalidation regroups the rail across their devices in realtime. No
+      // chatId; nothing chat-specific to touch.
+      meChatsInvalidator.invalidate(latestQc);
     } else if (msg.type === "pulse:tick") {
       // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
       // The composite `offline` (client_id → null) and runtime-`error` → failed

@@ -88,36 +88,48 @@ export function RowEngagementMenu({
   });
   // Pin toggles the caller's private `pinned_at`; the server re-projects the
   // Pinned group. The row moves OPTIMISTICALLY (`applyOptimisticPin` reorders
-  // the cached list into / out of the Pinned group on click) so the regroup is
-  // instant instead of waiting on the round-trip + refetch. The trailing
-  // invalidate reconciles the exact `pinnedAt` / ordering with the server; a
-  // success toast confirms the write, and a failure rolls the cache back and
-  // surfaces its own toast rather than silently leaving the row where it was.
+  // the cached list into / out of the Pinned group) so the regroup is instant
+  // instead of waiting on the round-trip + refetch. On failure the SAME helper
+  // re-applies the ORIGINAL state — a targeted revert of just this chat rather
+  // than a whole-cache snapshot restore, so a concurrent pin of a *different*
+  // chat isn't clobbered — and the trailing invalidate reconciles exact ordering.
+  //
+  // The `["me","chats"]` prefix also matches NON-infinite caches: the command
+  // palette (`["me","chats","palette"]`) and the mobile lists store a bare
+  // `ListMeChatsResponse` (no `pages`). Skip those here — feeding one to the
+  // InfiniteData transform would throw on `data.pages` — and let the trailing
+  // invalidate refetch them. Mirrors the shape guard in `chat-by-id.tsx`.
+  const applyPinToCaches = (nextPinned: boolean): void => {
+    const nowIso = new Date().toISOString();
+    queryClient.setQueriesData<InfiniteData<ListMeChatsResponse> | ListMeChatsResponse>(
+      { queryKey: ["me", "chats"] },
+      (old) => (old && "pages" in old ? applyOptimisticPin(old, chatId, nextPinned, nowIso) : old),
+    );
+  };
   const pinMut = useMutation({
+    // Serialize pin/unpin of the SAME chat so a rapid pin -> unpin can't reach
+    // the server out of order and settle on the stale value; different chats
+    // still run concurrently.
+    scope: { id: `chat-pin:${chatId}` },
     mutationFn: () => pinMeChat(chatId, !pinned),
     onMutate: async () => {
-      const nextPinned = !pinned;
       // Freeze in-flight me-chats refetches (the list polls every 30s) so a
       // stale response can't clobber the optimistic cache mid-flight.
       await queryClient.cancelQueries({ queryKey: ["me", "chats"] });
-      const previous = queryClient.getQueriesData<InfiniteData<ListMeChatsResponse>>({ queryKey: ["me", "chats"] });
-      const nowIso = new Date().toISOString();
-      queryClient.setQueriesData<InfiniteData<ListMeChatsResponse>>({ queryKey: ["me", "chats"] }, (old) =>
-        old ? applyOptimisticPin(old, chatId, nextPinned, nowIso) : old,
-      );
-      return { previous };
+      applyPinToCaches(!pinned);
     },
-    onError: (_err, _vars, ctx) => {
-      // Restore every list snapshot we overwrote.
-      for (const [key, snapshot] of ctx?.previous ?? []) queryClient.setQueryData(key, snapshot);
+    onError: () => {
+      // Targeted revert of just this chat (see above), then surface a toast
+      // rather than silently leaving the row where the optimistic move put it.
+      applyPinToCaches(pinned);
       addToast({
         title: pinned ? "Couldn't unpin" : "Couldn't pin",
         description: "The change wasn't saved — try again.",
       });
     },
     onSuccess: () => addToast({ title: pinned ? "Unpinned" : "Pinned" }),
-    // Reconcile with server truth after either outcome; on error this refetches
-    // the corrected state after the rollback above.
+    // Reconcile with server truth (exact pinnedAt / ordering, plus the
+    // non-infinite palette / mobile caches skipped above) after either outcome.
     onSettled: () => invalidate(),
   });
 

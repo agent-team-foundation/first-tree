@@ -202,4 +202,26 @@ describe("RowEngagementMenu", () => {
 
     expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Couldn't pin" }));
   });
+
+  it("skips non-infinite me-chats caches (palette / mobile) instead of throwing on the optimistic apply", async () => {
+    const dom = await render(
+      <RowEngagementMenu chatId="chat-active" status="active" hasUnread={false} pinned={false} />,
+    );
+    // The command palette and mobile lists store a BARE `ListMeChatsResponse`
+    // (no `pages`) under the same `["me","chats"]` prefix the pin optimistic
+    // apply writes through. Feeding one to the InfiniteData transform would throw
+    // on `data.pages`; the `"pages" in old` guard must skip it. Without the guard
+    // `onMutate` throws before `pinMeChat` is ever called.
+    const palette = { priorityRows: { attention: [], pinned: [] }, rows: [], nextCursor: null };
+    (queryClient as QueryClient).setQueryData(["me", "chats", "palette"], palette);
+
+    await click(manageButton(dom));
+    await click(menuItem("Pin"));
+
+    expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-active", true);
+    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Pinned" }));
+    // The bare cache is left untouched (same reference) — it reconciles via the
+    // trailing invalidate, not the optimistic transform.
+    expect((queryClient as QueryClient).getQueryData(["me", "chats", "palette"])).toBe(palette);
+  });
 });
