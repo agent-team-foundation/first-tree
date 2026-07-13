@@ -718,9 +718,10 @@ owners: [alice, bob]
 \`\`\`
 
 Useful optional frontmatter: \`description\`, \`soft_links\`,
-\`lastReviewed\`, and \`decisionLocksCode\`. Metadata is the reader
-interface: \`title\`, \`description\`, \`owners\`, and \`soft_links\` should
-make scanning, routing, and responsibility clear.
+\`lastReviewed\`, and \`decisionLocksCode\`. \`lastReviewed\` records an actual
+owner review; update it only through that review/audit workflow, never during
+a source-backed write. Use \`owners: [*]\` only when a human explicitly opens
+ownership to everyone. Metadata supports scanning, routing, and responsibility.
 
 Prefer body sections in this order, omitting any that do not apply:
 \`Decision\`, \`Rationale\`, \`Constraints\`, \`Cross-Domain\`. There is no
