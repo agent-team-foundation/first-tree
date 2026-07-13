@@ -109,10 +109,15 @@ export function AskTakeover({
   onReply,
   onSkip,
   isTrial = false,
+  mobile = false,
 }: {
   /** Trial surface: match the minimal trial composer — no @mention / attach
    *  affordances in the answer input, just plain text. */
   isTrial?: boolean;
+  /** Touch surface (the mobile route): enlarge tap targets to the touch
+   *  minimum and make Enter insert a newline (Reply button is the only submit),
+   *  matching the mobile chat composer. */
+  mobile?: boolean;
   /** The ask itself — the request message's markdown body. */
   body: string;
   payload: AskRequest;
@@ -245,7 +250,10 @@ export function AskTakeover({
         onSkip();
         return;
       }
-      if (e.key === "Enter" && !e.shiftKey) {
+      // Mobile soft keyboards have no Shift+Enter, so Enter must insert a
+      // newline in the answer box; the Reply button is the only submit path.
+      // Desktop keeps Enter-to-reply.
+      if (e.key === "Enter" && !e.shiftKey && !mobile) {
         // An option row is a radio/checkbox button that owns Enter as its
         // toggle; let that native behavior stand rather than resolving.
         if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
@@ -256,7 +264,7 @@ export function AskTakeover({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sending, canReply, onSkip, reply]);
+  }, [sending, canReply, onSkip, reply, mobile]);
 
   // Visible chrome (border + fill + radius) lives on the WRAPPER, not the
   // textarea: the textarea is painted transparent so the mention overlay
@@ -397,8 +405,9 @@ export function AskTakeover({
                   position: "absolute",
                   top: 2,
                   right: 2,
-                  width: 16,
-                  height: 16,
+                  // Mobile: a roomier corner × (kept modest vs the small thumbnail).
+                  width: mobile ? 22 : 16,
+                  height: mobile ? 22 : 16,
                   borderRadius: "50%",
                   background: "var(--color-overlay-scrim)",
                   border: "none",
@@ -410,7 +419,7 @@ export function AskTakeover({
                   padding: 0,
                 }}
               >
-                <X className="h-2.5 w-2.5" />
+                <X className={mobile ? "h-3 w-3" : "h-2.5 w-2.5"} />
               </button>
             </div>
           ) : (
@@ -423,8 +432,9 @@ export function AskTakeover({
                   onClick={() => removeAttachment(att.id)}
                   aria-label={`Remove ${att.file.name}`}
                   style={{
-                    width: 14,
-                    height: 14,
+                    // Mobile: a roomier tap target on the file chip's remove ×.
+                    width: mobile ? 26 : 14,
+                    height: mobile ? 26 : 14,
                     borderRadius: "50%",
                     background: "var(--color-overlay-scrim)",
                     border: "none",
@@ -436,7 +446,7 @@ export function AskTakeover({
                     padding: 0,
                   }}
                 >
-                  <X className="h-2 w-2" />
+                  <X className={mobile ? "h-3.5 w-3.5" : "h-2 w-2"} />
                 </button>
               }
             />
@@ -463,9 +473,11 @@ export function AskTakeover({
             padding: 0,
             display: "inline-flex",
             alignItems: "center",
+            // Mobile: grow the tap target to the touch minimum (icon stays small).
+            ...(mobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
           }}
         >
-          <AtSign className="h-3.5 w-3.5" />
+          <AtSign className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
         </button>
         <button
           type="button"
@@ -480,9 +492,11 @@ export function AskTakeover({
             padding: 0,
             display: "inline-flex",
             alignItems: "center",
+            // Mobile: grow the tap target to the touch minimum (icon stays small).
+            ...(mobile ? { width: 44, height: 44, justifyContent: "center" } : {}),
           }}
         >
-          <Paperclip className="h-3.5 w-3.5" />
+          <Paperclip className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
         </button>
         <input
           ref={fileInputRef}
@@ -637,7 +651,8 @@ export function AskTakeover({
             title="Skip (Esc)"
             className="text-label"
             style={{
-              height: 34,
+              // Mobile: 44 height clears the touch minimum.
+              height: mobile ? 44 : 34,
               padding: "0 var(--sp-4)",
               borderRadius: "var(--radius-input)",
               border: "var(--hairline) solid transparent",
@@ -652,10 +667,12 @@ export function AskTakeover({
             type="button"
             onClick={reply}
             disabled={!canReply}
-            title="Reply (Enter)"
+            title={mobile ? "Reply" : "Reply (Enter)"}
             className="text-label"
             style={{
-              height: 34,
+              // Mobile: 44 height clears the touch minimum (Reply is the only
+              // submit path there — Enter inserts a newline).
+              height: mobile ? 44 : 34,
               padding: "0 var(--sp-4)",
               borderRadius: "var(--radius-input)",
               border: "var(--hairline) solid transparent",

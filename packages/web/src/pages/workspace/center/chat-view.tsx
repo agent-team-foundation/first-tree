@@ -3529,6 +3529,7 @@ export function ChatView({
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
                 isTrial={isTrial}
+                mobile={composerMobile}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}
