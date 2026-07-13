@@ -37,13 +37,15 @@ async function click(element: Element | null): Promise<void> {
   await flush();
 }
 
-function checkboxByLabel(label: string): HTMLInputElement {
+function inputByLabel(label: string, type: "checkbox" | "radio"): HTMLInputElement {
   const labels = [...document.body.querySelectorAll("label")];
   const row = labels.find((el) => el.textContent?.includes(label));
-  const input = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  if (!input) throw new Error(`Missing checkbox ${label}`);
+  const input = row?.querySelector<HTMLInputElement>(`input[type="${type}"]`);
+  if (!input) throw new Error(`Missing ${type} ${label}`);
   return input;
 }
+const checkboxByLabel = (label: string): HTMLInputElement => inputByLabel(label, "checkbox");
+const radioByLabel = (label: string): HTMLInputElement => inputByLabel(label, "radio");
 
 function StatefulFilter({
   onOriginChange,
@@ -97,7 +99,7 @@ describe("FilterPopover", () => {
     expect(originLabel("future" as ChatSource)).toBe("future");
   });
 
-  it("toggles status, source, reset, reset-all, and done states", async () => {
+  it("status is exclusive; source defaults to all with no zero-source state; reset + done", async () => {
     const onOriginChange = vi.fn();
     const onEngagementChange = vi.fn();
     const onResetAll = vi.fn();
@@ -115,37 +117,48 @@ describe("FilterPopover", () => {
 
     expect(document.body.textContent).toContain("Status");
     expect(document.body.textContent).toContain("Source");
-    expect(checkboxByLabel("Active").checked).toBe(false);
-    expect(checkboxByLabel("Archived").checked).toBe(true);
+    // Status is a radio group: archived selected, the others not.
+    expect(radioByLabel("Archived").checked).toBe(true);
+    expect(radioByLabel("Active").checked).toBe(false);
+    expect(radioByLabel("All").checked).toBe(false);
+    // Source: the narrowed subset (github + agent) is checked, Human is not.
     expect(checkboxByLabel("GitHub").checked).toBe(true);
     expect(checkboxByLabel("Agent").checked).toBe(true);
     expect(checkboxByLabel("Human").checked).toBe(false);
 
+    // Status is EXCLUSIVE — picking Active sets engagement to exactly "active".
+    await click(radioByLabel("Active"));
+    expect(onEngagementChange).toHaveBeenLastCalledWith("active");
+    expect(radioByLabel("Active").checked).toBe(true);
+    expect(radioByLabel("Archived").checked).toBe(false);
+
+    // Checking the missing source completes the full set → normalizes to the
+    // unrestricted (empty) wire so "all sources" is not active narrowing.
     await click(checkboxByLabel("Human"));
-    expect(onOriginChange).toHaveBeenLastCalledWith(["manual", "github", "agent"]);
-    expect(trigger?.textContent).toContain("4");
-
-    await click(checkboxByLabel("Agent"));
-    expect(onOriginChange).toHaveBeenLastCalledWith(["manual", "github"]);
-    expect(checkboxByLabel("Agent").checked).toBe(false);
-
-    await click(checkboxByLabel("GitHub"));
-    expect(onOriginChange).toHaveBeenLastCalledWith(["manual"]);
-    expect(checkboxByLabel("GitHub").checked).toBe(false);
-
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset") ?? null);
     expect(onOriginChange).toHaveBeenLastCalledWith([]);
-    expect(checkboxByLabel("Human").checked).toBe(false);
+    expect(checkboxByLabel("Human").checked).toBe(true);
+    expect(checkboxByLabel("GitHub").checked).toBe(true);
 
-    await click(checkboxByLabel("Active"));
-    expect(onEngagementChange).toHaveBeenLastCalledWith("all");
+    // Narrow again by unchecking down toward a single source.
+    await click(checkboxByLabel("Human"));
+    expect(onOriginChange).toHaveBeenLastCalledWith(["github", "agent"]);
+    await click(checkboxByLabel("Agent"));
+    expect(onOriginChange).toHaveBeenLastCalledWith(["github"]);
 
-    await click(
-      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Reset all") ?? null,
-    );
+    // The last checked source CANNOT be removed — no zero-source state.
+    onOriginChange.mockClear();
+    await click(checkboxByLabel("GitHub"));
+    expect(onOriginChange).not.toHaveBeenCalled();
+    expect(checkboxByLabel("GitHub").checked).toBe(true);
+
+    // Per-section Source reset returns to unrestricted (all checked).
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Reset") ?? null);
+    expect(onOriginChange).toHaveBeenLastCalledWith([]);
+    expect(checkboxByLabel("Human").checked).toBe(true);
+
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Reset all") ?? null);
     expect(onResetAll).toHaveBeenCalledTimes(1);
-
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Done") ?? null);
     expect(document.body.textContent).not.toContain("Source");
   });
 });

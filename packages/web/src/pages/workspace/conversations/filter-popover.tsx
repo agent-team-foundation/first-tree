@@ -85,26 +85,36 @@ export function FilterPopover({
   onResetAll,
   activeCount,
 }: FilterPopoverProps) {
+  // Source is a NON-EMPTY additive selection over creation origin (tree #721).
+  // `origin: []` is the wire's "unrestricted" (all sources) state — display it as
+  // every box checked rather than an empty list whose hidden meaning is "all".
+  const allSources = ORIGIN_OPTIONS.map((o) => o.value);
+  const sourceSelected = origin.length === 0 ? new Set<ChatSource>(allSources) : new Set(origin);
   const toggleOrigin = (src: ChatSource): void => {
-    const set = new Set(origin);
-    if (set.has(src)) set.delete(src);
-    else set.add(src);
-    // Re-emit in canonical order so the resulting URL is stable
-    // regardless of which checkbox the user clicked first.
-    onOriginChange(ORIGIN_OPTIONS.map((o) => o.value).filter((v) => set.has(v)));
+    const next = new Set(sourceSelected);
+    if (next.has(src)) {
+      if (next.size === 1) return; // forbid the zero-source state — the last stays
+      next.delete(src);
+    } else {
+      next.add(src);
+    }
+    // Re-emit in canonical order for a stable URL; the FULL set normalizes back to
+    // the empty/unrestricted wire so "all sources" never counts as active narrowing.
+    const selected = allSources.filter((v) => next.has(v));
+    onOriginChange(selected.length === allSources.length ? [] : selected);
   };
   const resetOrigin = (): void => onOriginChange([]);
 
-  // Status is two checkboxes (Active / Archived) that map onto the single
-  // `engagement` value — composable like Source, so "both checked" = the old
-  // "Both" and there's no redundant third option. Empty (neither checked)
-  // means "no constraint" → all, matching Source's "none = all" convention.
-  const activeChecked = engagement === "active" || engagement === "all";
-  const archivedChecked = engagement === "archived" || engagement === "all";
-  const pairToEngagement = (active: boolean, archived: boolean): ChatEngagementView =>
-    active && !archived ? "active" : archived && !active ? "archived" : "all";
-  const toggleActive = (): void => onEngagementChange(pairToEngagement(!activeChecked, archivedChecked));
-  const toggleArchived = (): void => onEngagementChange(pairToEngagement(activeChecked, !archivedChecked));
+  // Status is the viewer's engagement projection — one MUTUALLY EXCLUSIVE
+  // selection (tree #721): `Active` (default + reset target) / `Archived` / `All`
+  // (their union, still excluding deleted). A radio group, not the old
+  // composable checkbox pair, so the visible state can never read as an empty
+  // "means everything" selection.
+  const STATUS_OPTIONS: ReadonlyArray<{ value: ChatEngagementView; label: string }> = [
+    { value: "active", label: "Active" },
+    { value: "archived", label: "Archived" },
+    { value: "all", label: "All" },
+  ];
 
   return (
     <Popover
@@ -143,15 +153,21 @@ export function FilterPopover({
     >
       {({ close }) => (
         <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-          <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+          <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }} role="radiogroup" aria-label="Status">
             <header
               className="text-eyebrow"
               style={{ color: "var(--fg-4)", textTransform: "uppercase", paddingBottom: "var(--sp-0_5)" }}
             >
               Status
             </header>
-            <FilterCheckbox label="Active" checked={activeChecked} onChange={toggleActive} />
-            <FilterCheckbox label="Archived" checked={archivedChecked} onChange={toggleArchived} />
+            {STATUS_OPTIONS.map((opt) => (
+              <FilterRadio
+                key={opt.value}
+                label={opt.label}
+                checked={engagement === opt.value}
+                onChange={() => onEngagementChange(opt.value)}
+              />
+            ))}
           </section>
 
           <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
@@ -175,7 +191,7 @@ export function FilterPopover({
               <FilterCheckbox
                 key={opt.value}
                 label={opt.label}
-                checked={origin.includes(opt.value)}
+                checked={sourceSelected.has(opt.value)}
                 onChange={() => toggleOrigin(opt.value)}
               />
             ))}
@@ -258,6 +274,41 @@ function FilterCheckbox({ label, checked, onChange }: { label: string; checked: 
       </span>
       <span>{label}</span>
       <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />
+    </label>
+  );
+}
+
+/**
+ * Single-select sibling of `FilterCheckbox` for the exclusive Status axis. The
+ * native `<input type=radio>` is `sr-only` so keyboard + screen-reader semantics
+ * stay native (arrow-keys move within the radiogroup); the visible ring + filled
+ * dot are decoration reflecting the checked state.
+ */
+function FilterRadio({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
+  return (
+    <label
+      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+      style={{
+        gap: "var(--sp-1_5)",
+        padding: "var(--sp-0_75) var(--sp-1)",
+        borderRadius: 4,
+        color: "var(--fg-2)",
+      }}
+    >
+      <span
+        aria-hidden
+        className="inline-flex items-center justify-center shrink-0"
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: "50%",
+          border: `var(--hairline) solid ${checked ? "var(--primary)" : "var(--border)"}`,
+        }}
+      >
+        {checked && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--primary)" }} />}
+      </span>
+      <span>{label}</span>
+      <input type="radio" name="chat-status-filter" checked={checked} onChange={onChange} className="sr-only" />
     </label>
   );
 }

@@ -347,11 +347,10 @@ describe("ConversationList", () => {
     expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith("chat-failed", "archived");
 
     await click(container.querySelector('button[aria-label="Filter"]'));
+    // Source now defaults to all-checked (no zero-source state); unchecking Agent
+    // narrows to Human + GitHub, which the Unread assertion below expects.
     await click(
-      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Human")) ?? null,
-    );
-    await click(
-      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("GitHub")) ?? null,
+      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Agent")) ?? null,
     );
     expect(container.textContent).toContain("Filters");
     expect(container.textContent).toContain("Human");
