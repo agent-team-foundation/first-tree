@@ -552,6 +552,7 @@ export {
   type MeChatLeaveResponse,
   type MeChatMembershipKind,
   type MeChatParticipant,
+  type MeChatPinResponse,
   type MeChatReadResponse,
   type MeChatRow,
   type MeChatSourceCounts,
@@ -560,10 +561,13 @@ export {
   meChatLeaveResponseSchema,
   meChatMembershipKindSchema,
   meChatParticipantSchema,
+  meChatPinResponseSchema,
   meChatReadResponseSchema,
   meChatRowSchema,
   meChatSourceCountsSchema,
   meChatUnreadResponseSchema,
+  type PinMeChat,
+  pinMeChatSchema,
 } from "./schemas/me-chat.js";
 export {
   type DocSnapshotFailReason,

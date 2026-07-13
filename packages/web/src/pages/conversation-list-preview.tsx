@@ -44,6 +44,8 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -73,6 +75,8 @@ const ATTENTION_ROWS: MeChatRow[] = [
     participants: [NOVA],
     unreadMentionCount: 1,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
     lastMessageAt: minutesAgo(6),
     lastMessagePreview: "baixiaohang: please review the tag plan.",
   }),
@@ -86,6 +90,8 @@ const NORMAL_ROWS: MeChatRow[] = [
     participants: [DESIGN],
     unreadMentionCount: 2,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
     lastMessageAt: minutesAgo(12),
     lastMessagePreview: "baixiaohang: can you take a look at the second variant?",
   }),
@@ -136,6 +142,8 @@ const NORMAL_ROWS: MeChatRow[] = [
     participants: [NOVA, DESIGN, RESEARCH],
     unreadMentionCount: 5,
     chatHasExplicitMentionToMe: true,
+    pinnedAt: null,
+    activityAt: null,
     lastMessageAt: minutesAgo(70),
     lastMessagePreview: "research: cut RC2?",
   }),

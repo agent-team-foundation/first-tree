@@ -191,6 +191,8 @@ function meChatRow(overrides: Partial<MeChatRow> & { chatId: string }): MeChatRo
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -281,12 +283,16 @@ describe("ChatByIdView and CenterPanel", () => {
       chatId: "chat-1",
       unreadMentionCount: 2,
       chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
     });
     const otherUnread = meChatRow({
       chatId: "chat-2",
       title: "Other chat",
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
     });
     // The desktop rail stores InfiniteData (`useInfiniteQuery`); the command
     // palette stores a bare ListMeChatsResponse. Seed both so the mark-read
@@ -313,10 +319,14 @@ describe("ChatByIdView and CenterPanel", () => {
     expect(allRows?.find((row) => row.chatId === "chat-1")).toMatchObject({
       unreadMentionCount: 0,
       chatHasExplicitMentionToMe: false,
+      pinnedAt: null,
+      activityAt: null,
     });
     expect(allRows?.find((row) => row.chatId === "chat-2")).toMatchObject({
       unreadMentionCount: 1,
       chatHasExplicitMentionToMe: true,
+      pinnedAt: null,
+      activityAt: null,
     });
     const unreadRows = queryClient
       .getQueryData<InfiniteData<ListMeChatsResponse>>(unreadKey)

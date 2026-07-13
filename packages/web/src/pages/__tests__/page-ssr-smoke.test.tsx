@@ -295,6 +295,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? ["agent-1"],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? true,
+    pinnedAt: null,
+    activityAt: null,
   };
 }
 
@@ -615,6 +617,8 @@ function createClient(): QueryClient {
         unreadMentionCount: 0,
         busyAgentIds: [],
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
         engagementStatus: "archived",
         lastMessageAt: "2026-05-27T09:00:00.000Z",
         lastMessagePreview: "Looks good.",
@@ -636,6 +640,8 @@ function createClient(): QueryClient {
         unreadMentionCount: 0,
         busyAgentIds: [],
         chatHasExplicitMentionToMe: false,
+        pinnedAt: null,
+        activityAt: null,
         engagementStatus: "archived",
       }),
     ]),

@@ -6,6 +6,7 @@ import {
   paginationQuerySchema,
   parseLandingCampaignTrialChatMetadata,
   patchChatEngagementSchema,
+  pinMeChatSchema,
   sendMessageSchema,
   updateChatSchema,
 } from "@first-tree/shared";
@@ -35,6 +36,7 @@ import {
   leaveMeChat,
   markMeChatRead,
   markMeChatUnread,
+  pinMeChat,
   resolveChatTitle,
   setChatEngagement,
 } from "../services/me-chat.js";
@@ -496,6 +498,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { chatId: string } }>("/:chatId/unread", async (request) => {
     const { scope } = await requireChatAccess(request, app.db);
     return markMeChatUnread(app.db, request.params.chatId, scope.humanAgentId);
+  });
+
+  /** POST /chats/:chatId/pin — set/clear the caller's per-user pin. Idempotent. */
+  app.post<{ Params: { chatId: string } }>("/:chatId/pin", async (request) => {
+    const { scope } = await requireChatAccess(request, app.db);
+    const { pinned } = pinMeChatSchema.parse(request.body);
+    return pinMeChat(app.db, request.params.chatId, scope.humanAgentId, pinned);
   });
 
   /** POST /chats/:chatId/participants — add speaking participants. Idempotent. */
