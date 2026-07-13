@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fencedCodeBlockRanges, scanBareDocPathTokens, stripDocPathLineSuffix } from "../doc-link-scan.js";
+import { scanBareDocPathTokens, stripDocPathLineSuffix } from "../doc-link-scan.js";
 
 function tokens(text: string): string[] {
   return scanBareDocPathTokens(text).map((m) => m.raw);
@@ -225,37 +225,5 @@ describe("stripDocPathLineSuffix", () => {
 
   it("returns the raw value when it is not a markdown path", () => {
     expect(stripDocPathLineSuffix("not-a-doc.txt:12")).toBe("not-a-doc.txt:12");
-  });
-});
-
-describe("fencedCodeBlockRanges", () => {
-  function covered(text: string): string[] {
-    return fencedCodeBlockRanges(text).map((r) => text.slice(r.start, r.end));
-  }
-
-  it("returns no ranges when there is no fenced block", () => {
-    expect(fencedCodeBlockRanges("plain text\nno code here")).toEqual([]);
-    // Inline code is intentionally NOT covered (fenced-only exclusion).
-    expect(fencedCodeBlockRanges("use `code` here")).toEqual([]);
-  });
-
-  it("covers a simple backtick and tilde fence", () => {
-    expect(covered("a\n```\ncode\n```\nb")).toEqual(["```\ncode\n```"]);
-    expect(covered("~~~\ncode\n~~~")).toEqual(["~~~\ncode\n~~~"]);
-  });
-
-  it("closes a fence only on a same-char run at least as long as the opener", () => {
-    // A 3-backtick line inside a 4-backtick block does NOT close it.
-    const text = "````\n```\nstill code\n````\nafter";
-    expect(covered(text)).toEqual(["````\n```\nstill code\n````"]);
-  });
-
-  it("extends an unclosed fence to end of input", () => {
-    const text = "intro\n```\nnever closed";
-    expect(fencedCodeBlockRanges(text)).toEqual([{ start: 6, end: text.length }]);
-  });
-
-  it("covers multiple fenced blocks in order", () => {
-    expect(covered("```\na\n```\n\n```\nb\n```")).toEqual(["```\na\n```", "```\nb\n```"]);
   });
 });

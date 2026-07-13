@@ -154,9 +154,31 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(three.imageRefs).toHaveLength(0);
   });
 
-  it("DOES capture an image written inside inline code (fenced-only exclusion scope)", async () => {
-    // Deliberate scope: only fenced blocks are excluded. An image embed inside
-    // inline code is rare and treated as a live embed.
+  it("does NOT capture an image in a fenced block nested in a blockquote", async () => {
+    const { uploader } = stubUploader();
+    const body = ["> 看代码：", "> ```md", "> ![x](diagram.webp)", "> ```"].join("\n");
+    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(0);
+    expect(res.strippedText).toBe(body);
+  });
+
+  it("does NOT capture an image in a fenced block nested in a list item", async () => {
+    const { uploader } = stubUploader();
+    const body = ["- 步骤：", "  ```md", "  ![x](diagram.webp)", "  ```"].join("\n");
+    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(0);
+  });
+
+  it("does NOT capture an image inside an indented code block", async () => {
+    const { uploader } = stubUploader();
+    const body = ["示例：", "", "    ![x](diagram.webp)"].join("\n");
+    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(0);
+  });
+
+  it("DOES capture an image written inside inline code (inline is treated as live)", async () => {
+    // Deliberate scope: only block code (fenced/indented) is excluded. An image
+    // embed inside inline code is rare and treated as a live embed.
     const { uploader } = stubUploader();
     const res = await buildMessageImageSnapshots("示例 `![x](shots/filter.png)` 完", root, opts(uploader));
     expect(res.imageRefs).toHaveLength(1);
@@ -264,11 +286,14 @@ describe("buildMessageImageSnapshots — batch cap", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("captures at most MAX_BATCH_ATTACHMENTS (20) and counts the rest as skipped", async () => {
-    const { uploader } = stubUploader();
+  it("caps resolution+upload at MAX_BATCH_ATTACHMENTS (20) before the fan-out", async () => {
+    const { uploader, uploads } = stubUploader();
     const body = Array.from({ length: 25 }, (_, i) => `![p${i}](p${i}.png)`).join(" ");
     const res = await buildMessageImageSnapshots(body, root, opts(uploader));
     expect(res.imageRefs).toHaveLength(20);
     expect(res.skipped).toBe(5);
+    // Only 20 distinct paths were resolved+uploaded — the fs fan-out is bounded
+    // by the cap, not by the number of syntactic occurrences.
+    expect(uploads).toHaveLength(20);
   });
 });

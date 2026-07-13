@@ -1,12 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
 import {
-  fencedCodeBlockRanges,
   IMAGE_MIME_TO_EXT,
   type ImageRefContent,
   MAX_ATTACHMENT_BYTES,
   MAX_BATCH_ATTACHMENTS,
   type SupportedImageMime,
 } from "@first-tree/shared";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   type AttachmentUploader,
   canonicalizeWorkspacePath,
@@ -90,61 +90,73 @@ export async function buildMessageImageSnapshots(
   const roots = await resolveSelfRoots(selfConfig);
   if (!roots) return { imageRefs: [], strippedText: text, skipped: occurrences.length };
 
-  // Pass 1 — resolve each mention to a readable in-fence file + its MIME.
-  type Resolved = ImageOccurrence & { file: string; mime: SupportedImageMime };
-  const resolvedList: Array<Resolved | null> = await Promise.all(
-    occurrences.map(async (occ): Promise<Resolved | null> => {
-      const mime = imageMimeForPath(occ.writtenPath);
-      if (!mime) return null;
-      const key = await canonicalizeWorkspacePath(roots, occ.writtenPath);
-      if (!key) return null;
+  // Distinct written paths in first-appearance order. Cap the number we RESOLVE
+  // to the batch limit BEFORE touching the filesystem, so a message with
+  // thousands of mentions cannot fan out into thousands of concurrent
+  // realpath/stat calls — the resolve/upload fan-out is bounded by
+  // MAX_BATCH_ATTACHMENTS. Distinct paths beyond the cap are skipped and their
+  // mentions stay in the text.
+  const distinctPaths: string[] = [];
+  const seenPath = new Set<string>();
+  for (const occ of occurrences) {
+    if (seenPath.has(occ.writtenPath)) continue;
+    seenPath.add(occ.writtenPath);
+    distinctPaths.push(occ.writtenPath);
+  }
+  const inCapPaths = distinctPaths.slice(0, MAX_BATCH_ATTACHMENTS);
+  let skipped = distinctPaths.length - inCapPaths.length;
+
+  // Pass 1 — resolve each in-cap distinct path to a readable in-fence file +
+  // MIME (bounded fan-out ≤ MAX_BATCH_ATTACHMENTS).
+  const resolvedByPath = new Map<string, { file: string; mime: SupportedImageMime }>();
+  await Promise.all(
+    inCapPaths.map(async (wp) => {
+      const mime = imageMimeForPath(wp);
+      if (!mime) return;
+      const key = await canonicalizeWorkspacePath(roots, wp);
+      if (!key) return;
       const file = await resolveWorkspaceFile(roots.agentHomeReal, key);
-      if (!file) return null;
-      return { ...occ, file, mime };
+      if (!file) return;
+      resolvedByPath.set(wp, { file, mime });
     }),
   );
 
-  // Pass 2 — read + upload, de-duped by resolved file so the same picture
-  // referenced twice uploads once. Enforce the per-message batch cap.
-  const refByFile = new Map<string, ImageRefContent>();
-  let skipped = 0;
-
-  const attempted = new Set<string>();
-  const uploadTasks: Array<Promise<void>> = [];
-  for (const occ of resolvedList) {
-    if (!occ) continue;
-    if (attempted.has(occ.file)) continue;
-    attempted.add(occ.file);
-    if (attempted.size > MAX_BATCH_ATTACHMENTS) {
-      skipped += 1;
-      continue;
-    }
-    uploadTasks.push(
-      (async () => {
-        const ref = await captureAndUpload(occ.file, occ.writtenPath, occ.mime, opts);
-        if (ref) refByFile.set(occ.file, ref);
-        else skipped += 1;
-      })(),
-    );
+  // Pass 2 — upload each distinct resolved FILE once (two paths resolving to the
+  // same realpath upload once).
+  const refByFile = new Map<string, ImageRefContent | null>();
+  const toUpload: Array<{ file: string; wp: string; mime: SupportedImageMime }> = [];
+  for (const [wp, r] of resolvedByPath) {
+    if (refByFile.has(r.file)) continue;
+    refByFile.set(r.file, null);
+    toUpload.push({ file: r.file, wp, mime: r.mime });
   }
-  await Promise.all(uploadTasks);
-  if (refByFile.size === 0) return { imageRefs: [], strippedText: text, skipped };
+  await Promise.all(
+    toUpload.map(async (r) => {
+      const ref = await captureAndUpload(r.file, r.wp, r.mime, opts);
+      refByFile.set(r.file, ref);
+      if (!ref) skipped += 1;
+    }),
+  );
+  if (![...refByFile.values()].some((ref) => ref !== null)) {
+    return { imageRefs: [], strippedText: text, skipped };
+  }
 
-  // Pass 3 — collect the refs (first-appearance order, de-duped) and strip the
-  // spans. We strip EVERY in-fence-resolved image span, not only the captured
-  // ones: because at least one image captured, the message flips to a `file`
-  // batch whose caption is this text, and a leftover `![alt](local/path)` would
-  // render as a broken `<img>` there. Out-of-fence mentions (unresolved) are
-  // left untouched — we can't upload what we can't read.
-  const seen = new Set<string>();
+  // Pass 3 — collect the refs (first-appearance order, de-duped by file) and
+  // strip the spans. We strip EVERY in-fence-resolved image span, not only the
+  // captured ones: because at least one image captured, the message flips to a
+  // `file` batch whose caption is this text, and a leftover `![alt](local/path)`
+  // would render as a broken `<img>` there. Out-of-fence and over-cap mentions
+  // (unresolved) are left untouched — we can't upload what we can't read.
+  const seenFile = new Set<string>();
   const imageRefs: ImageRefContent[] = [];
   const resolvedSpans: Array<{ start: number; end: number }> = [];
-  for (const occ of resolvedList) {
-    if (!occ) continue;
+  for (const occ of occurrences) {
+    const r = resolvedByPath.get(occ.writtenPath);
+    if (!r) continue;
     resolvedSpans.push({ start: occ.start, end: occ.end });
-    const ref = refByFile.get(occ.file);
-    if (ref && !seen.has(occ.file)) {
-      seen.add(occ.file);
+    const ref = refByFile.get(r.file);
+    if (ref && !seenFile.has(r.file)) {
+      seenFile.add(r.file);
       imageRefs.push(ref);
     }
   }
@@ -245,11 +257,16 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
   }
   if (candidates.length === 0) return [];
 
-  // Filter out candidates that sit inside a fenced code block (a shown sample,
-  // not an embed). `fencedCodeBlockRanges` is in source order, and candidates
-  // are already in source order, so a single monotonic cursor over the ranges
-  // decides all candidates in O(candidates + ranges) — no per-candidate scan.
-  const codeRanges = fencedCodeBlockRanges(text);
+  // Filter out candidates that sit inside a block code sample (fenced or
+  // indented, at any container depth) — a shown sample, not an embed. Ranges
+  // come from the renderer's own markdown parser (`mdast-util-from-markdown`),
+  // so this matches exactly what ReactMarkdown treats as a code block, with no
+  // hand-rolled CommonMark divergence. `blockCodeRanges` is sorted by start and
+  // candidates are in source order, so a single monotonic cursor decides all
+  // candidates in O(candidates + ranges). (Inline `` `code` `` is deliberately
+  // NOT excluded — a rare place for a full embed, and treating it as live keeps
+  // the send-side from having to reproduce inline CommonMark parsing.)
+  const codeRanges = blockCodeRanges(text);
   const out: ImageOccurrence[] = [];
   let ri = 0;
   for (const c of candidates) {
@@ -274,6 +291,39 @@ const MAX_IMAGE_SCAN_CHARS = 1024 * 1024;
  *  drive prefix like `C:` is not treated as a scheme (single-letter). */
 function hasUrlScheme(target: string): boolean {
   return /^[a-z][a-z0-9+.-]+:/i.test(target);
+}
+
+/**
+ * `[start, end)` offset ranges of every block code sample (fenced or indented,
+ * at any container depth) in `text`, from the renderer's own markdown parser so
+ * capture treats a code block exactly as ReactMarkdown does — including fences
+ * nested in blockquotes / list items. Inline code (`inlineCode`) is not
+ * included. Sorted by start. Parser failure degrades to no ranges (best-effort).
+ */
+function blockCodeRanges(text: string): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  let tree: unknown;
+  try {
+    tree = fromMarkdown(text);
+  } catch {
+    return out;
+  }
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    const n = node as {
+      type?: unknown;
+      position?: { start?: { offset?: unknown }; end?: { offset?: unknown } };
+      children?: unknown;
+    };
+    if (n.type === "code") {
+      const start = n.position?.start?.offset;
+      const end = n.position?.end?.offset;
+      if (typeof start === "number" && typeof end === "number") out.push({ start, end });
+    }
+    if (Array.isArray(n.children)) for (const child of n.children) walk(child);
+  };
+  walk(tree);
+  return out.sort((a, b) => a.start - b.start);
 }
 
 /**
