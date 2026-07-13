@@ -182,7 +182,9 @@ function isClosingFence(line: string, fence: FenceState): boolean {
  * code sample as a live construct.
  */
 export function markdownCodeSpanRanges(text: string): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = [];
+  // Fenced blocks are line-anchored; scan them first (a backtick INSIDE a fence
+  // must not be read as an inline delimiter).
+  const fenced: Array<{ start: number; end: number }> = [];
   const lines = text.split(/(\r?\n)/);
   let fence: FenceState | null = null;
   let fenceStart = 0;
@@ -194,7 +196,7 @@ export function markdownCodeSpanRanges(text: string): Array<{ start: number; end
     }
     if (fence) {
       if (isClosingFence(line, fence)) {
-        ranges.push({ start: fenceStart, end: absoluteOffset + line.length });
+        fenced.push({ start: fenceStart, end: absoluteOffset + line.length });
         fence = null;
       }
       absoluteOffset += line.length;
@@ -204,15 +206,47 @@ export function markdownCodeSpanRanges(text: string): Array<{ start: number; end
     if (opening) {
       fence = opening;
       fenceStart = absoluteOffset;
-      absoluteOffset += line.length;
-      continue;
-    }
-    for (const span of findInlineCodeSpans(line)) {
-      ranges.push({ start: absoluteOffset + span.start, end: absoluteOffset + span.end });
     }
     absoluteOffset += line.length;
   }
-  if (fence) ranges.push({ start: fenceStart, end: text.length });
+  if (fence) fenced.push({ start: fenceStart, end: text.length });
+
+  // Inline code spans are scanned across the WHOLE text (a CommonMark code span
+  // may contain line endings), matching an opener run of N backticks to a
+  // closing run of EXACTLY N backticks (a longer run is not a close). Openers
+  // inside a fenced block are skipped.
+  const ranges = [...fenced];
+  const inFence = (pos: number): boolean => fenced.some((r) => pos >= r.start && pos < r.end);
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== "`" || inFence(i)) {
+      i += 1;
+      continue;
+    }
+    let openEnd = i;
+    while (openEnd < text.length && text[openEnd] === "`") openEnd += 1;
+    const openLen = openEnd - i;
+    let closeEnd = -1;
+    for (let k = openEnd; k < text.length; ) {
+      if (text[k] !== "`") {
+        k += 1;
+        continue;
+      }
+      let runEnd = k;
+      while (runEnd < text.length && text[runEnd] === "`") runEnd += 1;
+      if (runEnd - k === openLen) {
+        closeEnd = runEnd;
+        break;
+      }
+      k = runEnd; // a different-length run is not a close — skip the whole run
+    }
+    if (closeEnd >= 0) {
+      ranges.push({ start: i, end: closeEnd });
+      i = closeEnd;
+    } else {
+      i = openEnd; // unmatched opener — treat as literal, resume after it
+    }
+  }
   return ranges;
 }
 
@@ -261,11 +295,27 @@ function findInlineCodeSpans(line: string): Array<{ start: number; end: number }
     }
     const start = idx;
     while (line[idx] === "`") idx += 1;
-    const ticks = line.slice(start, idx);
-    const end = line.indexOf(ticks, idx);
-    if (end === -1) continue;
-    ranges.push({ start, end: end + ticks.length });
-    idx = end + ticks.length;
+    const openLen = idx - start;
+    // Close only on a backtick run of EXACTLY openLen — a longer run is not a
+    // close, so advance by whole runs rather than substring-matching (which
+    // would end an N-tick span inside an N+1-tick run).
+    let closeEnd = -1;
+    for (let k = idx; k < line.length; ) {
+      if (line[k] !== "`") {
+        k += 1;
+        continue;
+      }
+      let runEnd = k;
+      while (runEnd < line.length && line[runEnd] === "`") runEnd += 1;
+      if (runEnd - k === openLen) {
+        closeEnd = runEnd;
+        break;
+      }
+      k = runEnd;
+    }
+    if (closeEnd === -1) continue;
+    ranges.push({ start, end: closeEnd });
+    idx = closeEnd;
   }
   return ranges;
 }

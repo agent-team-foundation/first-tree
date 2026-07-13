@@ -1,6 +1,6 @@
 import { buildMessageImageSnapshots, type FirstTreeHubSDK } from "@first-tree/client";
 import type { ImageRefContent, MessageFormat } from "@first-tree/shared";
-import { resolveChatOrgId, resolveSelfFenceFromEnv } from "./doc-capture.js";
+import { resolveChatOrgId, resolveSelfFenceFromEnv } from "./capture-context.js";
 
 /**
  * Capture the workspace images an outbound `chat send` body references, the

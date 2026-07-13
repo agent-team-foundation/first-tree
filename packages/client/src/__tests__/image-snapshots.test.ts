@@ -151,6 +151,15 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(res.strippedText).toBe(body);
   });
 
+  it("does NOT capture an image inside a multiline inline code span", async () => {
+    const { uploader, uploads } = stubUploader();
+    const body = "before `line 1\n![x](shots/filter.png)\nline 3` after";
+    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(0);
+    expect(uploads).toHaveLength(0);
+    expect(res.strippedText).toBe(body);
+  });
+
   it("preserves blank lines inside an unrelated fenced block when stripping a later image", async () => {
     const { uploader } = stubUploader();
     const body = ["```txt", "line1", "", "", "line2", "```", "", "![img](shots/filter.png)"].join("\n");

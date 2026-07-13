@@ -259,6 +259,16 @@ describe("markdownCodeSpanRanges", () => {
     expect(covered("a ``x `y` z`` b")).toEqual(["``x `y` z``"]);
   });
 
+  it("closes an inline span only on an EXACT-length backtick run (not a longer one)", () => {
+    // `` opener, a stray ``` run (not a close), then the real `` close.
+    expect(covered("a ``x ``` y`` b")).toEqual(["``x ``` y``"]);
+  });
+
+  it("covers an inline code span that contains a line ending (multiline)", () => {
+    const text = "before `line 1\nstill code` after";
+    expect(covered(text)).toEqual(["`line 1\nstill code`"]);
+  });
+
   it("does not treat inline backticks inside a fenced block as separate spans", () => {
     expect(covered("```\n`inside`\n```")).toEqual(["```\n`inside`\n```"]);
   });
