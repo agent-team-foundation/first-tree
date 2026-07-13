@@ -145,10 +145,10 @@ type TypeTier = { cls: string; name: string; meta: string; sample: string; upper
 // design-token guardrail (which bans digit+px literals in src) stays clean.
 const APP_TIERS: TypeTier[] = [
   { cls: "text-eyebrow", name: "text-eyebrow", meta: "10 / 600 / +0.1em", sample: "Section eyebrow", uppercase: true },
-  { cls: "text-caption", name: "text-caption", meta: "10 / 500", sample: "Dense caption metadata" },
-  { cls: "text-label", name: "text-label", meta: "11 / 500", sample: "Form label / chip" },
-  { cls: "text-body", name: "text-body", meta: "12 / 400", sample: "Body copy and button text." },
-  { cls: "text-subtitle", name: "text-subtitle", meta: "13 / 600 · default", sample: "Row title / subtitle" },
+  { cls: "text-caption", name: "text-caption", meta: "11 / 500", sample: "Dense caption metadata" },
+  { cls: "text-label", name: "text-label", meta: "12 / 500", sample: "Form label / chip" },
+  { cls: "text-body", name: "text-body", meta: "13 / 400", sample: "Body copy and button text." },
+  { cls: "text-subtitle", name: "text-subtitle", meta: "14 / 600 · default", sample: "Row title / subtitle" },
   { cls: "text-title", name: "text-title", meta: "16 / 600", sample: "Section & page title" },
 ];
 
