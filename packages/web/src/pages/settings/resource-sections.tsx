@@ -85,44 +85,55 @@ export function ResourceTypeSections({
     <>
       {resourcesQuery.isLoading ? (
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
-          Loading...
+          Loading…
         </p>
       ) : resourcesQuery.error ? (
         <p className="text-body" style={{ color: "var(--state-error)" }}>
           {resourcesQuery.error instanceof Error ? resourcesQuery.error.message : "Failed to load resources"}
         </p>
       ) : (
-        types.map((type) => (
-          <Section
-            key={type}
-            title={titleFor?.(type) ?? typeLabelPlural(type)}
-            count={grouped.get(type)?.length ?? 0}
-            action={
-              isAdmin ? (
-                <AddResourceButton type={type} onClick={() => setEditor({ mode: "create", type })} />
-              ) : undefined
-            }
-          >
-            <div>
-              {(grouped.get(type) ?? []).length === 0 ? (
-                <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
-                  No {typeLabelPlural(type).toLowerCase()} configured.
-                </p>
-              ) : (
-                (grouped.get(type) ?? []).map((resource) => (
-                  <ResourceListRow
-                    key={resource.id}
-                    resource={resource}
-                    canEdit={isAdmin}
-                    onPreview={() => setPreview(resource)}
-                    onEdit={() => setEditor({ mode: "edit", type: resource.type, resource })}
-                    onRetire={() => setRetireTarget(resource)}
-                  />
-                ))
-              )}
-            </div>
-          </Section>
-        ))
+        types.map((type) => {
+          // When the host overrides a section's title (e.g. GitHub renders the
+          // `repo` type as "Source repos"), derive the empty-state and add-button
+          // nouns from that title so they read as one surface — instead of the
+          // per-type default ("repos" / "Repo") leaking through. Plural comes
+          // straight from the (already-plural) title; the add label strips a
+          // trailing "s" for a singular.
+          const overrideTitle = titleFor?.(type);
+          const pluralNoun = overrideTitle ? overrideTitle.toLowerCase() : typeLabelPlural(type).toLowerCase();
+          const addLabel = overrideTitle ? `Add ${overrideTitle.toLowerCase().replace(/s$/, "")}` : undefined;
+          return (
+            <Section
+              key={type}
+              title={overrideTitle ?? typeLabelPlural(type)}
+              count={grouped.get(type)?.length ?? 0}
+              action={
+                isAdmin ? (
+                  <AddResourceButton type={type} label={addLabel} onClick={() => setEditor({ mode: "create", type })} />
+                ) : undefined
+              }
+            >
+              <div>
+                {(grouped.get(type) ?? []).length === 0 ? (
+                  <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
+                    No {pluralNoun} configured yet.
+                  </p>
+                ) : (
+                  (grouped.get(type) ?? []).map((resource) => (
+                    <ResourceListRow
+                      key={resource.id}
+                      resource={resource}
+                      canEdit={isAdmin}
+                      onPreview={() => setPreview(resource)}
+                      onEdit={() => setEditor({ mode: "edit", type: resource.type, resource })}
+                      onRetire={() => setRetireTarget(resource)}
+                    />
+                  ))
+                )}
+              </div>
+            </Section>
+          );
+        })
       )}
       {editor ? (
         // Key by target so switching create-type / edit-target remounts the
@@ -192,7 +203,7 @@ function ResourceListRow(props: {
         </div>
         {detail ? (
           <p
-            className="m-0 text-caption truncate mono"
+            className="m-0 text-caption truncate"
             style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}
             title={detail}
           >
@@ -267,7 +278,7 @@ function RetireConfirmDialog(props: {
   const impactLine = checking
     ? "Checking impact…"
     : count === undefined
-      ? "This removes the resource from the team's runtime defaults."
+      ? "This removes the resource from the team's defaults."
       : count === 0
         ? "No agents currently use this resource."
         : `This will update ${count} agent${count === 1 ? "" : "s"} that use this resource.`;

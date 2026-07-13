@@ -33,8 +33,8 @@ const asDefaultMode = (v: string): DefaultMode => DEFAULT_MODES.find((d) => d ==
 const asTransport = (v: string): Transport => TRANSPORTS.find((t) => t === v) ?? "stdio";
 
 const DEFAULT_OPTIONS: SelectOption[] = [
-  { value: "recommended", label: "On by default", hint: "Enabled for every agent" },
-  { value: "available", label: "Opt-in", hint: "Agents enable it themselves" },
+  { value: "recommended", label: "On by default" },
+  { value: "available", label: "Opt-in" },
 ];
 
 /**
@@ -124,8 +124,17 @@ export type EditorState =
 // Capabilities tab share this trigger shape.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function AddResourceButton({ type, onClick }: { type: ResourceType; onClick: () => void }) {
-  const label = `Add ${typeLabelSingular(type)}`;
+export function AddResourceButton({
+  type,
+  onClick,
+  label: labelOverride,
+}: {
+  type: ResourceType;
+  onClick: () => void;
+  /** Override the aria-label/tooltip noun; defaults to the type's singular. */
+  label?: string;
+}) {
+  const label = labelOverride ?? `Add ${typeLabelSingular(type)}`;
   return (
     <Button size="xs" variant="ghost" aria-label={label} title={label} onClick={onClick}>
       <Plus className="h-4 w-4" />
@@ -430,9 +439,6 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
         placeholder="main"
         mono
       />
-      <p className="text-label" style={{ color: "var(--fg-3)", margin: 0 }}>
-        On by default — every agent gets this repo.
-      </p>
     </ModalEditor>
   );
 }
@@ -675,7 +681,7 @@ function SkillEditor({ state, save, onClose }: EditorProps) {
         onChange={setDescription}
         placeholder="What this skill does"
       />
-      <BodyField id="skill-body" label="Content" value={body} onChange={setBody} />
+      <BodyField id="skill-body" value={body} onChange={setBody} />
       <DefaultModeField value={mode} onChange={setMode} />
     </ModalEditor>
   );
@@ -685,7 +691,7 @@ function BodyField({
   id,
   value,
   onChange,
-  label = "Body",
+  label = "Content",
 }: {
   id: string;
   value: string;

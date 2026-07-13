@@ -305,7 +305,9 @@ describe("settings panels", () => {
     const desktop = await renderDom(<SettingsLayout />, "/settings/github");
     expect(desktop.container.textContent).toContain("Computers");
     expect(desktop.container.textContent).toContain("GitHub");
-    expect(desktop.container.textContent).toContain("Onboarding");
+    // The onboarding nav entry is labelled "Setup" (renamed from "Onboarding"
+    // so the sidebar label and the page heading no longer drift).
+    expect(desktop.container.textContent).toContain("Setup");
     expect(desktop.container.textContent).toContain("GitHub child");
     await act(async () => desktop.root.unmount());
 
@@ -315,7 +317,7 @@ describe("settings panels", () => {
     expect(narrow.container.querySelector("aside")).toBeNull();
     expect(narrow.container.textContent).toContain("Computers");
     expect(narrow.container.textContent).toContain("GitHub");
-    expect(narrow.container.textContent).not.toContain("Onboarding");
+    expect(narrow.container.textContent).not.toContain("Setup");
     await act(async () => narrow.root.unmount());
 
     authMock.value = { ...authMock.value, meLoaded: false };
@@ -329,7 +331,9 @@ describe("settings panels", () => {
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
     await waitForText(container, "Repository");
-    expect(container.textContent).toContain("Your team's Context Tree");
+    // The redundant in-body "Your team's Context Tree" label was removed; the
+    // section title "Repository" now carries that framing.
+    expect(container.textContent).not.toContain("Your team's Context Tree");
     expect(container.textContent).toContain("https://github.com/acme/context");
     expect(container.textContent).toContain("branch main");
     expect(container.textContent).toContain("View on the Context page");
@@ -345,7 +349,7 @@ describe("settings panels", () => {
   it("shows and saves manual context tree settings with blank values normalized to null", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "View on the Context page");
 
     await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
@@ -407,7 +411,7 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "View on the Context page");
 
     expect(container.textContent).toContain("https://github.com/acme/context");
     expect(container.textContent).toContain("branch main");
@@ -434,7 +438,7 @@ describe("settings panels", () => {
   it("renders Context Reviewer settings without resetting manual binding draft values", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "View on the Context page");
 
     await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
@@ -611,7 +615,7 @@ describe("settings panels", () => {
     );
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
-    await waitForText(container, "Your team's Context Tree");
+    await waitForText(container, "View on the Context page");
     await waitForText(container, "Context Reviewer Bot");
     expect(container.textContent).toContain("Automatic PR review");
     expect(container.textContent).toContain("On");

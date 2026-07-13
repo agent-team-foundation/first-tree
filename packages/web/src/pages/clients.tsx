@@ -23,7 +23,14 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../components/ui/dense-table.js";
-import { PageHeader } from "../components/ui/page-header.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { Section } from "../components/ui/section.js";
@@ -305,45 +312,24 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         : orgClientsQuery.isLoading || meClientsQuery.isLoading
       : meClientsQuery.isLoading;
 
-  // Subtitle is a short static description matching the rest of
-  // Settings (`Connected GitHub App and granted permissions` /
-  // `Finish or revisit your setup` etc). Dynamic pill-count stats
-  // ("1 offline · 6 ready · 16 agents bound") are dropped — each
-  // card's pill already conveys per-row state, and a global
-  // aggregate is noise the page header doesn't need to carry.
-
-  // Connect entry-point has moved from a bottom "Add another computer"
-  // button to a discreet "+ Connect" icon button in the PageHeader's
-  // right slot — always-available, low-visibility per mockup §"已敲定"
-  // 第 5 条. When the viewer has 0 own machines the empty-state CTA
-  // ("Connect your first computer") covers the affordance, so the
-  // header button hides to avoid duplication.
+  // A discreet always-available "+ Connect" entry shows whenever the viewer
+  // already has at least one of their own computers. Hidden when they have 0
+  // (the empty-state CTA "Connect your first computer" covers that case, no
+  // need to double up).
   const viewerOwnCount = grouped ? mineList.length : (memberList?.length ?? 0);
-  // Header-right "+ Connect" icon button shows whenever the viewer
-  // already has at least one of their own computers — gives a
-  // discreet always-available entry to add another machine without
-  // taking up bottom-of-page real estate. Hidden when the viewer has
-  // 0 own machines (the empty state already has a prominent
-  // "Connect your first computer" CTA, no need to double up). The
-  // previous bottom "Add another computer" button is gone — replaced
-  // by this header icon per mockup §"已敲定" 第 5 条: "+ Connect 永远
-  // 在角落、低显眼度".
   const showHeaderConnectButton = viewerOwnCount >= 1;
+
+  // "+ Connect" lives in the "Your computers" section header, not a page header:
+  // the Settings layout now owns the single page heading (see settings.tsx).
+  const connectButton = showHeaderConnectButton ? (
+    <Button variant="outline" size="sm" onClick={openNewConnection}>
+      <Plus className="h-3.5 w-3.5" />
+      Connect
+    </Button>
+  ) : undefined;
 
   return (
     <div className={embedded ? "" : "-m-6"}>
-      <PageHeader
-        title="Computers"
-        subtitle="Machines connected to First Tree"
-        right={
-          showHeaderConnectButton ? (
-            <Button variant="outline" size="sm" onClick={openNewConnection}>
-              <Plus className="h-3.5 w-3.5" />
-              Connect
-            </Button>
-          ) : undefined
-        }
-      />
       {demoScenario && (
         <DemoNavigator activeKey={demoScenario.key} onSelect={(k) => setDemoKey(k)} onExit={() => setDemoKey(null)} />
       )}
@@ -362,35 +348,36 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         />
 
         {confirmRetire && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
-            <div
-              className="max-w-md w-full"
-              style={{
-                background: "var(--bg-raised)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-panel)",
-                padding: "var(--sp-6)",
-                boxShadow: "var(--shadow-md)",
-              }}
-            >
-              <h3 className="text-subtitle mb-2">Retire Computer</h3>
-              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
+          <Dialog
+            open
+            onOpenChange={(open) => {
+              if (!open) {
+                setConfirmRetire(null);
+                setRetireError(null);
+              }
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Retire Computer</DialogTitle>
+              </DialogHeader>
+              <DialogDescription>
                 Permanently remove{" "}
                 <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmRetire.hostname ?? confirmRetire.id.slice(0, 8)}
                 </span>
-                . Retire refuses if any agent is still pinned to this computer — you must delete those agents first
-                (reassign is not available in this milestone).
-              </p>
+                . Retiring is blocked while an agent is still assigned to this computer — delete those agents first
+                (reassigning isn't available yet).
+              </DialogDescription>
               {getClientAgents(confirmRetire.id).length > 0 && (
                 <div
-                  className="mb-3 p-2 rounded-[var(--radius-input)]"
+                  className="p-2 rounded-[var(--radius-input)]"
                   style={{
                     background: "var(--state-blocked-soft)",
                     border: "var(--hairline) solid var(--state-blocked-border)",
                   }}
                 >
-                  <div className="text-label mb-1">Agents currently bound to this computer (delete them first):</div>
+                  <div className="text-label mb-1">Agents on this computer (delete them first):</div>
                   <ul className="text-body space-y-0.5">
                     {getClientAgents(confirmRetire.id).map((a) => (
                       <li key={a.agentId} className="font-medium">
@@ -402,7 +389,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               )}
               {retireError && (
                 <div
-                  className="mb-3 p-2 rounded-[var(--radius-input)] text-body"
+                  className="p-2 rounded-[var(--radius-input)] text-body"
                   style={{
                     background: "var(--state-error-soft)",
                     border: "var(--hairline) solid var(--state-error-border)",
@@ -412,7 +399,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   {retireError}
                 </div>
               )}
-              <div className="flex justify-end gap-2">
+              <DialogFooter>
                 <Button
                   variant="outline"
                   size="sm"
@@ -431,35 +418,33 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 >
                   {retireMut.isPending ? "Retiring…" : "Retire"}
                 </Button>
-              </div>
-            </div>
-          </div>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         )}
 
         {confirmDisconnect && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
-            <div
-              className="max-w-md w-full"
-              style={{
-                background: "var(--bg-raised)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-panel)",
-                padding: "var(--sp-6)",
-                boxShadow: "var(--shadow-md)",
-              }}
-            >
-              <h3 className="text-subtitle mb-2">Disconnect Computer</h3>
-              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
+          <Dialog
+            open
+            onOpenChange={(open) => {
+              if (!open) setConfirmDisconnect(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Disconnect Computer</DialogTitle>
+              </DialogHeader>
+              <DialogDescription>
                 This will disconnect{" "}
                 <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmDisconnect.hostname ?? confirmDisconnect.id.slice(0, 8)}
                 </span>{" "}
-                and affect all bound agents:
-              </p>
-              <ul className="mb-4 space-y-1">
+                and affect all agents on this computer:
+              </DialogDescription>
+              <ul className="space-y-1">
                 {getClientAgents(confirmDisconnect.id).length === 0 ? (
                   <li className="text-body" style={{ color: "var(--fg-3)" }}>
-                    No bound agents
+                    No agents on this computer
                   </li>
                 ) : (
                   getClientAgents(confirmDisconnect.id).map((a) => (
@@ -470,7 +455,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   ))
                 )}
               </ul>
-              <div className="flex justify-end gap-2">
+              <DialogFooter>
                 <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect(null)}>
                   Cancel
                 </Button>
@@ -482,9 +467,9 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 >
                   {disconnectMut.isPending ? "Disconnecting…" : "Disconnect"}
                 </Button>
-              </div>
-            </div>
-          </div>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         )}
 
         {clientsLoading ? (
@@ -516,7 +501,11 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
             {teamLoadError && <TeamLoadErrorBanner />}
             {grouped ? (
               <>
-                <Section title="Your computers" count={mineList.length > 1 ? mineList.length : undefined}>
+                <Section
+                  title="Your computers"
+                  count={mineList.length > 1 ? mineList.length : undefined}
+                  action={connectButton}
+                >
                   {mineList.length === 0 ? (
                     // Admin with no own computers + N team rows — the "Add
                     // another computer" bottom button would read wrong here
@@ -606,23 +595,26 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 </Section>
               </>
             ) : (
-              <CardStack>
-                {(memberList ?? []).map((client) => (
-                  <ComputerCard
-                    key={client.id}
-                    client={client}
-                    boundAgents={getClientAgents(client.id)}
-                    agentName={agentName}
-                    onGenerateNewToken={() => openReAuth(client)}
-                    onReconnect={openNewConnection}
-                    onDisconnect={() => setConfirmDisconnect(client)}
-                    onRetire={() => {
-                      setRetireError(null);
-                      setConfirmRetire(client);
-                    }}
-                  />
-                ))}
-              </CardStack>
+              <>
+                {connectButton && <div className="flex justify-end">{connectButton}</div>}
+                <CardStack>
+                  {(memberList ?? []).map((client) => (
+                    <ComputerCard
+                      key={client.id}
+                      client={client}
+                      boundAgents={getClientAgents(client.id)}
+                      agentName={agentName}
+                      onGenerateNewToken={() => openReAuth(client)}
+                      onReconnect={openNewConnection}
+                      onDisconnect={() => setConfirmDisconnect(client)}
+                      onRetire={() => {
+                        setRetireError(null);
+                        setConfirmRetire(client);
+                      }}
+                    />
+                  ))}
+                </CardStack>
+              </>
             )}
           </div>
         )}
@@ -962,7 +954,7 @@ function ClientRow({
             {boundAgents.length > 0 && (
               <>
                 <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: "var(--sp-1_5)" }}>
-                  Bound agents · {boundAgents.length}
+                  Agents · {boundAgents.length}
                 </UppercaseLabel>
                 <div className="flex flex-col gap-1">
                   {boundAgents.map((a) => (

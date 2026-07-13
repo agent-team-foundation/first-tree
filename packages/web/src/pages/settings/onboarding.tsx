@@ -2,7 +2,6 @@ import { Check } from "lucide-react";
 import { Navigate, useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
-import { PageHeader } from "../../components/ui/page-header.js";
 import { Section } from "../../components/ui/section.js";
 
 /**
@@ -38,45 +37,45 @@ export function SettingsOnboardingPage() {
     navigate("/onboarding");
   };
 
+  // Page heading is owned by the Settings layout (see settings.tsx). Setup
+  // carries no lead — its old subtitle ("Finish or revisit your setup") just
+  // restated the label; the "Guided setup" section says the rest.
   return (
-    <>
-      <PageHeader title="Setup" subtitle="Finish or revisit your setup" />
-      <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
-        <Section
-          title="Guided setup"
-          description={
-            isDismissed
-              ? "Setup is hidden. Resume it to finish connecting your agent and your team's Context Tree."
-              : "You can hide the guided setup any time once your agent is ready."
-          }
-          action={isDismissed ? null : <ActiveBadge />}
-        >
-          {/* Section renders children flush against its top divider; without
+    <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
+      <Section
+        title="Guided setup"
+        description={
+          isDismissed
+            ? "Setup is hidden. Resume it to finish connecting your agent and your team's Context Tree."
+            : "You can hide the guided setup any time once your agent is ready."
+        }
+        action={isDismissed ? null : <ActiveBadge />}
+      >
+        {/* Section renders children flush against its top divider; without
               this the button sits on the hairline ("压线"). Scoped here rather
               than in the shared Section (used on 18 surfaces) to keep this PR
               to onboarding — the shared component's flush children is a latent
               issue worth its own styling pass. */}
-          <div style={{ paddingTop: "var(--sp-3)" }}>
-            {isDismissed ? (
-              <Button type="button" size="sm" onClick={() => void handleResume()}>
-                Resume setup
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void dismissOnboarding()}
-                disabled={!canHide}
-                title={canHide ? undefined : "Finish setting up your agent first"}
-              >
-                Hide setup guide
-              </Button>
-            )}
-          </div>
-        </Section>
-      </div>
-    </>
+        <div style={{ paddingTop: "var(--sp-3)" }}>
+          {isDismissed ? (
+            <Button type="button" size="sm" onClick={() => void handleResume()}>
+              Resume setup
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void dismissOnboarding()}
+              disabled={!canHide}
+              title={canHide ? undefined : "Finish setting up your agent first"}
+            >
+              Hide setup guide
+            </Button>
+          )}
+        </div>
+      </Section>
+    </div>
   );
 }
 

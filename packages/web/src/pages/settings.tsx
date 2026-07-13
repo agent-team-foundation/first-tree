@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router";
+import { NavLink, Outlet, useLocation } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
@@ -27,6 +27,18 @@ import { cn } from "../lib/utils.js";
  * `<Outlet/>`. Same NavLink semantics (active state via `isActive`), same
  * route targets — only the chrome shape changes.
  *
+ * Page header lives HERE, not in each sub-page. The old pattern had every
+ * sub-page render its own `PageHeader` whose title just repeated the active
+ * nav label (`GitHub` → `GitHub` → `GitHub Connection`) — a redundant title
+ * that was also rendered *smaller* (text-subtitle) than the section headings
+ * beneath it (text-title), so it never functioned as a real page title.
+ * The layout now owns a single accessible `<h1>` (visually hidden — the
+ * sidebar already answers "where am I") plus an optional one-line lead drawn
+ * from `ITEMS[].description`. Sourcing the label from `ITEMS` is also what
+ * keeps the sidebar and the heading from drifting (they used to: `Onboarding`
+ * in the nav vs `Setup` as the page title). Section headings are now the top
+ * visible tier on every page.
+ *
  * Sub-routes:
  *   Computers     — user-scoped: machines connected to First Tree (most-frequent
  *                   entry point — placed first)
@@ -36,26 +48,46 @@ import { cn } from "../lib/utils.js";
  *                   Visible to all members (read-only); only admins can manage.
  *   GitHub        — GitHub connection + source repos. Visible to all members
  *                   (read-only); only admins can manage the connection/resources.
- *   Onboarding    — guided-setup stepper enable/disable (hidden once
+ *   Setup         — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
  */
 
 type Item = {
   to: string;
   label: string;
+  /**
+   * Optional one-line lead rendered under the (visually-hidden) page heading.
+   * Present only where it adds context the sidebar label can't: Computers and
+   * Setup restate their own label ("Machines connected to First Tree"), so
+   * they carry no description.
+   */
+  description?: string;
 };
 
 const ITEMS: Item[] = [
   { to: "/settings/computers", label: "Computers" },
-  { to: "/settings/context", label: "Context tree" },
-  { to: "/settings/resources", label: "Resources" },
-  { to: "/settings/github", label: "GitHub" },
-  { to: "/settings/onboarding", label: "Onboarding" },
+  {
+    to: "/settings/context",
+    label: "Context tree",
+    description: "The shared knowledge tree your team's agents read from.",
+  },
+  {
+    to: "/settings/resources",
+    label: "Resources",
+    description: "Team defaults and opt-in resources your agents load when they start.",
+  },
+  {
+    to: "/settings/github",
+    label: "GitHub",
+    description: "GitHub App connection and the source repos agents work on.",
+  },
+  { to: "/settings/onboarding", label: "Setup" },
 ];
 
 export function SettingsLayout() {
   const { onboardingCompletedAt, meLoaded } = useAuth();
   const viewport = useWorkspaceViewport();
+  const { pathname } = useLocation();
   // Wait for `/me` to resolve before rendering the nav so role-dependent
   // entries such as Onboarding do not flicker during a fresh page load.
   if (!meLoaded) {
@@ -70,6 +102,13 @@ export function SettingsLayout() {
     if (it.to === "/settings/onboarding" && hasCompletedOnboarding) return false;
     return true;
   });
+
+  // The active sub-route drives the single page `<h1>` (visually hidden) and
+  // the optional lead. Match the longest `to` that prefixes the pathname so a
+  // future nested route (e.g. /settings/resources/:id) still resolves to its
+  // section header.
+  const activeItem =
+    [...ITEMS].sort((a, b) => b.to.length - a.to.length).find((it) => pathname.startsWith(it.to)) ?? ITEMS[0];
 
   if (viewport === "narrow") {
     return (
@@ -97,6 +136,7 @@ export function SettingsLayout() {
           ))}
         </nav>
         <div className="flex-1 min-w-0">
+          <SettingsHeader item={activeItem} />
           <Outlet />
         </div>
       </div>
@@ -127,9 +167,35 @@ export function SettingsLayout() {
       </aside>
 
       <div className="flex-1 min-w-0">
+        <SettingsHeader item={activeItem} />
         <Outlet />
       </div>
     </div>
+  );
+}
+
+/**
+ * Single per-page header owned by the layout. The `<h1>` is visually hidden
+ * (`sr-only`) — it exists for the document outline / screen readers, but the
+ * sidebar already tells a sighted user where they are, so a repeated visible
+ * title would be redundant chrome (and used to render smaller than the section
+ * titles below it). When the active item carries a `description`, it renders as
+ * a quiet one-line lead above the sub-page content.
+ */
+function SettingsHeader({ item }: { item: Item | undefined }) {
+  if (!item) return null;
+  return (
+    <>
+      <h1 className="sr-only">{item.label}</h1>
+      {item.description && (
+        <p
+          className="text-body"
+          style={{ margin: 0, color: "var(--fg-3)", padding: "var(--sp-4) var(--sp-5) var(--sp-1)" }}
+        >
+          {item.description}
+        </p>
+      )}
+    </>
   );
 }
 

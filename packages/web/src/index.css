@@ -1831,24 +1831,6 @@
 }
 
 /*
- * Settings → Save affordance. Hairline-bordered ✓ button that sits flush
- * next to its input. Rest state is just the outline so the row stays
- * light; hover lifts ink + fills with the sunken bg so the active state
- * reads as clearly clickable. Focus-visible swaps the border for the
- * neutral focus ring (subtle but unmistakable for keyboard users).
- */
-.settings-save-button:hover:not(:disabled) {
-  color: var(--fg);
-  background: var(--bg-sunken);
-  border-color: var(--fg-4);
-}
-
-.settings-save-button:focus-visible {
-  outline: var(--hairline-bold) solid var(--ring);
-  outline-offset: var(--sp-0_5);
-}
-
-/*
  * Settings → Computers card stack. Adjacent ComputerCards get a hairline
  * separator on the top edge (skipping the first child so the first
  * card sits flush against the parent Section's own bottom border).

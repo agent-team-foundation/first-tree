@@ -1,4 +1,3 @@
-import { PageHeader } from "../../components/ui/page-header.js";
 import { RESOURCE_TYPES } from "./resource-editors.js";
 import { ResourceTypeSections } from "./resource-sections.js";
 
@@ -15,12 +14,10 @@ import { ResourceTypeSections } from "./resource-sections.js";
  * admins see add / edit / retire affordances (see ResourceTypeSections).
  */
 export function SettingsResourcesPage() {
+  // Page heading + lead are owned by the Settings layout (see settings.tsx).
   return (
-    <>
-      <PageHeader title="Resources" subtitle="Team defaults and opt-in resources used by agents at runtime." />
-      <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
-        <ResourceTypeSections types={RESOURCE_TYPES.filter((type) => type !== "repo")} />
-      </div>
-    </>
+    <div className="flex flex-col" style={{ gap: "var(--sp-5)", padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
+      <ResourceTypeSections types={RESOURCE_TYPES.filter((type) => type !== "repo")} />
+    </div>
   );
 }

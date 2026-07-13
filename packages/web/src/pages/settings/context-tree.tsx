@@ -1,5 +1,4 @@
 import { useAuth } from "../../auth/auth-context.js";
-import { PageHeader } from "../../components/ui/page-header.js";
 import { ContextTreeSettingsPanel } from "../context-tree-settings-panel.js";
 
 /**
@@ -26,12 +25,10 @@ export function SettingsContextTreePage() {
     );
   }
 
+  // Page heading + lead are owned by the Settings layout (see settings.tsx).
   return (
-    <>
-      <PageHeader title="Context tree" subtitle="The shared knowledge tree your team's agents read from." />
-      <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
-        <ContextTreeSettingsPanel />
-      </div>
-    </>
+    <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
+      <ContextTreeSettingsPanel />
+    </div>
   );
 }
