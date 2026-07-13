@@ -944,19 +944,24 @@ describe("page SSR smoke coverage", () => {
     const { TeamPage } = await import("../team/index.js");
 
     expect(renderPage(<LandingPage />)).toContain("AI-native teams");
-    expect(renderPage(<ClientsPage />)).toContain("Computers");
+    // ClientsPage / SettingsComputersPage no longer render their own title —
+    // the Settings layout owns the single page heading (see settings.tsx), so
+    // assert on stable body copy instead of the moved title.
+    expect(renderPage(<ClientsPage />)).toContain("computer");
     expect(renderPage(<TeamPage />)).toContain("Team");
-    expect(renderPage(<SettingsComputersPage />)).toContain("Computers");
+    expect(renderPage(<SettingsComputersPage />)).toContain("computer");
+    // Page titles moved to the Settings layout; assert on stable section
+    // content each sub-page renders on its own.
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
-    expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
+    expect(renderPage(<SettingsContextTreePage />)).toContain("Repository");
+    expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: "member" };
     // Settings GitHub, Context tree, and Resources stay visible (read-only)
     // for members.
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
-    expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
+    expect(renderPage(<SettingsContextTreePage />)).toContain("Repository");
+    expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: null };
     expect(renderPage(<SettingsGithubPage />)).toContain("Loading");

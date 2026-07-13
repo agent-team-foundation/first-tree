@@ -305,7 +305,9 @@ describe("settings panels", () => {
     const desktop = await renderDom(<SettingsLayout />, "/settings/github");
     expect(desktop.container.textContent).toContain("Computers");
     expect(desktop.container.textContent).toContain("GitHub");
-    expect(desktop.container.textContent).toContain("Onboarding");
+    // The onboarding nav entry is labelled "Setup" (renamed from "Onboarding"
+    // so the sidebar label and the page heading no longer drift).
+    expect(desktop.container.textContent).toContain("Setup");
     expect(desktop.container.textContent).toContain("GitHub child");
     await act(async () => desktop.root.unmount());
 
@@ -315,7 +317,7 @@ describe("settings panels", () => {
     expect(narrow.container.querySelector("aside")).toBeNull();
     expect(narrow.container.textContent).toContain("Computers");
     expect(narrow.container.textContent).toContain("GitHub");
-    expect(narrow.container.textContent).not.toContain("Onboarding");
+    expect(narrow.container.textContent).not.toContain("Setup");
     await act(async () => narrow.root.unmount());
 
     authMock.value = { ...authMock.value, meLoaded: false };

@@ -23,7 +23,6 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../components/ui/dense-table.js";
-import { PageHeader } from "../components/ui/page-header.js";
 import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { Section } from "../components/ui/section.js";
@@ -305,45 +304,24 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         : orgClientsQuery.isLoading || meClientsQuery.isLoading
       : meClientsQuery.isLoading;
 
-  // Subtitle is a short static description matching the rest of
-  // Settings (`Connected GitHub App and granted permissions` /
-  // `Finish or revisit your setup` etc). Dynamic pill-count stats
-  // ("1 offline · 6 ready · 16 agents bound") are dropped — each
-  // card's pill already conveys per-row state, and a global
-  // aggregate is noise the page header doesn't need to carry.
-
-  // Connect entry-point has moved from a bottom "Add another computer"
-  // button to a discreet "+ Connect" icon button in the PageHeader's
-  // right slot — always-available, low-visibility per mockup §"已敲定"
-  // 第 5 条. When the viewer has 0 own machines the empty-state CTA
-  // ("Connect your first computer") covers the affordance, so the
-  // header button hides to avoid duplication.
+  // A discreet always-available "+ Connect" entry shows whenever the viewer
+  // already has at least one of their own computers. Hidden when they have 0
+  // (the empty-state CTA "Connect your first computer" covers that case, no
+  // need to double up).
   const viewerOwnCount = grouped ? mineList.length : (memberList?.length ?? 0);
-  // Header-right "+ Connect" icon button shows whenever the viewer
-  // already has at least one of their own computers — gives a
-  // discreet always-available entry to add another machine without
-  // taking up bottom-of-page real estate. Hidden when the viewer has
-  // 0 own machines (the empty state already has a prominent
-  // "Connect your first computer" CTA, no need to double up). The
-  // previous bottom "Add another computer" button is gone — replaced
-  // by this header icon per mockup §"已敲定" 第 5 条: "+ Connect 永远
-  // 在角落、低显眼度".
   const showHeaderConnectButton = viewerOwnCount >= 1;
+
+  // "+ Connect" lives in the "Your computers" section header, not a page header:
+  // the Settings layout now owns the single page heading (see settings.tsx).
+  const connectButton = showHeaderConnectButton ? (
+    <Button variant="outline" size="sm" onClick={openNewConnection}>
+      <Plus className="h-3.5 w-3.5" />
+      Connect
+    </Button>
+  ) : undefined;
 
   return (
     <div className={embedded ? "" : "-m-6"}>
-      <PageHeader
-        title="Computers"
-        subtitle="Machines connected to First Tree"
-        right={
-          showHeaderConnectButton ? (
-            <Button variant="outline" size="sm" onClick={openNewConnection}>
-              <Plus className="h-3.5 w-3.5" />
-              Connect
-            </Button>
-          ) : undefined
-        }
-      />
       {demoScenario && (
         <DemoNavigator activeKey={demoScenario.key} onSelect={(k) => setDemoKey(k)} onExit={() => setDemoKey(null)} />
       )}
@@ -516,7 +494,11 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
             {teamLoadError && <TeamLoadErrorBanner />}
             {grouped ? (
               <>
-                <Section title="Your computers" count={mineList.length > 1 ? mineList.length : undefined}>
+                <Section
+                  title="Your computers"
+                  count={mineList.length > 1 ? mineList.length : undefined}
+                  action={connectButton}
+                >
                   {mineList.length === 0 ? (
                     // Admin with no own computers + N team rows — the "Add
                     // another computer" bottom button would read wrong here
@@ -606,23 +588,26 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 </Section>
               </>
             ) : (
-              <CardStack>
-                {(memberList ?? []).map((client) => (
-                  <ComputerCard
-                    key={client.id}
-                    client={client}
-                    boundAgents={getClientAgents(client.id)}
-                    agentName={agentName}
-                    onGenerateNewToken={() => openReAuth(client)}
-                    onReconnect={openNewConnection}
-                    onDisconnect={() => setConfirmDisconnect(client)}
-                    onRetire={() => {
-                      setRetireError(null);
-                      setConfirmRetire(client);
-                    }}
-                  />
-                ))}
-              </CardStack>
+              <>
+                {connectButton && <div className="flex justify-end">{connectButton}</div>}
+                <CardStack>
+                  {(memberList ?? []).map((client) => (
+                    <ComputerCard
+                      key={client.id}
+                      client={client}
+                      boundAgents={getClientAgents(client.id)}
+                      agentName={agentName}
+                      onGenerateNewToken={() => openReAuth(client)}
+                      onReconnect={openNewConnection}
+                      onDisconnect={() => setConfirmDisconnect(client)}
+                      onRetire={() => {
+                        setRetireError(null);
+                        setConfirmRetire(client);
+                      }}
+                    />
+                  ))}
+                </CardStack>
+              </>
             )}
           </div>
         )}
