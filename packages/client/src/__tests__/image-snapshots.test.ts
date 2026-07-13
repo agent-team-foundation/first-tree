@@ -142,6 +142,24 @@ describe("buildMessageImageSnapshots — capture + strip", () => {
     expect(res.strippedText).toBe(body); // code samples preserved verbatim
   });
 
+  it("does NOT capture an image inside a multi-backtick inline code span", async () => {
+    const { uploader, uploads } = stubUploader();
+    const body = "示例 ``![x](shots/filter.png)`` 完";
+    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(0);
+    expect(uploads).toHaveLength(0);
+    expect(res.strippedText).toBe(body);
+  });
+
+  it("preserves blank lines inside an unrelated fenced block when stripping a later image", async () => {
+    const { uploader } = stubUploader();
+    const body = ["```txt", "line1", "", "", "line2", "```", "", "![img](shots/filter.png)"].join("\n");
+    const res = await buildMessageImageSnapshots(body, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(1);
+    // The two blank lines INSIDE the fence survive byte-for-byte.
+    expect(res.strippedText).toBe(["```txt", "line1", "", "", "line2", "```"].join("\n"));
+  });
+
   it("respects a longer closing fence and an unclosed (EOF) fence", async () => {
     const { uploader } = stubUploader();
     // 3-backtick open closed by a 4-backtick line — CommonMark closes here.

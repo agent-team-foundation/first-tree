@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fencedCodeBlockRanges, scanBareDocPathTokens, stripDocPathLineSuffix } from "../doc-link-scan.js";
+import { markdownCodeSpanRanges, scanBareDocPathTokens, stripDocPathLineSuffix } from "../doc-link-scan.js";
 
 function tokens(text: string): string[] {
   return scanBareDocPathTokens(text).map((m) => m.raw);
@@ -228,13 +228,13 @@ describe("stripDocPathLineSuffix", () => {
   });
 });
 
-describe("fencedCodeBlockRanges", () => {
+describe("markdownCodeSpanRanges", () => {
   function covered(text: string): string[] {
-    return fencedCodeBlockRanges(text).map((r) => text.slice(r.start, r.end));
+    return markdownCodeSpanRanges(text).map((r) => text.slice(r.start, r.end));
   }
 
-  it("returns no ranges when there is no fence", () => {
-    expect(fencedCodeBlockRanges("plain text\nno fences here")).toEqual([]);
+  it("returns no ranges when there is no code", () => {
+    expect(markdownCodeSpanRanges("plain text\nno code here")).toEqual([]);
   });
 
   it("covers a simple backtick and tilde fence", () => {
@@ -242,7 +242,7 @@ describe("fencedCodeBlockRanges", () => {
     expect(covered("~~~\ncode\n~~~")).toEqual(["~~~\ncode\n~~~"]);
   });
 
-  it("closes only on a fence at least as long as the opener", () => {
+  it("closes a fence only on a same-char run at least as long as the opener", () => {
     // A 3-backtick line inside a 4-backtick block does NOT close it.
     const text = "````\n```\nstill code\n````\nafter";
     expect(covered(text)).toEqual(["````\n```\nstill code\n````"]);
@@ -250,6 +250,16 @@ describe("fencedCodeBlockRanges", () => {
 
   it("extends an unclosed fence to end of input", () => {
     const text = "intro\n```\nnever closed";
-    expect(fencedCodeBlockRanges(text)).toEqual([{ start: 6, end: text.length }]);
+    expect(markdownCodeSpanRanges(text)).toEqual([{ start: 6, end: text.length }]);
+  });
+
+  it("covers single- and multi-backtick inline spans (delimiter-aware)", () => {
+    expect(covered("use `code` here")).toEqual(["`code`"]);
+    // A double-backtick span may contain single backticks; closes on ``.
+    expect(covered("a ``x `y` z`` b")).toEqual(["``x `y` z``"]);
+  });
+
+  it("does not treat inline backticks inside a fenced block as separate spans", () => {
+    expect(covered("```\n`inside`\n```")).toEqual(["```\n`inside`\n```"]);
   });
 });

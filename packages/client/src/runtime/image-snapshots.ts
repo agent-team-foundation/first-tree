@@ -1,10 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import {
-  fencedCodeBlockRanges,
   IMAGE_MIME_TO_EXT,
   type ImageRefContent,
   MAX_ATTACHMENT_BYTES,
   MAX_BATCH_ATTACHMENTS,
+  markdownCodeSpanRanges,
   type SupportedImageMime,
 } from "@first-tree/shared";
 import {
@@ -213,7 +213,7 @@ function basename(p: string): string {
  */
 function collectImageOccurrences(text: string): ImageOccurrence[] {
   const out: ImageOccurrence[] = [];
-  const codeRanges = codeSpanRanges(text);
+  const codeRanges = markdownCodeSpanRanges(text);
   // BOUNDED quantifiers keep this linear: without a length cap, `[^\]\n]*`
   // rescans to end-of-input at every `![` start, so a pathological `![![![…`
   // body is O(n²) (CodeQL polynomial-ReDoS). Alt text ≤512 and path ≤2048 are
@@ -233,23 +233,6 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
   return out;
 }
 
-/** Byte ranges covered by fenced code blocks and inline code spans, so an image
- *  mention inside a code sample is skipped. Fenced blocks use the shared
- *  CommonMark scanner (`fencedCodeBlockRanges` — handles a longer closing fence
- *  and an unclosed fence extending to EOF); single-line inline spans are added
- *  when not already inside a fence. */
-function codeSpanRanges(text: string): Array<{ start: number; end: number }> {
-  const ranges = fencedCodeBlockRanges(text);
-  const inline = /`[^`\n]*`/g;
-  let m: RegExpExecArray | null = inline.exec(text);
-  while (m !== null) {
-    const start = m.index;
-    if (!isInsideRange(start, ranges)) ranges.push({ start, end: start + m[0].length });
-    m = inline.exec(text);
-  }
-  return ranges;
-}
-
 function isInsideRange(pos: number, ranges: Array<{ start: number; end: number }>): boolean {
   return ranges.some((r) => pos >= r.start && pos < r.end);
 }
@@ -260,10 +243,17 @@ function hasUrlScheme(target: string): boolean {
   return /^[a-z][a-z0-9+.-]+:/i.test(target);
 }
 
-/** Remove `[start,end)` spans from `text`, then collapse the runs of blank
- *  lines a removed inline image can leave behind (3+ newlines → 2). */
+/**
+ * Remove `[start,end)` spans from `text`. When a removed image sat on its own
+ * blank-line-separated line, the newlines on either side would merge into an
+ * extra blank line; we clamp the newline run AT EACH REMOVED-SPAN JOIN to at
+ * most one blank line. The clamp only touches whitespace straddling a removed
+ * span — text elsewhere (e.g. blank lines inside a preserved code block) is
+ * kept byte-for-byte. A final `trim()` drops leading/trailing whitespace of the
+ * resulting caption.
+ */
 function stripSpans(text: string, spans: Array<{ start: number; end: number }>): string {
-  if (spans.length === 0) return text;
+  if (spans.length === 0) return text.trim();
   const ordered = [...spans].sort((a, b) => a.start - b.start);
   let out = "";
   let cursor = 0;
@@ -271,7 +261,18 @@ function stripSpans(text: string, spans: Array<{ start: number; end: number }>):
     if (span.start < cursor) continue;
     out += text.slice(cursor, span.start);
     cursor = span.end;
+    // Clamp only the newline run straddling this join. If the kept text ends
+    // with a newline and the remaining text begins with a whitespace-only run
+    // containing a newline, the removed image was its own line — drop that
+    // leading run and normalize the trailing run to a single blank line.
+    if (/\n[ \t]*$/.test(out)) {
+      const leading = /^[ \t]*(?:\n[ \t]*)+/.exec(text.slice(cursor))?.[0] ?? "";
+      if (leading) {
+        cursor += leading.length;
+        out = out.replace(/(?:[ \t]*\n)+[ \t]*$/, "\n\n");
+      }
+    }
   }
   out += text.slice(cursor);
-  return out.replace(/\n[ \t]*\n[ \t]*\n+/g, "\n\n").trim();
+  return out.trim();
 }
