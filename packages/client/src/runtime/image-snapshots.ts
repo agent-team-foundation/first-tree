@@ -51,6 +51,9 @@ const IMAGE_UPLOAD_MAX_ATTEMPTS = 3;
 
 type ImageOccurrence = {
   writtenPath: string;
+  /** Supported image MIME derived from the target's extension. Only supported
+   *  image targets become occurrences, so the cap is over eligible images. */
+  mime: SupportedImageMime;
   /** Span of the whole `![alt](path)` in the source text (for stripping). */
   start: number;
   end: number;
@@ -90,34 +93,33 @@ export async function buildMessageImageSnapshots(
   const roots = await resolveSelfRoots(selfConfig);
   if (!roots) return { imageRefs: [], strippedText: text, skipped: occurrences.length };
 
-  // Distinct written paths in first-appearance order. Cap the number we RESOLVE
-  // to the batch limit BEFORE touching the filesystem, so a message with
-  // thousands of mentions cannot fan out into thousands of concurrent
-  // realpath/stat calls — the resolve/upload fan-out is bounded by
-  // MAX_BATCH_ATTACHMENTS. Distinct paths beyond the cap are skipped and their
-  // mentions stay in the text.
-  const distinctPaths: string[] = [];
+  // Distinct supported-image paths in first-appearance order (occurrences are
+  // already filtered to supported images). Cap the number we RESOLVE to the
+  // batch limit BEFORE touching the filesystem, so a message with thousands of
+  // mentions cannot fan out into thousands of concurrent realpath/stat calls —
+  // the resolve/upload fan-out is bounded by MAX_BATCH_ATTACHMENTS. Distinct
+  // paths beyond the cap are skipped and their mentions dropped from the caption
+  // (below) rather than left as a broken local path.
+  const distinctPaths: Array<{ path: string; mime: SupportedImageMime }> = [];
   const seenPath = new Set<string>();
   for (const occ of occurrences) {
     if (seenPath.has(occ.writtenPath)) continue;
     seenPath.add(occ.writtenPath);
-    distinctPaths.push(occ.writtenPath);
+    distinctPaths.push({ path: occ.writtenPath, mime: occ.mime });
   }
   const inCapPaths = distinctPaths.slice(0, MAX_BATCH_ATTACHMENTS);
   let skipped = distinctPaths.length - inCapPaths.length;
 
-  // Pass 1 — resolve each in-cap distinct path to a readable in-fence file +
-  // MIME (bounded fan-out ≤ MAX_BATCH_ATTACHMENTS).
+  // Pass 1 — resolve each in-cap distinct path to a readable in-fence file
+  // (bounded fan-out ≤ MAX_BATCH_ATTACHMENTS).
   const resolvedByPath = new Map<string, { file: string; mime: SupportedImageMime }>();
   await Promise.all(
-    inCapPaths.map(async (wp) => {
-      const mime = imageMimeForPath(wp);
-      if (!mime) return;
-      const key = await canonicalizeWorkspacePath(roots, wp);
+    inCapPaths.map(async ({ path, mime }) => {
+      const key = await canonicalizeWorkspacePath(roots, path);
       if (!key) return;
       const file = await resolveWorkspaceFile(roots.agentHomeReal, key);
       if (!file) return;
-      resolvedByPath.set(wp, { file, mime });
+      resolvedByPath.set(path, { file, mime });
     }),
   );
 
@@ -217,16 +219,17 @@ function basename(p: string): string {
 }
 
 /**
- * Collect markdown image mentions `![alt](path)` whose target is a local,
- * image-extension path. A leading `!` is required (that is what distinguishes an
- * image from a doc link); a `\` before the `!` escapes it, and any URL-scheme
- * target (`http://`, `data:`) is skipped — those already render inline and are
- * not workspace files. Mentions inside a fenced code block (``` ``` ``` ``` /
- * `~~~`) are skipped — there the agent is SHOWING the markdown, not embedding an
- * image, and capturing would destructively strip the code sample. Inline code
- * (`` `![](x)` ``) is intentionally NOT excluded: it is a rare place to write a
- * full image embed, and fenced-only exclusion sidesteps the CommonMark
- * inline-parsing edge cases a hand-rolled scanner cannot match the renderer on.
+ * Collect markdown image mentions `![alt](path)` that are LOCAL, supported
+ * image embeds. A leading `!` is required (distinguishes an image from a doc
+ * link); a `\` before the `!` escapes it (odd-run parity). A web URL target is
+ * skipped — an absolute scheme (`http:`, `data:`, …) OR a protocol-relative
+ * `//host/…` — since those render inline and are not workspace files. The
+ * target must have a supported image extension, so the per-message cap is over
+ * eligible images (an unsupported `.txt` target never consumes budget). Mentions
+ * inside a block code sample (fenced or indented) are dropped — the agent is
+ * SHOWING the markdown, not embedding an image. Inline code (`` `![](x)` ``) is
+ * intentionally NOT excluded: a rare place for a full embed, and treating it as
+ * live keeps the send side from reproducing the renderer's inline parsing.
  */
 function collectImageOccurrences(text: string): ImageOccurrence[] {
   // Guard: skip capture on an absurdly large body so a pathological message can
@@ -237,8 +240,7 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
   // Cheap first pass: find the candidate image embeds with the BOUNDED regex
   // (bounded quantifiers keep it linear — an unbounded `[^\]\n]*` would rescan
   // to EOF at every `![`). Only when there IS a candidate do we compute the
-  // (more expensive) code-span ranges — an ordinary text-only send pays nothing
-  // here.
+  // (more expensive) code ranges — an ordinary text-only send pays nothing here.
   const re = /!\[[^\]\n]{0,512}\]\(([^\s)"]{1,2048})(?:\s+"[^"]*")?\)/g;
   const candidates: ImageOccurrence[] = [];
   let match: RegExpExecArray | null = re.exec(text);
@@ -252,8 +254,9 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
     let backslashes = 0;
     for (let p = start - 1; p >= 0 && text[p] === "\\"; p -= 1) backslashes += 1;
     const escaped = backslashes % 2 === 1;
-    if (!escaped && target && !hasUrlScheme(target)) {
-      candidates.push({ writtenPath: target, start, end: start + whole.length });
+    const mime = target ? imageMimeForPath(target) : null;
+    if (!escaped && target && mime && !isWebUrl(target)) {
+      candidates.push({ writtenPath: target, mime, start, end: start + whole.length });
     }
     match = re.exec(text);
   }
@@ -289,10 +292,12 @@ function collectImageOccurrences(text: string): ImageOccurrence[] {
  *  far above any real chat message. */
 const MAX_IMAGE_SCAN_CHARS = 1024 * 1024;
 
-/** True for an absolute URL scheme (`http:`, `https:`, `data:`, …). A Windows
- *  drive prefix like `C:` is not treated as a scheme (single-letter). */
-function hasUrlScheme(target: string): boolean {
-  return /^[a-z][a-z0-9+.-]+:/i.test(target);
+/** True for a web URL target that renders inline as-is, so it is NOT a
+ *  workspace file: an absolute scheme (`http:`, `data:`, …) OR a
+ *  protocol-relative `//host/…`. A Windows drive prefix like `C:` is not a
+ *  scheme (single letter). */
+function isWebUrl(target: string): boolean {
+  return target.startsWith("//") || /^[a-z][a-z0-9+.-]+:/i.test(target);
 }
 
 /**

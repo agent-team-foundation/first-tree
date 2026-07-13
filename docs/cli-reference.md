@@ -416,7 +416,8 @@ EOF
 # (the same shape a human composer upload uses), so recipients see the picture
 # instead of a broken local path. Only explicit `![...](...)` embeds are
 # captured (a bare filename is left as text), only the sender's own workspace,
-# and an image shown inside a fenced code block (``` … ```) is left as a
+# and an image shown inside a block code sample the renderer recognizes (a
+# fenced block at any container depth, or an indented code block) is left as a
 # literal sample (an image written inside inline `code` is treated as a live
 # embed). Capture is best-effort and never blocks the send, and is skipped
 # entirely for a body longer than ~1 million characters (then sent verbatim). An image

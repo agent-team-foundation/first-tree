@@ -300,6 +300,27 @@ describe("buildMessageImageSnapshots — batch cap", () => {
     expect(res.strippedText).not.toContain("![");
   });
 
+  it("does not let unsupported targets consume the cap budget (cap is over supported images)", async () => {
+    const { uploader } = stubUploader();
+    const txts = Array.from({ length: 20 }, (_, i) => `![n${i}](notes${i}.txt)`).join(" ");
+    const res = await buildMessageImageSnapshots(`${txts} ![shot](p0.png)`, root, opts(uploader));
+    // The 20 unsupported `.txt` targets are not candidates, so the valid png is
+    // attempted and captured — not starved by the budget.
+    expect(res.imageRefs.map((r) => r.filename)).toEqual(["p0.png"]);
+  });
+
+  it("preserves a protocol-relative web image URL in a flipped caption", async () => {
+    const { uploader } = stubUploader();
+    const res = await buildMessageImageSnapshots(
+      "![local](p0.png) and ![cdn](//cdn.example.com/logo.png)",
+      root,
+      opts(uploader),
+    );
+    expect(res.imageRefs).toHaveLength(1); // only the local one captured
+    // The `//cdn…` web URL is not a candidate — it stays in the caption.
+    expect(res.strippedText).toContain("//cdn.example.com/logo.png");
+  });
+
   it("strips an over-cap and an out-of-fence mention from a flipped caption (no broken paths)", async () => {
     const { uploader } = stubUploader();
     // 20 in-cap workspace images fill the batch; one out-of-fence path is over
