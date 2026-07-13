@@ -114,7 +114,7 @@ describe("listMeChats — server priority projection (PR3)", () => {
     return null;
   }
 
-  it("pinned chats surface in priorityRows.pinned (pinned_at DESC) and drop out of ordinary rows", async () => {
+  it("pinned chats surface in priorityRows.pinned (pinned_at DESC); rows stays additive", async () => {
     const app = getApp();
     const owner = await createTestAdmin(app);
     const peer = await managedAgent(app, owner, "pin-peer");
@@ -127,8 +127,11 @@ describe("listMeChats — server priority projection (PR3)", () => {
 
     const res = await list(app, owner);
     expect(res.priorityRows.pinned.map((r) => r.chatId)).toEqual([second, first]);
-    // Not duplicated in ordinary rows.
-    expect(res.rows.some((r) => r.chatId === first || r.chatId === second)).toBe(false);
+    // ADDITIVE contract: pinned chats ALSO appear in `rows` (the complete recency
+    // stream) so a client that ignores priorityRows never loses them; the
+    // priority-aware client de-duplicates them against priorityRows on render.
+    expect(res.rows.some((r) => r.chatId === first)).toBe(true);
+    expect(res.rows.some((r) => r.chatId === second)).toBe(true);
   });
 
   it("pinned extraction is global — a low-activity pinned chat appears on page 1 despite paging", async () => {
@@ -149,15 +152,17 @@ describe("listMeChats — server priority projection (PR3)", () => {
 
     const page1 = await list(app, owner, { limit: 2 });
     // The old pinned chat is on page 1's priority group even though its activity
-    // would put it dead last in the ordinary stream.
+    // would put it dead last in the recency stream.
     expect(page1.priorityRows.pinned.map((r) => r.chatId)).toEqual([oldPinned]);
-    expect(page1.rows.some((r) => r.chatId === oldPinned)).toBe(false);
-    // Ordinary page still returns the freshest 2 ordinary chats.
+    // Ordinary page 1 returns the freshest 2 chats; `oldPinned` is absent here
+    // only because its activity pages it far down (additive rows, not exclusion) —
+    // it reappears in a later page and the client de-dupes it against the group.
     expect(page1.rows.map((r) => r.chatId)).toEqual([ordinary[3], ordinary[2]]);
+    expect(page1.rows.some((r) => r.chatId === oldPinned)).toBe(false);
     expect(page1.nextCursor).not.toBeNull();
   });
 
-  it("an open request routes the chat into priorityRows.attention, not ordinary rows", async () => {
+  it("an open request routes the chat into priorityRows.attention (render group), additively in rows", async () => {
     const app = getApp();
     const owner = await createTestAdmin(app);
     const peer = await managedAgent(app, owner, "req-peer");
@@ -166,9 +171,12 @@ describe("listMeChats — server priority projection (PR3)", () => {
     await raiseRequest(app, chatId, peer.uuid, owner.humanAgentUuid);
 
     const res = await list(app, owner);
+    // groupOf uses render precedence (attention > pinned > rows).
     expect(groupOf(res, chatId)).toBe("attention");
     const row = res.priorityRows.attention.find((r) => r.chatId === chatId);
     expect(row?.openRequestCount).toBe(1);
+    // ADDITIVE: also present in the recency stream (client de-dupes on render).
+    expect(res.rows.some((r) => r.chatId === chatId)).toBe(true);
   });
 
   it("a failed caller-managed speaker routes the chat into priorityRows.attention", async () => {
@@ -232,7 +240,7 @@ describe("listMeChats — server priority projection (PR3)", () => {
     expect(res.priorityRows.pinned.some((r) => r.chatId === chatId)).toBe(false);
   });
 
-  it("every chat appears exactly once across attention / pinned / rows", async () => {
+  it("renders each chat in exactly one group: attention and pinned are disjoint, precedence picks the group", async () => {
     const app = getApp();
     const owner = await createTestAdmin(app);
     const peer = await managedAgent(app, owner, "once-peer");
@@ -244,15 +252,18 @@ describe("listMeChats — server priority projection (PR3)", () => {
     const ordinary = await chatWith(app, owner, peer.uuid);
 
     const res = await list(app, owner);
-    const all = [...res.priorityRows.attention, ...res.priorityRows.pinned, ...res.rows].map((r) => r.chatId);
-    // No chat id appears twice.
-    expect(new Set(all).size).toBe(all.length);
+    // The two PRIORITY groups are disjoint (a chat is in at most one of them) —
+    // that is the server's "once" guarantee. `rows` is additive on top, and the
+    // client renders each chat once via the same precedence `groupOf` encodes.
+    const attnIds = new Set(res.priorityRows.attention.map((r) => r.chatId));
+    const pinnedIds = new Set(res.priorityRows.pinned.map((r) => r.chatId));
+    expect([...attnIds].some((id) => pinnedIds.has(id))).toBe(false);
     expect(groupOf(res, attn)).toBe("attention");
     expect(groupOf(res, pinnedChat)).toBe("pinned");
     expect(groupOf(res, ordinary)).toBe("rows");
   });
 
-  it("counts.unread aggregates the caller's unread chats independent of the page", async () => {
+  it("priority groups + counts.unread are computed on the first page and gated off on load-more", async () => {
     const app = getApp();
     const owner = await createTestAdmin(app);
     const peer = await managedAgent(app, owner, "unread-peer");
@@ -262,13 +273,23 @@ describe("listMeChats — server priority projection (PR3)", () => {
     await raiseRequest(app, a, peer.uuid, owner.humanAgentUuid);
     await raiseRequest(app, b, peer.uuid, owner.humanAgentUuid);
 
-    const before = await list(app, owner, { limit: 1 });
-    expect(before.counts.unread).toBe(2);
+    // First page (cursor === null): priority groups + the global unread aggregate.
+    const page1 = await list(app, owner, { limit: 1 });
+    expect(page1.counts.unread).toBe(2);
+    expect(page1.priorityRows.attention.length).toBe(2);
+    expect(page1.nextCursor).not.toBeNull();
 
-    // Reading one clears its unread; the aggregate follows, still page-independent.
+    // Load-more page (cursor set): priority + counts are gated OFF — the client
+    // reads them from page 1 only — so the whole-set work runs once per open.
+    const page2 = await list(app, owner, { cursor: page1.nextCursor ?? undefined, limit: 1 });
+    expect(page2.priorityRows.attention).toEqual([]);
+    expect(page2.priorityRows.pinned).toEqual([]);
+    expect(page2.counts.unread).toBe(0);
+
+    // Reading one clears its unread; the first-page aggregate follows.
     await markMeChatRead(app.db, a, owner.humanAgentUuid);
-    const after = await list(app, owner, { limit: 1 });
-    expect(after.counts.unread).toBe(1);
+    const afterRead = await list(app, owner, { limit: 1 });
+    expect(afterRead.counts.unread).toBe(1);
   });
 
   it("the active filter narrows the priority groups too (origin filter drops a mismatched pinned chat)", async () => {
@@ -290,5 +311,53 @@ describe("listMeChats — server priority projection (PR3)", () => {
 
     const githubOnly = await list(app, owner, { origin: ["github"] });
     expect(githubOnly.priorityRows.pinned.map((r) => r.chatId)).toEqual([githubChat]);
+  });
+
+  it("keyset pagination walks the complete activity-ordered recency stream (no gaps or dups)", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peer = await managedAgent(app, owner, "page-peer");
+
+    // Five chats with strictly descending activity (c-4 newest … c-0 oldest).
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const c = await chatWith(app, owner, peer.uuid, `c-${i}`);
+      await setActivity(app, c, `2026-05-0${i + 1}T00:00:00.000Z`);
+      ids.push(c);
+    }
+    const expectedNewestFirst = [...ids].reverse();
+
+    // Walk pages of 2 via nextCursor, collecting the ordinary stream.
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 10; guard++) {
+      const page = await list(app, owner, { limit: 2, cursor });
+      seen.push(...page.rows.map((r) => r.chatId));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    // Complete + ordered across every page boundary — the cursor never skips or
+    // repeats a row (the `(activity_at, id)` keyset is a total order).
+    expect(seen).toEqual(expectedNewestFirst);
+  });
+
+  it("a peer's failed speaker (not caller-managed) never pins the chat — it stays in rows", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    // A second member in the same org whose managed agent will fail.
+    const peerAdmin = await createTestAdmin(app);
+    const peerAgent = await managedAgent(app, peerAdmin, "peer-failed");
+
+    const chatId = await chatWith(app, owner, peerAgent.uuid);
+    await markFailed(app, peerAgent.uuid, peerAgent.clientId, chatId);
+
+    const res = await list(app, owner);
+    // The failed speaker belongs to a PEER (manager != caller), so the
+    // manager-scoped candidate filter + the `isMine` failed narrowing keep it out
+    // of the caller's attention — someone else's broken agent is not my problem.
+    expect(groupOf(res, chatId)).toBe("rows");
+    expect(res.priorityRows.attention.some((r) => r.chatId === chatId)).toBe(false);
+    // And the row the caller does see carries no failed marker for the peer agent.
+    expect(res.rows.find((r) => r.chatId === chatId)?.failedAgentIds).toEqual([]);
   });
 });

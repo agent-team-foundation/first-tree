@@ -581,27 +581,33 @@ async function enrichMeChatRows(
  * GET /me/chats — cursor-paginated conversation list with server-side priority
  * projection.
  *
- * The response is three groups, computed so every chat appears in AT MOST ONE
- * of them (attention > pinned > ordinary `rows`):
+ * The response carries two whole-set priority groups plus the ordinary page:
  *   1. `priorityRows.attention` — extracted across the *full* matching set (not
  *      just the loaded page): a caller-managed non-human speaker in `failed`,
  *      OR an open request to the caller. Ordered failed-first then activity DESC.
  *   2. `priorityRows.pinned` — the caller's pinned chats (private per-user
  *      state), `pinned_at` DESC, minus anything already in attention.
- *   3. `rows` — the ordinary activity-ordered page, EXCLUDING every priority
- *      chat id, keyset-paginated on `activity_at`.
+ *   3. `rows` — the ordinary activity-ordered keyset page on `activity_at`.
  * Plus `counts.unread`, a page-independent global aggregate.
  *
  * `failed` is a composite status derived by `resolveAgentChatStatuses`, not a
- * column, so attention is built via a bounded CANDIDATE set (open request OR a
+ * column, so attention is built via a CANDIDATE set (open request OR a
  * caller-managed non-human speaker present) that the enrichment pass resolves
  * canonically — never a SQL re-implementation of the status folding.
  *
- * NOTE (v1 cost): the priority groups + `counts.unread` are recomputed on every
- * page; the web reads them from the first page only. The sets are bounded
- * (pins / open requests / managed agents), but `resolveAgentChatStatuses` runs
- * on the candidate set each call — a fair follow-up is to gate the priority
- * work on `cursor === null` once the client contract is settled.
+ * ADDITIVE contract (deliberate, for safe rollout): `rows` is NOT filtered
+ * against the priority ids. A pinned / attention chat appears in `rows` too, and
+ * the client de-duplicates it against `priorityRows` when it renders the groups
+ * (each chat shown once: attention > pinned > recency). This keeps the response
+ * backward-compatible with the already-shipped web that reads only `rows` — a
+ * server deploy ahead of the priority-aware client never makes a chat vanish.
+ *
+ * FIRST-PAGE gating: the two priority groups + `counts.unread` are computed only
+ * when `cursor === null` and returned empty/zero on `load-more` pages (the
+ * client reads them from the first page). This bounds cost — `resolveAgentChatStatuses`
+ * over the candidate set runs once per list open, not per scroll page — and is
+ * exactly what the additive `rows` above makes safe (later pages need no priority
+ * ids to exclude).
  */
 export async function listMeChats(
   db: Database,
@@ -647,87 +653,97 @@ export async function listMeChats(
 
   const activityOrder = sql`c.activity_at DESC, c.id DESC`;
 
-  // --- Global attention candidates ---------------------------------------
-  // Bounded set the enrichment pass resolves into the attention group: any chat
-  // with an open request OR a caller-managed non-human speaker present. The
-  // `EXISTS` is speaker + non-human + manager-scoped so a chat only becomes a
-  // candidate for MY broken agent, never a peer's.
-  const managedSpeakerExists = sql`EXISTS (
-    SELECT 1 FROM chat_membership cm_s
-      JOIN agents a_s ON a_s.uuid = cm_s.agent_id
-     WHERE cm_s.chat_id = c.id
-       AND cm_s.access_mode = 'speaker'
-       AND a_s.type <> 'human'
-       AND a_s.manager_id = ${callerMemberId})`;
-  const attnCandidateRaw = await selectMeChatRawRows(db, {
-    humanAgentId,
-    organizationId,
-    filters,
-    extra: sql`(COALESCE(cus.open_request_count, 0) > 0 OR ${managedSpeakerExists})`,
-    orderBy: activityOrder,
-    limit: null,
-  });
-
-  // --- Global pinned ------------------------------------------------------
-  const pinnedRaw = await selectMeChatRawRows(db, {
-    humanAgentId,
-    organizationId,
-    filters,
-    extra: sql`cus.pinned_at IS NOT NULL`,
-    orderBy: sql`cus.pinned_at DESC, c.id DESC`,
-    limit: null,
-  });
-
-  // Enrich the priority union once (candidates ∪ pinned; disjoint from the
-  // ordinary page, which excludes them). `failedByChat` splits attention below.
-  const priorityRawUnion = dedupeRawByChatId([...attnCandidateRaw, ...pinnedRaw]);
-  const { rows: priorityRowsFlat, failedByChat } = await enrichMeChatRows(db, priorityRawUnion, {
-    humanAgentId,
-    managedAgentIds,
-  });
-  const priorityRowById = new Map(priorityRowsFlat.map((r) => [r.chatId, r]));
-
-  // Attention = candidates that actually qualify (failed OR open request),
-  // ordered failed-first then by activity. Each candidate slice is already
-  // activity DESC from the query and `filter` preserves order.
-  const attnQualified = attnCandidateRaw.filter((r) => failedByChat.has(r.chat_id) || r.open_request_count > 0);
-  const attention = [
-    ...attnQualified.filter((r) => failedByChat.has(r.chat_id)),
-    ...attnQualified.filter((r) => !failedByChat.has(r.chat_id)),
-  ]
-    .map((r) => priorityRowById.get(r.chat_id))
-    .filter((r): r is MeChatRow => r !== undefined);
-  const attentionIds = new Set(attention.map((r) => r.chatId));
-
-  // Pinned excludes anything already surfaced in attention (attention wins),
-  // preserving the `pinned_at` DESC order.
-  const pinned = pinnedRaw
-    .filter((r) => !attentionIds.has(r.chat_id))
-    .map((r) => priorityRowById.get(r.chat_id))
-    .filter((r): r is MeChatRow => r !== undefined);
-
-  // --- Ordinary page ------------------------------------------------------
-  // Excludes every priority chat id so a chat appears exactly once. The
-  // exclusion holds on ALL pages (priority chats can have any activity_at), so
-  // a pinned/attention chat never re-surfaces in a later ordinary page.
-  const priorityIds = new Set<string>([...attentionIds, ...pinned.map((r) => r.chatId)]);
+  // Keyset cursor predicate (sort: activity_at DESC, id DESC). `chats.activity_at`
+  // is NOT NULL, so this is a plain keyset with no null-timestamp branch.
   const cursorTsIso = cursor ? cursor.activityAt.toISOString() : null;
   const cursorPredicate = !cursor
     ? sql`TRUE`
     : sql`(c.activity_at < ${cursorTsIso}::timestamptz
            OR (c.activity_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
-  const exclusionPredicate =
-    priorityIds.size === 0
-      ? sql`TRUE`
-      : sql`c.id NOT IN (${sql.join(
-          [...priorityIds].map((id) => sql`${id}`),
-          sql.raw(", "),
-        )})`;
+
+  // --- Priority groups + unread aggregate: FIRST PAGE ONLY -----------------
+  // These are whole-set projections the client reads once (from the first page).
+  // Computing them only when `cursor === null` keeps `load-more` cheap AND is
+  // what lets `rows` stay ADDITIVE: because later pages never exclude priority
+  // ids, the ordinary stream remains the complete recency list, so the change is
+  // backward-compatible with a client that ignores `priorityRows`. See docblock.
+  let attention: MeChatRow[] = [];
+  let pinned: MeChatRow[] = [];
+  let unread = 0;
+  if (cursor === null) {
+    // Attention candidates: any chat with an open request OR a caller-managed
+    // non-human speaker present. The `EXISTS` is speaker + non-human +
+    // manager-scoped, so a chat is only a candidate for MY broken agent, never a
+    // peer's. `failed` itself is a composite status from resolveAgentChatStatuses
+    // (never re-implemented in SQL) — the enrichment pass below resolves it.
+    const managedSpeakerExists = sql`EXISTS (
+      SELECT 1 FROM chat_membership cm_s
+        JOIN agents a_s ON a_s.uuid = cm_s.agent_id
+       WHERE cm_s.chat_id = c.id
+         AND cm_s.access_mode = 'speaker'
+         AND a_s.type <> 'human'
+         AND a_s.manager_id = ${callerMemberId})`;
+    const attnCandidateRaw = await selectMeChatRawRows(db, {
+      humanAgentId,
+      organizationId,
+      filters,
+      extra: sql`(COALESCE(cus.open_request_count, 0) > 0 OR ${managedSpeakerExists})`,
+      orderBy: activityOrder,
+      limit: null,
+    });
+    const pinnedRaw = await selectMeChatRawRows(db, {
+      humanAgentId,
+      organizationId,
+      filters,
+      extra: sql`cus.pinned_at IS NOT NULL`,
+      orderBy: sql`cus.pinned_at DESC, c.id DESC`,
+      limit: null,
+    });
+
+    // Enrich the priority union once; `failedByChat` splits attention below.
+    const priorityRawUnion = dedupeRawByChatId([...attnCandidateRaw, ...pinnedRaw]);
+    const { rows: priorityRowsFlat, failedByChat } = await enrichMeChatRows(db, priorityRawUnion, {
+      humanAgentId,
+      managedAgentIds,
+    });
+    const priorityRowById = new Map(priorityRowsFlat.map((r) => [r.chatId, r]));
+
+    // Attention = candidates that qualify (failed OR open request), failed-first
+    // then activity DESC. Each candidate slice is already activity DESC from the
+    // query and `filter` preserves order.
+    const attnQualified = attnCandidateRaw.filter((r) => failedByChat.has(r.chat_id) || r.open_request_count > 0);
+    attention = [
+      ...attnQualified.filter((r) => failedByChat.has(r.chat_id)),
+      ...attnQualified.filter((r) => !failedByChat.has(r.chat_id)),
+    ]
+      .map((r) => priorityRowById.get(r.chat_id))
+      .filter((r): r is MeChatRow => r !== undefined);
+    const attentionIds = new Set(attention.map((r) => r.chatId));
+
+    // Pinned excludes anything already surfaced in attention (attention wins),
+    // preserving the `pinned_at` DESC order.
+    pinned = pinnedRaw
+      .filter((r) => !attentionIds.has(r.chat_id))
+      .map((r) => priorityRowById.get(r.chat_id))
+      .filter((r): r is MeChatRow => r !== undefined);
+
+    // Page-independent global aggregate ("you have N unread"), org-scoped and
+    // not narrowed by the transient filter (matches the existing totalUnread
+    // pill). Returned on the first page only; the client reads it from there.
+    unread = await countUnreadMeChats(db, humanAgentId, organizationId);
+  }
+
+  // --- Ordinary page (EVERY page) -----------------------------------------
+  // ADDITIVE: no priority-id exclusion. `rows` is the complete activity-ordered
+  // recency stream; a priority chat also appears here and the client
+  // de-duplicates it against `priorityRows` when it renders the groups. This
+  // keeps the response backward-compatible with the already-shipped web that
+  // reads only `rows` (a pinned / open-request / failed chat never vanishes).
   const ordinaryRaw = await selectMeChatRawRows(db, {
     humanAgentId,
     organizationId,
     filters,
-    extra: sql`${cursorPredicate} AND ${exclusionPredicate}`,
+    extra: cursorPredicate,
     orderBy: activityOrder,
     limit: limit + 1,
   });
@@ -738,10 +754,6 @@ export async function listMeChats(
   const lastActivity = last ? toChatDate(last.activity_at) : null;
   const nextCursor = hasMore && last && lastActivity ? encodeCursor(lastActivity, last.chat_id) : null;
   const { rows } = await enrichMeChatRows(db, pageRaw, { humanAgentId, managedAgentIds });
-
-  // Page-independent global aggregate ("you have N unread"), not narrowed by
-  // the transient filter — matches the existing totalUnread pill semantics.
-  const unread = await countUnreadMeChats(db, humanAgentId, organizationId);
 
   return {
     priorityRows: { attention, pinned },
