@@ -888,10 +888,11 @@ describe("chat-first workspace service layer", () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    // A recognized pre-PR legacy cursor (`<iso>|<chatId>`, 2 parts) restarts from
-    // page 1 so an already-open client recovers across the rollout instead of
-    // looping its load-more Retry.
-    const legacy = Buffer.from("2026-05-06T10:24:00.000Z|old-chat", "utf8").toString("base64url");
+    // A recognized pre-PR legacy cursor restarts from page 1 so an already-open
+    // client recovers across the rollout instead of looping its load-more Retry.
+    // Use the deployed null-tail shape `|<chatId>` (empty timestamp) the old
+    // encoder emitted for a `last_message_at IS NULL` boundary.
+    const legacy = Buffer.from("|old-chat", "utf8").toString("base64url");
     const recovered = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",

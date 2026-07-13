@@ -17,12 +17,16 @@ describe("me-chat encodeCursor / decodeCursor", () => {
     expect(Buffer.from(cursor, "base64url").toString("utf8")).toBe("v2|2026-05-06T10:24:00.000Z|chat-123");
   });
 
-  it("classifies a recognized unversioned pre-PR cursor as `legacy` (never reinterpreted as v2)", () => {
-    // The old shape was `<lastMessageAt>|<chatId>` (2 parts) — its timestamp meant
-    // last_message_at, so it must NOT be reinterpreted against activity ordering;
-    // `legacy` lets the caller restart from page 1 instead of resuming wrongly.
-    const legacy = Buffer.from("2026-05-06T10:24:00.000Z|chat-123", "utf8").toString("base64url");
-    expect(decodeCursor(legacy).status).toBe("legacy");
+  it("classifies both recognized unversioned pre-PR cursor shapes as `legacy`", () => {
+    // The old encoder emitted `<lastMessageAt>|<chatId>` for a normal boundary AND
+    // `|<chatId>` (empty timestamp) for a `last_message_at IS NULL` tail boundary.
+    // Both are deployed shapes whose timestamp meant last_message_at, so neither
+    // may be reinterpreted against activity ordering; `legacy` lets the caller
+    // restart from page 1 instead of resuming wrongly (or 400ing).
+    const withTs = Buffer.from("2026-05-06T10:24:00.000Z|chat-123", "utf8").toString("base64url");
+    const emptyTs = Buffer.from("|chat-123", "utf8").toString("base64url");
+    expect(decodeCursor(withTs).status).toBe("legacy");
+    expect(decodeCursor(emptyTs).status).toBe("legacy");
   });
 
   it("marks a different version `invalid`", () => {

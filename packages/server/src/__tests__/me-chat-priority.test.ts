@@ -1,22 +1,34 @@
 import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { createAgent } from "../services/agent.js";
+import { resolveAgentChatStatuses } from "../services/agent-chat-status.js";
 import { createMeChat, listMeChats, pinMeChat } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
+
+// Wrap (not replace) the canonical status resolver so a test can count how many
+// times the priority + ordinary enrichment passes invoke it — the observable
+// signal for whether a chat was admitted to the attention candidate set. Real
+// behavior is preserved; only calls are recorded.
+vi.mock("../services/agent-chat-status.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/agent-chat-status.js")>();
+  return { ...actual, resolveAgentChatStatuses: vi.fn(actual.resolveAgentChatStatuses) };
+});
+const resolveStatusesSpy = vi.mocked(resolveAgentChatStatuses);
 
 /**
  * Server-side priority projection (PR3): `listMeChats` splits its result into
  * `priorityRows.attention` (a caller-managed speaker in `failed`, OR an open
  * request to the caller) → `priorityRows.pinned` (the caller's pins) → ordinary
  * `rows`, computed across the FULL matching set so a priority chat surfaces on
- * page 1 even when its `activity_at` would page it far down. Every chat appears
- * in exactly one group. Plus a page-independent `counts.unread` aggregate.
+ * page 1 even when its `activity_at` would page it far down. `attention` and
+ * `pinned` are disjoint; `rows` is additive (priority chats repeat there and the
+ * client de-duplicates), and the priority groups are first-page only.
  */
 describe("listMeChats — server priority projection (PR3)", () => {
   const getApp = useTestApp();
@@ -404,8 +416,16 @@ describe("listMeChats — server priority projection (PR3)", () => {
         SET state = 'active', runtime_state = 'idle', runtime_state_at = NOW()
     `);
 
+    resolveStatusesSpy.mockClear();
     const res = await list(app, owner);
     expect(groupOf(res, chatId)).toBe("rows");
     expect(res.priorityRows.attention.some((r) => r.chatId === chatId)).toBe(false);
+    // Perf contract (candidate narrowing, not just final output): the stamped-idle
+    // chat is NOT admitted to the attention candidate set, so the priority
+    // enrichment pass has an empty union and never runs the canonical resolver.
+    // With no pins / open requests here, the resolver therefore runs exactly ONCE
+    // — for the ordinary page. The pre-narrowing candidate SQL admitted this chat,
+    // which would have invoked the resolver a second time (the priority pass).
+    expect(resolveStatusesSpy).toHaveBeenCalledTimes(1);
   });
 });

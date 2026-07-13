@@ -66,9 +66,11 @@ const CURSOR_VERSION = "v2";
  * A decoded cursor is one of three cases so the caller can treat them
  * differently across a rollout:
  *   - `ok`     — a valid `v2|<iso>|<chatId>` cursor; resume from it.
- *   - `legacy` — the recognized PRE-PR shape `<iso>|<chatId>` (2 parts, valid
- *     ISO first). Its timestamp meant `last_message_at`, not `activity_at`, so
- *     it can't be reinterpreted against the new ordering; a client that held one
+ *   - `legacy` — a recognized PRE-PR shape (2 parts, non-empty chat id): either
+ *     `<iso>|<chatId>` (a normal boundary) or `|<chatId>` (an empty timestamp,
+ *     which the old encoder emitted for a `last_message_at IS NULL` tail
+ *     boundary). Its timestamp meant `last_message_at`, not `activity_at`, so it
+ *     can't be reinterpreted against the new ordering; a client that held one
  *     across the rollout is restarted from page 1 rather than stranded.
  *   - `invalid` — anything else (truncated / wrong-version / garbage). Kept as a
  *     typed failure (→ 400) so a genuine client/API bug still surfaces instead of
@@ -100,7 +102,14 @@ export function decodeCursor(cursor: string): DecodedCursor {
   }
   if (parts.length === 2) {
     const [tsPart, chatId] = parts;
-    if (tsPart && chatId && !Number.isNaN(new Date(tsPart).getTime())) return { status: "legacy" };
+    // The deployed pre-PR encoder emitted `<iso>|<chatId>` for a normal boundary
+    // AND `|<chatId>` (EMPTY timestamp) for a `last_message_at IS NULL` tail
+    // boundary. Recognize both exact old shapes — empty or parseable timestamp,
+    // with a non-empty chat id — as legacy so every real deployed cursor takes
+    // the page-1 recovery path instead of 400ing.
+    if (tsPart !== undefined && chatId && (tsPart === "" || !Number.isNaN(new Date(tsPart).getTime()))) {
+      return { status: "legacy" };
+    }
   }
   return { status: "invalid" };
 }
