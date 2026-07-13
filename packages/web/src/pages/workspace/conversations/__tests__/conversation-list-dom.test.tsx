@@ -12,6 +12,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const meChatMocks = vi.hoisted(() => ({
   listMeChats: vi.fn(),
   markMeChatUnread: vi.fn(),
+  pinMeChat: vi.fn(),
 }));
 
 const chatMocks = vi.hoisted(() => ({
@@ -20,8 +21,10 @@ const chatMocks = vi.hoisted(() => ({
 
 vi.mock("../../../../api/me-chats.js", () => meChatMocks);
 // Rows render RowEngagementMenu, which uses the toast hook; the harness has no
-// ToastProvider, so stub it.
-vi.mock("../../../../components/ui/toast.js", () => ({ useToast: () => ({ addToast: vi.fn() }) }));
+// ToastProvider, so stub it with a STABLE addToast so a test can assert the
+// pin/unpin toast direction across an optimistic rerender.
+const toastMocks = vi.hoisted(() => ({ addToast: vi.fn() }));
+vi.mock("../../../../components/ui/toast.js", () => ({ useToast: () => toastMocks }));
 // The filter popover's Participants picker is search-driven (`useOrgAgentsSearch`);
 // stub it so the list doesn't hit the network. The list tests never type into the
 // participant search, so an empty result is all that's needed.
@@ -275,6 +278,9 @@ beforeEach(() => {
   Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
   meChatMocks.listMeChats.mockReset();
   meChatMocks.markMeChatUnread.mockReset();
+  meChatMocks.pinMeChat.mockReset();
+  meChatMocks.pinMeChat.mockResolvedValue({ chatId: "chat", pinnedAt: null });
+  toastMocks.addToast.mockReset();
   chatMocks.patchChatEngagement.mockReset();
   meChatMocks.listMeChats.mockImplementation(
     async (params?: { cursor?: string; engagement?: string; filter?: string }) => {
@@ -630,6 +636,42 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("Needs attention");
   });
 
+  it("toasts the submitted pin direction after an Attention row rerenders in place (regression)", async () => {
+    // Pinning an Attention chat only flips its `pinnedAt` — Attention wins, so the
+    // row stays in its bucket and this RowEngagementMenu rerenders IN PLACE with
+    // pinned=true while the request is still pending. The callbacks must report the
+    // direction submitted at click time (the mutation variable), not the flipped
+    // prop; reading the prop toasted "Unpinned" for a Pin. A deferred pinMeChat
+    // forces the optimistic rerender to land before the mutation resolves — this
+    // only reproduces via a cache-subscribed render (the menu-only tests can't).
+    let resolvePin: (value: { chatId: string; pinnedAt: string }) => void = () => {};
+    meChatMocks.pinMeChat.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePin = resolve;
+        }),
+    );
+    const rows = [row({ chatId: "chat-att", title: "Attention chat", failedAgentIds: ["agent-1"] })];
+    const container = await renderDom(
+      <StatefulList rows={rows} nextCursor={null} selectedChatId={null} />,
+      createClient(rows, null),
+    );
+
+    await click(container.querySelector('button[aria-label="Manage chat"]'));
+    await click([...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent === "Pin") ?? null);
+    // The request submitted `true`; the optimistic rerender has flipped the row to
+    // pinned in place, and the mutation is still pending.
+    expect(meChatMocks.pinMeChat).toHaveBeenCalledWith("chat-att", true);
+
+    await act(async () => {
+      resolvePin({ chatId: "chat-att", pinnedAt: "2026-07-13T00:00:00.000Z" });
+    });
+    await flush();
+
+    expect(toastMocks.addToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Pinned" }));
+    expect(toastMocks.addToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Unpinned" }));
+  });
+
   it("shows the ⚙ badge as a DIMENSION count (monotonic), driven by the real component", async () => {
     // Guards the production `popoverFilterCount` (index.tsx), NOT the harness
     // copy: narrowing Source from 2 sources to 1 must NOT drop the badge, and a
@@ -719,5 +761,8 @@ describe("ConversationList", () => {
     // pointers, not hover-only, so Pin is reachable on phones / the narrow overlay.
     const kebab = container.querySelector('button[aria-label="Manage chat"]');
     expect(kebab?.className).toContain("pointer-coarse:opacity-100");
+    // ...and the trailing metadata cluster hides on coarse pointers so the
+    // always-visible kebab never overlaps the row's time / status (R5).
+    expect(container.querySelector('[class~="pointer-coarse:opacity-0"]')).not.toBeNull();
   });
 });

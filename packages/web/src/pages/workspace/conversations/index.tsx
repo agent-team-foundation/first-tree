@@ -595,10 +595,13 @@ export function ConversationList({
                         >
                           {row.title}
                         </span>
-                        {/* Right meta cluster — single line. Hidden on hover so
-                            the row's engagement menu can take the corner. */}
+                        {/* Right meta cluster — single line. Yields the top-right
+                            corner to the row's engagement kebab so the two never
+                            overlap: hidden on hover / when the menu is open, and
+                            ALSO on coarse (touch) pointers, where the kebab is
+                            always shown (no hover to reveal it). */}
                         <span
-                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                          className="shrink-0 inline-flex items-center transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0 pointer-coarse:opacity-0"
                           style={{ gap: 6 }}
                         >
                           {isWatching && (

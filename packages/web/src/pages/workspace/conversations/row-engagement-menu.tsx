@@ -106,28 +106,34 @@ export function RowEngagementMenu({
       (old) => (old && "pages" in old ? applyOptimisticPin(old, chatId, nextPinned, nowIso) : old),
     );
   };
+  // The submitted direction is the mutation VARIABLE (`nextPinned`), captured at
+  // click time — NOT the live `pinned` prop. `onMutate` flips `pinned` (an
+  // Attention row that gets pinned stays in its bucket and rerenders in place),
+  // and TanStack Query re-binds the pending mutation's callbacks to the newest
+  // render's closures; reading `pinned` in onSuccess/onError would then observe
+  // the post-optimistic value and report / revert the WRONG direction.
   const pinMut = useMutation({
     // Serialize pin/unpin of the SAME chat so a rapid pin -> unpin can't reach
     // the server out of order and settle on the stale value; different chats
     // still run concurrently.
     scope: { id: `chat-pin:${chatId}` },
-    mutationFn: () => pinMeChat(chatId, !pinned),
-    onMutate: async () => {
+    mutationFn: (nextPinned: boolean) => pinMeChat(chatId, nextPinned),
+    onMutate: async (nextPinned: boolean) => {
       // Freeze in-flight me-chats refetches (the list polls every 30s) so a
       // stale response can't clobber the optimistic cache mid-flight.
       await queryClient.cancelQueries({ queryKey: ["me", "chats"] });
-      applyPinToCaches(!pinned);
+      applyPinToCaches(nextPinned);
     },
-    onError: () => {
-      // Targeted revert of just this chat (see above), then surface a toast
+    onError: (_err, nextPinned) => {
+      // Targeted revert of just this chat to its pre-mutation state, then a toast
       // rather than silently leaving the row where the optimistic move put it.
-      applyPinToCaches(pinned);
+      applyPinToCaches(!nextPinned);
       addToast({
-        title: pinned ? "Couldn't unpin" : "Couldn't pin",
+        title: nextPinned ? "Couldn't pin" : "Couldn't unpin",
         description: "The change wasn't saved — try again.",
       });
     },
-    onSuccess: () => addToast({ title: pinned ? "Unpinned" : "Pinned" }),
+    onSuccess: (_data, nextPinned) => addToast({ title: nextPinned ? "Pinned" : "Unpinned" }),
     // Reconcile with server truth (exact pinnedAt / ordering, plus the
     // non-infinite palette / mobile caches skipped above) after either outcome.
     onSettled: () => invalidate(),
@@ -139,7 +145,8 @@ export function RowEngagementMenu({
     pinned,
     runEngagement: (next) => engagementMut.mutate(next),
     runMarkUnread: () => markUnreadMut.mutate(),
-    runTogglePin: () => pinMut.mutate(),
+    // Capture the target direction at click time (before onMutate flips `pinned`).
+    runTogglePin: () => pinMut.mutate(!pinned),
   });
   return <RowActionsMenu actions={actions} ariaLabel="Manage chat" triggerClassName={TRIGGER_HOVER_REVEAL} />;
 }
