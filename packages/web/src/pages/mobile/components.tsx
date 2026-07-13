@@ -78,7 +78,7 @@ export function MobilePage({
 }) {
   return (
     <div
-      className={cn("h-full overflow-y-auto", className)}
+      className={cn("h-full overflow-y-auto overscroll-y-contain", className)}
       style={{
         padding: padded ? "var(--sp-4) var(--sp-4) var(--sp-6)" : undefined,
       }}
