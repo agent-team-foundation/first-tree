@@ -6,9 +6,11 @@ import type {
   ListMeChatsQuery,
   ListMeChatsResponse,
   MeChatLeaveResponse,
+  MeChatPinResponse,
   MeChatReadResponse,
   MeChatSourceCounts,
   MeChatUnreadResponse,
+  PinMeChat,
 } from "@first-tree/shared";
 import { listMeChatsResponseSchema } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
@@ -82,6 +84,11 @@ export function markMeChatRead(chatId: string): Promise<MeChatReadResponse> {
 
 export function markMeChatUnread(chatId: string): Promise<MeChatUnreadResponse> {
   return api.post<MeChatUnreadResponse>(`/chats/${encodeURIComponent(chatId)}/unread`);
+}
+
+/** Pin (`pinned: true`) or unpin the chat for the current viewer (private per-user state). */
+export function pinMeChat(chatId: string, pinned: boolean): Promise<MeChatPinResponse> {
+  return api.post<MeChatPinResponse>(`/chats/${encodeURIComponent(chatId)}/pin`, { pinned } satisfies PinMeChat);
 }
 
 export function addMeChatParticipants(chatId: string, body: AddMeChatParticipants): Promise<void> {

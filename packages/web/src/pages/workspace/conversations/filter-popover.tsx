@@ -33,7 +33,7 @@ export function originLabel(source: ChatSource): string {
  * popover — grouping is a view-mode preference, not a daily-touch control.
  */
 export const GROUP_OPTIONS: ReadonlyArray<{ value: GroupMode; label: string }> = [
-  { value: "recency", label: "Time" },
+  { value: "recency", label: "Recent activity" },
   { value: "source", label: "Source" },
 ];
 

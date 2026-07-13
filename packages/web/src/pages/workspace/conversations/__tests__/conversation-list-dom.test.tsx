@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatSource, ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
+import type { ChatSource, ListMeChatsResponse, MeChatPriorityRows, MeChatRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -19,6 +19,9 @@ const chatMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../../api/me-chats.js", () => meChatMocks);
+// Rows render RowEngagementMenu, which uses the toast hook; the harness has no
+// ToastProvider, so stub it.
+vi.mock("../../../../components/ui/toast.js", () => ({ useToast: () => ({ addToast: vi.fn() }) }));
 vi.mock("../../../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/chats.js")>()),
   patchChatEngagement: chatMocks.patchChatEngagement,
@@ -128,8 +131,20 @@ const BASE_ROWS: MeChatRow[] = [
   }),
 ];
 
-// The rail now uses `useInfiniteQuery`, so seeded cache entries must be the
-// `InfiniteData` shape (`{ pages, pageParams }`) rather than a bare response.
+// Model the server priority projection the way the wire does: attention = the
+// failed / open-request rows (server order preserved), pinned = pinned rows not
+// already in attention. Ordinary `rows` stay ADDITIVE (they still include the
+// priority chats); the component de-duplicates them against the groups.
+function priorityFrom(rows: MeChatRow[]): MeChatPriorityRows {
+  const attention = rows.filter((r) => r.failedAgentIds.length > 0 || r.openRequestCount > 0);
+  const attentionIds = new Set(attention.map((r) => r.chatId));
+  const pinned = rows.filter((r) => r.pinnedAt !== null && !attentionIds.has(r.chatId));
+  return { attention, pinned };
+}
+
+// The rail uses `useInfiniteQuery`, so seeded cache entries must be the
+// `InfiniteData` shape (`{ pages, pageParams }`). Priority groups ride on the
+// FIRST page only, matching the server contract.
 function page(
   rows: MeChatRow[],
   nextCursor: string | null = null,
@@ -138,7 +153,7 @@ function page(
   pageParams: Array<string | undefined>;
 } {
   return {
-    pages: [{ rows, nextCursor, priorityRows: { attention: [], pinned: [] } }],
+    pages: [{ rows, nextCursor, priorityRows: priorityFrom(rows) }],
     pageParams: [undefined],
   };
 }
@@ -363,7 +378,9 @@ describe("ConversationList", () => {
     await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
 
     await click(container.querySelector('button[aria-haspopup="listbox"]'));
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Time") ?? null);
+    await click(
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Recent activity") ?? null,
+    );
     expect(container.textContent).toContain("Older");
 
     await click(container.querySelector('button[aria-label="Filter"]'));
