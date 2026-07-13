@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { decodeCursor, encodeCursor, resolveChatTitle } from "../services/me-chat.js";
 
 describe("me-chat encodeCursor / decodeCursor", () => {
-  it("round-trips a timestamp + chat id", () => {
+  it("round-trips a timestamp + chat id as an `ok` cursor", () => {
     const ts = new Date("2026-05-06T10:24:00.000Z");
-    const cursor = encodeCursor(ts, "chat-123");
-    const decoded = decodeCursor(cursor);
-    expect(decoded?.activityAt?.toISOString()).toBe(ts.toISOString());
-    expect(decoded?.chatId).toBe("chat-123");
+    const decoded = decodeCursor(encodeCursor(ts, "chat-123"));
+    expect(decoded.status).toBe("ok");
+    if (decoded.status === "ok") {
+      expect(decoded.activityAt.toISOString()).toBe(ts.toISOString());
+      expect(decoded.chatId).toBe("chat-123");
+    }
   });
 
   it("emits a versioned payload (v2 prefix)", () => {
@@ -15,39 +17,42 @@ describe("me-chat encodeCursor / decodeCursor", () => {
     expect(Buffer.from(cursor, "base64url").toString("utf8")).toBe("v2|2026-05-06T10:24:00.000Z|chat-123");
   });
 
-  it("rejects an unversioned pre-PR cursor rather than reinterpreting it", () => {
-    // The old shape was `<lastMessageAt>|<chatId>` (2 parts) — indistinguishable
-    // from a raw activity cursor, so it MUST be rejected across the rollout, not
-    // resumed from a wrong boundary.
+  it("classifies a recognized unversioned pre-PR cursor as `legacy` (never reinterpreted as v2)", () => {
+    // The old shape was `<lastMessageAt>|<chatId>` (2 parts) — its timestamp meant
+    // last_message_at, so it must NOT be reinterpreted against activity ordering;
+    // `legacy` lets the caller restart from page 1 instead of resuming wrongly.
     const legacy = Buffer.from("2026-05-06T10:24:00.000Z|chat-123", "utf8").toString("base64url");
-    expect(decodeCursor(legacy)).toBeNull();
+    expect(decodeCursor(legacy).status).toBe("legacy");
   });
 
-  it("rejects a cursor with a different version", () => {
+  it("marks a different version `invalid`", () => {
     const wrongVersion = Buffer.from("v1|2026-05-06T10:24:00.000Z|chat-123", "utf8").toString("base64url");
-    expect(decodeCursor(wrongVersion)).toBeNull();
+    expect(decodeCursor(wrongVersion).status).toBe("invalid");
   });
 
-  it("rejects a v2 cursor with an empty timestamp or chat id", () => {
-    expect(decodeCursor(Buffer.from("v2||chat-no-ts", "utf8").toString("base64url"))).toBeNull();
-    expect(decodeCursor(Buffer.from("v2|2026-05-06T10:24:00.000Z|", "utf8").toString("base64url"))).toBeNull();
+  it("marks a v2 cursor with an empty timestamp or chat id `invalid`", () => {
+    expect(decodeCursor(Buffer.from("v2||chat-no-ts", "utf8").toString("base64url")).status).toBe("invalid");
+    expect(decodeCursor(Buffer.from("v2|2026-05-06T10:24:00.000Z|", "utf8").toString("base64url")).status).toBe(
+      "invalid",
+    );
   });
 
-  it("returns null for malformed cursor strings", () => {
-    expect(decodeCursor("not-a-cursor")).toBeNull();
-    expect(decodeCursor("")).toBeNull();
-    // base64-decodable but no separators
-    expect(decodeCursor(Buffer.from("nosep", "utf8").toString("base64url"))).toBeNull();
+  it("marks malformed cursor strings `invalid`", () => {
+    expect(decodeCursor("").status).toBe("invalid");
+    // one part, no separator
+    expect(decodeCursor(Buffer.from("nosep", "utf8").toString("base64url")).status).toBe("invalid");
+    // two parts but a bad timestamp (not a recognizable legacy cursor)
+    expect(decodeCursor(Buffer.from("not-a-date|chat", "utf8").toString("base64url")).status).toBe("invalid");
     // right version + shape but a bad timestamp
-    expect(decodeCursor(Buffer.from("v2|not-a-date|chat", "utf8").toString("base64url"))).toBeNull();
+    expect(decodeCursor(Buffer.from("v2|not-a-date|chat", "utf8").toString("base64url")).status).toBe("invalid");
   });
 
-  it("returns null when base64 decoding throws", () => {
+  it("marks a cursor `invalid` when base64 decoding throws", () => {
     const spy = vi.spyOn(Buffer, "from").mockImplementationOnce(() => {
       throw new Error("decode failed");
     });
     try {
-      expect(decodeCursor("bad-base64")).toBeNull();
+      expect(decodeCursor("bad-base64").status).toBe("invalid");
     } finally {
       spy.mockRestore();
     }

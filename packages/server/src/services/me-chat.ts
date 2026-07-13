@@ -59,39 +59,50 @@ import { ensureCanJoin, joinAsParticipant, leaveAsParticipant, resolveChatMember
 // Cursor is `v2|<activityAtIso>|<chatId>`, base64url so it survives query
 // strings. Sort ordering is `(activity_at DESC, chat_id DESC)`; `activity_at`
 // is NOT NULL, so there is no null-timestamp case.
-//
-// The `v2` version prefix is load-bearing: the PRE-PR cursor was
-// `<lastMessageAt>|<chatId>` — an INDISTINGUISHABLE shape whose timestamp meant
-// `last_message_at`, not `activity_at`. Without the version, a browser holding
-// an old `nextCursor` across the server rollout would pass validation and
-// resume from a wrong boundary (silently skipping / repeating chats whenever
-// the two timestamps differ). Versioning makes an old cursor fail to decode so
-// it is rejected (400 → the client restarts from page 1) rather than
-// misinterpreted.
 
 const CURSOR_VERSION = "v2";
+
+/**
+ * A decoded cursor is one of three cases so the caller can treat them
+ * differently across a rollout:
+ *   - `ok`     — a valid `v2|<iso>|<chatId>` cursor; resume from it.
+ *   - `legacy` — the recognized PRE-PR shape `<iso>|<chatId>` (2 parts, valid
+ *     ISO first). Its timestamp meant `last_message_at`, not `activity_at`, so
+ *     it can't be reinterpreted against the new ordering; a client that held one
+ *     across the rollout is restarted from page 1 rather than stranded.
+ *   - `invalid` — anything else (truncated / wrong-version / garbage). Kept as a
+ *     typed failure (→ 400) so a genuine client/API bug still surfaces instead of
+ *     being silently served page 1.
+ */
+type DecodedCursor = { status: "ok"; activityAt: Date; chatId: string } | { status: "legacy" } | { status: "invalid" };
 
 export function encodeCursor(activityAt: Date, chatId: string): string {
   const payload = `${CURSOR_VERSION}|${activityAt.toISOString()}|${chatId}`;
   return Buffer.from(payload, "utf8").toString("base64url");
 }
 
-export function decodeCursor(cursor: string): { activityAt: Date; chatId: string } | null {
+export function decodeCursor(cursor: string): DecodedCursor {
+  let decoded: string;
   try {
-    const decoded = Buffer.from(cursor, "base64url").toString("utf8");
-    // Exactly `<version>|<iso>|<chatId>` (chat ids are UUIDs — never contain
-    // `|`). An old unversioned cursor (`<iso>|<chatId>`) is 2 parts, so it — and
-    // anything else malformed — is rejected rather than reinterpreted.
-    const parts = decoded.split("|");
-    if (parts.length !== 3) return null;
-    const [version, tsPart, chatId] = parts;
-    if (version !== CURSOR_VERSION || !tsPart || !chatId) return null;
-    const activityAt = new Date(tsPart);
-    if (Number.isNaN(activityAt.getTime())) return null;
-    return { activityAt, chatId };
+    decoded = Buffer.from(cursor, "base64url").toString("utf8");
   } catch {
-    return null;
+    return { status: "invalid" };
   }
+  // Chat ids are UUIDs (never contain `|`), so a well-formed payload splits
+  // cleanly: current `v2|<iso>|<chatId>` is 3 parts, legacy `<iso>|<chatId>` is 2.
+  const parts = decoded.split("|");
+  if (parts.length === 3) {
+    const [version, tsPart, chatId] = parts;
+    if (version === CURSOR_VERSION && tsPart && chatId && !Number.isNaN(new Date(tsPart).getTime())) {
+      return { status: "ok", activityAt: new Date(tsPart), chatId };
+    }
+    return { status: "invalid" };
+  }
+  if (parts.length === 2) {
+    const [tsPart, chatId] = parts;
+    if (tsPart && chatId && !Number.isNaN(new Date(tsPart).getTime())) return { status: "legacy" };
+  }
+  return { status: "invalid" };
 }
 
 // ---------------------------------------------------------------------------
@@ -621,9 +632,9 @@ async function enrichMeChatRows(
  * what the additive `rows` above makes safe (later pages need no priority ids to
  * exclude).
  *
- * An undecodable / pre-PR (unversioned) cursor is treated as a first-page request
- * rather than a 400, so a client that held an old cursor across the rollout
- * recovers gracefully instead of looping its load-more Retry.
+ * A recognized pre-PR (legacy) cursor is treated as a first-page request rather
+ * than a 400, so a client that held one across the rollout recovers gracefully
+ * instead of looping its load-more Retry; a genuinely invalid cursor still 400s.
  */
 export async function listMeChats(
   db: Database,
@@ -633,13 +644,16 @@ export async function listMeChats(
   query: ListMeChatsQuery,
 ): Promise<ListMeChatsResponse> {
   const limit = query.limit;
-  // A cursor that fails to decode — including a pre-PR (unversioned) cursor held
-  // across the server rollout — is treated as "start from the first page" rather
-  // than a 400. That recovers an already-open client gracefully: it gets page 1
-  // (whose rows it de-duplicates against what it already showed) plus a fresh v2
-  // nextCursor to resume from. A hard 400 would instead leave the client's
-  // load-more Retry looping on the same rejected cursor until a page-0 refresh.
-  const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+  // Resolve the cursor into a keyset anchor. A recognized `legacy` cursor (a
+  // pre-PR shape a client held across the rollout) restarts from page 1 — the
+  // client de-duplicates the repeated rows and picks up a fresh v2 cursor — while
+  // an `invalid` cursor stays a typed 400 so a genuine client/API bug surfaces
+  // instead of being silently masked as a first-page request.
+  const decoded = query.cursor ? decodeCursor(query.cursor) : null;
+  if (decoded?.status === "invalid") {
+    throw new BadRequestError("Invalid cursor");
+  }
+  const cursor = decoded?.status === "ok" ? decoded : null;
 
   const filterUnreadOnly = query.filter === "unread";
   const filterWatchingOnly = query.watching === true;
@@ -691,14 +705,19 @@ export async function listMeChats(
   if (cursor === null) {
     // Attention candidates — a bounded pre-canonical set the enrichment pass
     // resolves. A chat qualifies if it has an open request OR a caller-managed
-    // non-human speaker ACTUALLY in an error state: session `errored`, or an
-    // active session whose per-chat / agent-global runtime is `error`. Those are
-    // exactly the inputs `computeErrored` folds into composite `failed` (minus
-    // the freshness / reachability the canonical resolver still applies), so this
-    // is a strict SUPERSET of failed — no false negatives — while excluding the
-    // common HEALTHY managed speaker that would otherwise make nearly every
-    // active chat a candidate on the 30s poll. `failed` is still never decided in
-    // SQL; the enrichment pass below confirms it canonically.
+    // non-human speaker whose stored error inputs mirror `computeErrored`'s
+    // branches exactly (minus the freshness / reachability the canonical resolver
+    // still applies), so this is a strict SUPERSET of failed — no false negatives
+    // — while excluding the common HEALTHY managed speaker that would otherwise
+    // make nearly every active chat a candidate on the 30s poll:
+    //   - session `errored` (C-axis lifecycle) always contributes;
+    //   - an active session with a per-chat runtime stamp: only the per-chat
+    //     `runtime_state = 'error'` is authoritative (D-axis);
+    //   - an active session with NO per-chat stamp (old client): fall back to the
+    //     agent-global `presence.runtime_state = 'error'`.
+    // Gating the presence fallback on `runtime_state_at IS NULL` is what keeps
+    // one agent-global error from admitting that agent's stamped-idle chats.
+    // `failed` is still never decided in SQL; the enrichment pass confirms it.
     const managedFailureCandidate = sql`EXISTS (
       SELECT 1 FROM chat_membership cm_s
         JOIN agents a_s ON a_s.uuid = cm_s.agent_id
@@ -708,8 +727,11 @@ export async function listMeChats(
          AND cm_s.access_mode = 'speaker'
          AND a_s.type <> 'human'
          AND a_s.manager_id = ${callerMemberId}
-         AND (acs.state = 'errored'
-              OR (acs.state = 'active' AND (acs.runtime_state = 'error' OR ap.runtime_state = 'error'))))`;
+         AND (
+           acs.state = 'errored'
+           OR (acs.state = 'active' AND acs.runtime_state_at IS NOT NULL AND acs.runtime_state = 'error')
+           OR (acs.state = 'active' AND acs.runtime_state_at IS NULL AND ap.runtime_state = 'error')
+         ))`;
     const attnCandidateRaw = await selectMeChatRawRows(db, {
       humanAgentId,
       organizationId,

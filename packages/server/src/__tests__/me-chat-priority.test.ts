@@ -370,4 +370,42 @@ describe("listMeChats — server priority projection (PR3)", () => {
     // And the row the caller does see carries no failed marker for the peer agent.
     expect(res.rows.find((r) => r.chatId === chatId)?.failedAgentIds).toEqual([]);
   });
+
+  it("a managed agent with a global error but a stamped per-chat idle session stays in rows", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peer = await managedAgent(app, owner, "stamped-idle");
+    const chatId = await chatWith(app, owner, peer.uuid);
+
+    // Agent-global presence error (reachable), BUT the per-chat session is active
+    // with a STAMPED per-chat runtime of `idle`. Once a per-chat stamp exists, the
+    // per-chat runtime is authoritative and the global error is ignored — so the
+    // agent is canonically NOT failed here. The narrowed candidate filter must
+    // gate the presence fallback on the missing stamp, so this chat is neither a
+    // candidate nor attention.
+    await app.db
+      .insert(agentPresence)
+      .values({
+        agentId: peer.uuid,
+        clientId: peer.clientId,
+        lastSeenAt: new Date(),
+        runtimeState: "error",
+        activeSessions: 1,
+        totalSessions: 1,
+      })
+      .onConflictDoUpdate({
+        target: [agentPresence.agentId],
+        set: { clientId: peer.clientId, runtimeState: "error" },
+      });
+    await app.db.execute(sql`
+      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, runtime_state, runtime_state_at, updated_at)
+      VALUES (${peer.uuid}, ${chatId}, 'active', 'idle', NOW(), NOW())
+      ON CONFLICT (agent_id, chat_id) DO UPDATE
+        SET state = 'active', runtime_state = 'idle', runtime_state_at = NOW()
+    `);
+
+    const res = await list(app, owner);
+    expect(groupOf(res, chatId)).toBe("rows");
+    expect(res.priorityRows.attention.some((r) => r.chatId === chatId)).toBe(false);
+  });
 });

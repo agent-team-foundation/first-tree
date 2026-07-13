@@ -884,21 +884,34 @@ describe("chat-first workspace service layer", () => {
     expect(page2.rows[0]?.chatId).toBe(c1.chatId);
   });
 
-  it("listMeChats recovers an undecodable cursor as a first-page request", async () => {
+  it("listMeChats recovers a legacy cursor as a first-page request but 400s an invalid one", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    // No longer a 400: an undecodable (or pre-PR unversioned) cursor is treated
-    // as "start from the first page" so an already-open client recovers
-    // gracefully across the rollout instead of looping its load-more Retry.
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+    // A recognized pre-PR legacy cursor (`<iso>|<chatId>`, 2 parts) restarts from
+    // page 1 so an already-open client recovers across the rollout instead of
+    // looping its load-more Retry.
+    const legacy = Buffer.from("2026-05-06T10:24:00.000Z|old-chat", "utf8").toString("base64url");
+    const recovered = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
-      cursor: "not-a-valid-cursor",
+      cursor: legacy,
     });
-    expect(res.priorityRows).toEqual({ attention: [], pinned: [] });
-    expect(Array.isArray(res.rows)).toBe(true);
+    expect(recovered.priorityRows).toEqual({ attention: [], pinned: [] });
+    expect(Array.isArray(recovered.rows)).toBe(true);
+
+    // A genuinely invalid cursor (here: an unsupported version) still surfaces as
+    // a typed 400 so a real client/API bug is not masked as a first-page request.
+    const invalid = Buffer.from("v9|2026-05-06T10:24:00.000Z|chat", "utf8").toString("base64url");
+    await expect(
+      listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+        cursor: invalid,
+      }),
+    ).rejects.toThrow(/invalid cursor/i);
   });
 
   it("listMeChats nested-chat filter: parent_chat_id IS NOT NULL is excluded", async () => {
