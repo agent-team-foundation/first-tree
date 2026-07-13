@@ -337,7 +337,7 @@ const toChatDate = (v: Date | string | null): Date | null => {
  * global attention candidates) shares so the three row sets are byte-identical
  * in shape.
  */
-type RawMeChatRow = {
+export type RawMeChatRow = {
   chat_id: string;
   type: string;
   topic: string | null;
@@ -449,6 +449,55 @@ async function selectMeChatRawRows(
      ORDER BY ${orderBy}
      ${limitClause}
   `)) as unknown as RawMeChatRow[];
+}
+
+/**
+ * Run the attention-candidate query: chats matching the caller's view `filters`
+ * that COULD canonically be `failed` or have an open request. A chat qualifies
+ * if it has an open request OR a caller-managed non-human speaker whose stored
+ * error inputs mirror `computeErrored`'s branches exactly (minus the freshness /
+ * reachability the canonical resolver still applies) — a strict SUPERSET of
+ * failed (no false negatives) that still excludes the common HEALTHY managed
+ * speaker that would otherwise make nearly every active chat a candidate on the
+ * 30s poll:
+ *   - session `errored` (C-axis lifecycle) always contributes;
+ *   - an active session with a per-chat runtime stamp: only the per-chat
+ *     `runtime_state = 'error'` is authoritative (D-axis);
+ *   - an active session with NO per-chat stamp (old client): fall back to the
+ *     agent-global `presence.runtime_state = 'error'`.
+ * Gating the presence fallback on `runtime_state_at IS NULL` keeps one
+ * agent-global error from admitting that agent's stamped-idle chats. `failed` is
+ * never decided here; the enrichment pass confirms it canonically.
+ *
+ * Exported so a test can observe the candidate boundary directly (no mocking).
+ */
+export async function selectAttentionCandidateRows(
+  db: Database,
+  params: { humanAgentId: string; organizationId: string; callerMemberId: string; filters: SQL; orderBy: SQL },
+): Promise<RawMeChatRow[]> {
+  const { humanAgentId, organizationId, callerMemberId, filters, orderBy } = params;
+  const managedFailureCandidate = sql`EXISTS (
+    SELECT 1 FROM chat_membership cm_s
+      JOIN agents a_s ON a_s.uuid = cm_s.agent_id
+      JOIN agent_chat_sessions acs ON acs.agent_id = a_s.uuid AND acs.chat_id = c.id
+      LEFT JOIN agent_presence ap ON ap.agent_id = a_s.uuid
+     WHERE cm_s.chat_id = c.id
+       AND cm_s.access_mode = 'speaker'
+       AND a_s.type <> 'human'
+       AND a_s.manager_id = ${callerMemberId}
+       AND (
+         acs.state = 'errored'
+         OR (acs.state = 'active' AND acs.runtime_state_at IS NOT NULL AND acs.runtime_state = 'error')
+         OR (acs.state = 'active' AND acs.runtime_state_at IS NULL AND ap.runtime_state = 'error')
+       ))`;
+  return selectMeChatRawRows(db, {
+    humanAgentId,
+    organizationId,
+    filters,
+    extra: sql`(COALESCE(cus.open_request_count, 0) > 0 OR ${managedFailureCandidate})`,
+    orderBy,
+    limit: null,
+  });
 }
 
 /**
@@ -712,42 +761,14 @@ export async function listMeChats(
   let attention: MeChatRow[] = [];
   let pinned: MeChatRow[] = [];
   if (cursor === null) {
-    // Attention candidates — a bounded pre-canonical set the enrichment pass
-    // resolves. A chat qualifies if it has an open request OR a caller-managed
-    // non-human speaker whose stored error inputs mirror `computeErrored`'s
-    // branches exactly (minus the freshness / reachability the canonical resolver
-    // still applies), so this is a strict SUPERSET of failed — no false negatives
-    // — while excluding the common HEALTHY managed speaker that would otherwise
-    // make nearly every active chat a candidate on the 30s poll:
-    //   - session `errored` (C-axis lifecycle) always contributes;
-    //   - an active session with a per-chat runtime stamp: only the per-chat
-    //     `runtime_state = 'error'` is authoritative (D-axis);
-    //   - an active session with NO per-chat stamp (old client): fall back to the
-    //     agent-global `presence.runtime_state = 'error'`.
-    // Gating the presence fallback on `runtime_state_at IS NULL` is what keeps
-    // one agent-global error from admitting that agent's stamped-idle chats.
-    // `failed` is still never decided in SQL; the enrichment pass confirms it.
-    const managedFailureCandidate = sql`EXISTS (
-      SELECT 1 FROM chat_membership cm_s
-        JOIN agents a_s ON a_s.uuid = cm_s.agent_id
-        JOIN agent_chat_sessions acs ON acs.agent_id = a_s.uuid AND acs.chat_id = c.id
-        LEFT JOIN agent_presence ap ON ap.agent_id = a_s.uuid
-       WHERE cm_s.chat_id = c.id
-         AND cm_s.access_mode = 'speaker'
-         AND a_s.type <> 'human'
-         AND a_s.manager_id = ${callerMemberId}
-         AND (
-           acs.state = 'errored'
-           OR (acs.state = 'active' AND acs.runtime_state_at IS NOT NULL AND acs.runtime_state = 'error')
-           OR (acs.state = 'active' AND acs.runtime_state_at IS NULL AND ap.runtime_state = 'error')
-         ))`;
-    const attnCandidateRaw = await selectMeChatRawRows(db, {
+    // Attention candidates — the bounded pre-canonical set the enrichment pass
+    // resolves (see `selectAttentionCandidateRows` for the superset rationale).
+    const attnCandidateRaw = await selectAttentionCandidateRows(db, {
       humanAgentId,
       organizationId,
+      callerMemberId,
       filters,
-      extra: sql`(COALESCE(cus.open_request_count, 0) > 0 OR ${managedFailureCandidate})`,
       orderBy: activityOrder,
-      limit: null,
     });
     const pinnedRaw = await selectMeChatRawRows(db, {
       humanAgentId,
