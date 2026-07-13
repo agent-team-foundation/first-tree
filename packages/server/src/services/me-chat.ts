@@ -56,26 +56,27 @@ import { ensureCanJoin, joinAsParticipant, leaveAsParticipant, resolveChatMember
 // Cursor encoding
 // ---------------------------------------------------------------------------
 //
-// Cursor is `<lastMessageAtIso>|<chatId>`. Encoded base64url so it survives
+// Cursor is `<activityAtIso>|<chatId>`. Encoded base64url so it survives
 // query strings without escaping. Sort ordering is
-// `(last_message_at DESC NULLS LAST, chat_id DESC)`.
+// `(activity_at DESC, chat_id DESC)`. `chats.activity_at` is NOT NULL, so —
+// unlike the pre-PR `last_message_at` cursor — there is no null-timestamp case.
 
-export function encodeCursor(lastMessageAt: Date | null, chatId: string): string {
-  const payload = `${lastMessageAt ? lastMessageAt.toISOString() : ""}|${chatId}`;
+export function encodeCursor(activityAt: Date, chatId: string): string {
+  const payload = `${activityAt.toISOString()}|${chatId}`;
   return Buffer.from(payload, "utf8").toString("base64url");
 }
 
-export function decodeCursor(cursor: string): { lastMessageAt: Date | null; chatId: string } | null {
+export function decodeCursor(cursor: string): { activityAt: Date; chatId: string } | null {
   try {
     const decoded = Buffer.from(cursor, "base64url").toString("utf8");
     const sep = decoded.indexOf("|");
     if (sep < 0) return null;
     const tsPart = decoded.slice(0, sep);
     const chatId = decoded.slice(sep + 1);
-    if (!chatId) return null;
-    const lastMessageAt = tsPart.length > 0 ? new Date(tsPart) : null;
-    if (lastMessageAt && Number.isNaN(lastMessageAt.getTime())) return null;
-    return { lastMessageAt, chatId };
+    if (!chatId || tsPart.length === 0) return null;
+    const activityAt = new Date(tsPart);
+    if (Number.isNaN(activityAt.getTime())) return null;
+    return { activityAt, chatId };
   } catch {
     return null;
   }
@@ -332,21 +333,16 @@ export async function listMeChats(
   const originPredicate = query.origin ? originsFilterSql(query.origin) : sql`TRUE`;
   const participantsPredicate = query.with ? participantsFilterSql(query.with) : sql`TRUE`;
 
-  // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
-  // See the original commentary in git history for the case-by-case
-  // analysis — preserved verbatim from the pre-refactor implementation
-  // because the entity-layer (chats) sort key has not changed.
-  // postgres-js can't serialize a JS Date through a raw sql template
-  // without column metadata; pre-stringify to ISO so the param goes
-  // through as text and the `::timestamptz` cast handles the rest.
-  const cursorTsIso = cursor?.lastMessageAt ? cursor.lastMessageAt.toISOString() : null;
+  // Cursor predicate (sort: activity_at DESC, chat_id DESC). `chats.activity_at`
+  // is NOT NULL, so this is a plain keyset with no null-timestamp branches.
+  // postgres-js can't serialize a JS Date through a raw sql template without
+  // column metadata; pre-stringify to ISO so the param goes through as text and
+  // the `::timestamptz` cast handles the rest.
+  const cursorTsIso = cursor ? cursor.activityAt.toISOString() : null;
   const cursorPredicate = !cursor
     ? sql`TRUE`
-    : cursor.lastMessageAt === null
-      ? sql`(c.last_message_at IS NULL AND c.id < ${cursor.chatId})`
-      : sql`(c.last_message_at IS NULL
-             OR c.last_message_at < ${cursorTsIso}::timestamptz
-             OR (c.last_message_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
+    : sql`(c.activity_at < ${cursorTsIso}::timestamptz
+           OR (c.activity_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
 
   // postgres-js returns timestamptz as ISO strings when bound through
   // a raw sql template; coerce below so the response uses ISO
@@ -405,7 +401,7 @@ export async function listMeChats(
        AND ${originPredicate}
        AND ${participantsPredicate}
        AND ${cursorPredicate}
-     ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
+     ORDER BY c.activity_at DESC, c.id DESC
      LIMIT ${limit + 1}
   `)) as unknown as Array<{
     chat_id: string;
@@ -435,7 +431,8 @@ export async function listMeChats(
   const hasMore = rawRows.length > limit;
   const pageRaw = hasMore ? rawRows.slice(0, limit) : rawRows;
   const last = pageRaw[pageRaw.length - 1];
-  const nextCursor = hasMore && last ? encodeCursor(toDate(last.last_message_at), last.chat_id) : null;
+  const lastActivity = last ? toDate(last.activity_at) : null;
+  const nextCursor = hasMore && last && lastActivity ? encodeCursor(lastActivity, last.chat_id) : null;
 
   if (pageRaw.length === 0) return { rows: [], nextCursor: null };
 

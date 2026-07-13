@@ -2,19 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { decodeCursor, encodeCursor, resolveChatTitle } from "../services/me-chat.js";
 
 describe("me-chat encodeCursor / decodeCursor", () => {
-  it("round-trips a non-null timestamp + chat id", () => {
+  it("round-trips a timestamp + chat id", () => {
     const ts = new Date("2026-05-06T10:24:00.000Z");
     const cursor = encodeCursor(ts, "chat-123");
     const decoded = decodeCursor(cursor);
-    expect(decoded?.lastMessageAt?.toISOString()).toBe(ts.toISOString());
+    expect(decoded?.activityAt?.toISOString()).toBe(ts.toISOString());
     expect(decoded?.chatId).toBe("chat-123");
   });
 
-  it("round-trips a null timestamp", () => {
-    const cursor = encodeCursor(null, "chat-no-msgs");
-    const decoded = decodeCursor(cursor);
-    expect(decoded?.lastMessageAt).toBeNull();
-    expect(decoded?.chatId).toBe("chat-no-msgs");
+  it("rejects a cursor with an empty timestamp part (activity_at is never null)", () => {
+    expect(decodeCursor(Buffer.from("|chat-no-ts", "utf8").toString("base64url"))).toBeNull();
   });
 
   it("returns null for malformed cursor strings", () => {
