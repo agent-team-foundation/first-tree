@@ -1,177 +1,265 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import {
+  type ContextContentClassCounts,
+  collectContextMarkdownContent,
+  emptyContentClassCounts,
+} from "./content-class.js";
+import {
+  type ContextDocument,
+  readContextDocument,
+  readNonEmptyStringArrayField,
+  readNonEmptyStringField,
+} from "./context-document.js";
+import { readMarkdownLinkTargets, resolveLocalTreeTarget } from "./context-links.js";
+import {
+  formatValidationFinding,
+  type TreeValidationFinding,
+  VALIDATION_CODES,
+  type ValidationCode,
+} from "./validation-finding.js";
 
-const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
-const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/mu;
-const SOFT_LINKS_INLINE_RE = /^soft_links:\s*\[([^\]]*)\]/mu;
-const SOFT_LINKS_BLOCK_RE = /^soft_links:\s*\n((?:\s+-\s+.+\n?)+)/mu;
-const TITLE_RE = /^title:\s*['"]?(.+?)['"]?\s*$/mu;
-// Personal path = a member's own subtree under `members/<me>/`.
-// `members/NODE.md` itself is the members domain root and stays non-personal.
-const PERSONAL_PATH_RE = /^members\/[^/]+\//u;
+const MEMBERS_INDEX_PATH = "members/NODE.md";
 
-const SKIP_DIRS = new Set(["node_modules", "__pycache__"]);
-const SKIP_FILES = new Set(["AGENTS.md", "CLAUDE.md"]);
-// Managed framework files that bootstrap writes as symlinks into `.agents/skills/`.
-// They carry skill-payload frontmatter (`name:`/`version:`), not tree-node frontmatter
-// (`title:`/`owners:`), so the node validator must not treat them as tree content.
-const MANAGED_SYMLINK_FILES = new Set(["WHITEPAPER.md"]);
+export type NodeValidationResult = {
+  findings: TreeValidationFinding[];
+  scannedByContentClass: ContextContentClassCounts;
+};
 
-function rel(path: string, root: string): string {
-  return relative(root, path).replace(/\\/gu, "/");
+function addFinding(
+  findings: TreeValidationFinding[],
+  code: ValidationCode,
+  path: string,
+  message: string,
+  target?: string,
+): void {
+  findings.push({ code, message, path, ...(target === undefined ? {} : { target }) });
 }
 
-function shouldSkipPath(path: string, treeRoot: string): boolean {
-  const relPath = rel(path, treeRoot);
-  const parts = relPath.split("/");
-
-  if (parts.some((part) => part.startsWith(".") || SKIP_DIRS.has(part))) {
-    return true;
+function validateRequiredNodeMetadata(
+  document: ContextDocument,
+  path: string,
+  findings: TreeValidationFinding[],
+): void {
+  if (document.frontmatter === "missing") {
+    addFinding(findings, VALIDATION_CODES.frontmatterMissing, path, "missing frontmatter");
+    return;
   }
 
-  return false;
-}
-
-function collectMarkdownFiles(treeRoot: string): string[] {
-  const files: string[] = [];
-
-  function walk(dir: string): void {
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(dir).sort();
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = join(dir, entry);
-
-      if (shouldSkipPath(fullPath, treeRoot)) {
-        continue;
-      }
-
-      try {
-        const stat = statSync(fullPath);
-        if (stat.isDirectory()) {
-          walk(fullPath);
-          continue;
-        }
-        if (!stat.isFile() || !entry.endsWith(".md") || SKIP_FILES.has(entry)) {
-          continue;
-        }
-        if (MANAGED_SYMLINK_FILES.has(entry) && lstatSync(fullPath).isSymbolicLink()) {
-          continue;
-        }
-        files.push(fullPath);
-      } catch {
-        // Ignore unreadable entries.
-      }
-    }
+  if (document.frontmatter === "invalid" || document.data === null) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.frontmatterParse,
+      path,
+      `frontmatter could not be parsed${document.error === undefined ? "" : `: ${document.error}`}`,
+    );
+    return;
   }
 
-  walk(treeRoot);
-  return files;
-}
+  const title = readNonEmptyStringField(document.data, "title");
+  if (!title.present) {
+    addFinding(findings, VALIDATION_CODES.titleMissing, path, "missing 'title' field in frontmatter");
+  } else if (!title.valid) {
+    addFinding(findings, VALIDATION_CODES.titleInvalid, path, "'title' must be a non-empty string");
+  }
 
-function parseFrontmatter(path: string): string | null {
-  try {
-    const text = readFileSync(path, "utf-8");
-    const match = text.match(FRONTMATTER_RE);
-    return match ? match[1] : null;
-  } catch {
-    return null;
+  const owners = readNonEmptyStringArrayField(document.data, "owners");
+  if (!owners.present) {
+    addFinding(findings, VALIDATION_CODES.ownersMissing, path, "missing 'owners' field in frontmatter");
+  } else if (!owners.valid) {
+    addFinding(findings, VALIDATION_CODES.ownersInvalid, path, "'owners' must be a non-empty string array");
+  }
+
+  const description = readNonEmptyStringField(document.data, "description");
+  if (description.present && !description.valid) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.descriptionInvalid,
+      path,
+      "'description' must be a non-empty string when present",
+    );
   }
 }
 
-function parseSoftLinks(frontmatter: string): string[] {
-  const inlineMatch = frontmatter.match(SOFT_LINKS_INLINE_RE);
-  if (inlineMatch) {
-    return inlineMatch[1]
-      .split(",")
-      .map((value) => value.trim().replace(/^['"]|['"]$/gu, ""))
-      .filter(Boolean);
-  }
-
-  const blockMatch = frontmatter.match(SOFT_LINKS_BLOCK_RE);
-  if (!blockMatch) {
+function readSoftLinks(document: ContextDocument, path: string, findings: TreeValidationFinding[]): string[] {
+  if (document.data === null) {
     return [];
   }
 
-  return blockMatch[1]
-    .trim()
-    .split("\n")
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^-\s*/u, "")
-        .trim()
-        .replace(/^['"]|['"]$/gu, ""),
-    )
-    .filter(Boolean);
+  const softLinks = readNonEmptyStringArrayField(document.data, "soft_links");
+  if (!softLinks.present) {
+    return [];
+  }
+  if (!softLinks.valid) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.softLinksInvalid,
+      path,
+      "'soft_links' must be a non-empty string array when present",
+    );
+    return [];
+  }
+  return softLinks.value;
 }
 
-function resolveSoftLink(treeRoot: string, link: string): boolean {
-  const cleaned = link.replace(/^\/+/u, "");
-  const target = join(treeRoot, cleaned);
+function validateSoftLinks(options: {
+  allowArchive: boolean;
+  document: ContextDocument;
+  findings: TreeValidationFinding[];
+  path: string;
+  treeRoot: string;
+}): void {
+  for (const target of readSoftLinks(options.document, options.path, options.findings)) {
+    const resolved = resolveLocalTreeTarget({
+      sourcePath: options.path,
+      target,
+      treeRoot: options.treeRoot,
+      softLink: true,
+    });
 
-  try {
-    if (statSync(target).isFile() && target.endsWith(".md")) {
-      return true;
+    if (resolved === null || !resolved.exists) {
+      addFinding(options.findings, VALIDATION_CODES.softLinkBroken, options.path, "broken soft_links target", target);
     }
-  } catch {
-    // Fall through.
-  }
-
-  try {
-    return statSync(target).isDirectory() && existsSync(join(target, "NODE.md"));
-  } catch {
-    return false;
+    if (resolved === null) {
+      continue;
+    }
+    if (!options.allowArchive && resolved.contentClass === "archive-supporting") {
+      addFinding(
+        options.findings,
+        VALIDATION_CODES.softLinkArchiveDependency,
+        options.path,
+        "normal content must not link to archive/supporting content",
+        target,
+      );
+    }
+    if (resolved.escaped) {
+      addFinding(
+        options.findings,
+        VALIDATION_CODES.softLinkPathEscape,
+        options.path,
+        "soft_links target resolves outside the Context Tree root",
+        target,
+      );
+    }
   }
 }
 
-export function runValidateNodes(treeRoot: string): {
-  exitCode: number;
-  errors: string[];
-} {
-  const errors: string[] = [];
-  const markdownFiles = collectMarkdownFiles(treeRoot);
+function validateMarkdownLinks(
+  document: ContextDocument,
+  path: string,
+  treeRoot: string,
+  findings: TreeValidationFinding[],
+): void {
+  for (const target of readMarkdownLinkTargets(document.body)) {
+    const resolved = resolveLocalTreeTarget({ sourcePath: path, target, treeRoot, softLink: false });
+    if (resolved === null) {
+      continue;
+    }
+    if (resolved.contentClass === "archive-supporting") {
+      addFinding(
+        findings,
+        VALIDATION_CODES.markdownArchiveDependency,
+        path,
+        "normal content must not link to archive/supporting content",
+        target,
+      );
+    }
+    if (resolved.escaped) {
+      addFinding(
+        findings,
+        VALIDATION_CODES.markdownPathEscape,
+        path,
+        "Markdown link resolves outside the Context Tree root",
+        target,
+      );
+    }
+  }
+}
 
-  for (const path of markdownFiles) {
-    const relPath = rel(path, treeRoot);
-    const personal = PERSONAL_PATH_RE.test(relPath);
-    const frontmatter = parseFrontmatter(path);
+export function collectNodeValidationFindings(treeRoot: string): NodeValidationResult {
+  const findings: TreeValidationFinding[] = [];
+  const scannedByContentClass = emptyContentClassCounts();
+  const content = collectContextMarkdownContent(treeRoot);
 
-    if (frontmatter === null) {
-      // Personal files (`members/<me>/**`) may be plain markdown — the owner is
-      // inferred from the path. Non-personal files still must declare frontmatter.
-      if (!personal) {
-        errors.push(`${relPath}: missing frontmatter`);
-      }
+  for (const directory of content.directorySymlinks) {
+    addFinding(
+      findings,
+      directory.escaped ? VALIDATION_CODES.directorySymlinkPathEscape : VALIDATION_CODES.directorySymlinkUnsupported,
+      directory.relativePath,
+      directory.escaped
+        ? "directory symlink resolves outside the Context Tree root"
+        : "Context Tree domain directories must not be symlinks",
+    );
+  }
+
+  for (const file of content.files) {
+    scannedByContentClass[file.contentClass] += 1;
+
+    if (file.contentClass === "repo-infra" || file.contentClass === "archive-supporting") {
       continue;
     }
 
-    // Title and owners are required only outside personal paths. Inside
-    // `members/<me>/**` the owner is the path-derived member; an explicit
-    // `owners` field is optional and not cross-checked here.
-    if (!personal) {
-      if (!TITLE_RE.test(frontmatter)) {
-        errors.push(`${relPath}: missing 'title' field in frontmatter`);
-      }
-
-      if (!OWNERS_RE.test(frontmatter)) {
-        errors.push(`${relPath}: missing 'owners' field in frontmatter`);
-      }
+    if (file.escaped) {
+      addFinding(
+        findings,
+        VALIDATION_CODES.markdownFilePathEscape,
+        file.relativePath,
+        "Markdown file resolves outside the Context Tree root",
+      );
+      continue;
     }
 
-    for (const softLink of parseSoftLinks(frontmatter)) {
-      if (!resolveSoftLink(treeRoot, softLink)) {
-        errors.push(`${relPath}: broken soft_links target '${softLink}'`);
+    const document = readContextDocument(file.absolutePath);
+    const personalMemberContent = file.contentClass === "member" && file.relativePath !== MEMBERS_INDEX_PATH;
+
+    if (personalMemberContent) {
+      if (document.frontmatter === "missing") {
+        continue;
       }
+      if (document.frontmatter === "invalid") {
+        continue;
+      }
+      validateSoftLinks({
+        allowArchive: true,
+        document,
+        findings,
+        path: file.relativePath,
+        treeRoot,
+      });
+      continue;
+    }
+
+    validateRequiredNodeMetadata(document, file.relativePath, findings);
+    validateSoftLinks({
+      allowArchive: file.contentClass === "member",
+      document,
+      findings,
+      path: file.relativePath,
+      treeRoot,
+    });
+
+    if (file.contentClass === "normal") {
+      validateMarkdownLinks(document, file.relativePath, treeRoot, findings);
     }
   }
 
-  return {
-    exitCode: errors.length === 0 ? 0 : 1,
-    errors,
-  };
+  return { findings, scannedByContentClass };
+}
+
+export function formatLegacyNodeError(finding: TreeValidationFinding): string {
+  switch (finding.code) {
+    case VALIDATION_CODES.frontmatterMissing:
+      return `${finding.path}: missing frontmatter`;
+    case VALIDATION_CODES.titleMissing:
+      return `${finding.path}: missing 'title' field in frontmatter`;
+    case VALIDATION_CODES.ownersMissing:
+      return `${finding.path}: missing 'owners' field in frontmatter`;
+    case VALIDATION_CODES.softLinkBroken:
+      return `${finding.path}: broken soft_links target '${finding.target ?? ""}'`;
+    default:
+      return formatValidationFinding(finding);
+  }
+}
+
+export function runValidateNodes(treeRoot: string): { errors: string[]; exitCode: number } {
+  const errors = collectNodeValidationFindings(treeRoot).findings.map(formatLegacyNodeError);
+  return { errors, exitCode: errors.length === 0 ? 0 : 1 };
 }

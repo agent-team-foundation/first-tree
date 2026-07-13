@@ -708,7 +708,23 @@ to replace an existing team binding unless `--rebind` is passed. Key options:
 `--owner`, `--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
 `--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
 
-Run `first-tree tree verify --help` for options.
+`first-tree tree verify` applies the current strict structural policy. Normal
+content requires parseable YAML frontmatter with non-empty `title` and `owners`;
+`description` and `soft_links`, when present, must have valid shapes. The
+separate member-node contract remains in force, while archive/supporting and
+repo-infrastructure Markdown are not treated as normal nodes.
+
+Broken `soft_links`, tree-local path escapes, and normal links into
+`raw-context/` fail verification. Markdown links are parsed structurally, but
+an otherwise tree-local Markdown target may be absent; external links, anchors,
+and plain prose that explains the archive class remain allowed. JSON output
+preserves the existing summary and adds stable findings plus per-class scan
+counts. Context Tree domain directories must not be symlinks; Markdown file
+symlinks are validated and must resolve inside the tree, except for the managed
+`WHITEPAPER.md` pointer. This is a breaking tightening for trees that relied on legacy metadata
+or normal-to-archive links: mechanical syntax can be corrected directly, while
+ownership assignments and promotion of durable archive content require human
+or source-backed decisions. Run `first-tree tree verify --help` for options.
 
 `first-tree tree tree [path]` resolves `path` relative to the current
 working directory, then renders from the current git repository root down

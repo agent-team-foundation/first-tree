@@ -1,133 +1,133 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
-const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
+import { toTreeRelativePosixPath } from "./content-class.js";
+import { readContextDocument, readNonEmptyStringArrayField, readNonEmptyStringField } from "./context-document.js";
+import {
+  formatValidationFinding,
+  type TreeValidationFinding,
+  VALIDATION_CODES,
+  type ValidationCode,
+} from "./validation-finding.js";
+
 const VALID_TYPES = new Set(["human", "agent"]);
 const VALID_STATUSES = new Set(["invited"]);
 
-function rel(path: string, root: string): string {
-  return relative(root, path).replace(/\\/gu, "/");
+export type MemberValidationResult = {
+  findings: TreeValidationFinding[];
+};
+
+function addFinding(findings: TreeValidationFinding[], code: ValidationCode, path: string, message: string): void {
+  findings.push({ code, message, path });
 }
 
-function parseFrontmatter(path: string): string | null {
-  try {
-    const text = readFileSync(path, "utf-8");
-    const match = text.match(FRONTMATTER_RE);
-    return match ? match[1] : null;
-  } catch {
-    return null;
+function validateMember(nodePath: string, treeRoot: string): TreeValidationFinding[] {
+  const findings: TreeValidationFinding[] = [];
+  const location = toTreeRelativePosixPath(treeRoot, nodePath);
+  const document = readContextDocument(nodePath);
+
+  if (document.frontmatter === "missing") {
+    addFinding(findings, VALIDATION_CODES.memberFrontmatterMissing, location, "no frontmatter found");
+    return findings;
   }
-}
-
-function extractScalar(fm: string, key: string): string | null {
-  const regex = new RegExp(`^${key}:\\s*"?([^"\\n]+?)"?\\s*$`, "mu");
-  const match = fm.match(regex);
-  return match ? match[1].trim() : null;
-}
-
-function extractList(fm: string, key: string): string[] | null {
-  const inlineRegex = new RegExp(`^${key}:\\s*\\[([^\\]]*)\\]`, "mu");
-  const inlineMatch = fm.match(inlineRegex);
-
-  if (inlineMatch) {
-    const raw = inlineMatch[1].trim();
-    if (!raw) {
-      return [];
-    }
-    return raw
-      .split(",")
-      .map((value) => value.trim().replace(/^['"]|['"]$/gu, ""))
-      .filter(Boolean);
-  }
-
-  const blockRegex = new RegExp(`^${key}:\\s*\\n((?:\\s+-\\s+.+\\n?)+)`, "mu");
-  const blockMatch = fm.match(blockRegex);
-
-  if (!blockMatch) {
-    return null;
-  }
-
-  return blockMatch[1]
-    .trim()
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^-\s*/u, "")
-        .trim()
-        .replace(/^['"]|['"]$/gu, ""),
+  if (document.frontmatter === "invalid" || document.data === null) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.memberFrontmatterParse,
+      location,
+      `frontmatter could not be parsed${document.error === undefined ? "" : `: ${document.error}`}`,
     );
+    return findings;
+  }
+
+  const title = readNonEmptyStringField(document.data, "title");
+  if (!title.valid) {
+    addFinding(findings, VALIDATION_CODES.memberTitleInvalid, location, "missing or invalid 'title' field");
+  }
+
+  const owners = readNonEmptyStringArrayField(document.data, "owners");
+  if (!owners.present) {
+    addFinding(findings, VALIDATION_CODES.memberOwnersMissing, location, "missing 'owners' field");
+  } else if (!owners.valid) {
+    addFinding(findings, VALIDATION_CODES.memberOwnersInvalid, location, "'owners' must be a non-empty string array");
+  }
+
+  const memberType = readNonEmptyStringField(document.data, "type");
+  if (!memberType.present) {
+    addFinding(findings, VALIDATION_CODES.memberTypeMissing, location, "missing 'type' field");
+  } else if (!memberType.valid) {
+    addFinding(findings, VALIDATION_CODES.memberTypeShape, location, "'type' must be a non-empty string");
+  } else if (!VALID_TYPES.has(memberType.value)) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.memberTypeInvalid,
+      location,
+      `invalid type '${memberType.value}' — must be one of: ${[...VALID_TYPES].sort().join(", ")}`,
+    );
+  }
+
+  const status = readNonEmptyStringField(document.data, "status");
+  if (status.present && !status.valid) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.memberStatusShape,
+      location,
+      "'status' must be a non-empty string when present",
+    );
+  } else if (status.valid && !VALID_STATUSES.has(status.value)) {
+    addFinding(
+      findings,
+      VALIDATION_CODES.memberStatusInvalid,
+      location,
+      `invalid status '${status.value}' — must be one of: ${[...VALID_STATUSES].sort().join(", ")}`,
+    );
+  }
+
+  const role = readNonEmptyStringField(document.data, "role");
+  if (!role.present) {
+    addFinding(findings, VALIDATION_CODES.memberRoleInvalid, location, "missing 'role' field");
+  } else if (!role.valid) {
+    addFinding(findings, VALIDATION_CODES.memberRoleShape, location, "'role' must be a non-empty string");
+  }
+
+  const domains = readNonEmptyStringArrayField(document.data, "domains");
+  if (!domains.present) {
+    addFinding(findings, VALIDATION_CODES.memberDomainsInvalid, location, "missing 'domains' field");
+  } else if (!domains.valid) {
+    const value = document.data.domains;
+    addFinding(
+      findings,
+      Array.isArray(value) && value.length === 0
+        ? VALIDATION_CODES.memberDomainsInvalid
+        : VALIDATION_CODES.memberDomainsShape,
+      location,
+      Array.isArray(value) && value.length === 0
+        ? "'domains' must contain at least one entry"
+        : "'domains' must be a non-empty string array",
+    );
+  }
+
+  return findings;
 }
 
-function validateMember(nodePath: string, treeRoot: string): string[] {
-  const errors: string[] = [];
-  const location = rel(nodePath, treeRoot);
-  const fm = parseFrontmatter(nodePath);
-
-  if (fm === null) {
-    return [`${location}: no frontmatter found`];
-  }
-
-  const title = extractScalar(fm, "title");
-  if (!title) {
-    errors.push(`${location}: missing or empty 'title' field`);
-  }
-
-  const owners = extractList(fm, "owners");
-  if (owners === null) {
-    errors.push(`${location}: missing 'owners' field`);
-  }
-
-  const memberType = extractScalar(fm, "type");
-  if (!memberType) {
-    errors.push(`${location}: missing 'type' field`);
-  } else if (!VALID_TYPES.has(memberType)) {
-    errors.push(`${location}: invalid type '${memberType}' — must be one of: ${[...VALID_TYPES].sort().join(", ")}`);
-  }
-
-  const status = extractScalar(fm, "status");
-  if (status !== null && !VALID_STATUSES.has(status)) {
-    errors.push(`${location}: invalid status '${status}' — must be one of: ${[...VALID_STATUSES].sort().join(", ")}`);
-  }
-
-  const role = extractScalar(fm, "role");
-  if (!role) {
-    errors.push(`${location}: missing or empty 'role' field`);
-  }
-
-  const domains = extractList(fm, "domains");
-  if (domains === null) {
-    errors.push(`${location}: missing 'domains' field`);
-  } else if (domains.length === 0) {
-    errors.push(`${location}: 'domains' must contain at least one entry`);
-  }
-
-  return errors;
-}
-
-export function runValidateMembers(treeRoot: string): {
-  exitCode: number;
-  errors: string[];
-} {
+export function collectMemberValidationFindings(treeRoot: string): MemberValidationResult {
   const membersDir = join(treeRoot, "members");
+  const findings: TreeValidationFinding[] = [];
 
   if (!existsSync(membersDir) || !statSync(membersDir).isDirectory()) {
-    return {
-      exitCode: 1,
-      errors: [`Members directory not found: ${membersDir}`],
-    };
+    addFinding(
+      findings,
+      VALIDATION_CODES.membersDirectoryMissing,
+      "members/",
+      `Members directory not found: ${membersDir}`,
+    );
+    return { findings };
   }
 
-  const allErrors: string[] = [];
   let memberCount = 0;
 
-  // Top-level directories under `members/` must each be a member node
-  // (have NODE.md). Nested directories deeper than that are allowed to
-  // exist as non-node containers — personal research notes, attachments,
-  // assistants without a node yet, etc. Nested dirs that DO carry a
-  // NODE.md are still validated as nested members (preserves the
-  // `<member>/<member>-assistant/NODE.md` pattern).
+  // Top-level directories under members are member nodes. Nested directories
+  // may be personal containers; nested NODE.md files still use this contract.
   function walk(dir: string, requireNode: boolean): void {
     for (const child of readdirSync(dir).sort()) {
       const childPath = join(dir, child);
@@ -143,14 +143,15 @@ export function runValidateMembers(treeRoot: string): {
       const nodePath = join(childPath, "NODE.md");
       if (!existsSync(nodePath)) {
         if (requireNode) {
-          allErrors.push(`${rel(childPath, treeRoot)}/: directory exists but missing NODE.md`);
+          const path = `${toTreeRelativePosixPath(treeRoot, childPath)}/`;
+          addFinding(findings, VALIDATION_CODES.memberNodeMissing, path, "directory exists but is missing NODE.md");
           walk(childPath, false);
         }
         continue;
       }
 
       memberCount += 1;
-      allErrors.push(...validateMember(nodePath, treeRoot));
+      findings.push(...validateMember(nodePath, treeRoot));
       walk(childPath, false);
     }
   }
@@ -158,11 +159,41 @@ export function runValidateMembers(treeRoot: string): {
   walk(membersDir, true);
 
   if (memberCount === 0) {
-    allErrors.push("members/: no member nodes were found");
+    addFinding(findings, VALIDATION_CODES.memberNodesEmpty, "members/", "no member nodes were found");
   }
 
-  return {
-    exitCode: allErrors.length === 0 ? 0 : 1,
-    errors: allErrors,
-  };
+  return { findings };
+}
+
+export function formatLegacyMemberError(finding: TreeValidationFinding): string {
+  switch (finding.code) {
+    case VALIDATION_CODES.memberFrontmatterMissing:
+      return `${finding.path}: no frontmatter found`;
+    case VALIDATION_CODES.memberTitleInvalid:
+      return `${finding.path}: missing or empty 'title' field`;
+    case VALIDATION_CODES.memberOwnersMissing:
+      return `${finding.path}: missing 'owners' field`;
+    case VALIDATION_CODES.memberTypeMissing:
+      return `${finding.path}: missing 'type' field`;
+    case VALIDATION_CODES.memberTypeInvalid:
+    case VALIDATION_CODES.memberStatusInvalid:
+      return `${finding.path}: ${finding.message}`;
+    case VALIDATION_CODES.memberRoleInvalid:
+      return `${finding.path}: missing or empty 'role' field`;
+    case VALIDATION_CODES.memberDomainsInvalid:
+      return `${finding.path}: ${finding.message}`;
+    case VALIDATION_CODES.membersDirectoryMissing:
+      return finding.message;
+    case VALIDATION_CODES.memberNodeMissing:
+      return `${finding.path}: directory exists but missing NODE.md`;
+    case VALIDATION_CODES.memberNodesEmpty:
+      return "members/: no member nodes were found";
+    default:
+      return formatValidationFinding(finding);
+  }
+}
+
+export function runValidateMembers(treeRoot: string): { errors: string[]; exitCode: number } {
+  const errors = collectMemberValidationFindings(treeRoot).findings.map(formatLegacyMemberError);
+  return { errors, exitCode: errors.length === 0 ? 0 : 1 };
 }

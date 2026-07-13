@@ -217,7 +217,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(tree).toContain("`lastReviewed` records an actual\nowner review");
     expect(tree).toContain("update it only through that review/audit workflow");
     expect(tree).toContain("never during\na source-backed write");
-    expect(tree).toContain("Use `owners: [*]` only when a human explicitly opens");
+    expect(tree).toContain('Use `owners: ["*"]` only when a human explicitly opens');
     expect(tree).toContain("ownership to everyone");
     expect(tree).toContain("Metadata supports scanning, routing, and responsibility");
     expect(tree).toContain("### Write / Verify / PR Discipline");
