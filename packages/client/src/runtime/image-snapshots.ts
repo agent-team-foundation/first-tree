@@ -142,18 +142,20 @@ export async function buildMessageImageSnapshots(
   }
 
   // Pass 3 — collect the refs (first-appearance order, de-duped by file) and
-  // strip the spans. We strip EVERY in-fence-resolved image span, not only the
-  // captured ones: because at least one image captured, the message flips to a
-  // `file` batch whose caption is this text, and a leftover `![alt](local/path)`
-  // would render as a broken `<img>` there. Out-of-fence and over-cap mentions
-  // (unresolved) are left untouched — we can't upload what we can't read.
+  // strip the caption. Because at least one image captured, the message flips
+  // to a `file` batch whose caption is this text — so EVERY local-path image
+  // candidate span is stripped, not just the captured ones: a captured mention
+  // became an attachment, and an uncaptured or over-cap one would otherwise be
+  // left as a `![alt](local/path)` that renders broken in the caption.
+  // (Candidates already exclude web-URL images and code-block samples, which
+  // stay.)
   const seenFile = new Set<string>();
   const imageRefs: ImageRefContent[] = [];
-  const resolvedSpans: Array<{ start: number; end: number }> = [];
+  const spans: Array<{ start: number; end: number }> = [];
   for (const occ of occurrences) {
+    spans.push({ start: occ.start, end: occ.end });
     const r = resolvedByPath.get(occ.writtenPath);
     if (!r) continue;
-    resolvedSpans.push({ start: occ.start, end: occ.end });
     const ref = refByFile.get(r.file);
     if (ref && !seenFile.has(r.file)) {
       seenFile.add(r.file);
@@ -161,7 +163,7 @@ export async function buildMessageImageSnapshots(
     }
   }
 
-  return { imageRefs, strippedText: stripSpans(text, resolvedSpans), skipped };
+  return { imageRefs, strippedText: stripSpans(text, spans), skipped };
 }
 
 /** Read the file, enforce the upload cap, and upload. Returns the ref, or null

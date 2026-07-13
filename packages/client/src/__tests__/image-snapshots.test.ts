@@ -295,5 +295,19 @@ describe("buildMessageImageSnapshots — batch cap", () => {
     // Only 20 distinct paths were resolved+uploaded — the fs fan-out is bounded
     // by the cap, not by the number of syntactic occurrences.
     expect(uploads).toHaveLength(20);
+    // Every candidate span is stripped from the flipped caption — the 5 over-cap
+    // mentions are dropped, NOT left as broken local paths.
+    expect(res.strippedText).not.toContain("![");
+  });
+
+  it("strips an over-cap and an out-of-fence mention from a flipped caption (no broken paths)", async () => {
+    const { uploader } = stubUploader();
+    // 20 in-cap workspace images fill the batch; one out-of-fence path is over
+    // and beyond the fence — both must be removed from the file-batch caption.
+    const inCap = Array.from({ length: 20 }, (_, i) => `![p${i}](p${i}.png)`).join(" ");
+    const res = await buildMessageImageSnapshots(`${inCap} ![x](/etc/hosts.png)`, root, opts(uploader));
+    expect(res.imageRefs).toHaveLength(20);
+    expect(res.strippedText).not.toContain("!["); // out-of-fence one also stripped
+    expect(res.strippedText).not.toContain("/etc/hosts.png");
   });
 });
