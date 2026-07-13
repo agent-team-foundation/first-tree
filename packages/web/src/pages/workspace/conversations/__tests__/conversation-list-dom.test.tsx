@@ -138,7 +138,7 @@ function page(
   pageParams: Array<string | undefined>;
 } {
   return {
-    pages: [{ rows, nextCursor, priorityRows: { attention: [], pinned: [] }, counts: { unread: 0 } }],
+    pages: [{ rows, nextCursor, priorityRows: { attention: [], pinned: [] } }],
     pageParams: [undefined],
   };
 }

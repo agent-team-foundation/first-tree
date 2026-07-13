@@ -600,12 +600,12 @@ async function enrichMeChatRows(
  *   2. `priorityRows.pinned` — the caller's pinned chats (private per-user
  *      state), `pinned_at` DESC, minus anything already in attention.
  *   3. `rows` — the ordinary activity-ordered keyset page on `activity_at`.
- * Plus `counts.unread`, a page-independent global aggregate.
  *
  * `failed` is a composite status derived by `resolveAgentChatStatuses`, not a
  * column, so attention is built via a CANDIDATE set (open request OR a
- * caller-managed non-human speaker present) that the enrichment pass resolves
- * canonically — never a SQL re-implementation of the status folding.
+ * caller-managed non-human speaker whose session/runtime is actually in error —
+ * a strict superset of `computeErrored`'s inputs) that the enrichment pass
+ * resolves canonically — never a SQL re-implementation of the status folding.
  *
  * ADDITIVE contract (deliberate, for safe rollout): `rows` is NOT filtered
  * against the priority ids. A pinned / attention chat appears in `rows` too, and
@@ -614,12 +614,16 @@ async function enrichMeChatRows(
  * backward-compatible with the already-shipped web that reads only `rows` — a
  * server deploy ahead of the priority-aware client never makes a chat vanish.
  *
- * FIRST-PAGE gating: the two priority groups + `counts.unread` are computed only
- * when `cursor === null` and returned empty/zero on `load-more` pages (the
- * client reads them from the first page). This bounds cost — `resolveAgentChatStatuses`
- * over the candidate set runs once per list open, not per scroll page — and is
- * exactly what the additive `rows` above makes safe (later pages need no priority
- * ids to exclude).
+ * FIRST-PAGE gating: the two priority groups are computed only when there is no
+ * `cursor` and returned empty on `load-more` pages (the client reads them from
+ * the first page). This bounds cost — `resolveAgentChatStatuses` over the
+ * candidate set runs once per list open, not per scroll page — and is exactly
+ * what the additive `rows` above makes safe (later pages need no priority ids to
+ * exclude).
+ *
+ * An undecodable / pre-PR (unversioned) cursor is treated as a first-page request
+ * rather than a 400, so a client that held an old cursor across the rollout
+ * recovers gracefully instead of looping its load-more Retry.
  */
 export async function listMeChats(
   db: Database,
@@ -629,10 +633,13 @@ export async function listMeChats(
   query: ListMeChatsQuery,
 ): Promise<ListMeChatsResponse> {
   const limit = query.limit;
+  // A cursor that fails to decode — including a pre-PR (unversioned) cursor held
+  // across the server rollout — is treated as "start from the first page" rather
+  // than a 400. That recovers an already-open client gracefully: it gets page 1
+  // (whose rows it de-duplicates against what it already showed) plus a fresh v2
+  // nextCursor to resume from. A hard 400 would instead leave the client's
+  // load-more Retry looping on the same rejected cursor until a page-0 refresh.
   const cursor = query.cursor ? decodeCursor(query.cursor) : null;
-  if (query.cursor && !cursor) {
-    throw new BadRequestError("Invalid cursor");
-  }
 
   const filterUnreadOnly = query.filter === "unread";
   const filterWatchingOnly = query.watching === true;
@@ -673,33 +680,41 @@ export async function listMeChats(
     : sql`(c.activity_at < ${cursorTsIso}::timestamptz
            OR (c.activity_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
 
-  // --- Priority groups + unread aggregate: FIRST PAGE ONLY -----------------
-  // These are whole-set projections the client reads once (from the first page).
-  // Computing them only when `cursor === null` keeps `load-more` cheap AND is
-  // what lets `rows` stay ADDITIVE: because later pages never exclude priority
-  // ids, the ordinary stream remains the complete recency list, so the change is
-  // backward-compatible with a client that ignores `priorityRows`. See docblock.
+  // --- Priority groups: FIRST PAGE ONLY -----------------------------------
+  // Whole-set projections the client reads once (from the first page). Gating
+  // them on `cursor === null` keeps `load-more` cheap AND is what lets `rows`
+  // stay ADDITIVE: later pages never exclude priority ids, so the ordinary
+  // stream is the complete recency list — backward-compatible with a client that
+  // ignores `priorityRows`. See docblock.
   let attention: MeChatRow[] = [];
   let pinned: MeChatRow[] = [];
-  let unread = 0;
   if (cursor === null) {
-    // Attention candidates: any chat with an open request OR a caller-managed
-    // non-human speaker present. The `EXISTS` is speaker + non-human +
-    // manager-scoped, so a chat is only a candidate for MY broken agent, never a
-    // peer's. `failed` itself is a composite status from resolveAgentChatStatuses
-    // (never re-implemented in SQL) — the enrichment pass below resolves it.
-    const managedSpeakerExists = sql`EXISTS (
+    // Attention candidates — a bounded pre-canonical set the enrichment pass
+    // resolves. A chat qualifies if it has an open request OR a caller-managed
+    // non-human speaker ACTUALLY in an error state: session `errored`, or an
+    // active session whose per-chat / agent-global runtime is `error`. Those are
+    // exactly the inputs `computeErrored` folds into composite `failed` (minus
+    // the freshness / reachability the canonical resolver still applies), so this
+    // is a strict SUPERSET of failed — no false negatives — while excluding the
+    // common HEALTHY managed speaker that would otherwise make nearly every
+    // active chat a candidate on the 30s poll. `failed` is still never decided in
+    // SQL; the enrichment pass below confirms it canonically.
+    const managedFailureCandidate = sql`EXISTS (
       SELECT 1 FROM chat_membership cm_s
         JOIN agents a_s ON a_s.uuid = cm_s.agent_id
+        JOIN agent_chat_sessions acs ON acs.agent_id = a_s.uuid AND acs.chat_id = c.id
+        LEFT JOIN agent_presence ap ON ap.agent_id = a_s.uuid
        WHERE cm_s.chat_id = c.id
          AND cm_s.access_mode = 'speaker'
          AND a_s.type <> 'human'
-         AND a_s.manager_id = ${callerMemberId})`;
+         AND a_s.manager_id = ${callerMemberId}
+         AND (acs.state = 'errored'
+              OR (acs.state = 'active' AND (acs.runtime_state = 'error' OR ap.runtime_state = 'error'))))`;
     const attnCandidateRaw = await selectMeChatRawRows(db, {
       humanAgentId,
       organizationId,
       filters,
-      extra: sql`(COALESCE(cus.open_request_count, 0) > 0 OR ${managedSpeakerExists})`,
+      extra: sql`(COALESCE(cus.open_request_count, 0) > 0 OR ${managedFailureCandidate})`,
       orderBy: activityOrder,
       limit: null,
     });
@@ -738,11 +753,6 @@ export async function listMeChats(
       .filter((r) => !attentionIds.has(r.chat_id))
       .map((r) => priorityRowById.get(r.chat_id))
       .filter((r): r is MeChatRow => r !== undefined);
-
-    // Page-independent global aggregate ("you have N unread"), org-scoped and
-    // not narrowed by the transient filter (matches the existing totalUnread
-    // pill). Returned on the first page only; the client reads it from there.
-    unread = await countUnreadMeChats(db, humanAgentId, organizationId);
   }
 
   // --- Ordinary page (EVERY page) -----------------------------------------
@@ -771,7 +781,6 @@ export async function listMeChats(
     priorityRows: { attention, pinned },
     rows,
     nextCursor,
-    counts: { unread },
   };
 }
 

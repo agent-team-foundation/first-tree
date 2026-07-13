@@ -884,18 +884,21 @@ describe("chat-first workspace service layer", () => {
     expect(page2.rows[0]?.chatId).toBe(c1.chatId);
   });
 
-  it("listMeChats rejects an invalid cursor", async () => {
+  it("listMeChats recovers an undecodable cursor as a first-page request", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    await expect(
-      listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-        limit: 50,
-        filter: "all",
-        engagement: "all",
-        cursor: "not-a-valid-cursor",
-      }),
-    ).rejects.toThrow(/invalid cursor/i);
+    // No longer a 400: an undecodable (or pre-PR unversioned) cursor is treated
+    // as "start from the first page" so an already-open client recovers
+    // gracefully across the rollout instead of looping its load-more Retry.
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+      cursor: "not-a-valid-cursor",
+    });
+    expect(res.priorityRows).toEqual({ attention: [], pinned: [] });
+    expect(Array.isArray(res.rows)).toBe(true);
   });
 
   it("listMeChats nested-chat filter: parent_chat_id IS NOT NULL is excluded", async () => {

@@ -416,7 +416,7 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     expect(bobRow?.liveActivity, "Bob's row: no live activity").toBeNull();
   });
 
-  it("wire response carries priorityRows + counts (Fastify serializes the new fields)", async () => {
+  it("wire response carries priorityRows (Fastify serializes the new field)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createAgent(app.db, {
@@ -451,14 +451,11 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     const body = res.json<{
       priorityRows: { attention: Array<{ chatId: string }>; pinned: Array<{ chatId: string }> };
       rows: Array<{ chatId: string }>;
-      counts: { unread: number };
     }>();
 
-    // The route has no Fastify response schema, so the new fields must survive
-    // the default serializer end-to-end (the failure mode that would strip them).
+    // The route has no Fastify response schema, so priorityRows must survive the
+    // default serializer end-to-end (the failure mode that would strip it).
     expect(body.priorityRows.attention.some((r) => r.chatId === request.chatId)).toBe(true);
     expect(body.priorityRows.pinned.some((r) => r.chatId === pinned.chatId)).toBe(true);
-    expect(typeof body.counts.unread).toBe("number");
-    expect(body.counts.unread).toBeGreaterThanOrEqual(1);
   });
 });

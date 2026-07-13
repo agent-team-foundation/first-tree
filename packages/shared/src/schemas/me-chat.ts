@@ -372,8 +372,8 @@ export type MeChatRow = z.infer<typeof meChatRowSchema>;
  * Priority groups extracted server-side across the *full matching set* (the same
  * engagement / origin / participant / unread / watch filters as the ordinary
  * list, just without the loaded-page boundary), rendered above the ordinary
- * list. Populated on the FIRST page only (`nextCursor === null` request); empty
- * on load-more pages, which the client reads from page 0.
+ * list. Populated on the FIRST page only (a request with no `cursor`); empty on
+ * load-more pages, which the client reads from page 0.
  *   - `attention`: chats needing the viewer now — a *caller-managed* non-human
  *     speaker in `failed`, or an open request addressed to the viewer — ordered
  *     failed-first, then by `activityAt` DESC. (A peer's failed agent / another
@@ -403,18 +403,10 @@ export const listMeChatsResponseSchema = z.object({
   priorityRows: meChatPriorityRowsSchema,
   rows: z.array(meChatRowSchema),
   nextCursor: z.string().nullable(),
-  /**
-   * Page-independent aggregate counters over the viewer's chats.
-   *   - `unread`: total chats with an unread mention for the viewer
-   *     (org-scoped, non-deleted) — the global "you have N unread" signal, not
-   *     narrowed by the transient filter. `.default` for the same version-skew
-   *     reason as `priorityRows`.
-   */
-  counts: z
-    .object({
-      unread: z.number().int(),
-    })
-    .default({ unread: 0 }),
+  // NOTE: a global unread `counts` aggregate is intentionally NOT part of this
+  // response yet — its scope (global vs the active engagement view) is a product
+  // decision that belongs with the unread badge that consumes it, landing in the
+  // desktop-rail PR. Adding it here first would publish an unsettled contract.
 });
 export type ListMeChatsResponse = z.infer<typeof listMeChatsResponseSchema>;
 

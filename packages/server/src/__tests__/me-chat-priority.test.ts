@@ -6,7 +6,7 @@ import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { createAgent } from "../services/agent.js";
-import { createMeChat, listMeChats, markMeChatRead, pinMeChat } from "../services/me-chat.js";
+import { createMeChat, listMeChats, pinMeChat } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -263,33 +263,43 @@ describe("listMeChats — server priority projection (PR3)", () => {
     expect(groupOf(res, ordinary)).toBe("rows");
   });
 
-  it("priority groups + counts.unread are computed on the first page and gated off on load-more", async () => {
+  it("priority groups are computed on the first page and gated off on load-more", async () => {
     const app = getApp();
     const owner = await createTestAdmin(app);
-    const peer = await managedAgent(app, owner, "unread-peer");
+    const peer = await managedAgent(app, owner, "gate-peer");
 
     const a = await chatWith(app, owner, peer.uuid);
     const b = await chatWith(app, owner, peer.uuid);
     await raiseRequest(app, a, peer.uuid, owner.humanAgentUuid);
     await raiseRequest(app, b, peer.uuid, owner.humanAgentUuid);
 
-    // First page (cursor === null): priority groups + the global unread aggregate.
+    // First page (no cursor): the whole-set priority groups.
     const page1 = await list(app, owner, { limit: 1 });
-    expect(page1.counts.unread).toBe(2);
     expect(page1.priorityRows.attention.length).toBe(2);
     expect(page1.nextCursor).not.toBeNull();
 
-    // Load-more page (cursor set): priority + counts are gated OFF — the client
+    // Load-more page (cursor set): priority groups are gated OFF — the client
     // reads them from page 1 only — so the whole-set work runs once per open.
     const page2 = await list(app, owner, { cursor: page1.nextCursor ?? undefined, limit: 1 });
     expect(page2.priorityRows.attention).toEqual([]);
     expect(page2.priorityRows.pinned).toEqual([]);
-    expect(page2.counts.unread).toBe(0);
+  });
 
-    // Reading one clears its unread; the first-page aggregate follows.
-    await markMeChatRead(app.db, a, owner.humanAgentUuid);
-    const afterRead = await list(app, owner, { limit: 1 });
-    expect(afterRead.counts.unread).toBe(1);
+  it("an undecodable / legacy cursor restarts from the first page instead of erroring", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peer = await managedAgent(app, owner, "cursor-peer");
+    const pinnedChat = await chatWith(app, owner, peer.uuid);
+    await pinMeChat(app.db, pinnedChat, owner.humanAgentUuid, true);
+
+    // A pre-PR (unversioned) cursor shape: base64url of `<iso>|<chatId>`, which
+    // the v2 decoder no longer accepts. It must recover as a first-page request,
+    // not throw or strand the caller.
+    const legacyCursor = Buffer.from("2026-05-06T10:24:00.000Z|some-old-chat", "utf8").toString("base64url");
+    const res = await list(app, owner, { cursor: legacyCursor });
+    // Treated as page 1: the priority groups are populated (they would be gated
+    // off on a genuine load-more page), and the call did not error.
+    expect(res.priorityRows.pinned.some((r) => r.chatId === pinnedChat)).toBe(true);
   });
 
   it("the active filter narrows the priority groups too (origin filter drops a mismatched pinned chat)", async () => {

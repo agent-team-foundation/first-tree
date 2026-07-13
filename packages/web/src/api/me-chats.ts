@@ -10,6 +10,7 @@ import type {
   MeChatSourceCounts,
   MeChatUnreadResponse,
 } from "@first-tree/shared";
+import { listMeChatsResponseSchema } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 /**
@@ -25,7 +26,10 @@ export type ListMeChatsParams = Partial<
   Pick<ListMeChatsQuery, "cursor" | "limit" | "filter" | "engagement" | "origin" | "with" | "watching">
 >;
 
-export function listMeChats(params?: ListMeChatsParams, opts?: { signal?: AbortSignal }): Promise<ListMeChatsResponse> {
+export async function listMeChats(
+  params?: ListMeChatsParams,
+  opts?: { signal?: AbortSignal },
+): Promise<ListMeChatsResponse> {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
@@ -41,7 +45,13 @@ export function listMeChats(params?: ListMeChatsParams, opts?: { signal?: AbortS
   const query = qs.toString();
   // `opts.signal` lets React Query cancel the in-flight request when the
   // filter/cursor changes, so a superseded page never lands.
-  return api.get<ListMeChatsResponse>(withOrg(`/chats${query ? `?${query}` : ""}`), opts);
+  //
+  // Parse (not just cast): the schema's version-skew `.default`s only run when
+  // something actually parses the payload. A web bundle ahead of a server that
+  // predates `priorityRows` therefore reads it as the empty default rather than
+  // `undefined`. Zod ignores unknown keys, so a newer server stays compatible.
+  const res = await api.get<unknown>(withOrg(`/chats${query ? `?${query}` : ""}`), opts);
+  return listMeChatsResponseSchema.parse(res);
 }
 
 export function listMeChatSourceCounts(params?: { engagement?: ChatEngagementView }): Promise<MeChatSourceCounts> {
