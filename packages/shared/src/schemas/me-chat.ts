@@ -368,9 +368,45 @@ export const meChatRowSchema = z.object({
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
+/**
+ * Priority groups extracted server-side across the *full matching set* (the same
+ * engagement / origin / participant / unread / watch filters as the ordinary
+ * list, just without the loaded-page boundary), rendered above the ordinary
+ * list. Populated on the FIRST page only (a request with no `cursor`); empty on
+ * load-more pages, which the client reads from page 0.
+ *   - `attention`: chats needing the viewer now — a *caller-managed* non-human
+ *     speaker in `failed`, or an open request addressed to the viewer — ordered
+ *     failed-first, then by `activityAt` DESC. (A peer's failed agent / another
+ *     human's request stays in the ordinary stream.)
+ *   - `pinned`: the viewer's pinned chats (private per-user state), ordered by
+ *     `pinnedAt` DESC, excluding any already surfaced in `attention`.
+ *
+ * `attention` and `pinned` are server-DISJOINT (a chat is in at most one of the
+ * two). The ordinary `rows`, however, are ADDITIVE: a priority chat is NOT
+ * removed from `rows` (that keeps the response backward-compatible with a client
+ * that ignores these groups). A client that renders the groups must therefore
+ * de-duplicate `rows` against the priority chat ids so each chat shows once
+ * (attention > pinned > recency).
+ *
+ * `.default({...})` for version skew: a web bundle ahead of a server that
+ * predates these groups reads them as empty rather than `undefined`.
+ */
+export const meChatPriorityRowsSchema = z
+  .object({
+    attention: z.array(meChatRowSchema),
+    pinned: z.array(meChatRowSchema),
+  })
+  .default({ attention: [], pinned: [] });
+export type MeChatPriorityRows = z.infer<typeof meChatPriorityRowsSchema>;
+
 export const listMeChatsResponseSchema = z.object({
+  priorityRows: meChatPriorityRowsSchema,
   rows: z.array(meChatRowSchema),
   nextCursor: z.string().nullable(),
+  // NOTE: a global unread `counts` aggregate is intentionally NOT part of this
+  // response yet — its scope (global vs the active engagement view) is a product
+  // decision that belongs with the unread badge that consumes it, landing in the
+  // desktop-rail PR. Adding it here first would publish an unsettled contract.
 });
 export type ListMeChatsResponse = z.infer<typeof listMeChatsResponseSchema>;
 

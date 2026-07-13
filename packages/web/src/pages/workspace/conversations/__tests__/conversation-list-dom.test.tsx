@@ -137,7 +137,10 @@ function page(
   pages: ListMeChatsResponse[];
   pageParams: Array<string | undefined>;
 } {
-  return { pages: [{ rows, nextCursor }], pageParams: [undefined] };
+  return {
+    pages: [{ rows, nextCursor, priorityRows: { attention: [], pinned: [] } }],
+    pageParams: [undefined],
+  };
 }
 
 function createClient(rows = BASE_ROWS, nextCursor: string | null = "cursor-1"): QueryClient {

@@ -35,12 +35,20 @@ describe("pinMeChat + chats.activity_at", () => {
   }
 
   async function rowFor(app: App, chatId: string, admin: Admin) {
-    const { rows } = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "all",
-    });
-    return rows.find((r) => r.chatId === chatId) ?? null;
+    const { priorityRows, rows } = await listMeChats(
+      app.db,
+      admin.humanAgentUuid,
+      admin.memberId,
+      admin.organizationId,
+      {
+        limit: 50,
+        filter: "all",
+        engagement: "all",
+      },
+    );
+    // A chat can surface in any group now (attention > pinned > ordinary rows) —
+    // a pinned chat lives in `priorityRows.pinned`, so search all three.
+    return [...priorityRows.attention, ...priorityRows.pinned, ...rows].find((r) => r.chatId === chatId) ?? null;
   }
 
   async function activityAtOf(app: App, chatId: string): Promise<Date | null> {

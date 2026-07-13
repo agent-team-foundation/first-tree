@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
-import { createMeChat } from "../services/me-chat.js";
+import { createMeChat, pinMeChat } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -414,5 +414,48 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
       .json<{ rows: Array<Record<string, unknown>> }>()
       .rows.find((r) => r.chatId === bobChat.chatId);
     expect(bobRow?.liveActivity, "Bob's row: no live activity").toBeNull();
+  });
+
+  it("wire response carries priorityRows (Fastify serializes the new field)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createAgent(app.db, {
+      name: `prio-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Prio Agent",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+    });
+
+    const pinned = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [agent.uuid],
+    });
+    await pinMeChat(app.db, pinned.chatId, admin.humanAgentUuid, true);
+
+    const request = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [agent.uuid],
+    });
+    await sendMessage(app.db, request.chatId, agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "please look",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/chats`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      priorityRows: { attention: Array<{ chatId: string }>; pinned: Array<{ chatId: string }> };
+      rows: Array<{ chatId: string }>;
+    }>();
+
+    // The route has no Fastify response schema, so priorityRows must survive the
+    // default serializer end-to-end (the failure mode that would strip it).
+    expect(body.priorityRows.attention.some((r) => r.chatId === request.chatId)).toBe(true);
+    expect(body.priorityRows.pinned.some((r) => r.chatId === pinned.chatId)).toBe(true);
   });
 });

@@ -299,12 +299,16 @@ describe("ChatByIdView and CenterPanel", () => {
     // patch is exercised against each cache shape it must handle.
     const paletteKey = ["me", "chats", "palette"];
     const infinite = (rows: MeChatRow[]): InfiniteData<ListMeChatsResponse> => ({
-      pages: [{ rows, nextCursor: null }],
+      pages: [{ rows, nextCursor: null, priorityRows: { attention: [], pinned: [] } }],
       pageParams: [undefined],
     });
     queryClient.setQueryData<InfiniteData<ListMeChatsResponse>>(allKey, infinite([currentUnread, otherUnread]));
     queryClient.setQueryData<InfiniteData<ListMeChatsResponse>>(unreadKey, infinite([currentUnread, otherUnread]));
-    queryClient.setQueryData<ListMeChatsResponse>(paletteKey, { rows: [currentUnread, otherUnread], nextCursor: null });
+    queryClient.setQueryData<ListMeChatsResponse>(paletteKey, {
+      rows: [currentUnread, otherUnread],
+      nextCursor: null,
+      priorityRows: { attention: [], pinned: [] },
+    });
 
     const { container, root } = await renderDom(
       <ChatByIdView chatId="chat-1" narrow onShowConversations={onShowConversations} />,

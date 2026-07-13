@@ -212,7 +212,12 @@ describe("api wrapper paths", () => {
     await chats.createAgentChat("agent/id");
     await chats.listChatMessages("chat/id", { limit: 20, cursor: "older" });
 
-    await meChats.listMeChats({
+    // listMeChats now parses the response, so it needs a valid payload. Seed the
+    // shape an OLDER server (pre-priorityRows) would return and assert the schema
+    // fills the version-skew default — that both keeps this request-shape test
+    // reaching its assertion and proves the fallback the parse exists to provide.
+    apiMock.get.mockResolvedValueOnce({ rows: [], nextCursor: null });
+    const listed = await meChats.listMeChats({
       limit: 10,
       cursor: "next",
       filter: "unread",
@@ -221,6 +226,7 @@ describe("api wrapper paths", () => {
       with: ["agent-1", "agent-2"],
       watching: true,
     });
+    expect(listed.priorityRows).toEqual({ attention: [], pinned: [] });
     await meChats.listMeChatSourceCounts({ engagement: "archived" });
     await meChats.createMeChat({ participantIds: ["agent-1"] });
     await meChats.createMeTaskChat({
