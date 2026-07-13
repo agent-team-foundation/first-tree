@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { readSourceState, type SourceBindingMode, type TreeMode } from "./binding-state.js";
@@ -157,6 +157,14 @@ export function readManagedSourceBinding(root: string): ManagedSourceBinding | u
     const path = join(root, file);
 
     if (!existsSync(path)) {
+      continue;
+    }
+
+    try {
+      if (!statSync(path).isFile()) {
+        continue;
+      }
+    } catch {
       continue;
     }
 

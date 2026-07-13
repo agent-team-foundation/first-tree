@@ -13,6 +13,7 @@ export type ContextMarkdownFile = {
   contentClass: ContextContentClass;
   escaped: boolean;
   relativePath: string;
+  unsupported: boolean;
   unresolved: boolean;
 };
 
@@ -101,14 +102,53 @@ export function collectContextMarkdownContent(treeRoot: string): ContextMarkdown
       const symbolicLink = entry.isSymbolicLink();
       if (symbolicLink) {
         try {
-          if (statSync(absolutePath).isDirectory()) {
-            if (contentClass !== "repo-infra") {
+          const targetStat = statSync(absolutePath);
+          if (targetStat.isDirectory()) {
+            if (contentClass !== "repo-infra" || entry.name.endsWith(".md")) {
               directorySymlinks.push({
                 contentClass,
-                escaped: !pathIsInside(realpathSync(treeRoot), realpathSync(absolutePath)),
+                escaped: !pathIsInside(realTreeRoot, realpathSync(absolutePath)),
                 relativePath,
               });
             }
+            continue;
+          }
+
+          if (!targetStat.isFile() && entry.name.endsWith(".md")) {
+            let escaped = false;
+            let canonicalContentClass = contentClass;
+            let canonicalRelativePath = relativePath;
+            try {
+              const realTarget = realpathSync(absolutePath);
+              escaped = !pathIsInside(realTreeRoot, realTarget);
+              canonicalRelativePath = toTreeRelativePosixPath(realTreeRoot, realTarget);
+              if (!escaped) {
+                canonicalContentClass = classifyContextContent(canonicalRelativePath);
+              }
+            } catch {
+              files.push({
+                absolutePath,
+                canonicalContentClass,
+                canonicalRelativePath,
+                contentClass,
+                escaped: false,
+                relativePath,
+                unsupported: false,
+                unresolved: true,
+              });
+              continue;
+            }
+
+            files.push({
+              absolutePath,
+              canonicalContentClass,
+              canonicalRelativePath,
+              contentClass,
+              escaped,
+              relativePath,
+              unsupported: true,
+              unresolved: false,
+            });
             continue;
           }
         } catch {
@@ -123,6 +163,7 @@ export function collectContextMarkdownContent(treeRoot: string): ContextMarkdown
               contentClass,
               escaped: false,
               relativePath,
+              unsupported: false,
               unresolved: true,
             });
           }
@@ -169,6 +210,7 @@ export function collectContextMarkdownContent(treeRoot: string): ContextMarkdown
         contentClass,
         escaped,
         relativePath,
+        unsupported: false,
         unresolved: false,
       });
     }

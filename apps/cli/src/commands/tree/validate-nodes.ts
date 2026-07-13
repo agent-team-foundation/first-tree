@@ -213,6 +213,16 @@ export function collectNodeValidationFindings(treeRoot: string): NodeValidationR
       continue;
     }
 
+    if (file.unsupported) {
+      addFinding(
+        findings,
+        VALIDATION_CODES.markdownFileSymlinkUnsupported,
+        file.relativePath,
+        "Markdown file symlink must resolve to a regular file",
+      );
+      continue;
+    }
+
     if (file.canonicalContentClass !== file.contentClass) {
       addFinding(
         findings,

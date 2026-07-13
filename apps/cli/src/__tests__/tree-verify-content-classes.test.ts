@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -135,6 +136,49 @@ describe("tree verify strict content policy", () => {
     expect(summary.checks.rootNodeFrontmatter.errors).toEqual(["Root NODE.md symlink target cannot be resolved."]);
   });
 
+  it("rejects Markdown symlinks to non-regular targets", (ctx) => {
+    if (process.platform === "win32") {
+      ctx.skip("FIFO fixtures are not portable to Windows.");
+    }
+
+    const root = makeValidTree();
+    const fifoPath = join(root, "special-target");
+    try {
+      execFileSync("mkfifo", [fifoPath]);
+      symlinkSync("special-target", join(root, "special.md"));
+    } catch {
+      ctx.skip("FIFO or symlink creation is not supported in this environment.");
+    }
+
+    expect(verifyTreeRoot(root).findings).toContainEqual(
+      expect.objectContaining({ code: "TREE_MARKDOWN_FILE_SYMLINK_UNSUPPORTED", path: "special.md" }),
+    );
+  });
+
+  it("keeps the legacy root check failed when NODE.md targets a directory", (ctx) => {
+    const root = makeValidTree();
+    rmSync(join(root, "NODE.md"));
+    write(join(root, "system", "NODE.md"), node("System"));
+    try {
+      symlinkSync("system", join(root, "NODE.md"), "dir");
+    } catch {
+      ctx.skip("Directory symlink creation is not supported in this environment.");
+    }
+
+    const summary = verifyTreeRoot(root);
+
+    expect(summary.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "TREE_DIRECTORY_SYMLINK_UNSUPPORTED", path: "NODE.md" }),
+        expect.objectContaining({ code: "TREE_FRONTMATTER_MISSING", path: "NODE.md" }),
+      ]),
+    );
+    expect(summary.checks.rootNodeFrontmatter).toEqual({
+      errors: ["Root NODE.md is missing frontmatter."],
+      ok: false,
+    });
+  });
+
   it("rejects escaping archive and repo-infra Markdown symlinks before class skips", (ctx) => {
     const root = makeValidTree();
     const outside = makeTempDir();
@@ -211,6 +255,32 @@ describe("tree verify strict content policy", () => {
         expect.objectContaining({
           code: "TREE_DIRECTORY_SYMLINK_UNSUPPORTED",
           path: "WHITEPAPER.md",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects repo-infra Markdown symlinks to directories before class skips", (ctx) => {
+    const root = makeValidTree();
+    const outside = makeTempDir();
+    write(join(root, "system", "NODE.md"), node("System"));
+    write(join(outside, "NODE.md"), node("Outside"));
+    try {
+      symlinkSync("system", join(root, "AGENTS.md"), "dir");
+      symlinkSync(outside, join(root, "CLAUDE.md"), "dir");
+    } catch {
+      ctx.skip("Directory symlink creation is not supported in this environment.");
+    }
+
+    expect(verifyTreeRoot(root).findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "TREE_DIRECTORY_SYMLINK_UNSUPPORTED",
+          path: "AGENTS.md",
+        }),
+        expect.objectContaining({
+          code: "TREE_DIRECTORY_SYMLINK_PATH_ESCAPE",
+          path: "CLAUDE.md",
         }),
       ]),
     );
