@@ -1,6 +1,5 @@
 import type { SkillDescriptor } from "@first-tree/shared";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "../lib/utils.js";
 
 /**
  * `/`-triggered slash-command popover, mirrored on the `@mention`
@@ -341,22 +340,7 @@ export function SlashCommandPopover({
   let lastKind: SlashCommandItem["kind"] | null = null;
 
   return (
-    <div
-      ref={popoverRef}
-      role="listbox"
-      aria-label="Slash command suggestions"
-      className={cn(
-        "absolute z-20 max-h-72 overflow-auto rounded-[var(--radius-panel)] border shadow-[var(--shadow-md)]",
-      )}
-      style={{
-        bottom: "calc(100% + var(--sp-1))",
-        left: 0,
-        minWidth: 280,
-        maxWidth: 420,
-        background: "var(--bg-raised)",
-        borderColor: "var(--border)",
-      }}
-    >
+    <div ref={popoverRef} role="listbox" aria-label="Slash command suggestions" className="slash-popover">
       {results.map((item, i) => {
         const headerEl =
           item.kind !== lastKind ? (
@@ -396,7 +380,7 @@ export function SlashCommandPopover({
                 e.preventDefault();
                 onPick(item);
               }}
-              className="flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left"
+              className="slash-option flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left"
               style={{
                 background: active ? "var(--bg-hover)" : "transparent",
                 color: "var(--fg)",

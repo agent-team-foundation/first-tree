@@ -3,6 +3,7 @@ import {
   buildMentionInsert,
   buildPickerSections,
   type CandidateDivider,
+  composerPickerVisible,
   detectMentionTrigger,
   groupAndSortCandidates,
   type MentionCandidate,
@@ -359,5 +360,21 @@ describe("buildPickerSections", () => {
     const { items, selectable } = buildPickerSections([], []);
     expect(items).toEqual([]);
     expect(selectable).toEqual([]);
+  });
+});
+
+describe("composerPickerVisible", () => {
+  it("welds when a mention or slash panel is open on a non-trial composer", () => {
+    expect(composerPickerVisible({ isTrial: false, mentionOpen: true, slashOpen: false })).toBe(true);
+    expect(composerPickerVisible({ isTrial: false, mentionOpen: false, slashOpen: true })).toBe(true);
+  });
+
+  it("does not weld when no picker is open", () => {
+    expect(composerPickerVisible({ isTrial: false, mentionOpen: false, slashOpen: false })).toBe(false);
+  });
+
+  it("never welds on the trial composer, even with a live trigger — trial renders no panel", () => {
+    expect(composerPickerVisible({ isTrial: true, mentionOpen: false, slashOpen: true })).toBe(false);
+    expect(composerPickerVisible({ isTrial: true, mentionOpen: true, slashOpen: true })).toBe(false);
   });
 });
