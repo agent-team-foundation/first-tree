@@ -7,7 +7,8 @@ import { listMembers } from "../../api/members.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Avatar } from "../../components/avatar.js";
 import { Input } from "../../components/ui/input.js";
-import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
+import { presenceChipView, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
+import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { formatRelative } from "../../lib/utils.js";
 import { MobilePage, MobileSection, MobileSystemState, mobileCardStyle } from "./components.js";
 
@@ -112,7 +113,13 @@ export function MobileTeamPage() {
 }
 
 function MobileAgentRow({ agent }: { agent: Agent }) {
-  const subtitle = `${agent.visibility === "private" ? "Private" : "Public"} agent`;
+  // Fold reachability and visibility into a single secondary line: a colored
+  // presence dot (blue online / muted offline) plus a muted, non-mono
+  // "Online · Private" caption. Dropping the "agent" suffix — the row already
+  // sits under the "Agents" section header — and the standalone presence line
+  // takes each card from three lines to two.
+  const presence = presenceChipView(runtimeStateToPresence(agent.runtimeState));
+  const visibility = agent.visibility === "private" ? "Private" : "Public";
   return (
     <MobileTeamRow
       avatar={
@@ -125,8 +132,12 @@ function MobileAgentRow({ agent }: { agent: Agent }) {
         />
       }
       title={agent.displayName}
-      subtitle={subtitle}
-      meta={<PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />}
+      secondary={
+        <>
+          <StatusGlyph shape="dot" colorVar={presence.color} size={7} />
+          <span className="truncate">{`${presence.label} · ${visibility}`}</span>
+        </>
+      }
       chatTarget={agent.uuid}
     />
   );
@@ -134,16 +145,14 @@ function MobileAgentRow({ agent }: { agent: Agent }) {
 
 function MobileHumanRow({ member, isSelf }: { member: MemberListItem; isSelf: boolean }) {
   const activeLabel = member.lastActiveAt ? formatRelative(member.lastActiveAt) : "No activity";
+  // The "Humans" section header already conveys the kind, so the former
+  // "Human" meta badge is redundant; the role + last-active line is enough and
+  // keeps the row to two lines, consistent with the agent rows.
   return (
     <MobileTeamRow
       avatar={<Avatar name={member.displayName} src={member.avatarUrl} seed={member.id} size={36} />}
       title={isSelf ? `${member.displayName} (you)` : member.displayName}
-      subtitle={`${member.role} · ${activeLabel}`}
-      meta={
-        <span className="mono text-mobile-caption" style={{ color: "var(--fg-3)" }}>
-          Human
-        </span>
-      }
+      secondary={<span className="truncate">{`${member.role} · ${activeLabel}`}</span>}
       chatTarget={isSelf ? null : member.agentId}
     />
   );
@@ -152,14 +161,12 @@ function MobileHumanRow({ member, isSelf }: { member: MemberListItem; isSelf: bo
 function MobileTeamRow({
   avatar,
   title,
-  subtitle,
-  meta,
+  secondary,
   chatTarget,
 }: {
   avatar: ReactNode;
   title: string;
-  subtitle: string;
-  meta: ReactNode;
+  secondary: ReactNode;
   chatTarget: string | null;
 }) {
   const cardStyle = {
@@ -173,10 +180,12 @@ function MobileTeamRow({
         <p className="text-mobile-subtitle truncate" style={{ color: "var(--fg)", margin: 0 }}>
           {title}
         </p>
-        <p className="text-mobile-body truncate" style={{ color: "var(--fg-3)", margin: "var(--sp-0_5) 0 0" }}>
-          {subtitle}
-        </p>
-        <div style={{ marginTop: "var(--sp-1)" }}>{meta}</div>
+        <div
+          className="flex items-center text-mobile-body"
+          style={{ color: "var(--fg-3)", gap: "var(--sp-1_5)", margin: "var(--sp-0_5) 0 0" }}
+        >
+          {secondary}
+        </div>
       </div>
     </>
   );
