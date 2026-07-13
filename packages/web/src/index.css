@@ -672,6 +672,15 @@
     text-rendering: optimizeLegibility;
     font-synthesis: none;
   }
+  /* iOS standalone Web Apps can leave a root scroll range equal to the
+     Home Indicator safe area after the keyboard closes. Mobile pages own
+     their scrolling, so lock every document-level box while the guard is
+     mounted and let the bounded page scroller handle touch movement. */
+  html.ios-standalone-root-scroll-guard,
+  html.ios-standalone-root-scroll-guard body,
+  html.ios-standalone-root-scroll-guard #root {
+    overflow: hidden;
+  }
   ::selection {
     background: var(--brand-bg);
     color: var(--fg);
