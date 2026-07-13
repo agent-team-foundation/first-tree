@@ -22,10 +22,11 @@ vi.mock("../../../../api/me-chats.js", () => meChatMocks);
 // Rows render RowEngagementMenu, which uses the toast hook; the harness has no
 // ToastProvider, so stub it.
 vi.mock("../../../../components/ui/toast.js", () => ({ useToast: () => ({ addToast: vi.fn() }) }));
-// The filter popover fetches the org roster for its Participants picker; stub it
-// so the list doesn't hit the network under test.
+// The filter popover's Participants picker is search-driven (`useOrgAgentsSearch`);
+// stub it so the list doesn't hit the network. The list tests never type into the
+// participant search, so an empty result is all that's needed.
 vi.mock("../../../../lib/use-org-agents.js", () => ({
-  useOrgAgents: () => ({ data: { items: [] }, isLoading: false }),
+  useOrgAgentsSearch: () => ({ data: { items: [] }, isFetching: false }),
 }));
 vi.mock("../../../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/chats.js")>()),

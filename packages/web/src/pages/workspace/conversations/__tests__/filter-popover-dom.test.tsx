@@ -8,30 +8,37 @@ import { FilterPopover, originLabel } from "../filter-popover.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-// The popover fetches the org roster for the Participants picker; drive it from a
-// mutable result (reset in `beforeEach`) so tests can exercise the loaded and
-// error states without a QueryClient. `mock`-prefixed so vitest's hoisted
-// `vi.mock` factory may reference it.
-type MockAgentsResult = {
+// The Participants picker is SEARCH-driven: typing keys `useOrgAgentsSearch`.
+// - the debounce is a passthrough in tests so results settle synchronously;
+// - `useOrgAgentsSearch` returns roster entries whose displayName matches the
+//   query (empty query → no items, mirroring the search-only "no list" design);
+// - the name map resolves selected-chip labels.
+// `mockSearchOverride` (mock-prefixed so the hoisted factory may read it) lets a
+// test force an in-flight state.
+// Debounce is a passthrough by default (results settle synchronously); a test
+// forces a lag — the debounced value trailing the raw input — via `mockDebounceLag`.
+let mockDebounceLag: string | null = null;
+vi.mock("../../../../lib/use-debounced-value.js", () => ({
+  useDebouncedValue: (value: string) => (mockDebounceLag === null ? value : mockDebounceLag),
+}));
+vi.mock("../../../../lib/use-agent-name-map.js", () => ({
+  useAgentNameMap: () => (id: string) => (id === "agent-1" ? "Nova" : id === "agent-2" ? "Design Critique" : id),
+}));
+let mockSearchOverride: {
   data: { items: Array<{ uuid: string; displayName: string }> } | undefined;
-  isLoading: boolean;
-  isError: boolean;
-  refetch: () => void;
-};
-const mockAgentsDefault: MockAgentsResult = {
-  data: {
-    items: [
+  isFetching: boolean;
+} | null = null;
+vi.mock("../../../../lib/use-org-agents.js", () => ({
+  useOrgAgentsSearch: (query: string) => {
+    if (mockSearchOverride) return mockSearchOverride;
+    const roster = [
       { uuid: "agent-1", displayName: "Nova" },
       { uuid: "agent-2", displayName: "Design Critique" },
-    ],
+    ];
+    const q = query.trim().toLowerCase();
+    const items = q.length === 0 ? [] : roster.filter((a) => a.displayName.toLowerCase().includes(q));
+    return { data: { items }, isFetching: false };
   },
-  isLoading: false,
-  isError: false,
-  refetch: () => {},
-};
-let mockAgentsResult: MockAgentsResult = mockAgentsDefault;
-vi.mock("../../../../lib/use-org-agents.js", () => ({
-  useOrgAgents: () => mockAgentsResult,
 }));
 
 let root: Root | null = null;
@@ -59,6 +66,19 @@ async function click(element: Element | null): Promise<void> {
   if (!element) throw new Error("Expected element to click");
   await act(async () => {
     element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
+// Set a React controlled-input value via the native setter (bypasses React's
+// value tracker) then dispatch input, so onChange fires with the new value.
+async function typeSearch(value: string): Promise<void> {
+  const input = document.body.querySelector<HTMLInputElement>('input[aria-label="Search participants"]');
+  if (!input) throw new Error("Missing participants search input");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await flush();
 }
@@ -117,7 +137,8 @@ function StatefulFilter({
 
 beforeEach(() => {
   document.body.innerHTML = "";
-  mockAgentsResult = mockAgentsDefault;
+  mockSearchOverride = null;
+  mockDebounceLag = null;
 });
 
 afterEach(async () => {
@@ -135,7 +156,7 @@ describe("FilterPopover", () => {
     expect(originLabel("future" as ChatSource)).toBe("future");
   });
 
-  it("status is exclusive; source defaults to all with no zero-source state; reset + done", async () => {
+  it("status is exclusive; source defaults to all with no zero-source state; participants search + reset", async () => {
     const onOriginChange = vi.fn();
     const onEngagementChange = vi.fn();
     const onParticipantsChange = vi.fn();
@@ -196,57 +217,117 @@ describe("FilterPopover", () => {
     expect(onOriginChange).toHaveBeenLastCalledWith([]);
     expect(checkboxByLabel("Human").checked).toBe(true);
 
-    // Participants OR-picker: the org roster renders; the default is no
-    // constraint (every box unchecked). Toggling an agent adds it to `with`.
+    // Participants is SEARCH-only: no roster is dumped until you type.
     expect(document.body.textContent).toContain("Participants");
+    expect(document.body.textContent).toContain("Type to search people.");
+    expect(document.body.textContent).not.toContain("Nova");
+    await typeSearch("nova");
+    // The match renders as a toggle; picking it adds the agent to `with`.
     expect(checkboxByLabel("Nova").checked).toBe(false);
     await click(checkboxByLabel("Nova"));
     expect(onParticipantsChange).toHaveBeenLastCalledWith(["agent-1"]);
     expect(checkboxByLabel("Nova").checked).toBe(true);
 
-    // The footer "Reset" is the LAST such button — the per-section Source /
-    // Participants "Reset" links share the label and render before it.
+    // The footer "Reset" is the LAST such button — the per-section Participants
+    // "Reset" link shares the label and renders before it.
     await click([...document.body.querySelectorAll("button")].filter((b) => b.textContent === "Reset").at(-1) ?? null);
     expect(onResetAll).toHaveBeenCalledTimes(1);
     await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Done") ?? null);
     expect(document.body.textContent).not.toContain("Source");
   });
 
-  it("surfaces an error + retry when the participants roster fails to load", async () => {
-    // A failed roster load must NOT read as an empty "No people to filter by."
-    const refetch = vi.fn();
-    mockAgentsResult = { data: undefined, isLoading: false, isError: true, refetch };
+  it("is search-only: empty query hints, typing filters, no match reports it", async () => {
     const noop = (): void => {};
     const container = await renderDom(
       <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
     );
     await click(container.querySelector('button[aria-label="Filter"]'));
 
-    expect(document.body.textContent).toContain("Couldn't load people.");
-    expect(document.body.textContent).not.toContain("No people to filter by.");
-    const retry = [...document.body.querySelectorAll("button")].find((b) => b.textContent === "Retry");
-    expect(retry).toBeTruthy();
-    await click(retry ?? null);
-    expect(refetch).toHaveBeenCalledTimes(1);
+    // No roster dump — just a hint until the user types.
+    expect(document.body.textContent).toContain("Type to search people.");
+    expect(document.body.textContent).not.toContain("Nova");
+    expect(document.body.textContent).not.toContain("Design Critique");
+
+    await typeSearch("des");
+    expect(document.body.textContent).toContain("Design Critique");
+    expect(document.body.textContent).not.toContain("Nova");
+
+    await typeSearch("zzz");
+    expect(document.body.textContent).toContain("No people match");
+    expect(document.body.textContent).not.toContain("Design Critique");
   });
 
-  it("keeps the cached roster on a background refetch error (v5 retains data)", async () => {
-    // TanStack v5 sets isError while retaining prior data on a background poll
-    // failure — the picker must keep rendering the stale options, not flip to the
-    // blocking error panel.
-    mockAgentsResult = {
-      data: { items: [{ uuid: "agent-1", displayName: "Nova" }] },
-      isLoading: false,
-      isError: true,
-      refetch: () => {},
-    };
+  it("shows an in-flight query as Searching…", async () => {
+    mockSearchOverride = { data: undefined, isFetching: true };
     const noop = (): void => {};
     const container = await renderDom(
       <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
     );
     await click(container.querySelector('button[aria-label="Filter"]'));
+    await typeSearch("no");
+    expect(document.body.textContent).toContain("Searching…");
+  });
 
-    expect(document.body.textContent).toContain("Nova");
-    expect(document.body.textContent).not.toContain("Couldn't load people.");
+  it("shows a selected participant as a removable chip and removes it", async () => {
+    const onParticipantsChange = vi.fn();
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter
+        onOriginChange={noop}
+        onEngagementChange={noop}
+        onParticipantsChange={onParticipantsChange}
+        onResetAll={noop}
+      />,
+    );
+    await click(container.querySelector('button[aria-label="Filter"]'));
+    await typeSearch("nova");
+    await click(checkboxByLabel("Nova"));
+    expect(onParticipantsChange).toHaveBeenLastCalledWith(["agent-1"]);
+
+    // The chip persists INDEPENDENTLY of the results: searching a different term
+    // (Nova is no longer a match) keeps the removable chip, and its name comes
+    // from the pick — proving chips don't depend on the visible result rows.
+    await typeSearch("zzz");
+    expect(document.body.textContent).toContain("No people match");
+    const chip = [...document.body.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "Remove Nova",
+    );
+    expect(chip).toBeTruthy();
+    await click(chip ?? null);
+    expect(onParticipantsChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it("emits ?with= in canonical (sorted) order regardless of pick order", async () => {
+    const onParticipantsChange = vi.fn();
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter
+        onOriginChange={noop}
+        onEngagementChange={noop}
+        onParticipantsChange={onParticipantsChange}
+        onResetAll={noop}
+      />,
+    );
+    await click(container.querySelector('button[aria-label="Filter"]'));
+    // Pick Design Critique (agent-2) first, then Nova (agent-1) — the emitted set
+    // must be sorted, not insertion-ordered, so one `?with=` key serves both.
+    await typeSearch("design");
+    await click(checkboxByLabel("Design Critique"));
+    expect(onParticipantsChange).toHaveBeenLastCalledWith(["agent-2"]);
+    await typeSearch("nova");
+    await click(checkboxByLabel("Nova"));
+    expect(onParticipantsChange).toHaveBeenLastCalledWith(["agent-1", "agent-2"]);
+  });
+
+  it("keeps Searching… (not No match) while the debounce trails a new term", async () => {
+    mockDebounceLag = "zz"; // debounced trails the raw input
+    const noop = (): void => {};
+    const container = await renderDom(
+      <StatefulFilter onOriginChange={noop} onEngagementChange={noop} onParticipantsChange={noop} onResetAll={noop} />,
+    );
+    await click(container.querySelector('button[aria-label="Filter"]'));
+    await typeSearch("zzz"); // raw "zzz" !== debounced "zz" → still settling
+    expect(document.body.textContent).toContain("Searching…");
+    expect(document.body.textContent).not.toContain("No people match");
   });
 });

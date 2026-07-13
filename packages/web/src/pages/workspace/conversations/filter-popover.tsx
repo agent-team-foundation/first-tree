@@ -1,8 +1,10 @@
 import type { ChatEngagementView, ChatSource } from "@first-tree/shared";
-import { Check, Filter } from "lucide-react";
-import { useId } from "react";
+import { Check, Filter, X } from "lucide-react";
+import { useId, useState } from "react";
 import { Popover } from "../../../components/ui/popover.js";
-import { useOrgAgents } from "../../../lib/use-org-agents.js";
+import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import { useDebouncedValue } from "../../../lib/use-debounced-value.js";
+import { useOrgAgentsSearch } from "../../../lib/use-org-agents.js";
 import type { GroupMode } from "./group-rows.js";
 
 /**
@@ -350,15 +352,19 @@ function FilterRadio({
 }
 
 /**
- * Participants OR-picker — the org's addressable (speaker-eligible) agents and
- * humans. Empty selection = no constraint (the default); each checked identity
- * is an additive OR match, carried on the URL as `?with=`.
+ * Participants OR-picker — a SEARCH-driven multi-select over the org's
+ * addressable (speaker-eligible) agents and humans. Empty selection = no
+ * constraint (the default); each checked identity is an additive OR match,
+ * carried on the URL as `?with=`.
  *
- * Extracted into its own component (rather than inlined in `FilterPopover`) so
- * its `useOrgAgents` roster fetch + 30s poll only run while the popover panel is
- * OPEN: `Popover` conditionally renders its panel, so this component unmounts on
- * close and a never-opened filter costs no background roster poll for the whole
- * session.
+ * Search-only (no upfront roster): typing drives a `useOrgAgentsSearch`
+ * typeahead keyed on the debounced term, so it scales to any org — past the
+ * org-list 100-row first page — and matches the app's other people pickers
+ * (new-chat, chat-header, @-mention) instead of dumping a flat list. An empty
+ * query renders just a hint; current selections show as removable chips above
+ * the search so they stay visible and manageable without re-searching. Mounted
+ * only inside the open `Popover` panel, so it costs nothing until the filter is
+ * opened.
  */
 function ParticipantsSection({
   participants,
@@ -367,19 +373,42 @@ function ParticipantsSection({
   participants: ReadonlyArray<string>;
   onParticipantsChange: (next: ReadonlyArray<string>) => void;
 }) {
-  const agentsQuery = useOrgAgents({ addressableOnly: true });
-  const participantOptions = agentsQuery.data?.items ?? [];
+  const [search, setSearch] = useState("");
+  const debounced = useDebouncedValue(search, 200);
+  const trimmed = debounced.trim();
+  // Empty query short-circuits inside the hook to the cached first page, but we
+  // never render that — only the hint — so no roster list is dumped.
+  const resultsQuery = useOrgAgentsSearch(trimmed, { addressableOnly: true });
+  const resolveName = useAgentNameMap();
   const participantSet = new Set(participants);
-  const toggleParticipant = (uuid: string): void => {
+
+  // Remember the display name of each identity picked FROM SEARCH so a selected
+  // agent past the org-list 100-row cap — exactly who this search-only picker
+  // exists to reach — still shows a name on its chip; `useAgentNameMap` alone
+  // caps at 100. Falls back to the name map for a `?with=` selection restored
+  // from the URL in a later session.
+  const [pickedNames, setPickedNames] = useState<Record<string, string>>({});
+  const chipName = (uuid: string): string => pickedNames[uuid] ?? resolveName(uuid);
+
+  const toggle = (uuid: string, displayName: string): void => {
     const next = new Set(participantSet);
     if (next.has(uuid)) next.delete(uuid);
-    else next.add(uuid);
-    // Emit in a canonical (sorted) order so picking A-then-B and B-then-A yield
-    // the same `?with=` — one react-query cache key, not two, for a logically
-    // identical OR-filter (mirrors Source's canonical re-emit).
+    else {
+      next.add(uuid);
+      setPickedNames((prev) => (prev[uuid] === displayName ? prev : { ...prev, [uuid]: displayName }));
+    }
+    // Canonical (sorted) order so picking A-then-B and B-then-A yield the same
+    // `?with=` — one react-query cache key for a logically identical OR-filter.
     onParticipantsChange([...next].sort());
   };
-  const resetParticipants = (): void => onParticipantsChange([]);
+  const remove = (uuid: string): void => onParticipantsChange(participants.filter((p) => p !== uuid));
+
+  const results = trimmed.length > 0 ? (resultsQuery.data?.items ?? []) : [];
+  // The rendered results trail the input by the debounce + the in-flight fetch;
+  // treat that window as "searching" so an empty list never falsely reads "no
+  // match" for a term the user just finished typing.
+  const searching = search.trim() !== trimmed || resultsQuery.isFetching;
+  const statusStyle = { color: "var(--fg-4)", padding: "var(--sp-0_75) var(--sp-1)" };
 
   return (
     <section className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
@@ -391,7 +420,7 @@ function ParticipantsSection({
         {participants.length > 0 && (
           <button
             type="button"
-            onClick={resetParticipants}
+            onClick={() => onParticipantsChange([])}
             className="text-label cursor-pointer"
             style={{ background: "transparent", border: 0, padding: 0, color: "var(--primary)" }}
           >
@@ -399,42 +428,95 @@ function ParticipantsSection({
           </button>
         )}
       </header>
-      {agentsQuery.isError && participantOptions.length === 0 ? (
-        // A failed INITIAL load (no cached roster) shows an error + retry rather
-        // than masquerading as "No people to filter by." A *background* refetch
-        // failure keeps the prior `data` (TanStack v5), so we keep rendering the
-        // stale options below instead of replacing a usable picker with this panel.
-        <div className="flex items-center justify-between" style={{ padding: "var(--sp-0_75) var(--sp-1)" }}>
+
+      {/* Current selections as removable chips — visible + manageable without
+          re-searching; names resolve via the shared identity map, same as the
+          rail's filter-chip row. */}
+      {participants.length > 0 && (
+        <div className="flex flex-wrap" style={{ gap: "var(--sp-1)", padding: "var(--sp-0_5) var(--sp-1)" }}>
+          {participants.map((uuid) => (
+            <button
+              key={uuid}
+              type="button"
+              onClick={() => remove(uuid)}
+              className="inline-flex items-center text-label cursor-pointer hover:bg-[var(--bg-hover)]"
+              style={{
+                gap: "var(--sp-0_5)",
+                padding: "var(--sp-0_5) var(--sp-1)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: 999,
+                background: "var(--bg-sunken)",
+                color: "var(--fg-2)",
+              }}
+              aria-label={`Remove ${chipName(uuid)}`}
+            >
+              <span className="truncate" style={{ maxWidth: 140 }}>
+                @{chipName(uuid)}
+              </span>
+              <X size={11} strokeWidth={2} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search people…"
+        aria-label="Search participants"
+        className="w-full text-label outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-raised)]"
+        style={{
+          padding: "var(--sp-1) var(--sp-1_5)",
+          background: "var(--bg-sunken)",
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: 4,
+          color: "var(--fg)",
+        }}
+      />
+
+      {trimmed.length === 0 ? (
+        <p aria-live="polite" className="text-label" style={statusStyle}>
+          Type to search people.
+        </p>
+      ) : results.length > 0 ? (
+        // Any checked identity is an OR match. Results stay visible while a newer
+        // term is still settling (no blank flash). Scrollable so a broad match
+        // set doesn't blow out the popover height.
+        <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 168 }}>
+          {results.map((agent) => (
+            <FilterCheckbox
+              key={agent.uuid}
+              label={agent.displayName}
+              checked={participantSet.has(agent.uuid)}
+              onChange={() => toggle(agent.uuid, agent.displayName)}
+            />
+          ))}
+        </div>
+      ) : searching ? (
+        <p aria-live="polite" className="text-label" style={statusStyle}>
+          Searching…
+        </p>
+      ) : resultsQuery.isError ? (
+        // A failed search reports the failure (with a retry) rather than
+        // masquerading as an empty "No people match" result.
+        <div aria-live="polite" className="flex items-center justify-between" style={statusStyle}>
           <span className="text-label" style={{ color: "var(--fg-4)" }}>
-            {"Couldn't load people."}
+            {"Couldn't search people."}
           </span>
           <button
             type="button"
-            onClick={() => agentsQuery.refetch()}
+            onClick={() => resultsQuery.refetch()}
             className="text-label cursor-pointer"
             style={{ background: "transparent", border: 0, padding: 0, color: "var(--primary)" }}
           >
             Retry
           </button>
         </div>
-      ) : participantOptions.length === 0 ? (
-        <p className="text-label" style={{ color: "var(--fg-4)", padding: "var(--sp-0_75) var(--sp-1)" }}>
-          {agentsQuery.isLoading ? "Loading…" : "No people to filter by."}
-        </p>
       ) : (
-        // Empty selection = no constraint, so every box starts UNCHECKED (unlike
-        // Source). Any checked identity is an OR match. Scrollable so a large
-        // roster doesn't blow out the popover height.
-        <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 168 }}>
-          {participantOptions.map((agent) => (
-            <FilterCheckbox
-              key={agent.uuid}
-              label={agent.displayName}
-              checked={participantSet.has(agent.uuid)}
-              onChange={() => toggleParticipant(agent.uuid)}
-            />
-          ))}
-        </div>
+        <p aria-live="polite" className="text-label" style={statusStyle}>
+          {`No people match “${trimmed}”.`}
+        </p>
       )}
     </section>
   );
