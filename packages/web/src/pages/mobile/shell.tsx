@@ -7,7 +7,6 @@ import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { MobileBottomTabs } from "./components.js";
 import { countAttentionRows, countUnreadRows } from "./data.js";
-import { useIosStandaloneRootScrollGuard } from "./use-ios-standalone-root-scroll-guard.js";
 
 export function MobileShell() {
   const {
@@ -20,8 +19,6 @@ export function MobileShell() {
   } = useAuth();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-
-  useIosStandaloneRootScrollGuard(`${location.pathname}${location.search}`);
 
   useAdminWs();
 
