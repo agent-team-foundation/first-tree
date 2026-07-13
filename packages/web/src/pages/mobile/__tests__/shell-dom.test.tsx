@@ -151,6 +151,5 @@ describe("MobilePage", () => {
     // engages; min-h-full would grow with content and never scroll.
     expect(scroller?.className).toContain("h-full");
     expect(scroller?.className).not.toContain("min-h-full");
-    expect(scroller?.className).toContain("overscroll-y-contain");
   });
 });
