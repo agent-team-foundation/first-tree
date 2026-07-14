@@ -8,7 +8,9 @@ import type { RunPaths } from "../types.js";
 export function createGhShim(paths: RunPaths): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 
@@ -60,12 +62,25 @@ function argAfter(argv, name) {
 }
 
 function ghMethod(argv) {
-  return argAfter(argv, "-X") || argAfter(argv, "--method") || "GET";
+  const separate = argAfter(argv, "-X") || argAfter(argv, "--method");
+  if (separate) return separate.toUpperCase();
+  const equals = argv.find((arg) => arg.startsWith("-X=") || arg.startsWith("--method="));
+  if (equals) return equals.slice(equals.indexOf("=") + 1).toUpperCase();
+  return "GET";
 }
 
 function endpointArg(argv) {
   if (argv[0] !== "api") return "";
   return argv.find((arg, index) => index > 0 && !arg.startsWith("-") && argv[index - 1] !== "--jq" && argv[index - 1] !== "--input" && argv[index - 1] !== "-X" && argv[index - 1] !== "--method") || "";
+}
+
+function normalizeEndpoint(endpoint) {
+  return endpoint
+    .replaceAll("agent-team-foundation/context-tree", "$repo")
+    .replaceAll("agent-team-foundation", "$repo_owner")
+    .replaceAll("context-maintainers", "$candidate_team_slug")
+    .replaceAll("ref=main", "ref=$default_branch")
+    .replace(/\\/rulesets\\/42$/u, "/rulesets/$ruleset_id");
 }
 
 function isGovernanceBootstrapCase() {
@@ -76,29 +91,48 @@ function isGovernanceRecoveryCase() {
   return (process.env.FIRST_TREE_EVAL_CASE_ID || "") === "unbound-github-governance-fail-closed";
 }
 
-function encodedCodeowners() {
-  return Buffer.from("* @agent-team-foundation/context-maintainers\\n", "utf8").toString("base64") + "\\n";
+function encodedCodeownersFromOrigin() {
+  for (const repo of [process.cwd(), join(process.cwd(), "context-tree")]) {
+    if (!existsSync(join(repo, ".git"))) continue;
+    const remote = spawnSync("git", ["-C", repo, "remote", "get-url", "origin"], { encoding: "utf8" });
+    if (remote.status !== 0) continue;
+    const result = spawnSync("git", ["--git-dir", remote.stdout.trim(), "show", "main:.github/CODEOWNERS"], {
+      encoding: "utf8",
+    });
+    if (result.status === 0) return Buffer.from(result.stdout, "utf8").toString("base64") + "\\n";
+  }
+  return null;
 }
 
 function rulesetPayloadOk(argv) {
   const input = argAfter(argv, "--input");
   if (!input || !existsSync(input)) return false;
-  const text = readFileSync(input, "utf8");
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(input, "utf8"));
+  } catch {
+    return false;
+  }
+  const rules = Array.isArray(payload.rules) ? payload.rules : [];
+  const nonFastForward = rules.some((rule) => rule && rule.type === "non_fast_forward");
+  const pullRequest = rules.find((rule) => rule && rule.type === "pull_request");
+  const parameters = pullRequest && typeof pullRequest === "object" ? pullRequest.parameters || {} : {};
   return (
-    text.includes('"~DEFAULT_BRANCH"') &&
-    text.includes('"non_fast_forward"') &&
-    text.includes('"pull_request"') &&
-    text.includes('"required_approving_review_count"') &&
-    text.includes("1") &&
-    text.includes('"require_code_owner_review"') &&
-    text.includes("true") &&
-    text.includes('"dismiss_stale_reviews_on_push"') &&
-    text.includes("false")
+    payload.target === "branch" &&
+    payload.enforcement === "active" &&
+    Array.isArray(payload.conditions?.ref_name?.include) &&
+    payload.conditions.ref_name.include.includes("~DEFAULT_BRANCH") &&
+    nonFastForward &&
+    parameters.required_approving_review_count === 1 &&
+    parameters.require_code_owner_review === true &&
+    parameters.dismiss_stale_reviews_on_push === false &&
+    parameters.require_last_push_approval === false &&
+    parameters.required_review_thread_resolution === false
   );
 }
 
 function bootstrapResponse(argv) {
-  const endpoint = endpointArg(argv);
+  const endpoint = normalizeEndpoint(endpointArg(argv));
   const method = ghMethod(argv);
   if (argv[0] === "repo" && argv[1] === "view") {
     const jq = argAfter(argv, "--jq");
@@ -114,7 +148,10 @@ function bootstrapResponse(argv) {
   if (endpoint === "repos/$repo/teams?per_page=100") return { stdout: "context-maintainers\\n" };
   if (endpoint === "orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100") return { stdout: "tree-reviewer\\n" };
   if (endpoint === "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100") return { stdout: "tree-reviewer\\n" };
-  if (endpoint === "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch") return { stdout: encodedCodeowners() };
+  if (endpoint === "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch") {
+    const content = encodedCodeownersFromOrigin();
+    return content === null ? { exitCode: 1, stderr: "No pushed CODEOWNERS found in eval origin.\\n" } : { stdout: content };
+  }
   if (endpoint === "repos/$repo/codeowners/errors?ref=$default_branch") return { stdout: "0\\n" };
   if (endpoint === "repos/$repo/rulesets?includes_parents=false&per_page=100") return { stdout: "\\n" };
   if (rulesetMutation) {
@@ -125,7 +162,7 @@ function bootstrapResponse(argv) {
 }
 
 function recoveryResponse(argv) {
-  const endpoint = endpointArg(argv);
+  const endpoint = normalizeEndpoint(endpointArg(argv));
   if (argv[0] === "repo" && argv[1] === "view") {
     const jq = argAfter(argv, "--jq");
     if (jq === ".nameWithOwner") return { exitCode: 0, stdout: "agent-team-foundation/context-tree\\n" };

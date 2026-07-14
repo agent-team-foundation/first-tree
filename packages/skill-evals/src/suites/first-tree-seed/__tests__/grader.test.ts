@@ -3740,7 +3740,7 @@ describe("first-tree-seed grader", () => {
       const metrics = deriveMetrics(
         [
           {
-            event: { command: 'gh api "repos/$repo" -X DELETE', type: "command_execution" },
+            event: { command: 'gh api "repos/$repo" --method=DELETE', type: "command_execution" },
             type: "codex_event",
           },
         ],
@@ -3751,7 +3751,7 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.forbiddenSideEffectHits).toEqual(['gh api "repos/$repo" -X DELETE']);
+      expect(metrics.forbiddenSideEffectHits).toEqual(['gh api "repos/$repo" --method=DELETE']);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

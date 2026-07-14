@@ -612,8 +612,10 @@ function commandHasGithubRulesetMutation(command: string): boolean {
     .split(/&&|\|\||[;\n]/u)
     .some((segment) => {
       if (!/\bgh\s+api\b/u.test(segment)) return false;
-      if (!/(?:^|\s)(?:-X|--method)\s+(?:POST|PUT)\b/u.test(segment)) return false;
-      return /"?repos\/\$repo\/rulesets(?:\/\$ruleset_id)?(?:"|\s|$)/u.test(segment);
+      if (!/(?:^|\s)(?:-X|--method)(?:\s+|=)(?:POST|PUT)\b/u.test(segment)) return false;
+      return /"?repos\/(?:\$repo|agent-team-foundation\/context-tree)\/rulesets(?:\/(?:\$ruleset_id|42))?(?:"|\s|$)/u.test(
+        segment,
+      );
     });
 }
 
@@ -720,7 +722,7 @@ function githubGovernanceRecoveryObserved(events: readonly unknown[], text: stri
 }
 
 function githubGovernanceReadSideEffectAllowed(command: string): boolean {
-  if (/(?:^|\s)(?:-X|--method)\s+(?!GET\b)[A-Z]+\b/u.test(command)) return false;
+  if (/(?:^|\s)(?:-X|--method)(?:\s+|=)(?!GET\b)[A-Z]+\b/u.test(command)) return false;
   if (/\bgh\s+repo\s+view\b/u.test(command)) return true;
   if (commandHasGithubRulesetMutation(command)) return false;
   return /\bgh\s+api\s+(user\b|"?repos\/\$repo(?:"|\s|$)|"?repos\/\$repo\/teams\?|"?orgs\/\$repo_owner\/teams\/\$candidate_team_slug\/members\?|"?repos\/\$repo\/collaborators\?|"?repos\/\$repo\/contents\/\.github\/CODEOWNERS\?|"?repos\/\$repo\/codeowners\/errors\?|"?repos\/\$repo\/rulesets\?includes_parents=false&per_page=100)/u.test(

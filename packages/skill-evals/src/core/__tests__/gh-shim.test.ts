@@ -30,23 +30,27 @@ describe("gh eval shim", () => {
         join(shim.workspacePath, "ruleset.json"),
         JSON.stringify({
           conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+          enforcement: "active",
           rules: [
             { type: "non_fast_forward" },
             {
               parameters: {
                 dismiss_stale_reviews_on_push: false,
                 require_code_owner_review: true,
+                require_last_push_approval: false,
                 required_approving_review_count: 1,
+                required_review_thread_resolution: false,
               },
               type: "pull_request",
             },
           ],
+          target: "branch",
         }),
         "utf8",
       );
       const result = spawnSync(
         shim.ghPath,
-        ["api", "repos/$repo/rulesets", "--method", "POST", "--input", "ruleset.json"],
+        ["api", "repos/agent-team-foundation/context-tree/rulesets", "--method", "POST", "--input", "ruleset.json"],
         {
           cwd: shim.workspacePath,
           encoding: "utf8",
@@ -64,7 +68,14 @@ describe("gh eval shim", () => {
       expect(readEvents(shim.eventsPath)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            argv: ["api", "repos/$repo/rulesets", "--method", "POST", "--input", "ruleset.json"],
+            argv: [
+              "api",
+              "repos/agent-team-foundation/context-tree/rulesets",
+              "--method",
+              "POST",
+              "--input",
+              "ruleset.json",
+            ],
             exitCode: 0,
             rulesetPayloadValidated: true,
             shimmedByEval: true,
@@ -77,10 +88,105 @@ describe("gh eval shim", () => {
     }
   });
 
+  it("serves CODEOWNERS contents from the pushed local origin", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
+    try {
+      const treePath = join(shim.workspacePath, "context-tree");
+      const originPath = join(shim.workspacePath, "context-tree-origin.git");
+      mkdirSync(join(treePath, ".github"), { recursive: true });
+      writeFileSync(join(treePath, ".github", "CODEOWNERS"), "* @agent-team-foundation/context-maintainers\n", "utf8");
+      for (const args of [
+        ["init", "--initial-branch=main"],
+        ["config", "user.email", "eval@example.invalid"],
+        ["config", "user.name", "First Tree Eval"],
+        ["add", "."],
+        ["commit", "-m", "chore: add codeowners"],
+      ]) {
+        expect(spawnSync("git", args, { cwd: treePath, encoding: "utf8" }).status).toBe(0);
+      }
+      expect(
+        spawnSync("git", ["clone", "--bare", treePath, originPath], { cwd: shim.workspacePath, encoding: "utf8" })
+          .status,
+      ).toBe(0);
+      expect(
+        spawnSync("git", ["remote", "add", "origin", originPath], { cwd: treePath, encoding: "utf8" }).status,
+      ).toBe(0);
+
+      const result = spawnSync(
+        shim.ghPath,
+        ["api", "repos/agent-team-foundation/context-tree/contents/.github/CODEOWNERS?ref=main"],
+        {
+          cwd: shim.workspacePath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+            FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+            FIRST_TREE_EVAL_PHASE: "model",
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(Buffer.from(result.stdout.trim(), "base64").toString("utf8")).toBe(
+        "* @agent-team-foundation/context-maintainers\n",
+      );
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects ruleset payloads with wrong governance values", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
+    try {
+      writeFileSync(
+        join(shim.workspacePath, "bad-ruleset.json"),
+        JSON.stringify({
+          conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+          enforcement: "active",
+          rules: [
+            { type: "non_fast_forward" },
+            {
+              parameters: {
+                dismiss_stale_reviews_on_push: true,
+                require_code_owner_review: false,
+                require_last_push_approval: true,
+                required_approving_review_count: 0,
+                required_review_thread_resolution: true,
+              },
+              type: "pull_request",
+            },
+          ],
+          target: "branch",
+        }),
+        "utf8",
+      );
+      const result = spawnSync(
+        shim.ghPath,
+        ["api", "repos/agent-team-foundation/context-tree/rulesets", "--method=POST", "--input", "bad-ruleset.json"],
+        {
+          cwd: shim.workspacePath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+            FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+            FIRST_TREE_EVAL_PHASE: "model",
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Invalid ruleset payload");
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
   it("blocks destructive methods on governance read endpoints", () => {
     const shim = createShim("unbound-github-tree-governance-bootstrap");
     try {
-      const result = spawnSync(shim.ghPath, ["api", "repos/$repo", "-X", "DELETE"], {
+      const result = spawnSync(shim.ghPath, ["api", "repos/agent-team-foundation/context-tree", "--method=DELETE"], {
         cwd: shim.workspacePath,
         encoding: "utf8",
         env: {
