@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree File Bug"
-  short_description: "Report a First Tree bug as a GitHub issue via gh"
-  default_prompt: "Use $first-tree-file-bug to collect the bug context (repro, version, chat ID, user ID) and open a GitHub issue on the First Tree repo with the user's gh CLI."
+  short_description: "Report a defect in First Tree itself, not into the user's repo"
+  default_prompt: "Use $first-tree-file-bug ONLY for a defect in First Tree itself, not for filing an issue into the user's own or bound repo. Collect the bug context (repro, version, chat ID, user ID), confirm with the user that this files into First Tree's own public issue tracker, then open the issue with the user's gh CLI."

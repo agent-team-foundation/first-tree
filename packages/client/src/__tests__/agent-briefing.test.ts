@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -412,6 +412,19 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).toContain("If the current member is not an org admin");
     expect(briefing).toContain("hidden server sync path");
 
+    // Issues/PRs the agent files for the user default to the repo the work is
+    // about (the bound source repo), not reflexively First Tree's own repo.
+    // Regression guard for agents misfiling a user's issue into
+    // agent-team-foundation/first-tree; a First Tree platform defect still
+    // routes through `first-tree-file-bug`.
+    expect(briefing).toContain("target the repo the work is about with an explicit `--repo`");
+    expect(briefing).toMatch(
+      /Don't default to First Tree's own repository unless the work is genuinely about First Tree itself/,
+    );
+    expect(briefing).toContain(
+      "a First Tree platform defect specifically goes through the `first-tree-file-bug` skill",
+    );
+
     expect(briefing).toContain("Creating a PR or issue **never** follows it");
     expect(briefing).toContain("first-tree github follow <url>");
     expect(briefing).toMatch(/clearly unrelated to this chat's task/);
@@ -601,6 +614,45 @@ describe("buildAgentBriefing — Skills", () => {
     expect(skillMap).not.toContain("`first-tree-github-scan`");
     expect(skillMap).not.toContain("`attention`");
     expect(skillMap).not.toContain("`github-scan`");
+  });
+
+  it("locks first-tree-file-bug routing scope across every shipped surface", () => {
+    // Regression guard for the incident where a generic "file an issue" for
+    // work in the user's own/bound repo was misrouted to First Tree's public
+    // tracker (agent-team-foundation/first-tree). first-tree-file-bug is
+    // deliberately excluded from live skill-evals (UNEVALUATED_SHIPPED_SKILLS
+    // in @first-tree/skill-evals), which documents that its trigger boundary is
+    // covered by unit/drift tests here instead. Every routing surface the model
+    // sees must keep BOTH the positive "First Tree platform defect" scope AND
+    // the negative "not the user's own/bound repo" exclusion, so a future
+    // broadening of any one surface fails loudly instead of silently restoring
+    // the misroute.
+    const testFileDir = dirname(fileURLToPath(import.meta.url));
+    const skillDir = resolve(testFileDir, "..", "..", "..", "..", "skills", "first-tree-file-bug");
+
+    // Surface 1 — SKILL.md frontmatter description (primary progressive disclosure).
+    const descLine = readFileSync(join(skillDir, "SKILL.md"), "utf-8")
+      .split("\n")
+      .find((line) => line.startsWith("description:"));
+    expect(descLine, "SKILL.md must have a frontmatter description").toBeDefined();
+    expect(descLine).toMatch(/defect in First Tree itself/i);
+    expect(descLine).toMatch(/not for filing an issue into the user's own or bound source repo/i);
+
+    // Surface 2 — Codex metadata (independent routing surface for the codex provider).
+    const openaiYaml = readFileSync(join(skillDir, "agents", "openai.yaml"), "utf-8");
+    expect(openaiYaml).toMatch(/ONLY for a defect in First Tree itself/i);
+    expect(openaiYaml).toMatch(/not for filing an issue into the user's own or bound repo/i);
+    expect(openaiYaml).toMatch(/not into the user's repo/i);
+
+    // Surface 3 — both generated family-map rows (tree-bound and tree-less).
+    for (const contextTreePath of ["/tree", null]) {
+      const row = buildAgentBriefing(makeOpts({ contextTreePath }))
+        .split("\n")
+        .find((line) => line.startsWith("| `first-tree-file-bug`"));
+      expect(row, `file-bug family-map row missing for contextTreePath=${contextTreePath}`).toBeDefined();
+      expect(row).toMatch(/bug in First Tree itself/i);
+      expect(row).toMatch(/First Tree's own repo \(not the user's own\/bound repo\)/i);
+    }
   });
 
   it("nests Team Skills before First Tree Family when resource skills exist", () => {
