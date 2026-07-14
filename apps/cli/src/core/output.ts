@@ -13,6 +13,10 @@
 
 let jsonMode = false;
 
+export type PrintErrorMetadata = {
+  status?: string;
+};
+
 export function setJsonMode(enabled: boolean): void {
   jsonMode = enabled;
 }
@@ -25,8 +29,10 @@ function result(data: unknown): void {
   process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
 }
 
-function fail(code: string, message: string, exitCode = 1): never {
-  process.stderr.write(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
+function fail(code: string, message: string, exitCode = 1, metadata?: PrintErrorMetadata): never {
+  const status = metadata?.status;
+  const error = status === undefined ? { code, message } : { code, message, status };
+  process.stderr.write(`${JSON.stringify({ ok: false, error })}\n`);
   process.exit(exitCode);
 }
 

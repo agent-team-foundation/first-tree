@@ -45,6 +45,19 @@ export {
   stopClientRuntimeProcess,
   switchLocalClientForLogin,
 } from "./client-switch.js";
+export type {
+  ContextTreeBindingResult,
+  ContextTreeConfigReader,
+  ContextTreeReadLogger,
+  ContextTreeUnreadableCategory,
+  ReadContextTreeBindingOptions,
+} from "./context-tree-binding.js";
+export {
+  ContextTreeUnreadableError,
+  classifyContextTreeReadError,
+  normalizeContextTreeBinding,
+  readAgentContextTreeBinding,
+} from "./context-tree-binding.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Document review (docloop) CLI helpers

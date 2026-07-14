@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
   applyClientLoggerConfig: vi.fn(),
+  createLogger: vi.fn(() => ({
+    debug: vi.fn(),
+    warn: vi.fn(),
+  })),
   FirstTreeHubSDK: vi.fn(),
   SdkError: class SdkError extends Error {},
   setCliBinding: vi.fn(),

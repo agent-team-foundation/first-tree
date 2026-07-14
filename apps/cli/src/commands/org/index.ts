@@ -1,15 +1,15 @@
 import type { Command } from "commander";
 import { registerOrgBindTreeCommand } from "./bind-tree.js";
+import { registerOrgContextTreeCommand } from "./context-tree.js";
 
 /**
  * `first-tree org` — organization-level operations.
  *
- * Today this only ships `bind-tree`, called by onboarding agents after they
- * create a fresh context-tree GitHub repo so First Tree records the binding in
- * the org's `context_tree` settings namespace. See
- * first-tree-context:agent-hub/onboarding.md §7.4 (Path B).
+ * `bind-tree` records an organization binding, while `context-tree` reads the
+ * binding selected by the current local agent's server-side organization.
  */
 export function registerOrgCommands(program: Command): void {
   const org = program.command("org").description("Organization-level operations");
   registerOrgBindTreeCommand(org);
+  registerOrgContextTreeCommand(org);
 }

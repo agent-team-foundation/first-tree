@@ -609,13 +609,68 @@ GitHub App installation to cover the repo (`422` otherwise).
 
 ```
 first-tree org
-└── bind-tree <url>                                  # record this org's Context Tree repo URL
+├── bind-tree <url>                                  # record this org's Context Tree repo URL
+└── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
 ```
 
 `bind-tree` records the team's Context Tree URL in
 `organization_settings(context_tree)`. Used by the onboarding flow's
 "create new tree" path, where the agent calls back into the server
 after scaffolding the tree.
+
+### org context-tree
+
+```bash
+first-tree org context-tree [--agent <name>]
+```
+
+`context-tree` is a read-only view of the Cloud `context_tree` setting for the
+selected agent's organization. It does not accept `--org`: the CLI sends the
+selected agent as `X-Agent-Id`, and the server derives that agent's
+organization. The command reads only `GET /api/v1/agent/context-tree/info`.
+It never falls back to the user's default organization from `/me`, the legacy
+`/api/v1/context-tree/info` endpoint, the web app's current organization, or a
+local workspace manifest or checkout.
+
+The selected agent is resolved in this order:
+
+1. `--agent <name>` selects that named local agent.
+2. `FIRST_TREE_AGENT_ID` selects the local agent whose configured UUID matches
+   the environment value.
+3. When exactly one local agent is configured, that agent is selected.
+
+Selection fails before any network request with exit code `2` when there is no
+local agent (`MISSING_AGENT`), more than one candidate (`AMBIGUOUS_AGENT`), an
+environment UUID that is not local (`ENV_AGENT_NOT_LOCAL`), or an unknown
+explicit name (`UNKNOWN_AGENT`). An explicit `--agent` takes precedence over
+`FIRST_TREE_AGENT_ID`.
+
+Human output reports one of three states. `Bound` includes the repository and
+branch. `Unbound` advises the user to ask an administrator for that agent's
+organization to bind an existing tree or initialize a new one. `Unreadable`
+means the Cloud value could not be read; it is never reported as `Unbound`.
+
+With `--json` or `FIRST_TREE_JSON=1`, successful output is exactly one of:
+
+```json
+{"ok":true,"data":{"status":"bound","repo":"git@github.com:acme/context-tree.git","branch":"main"}}
+{"ok":true,"data":{"status":"unbound","repo":null,"branch":null}}
+```
+
+`repo` alone determines binding state. An unbound response is normalized to
+`branch: null` even if the server supplies its default branch. A bound response
+with a null branch is normalized to `"main"`.
+
+Authentication, connection, timeout, remote, and response-validation failures
+use the following JSON error shape and a non-zero exit code:
+
+```json
+{"ok":false,"error":{"code":"CONTEXT_TREE_UNREADABLE","message":"...","status":"unreadable"}}
+```
+
+Authentication failures exit `3`; connection and timeout failures exit `6`;
+other remote or invalid-response failures exit `1`. Agent-selection failures
+retain exit code `2` and their existing error envelopes.
 
 ---
 
