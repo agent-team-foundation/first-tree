@@ -1934,7 +1934,10 @@
 .team-computers-table thead th {
   border-bottom: var(--hairline) solid var(--border-faint);
 }
-.team-computers-table tbody tr:first-child {
+/* Only the very first row-group's first row skips the separator (its top edge
+   is the header's bottom border); later `<tbody>` groups keep the top border so
+   there's a hairline above each "Ready" / "Needs attention" divider. */
+.team-computers-table tbody:first-of-type tr:first-child {
   border-top: 0;
 }
 .team-computer-row {
@@ -1943,8 +1946,9 @@
 .team-computer-row:hover {
   background-color: var(--bg-hover);
 }
-.team-group-row td {
+.team-group-row th {
   padding: 0;
+  font-weight: inherit;
 }
 /* `__meta` is the owner · OS · version line under the hostname, used only on a
    narrow container (below) where those columns collapse. */
@@ -1972,9 +1976,11 @@
     align-items: center;
     padding: var(--sp-2_5) var(--sp-3_5);
   }
+  /* Clear the base cell padding entirely on the reflowed grid rows — the row
+     itself carries the padding, so keeping it on the cells too would double the
+     vertical rhythm and bloat each stacked row. */
   .team-computers-table tr.team-computer-row > * {
-    padding-left: 0;
-    padding-right: 0;
+    padding: 0;
   }
   .team-computers-table tr.team-group-row {
     display: block;

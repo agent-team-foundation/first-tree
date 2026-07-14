@@ -185,6 +185,20 @@ const TEAM_UPDATE_FAILED = client({
     at: NOW,
   },
 });
+// Long *resolved* owner name — the truncating owner cell must expose it in full
+// via its title.
+const LONG_OWNER_NAME = "Diana Alexandra Wintersmith-Longname";
+const TEAM_LONG_OWNER = client({ id: "client-team-long", userId: "user-diana", hostname: "diana-box", os: "darwin" });
+// Unresolved owner (userId absent from the members map) — the cell shows the
+// short-id but the full UUID must survive in the title (desktop) and the
+// compact meta title (narrow).
+const UNRESOLVED_OWNER_ID = "user-ghost-1234567890abcdef";
+const TEAM_UNRESOLVED_OWNER = client({
+  id: "client-team-ghost",
+  userId: UNRESOLVED_OWNER_ID,
+  hostname: "ghost-box",
+  os: "linux",
+});
 
 const AGENTS: RuntimeAgent[] = [
   {
@@ -343,6 +357,8 @@ function seedDefaultMocks(): void {
     OFFLINE,
     TEAM,
     TEAM_UPDATE_FAILED,
+    TEAM_LONG_OWNER,
+    TEAM_UNRESOLVED_OWNER,
   ]);
   activityMocks.listClients.mockResolvedValue([READY, AUTH_EXPIRED, SETUP_INCOMPLETE, OFFLINE]);
   activityMocks.getActivityOverview.mockResolvedValue({
@@ -365,6 +381,7 @@ function seedDefaultMocks(): void {
   memberMocks.listMembers.mockResolvedValue([
     { userId: "user-self", displayName: "Gandy" },
     { userId: "user-alice", displayName: "Alice" },
+    { userId: "user-diana", displayName: LONG_OWNER_NAME },
   ]);
 }
 
@@ -457,6 +474,27 @@ describe("ClientsPage computer cards", () => {
     // surface under "Needs attention" as "Update failed", not hidden as Ready.
     await waitForText(container, "Needs attention");
     await waitForText(container, "Update failed");
+    // Health splits are <tbody> row-groups headed by a scope="rowgroup" cell.
+    const rowGroupHeaders = [...(teamTable?.querySelectorAll('th[scope="rowgroup"]') ?? [])];
+    expect(rowGroupHeaders.some((el) => el.textContent?.includes("Needs attention"))).toBe(true);
+    // The compact meta line labels each collapsed field for assistive tech.
+    const metaLabels = [...(teamTable?.querySelectorAll(".team-computer-row__meta .sr-only") ?? [])].map(
+      (el) => el.textContent,
+    );
+    expect(metaLabels).toEqual(expect.arrayContaining(["Owner: ", "OS: ", "First Tree: "]));
+    // Owner recovery: a long *resolved* name survives in full via the cell
+    // title, and an *unresolved* owner keeps its full UUID in both the cell and
+    // the compact meta title even though only the short-id is visible.
+    const findRow = (hostname: string) =>
+      [...(teamTable?.querySelectorAll("tr.team-computer-row") ?? [])].find((tr) =>
+        tr.querySelector('th[scope="row"]')?.textContent?.includes(hostname),
+      );
+    expect(findRow("diana-box")?.querySelector(".team-computer-row__col-owner")?.getAttribute("title")).toBe(
+      LONG_OWNER_NAME,
+    );
+    const ghostRow = findRow("ghost-box");
+    expect(ghostRow?.querySelector(".team-computer-row__col-owner")?.getAttribute("title")).toBe(UNRESOLVED_OWNER_ID);
+    expect(ghostRow?.querySelector(".team-computer-row__meta")?.getAttribute("title")).toContain(UNRESOLVED_OWNER_ID);
     await click(exactButton(container, "Hide"));
 
     await click(container.querySelector('button[aria-label="Computer actions"]'));
