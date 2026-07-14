@@ -1867,6 +1867,40 @@
   border-top: var(--hairline) solid var(--border-faint);
 }
 
+/* Team computers audit list (admin) — compact grouped rows with a hairline
+   between every row/group-header and a neutral hover. The health split is
+   carried by row order + the "Needs attention" group header + each row's
+   status pill, not a full-row color wash. */
+.team-computers-list {
+  /* Query the list's own width (not the viewport): the Settings nav eats
+     width, so a row can be narrow even on a wide screen. */
+  container-type: inline-size;
+}
+.team-computers-list > * + * {
+  border-top: var(--hairline) solid var(--border-faint);
+}
+.team-computer-row {
+  display: grid;
+  /* identity | agents | status. Fixed trailing tracks keep the agent counts
+     and status pills column-aligned across rows when there's room. */
+  grid-template-columns: minmax(0, 1fr) var(--sp-20) var(--sp-45);
+  align-items: center;
+  column-gap: var(--sp-3);
+  padding: var(--sp-2_5) var(--sp-3_5);
+  transition: background-color 120ms ease-out;
+}
+.team-computer-row:hover {
+  background-color: var(--bg-hover);
+}
+/* Narrow list (mobile / cramped Settings): drop the fixed trailing tracks to
+   intrinsic width so the hostname/meta identity column never collapses. */
+@container (max-width: 34rem) {
+  .team-computer-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    column-gap: var(--sp-2_5);
+  }
+}
+
 /* Dense table row hover — used by DenseTableRow[data-interactive] */
 tr[data-interactive]:hover {
   background: var(--bg-hover);

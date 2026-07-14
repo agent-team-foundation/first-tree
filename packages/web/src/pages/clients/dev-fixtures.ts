@@ -56,6 +56,7 @@ function client(overrides: Partial<HubClient>): HubClient {
     connectedAt: overrides.connectedAt ?? isoMinutesAgo(30),
     lastSeenAt: overrides.lastSeenAt ?? isoMinutesAgo(0.2),
     capabilities: overrides.capabilities ?? {},
+    lastUpdateAttempt: overrides.lastUpdateAttempt,
   };
 }
 
@@ -200,8 +201,71 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     id: "demo-team-machine",
     userId: "other-user",
     hostname: "alice-MBP.lan",
+    agentCount: 1,
     capabilities: {
       "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
+    },
+  });
+
+  const TEAM_READY_LINUX = client({
+    id: "demo-team-ready-linux",
+    userId: "dave-user",
+    hostname: "BAI-MATEBOOK",
+    os: "linux",
+    agentCount: 5,
+    capabilities: {
+      "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
+    },
+  });
+
+  // Long hostname exercises single-line ellipsis truncation on the team row.
+  const TEAM_OFFLINE = client({
+    id: "demo-team-offline",
+    userId: "bob-user",
+    hostname: "ci-runner-7f3a91b2c4d5e6f8a0b1.internal",
+    os: "linux",
+    status: "disconnected",
+    lastSeenAt: isoMinutesAgo(3 * 24 * 60),
+    sdkVersion: "0.5.1-staging.12.1",
+    agentCount: 1,
+    capabilities: {
+      "claude-code": cap("ok", { sdkVersion: "0.2.120" }),
+    },
+  });
+
+  const TEAM_AUTH_EXPIRED = client({
+    id: "demo-team-auth-expired",
+    userId: "carol-user",
+    hostname: "carol-mac-mini.local",
+    status: "disconnected",
+    authState: "expired",
+    lastSeenAt: isoMinutesAgo(6 * 60),
+    sdkVersion: "0.5.2-staging.31.4",
+    agentCount: 1,
+    capabilities: {
+      "claude-code": cap("ok", { sdkVersion: "0.2.130" }),
+    },
+  });
+
+  // Connected + OK runtime (pill would read Ready) but stuck on an old version
+  // because its self-update keeps failing — surfaces under Needs attention.
+  const TEAM_UPDATE_STUCK = client({
+    id: "demo-team-update-stuck",
+    userId: "erin-user",
+    hostname: "erin-devbox",
+    os: "linux",
+    sdkVersion: "0.4.9-staging.988.1",
+    agentCount: 2,
+    capabilities: {
+      "claude-code": cap("ok", { sdkVersion: "0.2.100" }),
+    },
+    lastUpdateAttempt: {
+      result: "failed",
+      target: "0.5.3-staging.49.1",
+      currentBefore: "0.4.9-staging.988.1",
+      installedVersion: null,
+      reason: "npm ETIMEDOUT while fetching @first-tree/cli",
+      at: isoMinutesAgo(20),
     },
   });
 
@@ -377,16 +441,27 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     {
       key: "admin-grouped",
       group: "Cross-cutting",
-      title: "Admin grouped: 2 own + 1 team machine",
+      title: "Admin grouped: 2 own + 5 team machines",
       summary:
-        "Admin view with 'Your computers' + 'Team computers'. Real Settings layout including the table for team rows.",
+        "Admin view with 'Your computers' cards + the redesigned compact 'Team computers' list — one line per machine, health-grouped so problem machines sort to the top.",
       whatToCheck: [
         "'Your computers · 2' section as Section heading with hairline below",
-        "'Team computers · 1' second Section",
-        "Team table uses the legacy dense-table chrome (deferred to Variant D)",
+        "'Team computers · 5' second Section, collapsed by default — click Show",
+        "Compact list: hostname (mono, the focus) over an 'owner · OS · version' meta line",
+        "'Needs attention · 3' on top: Auth expired, Offline, then 'Update failed' (a Ready runtime whose self-update failed), then a neutral 'Ready · 2'",
+        "Version drops the build suffix (0.5.2-staging.31.4 → 0.5.2); full string on hover",
+        "Long hostname truncates with an ellipsis; Offline row reads 'Offline · 3 days'; 'Update failed' shows its reason on hover",
         "Owner labels: 'gandy · you' on own cards, no '· you' on team rows",
       ],
-      clients: [READY_BOTH, OFFLINE_RECENT, TEAM_MACHINE],
+      clients: [
+        READY_BOTH,
+        OFFLINE_RECENT,
+        TEAM_AUTH_EXPIRED,
+        TEAM_OFFLINE,
+        TEAM_UPDATE_STUCK,
+        TEAM_MACHINE,
+        TEAM_READY_LINUX,
+      ],
       agents: [
         agent({ agentId: "a-dev", clientId: READY_BOTH.id, runtimeState: "idle" }),
         agent({ agentId: "a-asst", clientId: READY_BOTH.id, runtimeState: "idle" }),
