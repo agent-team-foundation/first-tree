@@ -259,6 +259,98 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not treat the approved checklist transition as a legacy handoff", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-approved-transition-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "The skeleton is approved; then I will build the structure and content in the same PR.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.legacyHandoffObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("allows post-merge first-tree-write guidance after the complete seed PR", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-future-write-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will build structure and initial leaves in one seed PR. Merge it, then use first-tree-write for future content.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.singlePrBuildObserved).toBe(true);
+      expect(metrics.legacyHandoffObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a structure-first PR whose merge gates leaf drafting", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-structure-first-"));
+    try {
+      const evalCase = findCase("same-chat-approved-skeleton-builds-single-pr");
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will open a PR with the structure; once you merge it, I will add the leaves.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.legacyHandoffObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("legacy_two_pr_handoff");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("accepts natural no-stop wording as a negated refusal", () => {
     const responses = [
       "I will build the structure and initial leaves in one PR without stopping for another approval.",

@@ -1147,22 +1147,28 @@ function legacyHandoffObserved(text: string): boolean {
       /\b(?:no|without)\s+(?:intermediate\s+)?(?:merge(?:\s+wait)?|ping|return-to-chat|handoff)\b[^.!?;\n]*/giu,
       "",
     );
-  const stagedPrObserved =
-    /\b(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?pr\b/iu.test(
-      affirmativeText,
-    );
-  const handoffObserved = /\b(?:merge(?:d|s|ing)?|wait(?:s|ed|ing)?|return|reply|ping|come\s+back)\b/iu.test(
-    affirmativeText,
-  );
-  const orderedHandoffObserved =
-    /\b(?:merge|approve)\w*\b[\s\S]{0,160}\b(?:then|before)\b[\s\S]{0,160}\b(?:return|reply|ping|come\s+back|continue|phase\s*2|content)\b/iu.test(
+  const stagedPrObserved = affirmativeText.split(/[.!?;\n]+/u).some((segment) => {
+    const structurePrObserved =
+      /\b(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?pr\b/iu.test(
+        segment,
+      ) ||
+      /\b(?:seed\s+)?pr\b[\s\S]{0,80}\b(?:with|for|containing|covering)\b[\s\S]{0,50}\b(?:structure|skeleton|phase\s*1)\b/iu.test(
+        segment,
+      );
+    const structureAndLeavesObserved =
+      /\b(?:structure|skeleton)\b[\s\S]{0,100}\b(?:content|lea(?:f|ves))\b|\b(?:content|lea(?:f|ves))\b[\s\S]{0,100}\b(?:structure|skeleton)\b/iu.test(
+        segment,
+      );
+    return structurePrObserved && !structureAndLeavesObserved;
+  });
+  const seedContinuationAfterMergeObserved =
+    /\bmerge\w*\b[\s\S]{0,180}\b(?:return|reply|ping|come\s+back|continue|(?:add|build|draft|write)\w*[\s\S]{0,60}(?:content|lea(?:f|ves)|phase\s*2))\b/iu.test(
       affirmativeText,
     ) ||
     /\b(?:return|reply|ping|come\s+back)\b[\s\S]{0,160}\b(?:after|once|when)\b[\s\S]{0,160}\bmerge\w*\b/iu.test(
       affirmativeText,
-    ) ||
-    /\bphase\s*2\b[\s\S]{0,160}\b(?:after|once|when)\b[\s\S]{0,160}\bmerge\w*\b/iu.test(affirmativeText);
-  return (stagedPrObserved && handoffObserved) || orderedHandoffObserved;
+    );
+  return stagedPrObserved && seedContinuationAfterMergeObserved;
 }
 
 function githubAppRequirementObserved(text: string): boolean {
