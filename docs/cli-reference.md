@@ -622,6 +622,11 @@ scripts: without `--org`, it resolves the caller's default organization through
 `GET /api/v1/me`; with `--org`, it targets the explicitly supplied organization
 ID. It is not agent-scoped and is separate from `context-tree set` below.
 
+The Class B settings read `GET /api/v1/orgs/:orgId/settings/context_tree`
+returns the same runtime-safe binding representation for admins and members.
+Loose historical rows that are visible for repair are exposed only through the
+admin-only raw read `GET /api/v1/orgs/:orgId/settings/context_tree/raw`.
+
 ### org context-tree
 
 ```bash
@@ -696,9 +701,14 @@ The command performs a two-step, agent-scoped write. It first sends
 `GET /api/v1/agent/me` with the selected agent to obtain a non-empty
 `organizationId`, then sends the existing admin-only Class B request
 `PUT /api/v1/orgs/:orgId/settings/context_tree`, URL-encoding `orgId`. The
-selected agent identity, current user JWT, and current runtime-session token
-are used for both requests. It never falls back to `/api/v1/me`, the legacy
-`/api/v1/context-tree/*` endpoints, the web app's current organization, a
+paired Class B read `GET /api/v1/orgs/:orgId/settings/context_tree` is the
+member-safe active-binding view; the admin-only
+`GET /api/v1/orgs/:orgId/settings/context_tree/raw` endpoint is reserved for
+repairing loose historical rows and for replace-preflight flows that must not
+clobber any stored Context Tree row. The selected agent identity, current user
+JWT, and current runtime-session token are used for both requests. It never
+falls back to `/api/v1/me`, the legacy `/api/v1/context-tree/*` endpoints, the
+web app's current organization, a
 local workspace manifest, or a local checkout. The safe GET may use the
 client's normal read retry behavior. The PUT is never retried automatically,
 so one invocation cannot repeat a settings-version increment after an

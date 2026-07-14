@@ -939,10 +939,11 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ branch: "main" });
   });
 
-  it("keeps the raw Context Tree repair view admin-only while members receive safe bindings", async () => {
+  it("keeps context_tree GET runtime-safe and exposes raw repair data only on the admin endpoint", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
-    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const rawUrl = `${safeUrl}/raw`;
     const historical = {
       repo: "https://legacy-user:legacy-secret@github.com/example/context-tree.git",
       branch: "main",
@@ -955,27 +956,44 @@ describe("org-settings API (admin gating + masking)", () => {
       updatedBy: admin.userId,
     });
 
-    const adminRead = await app.inject({
+    const adminSafeRead = await app.inject({
       method: "GET",
-      url,
+      url: safeUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(adminRead.statusCode).toBe(200);
-    expect(adminRead.json()).toEqual(historical);
+    expect(adminSafeRead.statusCode).toBe(200);
+    expect(adminSafeRead.json()).toEqual({ branch: "main" });
+    expect(adminSafeRead.body).not.toContain("legacy-user");
+    expect(adminSafeRead.body).not.toContain("legacy-secret");
 
-    const memberRead = await app.inject({
+    const memberSafeRead = await app.inject({
       method: "GET",
-      url,
+      url: safeUrl,
       headers: { authorization: `Bearer ${member.accessToken}` },
     });
-    expect(memberRead.statusCode).toBe(200);
-    expect(memberRead.json()).toEqual({ branch: "main" });
-    expect(memberRead.body).not.toContain("legacy-user");
-    expect(memberRead.body).not.toContain("legacy-secret");
+    expect(memberSafeRead.statusCode).toBe(200);
+    expect(memberSafeRead.json()).toEqual({ branch: "main" });
+    expect(memberSafeRead.body).not.toContain("legacy-user");
+    expect(memberSafeRead.body).not.toContain("legacy-secret");
+
+    const adminRawRead = await app.inject({
+      method: "GET",
+      url: rawUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminRawRead.statusCode).toBe(200);
+    expect(adminRawRead.json()).toEqual(historical);
+
+    const memberRawRead = await app.inject({
+      method: "GET",
+      url: rawUrl,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(memberRawRead.statusCode).toBe(403);
 
     const repaired = await app.inject({
       method: "PUT",
-      url,
+      url: safeUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: { repo: "https://github.com/example/repaired-context-tree.git", branch: "release/2026-07" },
     });
@@ -983,7 +1001,7 @@ describe("org-settings API (admin gating + masking)", () => {
 
     const repairedMemberRead = await app.inject({
       method: "GET",
-      url,
+      url: safeUrl,
       headers: { authorization: `Bearer ${member.accessToken}` },
     });
     expect(repairedMemberRead.statusCode).toBe(200);

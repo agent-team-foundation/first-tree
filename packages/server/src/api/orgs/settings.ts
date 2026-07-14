@@ -18,17 +18,24 @@ import * as orgSettingsService from "../../services/org-settings.js";
  * team is bound to before joining the chat. PUT and DELETE are always
  * admin-only regardless of namespace — non-admins must never mutate
  * org-wide config.
+ *
+ * `context_tree` has two read surfaces: the generic namespace URL is always
+ * runtime-safe, while `/context_tree/raw` is an admin-only repair view for
+ * loose historical rows.
  */
 export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { orgId: string } }>("/context_tree/raw", async (request) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    return orgSettingsService.getOrgSetting(app.db, scope.organizationId, "context_tree");
+  });
+
   app.get<{ Params: { orgId: string; namespace: string } }>("/:namespace", async (request) => {
     const namespace = parseNamespace(request.params.namespace);
     const scope =
       ORG_SETTINGS_NAMESPACES[namespace].readPolicy === "member"
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
-    if (namespace === "context_tree" && scope.role !== "admin") {
-      // Historical rows may predate the no-credentials URL boundary. Keep the
-      // raw repair view admin-only; members only receive a runtime-safe binding.
+    if (namespace === "context_tree") {
       return (await orgSettingsService.getOrgContextTreeBinding(app.db, scope.organizationId)) ?? { branch: "main" };
     }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);

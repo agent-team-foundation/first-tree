@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -110,6 +110,7 @@ describe("tree init command action", () => {
     await initCommand.action(context(command, true));
 
     const root = join(base, "local-tree");
+    const commandRoot = realpathSync(root);
     expect(process.exitCode).toBeUndefined();
     expect(existsSync(join(root, "NODE.md"))).toBe(true);
     expect(existsSync(join(root, "members", "octocat", "NODE.md"))).toBe(true);
@@ -117,8 +118,8 @@ describe("tree init command action", () => {
     expect(readFileSync(join(root, "NODE.md"), "utf8")).toContain("Acme Product Context Tree");
     expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
       "gh",
-      ["repo", "create", "octocat/custom-tree", "--public", "--source", root, "--remote", "origin", "--push"],
-      root,
+      ["repo", "create", "octocat/custom-tree", "--public", "--source", commandRoot, "--remote", "origin", "--push"],
+      commandRoot,
     );
 
     const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
@@ -144,7 +145,7 @@ describe("tree init command action", () => {
           memberships: [{ organizationId: "org_1", role: "admin" }],
         });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
         return response({ repo: null });
       }
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
@@ -201,7 +202,7 @@ describe("tree init command action", () => {
         if (url.endsWith("/api/v1/me")) {
           return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
         }
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
           return response({ repo: null });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
@@ -236,7 +237,7 @@ describe("tree init command action", () => {
         if (url.endsWith("/api/v1/me")) {
           return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
         }
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
           return response({ repo: null });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
@@ -306,7 +307,7 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/me")) {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
-          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response({ repo: "https://github.com/acme/live-tree" });
           }
           return response("not found", { status: 404 });
@@ -321,7 +322,7 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/me")) {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
-          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response("server down", { status: 503 });
           }
           return response("not found", { status: 404 });
@@ -336,7 +337,7 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/me")) {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
-          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response({ repo: null });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
@@ -354,7 +355,7 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/me")) {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
-          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response({ repo: null });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
@@ -372,7 +373,7 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/me")) {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
-          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response({ repo: null });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
@@ -390,7 +391,7 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/me")) {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
-          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree")) {
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response({ repo: null });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
@@ -574,7 +575,7 @@ describe("tree init command action", () => {
       vi.fn(async (input: FetchInput, init?: FetchInit) => {
         const url = String(input);
         if (url.endsWith("/api/v1/me")) return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
           return response({ repo: null });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) return response("missing", { status: 404 });
@@ -621,7 +622,7 @@ describe("tree init command action", () => {
         if (url.endsWith("/api/v1/me")) {
           return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
         }
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
           return response({ repo: null });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {

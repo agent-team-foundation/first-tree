@@ -276,15 +276,15 @@ function buildCoverage(lookup: InstallationLookup, repoFullName: string): Covera
   };
 }
 
-// Read the team's current `context_tree` binding so `tree init` refuses to
-// clobber an already-configured tree (the server one-click path 409s on this;
-// the CLI must not silently replace a live tree with the empty scaffold).
+// Read the raw `context_tree` repair view so `tree init` refuses to clobber
+// any configured row, including loose historical values that are not active
+// runtime bindings yet.
 async function readContextTreeBinding(
   serverUrl: string,
   accessToken: string,
   orgId: string,
 ): Promise<{ repo: string | null }> {
-  const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree`, {
+  const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree/raw`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
   });
