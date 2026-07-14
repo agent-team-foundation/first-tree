@@ -468,6 +468,7 @@ describe("service install helpers", () => {
       state: "active",
       pid: 987,
       unitPath,
+      managerScope: "system",
     });
     expect(unit).toContain("WantedBy=multi-user.target");
     expect(unit).toContain(`Environment=FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}`);
@@ -488,6 +489,78 @@ describe("service install helpers", () => {
       ["systemctl", ["stop", channelConfig.serviceUnitFile]],
       ["systemctl", ["restart", channelConfig.serviceUnitFile]],
     ]);
+  });
+
+  it("migrates a legacy root systemd user unit before enabling the system unit", () => {
+    setPlatform("linux");
+    userInfoMock.mockReturnValue({ uid: 0, username: "root" });
+    const legacyUnitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    mkdirSync(dirname(legacyUnitPath), { recursive: true });
+    writeFileSync(legacyUnitPath, 'Environment=HTTP_PROXY="http://legacy-proxy:8080"\n');
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "inactive\n", stderr: "" });
+
+    expect(installClientService()).toMatchObject({ platform: "systemd", state: "inactive", managerScope: "system" });
+    expect(existsSync(legacyUnitPath)).toBe(false);
+    expect(readFileSync(join(process.env.FIRST_TREE_HOME ?? "", "daemon.env"), "utf-8")).toContain(
+      "HTTP_PROXY=http://legacy-proxy:8080",
+    );
+    expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["systemctl", ["--user", "disable", "--now", channelConfig.serviceUnitFile]],
+      ["systemctl", ["--user", "daemon-reload"]],
+      ["systemctl", ["daemon-reload"]],
+      ["systemctl", ["enable", "--now", channelConfig.serviceUnitFile]],
+      ["systemctl", ["is-active", channelConfig.serviceUnitFile]],
+    ]);
+  });
+
+  it("removes a legacy root user unit when the user bus is unavailable", () => {
+    setPlatform("linux");
+    userInfoMock.mockReturnValue({ uid: 0, username: "root" });
+    const legacyUnitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    mkdirSync(dirname(legacyUnitPath), { recursive: true });
+    writeFileSync(legacyUnitPath, "unit");
+    spawnSyncMock
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+        stderr: "Failed to connect to bus: No such file or directory",
+      })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+        stderr: "Failed to connect to bus: No such file or directory",
+      })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "inactive\n", stderr: "" });
+
+    expect(installClientService()).toMatchObject({ platform: "systemd", state: "inactive", managerScope: "system" });
+    expect(existsSync(legacyUnitPath)).toBe(false);
+    expect(printMocks.line).toHaveBeenCalledWith(
+      expect.stringContaining("legacy root systemd user manager unavailable during migration"),
+    );
+    expect(printMocks.line).toHaveBeenCalledWith(
+      expect.stringContaining("legacy root systemd user daemon-reload skipped"),
+    );
+  });
+
+  it("fails root systemd migration when the legacy user unit cannot be stopped", () => {
+    setPlatform("linux");
+    userInfoMock.mockReturnValue({ uid: 0, username: "root" });
+    const legacyUnitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    mkdirSync(dirname(legacyUnitPath), { recursive: true });
+    writeFileSync(legacyUnitPath, "unit");
+    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "access denied" });
+
+    expect(() => installClientService()).toThrow("legacy root systemd user service migration failed: access denied");
+    expect(existsSync(join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "", channelConfig.serviceUnitFile))).toBe(
+      false,
+    );
   });
 
   it("surfaces systemd install and uninstall warnings", () => {

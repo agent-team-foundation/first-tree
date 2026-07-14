@@ -623,8 +623,12 @@ after scaffolding the tree.
 
 The background service that holds the client WebSocket and runs every
 configured agent on this machine. Installed automatically by `first-tree
-login` on supported desktop platforms: launchd on macOS, `systemd --user`
-on Linux, and a per-user Task Scheduler logon task on Windows.
+login` on supported desktop platforms: launchd on macOS, systemd on
+Linux, and a per-user Task Scheduler logon task on Windows. Linux installs
+use a `systemd --user` unit for normal users; when the CLI is run as root,
+First Tree installs the same channel's unit in system scope instead
+(`/etc/systemd/system/<channel>.service`) so daemon setup does not depend
+on a root user D-Bus session.
 
 On Windows, Task Scheduler only owns per-user logon/start triggering. A hidden
 First Tree supervisor loop owns the daemon child process, exit-code restart

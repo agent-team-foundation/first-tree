@@ -329,6 +329,31 @@ describe("daemon start command", () => {
     expect(output()).toContain("Supervisor fallback: `journalctl --user -u first-tree`");
   });
 
+  it("prints system journal hints for root systemd services", async () => {
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({
+        platform: "systemd",
+        state: "inactive",
+        label: "first-tree.service",
+        logDir: "/logs",
+        managerScope: "system",
+      })
+      .mockReturnValueOnce({
+        platform: "systemd",
+        state: "active",
+        label: "first-tree.service",
+        detail: "pid 123",
+        logDir: "/logs",
+        managerScope: "system",
+      });
+
+    await expect(runStart()).resolves.toBeTruthy();
+    expect(coreMocks.startClientService).toHaveBeenCalled();
+    expect(output()).toContain("Supervisor fallback: `journalctl -u first-tree`");
+    expect(output()).not.toContain("journalctl --user -u first-tree");
+  });
+
   it("starts an inactive launchd service and prints stdout/stderr fallback logs", async () => {
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus

@@ -108,7 +108,7 @@ export {
   uploadAgentSkills,
   uploadClientCapabilities,
 } from "./runtime-provider-reconcile.js";
-// Background service install (launchd / systemd --user)
+// Background service install (launchd / systemd)
 export type { ServiceInfo, ServiceOpResult, ServiceState } from "./service-install.js";
 export {
   getClientServiceStatus,

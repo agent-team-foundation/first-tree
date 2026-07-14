@@ -38,12 +38,31 @@ function systemctlArgs(scope: SystemdScope, args: string[]): string[] {
   return scope === "user" ? ["--user", ...args] : args;
 }
 
+function systemdUserUnitPath(): string {
+  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  return join(xdg, "systemd", "user", SYSTEMD_UNIT);
+}
+
 function systemdUnitPath(scope: SystemdScope = systemdScope()): string {
   if (scope === "system") {
     return join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "/etc/systemd/system", SYSTEMD_UNIT);
   }
-  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-  return join(xdg, "systemd", "user", SYSTEMD_UNIT);
+  return systemdUserUnitPath();
+}
+
+function rootUserSystemctlEnv(): NodeJS.ProcessEnv {
+  const runtimeDir = process.env.XDG_RUNTIME_DIR ?? "/run/user/0";
+  return {
+    ...process.env,
+    XDG_RUNTIME_DIR: runtimeDir,
+    DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS ?? `unix:path=${runtimeDir}/bus`,
+  };
+}
+
+function isUserBusUnavailable(reason: string): boolean {
+  return /failed to connect to bus|dbus_session_bus_address|xdg_runtime_dir|no medium found|no such file or directory/i.test(
+    reason,
+  );
 }
 
 export function renderSystemdUnit(invocation: ResolvedBinary, scope: SystemdScope = "user"): string {
@@ -160,14 +179,43 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
   return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
 }
 
+function migrateLegacyRootUserUnitToSystemScope(): void {
+  const legacyUnitPath = systemdUserUnitPath();
+  if (!existsSync(legacyUnitPath)) return;
+
+  migrateBakedProxyEnv(extractProxyFromSystemd(readFileSync(legacyUnitPath, "utf-8")));
+
+  const env = rootUserSystemctlEnv();
+  const disableRes = runCapture("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], 10_000, env);
+  if (!disableRes.ok) {
+    const reason = disableRes.stderr || `exit ${disableRes.code ?? "unknown"}`;
+    if (!isUserBusUnavailable(reason) && !/not found|no such|not loaded/i.test(reason)) {
+      throw new Error(`legacy root systemd user service migration failed: ${reason}`);
+    }
+    print.line(`    warning: legacy root systemd user manager unavailable during migration: ${reason}\n`);
+  }
+
+  rmSync(legacyUnitPath);
+
+  const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000, env);
+  if (!reloadRes.ok) {
+    const reason = reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`;
+    if (!isUserBusUnavailable(reason) && !/not found|no such|not loaded/i.test(reason)) {
+      throw new Error(`legacy root systemd user daemon-reload failed: ${reason}`);
+    }
+    print.line(`    warning: legacy root systemd user daemon-reload skipped: ${reason}\n`);
+  }
+}
+
 function installSystemd(): ServiceInfo {
   const scope = systemdScope();
-  // Legacy unit auto-cleanup deliberately not done here — same reason
-  // as `installLaunchd` above. A blanket `disable --now` + `rm` of
-  // a retired or sibling channel service unit would silently wipe a peer
-  // staging/prod install that the
-  // operator hasn't migrated yet. MIGRATION.md Phase 2 documents the
-  // operator-driven `systemctl --user stop` + `rm` snippet instead.
+  if (scope === "system") migrateLegacyRootUserUnitToSystemScope();
+  // Cross-channel legacy cleanup is deliberately not done here — same reason
+  // as `installLaunchd` above. A blanket `disable --now` + `rm` of a retired
+  // or sibling channel service unit would silently wipe a peer staging/prod
+  // install that the operator hasn't migrated yet. Root's same-channel user
+  // unit is the one exception, handled above before the replacement system
+  // unit is enabled.
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const unitPath = systemdUnitPath(scope);
@@ -210,7 +258,7 @@ function installSystemd(): ServiceInfo {
   }
 
   const { state, pid, detail } = systemdState();
-  return systemdInfo(unitPath, state, pid, detail);
+  return systemdInfo(unitPath, scope, state, pid, detail);
 }
 
 function uninstallSystemd(): ServiceInfo {
@@ -235,6 +283,7 @@ function uninstallSystemd(): ServiceInfo {
     unitPath,
     logDir: logDir(),
     state: "not-installed",
+    managerScope: scope,
   };
 }
 
@@ -246,17 +295,25 @@ function systemdUnitDriftDetected(): boolean {
 }
 
 function getSystemdServiceStatus(): ServiceInfo {
+  const scope = systemdScope();
   const { state, pid, detail } = systemdState();
-  return systemdInfo(systemdUnitPath(), state, pid, detail);
+  return systemdInfo(systemdUnitPath(scope), scope, state, pid, detail);
 }
 
-function systemdInfo(unitPath: string, state: ServiceState, pid?: number, detail?: string): ServiceInfo {
+function systemdInfo(
+  unitPath: string,
+  managerScope: SystemdScope,
+  state: ServiceState,
+  pid?: number,
+  detail?: string,
+): ServiceInfo {
   return {
     platform: "systemd",
     label: SYSTEMD_UNIT,
     unitPath,
     logDir: logDir(),
     state,
+    managerScope,
     pid,
     detail,
   };

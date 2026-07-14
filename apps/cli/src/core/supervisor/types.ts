@@ -8,6 +8,8 @@ export type ServiceInfo = {
   state: ServiceState;
   /** PID of the active service process, if running. */
   pid?: number;
+  /** systemd manager scope when platform === "systemd". */
+  managerScope?: "user" | "system";
   detail?: string;
 };
 
