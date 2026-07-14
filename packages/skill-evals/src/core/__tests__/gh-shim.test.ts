@@ -212,9 +212,53 @@ describe("gh eval shim", () => {
           },
         ],
         [
+          "wrong-name.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "Different ruleset",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "missing-exclude.json",
+          {
+            conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
           "malformed-conditions.json",
           {
-            conditions: { ref_name: { include: ["~DEFAULT_BRANCH", "refs/heads/main"] } },
+            conditions: { ref_name: { exclude: ["refs/heads/release"], include: ["~DEFAULT_BRANCH"] } },
             enforcement: "active",
             name: "First Tree Context Repo branch rules",
             rules: [
@@ -261,7 +305,7 @@ describe("gh eval shim", () => {
   it("blocks destructive methods on governance read endpoints", () => {
     const shim = createShim("unbound-github-tree-governance-bootstrap");
     try {
-      const result = spawnSync(shim.ghPath, ["api", "repos/agent-team-foundation/context-tree", "--method=DELETE"], {
+      const result = spawnSync(shim.ghPath, ["api", "repos/agent-team-foundation/context-tree", "--method=delete"], {
         cwd: shim.workspacePath,
         encoding: "utf8",
         env: {

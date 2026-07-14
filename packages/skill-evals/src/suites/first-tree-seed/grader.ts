@@ -617,7 +617,7 @@ function commandHasGithubRulesetMutation(command: string): boolean {
     .split(/&&|\|\||[;\n]/u)
     .some((segment) => {
       if (!/\bgh\s+api\b/u.test(segment)) return false;
-      if (!/(?:^|\s)(?:-X|--method)(?:\s+|=)(?:POST|PUT)\b/u.test(segment)) return false;
+      if (!/(?:^|\s)(?:-X|--method)(?:\s+|=)(?:POST|PUT)\b/iu.test(segment)) return false;
       return /"?repos\/(?:\$repo|agent-team-foundation\/context-tree)\/rulesets(?:\/(?:\$ruleset_id|42))?(?:"|\s|$)/u.test(
         segment,
       );
@@ -727,7 +727,7 @@ function githubGovernanceRecoveryObserved(events: readonly unknown[], text: stri
 }
 
 function githubGovernanceReadSideEffectAllowed(command: string): boolean {
-  if (/(?:^|\s)(?:-X|--method)(?:\s+|=)(?!GET\b)[A-Z]+\b/u.test(command)) return false;
+  if (/(?:^|\s)(?:-X|--method)(?:\s+|=)(?!GET\b)[a-z]+\b/iu.test(command)) return false;
   if (/\bgh\s+repo\s+view\b/u.test(command)) return true;
   if (commandHasGithubRulesetMutation(command)) return false;
   const repoPath = String.raw`(?:\$repo|agent-team-foundation/context-tree)`;
