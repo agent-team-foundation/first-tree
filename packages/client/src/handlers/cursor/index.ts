@@ -338,6 +338,17 @@ export const createCursorHandler: HandlerFactory = (config) => {
     return refs.length > 0 ? refs : undefined;
   }
 
+  /**
+   * The directory a shell tool actually executed in: Cursor's own
+   * `workingDirectory` when it reports one, else the agent home. Relative
+   * paths in the command MUST resolve against the provider-reported cwd — a
+   * `cat NODE.md` run with workingDirectory=<home>/context-tree read the
+   * tree's NODE.md, not <home>/NODE.md.
+   */
+  function shellEffectiveCwd(tool: Extract<CursorToolCall, { name: "shell" }>): string | null {
+    return tool.workingDirectory && tool.workingDirectory.length > 0 ? tool.workingDirectory : cwd;
+  }
+
   function providerRefsForTool(tool: CursorToolCall): ToolFileRef[] {
     switch (tool.name) {
       case "read":
@@ -345,16 +356,18 @@ export const createCursorHandler: HandlerFactory = (config) => {
       case "edit":
       case "write":
         return cursorNativePathRefs(tool.path, "file_change");
-      case "shell":
-        return cwd && tool.command
+      case "shell": {
+        const effectiveCwd = shellEffectiveCwd(tool);
+        return effectiveCwd && tool.command
           ? toolFileRefsFromShellCommand({
               command: tool.command,
-              cwd,
+              cwd: effectiveCwd,
               contextTreePath,
               contextTreeRepoUrl,
               contextTreeBranch,
             })
           : [];
+      }
       case "unknown":
         return [];
     }
@@ -362,8 +375,10 @@ export const createCursorHandler: HandlerFactory = (config) => {
 
   function toolArgsForEvent(tool: CursorToolCall): unknown {
     switch (tool.name) {
-      case "shell":
-        return { command: tool.command, ...(cwd ? { cwd } : {}) };
+      case "shell": {
+        const effectiveCwd = shellEffectiveCwd(tool);
+        return { command: tool.command, ...(effectiveCwd ? { cwd: effectiveCwd } : {}) };
+      }
       case "read":
       case "edit":
       case "write":
@@ -1185,6 +1200,13 @@ export const createCursorHandler: HandlerFactory = (config) => {
         }
         const sessionKey = providerSessionId ?? pendingSyntheticId ?? sessionId;
         if (turnDelivered) writeSessionBriefingFingerprint(workspaceCwd, sessionKey, briefingFingerprint);
+      } else {
+        // Admin-triggered resume carries no message (handler contract). The
+        // bring-up guard must still clear, or every later inject would queue
+        // forever behind a drain gate that never reopens — owned deliveries
+        // that never enter the provider or settle.
+        initialTurnPreparing = false;
+        scheduleQueuedMessagesDrain();
       }
 
       const effectiveId = providerSessionId ?? pendingSyntheticId ?? sessionId;

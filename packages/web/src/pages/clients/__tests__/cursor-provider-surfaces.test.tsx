@@ -97,6 +97,25 @@ describe("cursor provider — free-form model input", () => {
 
     // Trimmed exact id, committed once.
     expect(saved).toEqual(["gpt-5.3-codex-high"]);
+
+    // Immediate blur after Enter must NOT double-submit (the value prop has
+    // not advanced yet — a duplicate PATCH would carry a stale version).
+    // React 19 delegates onBlur via the bubbling `focusout` at the root.
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+    expect(saved).toEqual(["gpt-5.3-codex-high"]);
+
+    // A FAILED save stays retryable with the same value: refocusing (React
+    // onFocus ← bubbling `focusin`) expires the duplicate-submit latch, so
+    // Enter fires the save again.
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(saved).toEqual(["gpt-5.3-codex-high", "gpt-5.3-codex-high"]);
   });
 
   it("keeps the dropdown for claude/codex providers (no free-form regression)", async () => {

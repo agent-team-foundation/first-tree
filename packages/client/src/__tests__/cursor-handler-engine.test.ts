@@ -538,6 +538,68 @@ describe("cursor handler — per-turn CLI transport", () => {
     );
   });
 
+  it("admin resume (no message) clears the bring-up guard so later injects still drain", async () => {
+    const events: SessionEvent[] = [];
+    const { spawnFn, calls } = makeFakeSpawn([successScript({ sessionId: "s-admin", text: "after admin resume" })]);
+    const handler = makeHandler(spawnFn);
+
+    // Handler contract: `message` is undefined for admin-triggered resume.
+    const receipt = await handler.resume(undefined, "s-admin", makeContext({ events }), makeToken());
+    if (typeof receipt === "string") throw new Error("expected a resume receipt");
+    expect(receipt.route).toBeNull();
+
+    // A later inject must actually enter the provider and settle — the
+    // message-less resume must not leave initialTurnPreparing latched.
+    const token = makeToken();
+    const injectReceipt = handler.inject(makeMessage("m-post-admin", "hello"), token);
+    expect(injectReceipt).toMatchObject({ kind: "owned", mode: "queued" });
+    await vi.waitFor(() => {
+      if (token.completed.length === 0) throw new Error("queued turn not settled yet");
+    });
+    expect(calls).toHaveLength(1);
+    expect(token.completed).toMatchObject([{ status: "success" }]);
+  });
+
+  it("shell refs resolve relative paths against Cursor's reported workingDirectory, not the agent home", async () => {
+    const events: SessionEvent[] = [];
+    const contextTreePath = join(workspaceRoot, "context-tree");
+    const shellLines = [
+      line({
+        type: "tool_call",
+        subtype: "completed",
+        call_id: "tool_wd",
+        tool_call: {
+          shellToolCall: {
+            // Relative command executed FROM the tree clone — the provider
+            // reports the real workingDirectory; attributing it to the agent
+            // home would misresolve to <home>/NODE.md and drop the tree read.
+            args: { command: "cat NODE.md", workingDirectory: contextTreePath },
+            result: { success: { command: "cat NODE.md", exitCode: 0, stdout: "# node", stderr: "" } },
+          },
+        },
+        session_id: "s-wd",
+      }),
+    ];
+    const { spawnFn } = makeFakeSpawn([successScript({ sessionId: "s-wd", text: "done", extraLines: shellLines })]);
+    const handler = makeHandler(spawnFn, {
+      contextTreePath,
+      contextTreeRepoUrl: "https://github.com/acme/tree.git",
+      contextTreeBranch: "main",
+    });
+
+    await handler.start(makeMessage("m1", "read the node"), makeContext({ events }), makeToken());
+
+    const completed = events.find(
+      (e) => e.kind === "tool_call" && e.payload.name === "shell" && e.payload.status === "ok",
+    );
+    if (completed?.kind !== "tool_call") throw new Error("expected an ok shell tool_call event");
+    expect(completed.payload.toolFileRefs).toMatchObject([
+      { repoUrl: "https://github.com/acme/tree.git", repoRelativePath: "NODE.md" },
+    ]);
+    // The working-turn UI must see the cwd the provider actually used.
+    expect(completed.payload.args).toMatchObject({ cwd: contextTreePath });
+  });
+
   it("emits a one-time MCP unsupported diagnostic when the payload configures MCP servers", async () => {
     const events: SessionEvent[] = [];
     const payload = {

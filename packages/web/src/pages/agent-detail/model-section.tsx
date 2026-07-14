@@ -125,10 +125,13 @@ function FreeFormModelInput({
   disabled?: boolean;
 }) {
   const [draft, setDraft] = useState(value);
-  // Tracks the last value we sent, so Enter followed by an immediate blur
-  // does not fire a second identical save while the first round-trip is still
-  // in flight (the `value` prop only advances after the save lands, and a
-  // duplicate write would carry a stale expectedVersion → spurious conflict).
+  // Latch scoped to ONE Enter→blur sequence: Enter followed by the immediate
+  // blur must not fire a second identical save while the first round-trip is
+  // still in flight (the `value` prop only advances after the save lands, and
+  // a duplicate write would carry a stale expectedVersion → spurious
+  // conflict). The latch expires on refocus (and on a value round-trip), so a
+  // FAILED save stays retryable with the same intended model — the user
+  // clicks back in and presses Enter again.
   const lastSentRef = useRef<string | null>(null);
   useEffect(() => {
     setDraft(value);
@@ -145,6 +148,9 @@ function FreeFormModelInput({
     <Input
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => {
+        lastSentRef.current = null;
+      }}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") commit();
