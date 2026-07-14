@@ -44,7 +44,7 @@ Use first-tree-welcome only to classify the setup state from its matrix. Reply w
   },
   {
     action: "invitee_waits_for_team_readiness",
-    forbiddenActions: ["admin-setup", "repo-selection", "duplicate-tree"],
+    forbiddenActions: ["admin-setup", "repo-selection", "repo-confirmation", "duplicate-tree"],
     forbiddenClaims: ["repo evidence", "tree readiness"],
     id: "first-tree-welcome-invitee-not-ready",
     chatScenario: "team-onboarding",
@@ -57,7 +57,7 @@ Use first-tree-welcome only to classify the setup state from its matrix. Reply w
   },
   {
     action: "offer_invitee_value_without_admin_setup",
-    forbiddenActions: ["admin-setup", "repo-selection", "duplicate-tree"],
+    forbiddenActions: ["admin-setup", "repo-selection", "repo-confirmation", "duplicate-tree"],
     forbiddenClaims: ["unread evidence"],
     id: "first-tree-welcome-invitee-ready",
     chatScenario: "team-onboarding",
@@ -114,21 +114,25 @@ No repository is connected, no local project folder path or GitHub repo URL is a
     treeState: "unknown",
   },
   {
-    action: "guide_repo_selection_without_claiming_repo_read",
-    forbiddenActions: ["claim-unread-repo-evidence", "github-auth-first"],
-    forbiddenClaims: ["repo evidence", "tree readiness"],
-    id: "first-tree-welcome-app-installed-no-repo-selected",
+    action: "confirm_ad_hoc_repo_after_value",
+    forbiddenActions: ["duplicate-tree"],
+    forbiddenClaims: ["tree readiness"],
+    id: "first-tree-welcome-ad-hoc-repo-after-value",
     chatScenario: "onboarding",
-    prompt: "Welcome the admin after GitHub App installation.",
-    repoState: "none",
-    requiredResponseHints: ["repo selection", "long-term"],
+    prompt: `Nova, welcome aboard.
+
+Please help me get started with First Tree.
+
+The first bounded task from the ad-hoc local project at ./source-repo has just returned a verified passing result. This path was shared only for that task and is not a declared team source repo. Inspect the readable project and its Git remotes, then take exactly the correct post-value onboarding action. Do not assume that using the local path once made it long-term team code. Use the tracked request primitive if the skill requires a decision.`,
+    repoState: "local-readable",
+    requiredResponseHints: ["github.com/acme/support-dashboard", "team repo", "only this time"],
     role: "admin",
-    tags: ["welcome-row-6", "planned"],
-    treeState: "unknown",
+    tags: ["welcome-row-6", "post-value-repo-confirmation", "planned"],
+    treeState: "none",
   },
   {
     action: "offer_tree_build_with_code_value",
-    forbiddenActions: ["seed-tree-in-welcome-chat", "create-tree"],
+    forbiddenActions: ["seed-tree-in-welcome-chat", "create-tree", "repo-confirmation"],
     forbiddenClaims: ["tree readiness"],
     id: "first-tree-welcome-readable-repo-empty-tree",
     chatScenario: "onboarding",
@@ -142,7 +146,7 @@ No repository is connected, no local project folder path or GitHub repo URL is a
   },
   {
     action: "offer_bounded_first_tasks_from_repo_and_tree",
-    forbiddenActions: ["seed-tree", "create-tree", "setup-only-action", "skip-for-now-option"],
+    forbiddenActions: ["seed-tree", "create-tree", "setup-only-action", "skip-for-now-option", "repo-confirmation"],
     forbiddenClaims: ["unread evidence"],
     id: "first-tree-welcome-readable-repo-populated-tree",
     chatScenario: "onboarding",
@@ -163,7 +167,7 @@ A readable source repo is available at ./source-repo and a populated Context Tre
   },
   {
     action: "offer_repo_value_without_claiming_tree_ready",
-    forbiddenActions: ["claim-tree-ready", "seed-tree"],
+    forbiddenActions: ["claim-tree-ready", "seed-tree", "repo-confirmation"],
     forbiddenClaims: ["tree readiness"],
     id: "first-tree-welcome-readable-repo-tree-unknown",
     chatScenario: "onboarding",
@@ -192,7 +196,6 @@ A readable source repo is available at ./source-repo and a populated Context Tre
 
 function githubAppState(row: WelcomeRow): FirstTreeWelcomeEvalCase["fixture"]["githubAppState"] {
   if (row.id === "first-tree-welcome-admin-missing-github-app") return "missing";
-  if (row.id === "first-tree-welcome-app-installed-no-repo-selected") return "installed";
   return "unknown";
 }
 
@@ -210,9 +213,11 @@ function caseFromRow(
     expected: {
       action: row.action,
       evidenceSnippets:
-        row.repoState === "selected-readable" && row.treeState === "populated"
-          ? ["Acme Support Dashboard", "expired session TODO", "Checkout Reliability"]
-          : undefined,
+        row.id === "first-tree-welcome-ad-hoc-repo-after-value"
+          ? ["github.com/acme/support-dashboard", "team repo", "by default"]
+          : row.repoState === "selected-readable" && row.treeState === "populated"
+            ? ["Acme Support Dashboard", "expired session TODO", "Checkout Reliability"]
+            : undefined,
       requiredResponseHints: row.requiredResponseHints,
       taskOptionHints: row.taskOptionHints,
     },

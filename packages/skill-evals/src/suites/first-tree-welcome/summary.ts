@@ -38,8 +38,8 @@ function processPass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): 
   if (evalCase.expected.action === "value_first_then_setup_handoff") {
     return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
   }
-  if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
-    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  if (evalCase.expected.action === "confirm_ad_hoc_repo_after_value") {
+    return metrics.repoRemoteReadObserved && !metrics.treeEvidenceReadObserved && metrics.chatAskCount === 1;
   }
   if (evalCase.expected.action === "offer_tree_build_with_code_value") {
     return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
@@ -73,8 +73,16 @@ function outcomePass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): 
   if (evalCase.expected.action === "value_first_then_setup_handoff") {
     return true;
   }
-  if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
-    return !metrics.taskOptionsObserved;
+  if (evalCase.expected.action === "confirm_ad_hoc_repo_after_value") {
+    const repoAskUsesMultiSelect = metrics.firstTreeArgv.some(
+      (argv) => argv[0] === "chat" && argv[1] === "ask" && argv.includes("--multi-select"),
+    );
+    return (
+      metrics.repoConfirmationObserved &&
+      metrics.chatOptionCount === 2 &&
+      !repoAskUsesMultiSelect &&
+      !metrics.treeBuildOptionObserved
+    );
   }
   if (evalCase.expected.action === "offer_tree_build_with_code_value") {
     return metrics.taskOptionsObserved;
@@ -113,11 +121,11 @@ export function buildGrading(
       evidence("routing_pass", `first-tree-welcome skill file read observed=${metrics.skillFileReadObserved}`),
       evidence(
         "process_pass",
-        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; repo evidence read=${metrics.repoEvidenceReadObserved}; tree evidence read=${metrics.treeEvidenceReadObserved}; chat asks=${metrics.chatAskCount}`,
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; repo evidence read=${metrics.repoEvidenceReadObserved}; repo remote read=${metrics.repoRemoteReadObserved}; tree evidence read=${metrics.treeEvidenceReadObserved}; chat asks=${metrics.chatAskCount}`,
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; expected evidence observed=${metrics.expectedEvidenceObserved}; task options observed=${metrics.taskOptionsObserved}; chat option count=${metrics.chatOptionCount ?? "n/a"}`,
+        `expected response observed=${metrics.expectedResponseObserved}; expected evidence observed=${metrics.expectedEvidenceObserved}; repo confirmation observed=${metrics.repoConfirmationObserved}; task options observed=${metrics.taskOptionsObserved}; chat option count=${metrics.chatOptionCount ?? "n/a"}`,
       ),
       evidence(
         "risk_pass",
@@ -163,9 +171,11 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - expectedAction: ${summary.expectedAction}
 - skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
 - repoEvidenceReadObserved: ${markdownBool(summary.metrics.repoEvidenceReadObserved)}
+- repoRemoteReadObserved: ${markdownBool(summary.metrics.repoRemoteReadObserved)}
 - treeEvidenceReadObserved: ${markdownBool(summary.metrics.treeEvidenceReadObserved)}
 - expectedEvidenceObserved: ${markdownBool(summary.metrics.expectedEvidenceObserved)}
 - expectedResponseObserved: ${markdownBool(summary.metrics.expectedResponseObserved)}
+- repoConfirmationObserved: ${markdownBool(summary.metrics.repoConfirmationObserved)}
 - taskOptionsObserved: ${markdownBool(summary.metrics.taskOptionsObserved)}
 - chatAskCount: ${summary.metrics.chatAskCount}
 - chatOptionCount: ${summary.metrics.chatOptionCount ?? "n/a"}

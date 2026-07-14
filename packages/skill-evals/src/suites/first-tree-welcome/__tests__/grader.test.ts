@@ -32,7 +32,9 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     forbiddenClaimHits: [],
     forbiddenSideEffectHits: [],
     fixtureValidationOk: true,
+    repoConfirmationObserved: false,
     repoEvidenceReadObserved: false,
+    repoRemoteReadObserved: false,
     runnerExitCode: 0,
     skillFileReadObserved: true,
     sourceRepoChanged: false,
@@ -327,6 +329,182 @@ describe("first-tree-welcome grader", () => {
     }
   });
 
+  it("detects a forbidden long-term repo confirmation for an invitee", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-invitee-repo-confirmation-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-invitee-not-ready-periodic");
+      const metrics = deriveMetrics(
+        [skillReadEvent(), assistantMessageEvent("Should I save this as the long-term team repo for everyone?")],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenActionHits).toContain("repo-confirmation");
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("passes the post-value ad-hoc repo confirmation with the exact candidate and two choices", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-post-value-repo-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-ad-hoc-repo-after-value-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          repoEvidenceReadEvent(),
+          {
+            event: {
+              item: {
+                command: "git -C source-repo remote get-url --all origin",
+                type: "command_execution",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+          {
+            argv: [
+              "chat",
+              "ask",
+              "baixiaohang",
+              "I identified github.com/acme/support-dashboard. Should this become the team repo, available to the team's agents by default?",
+              "--options",
+              JSON.stringify([
+                {
+                  description: "Guide me to confirm it in team settings.",
+                  label: "Use as team repo",
+                },
+                {
+                  description: "Keep the local project temporary and do not save it.",
+                  label: "Only this time",
+                },
+              ]),
+            ],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.repoEvidenceReadObserved).toBe(true);
+      expect(metrics.repoRemoteReadObserved).toBe(true);
+      expect(metrics.repoConfirmationObserved).toBe(true);
+      expect(metrics.chatAskCount).toBe(1);
+      expect(metrics.chatOptionCount).toBe(2);
+      expect(metrics.treeBuildOptionObserved).toBe(false);
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+      expect(casePassed(evalCase, metrics)).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects agent-private add-repo as a forbidden welcome side effect", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-agent-add-repo-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-ad-hoc-repo-after-value-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          {
+            argv: ["agent", "config", "add-repo", "agent-uuid", "https://github.com/acme/support-dashboard"],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenSideEffectHits).toContain(
+        "first-tree agent config add-repo agent-uuid https://github.com/acme/support-dashboard",
+      );
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects multi-select for the mutually exclusive repo confirmation", () => {
+    const evalCase = findCase("first-tree-welcome-ad-hoc-repo-after-value-periodic");
+    const metrics = baseMetrics({
+      chatAskCount: 1,
+      chatOptionCount: 2,
+      firstTreeArgv: [["chat", "ask", "baixiaohang", "Confirm repo", "--options", "[]", "--multi-select"]],
+      repoConfirmationObserved: true,
+      repoRemoteReadObserved: true,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("rejects a direct team-resource API write as a forbidden welcome side effect", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-resource-post-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-ad-hoc-repo-after-value-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          {
+            event: {
+              item: {
+                command: 'curl -X POST https://first-tree.example/api/orgs/acme/resources --data \'{"type":"repo"}\'',
+                type: "command_execution",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenSideEffectHits).toEqual([
+        'curl -X POST https://first-tree.example/api/orgs/acme/resources --data \'{"type":"repo"}\'',
+      ]);
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects repo confirmation when the repo is already a declared team source", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-declared-repo-confirmation-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-readable-repo-populated-tree");
+      const metrics = deriveMetrics(
+        [skillReadEvent(), assistantMessageEvent("Should I save this as the long-term team repo for everyone?")],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenActionHits).toContain("repo-confirmation");
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("passes readable-repo-empty-tree when Build your Context Tree is offered as a first-class option", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-empty-tree-build-option-"));
     try {
@@ -518,10 +696,14 @@ describe("first-tree-welcome grader", () => {
       },
     ],
     [
-      "first-tree-welcome-app-installed-no-repo-selected-periodic",
+      "first-tree-welcome-ad-hoc-repo-after-value-periodic",
       {
-        finalResponse:
-          "The GitHub App is installed; select a repo for long-term team setup before I claim repo evidence.",
+        chatAskCount: 1,
+        chatOptionCount: 2,
+        finalResponse: "I identified github.com/acme/support-dashboard as the team repo candidate.",
+        repoConfirmationObserved: true,
+        repoEvidenceReadObserved: true,
+        repoRemoteReadObserved: true,
       },
     ],
     [
