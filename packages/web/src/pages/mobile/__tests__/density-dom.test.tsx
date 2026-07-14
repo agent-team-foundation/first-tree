@@ -185,4 +185,26 @@ describe("mobile density tiers", () => {
     expect(listCard.querySelector("[data-mobile-card-title]")?.className).toContain("text-mobile-subtitle");
     expect(harness.container.querySelector('[data-mobile-card="feed"]')).toBeNull();
   });
+
+  it("renders card previews with inline markdown peeled, not as literal markers", async () => {
+    meChatMocks.listMeChats.mockReset();
+    meChatMocks.listMeChats.mockResolvedValue({
+      rows: [
+        chatRow({
+          chatId: "md",
+          title: "Markdown preview",
+          openRequestCount: 1,
+          description: "**Task:** run the seed (`first-tree-seed`)",
+        }),
+      ],
+      nextCursor: null,
+    });
+    renderWithClient(harness, <MobileNowPage />, "/m/now");
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("Markdown preview"));
+
+    const preview = harness.container.querySelector("[data-mobile-card-preview]");
+    expect(preview?.textContent).toBe("Task: run the seed (first-tree-seed)");
+    expect(preview?.textContent).not.toContain("**");
+    expect(preview?.textContent).not.toContain("`");
+  });
 });

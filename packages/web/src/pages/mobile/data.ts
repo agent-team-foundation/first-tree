@@ -1,4 +1,5 @@
 import type { MeChatRow } from "@first-tree/shared";
+import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { rowAttentionReason } from "../workspace/conversations/group-rows.js";
 
 export type MobileChatSignalTone = "needs-you" | "error" | "unread" | "working" | "idle";
@@ -54,7 +55,13 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
 }
 
 export function mobileChatPreview(row: MeChatRow): string {
-  return row.description?.trim() || row.lastMessagePreview?.trim() || "No messages yet.";
+  const raw = row.description?.trim() || row.lastMessagePreview?.trim();
+  // Card previews are a one-line glance, not a rendered surface: peel inline
+  // markdown so `**Task:**` / `` `code` `` don't leak their literal markers.
+  // Fall back on the *stripped* value — a preview that is only markup (e.g. an
+  // `![](url)` image) strips to empty and must show the placeholder, not blank.
+  const stripped = raw ? stripInlineMarkdown(raw) : "";
+  return stripped || "No messages yet.";
 }
 
 export function mobileFeedReasonLabel(row: MeChatRow): string {
