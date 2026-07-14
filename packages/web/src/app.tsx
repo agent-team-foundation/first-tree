@@ -496,7 +496,10 @@ function useMobileExperienceState(): MobileExperienceState {
   if (!channelSettled) {
     return { enabled: false, settled: false };
   }
-  return { enabled: channel === "dev" || channel === "staging", settled: true };
+  return {
+    enabled: channel === "dev" || channel === "staging" || channel === "prod",
+    settled: true,
+  };
 }
 
 function MobileExperienceGate() {
