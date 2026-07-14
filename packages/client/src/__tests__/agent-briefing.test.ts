@@ -412,6 +412,19 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).toContain("If the current member is not an org admin");
     expect(briefing).toContain("hidden server sync path");
 
+    // Issues/PRs the agent files for the user default to the repo the work is
+    // about (the bound source repo), not reflexively First Tree's own repo.
+    // Regression guard for agents misfiling a user's issue into
+    // agent-team-foundation/first-tree; a First Tree platform defect still
+    // routes through `first-tree-file-bug`.
+    expect(briefing).toContain("target the repo the work is about with an explicit `--repo`");
+    expect(briefing).toMatch(
+      /Don't default to First Tree's own repository unless the work is genuinely about First Tree itself/,
+    );
+    expect(briefing).toContain(
+      "a First Tree platform defect specifically goes through the `first-tree-file-bug` skill",
+    );
+
     expect(briefing).toContain("Creating a PR or issue **never** follows it");
     expect(briefing).toContain("first-tree github follow <url>");
     expect(briefing).toMatch(/clearly unrelated to this chat's task/);
