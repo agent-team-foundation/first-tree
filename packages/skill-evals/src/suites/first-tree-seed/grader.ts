@@ -1165,7 +1165,7 @@ function legacyHandoffObserved(text: string): boolean {
 
     const handoffContext = clauses.slice(index, index + 4).join(". ");
     const handoffMatch =
-      /\b(?:merge\w*|(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\s+land(?:s|ed|ing)?)\b/iu.exec(
+      /(?:\b(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\b\s+(?:(?:is|gets|was|has\s+been|will\s+be)\s+)?(?:merge\w*|land(?:s|ed|ing)?)\b)|(?:\b(?:merge\w*|land(?:s|ed|ing)?)\b\s+(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\b)|(?:\b(?:once|after|when)\s+merged\b)/iu.exec(
         handoffContext,
       );
     if (!handoffMatch) return false;
@@ -1175,6 +1175,9 @@ function legacyHandoffObserved(text: string): boolean {
         beforeHandoff,
       ) ||
       /\b(?:it|this\s+(?:seed\s+)?(?:pr|pull\s+request)|that\s+(?:seed\s+)?(?:pr|pull\s+request)|the\s+same\s+(?:seed\s+)?(?:pr|pull\s+request))\b[\s\S]{0,80}\b(?:contain\w*|includ\w*|cover\w*|carr\w*|hold\w*)\b[\s\S]{0,50}\b(?:content|lea(?:f|ves))\b/iu.test(
+        beforeHandoff,
+      ) ||
+      /\b(?:content|lea(?:f|ves))\b[\s\S]{0,60}\b(?:to|in|into|on)\b[\s\S]{0,40}\b(?:it|this\s+(?:seed\s+)?(?:pr|pull\s+request)|that\s+same\s+(?:seed\s+)?(?:pr|pull\s+request)|the\s+same\s+(?:seed\s+)?(?:pr|pull\s+request))\b/iu.test(
         beforeHandoff,
       );
     if (samePrIncludesLeaves) return false;

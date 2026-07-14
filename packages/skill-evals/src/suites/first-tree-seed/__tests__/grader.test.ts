@@ -566,6 +566,68 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not treat merging sub-agent work as the seed PR handoff", () => {
+    const responses = [
+      "I will open one seed PR with the structure. Once I merge the sub-agent drafts, I will add the initial leaves to that same PR before you merge it.",
+      "I will open one seed PR with the structure. Once the sub-agent branches merge, I will add the initial leaves to that same PR before you merge it.",
+    ];
+
+    for (const [index, finalResponse] of responses.entries()) {
+      const tempRoot = mkdtempSync(join(tmpdir(), `seed-eval-single-pr-merge-sub-agent-work-${index}-`));
+      try {
+        const metrics = deriveMetrics(
+          [
+            {
+              event: { item: { text: finalResponse, type: "agent_message" }, type: "item.completed" },
+              type: "codex_event",
+            },
+          ],
+          findCase("same-chat-approved-skeleton-builds-single-pr"),
+          fixtureValidation(),
+          0,
+          baseRunPaths(tempRoot),
+          join(tempRoot, "context-tree"),
+        );
+
+        expect(metrics.singlePrBuildObserved, finalResponse).toBe(true);
+        expect(metrics.legacyHandoffObserved, finalResponse).toBe(false);
+        expect(metrics.forbiddenActionHits, finalResponse).toEqual([]);
+      } finally {
+        rmSync(tempRoot, { force: true, recursive: true });
+      }
+    }
+  });
+
+  it("treats merging that structure PR before leaves as the retired handoff", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-merge-structure-pr-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will open a structure PR now. Once you merge that structure PR, I will add the leaves.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.legacyHandoffObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("legacy_two_pr_handoff");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("rejects a structure-first PR whose merge gates leaf drafting", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-structure-first-"));
     try {
