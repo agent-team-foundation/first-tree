@@ -389,7 +389,7 @@ describe("ClientsPage computer cards", () => {
     await act(async () => root.unmount());
   });
 
-  it("renders admin cards, team table, action dialogs, runtime commands, and connect dialog", async () => {
+  it("renders admin cards, team list, action dialogs, runtime commands, and connect dialog", async () => {
     const { ClientsPage } = await import("../../clients.js");
     const { container, root } = await renderDom(<ClientsPage />);
 

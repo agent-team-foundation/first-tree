@@ -1,4 +1,3 @@
-import type { CapabilityEntry, ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -16,14 +15,6 @@ import { listMembers } from "../api/members.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import {
-  DenseTable,
-  DenseTableBody,
-  DenseTableCell,
-  DenseTableHead,
-  DenseTableHeader,
-  DenseTableRow,
-} from "../components/ui/dense-table.js";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -32,13 +23,11 @@ import {
   DialogTitle,
 } from "../components/ui/dialog.js";
 import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
-import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { Section } from "../components/ui/section.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
-import { formatDate, formatRelative } from "../lib/utils.js";
 import { ComputerCard } from "./clients/cards/computer-card.js";
-import { PROVIDER_LABEL, PROVIDER_ORDER, providerInstallHint } from "./clients/cards/shared/providers.js";
+import { formatOfflineDuration } from "./clients/cards/view-models.js";
 import { ComputerStatusPill } from "./clients/computer-status-pill.js";
 import { DemoNavigator, useDemoScenarioParam } from "./clients/demo-navigator.js";
 import { compareByPillPriority, deriveComputerStatus } from "./clients/derive-status.js";
@@ -87,11 +76,6 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         return DEMO_AGENT_NAMES[uuid] ?? realAgentName(uuid);
       }
     : realAgentName;
-  // Personal scope: a user typically has 1-3 computers, so expand by default
-  // and only let them collapse rows they actively want to hide. New clients
-  // arriving via the 10s poll auto-expand too — we only treat the closed set
-  // as "rows the user explicitly closed".
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   // Admin's Team computers section starts collapsed so it doesn't push the
   // viewer's own machines below the fold. Visible count badge on the
   // header still tells admins "you have N teammates" — they click to
@@ -577,20 +561,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   {teamList.length === 0 ? (
                     <EmptyCardsNote message="No other team computers." />
                   ) : teamExpanded ? (
-                    // Team rows stay as table for now — read-only audit
-                    // view. Per-row inline affordances (Generate new
-                    // token / install guide) don't apply to teammates;
-                    // the full team-card redesign with "Copy suggestion
-                    // → Alice" buttons is deferred to a follow-up PR
-                    // (proposal §"Variant D").
-                    <TeamComputersTable
-                      teamList={teamList}
-                      collapsedIds={collapsedIds}
-                      setCollapsedIds={setCollapsedIds}
-                      agentName={agentName}
-                      getClientAgents={getClientAgents}
-                      resolveOwner={resolveOwner}
-                    />
+                    <TeamComputersList teamList={teamList} resolveOwner={resolveOwner} />
                   ) : null}
                 </Section>
               </>
@@ -652,173 +623,139 @@ function EmptyCardsNote({ message }: { message: string }) {
 }
 
 /**
- * Team computers table — preserved from pre-PR-B as the admin's
- * read-only audit view. Wraps the existing `ClientRow` component with
- * the table chrome that used to live inline in `ClientsPage`.
+ * Team computers — the admin's read-only audit list. One compact line per
+ * machine (hostname focus + `owner · OS · version` meta), grouped so
+ * unhealthy machines ("Needs attention": auth-expired / setup-incomplete /
+ * offline) bubble to the top; a fully-healthy fleet renders as a flat list
+ * with no group chrome. Replaces the pre-PR-B DenseTable audit table.
+ *
+ * These rows are intentionally not expandable: the per-machine runtime /
+ * agent detail is owner-only (the capability probe 403s on non-owners), so
+ * there is nothing to reveal for a teammate's computer. The wrapping div
+ * bleeds the rows past the Section's horizontal padding so a row's hover /
+ * needs-attention tint spans the full width while the hostname still lines
+ * up with the Section title.
  */
-function TeamComputersTable({
+function TeamComputersList({
   teamList,
-  collapsedIds,
-  setCollapsedIds,
-  agentName,
-  getClientAgents,
   resolveOwner,
 }: {
   teamList: HubClient[];
-  collapsedIds: Set<string>;
-  setCollapsedIds: (updater: (prev: Set<string>) => Set<string>) => void;
-  agentName: (uuid: string | null | undefined) => string;
-  getClientAgents: (clientId: string) => RuntimeAgent[];
   resolveOwner: (client: HubClient) => { text: string; title?: string };
 }) {
-  // Wrapping div pulls the table left by the first cell's left padding
-  // so the chevron column lines up with the parent Section's title left
-  // edge. Without this the hostname column sits inside the section,
-  // breaking the page's vertical alignment rhythm. Audit-only table,
-  // no horizontal scroll concerns — safe to bleed past padding.
+  const sorted = useMemo(() => [...teamList].sort(compareByPillPriority), [teamList]);
+  const attention = sorted.filter((client) => deriveComputerStatus(client).pill !== "ready");
+  const ready = sorted.filter((client) => deriveComputerStatus(client).pill === "ready");
+  // Group headers earn their chrome only once something needs attention — a
+  // healthy fleet is a plain flat list, no "Ready" header stating the obvious.
+  const grouped = attention.length > 0;
   return (
-    <div style={{ marginLeft: "calc(-1 * var(--sp-3_5))", marginRight: "calc(-1 * var(--sp-3_5))" }}>
-      <DenseTable>
-        <DenseTableHeader>
-          <DenseTableRow>
-            <DenseTableHead style={{ width: "var(--sp-4)" }} />
-            <DenseTableHead>Hostname</DenseTableHead>
-            <DenseTableHead>Owner</DenseTableHead>
-            <DenseTableHead>OS</DenseTableHead>
-            <DenseTableHead>First Tree</DenseTableHead>
-            <DenseTableHead>Agents</DenseTableHead>
-            <DenseTableHead>Last seen</DenseTableHead>
-            <DenseTableHead>Status</DenseTableHead>
-          </DenseTableRow>
-        </DenseTableHeader>
-        <DenseTableBody>
-          {teamList.map((client) => {
-            const isExpanded = !collapsedIds.has(client.id);
-            const boundAgents = getClientAgents(client.id);
-            return (
-              <ClientRow
-                key={client.id}
-                client={client}
-                boundAgents={boundAgents}
-                isExpanded={isExpanded}
-                agentName={agentName}
-                onToggle={() =>
-                  setCollapsedIds((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(client.id)) next.delete(client.id);
-                    else next.add(client.id);
-                    return next;
-                  })
-                }
-                onDisconnect={() => {}}
-                onRetire={() => {}}
-                onReconnect={() => {}}
-                showOwner
-                ownerLabel={resolveOwner(client)}
-                restricted
-              />
-            );
-          })}
-        </DenseTableBody>
-      </DenseTable>
+    <div
+      className="team-computers-list"
+      style={{ marginLeft: "calc(-1 * var(--sp-3_5))", marginRight: "calc(-1 * var(--sp-3_5))" }}
+    >
+      {grouped && <TeamGroupHeader label="Needs attention" count={attention.length} attention />}
+      {attention.map((client) => (
+        <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
+      ))}
+      {grouped && ready.length > 0 && <TeamGroupHeader label="Ready" count={ready.length} />}
+      {ready.map((client) => (
+        <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
+      ))}
     </div>
   );
 }
 
 /**
- * Runtime-provider capability matrix shown inside the expanded row of the
- * Computers table. The snapshot is pre-loaded with the list response now
- * (single-source via `/me/clients` / `/orgs/:orgId/clients`), so the
- * matrix renders synchronously — no extra round-trip when a row opens.
- *
- * Constants for label / order / hints live in `cards/shared/providers.ts`
- * — the card-based IA uses the same vocabulary, so duplicating strings
- * here would invite drift.
+ * Group divider for the health split. The "Needs attention" header carries a
+ * warm `--fg-needs-you-strong` tint (the one meaningful color on this audit
+ * list); "Ready" stays neutral. The row status pills carry each machine's
+ * specific state hue — the group is set apart by order + this header, not by a
+ * full-row color wash.
  */
-function CapabilityMatrix({ capabilities, os }: { capabilities: ClientCapabilities; os: string | null }) {
-  const empty = Object.keys(capabilities).length === 0;
+function TeamGroupHeader({ label, count, attention = false }: { label: string; count: number; attention?: boolean }) {
   return (
-    <>
-      <UppercaseLabel style={{ display: "block", marginBottom: "var(--sp-1_5)" }}>Runtimes</UppercaseLabel>
-      {empty ? (
-        <div className="text-body" style={{ color: "var(--fg-3)" }}>
-          Capabilities not yet reported. Reconnect this computer to refresh.
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {PROVIDER_ORDER.map((provider) => (
-            <ProviderRow key={provider} provider={provider} entry={capabilities[provider] ?? null} os={os} />
-          ))}
-        </div>
-      )}
-    </>
+    <UppercaseLabel
+      style={{
+        display: "block",
+        padding: "var(--sp-3) var(--sp-3_5) var(--sp-1_5)",
+        ...(attention ? { color: "var(--fg-needs-you-strong)" } : {}),
+      }}
+    >
+      {label} · {count}
+    </UppercaseLabel>
   );
 }
 
-function ProviderRow({
-  provider,
-  entry,
-  os,
-}: {
-  provider: RuntimeProvider;
-  entry: CapabilityEntry | null;
-  os: string | null;
-}) {
-  const label = PROVIDER_LABEL[provider];
-  if (!entry) {
-    return (
-      <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-        <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
-          {label}
-        </span>
-        <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-          not reported · {providerInstallHint(provider, os)}
-        </span>
-      </div>
-    );
-  }
-  switch (entry.state) {
-    case "ok":
-      return (
-        <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--success)" }}>
-            ✓ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
-          </span>
-        </div>
-      );
-    case "missing":
-      return (
-        <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            ✗ {providerInstallHint(provider, os, entry.error)}
-          </span>
-        </div>
-      );
-    case "error":
-      return (
-        <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--state-error)" }}>
-            error · {entry.error ?? "probe failed"}
-          </span>
-        </div>
-      );
-  }
+/**
+ * Trim the build/channel suffix ("0.5.14-staging.841.1" → "0.5.14"). The
+ * major.minor.patch is the version signal an admin scans for; the build
+ * number is noise on an audit line. The full string stays in the `title`.
+ */
+function shortVersion(version: string): string {
+  const dash = version.indexOf("-");
+  return dash === -1 ? version : version.slice(0, dash);
 }
 
-// Column count in member mode — `chevron | Hostname | OS | First Tree |
-// Agents | Last seen | Status | Actions`. admin mode inserts an Owner column
-// between Hostname and OS, bumping the count by 1.
-const MEMBER_COLSPAN = 8;
-const ADMIN_COLSPAN = MEMBER_COLSPAN + 1;
+function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel: { text: string; title?: string } }) {
+  const status = deriveComputerStatus(client);
+  const version = client.sdkVersion;
+  // "Last seen" is redundant with a live "Ready" pill — fold it into the
+  // status only for offline machines, where "how long" is the actionable bit.
+  const offlineFor = status.pill === "offline" ? formatOfflineDuration(client.lastSeenAt) : null;
+  const agentCount = client.agentCount;
+  return (
+    <div
+      className="team-computer-row"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) var(--sp-20) var(--sp-45)",
+        alignItems: "center",
+        columnGap: "var(--sp-3)",
+        padding: "var(--sp-2_5) var(--sp-3_5)",
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div
+          className="mono text-subtitle"
+          style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          title={client.hostname ?? undefined}
+        >
+          {client.hostname ?? "—"}
+        </div>
+        <div
+          className="text-caption"
+          style={{ color: "var(--fg-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >
+          <span title={ownerLabel.title}>{ownerLabel.text}</span>
+          {client.os ? ` · ${client.os}` : ""}
+          {version ? (
+            <>
+              {" · "}
+              <span className="mono" title={version}>
+                {shortVersion(version)}
+              </span>
+            </>
+          ) : null}
+        </div>
+      </div>
+      <span
+        className="text-caption tnum"
+        style={{ color: agentCount > 0 ? "var(--fg-2)" : "var(--fg-4)", textAlign: "right", whiteSpace: "nowrap" }}
+      >
+        {agentCount} {agentCount === 1 ? "agent" : "agents"}
+      </span>
+      <span className="inline-flex items-center justify-end gap-1.5" style={{ whiteSpace: "nowrap" }}>
+        <ComputerStatusPill pill={status.pill} />
+        {offlineFor ? (
+          <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+            · {offlineFor}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
 
 function TeamLoadErrorBanner() {
   return (
@@ -835,147 +772,5 @@ function TeamLoadErrorBanner() {
     >
       Failed to load team computers. Showing only your computers.
     </div>
-  );
-}
-
-function ClientRow({
-  client,
-  boundAgents,
-  isExpanded,
-  agentName,
-  onToggle,
-  onDisconnect,
-  onRetire,
-  onReconnect,
-  showOwner = false,
-  ownerLabel,
-  restricted = false,
-}: {
-  client: HubClient;
-  boundAgents: RuntimeAgent[];
-  isExpanded: boolean;
-  agentName: (uuid: string | null | undefined) => string;
-  onToggle: () => void;
-  onDisconnect: () => void;
-  onRetire: () => void;
-  onReconnect: () => void;
-  /** When true, render the Owner column between Hostname and OS (admin view). */
-  showOwner?: boolean;
-  /** Resolved owner display value. Required when `showOwner` is true. */
-  ownerLabel?: { text: string; title?: string };
-  /**
-   * Read-only mode for rows the viewer doesn't own (admin viewing team
-   * computers). Collapses three behaviors into one flag because they're
-   * always toggled together:
-   *   - Hides Reconnect / Disconnect / Retire (server-side owner check
-   *     would 403 anyway).
-   *   - Suppresses the expand chevron and ignores `onToggle` so clicking
-   *     the row does nothing (and the capability-matrix `GET /clients/:id`
-   *     — which also 403s on non-owners — is never fired, avoiding both
-   *     wasted retries and a misleading "not reported" fallback).
-   *   - Drops the `interactive` hover styling so the row reads as inert
-   *     metadata, not a clickable target.
-   */
-  restricted?: boolean;
-}) {
-  const colSpan = showOwner ? ADMIN_COLSPAN : MEMBER_COLSPAN;
-  const isOffline = client.status !== "connected";
-  // The expanded sub-row carries owner-only capability data — we never let
-  // it render in restricted mode (see prop doc). `effectiveExpanded` mirrors
-  // `isExpanded` for owner rows and is forced to false for team rows so a
-  // stale collapsed-set never accidentally opens one.
-  const effectiveExpanded = restricted ? false : isExpanded;
-  // Row status pill is computed by `deriveComputerStatus` — pure function
-  // over (status, authState, capabilities). Encodes the priority rules
-  // ("auth expired wins over offline") that previously lived in this
-  // component, and unlocks `setup_incomplete` which the prior visuals
-  // could not express. See `clients/derive-status.ts`.
-  const status = deriveComputerStatus(client);
-  return (
-    <>
-      <DenseTableRow interactive={!restricted} selected={effectiveExpanded} onClick={restricted ? undefined : onToggle}>
-        <DenseTableCell style={{ width: "var(--sp-4)" }}>
-          {restricted ? null : (
-            <span style={{ color: "var(--fg-4)", display: "inline-flex" }}>
-              {effectiveExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            </span>
-          )}
-        </DenseTableCell>
-        <DenseTableCell className="font-medium">{client.hostname ?? "—"}</DenseTableCell>
-        {showOwner && (
-          <DenseTableCell style={{ color: "var(--fg-3)" }} title={ownerLabel?.title}>
-            {ownerLabel?.text ?? "—"}
-          </DenseTableCell>
-        )}
-        <DenseTableCell style={{ color: "var(--fg-3)" }}>{client.os ?? "—"}</DenseTableCell>
-        <DenseTableCell className="mono text-label" style={{ color: "var(--fg-3)" }}>
-          {client.sdkVersion ?? "—"}
-        </DenseTableCell>
-        <DenseTableCell>
-          <span className="mono tnum text-label">{client.agentCount}</span>
-        </DenseTableCell>
-        <DenseTableCell
-          className="mono text-caption"
-          style={{ color: "var(--fg-4)" }}
-          title={formatDate(client.lastSeenAt)}
-        >
-          {formatRelative(client.lastSeenAt)}
-        </DenseTableCell>
-        <DenseTableCell>
-          <ComputerStatusPill pill={status.pill} />
-        </DenseTableCell>
-        {/* Overflow menu for row actions. Reconnect / Disconnect / Retire
-            are all low-frequency operations (Retire is destructive and
-            once-off, Disconnect is rare, Reconnect only matters when offline)
-            so a kebab menu keeps the table clean. Team rows in admin view
-            get no menu — the underlying ops are owner-checked server-side
-            (DELETE /clients/:id 403s on non-owners), so surfacing them here
-            would just produce errors. */}
-        <DenseTableCell style={{ width: "var(--hairline)", whiteSpace: "nowrap" }}>
-          {restricted ? null : (
-            <div className="flex items-center justify-end">
-              <RowActionsMenu
-                ariaLabel="Computer actions"
-                actions={[
-                  ...(isOffline ? [{ key: "reconnect", label: "Reconnect", onSelect: onReconnect }] : []),
-                  { key: "disconnect", label: "Disconnect", onSelect: onDisconnect },
-                  { key: "retire", label: "Retire", destructive: true, onSelect: onRetire },
-                ]}
-              />
-            </div>
-          )}
-        </DenseTableCell>
-      </DenseTableRow>
-      {effectiveExpanded && (
-        <tr style={{ background: "var(--bg-sunken)" }}>
-          <DenseTableCell />
-          <DenseTableCell colSpan={colSpan - 1} style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-3_5)" }}>
-            <CapabilityMatrix capabilities={client.capabilities} os={client.os} />
-            {boundAgents.length > 0 && (
-              <>
-                <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: "var(--sp-1_5)" }}>
-                  Agents · {boundAgents.length}
-                </UppercaseLabel>
-                <div className="flex flex-col gap-1">
-                  {boundAgents.map((a) => (
-                    <div key={a.agentId} className="flex items-center gap-2.5 text-body">
-                      <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
-                        {agentName(a.agentId)}
-                      </span>
-                      <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
-                      {a.activeSessions !== null && (
-                        <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
-                          {a.activeSessions} / {a.totalSessions ?? 0} sessions
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </DenseTableCell>
-        </tr>
-      )}
-    </>
   );
 }
