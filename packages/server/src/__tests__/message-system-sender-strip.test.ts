@@ -11,7 +11,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  * could otherwise POST a regular text message with that key set and the
  * UI would render it as if it came from GitHub. The service layer
  * unconditionally strips the key unless the caller opts in via
- * `allowSystemSender: true` — only `github-delivery.deliverNormalizedEvent`
+ * `allowSystemSender: true` — only `github-delivery.deliverGithubEvent`
  * does. These tests pin both halves: the strip on the default path and
  * the persistence when the trusted opt-in is set.
  */

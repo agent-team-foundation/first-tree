@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { githubEntityTypeSchema } from "./chat-metadata.js";
-import { webhookSourceSchema } from "./webhook-source.js";
+import { scmIngressContextSchema } from "./scm-source.js";
 
 /**
- * Why a participant ended up in the Stage 2 `involves` list. `subscribed`
+ * Why a participant ended up in the normalized SCM event's `targets` list. `subscribed`
  * is reserved for the `(human, delegate, entity)` row already present in
  * `github_entity_chat_mappings` — it lives on the audience target, not on
  * an `involves` entry, which is why it doesn't appear here.
@@ -14,7 +14,7 @@ export type InvolveReason = z.infer<typeof involveReasonSchema>;
 
 /**
  * Stable kind tag that downstream consumers (delivery, card rendering)
- * read in place of the raw `(eventType, action)` pair. Stage 1 collapses
+ * read in place of the provider `(eventType, action)` pair. The adapter collapses
  * GitHub's wider action vocabulary into this set so callers don't have to
  * special-case every action string.
  *
@@ -42,21 +42,21 @@ export const NORMALIZED_EVENT_KINDS = [
 export const normalizedEventKindSchema = z.enum(NORMALIZED_EVENT_KINDS);
 export type NormalizedEventKind = z.infer<typeof normalizedEventKindSchema>;
 
-const normalizedEntitySchema = z.object({
+const normalizedScmEntitySchema = z.object({
   type: githubEntityTypeSchema,
-  repo: z.string().min(1),
+  projectKey: z.string().min(1),
   key: z.string().min(1),
   title: z.string().optional(),
   url: z.string().optional(),
 });
 
-const normalizedActorSchema = z.object({
-  githubLogin: z.string().min(1),
+const normalizedScmActorSchema = z.object({
+  externalUsername: z.string().min(1),
   isBot: z.boolean(),
 });
 
-const normalizedInvolveSchema = z.object({
-  githubLogin: z.string().min(1),
+const normalizedScmTargetSchema = z.object({
+  externalUsername: z.string().min(1),
   reason: involveReasonSchema,
 });
 
@@ -72,24 +72,22 @@ const normalizedRelatedRefSchema = z.object({
 });
 
 /**
- * Output of Stage 1 (`normalizeGithubEvent`). Pure data; no DB or chat
- * references. Carries everything Stage 2 needs to compute audience and
- * Stage 3 needs to render the card — without leaking the raw GitHub
- * payload's wire shape any further.
+ * Provider-neutral output of an SCM adapter. Pure data; no DB, chat, raw
+ * payload, or provider credential references. Carries everything the shared
+ * processing seam needs to claim the request and everything provider-owned
+ * audience/delivery adapters need to route and render it.
  */
-export const normalizedEventSchema = z.object({
-  source: webhookSourceSchema,
-  deliveryId: z.string().nullable(),
-  rawEventType: z.string().min(1),
-  rawAction: z.string().nullable(),
-  entity: normalizedEntitySchema,
-  actor: normalizedActorSchema,
+export const normalizedScmEventSchema = scmIngressContextSchema.extend({
+  eventType: z.string().min(1),
+  action: z.string().nullable(),
+  entity: normalizedScmEntitySchema,
+  actor: normalizedScmActorSchema,
   kind: normalizedEventKindSchema,
-  involves: z.array(normalizedInvolveSchema),
+  targets: z.array(normalizedScmTargetSchema),
   surface: normalizedSurfaceSchema,
   relatedRefs: z.array(normalizedRelatedRefSchema),
 });
-export type NormalizedEvent = z.infer<typeof normalizedEventSchema>;
+export type NormalizedScmEvent = z.infer<typeof normalizedScmEventSchema>;
 
 /**
  * Why the recipient is being told about this event. `subscribed` covers

@@ -669,10 +669,10 @@ export {
   type InvolveReason,
   involveReasonSchema,
   NORMALIZED_EVENT_KINDS,
-  type NormalizedEvent,
   type NormalizedEventKind,
+  type NormalizedScmEvent,
   normalizedEventKindSchema,
-  normalizedEventSchema,
+  normalizedScmEventSchema,
 } from "./schemas/normalized-event.js";
 export {
   NOTIFICATION_SEVERITIES,
@@ -876,6 +876,18 @@ export {
   runtimeProviderSchema,
 } from "./schemas/runtime-provider.js";
 export {
+  SCM_INGRESS_AUTHORITIES,
+  SCM_PROVIDERS,
+  type ScmIngressAuthority,
+  type ScmIngressContext,
+  type ScmProvider,
+  type ScmSource,
+  scmIngressAuthoritySchema,
+  scmIngressContextSchema,
+  scmProviderSchema,
+  scmSourceSchema,
+} from "./schemas/scm-source.js";
+export {
   type AssistantTextEventPayload,
   assistantTextEventPayload,
   type ChatTokenUsage,
@@ -966,7 +978,6 @@ export {
   userSchema,
   userStatusSchema,
 } from "./schemas/user.js";
-export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
 export {
   SOURCE_REPOS_DIRNAME,
   WORKSPACE_MANIFEST_FILENAME,

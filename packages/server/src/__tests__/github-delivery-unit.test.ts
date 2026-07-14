@@ -1,4 +1,4 @@
-import type { NormalizedEvent } from "@first-tree/shared";
+import type { NormalizedScmEvent } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AudienceTarget } from "../services/github-audience.js";
@@ -14,22 +14,24 @@ type MockBag = {
   notifyRecipients: MockFn;
 };
 
-function makeEvent(overrides: Partial<NormalizedEvent> = {}): NormalizedEvent {
+function makeEvent(overrides: Partial<NormalizedScmEvent> = {}): NormalizedScmEvent {
   return {
-    source: { kind: "github-app-installation", installationId: 1, organizationId: "org-1" },
-    deliveryId: "delivery-1",
-    rawEventType: "pull_request",
-    rawAction: "opened",
+    provider: "github",
+    source: { externalId: "installation:1", organizationId: "org-1" },
+    stableDeliveryId: "delivery-1",
+    ingressAuthority: "verified_signature",
+    eventType: "pull_request",
+    action: "opened",
     entity: {
       type: "pull_request",
-      repo: "owner/repo",
+      projectKey: "owner/repo",
       key: "owner/repo#1",
       title: "Refactor inbox",
       url: "https://github.com/owner/repo/pull/1",
     },
-    actor: { githubLogin: "alice", isBot: false },
+    actor: { externalUsername: "alice", isBot: false },
     kind: "opened",
-    involves: [],
+    targets: [],
     surface: {
       title: "PR #1: Refactor inbox",
       body: "Body",
@@ -71,7 +73,7 @@ function newTarget(overrides: Partial<AudienceTarget> = {}): AudienceTarget {
 }
 
 async function loadDelivery(overrides: Partial<MockBag> = {}): Promise<{
-  deliverNormalizedEvent: typeof import("../services/github-delivery.js").deliverNormalizedEvent;
+  deliverGithubEvent: typeof import("../services/github-delivery.js").deliverGithubEvent;
   mocks: MockBag;
 }> {
   vi.resetModules();
@@ -101,8 +103,8 @@ async function loadDelivery(overrides: Partial<MockBag> = {}): Promise<{
     notifyRecipients: mocks.notifyRecipients,
   }));
 
-  const { deliverNormalizedEvent } = await import("../services/github-delivery.js");
-  return { deliverNormalizedEvent, mocks };
+  const { deliverGithubEvent } = await import("../services/github-delivery.js");
+  return { deliverGithubEvent, mocks };
 }
 
 afterEach(() => {
@@ -114,12 +116,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("deliverNormalizedEvent dependency edge paths", () => {
+describe("deliverGithubEvent dependency edge paths", () => {
   it("drops a new target when chat resolution intentionally returns null", async () => {
     const resolveTargetChat = vi.fn(async () => null);
-    const { deliverNormalizedEvent, mocks } = await loadDelivery({ resolveTargetChat });
+    const { deliverGithubEvent, mocks } = await loadDelivery({ resolveTargetChat });
 
-    const stats = await deliverNormalizedEvent(makeApp(), makeEvent(), [
+    const stats = await deliverGithubEvent(makeApp(), makeEvent(), [
       newTarget({ humanAgentId: "human-new", delegateAgentId: "delegate-new" }),
     ]);
 
@@ -139,9 +141,9 @@ describe("deliverNormalizedEvent dependency edge paths", () => {
       throw new Error("title store down");
     });
     const resolveTargetChat = vi.fn(async () => ({ chatId: "chat-shared", created: true, boundVia: "direct" }));
-    const { deliverNormalizedEvent, mocks } = await loadDelivery({ resolveTargetChat, sendMessage, setEntityTitle });
+    const { deliverGithubEvent, mocks } = await loadDelivery({ resolveTargetChat, sendMessage, setEntityTitle });
 
-    const stats = await deliverNormalizedEvent(makeApp(), makeEvent(), [
+    const stats = await deliverGithubEvent(makeApp(), makeEvent(), [
       existingTarget({
         humanAgentId: "human-b",
         delegateAgentId: "delegate-b",
@@ -190,9 +192,9 @@ describe("deliverNormalizedEvent dependency edge paths", () => {
       .fn()
       .mockRejectedValueOnce("send failed")
       .mockResolvedValueOnce({ message: { id: "message-ok" }, recipients: ["recipient-ok"] });
-    const { deliverNormalizedEvent, mocks } = await loadDelivery({ sendMessage });
+    const { deliverGithubEvent, mocks } = await loadDelivery({ sendMessage });
 
-    const stats = await deliverNormalizedEvent(makeApp(), makeEvent({ rawAction: "synchronize" }), [
+    const stats = await deliverGithubEvent(makeApp(), makeEvent({ action: "synchronize" }), [
       existingTarget({ humanAgentId: "human-a", delegateAgentId: "delegate-a", chatId: "chat-a" }),
       existingTarget({ humanAgentId: "human-b", delegateAgentId: "delegate-b", chatId: "chat-b" }),
     ]);
