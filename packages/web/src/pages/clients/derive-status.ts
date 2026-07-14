@@ -92,33 +92,49 @@ export function compareByPillPriority(a: HubClient, b: HubClient): number {
 }
 
 /**
- * Ordered numeric components of a version string — every integer run, in
- * order: "0.5.3-staging.49.1" → [0, 5, 3, 49, 1]. Lets us compare both plain
- * semver ("0.6.0") and channel builds without a semver dependency. Returns
- * null when there's no parseable number (so callers can fail safe).
+ * A version parsed into a same-channel comparable form. Only the two shapes
+ * First Tree's durable channel contract accepts are supported (mirrors
+ * `inferChannelFromVersion` in `@first-tree/shared`'s channel module):
+ *   - prod:    `X.Y.Z`             → { channel: "prod",    parts: [X, Y, Z] }
+ *   - staging: `X.Y.Z-staging.N.M` → { channel: "staging", parts: [X, Y, Z, N, M] }
+ * Anything else — dev, alpha/beta/rc, partial (`1.4`), or otherwise malformed
+ * — is unsupported and returns null so callers fail closed.
  */
-function versionParts(version: string | null | undefined): number[] | null {
+type ParsedVersion = { channel: "prod" | "staging"; parts: number[] };
+
+function parseSupportedVersion(version: string | null | undefined): ParsedVersion | null {
   if (!version) return null;
-  const runs = version.match(/\d+/g);
-  return runs ? runs.map((n) => Number.parseInt(n, 10)) : null;
+  const staging = /^(\d+)\.(\d+)\.(\d+)-staging\.(\d+)\.(\d+)$/.exec(version);
+  if (staging) return { channel: "staging", parts: staging.slice(1).map((n) => Number.parseInt(n, 10)) };
+  const prod = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (prod) return { channel: "prod", parts: prod.slice(1).map((n) => Number.parseInt(n, 10)) };
+  return null;
+}
+
+function comparePartsAscending(a: number[], b: number[]): number {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (av !== bv) return av - bv;
+  }
+  return 0;
 }
 
 /**
- * Is `current` strictly behind `target`? Conservative on unparseable input:
- * when we can't compare, we return `true` so a recorded failure is surfaced
- * rather than silently hidden.
+ * Has a recorded failed/blocked update since been resolved? Only a **valid,
+ * same-channel** current version at or beyond a **valid** target clears the
+ * historical failure. Malformed, unknown/mismatched-channel, or missing
+ * versions fail closed (return false) so a genuine failure is never hidden by
+ * an unparseable version — e.g. a staging build never counts as having reached
+ * a stable prod target (prerelease < stable), and `garbage999` never outranks
+ * `1.4.0`.
  */
-function isVersionBehind(current: string | null | undefined, target: string): boolean {
-  const c = versionParts(current);
-  const t = versionParts(target);
-  if (!c || !t) return true;
-  const len = Math.max(c.length, t.length);
-  for (let i = 0; i < len; i++) {
-    const cv = c[i] ?? 0;
-    const tv = t[i] ?? 0;
-    if (cv !== tv) return cv < tv;
-  }
-  return false;
+function updateResolved(current: string | null | undefined, target: string): boolean {
+  const c = parseSupportedVersion(current);
+  const t = parseSupportedVersion(target);
+  if (!c || !t || c.channel !== t.channel) return false;
+  return comparePartsAscending(c.parts, t.parts) >= 0;
 }
 
 /**
@@ -130,13 +146,13 @@ function isVersionBehind(current: string | null | undefined, target: string): bo
  * The record is the *last* attempt, not a live "still stuck" flag, and the
  * manual recovery paths (`first-tree upgrade` / manual reinstall) don't write
  * an `ok` attempt or clear it. So a machine that has since reached the target
- * carries a stale failure — we treat it as a problem only while the reported
- * `sdkVersion` is still behind the attempt's `target`.
+ * carries a stale failure — treat it as a problem unless we can prove, within
+ * one accepted channel, that the reported version reached/passed the target.
  */
 export function hasUpdateProblem(client: HubClient): boolean {
   const attempt = client.lastUpdateAttempt;
   if (attempt?.result !== "failed" && attempt?.result !== "blocked") return false;
-  return isVersionBehind(client.sdkVersion, attempt.target);
+  return !updateResolved(client.sdkVersion, attempt.target);
 }
 
 /**

@@ -172,13 +172,20 @@ describe("hasUpdateProblem", () => {
     expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("ok") }))).toBe(false);
   });
 
-  it("is true for a failed/blocked update while still behind the target", () => {
-    // Default sdkVersion is v1.3.2, target 1.4.0 → still behind → unresolved.
-    expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("failed") }))).toBe(true);
-    expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("blocked") }))).toBe(true);
+  it("is true for a failed/blocked update still behind the target, within one channel", () => {
+    // prod behind prod
+    expect(hasUpdateProblem(client({ sdkVersion: "1.3.2", lastUpdateAttempt: updateAttempt("failed", "1.4.0") }))).toBe(
+      true,
+    );
+    // same staging channel, older build
+    expect(
+      hasUpdateProblem(
+        client({ sdkVersion: "0.5.3-staging.20.1", lastUpdateAttempt: updateAttempt("blocked", "0.5.3-staging.49.1") }),
+      ),
+    ).toBe(true);
   });
 
-  it("is false once the reported version reached/passed the failed target (stale record)", () => {
+  it("is false once a valid same-channel version reached/passed the target (stale record)", () => {
     // Manual `first-tree upgrade` recovers without clearing the record: the
     // client re-registers on the target version but keeps the old failure.
     expect(
@@ -187,32 +194,36 @@ describe("hasUpdateProblem", () => {
     expect(hasUpdateProblem(client({ sdkVersion: "1.5.0", lastUpdateAttempt: updateAttempt("failed", "1.4.0") }))).toBe(
       false,
     );
-    // Channel build past the target core also counts as recovered.
+    // staging ahead by build number
     expect(
       hasUpdateProblem(
-        client({ sdkVersion: "1.4.0-staging.5.1", lastUpdateAttempt: updateAttempt("blocked", "1.4.0") }),
+        client({ sdkVersion: "0.5.3-staging.60.1", lastUpdateAttempt: updateAttempt("blocked", "0.5.3-staging.49.1") }),
       ),
     ).toBe(false);
   });
 
-  it("stays true for an older channel build of the same core (still behind by build)", () => {
-    expect(
-      hasUpdateProblem(
-        client({
-          sdkVersion: "1.4.0-staging.20.1",
-          lastUpdateAttempt: updateAttempt("failed", "1.4.0-staging.49.1"),
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("fails safe (stays true) when the reported version is unparseable/missing", () => {
-    expect(hasUpdateProblem(client({ sdkVersion: null, lastUpdateAttempt: updateAttempt("blocked", "1.4.0") }))).toBe(
-      true,
-    );
-    expect(hasUpdateProblem(client({ sdkVersion: "dev", lastUpdateAttempt: updateAttempt("failed", "1.4.0") }))).toBe(
-      true,
-    );
+  it("fails closed (stays true) for malformed, unknown-channel, or channel-mismatched versions", () => {
+    const cases: Array<[string | null, string]> = [
+      // digit-bearing garbage must not outrank a valid target
+      ["garbage999", "1.4.0"],
+      // partial version is not a valid release
+      ["1.4", "1.4.0"],
+      // unknown prerelease channels fail closed even if numerically "ahead"
+      ["1.4.0-alpha.999.1", "1.4.0-staging.49.1"],
+      ["1.4.0-beta.1", "1.4.0-staging.1.1"],
+      ["1.4.0-rc.1", "1.4.0"],
+      // channel mismatch: a staging prerelease has NOT reached a stable prod target
+      ["1.4.0-staging.5.1", "1.4.0"],
+      ["1.4.0", "1.4.0-staging.49.1"],
+      // missing / non-numeric current
+      [null, "1.4.0"],
+      ["dev", "1.4.0"],
+      // malformed target also fails closed
+      ["1.5.0", "not-a-version"],
+    ];
+    for (const [sdkVersion, target] of cases) {
+      expect(hasUpdateProblem(client({ sdkVersion, lastUpdateAttempt: updateAttempt("blocked", target) }))).toBe(true);
+    }
   });
 });
 
