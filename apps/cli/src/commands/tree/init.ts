@@ -276,25 +276,29 @@ function buildCoverage(lookup: InstallationLookup, repoFullName: string): Covera
   };
 }
 
-function parseContextTreeBindingRead(body: unknown): { repo: string | null } {
+type ContextTreeBindingRead = { repo: string | null; branch: string; hasRepo: boolean };
+
+function parseContextTreeBindingRead(body: unknown): ContextTreeBindingRead {
   if (!body || typeof body !== "object") {
     throw new Error("Context Tree binding response was not an object");
   }
   const record = body as Record<string, unknown>;
-  if (typeof record.repo === "string") {
-    if (record.branch !== undefined && !contextTreeBranchSchema.safeParse(record.branch).success) {
-      throw new Error("Context Tree binding contains an invalid branch");
-    }
-    return { repo: record.repo };
-  }
-  if (record.repo !== undefined && record.repo !== null) {
-    throw new Error("Context Tree binding contains an invalid repo");
-  }
-  const branch = record.branch ?? DEFAULT_BRANCH;
-  if (!contextTreeBranchSchema.safeParse(branch).success) {
+  const branchParsed = contextTreeBranchSchema.safeParse(record.branch ?? DEFAULT_BRANCH);
+  if (!branchParsed.success) {
     throw new Error("Context Tree binding contains an invalid branch");
   }
-  return { repo: null };
+
+  if (Object.hasOwn(record, "repo")) {
+    if (typeof record.repo === "string") {
+      return { repo: record.repo, branch: branchParsed.data, hasRepo: true };
+    }
+    if (record.repo === null || record.repo === undefined) {
+      return { repo: null, branch: branchParsed.data, hasRepo: false };
+    }
+    throw new Error("Context Tree binding contains an invalid repo");
+  }
+
+  return { repo: null, branch: branchParsed.data, hasRepo: false };
 }
 
 // Read the raw `context_tree` repair view so `tree init` refuses to clobber
@@ -304,7 +308,7 @@ async function readContextTreeBinding(
   serverUrl: string,
   accessToken: string,
   orgId: string,
-): Promise<{ repo: string | null }> {
+): Promise<ContextTreeBindingRead> {
   const raw = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree/raw`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
@@ -331,11 +335,17 @@ async function readContextTreeBinding(
   }
 }
 
-async function bindOrgToTree(serverUrl: string, accessToken: string, orgId: string, repoUrl: string): Promise<void> {
+async function bindOrgToTree(
+  serverUrl: string,
+  accessToken: string,
+  orgId: string,
+  repoUrl: string,
+  branch: string,
+): Promise<void> {
   const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ repo: repoUrl }),
+    body: JSON.stringify({ repo: repoUrl, branch }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -413,9 +423,10 @@ async function runInitCommand(context: CommandContext): Promise<void> {
         );
       }
       const existing = await readContextTreeBinding(serverUrl, accessToken, orgId);
-      if (existing.repo && !options.rebind) {
+      if (existing.hasRepo && !options.rebind) {
+        const configuredRepo = existing.repo?.trim() ? existing.repo : "an invalid historical repo value";
         throw new Error(
-          `This team is already bound to a Context Tree (${existing.repo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
+          `This team is already bound to a Context Tree (${configuredRepo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
         );
       }
       lookup = await fetchInstallation(serverUrl, accessToken, orgId);
@@ -475,7 +486,7 @@ async function runInitCommand(context: CommandContext): Promise<void> {
 
     let bound = false;
     if (bindContext) {
-      await bindOrgToTree(bindContext.serverUrl, bindContext.accessToken, bindContext.orgId, htmlUrl);
+      await bindOrgToTree(bindContext.serverUrl, bindContext.accessToken, bindContext.orgId, htmlUrl, DEFAULT_BRANCH);
       bound = true;
     }
 

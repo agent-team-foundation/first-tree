@@ -1048,6 +1048,46 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(memberSafeRead.body).not.toContain("--bad");
   });
 
+  it("returns a non-secret conflict for an empty-string historical context_tree repo", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const rawUrl = `${safeUrl}/raw`;
+    const historical = { repo: "", branch: "main" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    const adminSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminSafeRead.statusCode).toBe(409);
+    expect(adminSafeRead.json()).toMatchObject({
+      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+    });
+
+    const memberSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(memberSafeRead.statusCode).toBe(409);
+
+    const adminRawRead = await app.inject({
+      method: "GET",
+      url: rawUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminRawRead.statusCode).toBe(200);
+    expect(adminRawRead.json()).toEqual(historical);
+  });
+
   it("keeps an intentionally cleared context_tree row readable as unbound", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);

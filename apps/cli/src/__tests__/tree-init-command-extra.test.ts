@@ -157,7 +157,9 @@ describe("tree init command action", () => {
         });
       }
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
-        expect(init.body).toBe(JSON.stringify({ repo: "https://github.com/acme-org/acme-context-tree" }));
+        expect(init.body).toBe(
+          JSON.stringify({ repo: "https://github.com/acme-org/acme-context-tree", branch: "main" }),
+        );
         return response("ok");
       }
       return response("not found", { status: 404 });
@@ -189,6 +191,72 @@ describe("tree init command action", () => {
       "https://server.example/api/v1/orgs/org_1/settings/context_tree",
       expect.objectContaining({ method: "PUT" }),
     );
+  });
+
+  it("binds the branch it actually created when the raw preflight is branch-only", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/me")) {
+        return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+        return response({ branch: "trunk" });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+        return response("missing", { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        expect(init.body).toBe(
+          JSON.stringify({ repo: "https://github.com/octocat/branch-only-context-tree", branch: "main" }),
+        );
+        return response("ok");
+      }
+      return response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Branch Only" }), true));
+
+    expect(process.exitCode).toBeUndefined();
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({ bound: true, branch: "main" });
+  });
+
+  it("rebinds a non-main existing binding to the branch it actually created", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/me")) {
+        return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+        return response({ repo: "https://github.com/acme/old-tree", branch: "trunk" });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+        return response("missing", { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        expect(init.body).toBe(
+          JSON.stringify({ repo: "https://github.com/octocat/rebind-context-tree", branch: "main" }),
+        );
+        return response("ok");
+      }
+      return response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, org: "org_1", rebind: true, title: "Rebind" }), true),
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({ bound: true, branch: "main" });
   });
 
   it("falls back to the legacy settings read when the server lacks the raw endpoint", async () => {
@@ -349,6 +417,21 @@ describe("tree init command action", () => {
           }
           if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response({ repo: "https://github.com/acme/live-tree" });
+          }
+          return response("not found", { status: 404 });
+        },
+        message: "already bound to a Context Tree",
+      },
+      {
+        name: "empty historical repo",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Empty Historical" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+            return response({ repo: "", branch: "main" });
           }
           return response("not found", { status: 404 });
         },

@@ -223,7 +223,7 @@ export async function getOrgContextTreeSafeProjection(
   }
 
   const storage = storageParsed.data as OrgContextTreeStorage;
-  if (storage.repo) {
+  if (Object.hasOwn(storage, "repo")) {
     const binding = contextTreeActiveBindingSchema.safeParse(storage);
     return binding.success
       ? { status: "active", binding: binding.data, updatedAt: row.updatedAt }
