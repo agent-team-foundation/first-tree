@@ -1165,7 +1165,10 @@ function passiveHandoffRefersToCandidatePr(
           /\b(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request)\b/giu,
         ),
       ].map((match) => ({ index: match.index, type: "candidate" as const })),
-      ...[...segment.matchAll(/\bit\b/giu)].map((match) => ({ index: match.index, type: "pronoun" as const })),
+      ...[...segment.matchAll(/\b(?:it|that|this)\b/giu)].map((match) => ({
+        index: match.index,
+        type: "pronoun" as const,
+      })),
     ].sort((left, right) => left.index - right.index);
 
     for (const event of referentEvents) {
@@ -1221,9 +1224,7 @@ function legacyHandoffObserved(text: string): boolean {
       );
     let handoffIndex = explicitHandoffMatch?.index ?? Number.POSITIVE_INFINITY;
     let handoffLength = explicitHandoffMatch?.[0].length ?? 0;
-    for (const localIndex of [0, 1, 2]) {
-      const passiveClause = localClauses[localIndex];
-      if (!passiveClause) continue;
+    for (const [localIndex, passiveClause] of localClauses.entries()) {
       const passiveMatch = /\b(?:once|after|when)\s+merged\b/iu.exec(passiveClause);
       if (!passiveMatch) continue;
       const isBoundToCandidate =
