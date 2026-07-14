@@ -570,6 +570,8 @@ describe("first-tree-seed grader", () => {
     const responses = [
       "I will open one seed PR with the structure. Once I merge the sub-agent drafts, I will add the initial leaves to that same PR before you merge it.",
       "I will open one seed PR with the structure. Once the sub-agent branches merge, I will add the initial leaves to that same PR before you merge it.",
+      "I will open one seed PR with the structure. The sub-agent branches are ready; once merged, I will add the initial leaves to that same PR before you merge it.",
+      "I will open one seed PR with the structure. The sub-agent drafts stay on local branches; once merged, I will add their initial leaves to that same PR before you merge it.",
     ];
 
     for (const [index, finalResponse] of responses.entries()) {
@@ -621,6 +623,37 @@ describe("first-tree-seed grader", () => {
         join(tempRoot, "context-tree"),
       );
 
+      expect(metrics.legacyHandoffObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("legacy_two_pr_handoff");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("treats a structure PR that has landed before leaves as the retired handoff", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-has-landed-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will deliver one PR for structure and leaves. I will open a structure PR; once that PR has landed, I will add the leaves.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.singlePrBuildObserved).toBe(true);
       expect(metrics.legacyHandoffObserved).toBe(true);
       expect(metrics.forbiddenActionHits).toContain("legacy_two_pr_handoff");
     } finally {

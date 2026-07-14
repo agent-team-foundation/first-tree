@@ -1163,13 +1163,32 @@ function legacyHandoffObserved(text: string): boolean {
       );
     if (!structurePrObserved) return false;
 
-    const handoffContext = clauses.slice(index, index + 4).join(". ");
-    const handoffMatch =
-      /(?:\b(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\b\s+(?:(?:is|gets|was|has\s+been|will\s+be)\s+)?(?:merge\w*|land(?:s|ed|ing)?)\b)|(?:\b(?:merge\w*|land(?:s|ed|ing)?)\b\s+(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\b)|(?:\b(?:once|after|when)\s+merged\b)/iu.exec(
+    const localClauses = clauses.slice(index, index + 4);
+    const handoffContext = localClauses.join(". ");
+    const explicitHandoffMatch =
+      /(?:\b(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\b\s+(?:(?:(?:has|have|had)\s+been|will\s+be|is|gets|was|has|have|had)\s+)?(?:merge\w*|land(?:s|ed|ing)?)\b)|(?:\b(?:merge\w*|land(?:s|ed|ing)?)\b\s+(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\b)/iu.exec(
         handoffContext,
       );
-    if (!handoffMatch) return false;
-    const beforeHandoff = handoffContext.slice(0, handoffMatch.index);
+    let handoffIndex = explicitHandoffMatch?.index ?? Number.POSITIVE_INFINITY;
+    let handoffLength = explicitHandoffMatch?.[0].length ?? 0;
+    for (const localIndex of [0, 1, 2]) {
+      const passiveClause = localClauses[localIndex];
+      if (!passiveClause) continue;
+      const passiveMatch = /\b(?:once|after|when)\s+merged\b/iu.exec(passiveClause);
+      if (!passiveMatch) continue;
+      const isBoundToCandidate =
+        localIndex === 0 ||
+        (localIndex === 1 && passiveMatch.index === 0) ||
+        (localIndex === 2 && passiveMatch.index === 0 && /\b(?:pr|pull\s+request)\b/iu.test(localClauses[1] ?? ""));
+      if (!isBoundToCandidate) continue;
+      const prefixLength = localClauses.slice(0, localIndex).join(". ").length + (localIndex > 0 ? 2 : 0);
+      const passiveIndex = prefixLength + passiveMatch.index;
+      if (passiveIndex >= handoffIndex) continue;
+      handoffIndex = passiveIndex;
+      handoffLength = passiveMatch[0].length;
+    }
+    if (!Number.isFinite(handoffIndex)) return false;
+    const beforeHandoff = handoffContext.slice(0, handoffIndex);
     const samePrIncludesLeaves =
       /\b(?:pr|pull\s+request)\b[\s\S]{0,100}\b(?:with|for|containing|covering)\b[\s\S]{0,80}\b(?:structure|skeleton)\b[\s\S]{0,50}\b(?:and|plus|alongside|together\s+with)\b[\s\S]{0,50}\b(?:content|lea(?:f|ves))\b/iu.test(
         beforeHandoff,
@@ -1182,7 +1201,7 @@ function legacyHandoffObserved(text: string): boolean {
       );
     if (samePrIncludesLeaves) return false;
 
-    const afterHandoff = handoffContext.slice(handoffMatch.index + handoffMatch[0].length);
+    const afterHandoff = handoffContext.slice(handoffIndex + handoffLength);
     if (/\b(?:return|reply|ping|come\s+back|continue)\b/iu.test(afterHandoff)) return true;
     if (/\b(?:lea(?:f|ves)|phase\s*2)\b/iu.test(afterHandoff)) return true;
     if (!/\bcontent\b/iu.test(afterHandoff)) return false;
