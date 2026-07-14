@@ -1,9 +1,9 @@
 ---
 name: first-tree-seed
-version: 0.3.0
+version: 0.4.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Bootstrap a team's Context Tree from readable source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or GitHub URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR is merged.
+description: Bootstrap a team's Context Tree from readable source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or GitHub URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content, delivered together as a single reviewable PR. Refuses an unrelated re-seed once the tree has domain structure.
 ---
 
 # First Tree — Seed
@@ -26,11 +26,10 @@ not here.
 | First content pass on resolved readable sources                       | Broad maintenance or drift-audit work on an existing tree                                            |
 | Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
 
-The skill is **single-shot per tree setup**: once the tree has domain
-structure, a new or unrelated seed request refuses and routes further work
-through `first-tree-write` or a focused maintenance task. The one exception is
-the verified Phase 2 continuation from this setup chat after its Phase 1 PR was
-merged; that is completion of the same seed, not a second seed.
+The skill is **single-shot per tree setup**: it builds the domain structure
+and initial leaves in one run and opens a **single PR**. Once the tree has
+domain structure, a new or unrelated seed request refuses and routes further
+work through `first-tree-write` or a focused maintenance task.
 
 ## Policy Baseline
 
@@ -49,21 +48,6 @@ resolve which of three states the team's Context Tree is in and act
 accordingly: create it when none exists, fill it when it is bound but empty,
 and refuse when it already has domain structure (state C below), routing
 that work to `first-tree-write` or a focused maintenance task.
-
-**Check for a Phase 2 continuation before classifying state C.** Continue the
-same seed into Phase 2 only when all of these are true:
-
-1. this setup chat's visible history contains the Phase 1 proposal, user
-   approval, and the Phase 1 PR handoff;
-2. the current user message explicitly says that PR was merged or asks to
-   continue after merging it; and
-3. a fresh fetch confirms the approved top-level structure exists on the tree
-   repo's default branch while Phase 2 has not already completed.
-
-When all three hold, re-resolve the same readable sources and enter Phase 2
-through its trigger below even though domain directories now exist. Otherwise
-apply A/B/C normally. Never infer continuation from node names, a chat title,
-or a populated tree alone.
 
 **A — No tree yet.** The workspace is not bound to a tree: either
 `<workspaceRoot>/.first-tree/workspace.json` has no non-empty `tree`
@@ -162,7 +146,7 @@ line; capture the result but do not interrupt source resolution, structure
 review, or Phase 1 work with an installation detour. The tree is built and
 bound, so proceed regardless of coverage.
 
-**After the Phase 1 PR is open**, or earlier only when the next requested
+**After the seed PR is open**, or earlier only when the next requested
 operation actually needs Cloud snapshot/reviewer access, surface an uncovered
 repo once in the setup chat. State the capability consequence — "your Context
 Tree is built and bound, but the web view and PR reviewer won't see it until
@@ -199,8 +183,7 @@ layers the normal domain skeleton plus any missing supporting/member structure
 on top of whatever bootstrap nodes already exist: **extend** the root `NODE.md`
 index and supporting trees rather than recreating them.
 
-**C — Already seeded.** Outside the verified Phase 2 continuation above, the
-tree has one or more **normal top-level domain
+**C — Already seeded.** The tree has one or more **normal top-level domain
 directories** — any directory directly under `<workspaceRoot>/<manifest.tree>/`
 other than `.git/`, `.first-tree/`, `.github/`, `members/`, `raw-context/`, and
 dotfile-prefixed dirs. Refuse with a one-line explanation pointing at
@@ -240,8 +223,8 @@ Tree GitHub App.
 
 When state A needs `--owner`, parse the owner from each resolved source's
 GitHub remote. If a local repo has no GitHub remote, ask which GitHub account
-should host the tree; never guess from its directory name. Revalidate the same
-`resolvedSources` before Phase 2 so a later turn cannot silently switch inputs.
+should host the tree; never guess from its directory name. Use the same
+`resolvedSources` for both the structure and content passes.
 
 **For declared sources, require every clone on disk.** Each source
 clone lives at `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>`
@@ -279,36 +262,39 @@ git -C <source-clone> worktree add <workspaceRoot>/worktrees/seed-<source> origi
 
 Every "read every resolved source" / Tier 0–2 scan in Phase 1 operates on
 these read worktrees, not the bare clone paths. Remove them
-(`git -C <source-clone> worktree remove <path>`) once both PRs are open.
+(`git -C <source-clone> worktree remove <path>`) once the seed PR is open.
 
-## The Two Phases
+## The build: two passes, one PR
 
-Resolving the tree's state comes first; the two phases below are the build
-itself — they run for a tree that needs building (states A and B). State C
-refuses before reaching them.
+Resolving the tree's state comes first; the build below runs for a tree
+that needs building (states A and B). State C refuses before reaching it.
+
+The build has two passes — structure, then content — that run back to back
+in the **same run** and land as a **single reviewable PR**. There is no
+intermediate PR and no merge between the passes.
 
 ```
 Phase 1 — Structure  (~3–10 min, main agent only)
   └─ Tiered structural read of every resolved source
   └─ Propose top + second-level domain skeleton
-  └─ User approves checklist
-  └─ Create NODE.md stubs + members/<owner> + raw-context
-  └─ PR1 on chore/seed-phase1-structure
+  └─ User approves the checklist in chat   ← the one human gate
+  └─ Create NODE.md stubs + members/<owner> + raw-context on the seed branch
 
-User merges PR1 ────────────────────────────────────────────────
+        (no PR, no merge — continue straight into Phase 2)
 
 Phase 2 — Content    (parallel; ~10–20 min wall-clock per batch)
   └─ Allocate sub-agents (cap 6 concurrent; split big top-levels,
      merge thin ones, batch dispatch when total work units > 6)
   └─ Each sub-agent: deep-read its subtree, draft leaves, report coverage
   └─ Main agent: consolidate + cross-check + collect escalations
-  └─ PR2 on chore/seed-phase2-content
+  └─ One seed PR (structure + leaves) on chore/seed-tree
 ```
 
-The hand-off point between phases is the merge of PR1. Do not start
-Phase 2 work before the user has signed off on the structure — the
-sub-agent fan-out is expensive and Phase 2 inherits Phase 1's
-structural decisions.
+The one human gate is the **in-chat checklist approval**, not a PR merge.
+Do not write anything — structure or content — before the user has signed
+off on the proposed domains. Once they have, both passes run to completion
+in the same run and open one PR; the sub-agent fan-out is expensive, so it
+starts only after that approval.
 
 ---
 
@@ -505,20 +491,18 @@ Notes on defaults:
   reviewed and hides it from future audits.
 - Do **not** set `decisionLocksCode` (defaults false).
 
-### PR1
+### After the structure pass — no PR yet
 
-- Branch: `chore/seed-phase1-structure`
-- Show the diff to the user before push.
-- Commit message: `chore: seed initial tree structure from <N> source repo(s)`
-- PR title: `Seed Phase 1 — initial tree structure`
-- PR body: enumerate which top + second-level domains were opened
-  and which were proposed-but-skipped (one line each, with the
-  user's reason if given). Do not list the source PRs / commits — the
-  audit trail is `git log`.
-- Run `first-tree tree verify --tree-path <tree>` locally before
-  opening the PR. Non-zero exit blocks.
-- Stop after the PR is open. Do **not** start Phase 2 work until the
-  user has explicitly merged PR1.
+- Write everything above on the seed branch `chore/seed-tree`.
+- Commit the structure as its own commit:
+  `chore: seed initial tree structure from <N> source repo(s)`. Keeping
+  it a distinct commit preserves the structure↔content review boundary
+  inside the single PR.
+- Run `first-tree tree verify --tree-path <tree>` locally. Non-zero exit
+  blocks — fix before continuing.
+- **Do not open a PR and do not stop.** Continue straight into Phase 2
+  (Content) in the same run. The single seed PR opens only after the
+  content pass, covering structure + leaves together.
 
 ---
 
@@ -529,38 +513,25 @@ nodes drawn from a real read of the resolved source code, under a time
 budget, with explicit coverage reports surfacing what was and was not
 extracted.
 
-### Trigger
+### From structure to content
 
-The user **re-pings this setup chat** after merging PR1 — that ping is the
-only sanctioned start signal. The agent does **not** poll the remote,
-the inbox, or any other source between phases; the seed skill is not
-running between PR1 and PR2. This is the Phase 2 continuation checked before
-normal state C refusal. When the ping arrives, re-resolve the same sources and
-run a fresh self-check that PR1's structure is actually on the tree's default
-branch before dispatching sub-agents — protects against the case where the
-user pinged before merging, merged a different branch, or changed the source
-input between turns.
-Resolve the default branch name dynamically rather than hard-coding
-`main` (some tree repos use `master` / `trunk`):
+Phase 2 begins **immediately after the structure pass, in the same run** —
+there is no ping, no merge, and no waiting. The structure you just wrote and
+committed is on the seed branch on disk; the content pass drafts leaves into
+it directly.
 
-```bash
-git -C <tree> fetch origin
-DEFAULT=$(git -C <tree> symbolic-ref refs/remotes/origin/HEAD | sed 's|^refs/remotes/origin/||')
-git -C <tree> ls-tree "origin/$DEFAULT" -- <top-level>  # for each approved domain
-```
-
-That `ls-tree` check applies only to the Context Tree checkout. Before listing
-or reading any source content in Phase 2, materialize each declared bare source
-through the source Worktrees protocol and read the resulting checkout. Do not
-use `git ls-tree`, `git show`, `git grep`, or similar content reads directly
-against a source bare clone, even as a quick preflight. Removing the temporary
-source read worktree after the evidence read is complete is expected cleanup;
-the required proof is the materialize/read event, not a leftover checkout.
+Before listing or reading any source content in Phase 2, materialize each
+declared bare source through the source Worktrees protocol and read the
+resulting checkout. Do not use `git ls-tree`, `git show`, `git grep`, or
+similar content reads directly against a source bare clone, even as a quick
+preflight. Removing the temporary source read worktree after the evidence
+read is complete is expected cleanup; the required proof is the
+materialize/read event, not a leftover checkout.
 
 ### Sub-agent allocation
 
 Phase 2 must balance parallelism against three costs: token spend,
-main-agent consolidation complexity, and the user's PR2 review
+main-agent consolidation complexity, and the user's PR review
 burden. The allocation policy below caps each batch at 6 concurrent
 sub-agents and uses queue-batched dispatch so no approved domain is
 deferred.
@@ -571,7 +542,7 @@ never get one — do not design nested fan-out). Fall back to
 **sequential self-dispatch**: the main agent works through the same
 queue one unit at a time, under the same per-unit contract — subtree
 scope, time budget, stopping discipline, and a coverage report per
-unit. Wall-clock is slower; the outputs and the PR2 shape are
+unit. Wall-clock is slower; the outputs and the PR shape are
 identical. Everything below that says "sub-agent" applies to a
 self-dispatched unit unchanged, except the parallel-write-safety
 rules, which become trivial. **In sequential mode, still defer all
@@ -579,7 +550,7 @@ git commits until after the consolidation pass** — name normalisation
 and the soft_links resolution check happen across every unit's
 output and may rewrite earlier drafts; committing per-unit inline
 would force consolidation fixes into extra commits and blur the
-per-unit `git log` boundaries that PR2 review depends on.
+per-unit `git log` boundaries that PR review depends on.
 
 **Concurrency cap: 6 sub-agents per batch.** Empirical limit.
 Beyond this, wall-clock savings flatten while token cost and
@@ -630,13 +601,13 @@ hits — the files / `gh` fields that motivated the domain in Phase 1)
 AND ≤ 1 leaf expected **to be drafted by Phase 2 in this seed run**
 (not "ever"). Weigh the **commit-boundary cost** before merging: a
 merged pair lands as one commit spanning two domains, which blurs
-the per-domain review boundary PR2 otherwise preserves. Merge only
+the per-domain review boundary the PR otherwise preserves. Merge only
 when both domains are thin enough that the combined commit is still
 trivially reviewable; when in doubt, run the thin domain as its own
 quick work unit instead. A merged sub-agent's authority covers
 **both assigned top-level paths in full** — the
 "sibling = forbidden" rule applies between work units, not inside a
-merged unit's pair. Surface the pairing in the PR2 body so the user
+merged unit's pair. Surface the pairing in the PR body so the user
 sees why one commit spans two domains.
 
 **Batched dispatch when total work units > 6.** Maintain a queue of
@@ -650,7 +621,7 @@ across multiple waves. Wall-clock for a queue of ~12 ends up roughly
 slowest sub-agent in batch N gates the start of batch N+1 only if
 its slot is the last to free.
 
-Record the actual allocation (splits, merges, batches) in the PR2
+Record the actual allocation (splits, merges, batches) in the PR
 body so the user can see why each commit covers the subtree it does
 — and so they can spot if the main agent split or merged something
 they would have left alone.
@@ -670,7 +641,8 @@ other's commit history, enforce two invariants:
    runs the consolidation pass (below), then groups files by
    sub-agent and lands one commit per sub-agent (`git add
    <sub-path>/... && git commit -m "..."`) on
-   `chore/seed-phase2-content`. This keeps domain boundaries visible
+   the seed branch `chore/seed-tree`, stacked on the structure commit.
+   This keeps domain boundaries visible
    in `git log` without ever risking concurrent index writes.
 
 ### Sub-agent contract
@@ -725,7 +697,7 @@ holds, whichever comes first:
 - **Twelve leaves drafted in this domain.** Empirical cap from
   observing real seed runs; not a hard architectural limit. A single
   seed pass should not create a sixty-leaf domain — defer the rest
-  to `first-tree-write` writes after the user has reviewed PR2.
+  to `first-tree-write` writes after the user has reviewed the seed PR.
   Adjust in a future skill version if real usage shows the number is
   consistently too low or too high.
 
@@ -765,7 +737,7 @@ across sub-agents:
 - `(first paragraph)` — only the first paragraph or first H1 block.
 
 The main agent stitches every sub-agent's coverage report into the
-PR2 description so the user can see, at merge time, exactly what was
+seed PR description so the user can see, at merge time, exactly what was
 and was not covered — and decide whether to accept, manually fill, or
 re-run seed with a focused prompt.
 
@@ -794,51 +766,47 @@ After all sub-agents return:
 
    Where a sub-agent linked to a target that fails this check, drop
    the link and surface it as a known gap.
-3. Aggregate escalations into a single section in the PR2 body
+3. Aggregate escalations into a single section in the PR body
    ("Sub-agents flagged the following as out of their scope; user to
    decide whether to act now or later").
 4. Run `first-tree tree verify --tree-path <tree>` from a clean
-   checkout of `chore/seed-phase2-content`. Non-zero blocks.
+   checkout of the seed branch `chore/seed-tree`. Non-zero blocks.
 
-### PR2
+### The seed PR
 
-- Branch: `chore/seed-phase2-content`
-- One commit per sub-agent (preserve domain boundaries for review),
-  plus one consolidation commit at the end.
-- PR title: `Seed Phase 2 — initial leaves across <N> domain(s)`
+- Branch: `chore/seed-tree` — structure + content on one branch.
+- Commits: the structure commit (the Phase 1 pass), then one commit per
+  sub-agent for content (preserve domain boundaries for review), plus one
+  consolidation commit at the end.
+- Show the diff to the user before push.
+- Run `first-tree tree verify --tree-path <tree>` from a clean checkout of
+  the branch. Non-zero exit blocks.
+- PR title: `Seed initial Context Tree — structure + initial leaves across <N> domain(s)`
 - PR body sections, in order:
-  1. **Coverage report** — concatenated coverage reports from every
+  1. **Structure** — which top + second-level domains were opened and which
+     were proposed-but-skipped (one line each, with the user's reason if
+     given).
+  2. **Coverage report** — concatenated coverage reports from every
      sub-agent.
-  2. **Escalations** — items sub-agents flagged as out of scope.
-  3. **Known gaps** — the union of all per-domain known gaps.
-  4. **Next steps** — point the user at `first-tree-write` for any
+  3. **Escalations** — items sub-agents flagged as out of scope.
+  4. **Known gaps** — the union of all per-domain known gaps.
+  5. **Next steps** — point the user at `first-tree-write` for any
      follow-up source-driven writes and describe any broad maintenance
      gaps as focused follow-up tasks.
+- Do not list the source PRs / commits — the audit trail is `git log`.
 
-After PR2 opens, the seed skill is done. Subsequent writes are owned
+After the seed PR opens, the seed skill is done. Subsequent writes are owned
 by `first-tree-write`; subsequent maintenance uses focused tasks with
 explicit scope.
 
-### Recovery path: PR1 merged, Phase 2 abandoned
+### If the seed PR is abandoned
 
-A user may merge PR1 and then never come back for Phase 2 (life
-happens, the team is busy, the kickoff agent crashed). The tree
-ends up with real structure but zero leaves. **This is not a new
-re-seed condition.** A later explicit continuation in the same setup chat can
-still complete Phase 2 after the three continuation checks pass. An unrelated
-future seed request sees an already-seeded tree (`<tree>/<domain>/NODE.md`
-files exist, state C) and refuses. For that unrelated path:
-
-- Future writes go through `first-tree-write` one source at a
-  time, exactly as they would on any other live tree.
-- A team that wants to back-fill the missing leaf content can ask for
-  a focused maintenance pass with explicit source scopes; any actual
-  writes still go through `first-tree-write` one source at a time.
-
-Communicate this fallback to the user in PR1's body so the choice
-is visible: "If you merge PR1 without coming back for Phase 2, the
-tree is fully usable but empty; later writes go through
-`first-tree-write` or a focused maintenance follow-up."
+A user may open the seed PR and never merge it. Nothing lands — the tree
+stays exactly as it was (either unbound, or bound-but-empty from `tree
+init`), with no half-built state to recover. A later seed request simply
+runs again from the current state. Once the seed PR *is* merged the tree
+has domain structure (state C); further writes go through
+`first-tree-write` one source at a time.
 
 ---
 
@@ -858,7 +826,7 @@ These apply the generated Context Tree Policy to the seed-specific surface.
 - **No history.** Nodes state current truth. Past states live in
   `git log`. Do not preface a node with "Originally we…" or
   "Update 2026-XX-XX:".
-- **`first-tree tree verify` must pass before PR1 and PR2 land.**
+- **`first-tree tree verify` must pass before the seed PR lands.**
   Non-zero exit blocks the commit.
 - **Ownership changes go through humans.** Phase 1 sets `owners` to
   the workspace's primary owner as the default; reassignment is the
@@ -882,8 +850,7 @@ These apply the generated Context Tree Policy to the seed-specific surface.
   domain has weak evidence and the user does not opt it in, leave it
   out.
 - Start a second seed on the same tree. Once the tree has domain structure,
-  only the verified same-setup-chat Phase 2 continuation remains in scope;
-  other work hands off to `first-tree-write` or a focused maintenance task.
+  work hands off to `first-tree-write` or a focused maintenance task.
 
 ## References
 
