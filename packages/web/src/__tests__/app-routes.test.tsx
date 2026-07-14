@@ -304,6 +304,25 @@ describe("App routes", () => {
     expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
   });
 
+  it("recovers a settled unusable channel to the desktop root", async () => {
+    serverChannelStateMock.channel = null;
+    serverChannelStateMock.settled = true;
+    setViewportWidth(390);
+
+    expect(await renderAppAt("/")).toContain("workspace page");
+    expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/now")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/chat")).toContain("workspace page");
+  });
+
   it("opens mobile routes, phone root, and PWA metadata on staging", async () => {
     serverChannelStateMock.channel = "staging";
     setViewportWidth(390);
