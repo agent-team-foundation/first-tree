@@ -656,36 +656,76 @@ function TeamComputersList({
       className="team-computers-list"
       style={{ marginLeft: "calc(-1 * var(--sp-3_5))", marginRight: "calc(-1 * var(--sp-3_5))" }}
     >
-      {grouped && <TeamGroupHeader label="Needs attention" count={attention.length} attention />}
-      {attention.map((client) => (
-        <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
-      ))}
-      {grouped && ready.length > 0 && <TeamGroupHeader label="Ready" count={ready.length} />}
-      {ready.map((client) => (
-        <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
-      ))}
+      {/* A real <table> so the six audit columns carry native header / row /
+          cell semantics; the `.team-computers-list` container-query reflows it
+          to a stacked hostname + meta line on narrow (see index.css). Flat
+          sentence-case header labels match the DenseTable convention. */}
+      <table className="team-computers-table" aria-label="Team computers">
+        <thead>
+          <tr>
+            <th className="text-label">Hostname</th>
+            <th className="text-label">Owner</th>
+            <th className="text-label">OS</th>
+            <th className="text-label">First Tree</th>
+            <th className="text-label team-cell--num">Agents</th>
+            <th className="text-label team-cell--num">Status</th>
+          </tr>
+        </thead>
+        {grouped ? (
+          <>
+            {/* Each health split is its own <tbody> row-group headed by a
+                `<th scope="rowgroup">`, so assistive tech ties the "Needs
+                attention" / "Ready" label to the rows under it. */}
+            <tbody>
+              <TeamGroupRow label="Needs attention" count={attention.length} attention />
+              {attention.map((client) => (
+                <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
+              ))}
+            </tbody>
+            {ready.length > 0 && (
+              <tbody>
+                <TeamGroupRow label="Ready" count={ready.length} />
+                {ready.map((client) => (
+                  <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
+                ))}
+              </tbody>
+            )}
+          </>
+        ) : (
+          <tbody>
+            {ready.map((client) => (
+              <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
+            ))}
+          </tbody>
+        )}
+      </table>
     </div>
   );
 }
 
 /**
- * Group divider for the health split. The "Needs attention" header carries a
- * warm `--fg-needs-you-strong` tint (the one meaningful color on this audit
- * list); "Ready" stays neutral. The row status pills carry each machine's
- * specific state hue — the group is set apart by order + this header, not by a
- * full-row color wash.
+ * Row-group header for a health split — a `<th scope="rowgroup" colSpan>` so
+ * the "Needs attention" / "Ready" label is announced as the heading for the
+ * rows in its `<tbody>`, not read as an ordinary data cell. "Needs attention"
+ * carries a warm `--fg-needs-you-strong` tint (the one meaningful color on this
+ * audit table); "Ready" stays neutral. The row status pills carry each
+ * machine's specific state hue — the group is set apart by order + this header.
  */
-function TeamGroupHeader({ label, count, attention = false }: { label: string; count: number; attention?: boolean }) {
+function TeamGroupRow({ label, count, attention = false }: { label: string; count: number; attention?: boolean }) {
   return (
-    <UppercaseLabel
-      style={{
-        display: "block",
-        padding: "var(--sp-3) var(--sp-3_5) var(--sp-1_5)",
-        ...(attention ? { color: "var(--fg-needs-you-strong)" } : {}),
-      }}
-    >
-      {label} · {count}
-    </UppercaseLabel>
+    <tr className="team-group-row">
+      <th scope="rowgroup" colSpan={6}>
+        <UppercaseLabel
+          style={{
+            display: "block",
+            padding: "var(--sp-3) var(--sp-3_5) var(--sp-1_5)",
+            ...(attention ? { color: "var(--fg-needs-you-strong)" } : {}),
+          }}
+        >
+          {label} · {count}
+        </UppercaseLabel>
+      </th>
+    </tr>
   );
 }
 
@@ -716,6 +756,8 @@ function updateProblemView(client: HubClient): { label: string; color: string; t
   return null;
 }
 
+const ELLIPSIS: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+
 function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel: { text: string; title?: string } }) {
   const status = deriveComputerStatus(client);
   const version = client.sdkVersion;
@@ -726,44 +768,72 @@ function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel
   // status only for offline machines, where "how long" is the actionable bit.
   const offlineFor = status.pill === "offline" ? formatOfflineDuration(client.lastSeenAt) : null;
   const agentCount = client.agentCount;
+  // Owner · OS · version, shown *only* on a narrow container where the owner /
+  // OS / version columns collapse — reflows them back under the hostname (the
+  // shipped mobile-friendly layout) so the identity column never gets starved.
+  // `title` carries the full (un-truncated, full-build-version) meta so a
+  // narrow viewer can still recover it on hover, matching the desktop columns.
+  // `ownerLabel.title` is the full identifier — the un-truncated resolved
+  // display name, or the full UUID when the owner can't be resolved (owner cell
+  // and this meta title fall back to it so hover always recovers the full value
+  // even when the visible text is a short-id or the cell truncates).
+  const ownerFull = ownerLabel.title ?? ownerLabel.text;
+  // Compact meta (owner · OS · version under the hostname) — each field carries
+  // a visually-hidden label so a screen reader on the reflowed narrow layout
+  // (where the labeled Owner / OS / First Tree columns collapse out of the
+  // tree) still hears "Owner: … OS: … First Tree: …" instead of three bare
+  // values. `title` recovers the full (un-truncated, full-build) meta on hover.
+  const metaParts: { label: string; value: string }[] = [
+    { label: "Owner", value: ownerLabel.text },
+    ...(client.os ? [{ label: "OS", value: client.os }] : []),
+    ...(version ? [{ label: "First Tree", value: shortVersion(version) }] : []),
+  ];
+  const metaTitle = [ownerFull, client.os, version].filter(Boolean).join(" · ");
   return (
-    <div className="team-computer-row">
-      <div style={{ minWidth: 0 }}>
-        <div
-          className="mono text-subtitle"
-          style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          title={client.hostname ?? undefined}
-        >
+    <tr className="team-computer-row">
+      <th scope="row" className="team-cell--id">
+        <div className="mono text-subtitle" style={ELLIPSIS} title={client.hostname ?? undefined}>
           {client.hostname ?? "—"}
         </div>
         <div
-          className="text-caption"
-          style={{ color: "var(--fg-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          className="team-computer-row__meta text-caption"
+          style={{ color: "var(--fg-3)", ...ELLIPSIS }}
+          title={metaTitle}
         >
-          <span title={ownerLabel.title}>{ownerLabel.text}</span>
-          {client.os ? ` · ${client.os}` : ""}
-          {version ? (
-            <>
-              {" · "}
-              <span className="mono" title={version}>
-                {shortVersion(version)}
-              </span>
-            </>
-          ) : null}
+          {metaParts.map((part, i) => (
+            <span key={part.label}>
+              {i > 0 ? " · " : null}
+              <span className="sr-only">{part.label}: </span>
+              {part.value}
+            </span>
+          ))}
         </div>
-      </div>
-      <span
-        className="text-caption tnum"
-        style={{ color: agentCount > 0 ? "var(--fg-2)" : "var(--fg-4)", textAlign: "right", whiteSpace: "nowrap" }}
+      </th>
+      <td className="team-computer-row__col-owner text-body" style={{ color: "var(--fg-2)" }} title={ownerFull}>
+        {ownerLabel.text}
+      </td>
+      <td className="team-computer-row__col-os text-body" style={{ color: "var(--fg-3)" }}>
+        {client.os ?? "—"}
+      </td>
+      <td
+        className="team-computer-row__col-ver mono text-caption"
+        style={{ color: "var(--fg-3)" }}
+        title={version ?? undefined}
+      >
+        {version ? shortVersion(version) : "—"}
+      </td>
+      <td
+        className="team-cell--num text-caption tnum"
+        style={{ color: agentCount > 0 ? "var(--fg-2)" : "var(--fg-4)" }}
       >
         {agentCount} {agentCount === 1 ? "agent" : "agents"}
-      </span>
-      <span className="inline-flex items-center justify-end gap-1.5" style={{ whiteSpace: "nowrap" }}>
+      </td>
+      <td className="team-cell--num team-cell--status">
         {updateProblem ? (
           <span
             role="status"
             aria-label={`Computer status: ${updateProblem.label}`}
-            className="mono inline-flex items-center gap-1.5 text-caption"
+            className="mono inline-flex items-center justify-end gap-1.5 text-caption"
             style={{ color: updateProblem.color }}
             title={updateProblem.title}
           >
@@ -771,17 +841,17 @@ function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel
             {updateProblem.label}
           </span>
         ) : (
-          <>
+          <span className="inline-flex items-center justify-end gap-1.5">
             <ComputerStatusPill pill={status.pill} />
             {offlineFor ? (
               <span className="text-caption" style={{ color: "var(--fg-3)" }}>
                 · {offlineFor}
               </span>
             ) : null}
-          </>
+          </span>
         )}
-      </span>
-    </div>
+      </td>
+    </tr>
   );
 }
 

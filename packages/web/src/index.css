@@ -1867,37 +1867,131 @@
   border-top: var(--hairline) solid var(--border-faint);
 }
 
-/* Team computers audit list (admin) — compact grouped rows with a hairline
-   between every row/group-header and a neutral hover. The health split is
-   carried by row order + the "Needs attention" group header + each row's
-   status pill, not a full-row color wash. */
+/* Team computers audit table (admin) — a semantic <table> whose distributed
+   columns (Hostname | Owner | OS | First Tree | Agents | Status) fill the
+   Settings content width, with a hairline between rows and a neutral hover.
+   The health split is carried by row order + the "Needs attention" group row
+   + each row's status pill, not a full-row color wash.
+
+   Width strategy (table-layout: fixed): Hostname is the only column left
+   auto-width, so it absorbs the slack — long names truncate, short ones leave
+   no mid-row void. Owner is capped + truncates; OS / First Tree / Agents are
+   fixed (content-bounded); Status is fixed to its worst case ("Offline · N
+   days" / "Setup incomplete"). Agents + Status right-align. */
 .team-computers-list {
   /* Query the list's own width (not the viewport): the Settings nav eats
-     width, so a row can be narrow even on a wide screen. */
+     width, so the table can be narrow even on a wide screen. */
   container-type: inline-size;
 }
-.team-computers-list > * + * {
+.team-computers-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.team-computers-table th,
+.team-computers-table td {
+  padding: var(--sp-2_5) var(--sp-3_5);
+  text-align: left;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Column widths — set on the header cells; the unspecified Hostname column
+   takes the remaining space under table-layout: fixed. */
+.team-computers-table th:nth-child(2) {
+  width: 11rem;
+}
+.team-computers-table th:nth-child(3) {
+  width: 5rem;
+}
+.team-computers-table th:nth-child(4) {
+  width: 6rem;
+}
+.team-computers-table th:nth-child(5) {
+  width: 5.5rem;
+}
+.team-computers-table th:nth-child(6) {
+  /* Wide enough for the worst-case status incl. padding:
+     "Offline · N days" / "Setup incomplete". */
+  width: 10rem;
+}
+.team-computers-table thead th {
+  color: var(--fg-3);
+}
+.team-cell--num {
+  text-align: right;
+}
+.team-cell--status .inline-flex {
+  justify-content: flex-end;
+}
+/* Hairline between rows; the first body row's separator is the header's
+   bottom edge, so skip it (and it keeps the narrow layout — thead hidden —
+   flush at the top). */
+.team-computers-table tbody tr {
   border-top: var(--hairline) solid var(--border-faint);
 }
+.team-computers-table thead th {
+  border-bottom: var(--hairline) solid var(--border-faint);
+}
+/* Only the very first row-group's first row skips the separator (its top edge
+   is the header's bottom border); later `<tbody>` groups keep the top border so
+   there's a hairline above each "Ready" / "Needs attention" divider. */
+.team-computers-table tbody:first-of-type tr:first-child {
+  border-top: 0;
+}
 .team-computer-row {
-  display: grid;
-  /* identity | agents | status. Fixed trailing tracks keep the agent counts
-     and status pills column-aligned across rows when there's room. */
-  grid-template-columns: minmax(0, 1fr) var(--sp-20) var(--sp-45);
-  align-items: center;
-  column-gap: var(--sp-3);
-  padding: var(--sp-2_5) var(--sp-3_5);
   transition: background-color 120ms ease-out;
 }
 .team-computer-row:hover {
   background-color: var(--bg-hover);
 }
-/* Narrow list (mobile / cramped Settings): drop the fixed trailing tracks to
-   intrinsic width so the hostname/meta identity column never collapses. */
-@container (max-width: 34rem) {
-  .team-computer-row {
+.team-group-row th {
+  padding: 0;
+  font-weight: inherit;
+}
+/* `__meta` is the owner · OS · version line under the hostname, used only on a
+   narrow container (below) where those columns collapse. */
+.team-computer-row__meta {
+  display: none;
+}
+/* Narrow container (mobile / cramped Settings): reflow the table — hide the
+   column header, drop the owner / OS / version cells, and let owner/OS/version
+   fall back under the hostname as the meta line. Data rows become a 3-track
+   grid (Hostname elastic | Agents | Status) so the identity column never
+   collapses. Breakpoint ~52rem clears the fixed-column budget (~42rem) plus a
+   comfortable hostname floor before the columns are allowed to render. */
+@container (max-width: 52rem) {
+  .team-computers-table,
+  .team-computers-table tbody {
+    display: block;
+  }
+  .team-computers-table thead {
+    display: none;
+  }
+  .team-computers-table tr.team-computer-row {
+    display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto;
     column-gap: var(--sp-2_5);
+    align-items: center;
+    padding: var(--sp-2_5) var(--sp-3_5);
+  }
+  /* Clear the base cell padding entirely on the reflowed grid rows — the row
+     itself carries the padding, so keeping it on the cells too would double the
+     vertical rhythm and bloat each stacked row. */
+  .team-computers-table tr.team-computer-row > * {
+    padding: 0;
+  }
+  .team-computers-table tr.team-group-row {
+    display: block;
+  }
+  .team-computer-row__col-owner,
+  .team-computer-row__col-os,
+  .team-computer-row__col-ver {
+    display: none;
+  }
+  .team-computer-row__meta {
+    display: block;
   }
 }
 

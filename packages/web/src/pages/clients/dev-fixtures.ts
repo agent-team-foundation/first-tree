@@ -447,10 +447,11 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
       whatToCheck: [
         "'Your computers · 2' section as Section heading with hairline below",
         "'Team computers · 5' second Section, collapsed by default — click Show",
-        "Compact list: hostname (mono, the focus) over an 'owner · OS · version' meta line",
+        "Distributed columns fill the width (no mid-row void): Hostname | Owner | OS | First Tree | Agents | Status, with a flat sentence-case column header",
         "'Needs attention · 3' on top: Auth expired, Offline, then 'Update failed' (a Ready runtime whose self-update failed), then a neutral 'Ready · 2'",
-        "Version drops the build suffix (0.5.2-staging.31.4 → 0.5.2); full string on hover",
-        "Long hostname truncates with an ellipsis; Offline row reads 'Offline · 3 days'; 'Update failed' shows its reason on hover",
+        "Version column drops the build suffix (0.5.2-staging.31.4 → 0.5.2); full string on hover",
+        "Hostname is the only elastic column — long names truncate, short ones leave no void; Offline row reads 'Offline · 3 days'; 'Update failed' shows its reason on hover",
+        "Narrow the browser: owner/OS/version reflow under the hostname as a meta line and the column header hides (the identity column never collapses)",
         "Owner labels: 'gandy · you' on own cards, no '· you' on team rows",
       ],
       clients: [
