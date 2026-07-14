@@ -1015,6 +1015,87 @@ describe("org-settings API (admin gating + masking)", () => {
     });
   });
 
+  it("returns a non-secret conflict for a repo-less invalid historical context_tree branch", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = { branch: "--bad" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    const adminSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminSafeRead.statusCode).toBe(409);
+    expect(adminSafeRead.json()).toMatchObject({
+      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+    });
+    expect(adminSafeRead.body).not.toContain("--bad");
+
+    const memberSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(memberSafeRead.statusCode).toBe(409);
+    expect(memberSafeRead.body).not.toContain("--bad");
+  });
+
+  it("keeps an intentionally cleared context_tree row readable as unbound", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const rawUrl = `${safeUrl}/raw`;
+
+    const bound = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/context-tree.git", branch: "release" },
+    });
+    expect(bound.statusCode).toBe(200);
+
+    const cleared = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null, branch: "trunk" },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toEqual({ branch: "trunk" });
+
+    const adminSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminSafeRead.statusCode).toBe(200);
+    expect(adminSafeRead.json()).toEqual({ branch: "trunk" });
+
+    const memberSafeRead = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(memberSafeRead.statusCode).toBe(200);
+    expect(memberSafeRead.json()).toEqual({ branch: "trunk" });
+
+    const rawRead = await app.inject({
+      method: "GET",
+      url: rawUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toEqual({ branch: "trunk" });
+  });
+
   it("strictly validates Context Tree PUT bodies without partially updating the setting", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

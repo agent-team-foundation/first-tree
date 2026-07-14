@@ -370,6 +370,21 @@ describe("tree init command action", () => {
         message: "Could not read the team's current Context Tree binding",
       },
       {
+        name: "invalid repo-less branch",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Invalid Branch" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+            return response({ branch: "--bad" });
+          }
+          return response("not found", { status: 404 });
+        },
+        message: "Context Tree binding contains an invalid branch",
+      },
+      {
         name: "installation lookup failure",
         command: commandWithOptions({ bind: true, org: "org_1", title: "Lookup" }),
         fetch: async (input) => {

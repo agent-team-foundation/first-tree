@@ -36,14 +36,10 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
     if (namespace === "context_tree") {
-      const current = await orgSettingsService.getOrgContextTreeWithMeta(app.db, scope.organizationId);
-      if (current.binding) return current.binding;
-      if (current.updatedAt) {
-        throw new ConflictError(
-          "Context Tree setting contains invalid historical data and must be repaired by an admin",
-        );
-      }
-      return { branch: "main" };
+      const current = await orgSettingsService.getOrgContextTreeSafeProjection(app.db, scope.organizationId);
+      if (current.status === "active") return current.binding;
+      if (current.status === "unbound") return { branch: current.branch };
+      throw new ConflictError("Context Tree setting contains invalid historical data and must be repaired by an admin");
     }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);
   });

@@ -1,6 +1,7 @@
 import {
   type ContextTreeActiveBinding,
   contextTreeActiveBindingSchema,
+  contextTreeBranchSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACES,
   type OrgContextTreeFeaturesInput,
@@ -193,15 +194,46 @@ export async function getOrgContextTreeWithMeta(
   db: Database,
   orgId: string,
 ): Promise<{ binding: ContextTreeActiveBinding | null; updatedAt: Date | null }> {
+  const safe = await getOrgContextTreeSafeProjection(db, orgId);
+  return {
+    binding: safe.status === "active" ? safe.binding : null,
+    updatedAt: safe.updatedAt,
+  };
+}
+
+export type OrgContextTreeSafeProjection =
+  | { status: "active"; binding: ContextTreeActiveBinding; updatedAt: Date }
+  | { status: "unbound"; branch: string; updatedAt: Date | null }
+  | { status: "invalid"; updatedAt: Date; reason: "invalid_storage" | "invalid_binding" | "invalid_branch" };
+
+export async function getOrgContextTreeSafeProjection(
+  db: Database,
+  orgId: string,
+): Promise<OrgContextTreeSafeProjection> {
   const [row] = await db
     .select({ value: organizationSettings.value, updatedAt: organizationSettings.updatedAt })
     .from(organizationSettings)
     .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, "context_tree")))
     .limit(1);
-  if (!row) return { binding: null, updatedAt: null };
-  const storage = ORG_SETTINGS_NAMESPACES.context_tree.storage.parse(row.value) as OrgContextTreeStorage;
-  const parsed = contextTreeActiveBindingSchema.safeParse(storage);
-  return { binding: parsed.success ? parsed.data : null, updatedAt: row.updatedAt };
+  if (!row) return { status: "unbound", branch: "main", updatedAt: null };
+
+  const storageParsed = ORG_SETTINGS_NAMESPACES.context_tree.storage.safeParse(row.value);
+  if (!storageParsed.success) {
+    return { status: "invalid", updatedAt: row.updatedAt, reason: "invalid_storage" };
+  }
+
+  const storage = storageParsed.data as OrgContextTreeStorage;
+  if (storage.repo) {
+    const binding = contextTreeActiveBindingSchema.safeParse(storage);
+    return binding.success
+      ? { status: "active", binding: binding.data, updatedAt: row.updatedAt }
+      : { status: "invalid", updatedAt: row.updatedAt, reason: "invalid_binding" };
+  }
+
+  const branch = contextTreeBranchSchema.safeParse(storage.branch);
+  return branch.success
+    ? { status: "unbound", branch: branch.data, updatedAt: row.updatedAt }
+    : { status: "invalid", updatedAt: row.updatedAt, reason: "invalid_branch" };
 }
 
 /**

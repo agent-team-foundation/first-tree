@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { contextTreeInstallationInfoResponseSchema } from "@first-tree/shared";
+import { contextTreeBranchSchema, contextTreeInstallationInfoResponseSchema } from "@first-tree/shared";
 import type { Command } from "commander";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
@@ -276,6 +276,27 @@ function buildCoverage(lookup: InstallationLookup, repoFullName: string): Covera
   };
 }
 
+function parseContextTreeBindingRead(body: unknown): { repo: string | null } {
+  if (!body || typeof body !== "object") {
+    throw new Error("Context Tree binding response was not an object");
+  }
+  const record = body as Record<string, unknown>;
+  if (typeof record.repo === "string") {
+    if (record.branch !== undefined && !contextTreeBranchSchema.safeParse(record.branch).success) {
+      throw new Error("Context Tree binding contains an invalid branch");
+    }
+    return { repo: record.repo };
+  }
+  if (record.repo !== undefined && record.repo !== null) {
+    throw new Error("Context Tree binding contains an invalid repo");
+  }
+  const branch = record.branch ?? DEFAULT_BRANCH;
+  if (!contextTreeBranchSchema.safeParse(branch).success) {
+    throw new Error("Context Tree binding contains an invalid branch");
+  }
+  return { repo: null };
+}
+
 // Read the raw `context_tree` repair view so `tree init` refuses to clobber
 // any configured row, including loose historical values that are not active
 // runtime bindings yet.
@@ -300,8 +321,14 @@ async function readContextTreeBinding(
       `Could not read the team's current Context Tree binding (server returned ${res.status}); refusing to proceed so an existing tree is not replaced. Retry, or pass --no-bind.`,
     );
   }
-  const body = (await res.json()) as { repo?: string | null };
-  return { repo: body.repo ?? null };
+  try {
+    return parseContextTreeBindingRead(await res.json());
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not read the team's current Context Tree binding (${reason}); refusing to proceed so an existing tree is not replaced. Retry, or pass --no-bind.`,
+    );
+  }
 }
 
 async function bindOrgToTree(serverUrl: string, accessToken: string, orgId: string, repoUrl: string): Promise<void> {

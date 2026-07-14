@@ -623,11 +623,12 @@ scripts: without `--org`, it resolves the caller's default organization through
 ID. It is not agent-scoped and is separate from `context-tree set` below.
 
 The Class B settings read `GET /api/v1/orgs/:orgId/settings/context_tree`
-returns the same runtime-safe binding representation for admins and members. If
-a loose historical row exists but is not a valid active binding, this safe read
-fails without returning the raw value. Loose historical rows that are visible for
-repair are exposed only through the admin-only raw read
-`GET /api/v1/orgs/:orgId/settings/context_tree/raw`.
+returns the same runtime-safe binding representation for admins and members: an
+active valid binding returns `repo` plus `branch`, and an intentionally unbound
+row returns a branch-only payload. Stored values whose repo/branch state would
+make a later repo-only bind invalid fail without returning the raw value. Loose
+historical rows that are visible for repair are exposed only through the
+admin-only raw read `GET /api/v1/orgs/:orgId/settings/context_tree/raw`.
 
 ### org context-tree
 
