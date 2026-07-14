@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree File Bug"
   short_description: "Report a defect in First Tree itself, not into the user's repo"
-  default_prompt: "Use $first-tree-file-bug ONLY for a defect in First Tree itself, not for filing an issue into the user's own or bound repo. Collect the bug context (repro, version, chat ID, user ID), confirm with the user that this files into First Tree's GitHub-hosted public issue tracker, then open the issue with the user's gh CLI. Ordinary source-repository issues use the CLI for that forge and are outside this skill."
+  default_prompt: "Use $first-tree-file-bug ONLY for a defect in First Tree itself, not for filing an issue into the user's own or bound repo. Collect the bug context (repro, version, chat ID, user ID), confirm with the user that this files into First Tree's GitHub-hosted public issue tracker, then open the issue with the user's gh CLI. Ordinary source-repository issues use gh for GitHub or glab for GitLab and are outside this skill."

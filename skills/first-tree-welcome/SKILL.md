@@ -11,7 +11,7 @@ description: Use for a First Tree onboarding first chat, especially natural open
 Use this skill only when the chat is clearly the onboarding first chat created by
 First Tree, including natural messages such as "welcome aboard", "Please help me
 get started with First Tree", or "Please help me get settled into this team on
-First Tree." Do not use it for ordinary chats, PR reviews, repo scans, tree
+First Tree." Do not use it for ordinary chats, PR/MR reviews, repo scans, tree
 writes, or maintenance work.
 
 Two look-alikes that are NOT this launcher, and one that routes by shape:
@@ -82,11 +82,15 @@ available local files:
   — a mere binding does not imply a populated tree, and the tree you may have
   bound is not necessarily this team's; confirm state by reading the **target
   team's** tree (root `NODE.md`), not by trusting a binding;
-- **host `gh` / `glab` / local credentials**: usable or not.
+- **detected source forge**: GitHub, GitLab, another host, or unknown — derive
+  it from the supplied URL or the repository's `origin` remote;
+- **matching host CLI / local credentials**: `gh` for GitHub, `glab` for
+  GitLab, or plain `git` for another host; usable or not.
 
 If state is unknown, first try to resolve it yourself (read the greeting for
-role, attempt the repo read, check the host CLI (`gh` or `glab`); only if it stays genuinely
-unresolvable, name the one specific missing piece and ask for that. Do not
+role, attempt the repo read, check the host CLI, `gh` or `glab`); only if it
+stays genuinely unresolvable, name the one specific missing piece and ask for
+that. Do not
 invent repo access, GitHub/GitLab authorization, or tree readiness.
 
 #### Reading role from the greeting
@@ -195,21 +199,21 @@ When either shape matches:
    - **None eligible to autofix** (everything left is a judgment call or stale)
      → spawn nothing; go straight to surfacing them (below).
    Do not split one blocker into implementation-step chats: code change, tests,
-   verification, and PR for that blocker belong in the same spawned fix chat.
+   verification, and PR/MR for that blocker belong in the same spawned fix chat.
    **Never fan out — or autofix — a judgment call**: a finding that needs product, architecture, or security-design judgment (rate-limiting redesign,
    changing auth), lacks concrete evidence, no longer matches the current repo,
-   or is already covered by existing code or an already-open PR. Surface those
+   or is already covered by existing code or an already-open PR/MR. Surface those
    in this chat for the user to decide or acknowledge.
    Before any spawned fix starts changing code, verify the finding still applies
    against the current repo. If it is already fixed or covered by existing code
-   or an already-open PR, report that and move to the next queued eligible
+   or an already-open PR/MR, report that and move to the next queued eligible
    blocker rather than producing a duplicate fix. Whether a fix runs in a
    spawned chat or here, its brief/target is self-contained: the repository URL,
    the findings JSON URL (when present), the specific finding(s) with their
    evidence and recommended fix, the instruction to verify the finding still
    applies before changing code, what to do when access is missing (diagnose the
-   cause, then the single narrowest recovery — the narrowest GitHub access or a
-   local path), and the completion bar — a verified fix or PR for that blocker,
+   cause, then the single narrowest recovery — the narrowest forge access or a
+   local path), and the completion bar — a verified fix or PR/MR for that blocker,
    with evidence.
 4. If the repository is not readable from this machine, follow the normal
    cannot-read rule: state the exact failure and make the smallest access ask;
@@ -368,9 +372,12 @@ Key mechanics — read these carefully, they are easy to get wrong:
   own. Include: the task, the relevant repo/paths, and how "done" is verified. Do
   NOT write a terse pointer like "do task 1".
 - **For a value task**: the brief states the change and its verification (test,
-  lint, screenshot, doc diff). If the task's likely completion artifact is a PR,
-  include that the task should follow the PR and report whether live tracking is
-  active or blocked by missing GitHub App coverage.
+  lint, screenshot, doc diff). If the likely completion artifact is a PR/MR,
+  choose the review CLI from that repository's remote. For a GitHub PR, include
+  that the task should run `first-tree github follow` and report whether live
+  tracking is active or blocked by missing GitHub App coverage. For a GitLab MR,
+  do not run that GitHub-only command; report the MR URL and only use a GitLab
+  tracking/integration surface when First Tree returns one explicitly.
 - **For "Build your Context Tree"**: the brief is user-visible, so write it in
   plain product language and **name no skill in it** — e.g. "Build our team's
   Context Tree from the connected code — propose an initial structure for me to
@@ -387,16 +394,21 @@ Key mechanics — read these carefully, they are easy to get wrong:
 
 Then, back in THIS launcher chat, post a short line naming the chats you opened
 so the user can see the parallel streams. As each spawned chat produces a result
-(a PR, a passing test, the seed PRs), note it here so the launcher stays the
+(a PR/MR, a passing test, the seed PRs/MRs), note it here so the launcher stays the
 map of what is in flight.
 
-### After a value PR opens: guide App install once
+### After a GitHub value PR opens: guide App install once
 
 A review-ready PR gives the admin a concrete reason to install or update First
 Tree GitHub App coverage: CI results, review comments, and merge state can flow
 back into chat. The welcome launcher owns one concise install/coverage guidance
 at this moment; do not rely only on the generic PR-following failure text that a
 spawned task may have shown.
+
+This section is GitHub-only. For a GitLab MR, do not call `first-tree github
+follow`, send the user to **Settings -> GitHub**, or imply live MR tracking.
+Relay a GitLab integration URL/settings target only when First Tree itself
+returns one; otherwise report the MR without a tracking/setup claim.
 
 - The spawned value task owns following its PR in its own task chat
   (`first-tree github follow <url>`) and reporting whether live tracking is
@@ -435,8 +447,8 @@ was not picked up front. Offer it **once**, after value, on these conditions:
   trusting a binding).
 - **Trigger on the first verified result** — the moment a value task returns
   something the user can see work, whether it ran in a spawned chat or was fixed
-  in place (a passing test, a review-ready PR, a
-  shipped doc), tie the offer to that win — not after everything finishes, and
+  in place (a passing test, a review-ready PR/MR, a shipped doc), tie the offer
+  to that win — not after everything finishes, and
   not before the first win.
 - **When the evidence warrants it** (per **Recommend, don't just list**), make
   this a reasoned recommendation, not a neutral question — e.g. "Test's green.
@@ -496,7 +508,7 @@ the user only for what only they can supply.
   in plain terms, tight.
 
 This does **not** loosen consent: a consequential or irreversible action (repo
-creation, pushes, PRs, authorization) still needs the user's explicit yes. Being
+creation, pushes, PRs/MRs, authorization) still needs the user's explicit yes. Being
 a protagonist is about owning diagnosis, safe/reversible steps, and mechanism
 choices — not about acting on things that are genuinely the user's to allow.
 
@@ -520,7 +532,7 @@ for tree build; other authorizations use a tracked ask.
   admin owns setup rather than routing a possible non-admin into an admin
   surface, and don't lead with "who should be involved?".
 
-**GitHub / repo access.**
+**Forge / repo access.**
 
 - Prefer a local project folder path + the matching host CLI (`gh` for GitHub,
   `glab` for GitLab) for ordinary forge work. A GitHub URL alone is not a reason
@@ -571,11 +583,14 @@ surface; involve the responsible admin.
 - If the admin did not pick the tree up front, re-offer it exactly once when the
   first value task delivers a verified result (see **After value lands**) — tied
   to that win, one line, no repeated nudging.
-- When the first value result is a PR/MR, consume the task chat's follow/tracking
-  status and, only for a confirmed admin when App coverage is missing, surface
-  the one-time App-install guidance from **After a value PR opens** in this
-  launcher. This does not replace the tree offer; if both apply, keep each to a
-  short sentence and do not repeat either later.
+- When the first value result is a GitHub PR, consume the task chat's
+  follow/tracking status and, only for a confirmed admin when App coverage is
+  missing, surface the one-time App-install guidance from **After a GitHub value
+  PR opens** in this launcher. A GitLab MR has no documented equivalent here;
+  use only an authoritative First Tree result and never substitute
+  `first-tree github follow` or **Settings -> GitHub**. This does not replace the
+  tree offer; if both apply, keep each to a short sentence and do not repeat
+  either later.
 - Present choices as a multi-select ask with **2–4 options** — the value tasks
   bundled with the tree-build option when tree build is offered, otherwise the
   value tasks listed individually; never a one-option ask; no "Skip for now"
@@ -592,7 +607,7 @@ surface; involve the responsible admin.
   `first-tree-seed` owns that in the spawned tree chat.
 - Finish each task against its own check and show the evidence; never claim it
   works without verifying.
-- Do not perform authorization, repo creation, pushes, or PR creation without
+- Do not perform authorization, repo creation, pushes, or PR/MR creation without
   explicit consent.
 - Do not surface skill internals or jargon to the user.
 - Do not use retired onboarding skill names such as `first-tree-guide`,

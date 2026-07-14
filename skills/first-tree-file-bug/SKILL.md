@@ -44,7 +44,11 @@ First Tree defect worth filing. If it is ambiguous whether the fault is in
 First Tree or the user's own setup, resolve that first — do not file an
 issue against First Tree for something outside it. If the report is really
 about the user's own project or their bound source repo, this is not the
-skill: file it into that repo with the target repository's forge CLI (`gh issue create --repo <their repo>` for GitHub, or `glab issue create --repo <their repo>` for GitLab) instead of here.
+skill: file it into that repo with the target repository's forge CLI
+(`gh issue create --repo <their repo>` for GitHub, or `glab issue create
+--repo <their repo>` for GitLab) instead of here. If that CLI is not
+authenticated, recover with `gh auth login` for GitHub or `glab auth login`
+for GitLab.
 
 ### 2. Gather the bug context
 

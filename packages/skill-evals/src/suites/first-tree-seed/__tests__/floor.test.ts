@@ -17,9 +17,17 @@ describe("first-tree-seed floor invariants", () => {
 
   it("keeps chat-provided sources independent of GitHub App setup", () => {
     expect(skillMarkdown).toContain("An empty or absent `manifest.sources` is valid");
-    expect(skillMarkdown).toMatch(/local\s+project folder or GitHub repository URL/);
+    expect(skillMarkdown).toMatch(/local\s+project folder or GitHub\/GitLab repository URL/);
     expect(skillMarkdown).toContain("Do not send them to Settings");
-    expect(skillMarkdown).toMatch(/rather than asking for the First\s+Tree GitHub App/);
+    expect(skillMarkdown).toMatch(/rather\s+than asking for the First\s+Tree GitHub App/);
+  });
+
+  it("supports GitLab sources without inventing GitLab tree provisioning", () => {
+    expect(skillMarkdown).toContain("Use `gh` for GitHub and `glab` for GitLab");
+    expect(skillMarkdown).toMatch(/Preserve the full GitLab\s+namespace/);
+    expect(skillMarkdown).toMatch(/current\s+`first-tree tree init` provisioning is GitHub-only/);
+    expect(skillMarkdown).toContain("do not substitute `glab` for this command");
+    expect(skillMarkdown).toContain("Never substitute `/settings/github`");
   });
 
   it("checks same-chat Phase 2 continuation before refusing state C", () => {
@@ -75,9 +83,9 @@ describe("first-tree-seed floor invariants", () => {
   });
 
   it("delays App coverage guidance until a reviewable milestone", () => {
-    expect(skillMarkdown).toContain("After the Phase 1 PR is open");
-    expect(skillMarkdown).toContain("do not interrupt source resolution, structure");
-    expect(skillMarkdown).toContain("relay only a recovery URL returned");
+    expect(skillMarkdown).toContain("After the Phase 1 PR/MR is open");
+    expect(skillMarkdown).toMatch(/do not interrupt source resolution,\s+structure/);
+    expect(skillMarkdown).toMatch(/Relay only a recovery URL returned/);
   });
 
   it("ships behavioral gates for chat-supplied sources and same-chat Phase 2 continuation", () => {
