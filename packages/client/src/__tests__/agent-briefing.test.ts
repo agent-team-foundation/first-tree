@@ -421,6 +421,20 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).not.toContain("`first-tree-github` skill");
   });
 
+  it("frames the missing-App follow failure as a value-first Connect CTA, not a chore", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    // Value first, not an error/chore report.
+    expect(briefing).toContain("frame it value first, not an error or chore");
+    expect(briefing).toContain("brings this PR/issue's live updates");
+    // One clickable, ABSOLUTE settings link, with a real host the agent can resolve
+    // (a bare path or literal placeholder would render as a broken/dead link).
+    expect(briefing).toContain("https://<your-host>/settings/github");
+    expect(briefing).toContain("agent status");
+    // Explicit jargon ban so the agent stops parroting CLI wording.
+    expect(briefing).toContain('Never say "webhook", "wire"');
+    expect(briefing).toContain('"install the App"');
+  });
+
   it("keeps chat metadata rules compact but actionable", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const chatTopic = briefing.slice(briefing.indexOf("## Chat Topic & Description"));

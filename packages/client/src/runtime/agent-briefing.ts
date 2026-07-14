@@ -502,11 +502,13 @@ Creating a PR or issue **never** follows it; \`gh pr create\`, curl, GitHub MCP,
 
   Skip the follow only when the entity is clearly unrelated to this chat's task.
 - **If the follow fails because the org has not installed the First Tree
-  GitHub App**, explain the optional value upgrade in product language: live
-  PR/issue activity (CI, reviews, merge) can flow back into this chat after an
-  org admin enables **Settings → GitHub** in the First Tree web app. Do not
-  expose raw error codes or \`github follow\` mechanics; say the PR/issue still
-  works either way.
+  GitHub App**, frame it value first, not an error or chore: connecting GitHub
+  brings this PR/issue's live updates (comments, reviews, checks, merge status)
+  into this chat — it still works either way. Offer one clickable **absolute**
+  \`https://<your-host>/settings/github\` link — take <your-host> from
+  \`${bin} agent status\`, and never emit a bare path or the literal placeholder.
+  Never say "webhook", "wire", "re-follow", "install the App", or "action
+  needed".
 - **Unfollow only when the human explicitly asks to stop tracking** the
   entity (\`${bin} github unfollow <entity>\`). Do not proactively unfollow merely because a PR or Issue completed, merged, or closed.
 

@@ -401,15 +401,20 @@ spawned task may have shown.
   add App-install guidance.
 - If tracking is blocked because the First Tree GitHub App is not installed on,
   or does not cover, the GitHub account/repo that owns the PR, and the human is a
-  confirmed **admin**, include one launcher-level install/coverage line when you
-  report that PR result. Keep it tied to the win, for example: "PR is open. To
-  have CI, review comments, and merge updates flow back here, install or cover
-  this repo from Settings -> GitHub." Use a product link only when you have a
-  stable one; otherwise name **Settings -> GitHub**. Do not fabricate raw GitHub
-  App install URLs.
+  confirmed **admin**, include one launcher-level line when you report that PR
+  result. Lead with value, tied to the win, for example: "Want this PR's checks,
+  reviews, and merge status to land in this chat as they happen?
+  **[Connect GitHub →](https://<your-host>/settings/github)** — one-time setup
+  for the team." Emit a clickable **absolute** `https://<your-host>/settings/github`
+  URL, taking `<your-host>` from the `Server:` value of `first-tree agent status`
+  (a bare path or the literal placeholder will not render); if you cannot resolve
+  the host, name **Settings → GitHub** rather than emit a broken link. Do not
+  fabricate a raw GitHub App install URL. Say value, then the link — and never use
+  mechanics words ("webhook", "wire", "re-follow", "install the App", "action
+  needed").
 - If the human is an invitee/member or role is unclear, do not route them into
-  an admin-only install surface. Say an organization admin can enable live PR
-  updates for this repo if useful.
+  an admin-only install surface. Say a team admin can turn on live PR updates
+  (checks, reviews, merge status) for this repo, if useful.
 - Give this App-install guidance at most once in the onboarding launcher. If the
   spawned task chat already mentioned the missing App, still include the short
   launcher-level line; do not repeat a full setup explanation.
