@@ -1134,33 +1134,54 @@ function singlePrBuildObserved(text: string): boolean {
   return actionObserved && singlePrObserved && structureAndLeavesObserved;
 }
 
-function passiveHandoffRefersToCandidatePr(localClauses: string[], passiveClauseIndex: number): boolean {
-  if (passiveClauseIndex === 0 || passiveClauseIndex === 1) return true;
+function passiveHandoffRefersToCandidatePr(
+  localClauses: string[],
+  passiveClauseIndex: number,
+  passiveMatchIndex: number,
+): boolean {
+  const candidateClause = localClauses[0] ?? "";
+  const prReferences = [
+    ...candidateClause.matchAll(
+      /\b(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request)\b/giu,
+    ),
+  ];
+  const candidateReference = prReferences.at(-1);
+  if (!candidateReference || candidateReference.index === undefined) return false;
 
   let candidatePrIsCurrentReferent = true;
   let candidatePrCoreferenceObserved = false;
-  for (const interveningClause of localClauses.slice(1, passiveClauseIndex)) {
-    if (
-      /\b(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request)\b/iu.test(interveningClause)
-    ) {
-      candidatePrIsCurrentReferent = true;
-      candidatePrCoreferenceObserved = true;
-      continue;
-    }
-    if (
-      /\b(?:sub-?agent|agent)\b[^.!?;\n]{0,50}\b(?:branches?|changes?|drafts?|work)\b|\b(?:branches?|drafts?)\b/iu.test(
-        interveningClause,
-      )
-    ) {
-      candidatePrIsCurrentReferent = false;
-      continue;
-    }
-    if (/\bit\b/iu.test(interveningClause) && candidatePrIsCurrentReferent) {
-      candidatePrCoreferenceObserved = true;
+  const candidateClauseEnd = passiveClauseIndex === 0 ? passiveMatchIndex : candidateClause.length;
+  const segments = [
+    candidateClause.slice(candidateReference.index + candidateReference[0].length, candidateClauseEnd),
+    ...localClauses.slice(1, passiveClauseIndex),
+  ];
+  for (const segment of segments) {
+    const referentEvents = [
+      ...[...segment.matchAll(/\b(?:sub-?agent|agent)\b[^.!?;\n]{0,50}\b(?:branches?|changes?|drafts?|work)\b/giu)].map(
+        (match) => ({ index: match.index, type: "competing" as const }),
+      ),
+      ...[
+        ...segment.matchAll(
+          /\b(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request)\b/giu,
+        ),
+      ].map((match) => ({ index: match.index, type: "candidate" as const })),
+      ...[...segment.matchAll(/\bit\b/giu)].map((match) => ({ index: match.index, type: "pronoun" as const })),
+    ].sort((left, right) => left.index - right.index);
+
+    for (const event of referentEvents) {
+      if (event.type === "competing") {
+        candidatePrIsCurrentReferent = false;
+      } else if (event.type === "candidate") {
+        candidatePrIsCurrentReferent = true;
+        candidatePrCoreferenceObserved = true;
+      } else if (candidatePrIsCurrentReferent) {
+        candidatePrCoreferenceObserved = true;
+      }
     }
   }
 
-  return candidatePrIsCurrentReferent && candidatePrCoreferenceObserved;
+  if (!candidatePrIsCurrentReferent) return false;
+  return passiveClauseIndex <= 1 || candidatePrCoreferenceObserved;
 }
 
 function legacyHandoffObserved(text: string): boolean {
@@ -1206,7 +1227,7 @@ function legacyHandoffObserved(text: string): boolean {
       const passiveMatch = /\b(?:once|after|when)\s+merged\b/iu.exec(passiveClause);
       if (!passiveMatch) continue;
       const isBoundToCandidate =
-        localIndex === 0 || (passiveMatch.index === 0 && passiveHandoffRefersToCandidatePr(localClauses, localIndex));
+        passiveMatch.index === 0 && passiveHandoffRefersToCandidatePr(localClauses, localIndex, passiveMatch.index);
       if (!isBoundToCandidate) continue;
       const prefixLength = localClauses.slice(0, localIndex).join(". ").length + (localIndex > 0 ? 2 : 0);
       const passiveIndex = prefixLength + passiveMatch.index;

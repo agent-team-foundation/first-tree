@@ -572,6 +572,7 @@ describe("first-tree-seed grader", () => {
       "I will open one seed PR with the structure. Once the sub-agent branches merge, I will add the initial leaves to that same PR before you merge it.",
       "I will open one seed PR with the structure. The sub-agent branches are ready; once merged, I will add the initial leaves to that same PR before you merge it.",
       "I will open one seed PR with the structure. The sub-agent drafts stay on local branches; once merged, I will add their initial leaves to that same PR before you merge it.",
+      "I will open one seed PR with the structure, and the sub-agent branches are ready. Once merged, I will add the initial leaves to that same PR before you merge it.",
     ];
 
     for (const [index, finalResponse] of responses.entries()) {
