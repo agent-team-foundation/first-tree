@@ -1159,7 +1159,7 @@ function passiveHandoffRefersToCandidatePr(
     const referentEvents = [
       ...[
         ...segment.matchAll(
-          /\b(?:sub-?agent|agent)\b[^.!?;\n]{0,50}\b(?:branch(?:es)?|changes?|drafts?|work)\b|\b(?:(?:a(?:n)?|the|this|that)\s+)?(?:branch(?:es)?|drafts?)\b/giu,
+          /\b(?:sub-?agent|agent)\b[^.!?;\n]{0,50}\b(?:branch(?:es)?|changes?|drafts?|work)\b|\b(?:(?:a(?:n)?|the|this|that)\s+)?(?:branch(?:es)?|drafts?)\b|\b(?:the|this|that)\s+(?:changes?|work)\b/giu,
         ),
       ].map((match) => ({ index: match.index, type: "competing" as const })),
       ...[
