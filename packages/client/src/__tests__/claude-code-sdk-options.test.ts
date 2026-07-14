@@ -209,11 +209,9 @@ describe("claude-code handler — SDK options", () => {
       expect(buildAgentEnv).toHaveBeenCalledWith(expect.objectContaining({ PATH: payloadBin }));
       expect(childEnv).toMatchObject({ PATH: finalProviderBin });
 
-      const briefingCall = vi.mocked(buildAgentBriefing).mock.calls[0]?.[0];
-      expect(briefingCall?.providerEnv).toEqual(childEnv);
       const briefing = vi.mocked(buildAgentBriefing).mock.results[0]?.value;
-      expect(briefing).toContain("did not detect `gh` on the final provider `PATH`");
-      expect(briefing).toContain("detected `glab` on the final provider `PATH`");
+      expect(briefing).not.toContain("final provider `PATH`");
+      expect(briefing).not.toContain("detected `glab`");
 
       await handler.shutdown();
     },

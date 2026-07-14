@@ -187,12 +187,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
    * (with `<cwd>/CLAUDE.md` symlinked to it) before claude spawns; per-chat
    * context is appended through the CLI system prompt file.
    */
-  function buildBriefing(
-    sessionCtx: SessionContext,
-    payload: AgentRuntimeConfigPayload,
-    workspaceCwd: string,
-    providerEnv: NodeJS.ProcessEnv,
-  ): string {
+  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
@@ -201,7 +196,6 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       contextTreePath,
       contextTreeRepoUrl,
       contextTreeBranch,
-      providerEnv,
     });
   }
 
@@ -682,7 +676,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
             workspace: cwd,
             sessionCtx,
             contextTreePath,
-            briefing: buildBriefing(sessionCtx, payload, cwd, providerEnv),
+            briefing: buildBriefing(sessionCtx, payload, cwd),
             // `null` when we fell back to `defaultPayload()` — the empty
             // `gitRepos: []` is then NOT authoritative, and the workspace
             // manifest write is deferred for this session.
@@ -744,7 +738,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
             workspace: cwd,
             sessionCtx,
             contextTreePath,
-            briefing: buildBriefing(sessionCtx, payload, cwd, providerEnv),
+            briefing: buildBriefing(sessionCtx, payload, cwd),
             // See PR #869 baixiaohang round-3 P0 — same gate as start().
             currentSourceRepoNames: currentSourceRepoNamesFromPayload(
               payload,

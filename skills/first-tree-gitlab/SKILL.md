@@ -10,9 +10,9 @@ commands that stay out of the always-present agent briefing.
 
 ## Preflight
 
-1. Confirm `glab` is executable in the current provider environment. Treat the
-   generated briefing's availability sentence as a startup probe, not proof of
-   authentication or project access.
+1. Confirm `glab` is executable in the current provider environment. Treat CLI
+   availability as a session capability, not proof of authentication or project
+   access.
 2. Let `glab` infer GitLab.com, GitLab Dedicated, or GitLab Self-Managed from
    the current repository remote when possible. When the host is ambiguous,
    inspect the remote and pass the intended hostname explicitly.

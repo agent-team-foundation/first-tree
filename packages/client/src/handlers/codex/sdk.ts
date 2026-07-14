@@ -549,12 +549,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     return message;
   }
 
-  function buildBriefing(
-    sessionCtx: SessionContext,
-    payload: AgentRuntimeConfigPayload,
-    workspaceCwd: string,
-    providerEnv: NodeJS.ProcessEnv,
-  ): string {
+  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
@@ -563,7 +558,6 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       contextTreePath,
       contextTreeRepoUrl,
       contextTreeBranch,
-      providerEnv,
     });
   }
 
@@ -1380,7 +1374,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     try {
       const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
       if (!payload) return null;
-      const briefing = buildBriefing(sessionCtx, payload, cwd, activeProviderEnv);
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
       const fingerprint = computeBriefingFingerprint(briefing);
       if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
       writeAgentBriefing(cwd, briefing);
@@ -1514,7 +1508,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = buildBriefing(sessionCtx, payload, cwd, providerEnv);
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
       markWorkspaceInitComplete(cwd);
 
@@ -1591,7 +1585,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = buildBriefing(sessionCtx, payload, cwd, providerEnv);
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
 

@@ -1,5 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -39,7 +38,6 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
     workspacePath: AGENT_HOME,
     sourceRepos: [],
     contextTreePath: null,
-    localCli: { github: true, gitlab: true },
     ...overrides,
   };
 }
@@ -536,7 +534,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
     expect(briefing).toContain("try the host `gh` CLI first");
     expect(briefing).toContain("not by itself a reason to ask for First Tree GitHub App");
-    expect(briefing).toContain("`gh` on the final provider `PATH`");
+    expect(briefing).not.toContain("final provider `PATH`");
     expect(briefing).toContain("gh auth status");
     expect(briefing).toContain("gh auth login");
     expect(briefing).toContain("gh <command> --help");
@@ -576,15 +574,15 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("GitLab Dedicated");
     expect(gitlab).toContain("GitLab Self-Managed");
     expect(gitlab).toContain("infers the host from the current repository remote");
-    expect(gitlab).toContain("`glab` on the final provider `PATH`");
+    expect(gitlab).not.toContain("final provider `PATH`");
     expect(gitlab).toContain("missing, unauthenticated, points at the wrong host, or lacks access");
     expect(gitlab).toContain("install GitLab CLI");
-    expect(gitlab).toContain("glab auth status");
-    expect(gitlab).toContain("glab auth status --hostname <host>");
-    expect(gitlab).toContain("glab auth login --hostname <host>");
-    expect(gitlab).toContain("fix project permissions");
+    expect(gitlab).toContain("fix auth/access/project permissions");
     expect(gitlab).toContain("use a local clone");
     expect(gitlab).toContain("glab <command> --help");
+    expect(gitlab).not.toContain("glab auth status");
+    expect(gitlab).not.toContain("--hostname <host>");
+    expect(gitlab).not.toContain("glab auth login");
     expect(gitlab).toContain("Never expose a token");
     expect(gitlab).toContain("command output, logs, or shell history");
     expect(gitlab).toContain("only notifications for the current authenticated account");
@@ -608,50 +606,19 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).not.toContain("-R <group/project>");
   });
 
-  it("always renders compact host posture while reflecting final provider CLI availability", () => {
-    const githubOnly = buildAgentBriefing(makeOpts({ localCli: { github: true, gitlab: false } }));
-    expect(githubOnly).toContain("## GitHub Working Posture");
-    expect(githubOnly).toContain("## GitHub Entity Attention");
-    expect(githubOnly).toContain("## GitLab Working Posture");
-    expect(githubOnly).toContain("## GitLab Entity Attention");
-    expect(githubOnly).toContain("detected `gh` on the final provider `PATH`");
-    expect(githubOnly).toContain("did not detect `glab` on the final provider `PATH`");
+  it("always renders compact host posture without session-scoped CLI availability", () => {
+    const briefing = buildAgentBriefing(makeOpts());
 
-    const gitlabOnly = buildAgentBriefing(makeOpts({ localCli: { github: false, gitlab: true } }));
-    expect(gitlabOnly).toContain("## GitHub Working Posture");
-    expect(gitlabOnly).toContain("## GitHub Entity Attention");
-    expect(gitlabOnly).toContain("## GitLab Working Posture");
-    expect(gitlabOnly).toContain("## GitLab Entity Attention");
-    expect(gitlabOnly).toContain("did not detect `gh` on the final provider `PATH`");
-    expect(gitlabOnly).toContain("detected `glab` on the final provider `PATH`");
-
-    const noProviderCli = buildAgentBriefing(makeOpts({ localCli: { github: false, gitlab: false } }));
-    expect(noProviderCli).toContain("## GitHub Working Posture");
-    expect(noProviderCli).toContain("## GitHub Entity Attention");
-    expect(noProviderCli).toContain("## GitLab Working Posture");
-    expect(noProviderCli).toContain("## GitLab Entity Attention");
-    expect(noProviderCli).toContain("did not detect `gh` on the final provider `PATH`");
-    expect(noProviderCli).toContain("did not detect `glab` on the final provider `PATH`");
-    expect(noProviderCli).toContain("## Asking Humans");
-  });
-
-  it.runIf(process.platform !== "win32")("probes only the supplied final provider environment", () => {
-    const providerBin = mkdtempSync(join(tmpdir(), "first-tree-provider-env-"));
-    try {
-      writeFileSync(join(providerBin, "glab"), "#!/bin/sh\n", { mode: 0o755 });
-
-      const briefing = buildAgentBriefing(
-        makeOpts({
-          localCli: undefined,
-          providerEnv: { PATH: providerBin },
-        }),
-      );
-
-      expect(briefing).toContain("did not detect `gh` on the final provider `PATH`");
-      expect(briefing).toContain("detected `glab` on the final provider `PATH`");
-    } finally {
-      rmSync(providerBin, { recursive: true, force: true });
-    }
+    expect(briefing).toContain("## GitHub Working Posture");
+    expect(briefing).toContain("## GitHub Entity Attention");
+    expect(briefing).toContain("## GitLab Working Posture");
+    expect(briefing).toContain("## GitLab Entity Attention");
+    expect(briefing).not.toContain("detected `gh`");
+    expect(briefing).not.toContain("did not detect `gh`");
+    expect(briefing).not.toContain("detected `glab`");
+    expect(briefing).not.toContain("did not detect `glab`");
+    expect(briefing).not.toContain("final provider `PATH`");
+    expect(briefing).toContain("## Asking Humans");
   });
 
   it("keeps the detailed GitLab command catalog in the on-demand skill", () => {

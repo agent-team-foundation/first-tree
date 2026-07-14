@@ -1491,7 +1491,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (cached.version > appliedConfigVersion) {
         await materializeResourceSkills(cwd, newPayload, sessionCtx);
       }
-      const switchedBriefing = currentBriefing(sessionCtx, cwd, newPayload, providerEnv);
+      const switchedBriefing = currentBriefing(sessionCtx, cwd, newPayload);
       writeAgentBriefing(cwd, switchedBriefing);
       // Refresh the on-disk briefing fingerprint so the NEXT delivered message
       // (drained right after this restart in pushInjectedMessage) sees the
@@ -1997,7 +1997,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     workspace: string,
     payload: AgentRuntimeConfigPayload | null | undefined,
-    providerEnv: NodeJS.ProcessEnv,
   ): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
@@ -2007,7 +2006,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       contextTreePath,
       contextTreeRepoUrl,
       contextTreeBranch,
-      providerEnv,
     });
   }
 
@@ -2074,7 +2072,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = currentBriefing(sessionCtx, cwd, payload, providerEnv);
+      const briefing = currentBriefing(sessionCtx, cwd, payload);
       ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
       // Stage-2 sentinel: written once per agent home. Future starts short-
@@ -2161,7 +2159,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // session's briefing paths and the SDK cwd resolve them.
         await materializeResourceSkills(cwd, payload, sessionCtx);
         const providerEnv = buildEnv(sessionCtx);
-        writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload, providerEnv));
+        writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
         // through `respawnQuery`.
@@ -2194,7 +2192,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const providerEnv = buildEnv(sessionCtx);
-      const briefing = currentBriefing(sessionCtx, cwd, payload, providerEnv);
+      const briefing = currentBriefing(sessionCtx, cwd, payload);
       ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
       markWorkspaceInitComplete(cwd);

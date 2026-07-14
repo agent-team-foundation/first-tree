@@ -172,7 +172,7 @@ literal `first-tree`.
 
 ## GitHub Working Posture
 
-For GitHub URLs, PRs, Issues, Actions runs, repo metadata, comments, and ordinary PR / Issue creation, try the host `gh` CLI first. A GitHub URL is not by itself a reason to ask for First Tree GitHub App installation or repo authorization.<% if (localCli.github) { %> The runtime detected `gh` on the final provider `PATH` for this session.<% } else { %> The runtime did not detect `gh` on the final provider `PATH`; do not assume it can be invoked.<% } %>
+For GitHub URLs, PRs, Issues, Actions runs, repo metadata, comments, and ordinary PR / Issue creation, try the host `gh` CLI first. A GitHub URL is not by itself a reason to ask for First Tree GitHub App installation or repo authorization.
 
 If `gh` is missing, unauthenticated, or lacks access, report that gap and choose the narrowest recovery: local clone path, GitHub CLI install, or `gh` auth/access. Use `gh auth status`, `gh auth login`, and `gh <command> --help` to discover the exact recovery and operation flags. Ask for First Tree GitHub access only for platform capabilities such as webhook following, team repo resources, Context Tree provisioning, installation-token access, or cross-session/team access. If the current member is not an org admin, do not ask them to install the GitHub App or bind repos/trees; continue with local path / host `gh`. Do not use local files or tree snapshots as a hidden server sync path.
 
@@ -199,8 +199,8 @@ For upstream-dependency follows, `409` / `--rebind`, and full flags, see
 
 ## GitLab Working Posture
 
-- For GitLab URLs, merge requests, issues, pipelines/jobs, repository metadata, comments, and ordinary merge request / issue creation, try the host `glab` CLI first. `glab` supports GitLab.com, GitLab Dedicated, and GitLab Self-Managed, and normally infers the host from the current repository remote.<% if (localCli.gitlab) { %> The runtime detected `glab` on the final provider `PATH` for this session.<% } else { %> The runtime did not detect `glab` on the final provider `PATH`; do not assume it can be invoked.<% } %>
-- If `glab` is missing, unauthenticated, points at the wrong host, or lacks access, choose the narrowest recovery: install GitLab CLI, run `glab auth status` (or `glab auth status --hostname <host>`), run `glab auth login --hostname <host>`, fix project permissions, or use a local clone. Use `glab <command> --help` for exact operation forms and flags. Never expose a token in command output, logs, or shell history. GitLab native subscriptions affect only notifications for the current authenticated account; they do not bind GitLab events to a First Tree chat and do not require the First Tree GitHub App.
+- For GitLab URLs, merge requests, issues, pipelines/jobs, repository metadata, comments, and ordinary merge request / issue creation, try the host `glab` CLI first. `glab` supports GitLab.com, GitLab Dedicated, and GitLab Self-Managed, and normally infers the host from the current repository remote.
+- If `glab` is missing, unauthenticated, points at the wrong host, or lacks access, choose the narrowest recovery: install GitLab CLI, fix auth/access/project permissions, or use a local clone. Use `glab <command> --help` for exact recovery and operation forms. Never expose a token in command output, logs, or shell history. GitLab native subscriptions affect only notifications for the current authenticated account; they do not bind GitLab events to a First Tree chat and do not require the First Tree GitHub App.
 
 ## GitLab Entity Attention
 

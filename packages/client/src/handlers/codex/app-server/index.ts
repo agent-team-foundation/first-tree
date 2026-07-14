@@ -356,12 +356,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     return cfg;
   }
 
-  function buildBriefing(
-    sessionCtx: SessionContext,
-    payload: AgentRuntimeConfigPayload,
-    workspaceCwd: string,
-    providerEnv: NodeJS.ProcessEnv,
-  ): string {
+  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
@@ -370,7 +365,6 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       contextTreePath,
       contextTreeRepoUrl,
       contextTreeBranch,
-      providerEnv,
     });
   }
 
@@ -462,7 +456,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       workspaceOnlyCodexHome = null;
       workspaceOnlyHostHome = null;
     }
-    const briefing = buildBriefing(sessionCtx, payload, cwd, env);
+    const briefing = buildBriefing(sessionCtx, payload, cwd);
     ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resolved);
     markWorkspaceInitComplete(cwd);
     currentModel = payload.model || "";
@@ -1553,7 +1547,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     try {
       const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
       if (!payload) return null;
-      const briefing = buildBriefing(sessionCtx, payload, cwd, activeProviderEnv);
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
       const fingerprint = computeBriefingFingerprint(briefing);
       if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
       writeAgentBriefing(cwd, briefing);

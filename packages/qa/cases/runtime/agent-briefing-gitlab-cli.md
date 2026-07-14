@@ -10,10 +10,9 @@ surfaces: [client, cli]
 ## Goal
 
 Verify that a runtime-generated `AGENTS.md` always gives an agent a compact
-GitLab posture and recovery path, reports whether the final provider `PATH`
-contains `glab`, routes detailed operations through the on-demand
-`first-tree-gitlab` skill / native `--help`, and keeps GitLab account
-notifications separate from First Tree chat tracking.
+GitLab posture and recovery path, routes detailed operations through the
+on-demand `first-tree-gitlab` skill / native `--help`, and keeps GitLab
+account notifications separate from First Tree chat tracking.
 
 This is a behavior-level QA case for the generated briefing. It does not add a
 First Tree GitLab API, event mapper, follow command, or database state.
@@ -21,8 +20,8 @@ First Tree GitLab API, event mapper, follow command, or database state.
 ## Preconditions
 
 - Run in an isolated QA worktree and run cell as required by the QA package.
-- Record whether `glab` is on the final child-provider `PATH`; presence is not
-  evidence of authentication.
+- Record whether `glab` is available to the selected provider session; presence
+  is not evidence of authentication.
 - Confirm `.agents/skills/first-tree-gitlab/SKILL.md` is installed in the
   workspace before exercising the detailed workflow.
 - Use a disposable GitLab project or an existing test issue/MR. Do not use a
@@ -68,8 +67,8 @@ that was already created.
 
 Capture a redacted transcript and command trace showing:
 
-- the generated briefing's availability sentence matches the executable
-  lookup result in the final provider environment;
+- the generated briefing contains no session-scoped executable availability
+  sentence for `glab` or `gh`;
 - `glab` was selected when available, after the `first-tree-gitlab` skill was
   loaded, with host/auth checks such as
   `glab auth status` or `glab auth status --hostname <host>` that reveal no
@@ -83,10 +82,9 @@ Capture a redacted transcript and command trace showing:
   GitHub App installation request is emitted for native GitLab subscriptions.
 
 If `glab` is missing, also verify that the generated briefing still presents
-the compact GitLab posture and recovery / discovery pointers, explicitly says
-the final provider `PATH` probe did not find `glab`, and lets the agent report
-the missing CLI without exposing credentials. The full command catalog must
-remain outside the generated briefing in this branch.
+the compact GitLab posture and recovery / discovery pointers, and lets the
+agent report the missing CLI without exposing credentials. The full command
+catalog must remain outside the generated briefing in this branch.
 
 ## Expected Result
 

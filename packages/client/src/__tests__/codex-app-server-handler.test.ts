@@ -11,18 +11,13 @@ import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
-const briefingState = vi.hoisted(() => ({
-  calls: [] as Array<{ providerEnv?: NodeJS.ProcessEnv }>,
-}));
-
 vi.mock("../runtime/agent-briefing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime/agent-briefing.js")>();
   return {
     ...actual,
-    buildAgentBriefing: vi.fn((options: Parameters<typeof actual.buildAgentBriefing>[0]) => {
-      briefingState.calls.push(options);
-      return actual.buildAgentBriefing(options);
-    }),
+    buildAgentBriefing: vi.fn((options: Parameters<typeof actual.buildAgentBriefing>[0]) =>
+      actual.buildAgentBriefing(options),
+    ),
   };
 });
 
@@ -469,7 +464,6 @@ function stubLandingTrialHostEnv(suffix: string): void {
 }
 
 beforeEach(() => {
-  briefingState.calls.length = 0;
   workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "ft-codex-app-server-")));
   setCliBinding({ binName: "first-tree-test", packageName: null });
 });
@@ -549,7 +543,6 @@ describe("codex app-server handler", () => {
     expect(capturedEnv?.CODEX_HOME).toBe(codexHome);
     expect(capturedEnv?.GH_CONFIG_DIR).toBe(ghConfigDir);
     expect(capturedEnv?.GIT_SSH_COMMAND).toContain("-F /dev/null");
-    expect(briefingState.calls[0]?.providerEnv).toEqual(capturedEnv);
     expect(capturedEnv?.GIT_SSH_COMMAND).toContain(sshKeyPath);
     expect(capturedEnv?.GIT_SSH_COMMAND).toContain(
       join(workspaceRoot, ".first-tree-workspace", "outbox-home", "ssh", "known_hosts"),
