@@ -243,10 +243,13 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
 
   const entityChip = (
     <span
+      data-github-card-entity
       className="mono text-label"
       style={{
         display: "inline-flex",
         alignItems: "center",
+        minWidth: 0,
+        maxWidth: "100%",
         gap: "var(--sp-1)",
         padding: "var(--sp-px) var(--sp-1_5)",
         borderRadius: "var(--radius-chip)",
@@ -256,10 +259,16 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
         lineHeight: 1.4,
       }}
     >
-      <span className="font-semibold" style={{ color: "var(--primary)" }}>
+      <span className="font-semibold" style={{ color: "var(--primary)", flexShrink: 0 }}>
         {tagLabel}
       </span>
-      <span style={{ color: "var(--fg-3)" }}>{entityNumber}</span>
+      <span
+        data-github-card-entity-number
+        title={entityNumber}
+        style={{ color: "var(--fg-3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+      >
+        {entityNumber}
+      </span>
     </span>
   );
 

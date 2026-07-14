@@ -1,12 +1,13 @@
-import type { AskRequest } from "@first-tree/shared";
+import type { AskRequest, GithubEventCard } from "@first-tree/shared";
 import { useState } from "react";
 import { AskTakeover } from "../components/chat/ask-takeover.js";
+import { GithubEventCardMessage } from "../components/chat/github-event-card.js";
 
 /**
- * DEV-only visual review for `AskTakeover` — the pop-up answer card for a
- * `format="request"` ask. No backend / no auth — same gating as the other
- * `/preview/*` routes (DEV-only in `app.tsx`). Each mode renders the production
- * card inside a relative box (the card is an absolute scrim that fills it).
+ * DEV-only visual review for `AskTakeover` plus narrow timeline overflow
+ * fixtures. No backend / no auth — same gating as the other `/preview/*`
+ * routes (DEV-only in `app.tsx`). Each ask mode renders the production card
+ * inside a relative box (the card is an absolute scrim that fills it).
  */
 
 const BODY = [
@@ -48,6 +49,25 @@ const MULTI_PAYLOAD: AskRequest = {
         "https://example.invalid/qa/mobile-ask-card-very-long-preview/endpoint?token=abcdefghijklmnopqrstuvwxyz0123456789&scope=read:write:admin&note=this-is-a-deliberately-very-long-single-token-preview-to-exercise-overflow-wrap-and-scroll-clipping",
     },
   ],
+};
+
+const COMMIT_SHA = "abcdef0123456789".repeat(3).slice(0, 40);
+const COMMIT_CARD: GithubEventCard = {
+  type: "github_event",
+  reason: "subscribed",
+  event: "commit_comment",
+  action: "created",
+  kind: "commit_commented",
+  repository: "agent-team-foundation/first-tree",
+  sender: "mobile-reviewer-with-a-long-handle",
+  title: "Commit: Keep the mobile timeline inside its reading column",
+  body: `Verification target ${"unbroken".repeat(30)}`,
+  url: `https://github.com/agent-team-foundation/first-tree/commit/${COMMIT_SHA}`,
+  entity: {
+    type: "commit",
+    key: `agent-team-foundation/first-tree@${COMMIT_SHA}`,
+    url: `https://github.com/agent-team-foundation/first-tree/commit/${COMMIT_SHA}`,
+  },
 };
 
 const MODES: { label: string; payload: AskRequest }[] = [
@@ -132,6 +152,26 @@ export function RequestDockPreviewPage() {
       </p>
       <ModeBlock label="options · single · short" payload={SINGLE_PAYLOAD} height={300} mobile />
       <ModeBlock label="options · multi · short" payload={MULTI_PAYLOAD} height={300} mobile />
+
+      <h2
+        className="mono text-caption font-semibold"
+        style={{ color: "var(--fg-3)", textTransform: "uppercase", marginBottom: "var(--sp-2)" }}
+      >
+        GitHub commit overflow guard
+      </h2>
+      <div
+        data-mobile-github-fixture
+        style={{
+          width: "100%",
+          padding: "var(--sp-3)",
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-panel)",
+          background: "var(--bg-raised)",
+          overflow: "hidden",
+        }}
+      >
+        <GithubEventCardMessage content={COMMIT_CARD} />
+      </div>
     </div>
   );
 }
