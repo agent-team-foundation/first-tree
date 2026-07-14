@@ -661,6 +661,37 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("preserves a structure PR referent through review prose before a passive merge", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-review-pronoun-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can review it first. Once merged, I will add the leaves.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.singlePrBuildObserved).toBe(true);
+      expect(metrics.legacyHandoffObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("legacy_two_pr_handoff");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("rejects a structure-first PR whose merge gates leaf drafting", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-structure-first-"));
     try {

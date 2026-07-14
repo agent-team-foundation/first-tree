@@ -1134,6 +1134,35 @@ function singlePrBuildObserved(text: string): boolean {
   return actionObserved && singlePrObserved && structureAndLeavesObserved;
 }
 
+function passiveHandoffRefersToCandidatePr(localClauses: string[], passiveClauseIndex: number): boolean {
+  if (passiveClauseIndex === 0 || passiveClauseIndex === 1) return true;
+
+  let candidatePrIsCurrentReferent = true;
+  let candidatePrCoreferenceObserved = false;
+  for (const interveningClause of localClauses.slice(1, passiveClauseIndex)) {
+    if (
+      /\b(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request)\b/iu.test(interveningClause)
+    ) {
+      candidatePrIsCurrentReferent = true;
+      candidatePrCoreferenceObserved = true;
+      continue;
+    }
+    if (
+      /\b(?:sub-?agent|agent)\b[^.!?;\n]{0,50}\b(?:branches?|changes?|drafts?|work)\b|\b(?:branches?|drafts?)\b/iu.test(
+        interveningClause,
+      )
+    ) {
+      candidatePrIsCurrentReferent = false;
+      continue;
+    }
+    if (/\bit\b/iu.test(interveningClause) && candidatePrIsCurrentReferent) {
+      candidatePrCoreferenceObserved = true;
+    }
+  }
+
+  return candidatePrIsCurrentReferent && candidatePrCoreferenceObserved;
+}
+
 function legacyHandoffObserved(text: string): boolean {
   const affirmativeText = text
     .replace(/\b(?:rather\s+than|instead\s+of)\b[^,.;!?\n]*(?:,|(?=[.;!?\n]|$))/giu, "")
@@ -1177,9 +1206,7 @@ function legacyHandoffObserved(text: string): boolean {
       const passiveMatch = /\b(?:once|after|when)\s+merged\b/iu.exec(passiveClause);
       if (!passiveMatch) continue;
       const isBoundToCandidate =
-        localIndex === 0 ||
-        (localIndex === 1 && passiveMatch.index === 0) ||
-        (localIndex === 2 && passiveMatch.index === 0 && /\b(?:pr|pull\s+request)\b/iu.test(localClauses[1] ?? ""));
+        localIndex === 0 || (passiveMatch.index === 0 && passiveHandoffRefersToCandidatePr(localClauses, localIndex));
       if (!isBoundToCandidate) continue;
       const prefixLength = localClauses.slice(0, localIndex).join(". ").length + (localIndex > 0 ? 2 : 0);
       const passiveIndex = prefixLength + passiveMatch.index;
