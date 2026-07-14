@@ -154,17 +154,25 @@ describe("first-tree-welcome floor invariants", () => {
   });
 
   it("hardens both agent-briefing welcome skill-map rows with the scan / tree-setup exclusion", () => {
-    // agent-briefing.ts ships TWO `first-tree-welcome` "Load when" rows (the
+    // agent-briefing.ejs ships TWO `first-tree-welcome` "Load when" rows (the
     // tree-less and tree-bound briefing variants) — routing hints the agent
     // reads. If either omits the scan / tree-setup exclusion it can misroute a
     // scan-first chat into the welcome launcher. Bind both so neither drifts back
     // to an un-hardened hint.
-    const briefing = readFileSync(join(process.cwd(), "../client/src/runtime/agent-briefing.ts"), "utf8");
-    const hardenedRows = briefing.match(/first-tree-welcome.*not a repo scan or tree setup chat/g) ?? [];
-    expect(hardenedRows.length, "both welcome skill-map rows must carry the scan/tree-setup exclusion").toBe(2);
+    const briefingTemplate = readFileSync(
+      join(process.cwd(), "../client/src/runtime/templates/agent-briefing.ejs"),
+      "utf8",
+    );
+    const welcomeRows = briefingTemplate.match(/^\|[ \t]*`first-tree-welcome`[ \t]*\|[^\n]*$/gm) ?? [];
+    expect(welcomeRows, "template must contain both tree-bound and tree-less welcome rows").toHaveLength(2);
+    for (const row of welcomeRows) {
+      expect(row, "both welcome rows must carry the scan/tree-setup exclusion").toContain(
+        "not a repo scan or tree setup chat",
+      );
+    }
     // The retired un-hardened hints must be gone.
-    expect(briefing).not.toContain("onboarding welcome / intro / value-first first chat");
-    expect(briefing).not.toContain("onboarding system messages ask for welcome");
+    expect(briefingTemplate).not.toContain("onboarding welcome / intro / value-first first chat");
+    expect(briefingTemplate).not.toContain("onboarding system messages ask for welcome");
   });
 
   it("keeps production-scan fix fan-out aligned with the scan's 3-5 blocker contract", () => {
