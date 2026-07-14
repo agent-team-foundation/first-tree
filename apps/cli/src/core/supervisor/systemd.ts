@@ -189,10 +189,12 @@ function migrateLegacyRootUserUnitToSystemScope(): void {
   const disableRes = runCapture("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], 10_000, env);
   if (!disableRes.ok) {
     const reason = disableRes.stderr || `exit ${disableRes.code ?? "unknown"}`;
-    if (!isUserBusUnavailable(reason) && !/not found|no such|not loaded/i.test(reason)) {
+    if (isUserBusUnavailable(reason)) {
+      throw new Error(`legacy root systemd user service state is ambiguous: ${reason}`);
+    }
+    if (!/not found|no such|not loaded/i.test(reason)) {
       throw new Error(`legacy root systemd user service migration failed: ${reason}`);
     }
-    print.line(`    warning: legacy root systemd user manager unavailable during migration: ${reason}\n`);
   }
 
   rmSync(legacyUnitPath);
@@ -200,10 +202,12 @@ function migrateLegacyRootUserUnitToSystemScope(): void {
   const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000, env);
   if (!reloadRes.ok) {
     const reason = reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`;
-    if (!isUserBusUnavailable(reason) && !/not found|no such|not loaded/i.test(reason)) {
+    if (isUserBusUnavailable(reason)) {
+      throw new Error(`legacy root systemd user daemon-reload state is ambiguous: ${reason}`);
+    }
+    if (!/not found|no such|not loaded/i.test(reason)) {
       throw new Error(`legacy root systemd user daemon-reload failed: ${reason}`);
     }
-    print.line(`    warning: legacy root systemd user daemon-reload skipped: ${reason}\n`);
   }
 }
 

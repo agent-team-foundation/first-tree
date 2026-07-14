@@ -518,34 +518,24 @@ describe("service install helpers", () => {
     ]);
   });
 
-  it("removes a legacy root user unit when the user bus is unavailable", () => {
+  it("fails root systemd migration when the legacy user bus is unavailable", () => {
     setPlatform("linux");
     userInfoMock.mockReturnValue({ uid: 0, username: "root" });
     const legacyUnitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
     mkdirSync(dirname(legacyUnitPath), { recursive: true });
     writeFileSync(legacyUnitPath, "unit");
-    spawnSyncMock
-      .mockReturnValueOnce({
-        status: 1,
-        stdout: "",
-        stderr: "Failed to connect to bus: No such file or directory",
-      })
-      .mockReturnValueOnce({
-        status: 1,
-        stdout: "",
-        stderr: "Failed to connect to bus: No such file or directory",
-      })
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
-      .mockReturnValueOnce({ status: 0, stdout: "inactive\n", stderr: "" });
+    spawnSyncMock.mockReturnValueOnce({
+      status: 1,
+      stdout: "",
+      stderr: "Failed to connect to bus: No such file or directory",
+    });
 
-    expect(installClientService()).toMatchObject({ platform: "systemd", state: "inactive", managerScope: "system" });
-    expect(existsSync(legacyUnitPath)).toBe(false);
-    expect(printMocks.line).toHaveBeenCalledWith(
-      expect.stringContaining("legacy root systemd user manager unavailable during migration"),
+    expect(() => installClientService()).toThrow(
+      "legacy root systemd user service state is ambiguous: Failed to connect to bus: No such file or directory",
     );
-    expect(printMocks.line).toHaveBeenCalledWith(
-      expect.stringContaining("legacy root systemd user daemon-reload skipped"),
+    expect(existsSync(legacyUnitPath)).toBe(true);
+    expect(existsSync(join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "", channelConfig.serviceUnitFile))).toBe(
+      false,
     );
   });
 
