@@ -29,6 +29,10 @@ describe("InstallGuideSheet", () => {
     const sheet = harness.container.querySelector('[data-mobile-install-sheet="true"]');
     expect(sheet?.textContent).toContain("Add First Tree to your home screen");
     expect(sheet?.textContent).toContain("Opens instantly");
+    // The benefits are one shared list across all install modes, so it must not
+    // promise "no signing in again" — false on iOS, where an installed PWA runs
+    // in a storage partition separate from Safari and needs one sign-in.
+    expect(sheet?.textContent).not.toContain("signing in again");
     // Native mode is one-tap, not a step list.
     expect(sheet?.textContent).not.toContain("Share button");
 

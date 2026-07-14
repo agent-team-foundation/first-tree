@@ -4,7 +4,7 @@ import { Button } from "../../components/ui/button.js";
 import type { InstallGuideMode } from "./use-install-guide.js";
 
 const BENEFITS = [
-  "Opens instantly — no hunting for the link or signing in again",
+  "Opens instantly — no hunting for the link",
   "Full screen — no browser address bar in the way",
 ] as const;
 
