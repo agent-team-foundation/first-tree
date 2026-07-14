@@ -672,6 +672,7 @@ describe("first-tree-seed grader", () => {
       "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can inspect it first. You can approve it after that. Once merged, I will add the leaves.",
       "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can review this first. Once merged, I will add the leaves.",
       "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can review this work first. Once merged, I will add the leaves.",
+      "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can review the work first. Once merged, I will add the leaves.",
     ];
 
     for (const [index, finalResponse] of responses.entries()) {

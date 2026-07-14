@@ -1171,6 +1171,10 @@ function passiveHandoffRefersToCandidatePr(
         index: match.index,
         type: "pronoun" as const,
       })),
+      ...[...segment.matchAll(/\bthe\s+(?:changes?|work)\b/giu)].map((match) => ({
+        index: match.index,
+        type: "pronoun" as const,
+      })),
     ].sort((left, right) => {
       if (left.index !== right.index) return left.index - right.index;
       const priority = { candidate: 1, competing: 0, pronoun: 2 } as const;
