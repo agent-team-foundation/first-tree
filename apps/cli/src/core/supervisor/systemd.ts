@@ -140,6 +140,7 @@ function systemdState(): {
   pid?: number;
   detail?: string;
   managerScope?: SystemdScope;
+  migrationRequired?: ServiceInfo["migrationRequired"];
   unitPath?: string;
 } {
   const scope = systemdScope();
@@ -151,6 +152,7 @@ function systemdState(): {
         state: "unknown",
         detail: legacyRootUserMigrationDetail(legacyUnitPath),
         managerScope: "user",
+        migrationRequired: "root-systemd-user-to-system",
         unitPath: legacyUnitPath,
       };
     }
@@ -327,6 +329,7 @@ function uninstallSystemd(): ServiceInfo {
       "unknown",
       undefined,
       legacyRootUserMigrationDetail(blockedLegacyUnitPath),
+      "root-systemd-user-to-system",
     );
   }
   const unitPath = systemdUnitPath(scope);
@@ -363,8 +366,8 @@ function systemdUnitDriftDetected(): boolean {
 
 function getSystemdServiceStatus(): ServiceInfo {
   const scope = systemdScope();
-  const { state, pid, detail, managerScope, unitPath } = systemdState();
-  return systemdInfo(unitPath ?? systemdUnitPath(scope), managerScope ?? scope, state, pid, detail);
+  const { state, pid, detail, managerScope, migrationRequired, unitPath } = systemdState();
+  return systemdInfo(unitPath ?? systemdUnitPath(scope), managerScope ?? scope, state, pid, detail, migrationRequired);
 }
 
 function systemdInfo(
@@ -373,6 +376,7 @@ function systemdInfo(
   state: ServiceState,
   pid?: number,
   detail?: string,
+  migrationRequired?: ServiceInfo["migrationRequired"],
 ): ServiceInfo {
   return {
     platform: "systemd",
@@ -381,6 +385,7 @@ function systemdInfo(
     logDir: logDir(),
     state,
     managerScope,
+    migrationRequired,
     pid,
     detail,
   };

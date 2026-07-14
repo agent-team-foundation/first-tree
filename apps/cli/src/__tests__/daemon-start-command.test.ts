@@ -450,10 +450,13 @@ describe("daemon start command", () => {
         "legacy root systemd user unit requires out-of-service migration: /root/.config/systemd/user/first-tree.service",
       logDir: "/logs",
       managerScope: "user",
+      migrationRequired: "root-systemd-user-to-system",
     });
 
     await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
     expect(output()).toContain("legacy root systemd user unit requires out-of-service migration");
+    expect(output()).toContain("Complete the root systemd migration out-of-service with `first-tree-dev login <code>`");
+    expect(output()).not.toContain("--foreground");
     expect(coreMocks.startClientService).not.toHaveBeenCalled();
     expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
   });

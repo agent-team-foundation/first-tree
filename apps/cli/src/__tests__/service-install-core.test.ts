@@ -591,6 +591,7 @@ describe("service install helpers", () => {
       state: "unknown",
       unitPath: legacyUnitPath,
       managerScope: "user",
+      migrationRequired: "root-systemd-user-to-system",
       detail: reason,
     });
     expect(isServiceUnitDriftDetected()).toBe(true);
@@ -602,6 +603,7 @@ describe("service install helpers", () => {
       state: "unknown",
       unitPath: legacyUnitPath,
       managerScope: "user",
+      migrationRequired: "root-systemd-user-to-system",
       detail: reason,
     });
     expect(() => refreshClientServiceUnitForUpdate()).toThrow(
