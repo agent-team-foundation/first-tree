@@ -114,4 +114,22 @@ describe("GitHub event card", () => {
       expect(html).toContain("@alice");
     }
   });
+
+  it("contains long GitHub tokens without clipping the mobile timeline", () => {
+    const html = renderToStaticMarkup(
+      <GithubEventCardMessage
+        content={card({
+          title: `release-${"unbroken".repeat(20)}`,
+          repository: `organization-${"long".repeat(20)}/repository-${"wide".repeat(20)}`,
+          body: `check-${"unbroken".repeat(40)}`,
+        })}
+      />,
+    );
+
+    expect(html).toContain("data-github-card-title");
+    expect(html).toContain("data-github-card-repository");
+    expect(html).toContain("data-github-card-body");
+    expect(html).toContain("overflow-wrap:anywhere");
+    expect(html).toContain("text-overflow:ellipsis");
+  });
 });

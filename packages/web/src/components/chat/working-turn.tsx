@@ -244,8 +244,12 @@ export function WorkingTurn({ events, defaultOpen, agentNameFn, agentAvatarFn, a
   const thinkingCount = processEvents.length - toolCount;
 
   const header = (
-    <div className="flex items-baseline" style={{ gap: 6, minWidth: 0 }}>
-      <span className="mono text-label font-semibold" style={{ color: "var(--primary)", flexShrink: 0 }}>
+    <div data-working-turn-header className="flex flex-wrap items-baseline" style={{ gap: 6, minWidth: 0 }}>
+      <span
+        data-working-turn-name
+        className="mono text-label font-semibold"
+        style={{ color: "var(--primary)", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere" }}
+      >
         {name}
       </span>
       <span style={{ display: "inline-flex", flexShrink: 0 }}>
@@ -287,7 +291,11 @@ export function WorkingTurn({ events, defaultOpen, agentNameFn, agentAvatarFn, a
           {header}
 
           {bodyText ? (
-            <div className="text-body" style={{ color: "var(--fg)", whiteSpace: "pre-wrap", marginTop: 2 }}>
+            <div
+              data-working-turn-body
+              className="text-body"
+              style={{ color: "var(--fg)", whiteSpace: "pre-wrap", overflowWrap: "anywhere", marginTop: 2 }}
+            >
               {bodyText}
             </div>
           ) : null}

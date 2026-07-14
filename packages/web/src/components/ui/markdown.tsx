@@ -159,7 +159,7 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
         "prose-p:my-2 prose-headings:mt-3 prose-headings:mb-1.5 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-blockquote:my-2 prose-hr:my-3",
         "prose-a:text-[color:var(--primary)] prose-a:no-underline hover:prose-a:underline",
         "prose-code:text-current prose-code:bg-[color:var(--bg-sunken)] prose-code:rounded prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.9em] prose-code:before:content-none prose-code:after:content-none",
-        "prose-pre:bg-[color:var(--bg-sunken)] prose-pre:text-current prose-pre:border prose-pre:border-[color:var(--border)]",
+        "prose-pre:max-w-full prose-pre:overflow-x-auto prose-pre:bg-[color:var(--bg-sunken)] prose-pre:text-current prose-pre:border prose-pre:border-[color:var(--border)]",
         "prose-hr:border-[color:var(--border)]",
         "prose-blockquote:border-l-[color:var(--border-strong)] prose-blockquote:text-[color:var(--fg-2)]",
         "prose-th:border-[color:var(--border)] prose-td:border-[color:var(--border)]",

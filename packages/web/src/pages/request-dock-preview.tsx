@@ -18,6 +18,11 @@ const BODY = [
   "### What I'd weigh",
   "- Error budget is healthy; nothing in the dashboards argues against proceeding.",
   "- The billing migration team is waiting on 20% before they cut over.",
+  "",
+  "### Verification command",
+  "```sh",
+  "first-tree-staging tree verify --tree-path /Users/reviewer/first-tree-context/very-long-mobile-verification-worktree",
+  "```",
 ].join("\n");
 
 const SINGLE_PAYLOAD: AskRequest = {
@@ -51,7 +56,17 @@ const MODES: { label: string; payload: AskRequest }[] = [
   { label: "free text", payload: { multiSelect: false } },
 ];
 
-function ModeBlock({ label, payload, height = 560 }: { label: string; payload: AskRequest; height?: number }) {
+function ModeBlock({
+  label,
+  payload,
+  height = 560,
+  mobile = false,
+}: {
+  label: string;
+  payload: AskRequest;
+  height?: number;
+  mobile?: boolean;
+}) {
   const [status, setStatus] = useState<string | null>(null);
   return (
     <section style={{ marginBottom: "var(--sp-6)" }}>
@@ -73,6 +88,7 @@ function ModeBlock({ label, payload, height = 560 }: { label: string; payload: A
           body={BODY}
           payload={payload}
           askerName="deploy-agent"
+          mobile={mobile}
           onReply={(answer) =>
             setStatus(
               `Reply → ${answer.content.replace(/\n/g, " · ")}` +
@@ -114,8 +130,8 @@ export function RequestDockPreviewPage() {
         A short box (the phone case): the answer surface no longer fits, so it scrolls inside the card while the Skip /
         Reply footer stays pinned and visible. Regression guard for the off-screen-button bug.
       </p>
-      <ModeBlock label="options · single · short" payload={SINGLE_PAYLOAD} height={300} />
-      <ModeBlock label="options · multi · short" payload={MULTI_PAYLOAD} height={300} />
+      <ModeBlock label="options · single · short" payload={SINGLE_PAYLOAD} height={300} mobile />
+      <ModeBlock label="options · multi · short" payload={MULTI_PAYLOAD} height={300} mobile />
     </div>
   );
 }
