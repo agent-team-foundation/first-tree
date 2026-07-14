@@ -5,8 +5,7 @@ import { createLogger } from "../observability/index.js";
 import type { AudienceTarget } from "./github-audience.js";
 import { findReuseChatForInvolved, refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
 import { type EntityStateSeed, setEntityTitle } from "./github-entity-state.js";
-import { sendMessage } from "./message.js";
-import { notifyRecipients } from "./notifier.js";
+import { sendScmSystemCard } from "./scm-card-delivery.js";
 
 const log = createLogger("GithubDelivery");
 
@@ -216,48 +215,27 @@ export async function deliverGithubEvent(
       // `allowRecipientlessSend`). The unread-mention red dot stays off because
       // delegates are non-human mention targets.
       const mentions = [...new Set(entries.map((entry) => entry.wakeAgentId))].sort();
-      const { message, recipients } = await sendMessage(
-        app.db,
-        delivery.chatId,
+      await sendScmSystemCard(app, {
+        chatId: delivery.chatId,
         senderId,
-        {
-          format: "card",
-          content: card,
-          source: "github",
-          metadata: {
-            source: "github",
-            event: event.eventType,
-            action: event.action,
-            entityType: event.entity.type,
-            entityKey: event.entity.key,
-            reason: card.reason,
-            // Native mention wake-set — see above.
-            mentions,
-            // Render this card with a synthetic "GitHub" sender in place of the
-            // chat-local human row stored as `senderId`. Keeping the DB
-            // senderId chat-local preserves fan-out / read-receipts; only the
-            // visual attribution shifts. Scoped to GitHub cards so an arbitrary
-            // client cannot impersonate other sources.
-            systemSender: "github",
-            ...(mentionedUser ? { mentionedUser } : {}),
-          },
+        provider: "github",
+        content: card,
+        metadata: {
+          event: event.eventType,
+          action: event.action,
+          entityType: event.entity.type,
+          entityKey: event.entity.key,
+          reason: card.reason,
+          // Native mention wake-set — see above.
+          mentions,
+          // Render this card with a synthetic "GitHub" sender in place of the
+          // chat-local human row stored as `senderId`. Keeping the DB
+          // senderId chat-local preserves fan-out / read-receipts; only the
+          // visual attribution shifts. Scoped to GitHub cards so an arbitrary
+          // client cannot impersonate other sources.
+          ...(mentionedUser ? { mentionedUser } : {}),
         },
-        {
-          // Opt in to writing `metadata.systemSender` — the message service
-          // strips that key from every untrusted caller (web / agent SDK POST)
-          // so HTTP boundaries cannot impersonate the GitHub sender. This is
-          // the one trusted-internal path.
-          allowSystemSender: true,
-          // Opt out of the default explicit-recipient guard. This trusted
-          // system delivery owns its own routing, but on some events the
-          // wake-set resolves to no live speaker (every delegate is a
-          // non-speaker). Such a card is still a valid history/context row
-          // for human observers; without this opt-out the default guard would
-          // make this trusted path start throwing.
-          allowRecipientlessSend: true,
-        },
-      );
-      notifyRecipients(app.notifier, recipients, message.id);
+      });
       stats.delivered += 1;
     } catch (err) {
       stats.failed += 1;

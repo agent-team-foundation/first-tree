@@ -3,6 +3,7 @@ import {
   addParticipantSchema,
   createTaskChatSchema,
   followGithubEntityRequestSchema,
+  followGitlabEntitySchema,
   legacyCreateChatSchema,
   paginationQuerySchema,
   updateChatSchema,
@@ -20,6 +21,11 @@ import {
   listChatGithubEntities,
   removeEntityFollow,
 } from "../../services/github-entity-follow.js";
+import {
+  declareGitlabEntityFollow,
+  listChatGitlabEntities,
+  removeGitlabEntityFollow,
+} from "../../services/gitlab-entity-follow.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { sendFollowResult } from "../github-entity-reply.js";
@@ -287,6 +293,40 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
         throw new BadRequestError("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
       }
       return removeEntityFollow(app.db, { chatId: request.params.chatId, entity });
+    },
+  );
+
+  app.get<{ Params: { chatId: string } }>("/:chatId/gitlab-entities", async (request) => {
+    const identity = requireAgent(request);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    return { entities: await listChatGitlabEntities(app.db, request.params.chatId) };
+  });
+
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/gitlab-entities",
+    { config: { otelRecordBody: true } },
+    async (request, reply) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const body = followGitlabEntitySchema.parse(request.body);
+      const entity = await declareGitlabEntityFollow(app.db, {
+        organizationId: identity.organizationId,
+        connectionId: body.connectionId,
+        chatId: request.params.chatId,
+        declaredByAgentId: identity.uuid,
+        entityUrl: body.entityUrl,
+      });
+      return reply.status(201).send({ entity });
+    },
+  );
+
+  app.delete<{ Params: { chatId: string }; Querystring: { mappingId?: string } }>(
+    "/:chatId/gitlab-entities",
+    async (request) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      if (!request.query.mappingId) throw new BadRequestError("Pass ?mappingId=<GitLab follow id> to unfollow.");
+      return { removed: await removeGitlabEntityFollow(app.db, request.params.chatId, request.query.mappingId) };
     },
   );
 }

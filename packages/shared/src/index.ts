@@ -438,6 +438,22 @@ export {
   githubPermissionLevelSchema,
 } from "./schemas/github-app.js";
 export {
+  type FollowGitlabEntity,
+  followGitlabEntitySchema,
+  type GitlabAutomaticActionsUpdate,
+  type GitlabConnectionCreate,
+  type GitlabConnectionDisable,
+  type GitlabConnectionSecretResponse,
+  type GitlabConnectionSummary,
+  type GitlabReviewerMode,
+  gitlabAutomaticActionsUpdateSchema,
+  gitlabConnectionCreateSchema,
+  gitlabConnectionDisableSchema,
+  gitlabConnectionSecretResponseSchema,
+  gitlabConnectionSummarySchema,
+  gitlabReviewerModeSchema,
+} from "./schemas/gitlab.js";
+export {
   extractCaption,
   IMAGE_MIME_TO_EXT,
   type ImageBatchRefContent,
@@ -663,8 +679,10 @@ export {
   GITHUB_EVENT_CARD_REASONS,
   type GithubEventCard,
   type GithubEventCardReason,
+  type GitlabEventCard,
   githubEventCardReasonSchema,
   githubEventCardSchema,
+  gitlabEventCardSchema,
   INVOLVE_REASONS,
   type InvolveReason,
   involveReasonSchema,
