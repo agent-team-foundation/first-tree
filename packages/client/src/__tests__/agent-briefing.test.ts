@@ -492,13 +492,14 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("load `first-tree-write`");
     expect(tree).toContain("load `first-tree-read`");
+    expect(tree).toContain("exclusively, not `first-tree-read`");
     expect(tree).toContain("**Normal content**");
     expect(tree).toContain("**Archive/supporting content**");
     expect(tree).toContain("**Member content**");
     expect(tree).toContain("Default to normal content as current truth");
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
-    expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
+    expect(tree).toContain("code, CLI, review, repo, path,\nbug, and error tasks");
     expect(tree).toContain("first-tree tree tree --help");
     expect(tree).toContain("tree tree` selectors");
     expect(tree).toContain("root `NODE.md`");

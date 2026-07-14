@@ -76,6 +76,21 @@ if (REVIEW_FIXTURE_PATH) {
     return argv[2] === String(fixture.prNumber) && optionValue(argv, "--repo") === fixture.repo;
   }
 
+  function apiEndpoint() {
+    for (let index = 1; index < argv.length; index += 1) {
+      if (["--method", "--input"].includes(argv[index])) {
+        index += 1;
+        continue;
+      }
+      if (!argv[index].startsWith("-")) return argv[index];
+    }
+    return null;
+  }
+
+  function reviewEndpointMatches() {
+    return apiEndpoint() === "repos/" + fixture.repo + "/pulls/" + fixture.prNumber + "/reviews";
+  }
+
   function rejectFixtureCall(message) {
     finish(2, "", message + "\\n", { reviewFixture: true, reviewFixtureViolation: true });
   }
@@ -111,9 +126,35 @@ if (REVIEW_FIXTURE_PATH) {
     finish(0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
   }
 
-  if (argv[0] === "pr" && argv[1] === "review") {
-    if (!targetMatches()) rejectFixtureCall("Review fixture requires the configured repository and pull request.");
+  if (argv[0] === "api" && reviewEndpointMatches()) {
+    const method = optionValue(argv, "--method");
+    const inputPath = optionValue(argv, "--input");
+    if (method !== "POST" || !inputPath) {
+      rejectFixtureCall("Review fixture requires the commit-bound create-review API with POST and --input.");
+    }
+    let payload;
+    try {
+      payload = JSON.parse(readFileSync(inputPath, "utf8"));
+    } catch {
+      rejectFixtureCall("Review fixture requires a readable JSON review payload.");
+    }
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      typeof payload.body !== "string" ||
+      typeof payload.commit_id !== "string" ||
+      !["APPROVE", "REQUEST_CHANGES", "COMMENT"].includes(payload.event)
+    ) {
+      rejectFixtureCall("Review fixture requires body, commit_id, and one supported review event.");
+    }
+    if (payload.commit_id !== fixture.reviewHeadOid) {
+      rejectFixtureCall("Review fixture requires the inspected review-head commit_id.");
+    }
     const head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.reviewWorktreePath,
+      encoding: "utf8",
+    });
+    const symbolicHead = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
       cwd: fixture.reviewWorktreePath,
       encoding: "utf8",
     });
@@ -124,34 +165,36 @@ if (REVIEW_FIXTURE_PATH) {
     if (
       head.status !== 0 ||
       head.stdout.trim() !== fixture.reviewHeadOid ||
+      symbolicHead.status === 0 ||
       status.status !== 0 ||
       status.stdout.trim() !== ""
     ) {
       rejectFixtureCall("Review fixture requires the registered clean detached PR-head worktree at submission time.");
     }
-    const actions = [
-      ["--approve", "approve"],
-      ["--request-changes", "request-changes"],
-      ["--comment", "comment"],
-    ].filter(([flag]) => argv.includes(flag));
-    const action = actions.length === 1 ? actions[0][1] : null;
-    const bodyFileIndex = argv.indexOf("--body-file");
-    if (!action || bodyFileIndex < 0 || !argv[bodyFileIndex + 1]) {
-      finish(2, "", "Review fixture requires exactly one action and --body-file.\\n", { reviewFixture: true });
-    }
-    const body = readFileSync(argv[bodyFileIndex + 1], "utf8");
+    const action = {
+      APPROVE: "approve",
+      COMMENT: "comment",
+      REQUEST_CHANGES: "request-changes",
+    }[payload.event];
     append({
       type: "github_review_submitted",
       phase,
       action,
-      body,
+      body: payload.body,
       bodyFileUsed: true,
+      commitOid: payload.commit_id,
+      currentHeadOid: fixture.submissionHeadOid,
       prNumber: fixture.prNumber,
       repo: fixture.repo,
       argv,
       cwd: process.cwd(),
     });
-    finish(0, "Recorded deterministic GitHub PR review.\\n", "", { reviewFixture: true });
+    finish(
+      0,
+      JSON.stringify({ body: payload.body, commit_id: payload.commit_id, state: payload.event }) + "\\n",
+      "",
+      { reviewFixture: true },
+    );
   }
 }
 

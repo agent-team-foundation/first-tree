@@ -11,7 +11,7 @@ import { createRunPaths } from "../paths.js";
 import { createGhShim } from "../shims/gh.js";
 
 describe("gh eval shim", () => {
-  it("allows only deterministic review reads and one body-file review", () => {
+  it("allows only deterministic review reads and one commit-bound API review", () => {
     const root = mkdtempSync(join(tmpdir(), "skill-evals-gh-shim-"));
     try {
       const packageRoot = join(root, "packages", "skill-evals");
@@ -33,9 +33,10 @@ describe("gh eval shim", () => {
         cwd: reviewWorktreePath,
         encoding: "utf8",
       }).stdout.trim();
+      expect(spawnSync("git", ["checkout", "--detach", reviewHeadOid], { cwd: reviewWorktreePath }).status).toBe(0);
       writeText(
         fixturePath,
-        `${JSON.stringify({ prNumber: 42, repo: "owner/context-tree", reviewHeadOid, reviewerLogin: "reviewer", reviewWorktreePath, views: [{ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" }] })}\n`,
+        `${JSON.stringify({ prNumber: 42, repo: "owner/context-tree", reviewHeadOid, reviewerLogin: "reviewer", reviewWorktreePath, submissionHeadOid: reviewHeadOid, views: [{ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" }] })}\n`,
       );
       createGhShim(paths, { reviewFixturePath: fixturePath });
       const env = { ...process.env, FIRST_TREE_EVAL_EVENTS: paths.eventsPath, FIRST_TREE_EVAL_PHASE: "model" };
@@ -58,18 +59,39 @@ describe("gh eval shim", () => {
 
       const bodyPath = join(paths.runRoot, "review.md");
       writeText(bodyPath, "## Approved\n");
+      const payloadPath = join(paths.runRoot, "review.json");
+      writeText(
+        payloadPath,
+        `${JSON.stringify({ body: readFileSync(bodyPath, "utf8"), commit_id: reviewHeadOid, event: "APPROVE" })}\n`,
+      );
       const review = spawnSync(
         gh,
-        ["pr", "review", "42", "--repo", "owner/context-tree", "--approve", "--body-file", bodyPath],
+        ["api", "repos/owner/context-tree/pulls/42/reviews", "--method", "POST", "--input", payloadPath],
         { cwd: paths.workspacePath, encoding: "utf8", env },
       );
       expect(review.status).toBe(0);
       expect(readFileSync(bodyPath, "utf8")).toBe("## Approved\n");
 
+      writeText(
+        fixturePath,
+        `${JSON.stringify({ prNumber: 42, repo: "owner/context-tree", reviewHeadOid, reviewerLogin: "reviewer", reviewWorktreePath, submissionHeadOid: "new-head", views: [{ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" }] })}\n`,
+      );
+      const staleReview = spawnSync(
+        gh,
+        ["api", "repos/owner/context-tree/pulls/42/reviews", "--method", "POST", "--input", payloadPath],
+        { cwd: paths.workspacePath, encoding: "utf8", env },
+      );
+      expect(staleReview.status).toBe(0);
+      expect(JSON.parse(staleReview.stdout)).toMatchObject({ commit_id: reviewHeadOid, state: "APPROVE" });
+      writeText(
+        fixturePath,
+        `${JSON.stringify({ prNumber: 42, repo: "owner/context-tree", reviewHeadOid, reviewerLogin: "reviewer", reviewWorktreePath, submissionHeadOid: reviewHeadOid, views: [{ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" }] })}\n`,
+      );
+
       writeText(join(reviewWorktreePath, "NODE.md"), "dirty review fixture\n");
       const dirtyReview = spawnSync(
         gh,
-        ["pr", "review", "42", "--repo", "owner/context-tree", "--approve", "--body-file", bodyPath],
+        ["api", "repos/owner/context-tree/pulls/42/reviews", "--method", "POST", "--input", payloadPath],
         { cwd: paths.workspacePath, encoding: "utf8", env },
       );
       expect(dirtyReview.status).toBe(2);
@@ -82,23 +104,30 @@ describe("gh eval shim", () => {
         ["pr", "review", "42", "--repo", "owner/context-tree", "--approve", "--comment", "--body-file", bodyPath],
         { cwd: paths.workspacePath, encoding: "utf8", env },
       );
-      expect(ambiguousReview.status).toBe(2);
+      expect(ambiguousReview.status).toBe(1);
       const wrongTarget = spawnSync(
         gh,
-        ["pr", "review", "43", "--repo", "owner/context-tree", "--approve", "--body-file", bodyPath],
+        ["api", "repos/owner/context-tree/pulls/43/reviews", "--method", "POST", "--input", payloadPath],
         { cwd: paths.workspacePath, encoding: "utf8", env },
       );
-      expect(wrongTarget.status).toBe(2);
+      expect(wrongTarget.status).toBe(1);
       expect(readEvents(paths.eventsPath)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             action: "approve",
             bodyFileUsed: true,
+            commitOid: reviewHeadOid,
+            currentHeadOid: reviewHeadOid,
             prNumber: 42,
             repo: "owner/context-tree",
             type: "github_review_submitted",
           }),
           expect.objectContaining({ headRefOid: reviewHeadOid, prNumber: 42, type: "github_pr_viewed" }),
+          expect.objectContaining({
+            commitOid: reviewHeadOid,
+            currentHeadOid: "new-head",
+            type: "github_review_submitted",
+          }),
           expect.objectContaining({ login: "reviewer", type: "github_identity_read" }),
           expect.objectContaining({ argv: ["pr", "merge", "42"], blockedByEval: true, type: "gh_result" }),
           expect.objectContaining({ reviewFixtureViolation: true, type: "gh_result" }),

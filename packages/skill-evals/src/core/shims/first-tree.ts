@@ -282,6 +282,10 @@ if (RECORDED_MODEL_VERIFY_PATH && phase === "model" && argv[0] === "tree" && arg
     expectedCwd = RECORDED_MODEL_VERIFY_CWD ? realpathSync(RECORDED_MODEL_VERIFY_CWD) : null;
   } catch {}
   const headResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" });
+  const symbolicHeadResult = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
   const statusResult = spawnSync("git", ["status", "--porcelain"], { cwd: process.cwd(), encoding: "utf8" });
   const actualHead = headResult.status === 0 ? headResult.stdout.trim() : null;
   const clean = statusResult.status === 0 && statusResult.stdout.trim() === "";
@@ -291,6 +295,7 @@ if (RECORDED_MODEL_VERIFY_PATH && phase === "model" && argv[0] === "tree" && arg
     expectedCwd !== null &&
     actualCwd === expectedCwd &&
     actualHead === RECORDED_MODEL_VERIFY_HEAD &&
+    symbolicHeadResult.status !== 0 &&
     clean;
   if (!verifyBindingValid) {
     finish(

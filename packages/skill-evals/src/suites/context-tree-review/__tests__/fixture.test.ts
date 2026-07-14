@@ -25,11 +25,29 @@ describe("context-tree-review fixture", () => {
     });
     try {
       const fixture = setupFixture(evalCase, paths);
+      const agents = readFileSync(join(paths.workspacePath, "AGENTS.md"), "utf8");
+      for (const skill of [
+        "first-tree-welcome",
+        "first-tree-seed",
+        "first-tree-file-bug",
+        "first-tree-read",
+        "first-tree-write",
+        "context-tree-review",
+      ]) {
+        expect(agents).toContain(`\`${skill}\``);
+        expect(readFileSync(join(paths.workspacePath, ".agents", "skills", skill, "SKILL.md"), "utf8")).toContain(
+          `name: ${skill}`,
+        );
+      }
+      expect(agents).toContain("loads `context-tree-review` exclusively");
       expect(inspectFixtureIntegrity(fixture)).toEqual({
         mainHeadUnchanged: true,
         mainWorktreeClean: true,
         originRefsUnchanged: true,
         reviewWorktreeCleaned: true,
+        treeConfigUnchanged: true,
+        treeRefsUnchanged: true,
+        treeWorktreesUnchanged: true,
       });
       const result = JSON.parse(readFileSync(fixture.verifyResultPath, "utf8")) as { exitCode: number; stdout: string };
       expect(result.exitCode).toBe(expectedExitCode);

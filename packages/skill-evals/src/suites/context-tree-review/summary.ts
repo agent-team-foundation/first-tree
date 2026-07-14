@@ -12,7 +12,10 @@ export function buildGrading(
   return {
     caseId: evalCase.id,
     evidence: [
-      evidence("routing_pass", `skill file read=${metrics.skillFileReadObserved}`),
+      evidence(
+        "routing_pass",
+        `review skill read=${metrics.skillFileReadObserved}; first-tree-read loaded=${metrics.firstTreeReadLoaded}; main tree read=${metrics.mainTreeReadAttempted}`,
+      ),
       evidence(
         "process_pass",
         `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; final fresh=${metrics.finalViewFresh}; review after final=${metrics.reviewAfterFinalView}`,
@@ -32,7 +35,7 @@ export function buildGrading(
         ? [riskFlag("review_side_effect", "review attempted a forbidden tree or GitHub side effect")]
         : [],
     scores: {
-      routing_pass: metrics.skillFileReadObserved,
+      routing_pass: metrics.skillFileReadObserved && !metrics.firstTreeReadLoaded && !metrics.mainTreeReadAttempted,
       process_pass:
         metrics.runnerExitCode === 0 &&
         metrics.initialViewObserved &&

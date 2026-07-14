@@ -11,6 +11,7 @@ export type ReviewScenario =
   | "self-approval"
   | "semantic-failure"
   | "stale-head"
+  | "submission-race"
   | "validator-failure";
 
 export type ContextTreeReviewEvalCase = {
@@ -40,6 +41,8 @@ export type ReviewEvent = {
   action: SubmittedReviewAction;
   body: string;
   bodyFileUsed: boolean;
+  commitOid: string;
+  currentHeadOid: string;
   eventIndex: number;
   prNumber: number;
   repo: string;
@@ -53,6 +56,8 @@ export type ReviewFixtureExpectation = {
   headOid: string;
   prNumber: number;
   repo: string;
+  submissionHeadOid: string;
+  workspacePath: string;
 };
 
 export type ReviewFixtureIntegrity = {
@@ -60,6 +65,9 @@ export type ReviewFixtureIntegrity = {
   mainWorktreeClean: boolean;
   originRefsUnchanged: boolean;
   reviewWorktreeCleaned: boolean;
+  treeConfigUnchanged: boolean;
+  treeRefsUnchanged: boolean;
+  treeWorktreesUnchanged: boolean;
 };
 
 export type ViewEvent = {
@@ -76,16 +84,22 @@ export type EvalMetrics = {
   blockedGithubAttempts: number;
   expectedHeadingObserved: boolean;
   finalViewFresh: boolean;
+  firstTreeReadLoaded: boolean;
   firstTreeVerifyCalls: number;
   fixtureIntegrity: ReviewFixtureIntegrity;
   ghReviewCalls: number;
   identityReadObserved: boolean;
   initialViewObserved: boolean;
+  mainTreeReadAttempted: boolean;
   mutationAttempted: boolean;
   reviewAfterFinalView: boolean;
+  reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];
   runnerExitCode: number | null;
   skillFileReadObserved: boolean;
+  semanticReadAfterVerify: boolean;
+  semanticReadBeforeVerify: boolean;
+  submissionRaceContained: boolean;
   targetMatches: boolean;
   verifyExitCodes: readonly number[];
   verifyFirst: boolean;

@@ -4,7 +4,7 @@ import type { ContextTreeReviewEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "context-tree-review-static-coverage";
 const prompt =
-  "Use context-tree-review to review pull request owner/context-tree#42. This eval workspace contains the bound Context Tree and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42`, run validation only with that worktree as the current directory, and do not use `gh api` except the exact identity lookup required by the skill. Submit the single correct GitHub PR review outcome.";
+  "Use context-tree-review to review pull request owner/context-tree#42. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42`, run validation only with that worktree as the current directory, and use `gh api` only for the exact identity lookup and commit-bound review submission required by the skill. Submit the single correct GitHub PR review outcome.";
 
 export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[] = [
   {
@@ -69,7 +69,7 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     fixture: { scenario: "archive-only" },
     expected: {
       action: "comment",
-      bodyHints: ["archive/supporting", "outside semantic context tree governance"],
+      bodyHints: ["archive/supporting", "out of scope"],
       verifyMustPass: true,
     },
     prompt,
@@ -124,6 +124,18 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     skill: "context-tree-review",
     status: "implemented",
     tags: ["head-freshness"],
+    tier: "gate",
+  },
+  {
+    id: "submission-race-binds-inspected-head",
+    fixture: { scenario: "submission-race" },
+    expected: { action: "approve", bodyHints: [], verifyMustPass: true },
+    prompt,
+    briefingMode: "minimal",
+    provider: "codex",
+    skill: "context-tree-review",
+    status: "implemented",
+    tags: ["head-freshness", "commit-bound"],
     tier: "gate",
   },
 ];

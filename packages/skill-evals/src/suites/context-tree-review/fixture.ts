@@ -12,7 +12,10 @@ export type ReviewFixture = {
   originPath: string;
   originRefs: string;
   reviewWorktreePath: string;
+  treeConfig: string;
   treePath: string;
+  treeRefs: string;
+  treeWorktrees: string;
   verifyResultPath: string;
 };
 
@@ -20,8 +23,18 @@ function node(title: string, body: string, owners = "[eval-owner]"): string {
   return `---\ntitle: "${title}"\nowners: ${owners}\n---\n\n# ${title}\n\n${body}\n`;
 }
 
-function workspaceAgents(description: string): string {
-  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n| \`context-tree-review\` | ${description} |\n\nLoad \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for ownership changes and \`decisionLocksCode\`. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review is read-only.\n`;
+const DEFAULT_SKILL_NAMES = [
+  "first-tree-welcome",
+  "first-tree-seed",
+  "first-tree-file-bug",
+  "first-tree-read",
+  "first-tree-write",
+  "context-tree-review",
+] as const;
+
+function workspaceAgents(skills: readonly { description: string; name: string }[]): string {
+  const rows = skills.map((skill) => `| \`${skill.name}\` | ${skill.description} |`).join("\n");
+  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for ownership changes and \`decisionLocksCode\`. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review is read-only.\n`;
 }
 
 function changedBody(scenario: ContextTreeReviewEvalCase["fixture"]["scenario"]): { path: string; content: string } {
@@ -62,8 +75,11 @@ function changedBody(scenario: ContextTreeReviewEvalCase["fixture"]["scenario"])
 }
 
 export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPaths): ReviewFixture {
-  const skill = installRepoSkill(paths.repoRoot, paths.workspacePath, "context-tree-review");
-  writeText(join(paths.workspacePath, "AGENTS.md"), workspaceAgents(parseSkillDescription(skill)));
+  const installedSkills = DEFAULT_SKILL_NAMES.map((name) => ({
+    description: parseSkillDescription(installRepoSkill(paths.repoRoot, paths.workspacePath, name)),
+    name,
+  }));
+  writeText(join(paths.workspacePath, "AGENTS.md"), workspaceAgents(installedSkills));
   writeText(
     join(paths.workspacePath, ".first-tree", "workspace.json"),
     `${JSON.stringify({ tree: "context-tree" }, null, 2)}\n`,
@@ -140,6 +156,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
     url: "https://github.com/owner/context-tree/pull/42",
   };
   const secondView = evalCase.fixture.scenario === "stale-head" ? { ...view, headRefOid: baseOid } : view;
+  const submissionHeadOid = evalCase.fixture.scenario === "submission-race" ? baseOid : secondView.headRefOid;
   const reviewerLogin = evalCase.fixture.scenario === "self-approval" ? "contributor" : "independent-reviewer";
   const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
   const repo = "owner/context-tree";
@@ -147,9 +164,12 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
   const reviewWorktreePath = join(paths.workspacePath, ".review-worktrees", "42");
   writeText(
     fixturePath,
-    `${JSON.stringify({ prNumber, repo, reviewHeadOid: headOid, reviewerLogin, reviewWorktreePath, views: [view, secondView] }, null, 2)}\n`,
+    `${JSON.stringify({ prNumber, repo, reviewHeadOid: headOid, reviewerLogin, reviewWorktreePath, submissionHeadOid, views: [view, secondView] }, null, 2)}\n`,
   );
   const originRefs = runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], originPath).stdout;
+  const treeConfig = runCommand("git", ["config", "--local", "--list"], treePath).stdout;
+  const treeRefs = runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], treePath).stdout;
+  const treeWorktrees = runCommand("git", ["worktree", "list", "--porcelain"], treePath).stdout;
   return {
     expectation: {
       baseOid,
@@ -159,12 +179,17 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       headOid,
       prNumber,
       repo,
+      submissionHeadOid,
+      workspacePath: paths.workspacePath,
     },
     fixturePath,
     originPath,
     originRefs,
     reviewWorktreePath,
+    treeConfig,
     treePath,
+    treeRefs,
+    treeWorktrees,
     verifyResultPath,
   };
 }
@@ -179,6 +204,12 @@ export function inspectFixtureIntegrity(fixture: ReviewFixture): ReviewFixtureIn
       runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], fixture.originPath).stdout ===
       fixture.originRefs,
     reviewWorktreeCleaned: !existsSync(fixture.reviewWorktreePath) && !worktrees.includes(fixture.reviewWorktreePath),
+    treeConfigUnchanged:
+      runCommand("git", ["config", "--local", "--list"], fixture.treePath).stdout === fixture.treeConfig,
+    treeRefsUnchanged:
+      runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], fixture.treePath).stdout ===
+      fixture.treeRefs,
+    treeWorktreesUnchanged: worktrees === fixture.treeWorktrees,
   };
 }
 

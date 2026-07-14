@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -193,13 +193,22 @@ describe("first-tree eval shim", () => {
       });
       expect(wrongCwd.status).toBe(2);
 
+      const attached = spawnSync(firstTree, ["tree", "verify", "--json"], {
+        cwd: detachedPath,
+        encoding: "utf8",
+        env,
+      });
+      expect(attached.status).toBe(2);
+
+      expect(spawnSync("git", ["checkout", "--detach", expectedHead], { cwd: detachedPath }).status).toBe(0);
+
       const valid = spawnSync(firstTree, ["tree", "verify", "--json"], {
         cwd: detachedPath,
         encoding: "utf8",
         env,
       });
       expect(valid.status).toBe(0);
-      expect(JSON.parse(valid.stdout)).toMatchObject({ ok: true, targetRoot: detachedPath });
+      expect(JSON.parse(valid.stdout)).toMatchObject({ ok: true, targetRoot: realpathSync(detachedPath) });
 
       writeFileSync(join(detachedPath, "NODE.md"), "---\ntitle: Changed\nowners: [eval]\n---\n", "utf8");
       expect(spawnSync("git", ["add", "."], { cwd: detachedPath }).status).toBe(0);

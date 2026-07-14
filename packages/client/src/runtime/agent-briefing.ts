@@ -746,9 +746,10 @@ precise.`);
 When a task has a repo/path/feature/domain/owner/source signal, load
 \`first-tree-read\` before acting. The skill is read-only and requires
 you to inspect \`${getCliBinding().binName} tree tree --help\` inside the tree repo,
-then use \`tree tree\` selectors to find focused files before reading their
-Markdown content with normal file reads. Treat code, CLI, review, repo,
-path, bug, and error tasks as tree-read signals.
+then use \`tree tree\` selectors to find focused files before reading their Markdown content with normal file reads. Treat code, CLI, review, repo, path,
+bug, and error tasks as tree-read signals, except Context Tree PR reviews: load
+\`context-tree-review\` exclusively, not \`first-tree-read\`; it owns detached
+PR-head validation and reads without refreshing the main tree checkout.
 
 At minimum start with the root \`NODE.md\`; **If the root also contains an \`AGENTS.md\`, read it too**
 because it carries org-level rules. Follow

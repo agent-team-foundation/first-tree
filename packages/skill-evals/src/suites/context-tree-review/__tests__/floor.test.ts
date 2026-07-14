@@ -20,6 +20,7 @@ describe("context-tree-review floor", () => {
       "authority",
       "self-approval",
       "stale-head",
+      "submission-race",
     ]);
     expect(CONTEXT_TREE_REVIEW_SUITE.coverage.tiers.map((item) => item.tier)).toEqual(["floor", "gate"]);
   });
@@ -38,7 +39,9 @@ describe("context-tree-review floor", () => {
 
     expect(skill).toContain("generated `AGENTS.md` / `CLAUDE.md` Context Tree Policy");
     expect(skillHasPolicyDuplication(repoRoot)).toBe(false);
-    expect(skill).toContain("gh pr review --approve --body-file");
+    expect(skill).toContain("repos/$REPO/pulls/$PR_NUMBER/reviews");
+    expect(skill).toContain('--arg commit_id "$REVIEWED_HEAD"');
+    expect(skill).toContain("never through\n`gh pr review`");
     expect(cloud).toContain("context-tree-review");
     expect(cloud).not.toContain("gh pr review");
     expect(cloud).not.toContain("tree verify");
