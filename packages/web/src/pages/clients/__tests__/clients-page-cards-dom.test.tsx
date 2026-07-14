@@ -441,11 +441,17 @@ describe("ClientsPage computer cards", () => {
 
     await click(exactButton(container, "Show"));
     await waitForText(container, "Team computers");
-    // Distributed audit columns: the header labels owner / OS / version so the
-    // row fills the width instead of leaving a mid-row void.
+    // Distributed audit columns render as a semantic <table>: a 6-column header
+    // (Hostname … Status), each data row a <tr> whose hostname is a
+    // <th scope="row">, owner/os/version <td> cells. Assert the accessible
+    // structure, not just header strings.
     await waitForText(container, "Hostname");
     await waitForText(container, "First Tree");
-    await waitForText(container, "alice-linux");
+    const teamTable = container.querySelector<HTMLTableElement>('table[aria-label="Team computers"]');
+    expect(teamTable).not.toBeNull();
+    expect(teamTable?.querySelectorAll("thead th").length).toBe(6);
+    const rowHeaders = [...(teamTable?.querySelectorAll('th[scope="row"]') ?? [])];
+    expect(rowHeaders.some((el) => el.textContent?.includes("alice-linux"))).toBe(true);
     await waitForText(container, "Alice");
     // A connected + Ready-runtime team machine whose self-update failed must
     // surface under "Needs attention" as "Update failed", not hidden as Ready.
