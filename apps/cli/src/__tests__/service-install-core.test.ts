@@ -578,13 +578,32 @@ describe("service install helpers", () => {
     );
   });
 
-  it("refuses in-daemon refresh during root user-to-system systemd migration", () => {
+  it("refuses lifecycle operations during deferred root user-to-system systemd migration", () => {
     setPlatform("linux");
     userInfoMock.mockReturnValue(rootUserInfo());
     const legacyUnitPath = rootLegacySystemdUserUnitPath();
+    const reason = `legacy root systemd user unit requires out-of-service migration: ${legacyUnitPath}`;
     mkdirSync(dirname(legacyUnitPath), { recursive: true });
     writeFileSync(legacyUnitPath, "unit");
 
+    expect(getClientServiceStatus()).toMatchObject({
+      platform: "systemd",
+      state: "unknown",
+      unitPath: legacyUnitPath,
+      managerScope: "user",
+      detail: reason,
+    });
+    expect(isServiceUnitDriftDetected()).toBe(true);
+    expect(startClientService()).toEqual({ ok: false, reason });
+    expect(stopClientService()).toEqual({ ok: false, reason });
+    expect(restartClientService()).toEqual({ ok: false, reason });
+    expect(uninstallClientService()).toMatchObject({
+      platform: "systemd",
+      state: "unknown",
+      unitPath: legacyUnitPath,
+      managerScope: "user",
+      detail: reason,
+    });
     expect(() => refreshClientServiceUnitForUpdate()).toThrow(
       `legacy root systemd user unit requires an out-of-service migration before refresh: ${legacyUnitPath}`,
     );

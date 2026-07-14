@@ -440,6 +440,22 @@ describe("daemon start command", () => {
 
     await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
     expect(output()).toContain("Service state could not be determined (launchd).");
+
+    stderrSpy.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({
+      platform: "systemd",
+      state: "unknown",
+      label: "first-tree.service",
+      detail:
+        "legacy root systemd user unit requires out-of-service migration: /root/.config/systemd/user/first-tree.service",
+      logDir: "/logs",
+      managerScope: "user",
+    });
+
+    await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
+    expect(output()).toContain("legacy root systemd user unit requires out-of-service migration");
+    expect(coreMocks.startClientService).not.toHaveBeenCalled();
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
   });
 
   it("runs inline, reconciles local state, uploads capabilities and skills", async () => {
