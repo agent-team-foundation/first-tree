@@ -71,8 +71,9 @@ describe("first-tree-seed chat-first fixtures", () => {
       expect(agentsMarkdown).toContain("Source default branch: `trunk`");
       expect(agentsMarkdown).toContain("Declared source ref: `ref=trunk`");
       expect(agentsMarkdown).toContain("Local source branch state: `stale`");
-      expect(agentsMarkdown).toContain("worktree add");
-      expect(agentsMarkdown).toContain("origin/trunk");
+      expect(agentsMarkdown).toContain("Runtime declaration: ref=trunk");
+      expect(agentsMarkdown).not.toContain("worktree add");
+      expect(agentsMarkdown).not.toContain("origin/trunk");
       expect(agentsMarkdown).not.toContain("origin/main");
       expect(validateFixture(paths, contextTreePath, evalCase, false, reporter).ok).toBe(true);
     } finally {

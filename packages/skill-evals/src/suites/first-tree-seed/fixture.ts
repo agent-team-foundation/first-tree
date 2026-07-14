@@ -34,6 +34,12 @@ function workspaceAgentsMarkdown(
   const sourceDeclaredRef = evalCase.fixture.sourceDeclaredRef;
   const sourceForge = evalCase.fixture.sourceForge ?? "github";
   const sourceLocalBranchState = evalCase.fixture.sourceLocalBranchState ?? "fresh";
+  const declaredSourceWorktreeProtocol = sourceDeclaredRef
+    ? `git -C ${sourceRepoPath} fetch origin
+# Runtime declaration: ref=${sourceDeclaredRef}
+# Resolve this raw declaration with the installed first-tree-seed protocol before materializing ${sourceWorktreePath}.
+# Do not pass the local branch name directly when the fetched remote-tracking branch exists.`
+    : null;
   const sourceLine =
     evalCase.fixture.sourceRepoState === "missing"
       ? `The manifest source \`source-repo\` is intentionally missing from \`${sourceRepoPath}\`.`
@@ -117,8 +123,11 @@ directly from \`${sourceRepoPath}\`; it is a git object store, not a
 checkout. To read source, materialize a read worktree:
 
 \`\`\`bash
-git -C ${sourceRepoPath} fetch origin
-git -C ${sourceRepoPath} worktree add ${sourceWorktreePath} ${sourceWorktreeRef(evalCase)}
+${
+  declaredSourceWorktreeProtocol ??
+  `git -C ${sourceRepoPath} fetch origin
+git -C ${sourceRepoPath} worktree add ${sourceWorktreePath} ${sourceWorktreeRef(evalCase)}`
+}
 \`\`\`
 
 Then read files under \`${sourceWorktreePath}\`.`
