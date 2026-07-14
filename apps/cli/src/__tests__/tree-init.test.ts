@@ -213,4 +213,9 @@ describe("scaffold-templates (ejs)", () => {
     const branch = "feature\u00a0context-tree";
     expect(validateTreeWorkflowContent(branch)).toContain(`branches: ['${branch}']`);
   });
+
+  it("escapes GitHub branch-pattern operators after validating the branch", () => {
+    expect(validateTreeWorkflowContent("release!+candidate")).toContain("branches: ['release\\!\\+candidate']");
+    expect(() => validateTreeWorkflowContent("release\\candidate")).toThrow();
+  });
 });

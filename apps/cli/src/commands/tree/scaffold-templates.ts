@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
+import { contextTreeBranchSchema } from "@first-tree/shared";
 import type * as ejs from "ejs";
 
 // EJS is published as CommonJS at runtime even though its types expose named
@@ -71,10 +72,14 @@ function yamlSingleQuote(value: string): string {
 
 /** `.github/workflows/validate-tree.yml` — the optional CI workflow (`--with-workflow`). */
 export function validateTreeWorkflowContent(branch = "main"): string {
+  const validatedBranch = contextTreeBranchSchema.parse(branch);
   // GitHub Actions treats `!` and `+` as branch-pattern operators even though
   // both are valid in Git branch names. Escape them so this filter names the
-  // newly created branch literally.
-  const branchPattern = branch.replace(/[!+]/g, "\\$&");
+  // newly created branch literally. The Shared schema rejects backslashes, so
+  // no existing escape prefix can change the meaning of this character map.
+  const branchPattern = Array.from(validatedBranch, (character) =>
+    character === "!" || character === "+" ? `\\${character}` : character,
+  ).join("");
   return render("validate-tree-workflow.yml.ejs", {
     branchField: branchPattern === "main" ? "main" : yamlSingleQuote(branchPattern),
   });
