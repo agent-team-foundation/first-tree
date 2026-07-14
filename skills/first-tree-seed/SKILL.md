@@ -3,7 +3,7 @@ name: first-tree-seed
 version: 0.3.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Bootstrap a team's Context Tree from readable source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or GitHub URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR is merged.
+description: Bootstrap a team's Context Tree from readable source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or a GitHub/GitLab repository URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR is merged.
 ---
 
 # First Tree — Seed
@@ -24,7 +24,7 @@ not here.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | The team has no tree yet, **or** a bound tree with no normal domain structure per the generated policy's content classes | The tree already has a normal domain structure → `first-tree-write` (incremental source-driven write) |
 | First content pass on resolved readable sources                       | Broad maintenance or drift-audit work on an existing tree                                            |
-| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
+| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or the required forge CLI (`gh` / `glab`) is unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
 
 The skill is **single-shot per tree setup**: once the tree has domain
 structure, a new or unrelated seed request refuses and routes further work
@@ -70,7 +70,7 @@ or a populated tree alone.
 field, or the team has no `context_tree` binding. This is the
 agent-driven creation path. First resolve readable sources using the section
 below, because owner placement depends on them; then create the tree with the
-user's local `gh`:
+user's local forge CLI (`gh` for GitHub, `glab` for GitLab):
 
 ```bash
 first-tree tree init --title "<team display name>" --owner "<source-repo-owner>" --dir "<workspaceRoot>/<manifest.tree>"
@@ -83,26 +83,27 @@ source's **remote URL, not its directory name**: for a declared source resolve
 `<source-clone>` from the manifest
 (`<workspaceRoot>/<sourcesRoot>/<source>`, per *Materialize source read
 worktrees* below); for an explicit local repo use that repo; then run
-`git -C <source> remote get-url origin` (or use the explicit GitHub URL) and take
-the `<owner>` segment of that URL (e.g. `acme` in `github.com/acme/app`, or
-`alice` in `github.com/alice/app`). **`manifest.sources` holds directory
-names (e.g. `first-tree`), not owners** — passing a source *name* as
-`--owner` targets the wrong GitHub account, so always parse the owner from
-the clone's remote. With one source that account is unambiguous; when
-several sources share one account, use it;
-when sources span **different accounts**, pick the account that owns most
-of them, and if that is genuinely a tie, ask the admin which account should
-host the tree rather than guessing. Why: a team's Context Tree belongs in
-the **same account as its source** — that is the account the GitHub App
-lives on (or will) to read those sources. When the App is already installed
-there — the normal case — `--owner` just matches the installation account
-and nothing changes. When the App is not installed yet, `--owner` lands the
-tree in that account instead of defaulting to your personal `gh` login, so
-a **later App install on it covers the tree** rather than stranding it in
-an account the install can never reach. The tree lives in one account;
-sources under other accounts stay covered by their own App installs as
-usual. (When the source repo is itself under your personal account,
-`<source-repo-owner>` simply is that account — same result.)
+`git -C <source> remote get-url origin` (or use the explicit forge URL) and take
+the `<owner>` / namespace segment of that URL (e.g. `acme` in
+`github.com/acme/app`, or `acme/platform` in `gitlab.com/acme/platform/app`).
+**`manifest.sources` holds directory names (e.g. `first-tree`), not owners** —
+passing a source *name* as `--owner` targets the wrong forge account, so always
+parse the owner or namespace from the clone's remote. With one source that
+account is unambiguous; when several sources share one account, use it;
+when sources span **different accounts**, pick the account or namespace that
+owns most of them, and if that is genuinely a tie, ask the admin which account
+should host the tree rather than guessing. Why: a team's Context Tree belongs
+in the **same forge account/namespace as its source** — that is the account the
+GitHub App lives on for GitHub sources, or the integration surface First Tree
+returns for GitLab sources, to read those sources. When the GitHub App is
+already installed there — the normal GitHub case — `--owner` just matches the
+installation account and nothing changes. When the GitHub App is not installed
+yet, `--owner` lands the tree in that account instead of defaulting to your
+personal `gh` login, so a **later App install on it covers the tree** rather than
+stranding it in an account the install can never reach. The tree lives in one
+forge account/namespace; sources under other accounts stay covered by their own
+hosted integrations as usual. (When the source repo is itself under your personal
+account, `<source-repo-owner>` simply is that account — same result.)
 
 **If `--owner` can't be honored, stop and surface it — do not silently
 fall back.** Two distinct cases, each with its own recovery:
@@ -111,12 +112,13 @@ fall back.** Two distinct cases, each with its own recovery:
   installed, so nothing overrides `--owner`): prefer asking an admin to
   grant you create rights there, so the tree still homes beside its source.
   Only if that is not an option, re-run without `--owner` to build under
-  your personal `gh` account — flag the cost first: the tree then lives off
-  the source's account, so a later App install must go on *your* account,
-  not the source's, to cover it. Before re-running, empty **only** the
-  half-built scaffold this failed run left in `<manifest.tree>` (confirm the
-  directory holds just that — never delete a directory that already holds a
-  real tree clone or other content); `tree init` refuses a non-empty target.
+  your personal forge account — flag the cost first: the tree then lives off
+  the source's account/namespace, so a later App or integration install must
+  go on *your* account/namespace, not the source's, to cover it. Before
+  re-running, empty **only** the half-built scaffold this failed run left in
+  `<manifest.tree>` (confirm the directory holds just that — never delete a
+  directory that already holds a real tree clone or other content);
+  `tree init` refuses a non-empty target.
 - **`--owner` doesn't match an already-installed App account** (the App is
   installed on a different account than the source's — rare; `tree init`
   names that account): re-run **without `--owner`** to create under that
@@ -127,9 +129,10 @@ fall back.** Two distinct cases, each with its own recovery:
 `tree init` seeds a minimal valid tree
 (root `NODE.md`, a `members/` index, and the creator's member node),
 pushes, and binds the org's `context_tree` setting. It is **admin-only**
-and needs an authenticated `gh`; if the caller is not an org admin, or
-`gh` is unauthenticated, surface that exact gap and stop (binding a team
-tree is an admin action).
+and needs an authenticated forge CLI (`gh` for GitHub, `glab` for GitLab);
+if the caller is not an org admin, or the required forge CLI is
+unauthenticated, surface that exact gap and stop (binding a team tree is an
+admin action).
 Take the team display name from the chat context / `first-tree agent
 status`. After it succeeds the tree is bound and in state **B** — proceed.
 
@@ -138,9 +141,9 @@ bind is the sanctioned agent path (a general "tree binding is an operator
 action" note in your briefing does **not** apply to this task) — running it IS
 the task the user asked for, so binding needs no separate go-ahead. You do not
 need to independently "confirm admin" first: `tree init` enforces it
-server-side (it fails closed for a non-admin or unauthenticated `gh`). So run
+server-side (it fails closed for a non-admin or unauthenticated forge CLI). So run
 it; only if it fails on that admin/authentication check do you surface the
-exact gap (not an admin / `gh` not authenticated) and stop.
+exact gap (not an admin / matching CLI not authenticated) and stop.
 
 **Pin the local checkout with `--dir` — this is load-bearing.** `tree
 init` defaults its local clone to `<cwd>/<repo-name>`, but a managed
@@ -263,11 +266,12 @@ setup failure as a reason to delete or recreate the Context Repo.
 **Delay App coverage guidance until there is a reviewable milestone — recommend,
 never block.**
 A newly created tree is only visible to the team's web view and the
-Context Tree reviewer once the First Tree GitHub App can read its repo.
-`tree init` creates and binds the tree either way and prints a coverage
-line; capture the result but do not interrupt source resolution, structure
-review, or Phase 1 work with an installation detour. The tree is built and
-bound, so proceed regardless of coverage.
+Context Tree reviewer once the First Tree GitHub App can read its repo for
+GitHub sources; for GitLab sources, use the integration URL/settings First
+Tree returns. `tree init` creates and binds the tree either way and prints a
+coverage line; capture the result but do not interrupt source resolution,
+structure review, or Phase 1 work with an installation detour. The tree is
+built and bound, so proceed regardless of coverage.
 
 **After the Phase 1 PR is open**, or earlier only when the next requested
 operation actually needs Cloud snapshot/reviewer access, surface an uncovered
@@ -328,27 +332,28 @@ Use one ordered source-resolution rule and call its result
    source on disk. Do not let a URL or local path supplied in chat hide a
    half-provisioned declared workspace.
 2. **An empty or absent `manifest.sources` is valid.** Use an explicit local
-   project folder or GitHub repository URL already supplied in this setup chat.
-   If neither exists, ask the user for exactly one of them and stop until they
-   answer. Do not send them to Settings and do not make GitHub App installation
-   a prerequisite.
+   project folder or GitHub/GitLab repository URL already supplied in this
+   setup chat. If neither exists, ask the user for exactly one of them and stop
+   until they answer. Do not send them to Settings and do not make GitHub App
+   installation a prerequisite.
 3. **Validate before reading.** A local folder must exist, be readable, and be
-   a Git repository. A GitHub URL must be a repository URL that host `gh` or
-   `git` can access; materialize a task-local read checkout under the workspace
-   `worktrees/` directory. These reads do not register team resources or mutate
-   the source repo.
+   a Git repository. A GitHub or GitLab URL must be a repository URL that host
+   `gh`, `glab`, or `git` can access; materialize a task-local read checkout
+   under the workspace `worktrees/` directory. These reads do not register team
+   resources or mutate the source repo.
 
 For a local non-bare repository, read it in place without modifying it. For a
-local bare repository, follow the worktree protocol below. For a GitHub URL,
-clone/fetch it into task-local read storage, then read its default branch.
-Private URLs may rely on the user's existing `gh`/git credentials; if access
-fails, report that exact credential/access gap rather than asking for the First
-Tree GitHub App.
+local bare repository, follow the worktree protocol below. For a GitHub or
+GitLab URL, clone/fetch it into task-local read storage, then read its default
+branch. Private URLs may rely on the user's existing `gh` / `glab` / git
+credentials; if access fails, report that exact credential/access gap rather
+than asking for the First Tree GitHub App.
 
-When state A needs `--owner`, parse the owner from each resolved source's
-GitHub remote. If a local repo has no GitHub remote, ask which GitHub account
-should host the tree; never guess from its directory name. Revalidate the same
-`resolvedSources` before Phase 2 so a later turn cannot silently switch inputs.
+When state A needs `--owner`, parse the owner or namespace from each resolved
+source's remote. If a local repo has no GitHub or GitLab remote, ask which
+forge account or namespace should host the tree; never guess from its directory
+name. Revalidate the same `resolvedSources` before Phase 2 so a later turn
+cannot silently switch inputs.
 
 **For declared sources, require every clone on disk.** Each source
 clone lives at `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>`
@@ -433,7 +438,7 @@ tier left a specific question unanswered.
 | Tier | Action                                                                                                                                                                                                                                                                                                            | Cost                  | Yields                                                                                  |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
 | 0    | Filesystem walk over every resolved source checkout (including declared bare-source read worktrees): **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
-| 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` (skip silently on **any** failure — 4xx, missing token, no network, no `gh` binary; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
+| 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` / `glab repo view` metadata where available (skip silently on **any** failure — 4xx, missing token, no network, no `gh` / `glab` binary; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
 | 2    | Surgical content read of a **specific** file that Tier 0+1 left ambiguous (e.g. `packages/foo/` exists, README is empty → read `packages/foo/src/index.ts` head 30 lines). Triggered per uncertainty, not as a blanket sweep.                                                                                       | 1–3 min per question, 0 if not needed | answer one structural question |
 
 **Tier 2 is targeted, not exhaustive.** If you cannot articulate the
@@ -594,8 +599,8 @@ Notes on defaults:
 - **Primary owner** = the most-active recent contributor across the
   resolved sources, computed from `git log --since='6 months ago'
   --format='%aN <%aE>' | sort | uniq -c | sort -rn | head -1`. Use
-  the GitHub handle when `gh repo view` resolves the email; fall
-  back to the `%aN` author name otherwise. Compute this **during
+  the forge handle when `gh repo view` or `glab repo view` resolves the email;
+  fall back to the `%aN` author name otherwise. Compute this **during
   Phase 1 exploration** and surface it in the confirmation checklist
   (see above) — the user's reply to that checklist is the owner
   confirmation; do not ask a second time unless the derivation was
@@ -733,7 +738,7 @@ siblings.
 
 **Merge multiple thin top-levels into one sub-agent** when each
 top-level has ≤ 2 source signals (counted as distinct Tier-1 meta
-hits — the files / `gh` fields that motivated the domain in Phase 1)
+hits — the files / forge fields that motivated the domain in Phase 1)
 AND ≤ 1 leaf expected **to be drafted by Phase 2 in this seed run**
 (not "ever"). Weigh the **commit-boundary cost** before merging: a
 merged pair lands as one commit spanning two domains, which blurs
@@ -976,9 +981,10 @@ These apply the generated Context Tree Policy to the seed-specific surface.
 ## What This Skill Does NOT Do
 
 - Run the Cloud one-click **server** bootstrap. When the team has no tree
-  (state A), seed creates and binds it with `first-tree tree init`
-  (the user's local `gh`), not the server `/initialize` path — the two
-  coexist. Seed does not write the workspace-root `workspace.json`; that
+  (state A), seed creates and binds it with `first-tree tree init` (the user's
+  local `gh`; current tree creation is GitHub-only), not the server
+  `/initialize` path — the two coexist. A GitLab source still uses `glab` for
+  source access. Seed does not write the workspace-root `workspace.json`; that
   stays a runtime concern.
 - Install GitHub automation beyond the bootstrap root `CODEOWNERS` mapping and
   default-branch ruleset applied after a newly created GitHub Context Repo

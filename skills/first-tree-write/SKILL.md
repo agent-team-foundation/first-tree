@@ -27,6 +27,8 @@ Writing is source-driven. Acceptable sources include:
 
 If no concrete source artifact exists, stop and ask for one. Do not invent
 ad-hoc tree edits from memory or from a broad request like "update the tree".
+When the source repo or issue lives on GitHub or GitLab, choose the matching
+forge CLI (`gh` or `glab`) and use PR/MR language accordingly.
 
 Implementation-only material usually produces no tree write. Refactors,
 function signatures, API shapes, request/response examples, build config,
@@ -58,7 +60,7 @@ relationship.
    cross-domain reader needs navigation.
 6. **Verify.** Run `first-tree tree verify --tree-path <tree>` before commit.
    Non-zero exit blocks the PR.
-7. **Prepare the PR.** One source artifact maps to one tree PR. Keep the PR
+7. **Prepare the PR/MR.** One source artifact maps to one tree PR/MR. Keep the PR/MR
    description focused on the source and the tree nodes changed; do not put PR
    IDs, source links, or audit trails into node bodies.
 
@@ -70,7 +72,7 @@ relationship.
   not the implementation.
 - **No history.** Nodes state what is true now and why. Past states live in
   `git log` and non-normal archive/supporting material, not normal nodes.
-- **No Source section.** Do not add `## Source`, `Shipped in #123`, inline PR
+- **No Source section.** Do not add `## Source`, `Shipped in #123`, inline PR/MR
   citations, or delivery-history prose to node bodies.
 - **No actionable future work in normal nodes.** Put follow-up work in an
   issue, source artifact, or human decision.
@@ -248,6 +250,6 @@ writing is small. Today only one command is operationally required:
 A simplified CLI surface (a structural `list`, a `verify`, and an
 `upgrade`) is the design target; until that lands, map the tree with
 standard tooling (`ls`, `Read`, `Grep`) and rely on `tree verify` as
-the write gate. Everything else (opening PRs, fetching code, reading
+the write gate. Everything else (opening PRs/MRs, fetching code, reading
 the workspace binding) goes through standard tools (`git`, `gh`,
-`Read`, etc.).
+`glab`, `Read`, etc.).
