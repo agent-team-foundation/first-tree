@@ -259,7 +259,7 @@ describe("tree init command action", () => {
     expect(summary).toMatchObject({ bound: true, branch: "main" });
   });
 
-  it("falls back to the legacy settings read when the server lacks the raw endpoint", async () => {
+  it("falls back to the legacy settings read for an explicit rebind when the server lacks the raw endpoint", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const base = makeTempDir();
     process.chdir(base);
@@ -277,14 +277,16 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
         return response("missing", { status: 404 });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
         return response("ok");
       }
       return response("not found", { status: 404 });
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Legacy Server" }), true));
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, org: "org_1", rebind: true, title: "Legacy Server" }), true),
+    );
 
     expect(process.exitCode).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -328,13 +330,18 @@ describe("tree init command action", () => {
 
     expect(process.exitCode).toBe(1);
     const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
-    expect(error).toContain("does not support conflict-safe tree init finalization");
-    expect(error).toContain("Read back /api/v1/orgs/org_1/settings/context_tree before retrying");
+    expect(error).toContain("does not support conflict-safe Context Tree initialization finalization");
+    expect(error).toContain("refusing before any GitHub repo is created");
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>
           String(input).endsWith("/api/v1/orgs/org_1/settings/context_tree") &&
           (init as RequestInit | undefined)?.method === "PUT",
+      ),
+    ).toBe(false);
+    expect(
+      treeSharedMocks.runCommand.mock.calls.some(
+        ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "repo" && args[1] === "create",
       ),
     ).toBe(false);
   });

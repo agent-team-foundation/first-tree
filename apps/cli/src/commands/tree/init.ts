@@ -276,9 +276,11 @@ function buildCoverage(lookup: InstallationLookup, repoFullName: string): Covera
   };
 }
 
-type ContextTreeBindingRead = { repo: string | null; branch: string; hasRepo: boolean };
+type ContextTreeBindingRead = { repo: string | null; branch: string; hasRepo: boolean; rawSupported: boolean };
 
-function parseContextTreeBindingRead(body: unknown): ContextTreeBindingRead {
+type ParsedContextTreeBindingRead = Omit<ContextTreeBindingRead, "rawSupported">;
+
+function parseContextTreeBindingRead(body: unknown): ParsedContextTreeBindingRead {
   if (!body || typeof body !== "object") {
     throw new Error("Context Tree binding response was not an object");
   }
@@ -303,7 +305,9 @@ function parseContextTreeBindingRead(body: unknown): ContextTreeBindingRead {
 
 // Read the raw `context_tree` repair view so `tree init` refuses to clobber
 // any configured row, including loose historical values that are not active
-// runtime bindings yet.
+// runtime bindings yet. A missing raw endpoint marks an old Server that cannot
+// offer conflict-safe tree-init finalization, so non-rebind callers fail before
+// creating a GitHub repository.
 async function readContextTreeBinding(
   serverUrl: string,
   accessToken: string,
@@ -313,20 +317,20 @@ async function readContextTreeBinding(
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
   });
-  const res =
-    raw.status === 404
-      ? await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          signal: AbortSignal.timeout(10_000),
-        })
-      : raw;
+  const rawSupported = raw.status !== 404;
+  const res = rawSupported
+    ? raw
+    : await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(10_000),
+      });
   if (!res.ok) {
     throw new Error(
       `Could not read the team's current Context Tree binding (server returned ${res.status}); refusing to proceed so an existing tree is not replaced. Retry, or pass --no-bind.`,
     );
   }
   try {
-    return parseContextTreeBindingRead(await res.json());
+    return { ...parseContextTreeBindingRead(await res.json()), rawSupported };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -454,6 +458,11 @@ async function runInitCommand(context: CommandContext): Promise<void> {
         const configuredRepo = existing.repo?.trim() ? existing.repo : "an invalid historical repo value";
         throw new Error(
           `This team is already bound to a Context Tree (${configuredRepo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
+        );
+      }
+      if (!options.rebind && !existing.rawSupported) {
+        throw new Error(
+          "This server does not support conflict-safe Context Tree initialization finalization; refusing before any GitHub repo is created. Upgrade the server, pass --rebind to intentionally replace through the legacy settings write, or pass --no-bind to only create a repo.",
         );
       }
       lookup = await fetchInstallation(serverUrl, accessToken, orgId);

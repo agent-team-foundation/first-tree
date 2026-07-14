@@ -889,7 +889,9 @@ to replace an existing team binding unless `--rebind` is passed. Non-rebind
 finalization is conflict-safe: if another writer binds the org after preflight
 but before the local GitHub side effects finish, the server preserves that
 competing binding and `tree init` reports the conflict rather than overwriting
-it. Key options: `--owner`, `--name`, `--title`, `--public`, `--dir`,
+it. A non-`--rebind` invocation requires a Server with the raw repair/finalize
+surface during preflight; older Servers fail before any GitHub repository is
+created. Key options: `--owner`, `--name`, `--title`, `--public`, `--dir`,
 `--with-workflow`, `--no-bind`, `--rebind`, `--org`. Run `first-tree tree init
 --help` for the full list.
 
