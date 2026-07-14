@@ -133,6 +133,16 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // invoking us, run inline" so we don't recursively call systemctl
         // from inside our own ExecStart.
         const wantInline = options.foreground === true || isSupervisorChild;
+        if (options.foreground === true && !isSupervisorChild && isServiceSupported()) {
+          const svc = getClientServiceStatus();
+          if (svc.migrationRequired === "root-systemd-user-to-system") {
+            writeLine(
+              `\n  Service migration is required before foreground start (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
+            );
+            writeLine(`  Complete the root systemd migration out-of-service with \`${binName} login <code>\`.\n\n`);
+            process.exit(1);
+          }
+        }
         if (!wantInline && isServiceSupported()) {
           const svc = getClientServiceStatus();
           if (svc.state === "active") {
