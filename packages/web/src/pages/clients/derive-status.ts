@@ -90,3 +90,39 @@ export function compareByPillPriority(a: HubClient, b: HubClient): number {
 
   return a.id.localeCompare(b.id);
 }
+
+/**
+ * A `failed` / `blocked` self-update leaves the machine stuck on an old
+ * version. The server exposes it (`lastUpdateAttempt`) precisely so the
+ * admin dashboard can flag it — it needs attention even while the client is
+ * otherwise connected with an OK runtime (so the 4-state pill reads `Ready`).
+ */
+export function hasUpdateProblem(client: HubClient): boolean {
+  const result = client.lastUpdateAttempt?.result;
+  return result === "failed" || result === "blocked";
+}
+
+/**
+ * Whether a computer belongs in the Team-list "Needs attention" group: any
+ * non-`ready` runtime pill (auth-expired / setup-incomplete / offline) OR a
+ * failed/blocked self-update on an otherwise-ready machine. This is the audit
+ * view's health predicate — broader than the pill alone so a stuck update is
+ * never hidden under `Ready`.
+ */
+export function teamNeedsAttention(client: HubClient): boolean {
+  return deriveComputerStatus(client).pill !== "ready" || hasUpdateProblem(client);
+}
+
+/**
+ * Split a team-computer list into the "Needs attention" and "Ready" groups,
+ * each pill-priority sorted (problems first; a Ready-but-update-stuck machine
+ * sorts after the true pill problems since its pill is still `ready`).
+ */
+export function partitionTeamComputers(clients: HubClient[]): { attention: HubClient[]; ready: HubClient[] } {
+  const attention: HubClient[] = [];
+  const ready: HubClient[] = [];
+  for (const client of [...clients].sort(compareByPillPriority)) {
+    (teamNeedsAttention(client) ? attention : ready).push(client);
+  }
+  return { attention, ready };
+}

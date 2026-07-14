@@ -56,6 +56,7 @@ function client(overrides: Partial<HubClient>): HubClient {
     connectedAt: overrides.connectedAt ?? isoMinutesAgo(30),
     lastSeenAt: overrides.lastSeenAt ?? isoMinutesAgo(0.2),
     capabilities: overrides.capabilities ?? {},
+    lastUpdateAttempt: overrides.lastUpdateAttempt,
   };
 }
 
@@ -246,6 +247,28 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     },
   });
 
+  // Connected + OK runtime (pill would read Ready) but stuck on an old version
+  // because its self-update keeps failing — surfaces under Needs attention.
+  const TEAM_UPDATE_STUCK = client({
+    id: "demo-team-update-stuck",
+    userId: "erin-user",
+    hostname: "erin-devbox",
+    os: "linux",
+    sdkVersion: "0.4.9-staging.988.1",
+    agentCount: 2,
+    capabilities: {
+      "claude-code": cap("ok", { sdkVersion: "0.2.100" }),
+    },
+    lastUpdateAttempt: {
+      result: "failed",
+      target: "0.5.3-staging.49.1",
+      currentBefore: "0.4.9-staging.988.1",
+      installedVersion: null,
+      reason: "npm ETIMEDOUT while fetching @first-tree/cli",
+      at: isoMinutesAgo(20),
+    },
+  });
+
   const agentNames: Record<string, string> = {
     "a-dev": "gandy-developer",
     "a-asst": "gandy-assistant",
@@ -418,19 +441,27 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     {
       key: "admin-grouped",
       group: "Cross-cutting",
-      title: "Admin grouped: 2 own + 4 team machines",
+      title: "Admin grouped: 2 own + 5 team machines",
       summary:
         "Admin view with 'Your computers' cards + the redesigned compact 'Team computers' list — one line per machine, health-grouped so problem machines sort to the top.",
       whatToCheck: [
         "'Your computers · 2' section as Section heading with hairline below",
-        "'Team computers · 4' second Section, collapsed by default — click Show",
+        "'Team computers · 5' second Section, collapsed by default — click Show",
         "Compact list: hostname (mono, the focus) over an 'owner · OS · version' meta line",
-        "'Needs attention · 2' group on top (amber header: Auth expired + Offline), then a neutral 'Ready · 2'",
+        "'Needs attention · 3' on top: Auth expired, Offline, then 'Update failed' (a Ready runtime whose self-update failed), then a neutral 'Ready · 2'",
         "Version drops the build suffix (0.5.2-staging.31.4 → 0.5.2); full string on hover",
-        "Long hostname truncates with an ellipsis; Offline row reads 'Offline · 3 days'",
+        "Long hostname truncates with an ellipsis; Offline row reads 'Offline · 3 days'; 'Update failed' shows its reason on hover",
         "Owner labels: 'gandy · you' on own cards, no '· you' on team rows",
       ],
-      clients: [READY_BOTH, OFFLINE_RECENT, TEAM_AUTH_EXPIRED, TEAM_OFFLINE, TEAM_MACHINE, TEAM_READY_LINUX],
+      clients: [
+        READY_BOTH,
+        OFFLINE_RECENT,
+        TEAM_AUTH_EXPIRED,
+        TEAM_OFFLINE,
+        TEAM_UPDATE_STUCK,
+        TEAM_MACHINE,
+        TEAM_READY_LINUX,
+      ],
       agents: [
         agent({ agentId: "a-dev", clientId: READY_BOTH.id, runtimeState: "idle" }),
         agent({ agentId: "a-asst", clientId: READY_BOTH.id, runtimeState: "idle" }),

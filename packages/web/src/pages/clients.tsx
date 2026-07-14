@@ -25,12 +25,13 @@ import {
 import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { Section } from "../components/ui/section.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
+import { StatusGlyph } from "../components/ui/status-glyph.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { ComputerCard } from "./clients/cards/computer-card.js";
 import { formatOfflineDuration } from "./clients/cards/view-models.js";
 import { ComputerStatusPill } from "./clients/computer-status-pill.js";
 import { DemoNavigator, useDemoScenarioParam } from "./clients/demo-navigator.js";
-import { compareByPillPriority, deriveComputerStatus } from "./clients/derive-status.js";
+import { compareByPillPriority, deriveComputerStatus, partitionTeamComputers } from "./clients/derive-status.js";
 import { DEMO_AGENT_NAMES, DEMO_SELF_USER_ID, findDemoScenario } from "./clients/dev-fixtures.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
@@ -625,16 +626,17 @@ function EmptyCardsNote({ message }: { message: string }) {
 /**
  * Team computers — the admin's read-only audit list. One compact line per
  * machine (hostname focus + `owner · OS · version` meta), grouped so
- * unhealthy machines ("Needs attention": auth-expired / setup-incomplete /
- * offline) bubble to the top; a fully-healthy fleet renders as a flat list
- * with no group chrome. Replaces the pre-PR-B DenseTable audit table.
+ * machines that need attention (auth-expired / setup-incomplete / offline, or
+ * a failed/blocked self-update) bubble to the top; a fully-healthy fleet
+ * renders as a flat list with no group chrome. Replaces the pre-PR-B
+ * DenseTable audit table.
  *
  * These rows are intentionally not expandable: the per-machine runtime /
  * agent detail is owner-only (the capability probe 403s on non-owners), so
  * there is nothing to reveal for a teammate's computer. The wrapping div
- * bleeds the rows past the Section's horizontal padding so a row's hover /
- * needs-attention tint spans the full width while the hostname still lines
- * up with the Section title.
+ * bleeds the rows past the Section's horizontal padding so a row's hover
+ * spans the full width while the hostname still lines up with the Section
+ * title.
  */
 function TeamComputersList({
   teamList,
@@ -643,9 +645,7 @@ function TeamComputersList({
   teamList: HubClient[];
   resolveOwner: (client: HubClient) => { text: string; title?: string };
 }) {
-  const sorted = useMemo(() => [...teamList].sort(compareByPillPriority), [teamList]);
-  const attention = sorted.filter((client) => deriveComputerStatus(client).pill !== "ready");
-  const ready = sorted.filter((client) => deriveComputerStatus(client).pill === "ready");
+  const { attention, ready } = useMemo(() => partitionTeamComputers(teamList), [teamList]);
   // Group headers earn their chrome only once something needs attention — a
   // healthy fleet is a plain flat list, no "Ready" header stating the obvious.
   const grouped = attention.length > 0;
@@ -697,24 +697,35 @@ function shortVersion(version: string): string {
   return dash === -1 ? version : version.slice(0, dash);
 }
 
+/**
+ * Row-status view for a stuck self-update, shown *in place of* the `Ready`
+ * pill when the machine is otherwise ready but its last update failed/blocked
+ * — so a stuck machine never reads as plain `Ready`. The reason (npm error,
+ * etc.) rides in the `title`. Returns null when there is no update problem.
+ */
+function updateProblemView(client: HubClient): { label: string; color: string; title?: string } | null {
+  const attempt = client.lastUpdateAttempt;
+  if (attempt?.result === "failed") {
+    return { label: "Update failed", color: "var(--state-error)", title: attempt.reason ?? undefined };
+  }
+  if (attempt?.result === "blocked") {
+    return { label: "Update blocked", color: "var(--state-blocked)", title: attempt.reason ?? undefined };
+  }
+  return null;
+}
+
 function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel: { text: string; title?: string } }) {
   const status = deriveComputerStatus(client);
   const version = client.sdkVersion;
+  // A stuck self-update only overrides the *Ready* pill — a real pill problem
+  // (offline / auth-expired) is the more urgent thing to show.
+  const updateProblem = status.pill === "ready" ? updateProblemView(client) : null;
   // "Last seen" is redundant with a live "Ready" pill — fold it into the
   // status only for offline machines, where "how long" is the actionable bit.
   const offlineFor = status.pill === "offline" ? formatOfflineDuration(client.lastSeenAt) : null;
   const agentCount = client.agentCount;
   return (
-    <div
-      className="team-computer-row"
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) var(--sp-20) var(--sp-45)",
-        alignItems: "center",
-        columnGap: "var(--sp-3)",
-        padding: "var(--sp-2_5) var(--sp-3_5)",
-      }}
-    >
+    <div className="team-computer-row">
       <div style={{ minWidth: 0 }}>
         <div
           className="mono text-subtitle"
@@ -746,12 +757,27 @@ function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel
         {agentCount} {agentCount === 1 ? "agent" : "agents"}
       </span>
       <span className="inline-flex items-center justify-end gap-1.5" style={{ whiteSpace: "nowrap" }}>
-        <ComputerStatusPill pill={status.pill} />
-        {offlineFor ? (
-          <span className="text-caption" style={{ color: "var(--fg-3)" }}>
-            · {offlineFor}
+        {updateProblem ? (
+          <span
+            role="status"
+            aria-label={`Computer status: ${updateProblem.label}`}
+            className="mono inline-flex items-center gap-1.5 text-caption"
+            style={{ color: updateProblem.color }}
+            title={updateProblem.title}
+          >
+            <StatusGlyph shape="dot" colorVar={updateProblem.color} size={7} />
+            {updateProblem.label}
           </span>
-        ) : null}
+        ) : (
+          <>
+            <ComputerStatusPill pill={status.pill} />
+            {offlineFor ? (
+              <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+                · {offlineFor}
+              </span>
+            ) : null}
+          </>
+        )}
       </span>
     </div>
   );

@@ -4,6 +4,7 @@ import type {
   ConnectTokenResponse,
   RuntimeAuthMethod,
   RuntimeProvider,
+  UpdateAttempt,
 } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
@@ -61,6 +62,15 @@ export type HubClient = {
    * (≥1 capability `state=ok`) from Setup incomplete (all `≠ ok`).
    */
   capabilities: ClientCapabilities;
+  /**
+   * Outcome of the client's last self-update attempt, persisted by the
+   * server into `clients.metadata.lastUpdateAttempt` and returned by
+   * `/me/clients` and `/orgs/:orgId/clients`. A `failed` / `blocked`
+   * result means the machine is stuck on an old version and needs admin
+   * attention even while it's otherwise connected — see
+   * `teamNeedsAttention` in `pages/clients/derive-status.ts`.
+   */
+  lastUpdateAttempt?: UpdateAttempt | null;
 };
 
 export function retireClient(clientId: string): Promise<void> {

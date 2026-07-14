@@ -113,6 +113,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
     binName: overrides.binName ?? "first-tree-dev",
     sdkVersion: overrides.sdkVersion ?? "0.5.0",
     ...(overrides.serverCommandVersion !== undefined ? { serverCommandVersion: overrides.serverCommandVersion } : {}),
+    ...(overrides.lastUpdateAttempt !== undefined ? { lastUpdateAttempt: overrides.lastUpdateAttempt } : {}),
     hostname: overrides.hostname ?? "gandy-macbook",
     os: overrides.os ?? "darwin",
     agentCount: overrides.agentCount ?? 1,
@@ -166,6 +167,23 @@ const TEAM = client({
   hostname: "alice-linux",
   os: "linux",
   agentCount: 1,
+});
+// Connected + OK runtime (pill = Ready) but its self-update failed — must
+// surface under "Needs attention" as "Update failed", never hidden as Ready.
+const TEAM_UPDATE_FAILED = client({
+  id: "client-team-stuck",
+  userId: "user-alice",
+  hostname: "erin-stuck",
+  os: "linux",
+  agentCount: 2,
+  lastUpdateAttempt: {
+    result: "failed",
+    target: "0.6.0",
+    currentBefore: "0.5.0",
+    installedVersion: null,
+    reason: "npm E404",
+    at: NOW,
+  },
 });
 
 const AGENTS: RuntimeAgent[] = [
@@ -318,7 +336,14 @@ function copyButtonForCommand(container: ParentNode, command: string): HTMLButto
 }
 
 function seedDefaultMocks(): void {
-  activityMocks.listOrgClients.mockResolvedValue([READY, AUTH_EXPIRED, SETUP_INCOMPLETE, OFFLINE, TEAM]);
+  activityMocks.listOrgClients.mockResolvedValue([
+    READY,
+    AUTH_EXPIRED,
+    SETUP_INCOMPLETE,
+    OFFLINE,
+    TEAM,
+    TEAM_UPDATE_FAILED,
+  ]);
   activityMocks.listClients.mockResolvedValue([READY, AUTH_EXPIRED, SETUP_INCOMPLETE, OFFLINE]);
   activityMocks.getActivityOverview.mockResolvedValue({
     clients: 5,
@@ -418,6 +443,10 @@ describe("ClientsPage computer cards", () => {
     await waitForText(container, "Team computers");
     await waitForText(container, "alice-linux");
     await waitForText(container, "Alice");
+    // A connected + Ready-runtime team machine whose self-update failed must
+    // surface under "Needs attention" as "Update failed", not hidden as Ready.
+    await waitForText(container, "Needs attention");
+    await waitForText(container, "Update failed");
     await click(exactButton(container, "Hide"));
 
     await click(container.querySelector('button[aria-label="Computer actions"]'));

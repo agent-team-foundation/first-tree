@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
-import { compareByPillPriority, deriveComputerStatus, PILL_PRIORITY } from "../derive-status.js";
+import {
+  compareByPillPriority,
+  deriveComputerStatus,
+  hasUpdateProblem,
+  PILL_PRIORITY,
+  partitionTeamComputers,
+  teamNeedsAttention,
+} from "../derive-status.js";
 
 /**
  * Pure-function unit tests for the 4-state Settings → Computers status
@@ -149,5 +156,84 @@ describe("compareByPillPriority", () => {
     const sorted = [b, a].sort(compareByPillPriority);
     expect(sorted[0]?.id).toBe("a");
     expect(sorted[1]?.id).toBe("b");
+  });
+});
+
+function updateAttempt(result: "ok" | "failed" | "blocked") {
+  return { result, target: "1.4.0", currentBefore: "1.3.2", installedVersion: null, reason: "npm E404", at: T };
+}
+
+describe("hasUpdateProblem", () => {
+  it("is false when there is no update attempt", () => {
+    expect(hasUpdateProblem(client({}))).toBe(false);
+  });
+
+  it("is false for a successful update", () => {
+    expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("ok") }))).toBe(false);
+  });
+
+  it("is true for a failed or blocked update", () => {
+    expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("failed") }))).toBe(true);
+    expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("blocked") }))).toBe(true);
+  });
+});
+
+describe("teamNeedsAttention", () => {
+  it("is false for a healthy Ready machine with no update problem", () => {
+    const c = client({ capabilities: { "claude-code": capability("ok") } });
+    expect(deriveComputerStatus(c).pill).toBe("ready");
+    expect(teamNeedsAttention(c)).toBe(false);
+  });
+
+  it("is true for any non-ready pill", () => {
+    expect(teamNeedsAttention(client({ status: "disconnected", authState: "ok" }))).toBe(true);
+    expect(teamNeedsAttention(client({ status: "disconnected", authState: "expired" }))).toBe(true);
+    expect(teamNeedsAttention(client({ capabilities: {} }))).toBe(true);
+  });
+
+  it("is true for a Ready machine whose self-update failed/blocked (never hidden under Ready)", () => {
+    const stuck = client({
+      capabilities: { "claude-code": capability("ok") },
+      lastUpdateAttempt: updateAttempt("failed"),
+    });
+    expect(deriveComputerStatus(stuck).pill).toBe("ready");
+    expect(teamNeedsAttention(stuck)).toBe(true);
+  });
+});
+
+describe("partitionTeamComputers", () => {
+  it("splits attention (non-ready OR update-stuck) from the ready fleet", () => {
+    const offline = client({ id: "offline", hostname: "z-off", status: "disconnected", authState: "ok" });
+    const readyClean = client({ id: "ready", hostname: "a-ready", capabilities: { "claude-code": capability("ok") } });
+    const updateStuck = client({
+      id: "stuck",
+      hostname: "m-stuck",
+      capabilities: { "claude-code": capability("ok") },
+      lastUpdateAttempt: updateAttempt("failed"),
+    });
+    const { attention, ready } = partitionTeamComputers([readyClean, updateStuck, offline]);
+    // offline (pill priority 2) sorts ahead of the update-stuck Ready machine (pill 3).
+    expect(attention.map((c) => c.id)).toEqual(["offline", "stuck"]);
+    expect(ready.map((c) => c.id)).toEqual(["ready"]);
+  });
+
+  it("orders the attention group by pill priority, with update-stuck Ready machines last", () => {
+    const authExpired = client({ id: "auth", status: "disconnected", authState: "expired" });
+    const offline = client({ id: "offline", status: "disconnected", authState: "ok" });
+    const updateStuck = client({
+      id: "stuck",
+      capabilities: { "claude-code": capability("ok") },
+      lastUpdateAttempt: updateAttempt("blocked"),
+    });
+    const { attention } = partitionTeamComputers([updateStuck, offline, authExpired]);
+    expect(attention.map((c) => c.id)).toEqual(["auth", "offline", "stuck"]);
+  });
+
+  it("returns an empty attention group for an all-healthy fleet", () => {
+    const a = client({ id: "a", hostname: "a", capabilities: { "claude-code": capability("ok") } });
+    const b = client({ id: "b", hostname: "b", capabilities: { "claude-code": capability("ok") } });
+    const { attention, ready } = partitionTeamComputers([a, b]);
+    expect(attention).toEqual([]);
+    expect(ready.map((c) => c.id)).toEqual(["a", "b"]);
   });
 });
