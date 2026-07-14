@@ -297,19 +297,21 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         : orgClientsQuery.isLoading || meClientsQuery.isLoading
       : meClientsQuery.isLoading;
 
-  // A discreet always-available "+ Connect" entry shows whenever the viewer
-  // already has at least one of their own computers. Hidden when they have 0
-  // (the empty-state CTA "Connect your first computer" covers that case, no
-  // need to double up).
+  // A discreet always-available "+ Add computer" entry shows whenever the
+  // viewer already has at least one of their own computers. Hidden when they
+  // have 0 (the empty-state CTA "Connect your first computer" covers that
+  // case, no need to double up). "Add computer" over a bare "Connect": once
+  // you already have machines, the button adds a *new* one — "Connect" alone
+  // reads like connecting to an existing computer.
   const viewerOwnCount = grouped ? mineList.length : (memberList?.length ?? 0);
   const showHeaderConnectButton = viewerOwnCount >= 1;
 
-  // "+ Connect" lives in the "Your computers" section header, not a page header:
-  // the Settings layout now owns the single page heading (see settings.tsx).
+  // Lives in the "Your computers" section header, not a page header: the
+  // Settings layout now owns the single page heading (see settings.tsx).
   const connectButton = showHeaderConnectButton ? (
     <Button variant="outline" size="sm" onClick={openNewConnection}>
       <Plus className="h-3.5 w-3.5" />
-      Connect
+      Add computer
     </Button>
   ) : undefined;
 

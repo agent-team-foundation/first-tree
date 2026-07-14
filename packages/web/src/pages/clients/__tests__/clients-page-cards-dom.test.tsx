@@ -483,7 +483,7 @@ describe("ClientsPage computer cards", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(STAGING_BOOTSTRAP_COMMAND);
     await click(exactButton(document.body, "Cancel"));
 
-    await click(exactButton(container, "Connect"));
+    await click(exactButton(container, "Add computer"));
     await waitForText(document.body, "Connect computer");
     await click(exactButton(document.body, "Cancel"));
 

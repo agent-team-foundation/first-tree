@@ -159,8 +159,8 @@ describe("compareByPillPriority", () => {
   });
 });
 
-function updateAttempt(result: "ok" | "failed" | "blocked") {
-  return { result, target: "1.4.0", currentBefore: "1.3.2", installedVersion: null, reason: "npm E404", at: T };
+function updateAttempt(result: "ok" | "failed" | "blocked", target = "1.4.0") {
+  return { result, target, currentBefore: "1.3.2", installedVersion: null, reason: "npm E404", at: T };
 }
 
 describe("hasUpdateProblem", () => {
@@ -172,9 +172,47 @@ describe("hasUpdateProblem", () => {
     expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("ok") }))).toBe(false);
   });
 
-  it("is true for a failed or blocked update", () => {
+  it("is true for a failed/blocked update while still behind the target", () => {
+    // Default sdkVersion is v1.3.2, target 1.4.0 → still behind → unresolved.
     expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("failed") }))).toBe(true);
     expect(hasUpdateProblem(client({ lastUpdateAttempt: updateAttempt("blocked") }))).toBe(true);
+  });
+
+  it("is false once the reported version reached/passed the failed target (stale record)", () => {
+    // Manual `first-tree upgrade` recovers without clearing the record: the
+    // client re-registers on the target version but keeps the old failure.
+    expect(
+      hasUpdateProblem(client({ sdkVersion: "1.4.0", lastUpdateAttempt: updateAttempt("blocked", "1.4.0") })),
+    ).toBe(false);
+    expect(hasUpdateProblem(client({ sdkVersion: "1.5.0", lastUpdateAttempt: updateAttempt("failed", "1.4.0") }))).toBe(
+      false,
+    );
+    // Channel build past the target core also counts as recovered.
+    expect(
+      hasUpdateProblem(
+        client({ sdkVersion: "1.4.0-staging.5.1", lastUpdateAttempt: updateAttempt("blocked", "1.4.0") }),
+      ),
+    ).toBe(false);
+  });
+
+  it("stays true for an older channel build of the same core (still behind by build)", () => {
+    expect(
+      hasUpdateProblem(
+        client({
+          sdkVersion: "1.4.0-staging.20.1",
+          lastUpdateAttempt: updateAttempt("failed", "1.4.0-staging.49.1"),
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails safe (stays true) when the reported version is unparseable/missing", () => {
+    expect(hasUpdateProblem(client({ sdkVersion: null, lastUpdateAttempt: updateAttempt("blocked", "1.4.0") }))).toBe(
+      true,
+    );
+    expect(hasUpdateProblem(client({ sdkVersion: "dev", lastUpdateAttempt: updateAttempt("failed", "1.4.0") }))).toBe(
+      true,
+    );
   });
 });
 

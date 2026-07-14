@@ -92,14 +92,51 @@ export function compareByPillPriority(a: HubClient, b: HubClient): number {
 }
 
 /**
+ * Ordered numeric components of a version string — every integer run, in
+ * order: "0.5.3-staging.49.1" → [0, 5, 3, 49, 1]. Lets us compare both plain
+ * semver ("0.6.0") and channel builds without a semver dependency. Returns
+ * null when there's no parseable number (so callers can fail safe).
+ */
+function versionParts(version: string | null | undefined): number[] | null {
+  if (!version) return null;
+  const runs = version.match(/\d+/g);
+  return runs ? runs.map((n) => Number.parseInt(n, 10)) : null;
+}
+
+/**
+ * Is `current` strictly behind `target`? Conservative on unparseable input:
+ * when we can't compare, we return `true` so a recorded failure is surfaced
+ * rather than silently hidden.
+ */
+function isVersionBehind(current: string | null | undefined, target: string): boolean {
+  const c = versionParts(current);
+  const t = versionParts(target);
+  if (!c || !t) return true;
+  const len = Math.max(c.length, t.length);
+  for (let i = 0; i < len; i++) {
+    const cv = c[i] ?? 0;
+    const tv = t[i] ?? 0;
+    if (cv !== tv) return cv < tv;
+  }
+  return false;
+}
+
+/**
  * A `failed` / `blocked` self-update leaves the machine stuck on an old
- * version. The server exposes it (`lastUpdateAttempt`) precisely so the
- * admin dashboard can flag it — it needs attention even while the client is
+ * version. The server exposes it (`lastUpdateAttempt`) precisely so the admin
+ * dashboard can flag it — it needs attention even while the client is
  * otherwise connected with an OK runtime (so the 4-state pill reads `Ready`).
+ *
+ * The record is the *last* attempt, not a live "still stuck" flag, and the
+ * manual recovery paths (`first-tree upgrade` / manual reinstall) don't write
+ * an `ok` attempt or clear it. So a machine that has since reached the target
+ * carries a stale failure — we treat it as a problem only while the reported
+ * `sdkVersion` is still behind the attempt's `target`.
  */
 export function hasUpdateProblem(client: HubClient): boolean {
-  const result = client.lastUpdateAttempt?.result;
-  return result === "failed" || result === "blocked";
+  const attempt = client.lastUpdateAttempt;
+  if (attempt?.result !== "failed" && attempt?.result !== "blocked") return false;
+  return isVersionBehind(client.sdkVersion, attempt.target);
 }
 
 /**
