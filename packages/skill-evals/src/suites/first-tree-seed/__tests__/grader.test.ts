@@ -505,6 +505,67 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not treat sub-agent drafts landing as the seed PR handoff", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-drafts-land-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will open one seed PR with the structure. Once the sub-agent drafts land, I will add the initial leaves to that same PR before you merge it.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.singlePrBuildObserved).toBe(true);
+      expect(metrics.legacyHandoffObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("treats an explicit pull-request landing before leaves as the retired handoff", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-explicit-pr-lands-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will open a pull request with the structure. Once that pull request lands, I will add the leaves.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.legacyHandoffObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("legacy_two_pr_handoff");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("rejects a structure-first PR whose merge gates leaf drafting", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-structure-first-"));
     try {

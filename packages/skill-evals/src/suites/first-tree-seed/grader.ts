@@ -1164,7 +1164,10 @@ function legacyHandoffObserved(text: string): boolean {
     if (!structurePrObserved) return false;
 
     const handoffContext = clauses.slice(index, index + 4).join(". ");
-    const handoffMatch = /\b(?:merge\w*|land(?:s|ed|ing)?)\b/iu.exec(handoffContext);
+    const handoffMatch =
+      /\b(?:merge\w*|(?:it|(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request))\s+land(?:s|ed|ing)?)\b/iu.exec(
+        handoffContext,
+      );
     if (!handoffMatch) return false;
     const beforeHandoff = handoffContext.slice(0, handoffMatch.index);
     const samePrIncludesLeaves =
