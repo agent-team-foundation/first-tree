@@ -10,22 +10,12 @@ import type {
   ViewEvent,
 } from "./types.js";
 
-function skillRead(event: unknown): boolean {
-  return (
-    isRecord(event) &&
-    event.type === "codex_event" &&
-    JSON.stringify(event.event).includes("context-tree-review/SKILL.md") &&
-    /tool|exec|command|read|cat|sed/iu.test(JSON.stringify(event.event))
-  );
+function skillRead(event: unknown, expectation: ReviewFixtureExpectation): boolean {
+  return observedReadPaths(event, expectation, true).includes(".agents/skills/context-tree-review/SKILL.md");
 }
 
-function firstTreeReadSkillRead(event: unknown): boolean {
-  return (
-    isRecord(event) &&
-    event.type === "codex_event" &&
-    JSON.stringify(event.event).includes("first-tree-read/SKILL.md") &&
-    /tool|exec|command|read|cat|sed/iu.test(JSON.stringify(event.event))
-  );
+function firstTreeReadSkillRead(event: unknown, expectation: ReviewFixtureExpectation): boolean {
+  return observedReadPaths(event, expectation).includes(".agents/skills/first-tree-read/SKILL.md");
 }
 
 function commandFromCodexEvent(event: unknown): string | null {
@@ -43,7 +33,7 @@ function eventOrder(event: unknown, fallbackIndex: number): number {
   return fallbackIndex;
 }
 
-function shellSegments(command: string): string[] {
+function shellStructure(command: string): { operators: string[]; segments: string[] } {
   let source = command.trim().replace(/^\/?(?:usr\/)?bin\/(?:ba)?sh\s+-lc\s+/u, "");
   const outerQuote = source[0];
   if ((outerQuote === '"' || outerQuote === "'") && source.at(-1) === outerQuote) {
@@ -52,6 +42,7 @@ function shellSegments(command: string): string[] {
   }
 
   const segments: string[] = [];
+  const operators: string[] = [];
   let current = "";
   let quote: '"' | "'" | "`" | null = null;
   let escaped = false;
@@ -88,18 +79,28 @@ function shellSegments(command: string): string[] {
     }
     if (character === "\n" || character === ";" || character === "|") {
       finish();
-      if (character === "|" && source[index + 1] === "|") index += 1;
+      if (character === "|" && source[index + 1] === "|") {
+        operators.push("||");
+        index += 1;
+      } else {
+        operators.push(character);
+      }
       continue;
     }
     if (character === "&" && source[index + 1] === "&") {
       finish();
+      operators.push("&&");
       index += 1;
       continue;
     }
     current += character;
   }
   finish();
-  return segments;
+  return { operators, segments };
+}
+
+function shellSegments(command: string): string[] {
+  return shellStructure(command).segments;
 }
 
 function shellWords(segment: string): string[] {
@@ -144,6 +145,11 @@ function gitInvocation(segment: string): { args: string[]; command: string } | n
   if (words[index] === "-C") index += 2;
   const command = words[index];
   return command ? { args: words.slice(index + 1), command } : null;
+}
+
+function gitWorkingDirectory(segment: string): string | null {
+  const words = shellWords(segment);
+  return words[0] === "git" && words[1] === "-C" && typeof words[2] === "string" ? words[2] : null;
 }
 
 function hasUnquotedRedirection(segment: string): boolean {
@@ -399,6 +405,171 @@ function readerFileOperands(segment: string): string[] | null {
   return null;
 }
 
+function normalizeObservedPath(path: string, expectation: ReviewFixtureExpectation): string {
+  const normalized = path.replaceAll("\\", "/").replace(/^\.\//u, "");
+  const reviewRelative = `.review-worktrees/${expectation.prNumber}/`;
+  const reviewAbsolute = `${resolve(expectation.workspacePath, ".review-worktrees", String(expectation.prNumber)).replaceAll("\\", "/")}/`;
+  const workspaceAbsolute = `${resolve(expectation.workspacePath).replaceAll("\\", "/")}/`;
+  if (normalized.startsWith(reviewAbsolute)) return normalized.slice(reviewAbsolute.length);
+  if (normalized.startsWith(reviewRelative)) return normalized.slice(reviewRelative.length);
+  if (normalized.startsWith(`../${reviewRelative}`)) return normalized.slice(reviewRelative.length + 3);
+  if (normalized.startsWith(workspaceAbsolute)) return normalized.slice(workspaceAbsolute.length);
+  return normalized;
+}
+
+function gitDiffContentPaths(segment: string): string[] {
+  const invocation = gitInvocation(segment);
+  if (invocation?.command !== "diff") return [];
+  const separator = invocation.args.indexOf("--");
+  if (separator < 0) return [];
+  const metadataOnlyOptions = new Set([
+    "--name-only",
+    "--name-status",
+    "--numstat",
+    "--shortstat",
+    "--stat",
+    "--summary",
+    "--raw",
+    "--quiet",
+  ]);
+  if (invocation.args.slice(0, separator).some((arg) => metadataOnlyOptions.has(arg))) return [];
+  return invocation.args.slice(separator + 1);
+}
+
+function gitShowContentPaths(segment: string): string[] {
+  const invocation = gitInvocation(segment);
+  if (invocation?.command !== "show") return [];
+  return invocation.args.flatMap((arg) => {
+    const separator = arg.indexOf(":");
+    if (separator <= 0 || separator === arg.length - 1) return [];
+    return [arg.slice(separator + 1)];
+  });
+}
+
+function gitSemanticReadAttempted(event: unknown): boolean {
+  const command = commandFromCodexEvent(event);
+  if (!command) return false;
+  return shellSegments(command).some((segment) => {
+    const commandName = gitInvocation(segment)?.command;
+    return commandName !== undefined && ["blame", "cat-file", "grep", "log", "show"].includes(commandName);
+  });
+}
+
+function isReviewWorktreeOperand(path: string, expectation: ReviewFixtureExpectation): boolean {
+  const normalized = path.replaceAll("\\", "/").replace(/\/$/u, "");
+  const relative = `.review-worktrees/${expectation.prNumber}`;
+  const absolute = resolve(expectation.workspacePath, relative).replaceAll("\\", "/");
+  return (
+    normalized === relative ||
+    normalized === `../${relative}` ||
+    normalized === `$PWD/${relative}` ||
+    normalized === absolute
+  );
+}
+
+function pathUsesReviewWorktree(path: string, expectation: ReviewFixtureExpectation): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  const relative = `.review-worktrees/${expectation.prNumber}/`;
+  const absolute = `${resolve(expectation.workspacePath, relative).replaceAll("\\", "/").replace(/\/$/u, "")}/`;
+  return normalized.startsWith(relative) || normalized.startsWith(`../${relative}`) || normalized.startsWith(absolute);
+}
+
+function observedReadPaths(
+  event: unknown,
+  expectation: ReviewFixtureExpectation,
+  requireSuccessfulCommand = false,
+): string[] {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return [];
+  const item = event.event.item;
+  if (!isRecord(item)) return [];
+  if (item.type === "file_read" || item.type === "read_file") {
+    const path = typeof item.path === "string" ? item.path : typeof item.file_path === "string" ? item.file_path : null;
+    return path ? [normalizeObservedPath(path, expectation)] : [];
+  }
+  const command = commandFromCodexEvent(event);
+  if (!command) return [];
+  if (requireSuccessfulCommand && (item.status !== "completed" || item.exit_code !== 0)) return [];
+  const structure = shellStructure(command);
+  if (requireSuccessfulCommand && structure.operators.length > 0) return [];
+  const paths: string[] = [];
+  for (const segment of structure.segments) {
+    const files = readerFileOperands(segment);
+    if (files) paths.push(...files);
+    paths.push(...gitDiffContentPaths(segment));
+  }
+  return paths.map((path) => normalizeObservedPath(path, expectation));
+}
+
+function snapshotReadPaths(
+  event: unknown,
+  expectation: ReviewFixtureExpectation,
+  requireSuccessfulCommand = false,
+): string[] {
+  if (!isRecord(event) || event.type !== "codex_event" || !isRecord(event.event)) return [];
+  const item = event.event.item;
+  if (!isRecord(item)) return [];
+  if (item.type === "file_read" || item.type === "read_file") {
+    const path = typeof item.path === "string" ? item.path : typeof item.file_path === "string" ? item.file_path : null;
+    return path && pathUsesReviewWorktree(path, expectation) ? [normalizeObservedPath(path, expectation)] : [];
+  }
+  const command = commandFromCodexEvent(event);
+  if (!command) return [];
+  if (requireSuccessfulCommand && (item.status !== "completed" || item.exit_code !== 0)) return [];
+
+  const paths: string[] = [];
+  const structure = shellStructure(command);
+  let cwdIsReviewWorktree = false;
+  let segments = structure.segments;
+  if (requireSuccessfulCommand) {
+    if (structure.operators.length === 0 && segments.length === 1) {
+      // A single completed command is directly attributable to its reader.
+    } else if (structure.operators.length === 1 && structure.operators[0] === "&&" && segments.length === 2) {
+      const cdWords = shellWords(segments[0] ?? "");
+      if (cdWords[0] !== "cd" || !isReviewWorktreeOperand(cdWords[1] ?? "", expectation)) return [];
+      cwdIsReviewWorktree = true;
+      segments = segments.slice(1);
+    } else {
+      return [];
+    }
+  }
+  for (const segment of segments) {
+    const words = shellWords(segment);
+    if (words[0] === "cd") {
+      cwdIsReviewWorktree = isReviewWorktreeOperand(words[1] ?? "", expectation);
+      continue;
+    }
+    const gitCwd = gitWorkingDirectory(segment);
+    const gitUsesReviewWorktree = gitCwd !== null && isReviewWorktreeOperand(gitCwd, expectation);
+    const files = readerFileOperands(segment) ?? [];
+    for (const path of files) {
+      if (cwdIsReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
+    }
+    for (const path of [...gitDiffContentPaths(segment), ...gitShowContentPaths(segment)]) {
+      if (cwdIsReviewWorktree || gitUsesReviewWorktree || pathUsesReviewWorktree(path, expectation)) paths.push(path);
+    }
+  }
+  return paths.map((path) => normalizeObservedPath(path, expectation));
+}
+
+function treeContentReadPaths(event: unknown, expectation: ReviewFixtureExpectation): string[] {
+  const paths = observedReadPaths(event, expectation);
+  const command = commandFromCodexEvent(event);
+  if (command) {
+    for (const segment of shellSegments(command)) paths.push(...gitShowContentPaths(segment));
+  }
+  return paths
+    .map((path) => normalizeObservedPath(path, expectation))
+    .filter((path) => {
+      if (path.startsWith("/") || !/\.md$/iu.test(path)) return false;
+      return ![
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".agents/skills/context-tree-review/SKILL.md",
+        ".agents/skills/first-tree-read/SKILL.md",
+      ].includes(path);
+    });
+}
+
 function allowedPreVerifySegment(segment: string, expectation: ReviewFixtureExpectation): boolean {
   if (/^(?:fi|done)$/u.test(segment)) return true;
   if (!substitutionsAllowed(segment)) return false;
@@ -544,15 +715,27 @@ export function deriveMetrics(
   let firstReviewIndex = -1;
   let firstSemanticReadIndex = -1;
   let firstSemanticReadOrder = -1;
+  const governedReadOrders = new Map<string, number>();
+  const treeContentReadOrders: number[] = [];
+  const gitSemanticReadOrders: number[] = [];
 
   events.forEach((event, index) => {
-    if (skillRead(event)) skillFileReadObserved = true;
-    if (firstTreeReadSkillRead(event)) firstTreeReadLoaded = true;
+    if (skillRead(event, expectation)) skillFileReadObserved = true;
+    if (firstTreeReadSkillRead(event, expectation)) firstTreeReadLoaded = true;
     if (mainTreeReadAttempted(event)) mainTreeReadObserved = true;
     if (mutationAttempted(event, expectation)) mutationObserved = true;
+    const order = eventOrder(event, index);
+    const observedPaths = snapshotReadPaths(event, expectation, true);
+    for (const governedPath of expectation.governedPaths) {
+      if (observedPaths.includes(governedPath) && !governedReadOrders.has(governedPath)) {
+        governedReadOrders.set(governedPath, order);
+      }
+    }
+    if (treeContentReadPaths(event, expectation).length > 0) treeContentReadOrders.push(order);
+    if (gitSemanticReadAttempted(event)) gitSemanticReadOrders.push(order);
     if (semanticReadAttempted(event, expectation) && firstSemanticReadIndex < 0) {
       firstSemanticReadIndex = index;
-      firstSemanticReadOrder = eventOrder(event, index);
+      firstSemanticReadOrder = order;
     }
     if (!isRecord(event)) return;
     if (event.type === "gh_result" && (event.blockedByEval === true || event.reviewFixtureViolation === true)) {
@@ -641,7 +824,13 @@ export function deriveMetrics(
     finalView.state === expectation.expectedFinalState &&
     finalView.isDraft === expectation.expectedFinalDraft &&
     finalView.eventIndex > firstVerifyIndex;
-  const semanticReadAfterVerify = firstSemanticReadOrder > firstVerifyOrder;
+  const semanticReadAfterVerify =
+    expectation.governedPaths.length > 0 &&
+    expectation.governedPaths.every((path) => (governedReadOrders.get(path) ?? -1) > firstVerifyOrder);
+  const semanticReadAfterFailedVerify =
+    verifyExitCodes[0] !== undefined &&
+    verifyExitCodes[0] !== 0 &&
+    [...treeContentReadOrders, ...gitSemanticReadOrders].some((order) => order > firstVerifyOrder);
   const semanticReadBeforeVerify = firstSemanticReadOrder >= 0 && firstSemanticReadOrder < firstVerifyOrder;
   const submissionRaceContained =
     review !== undefined &&
@@ -673,6 +862,7 @@ export function deriveMetrics(
     runnerExitCode,
     skillFileReadObserved,
     semanticReadAfterVerify,
+    semanticReadAfterFailedVerify,
     semanticReadBeforeVerify,
     submissionRaceContained,
     targetMatches,
@@ -709,6 +899,7 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     metrics.verifyFirst &&
     metrics.verifyHeadBound &&
     !metrics.semanticReadBeforeVerify &&
+    !metrics.semanticReadAfterFailedVerify &&
     (!evalCase.expected.verifyMustPass ||
       evalCase.fixture.scenario === "archive-only" ||
       evalCase.fixture.scenario === "stale-head" ||

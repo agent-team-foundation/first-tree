@@ -18,7 +18,7 @@ export function buildGrading(
       ),
       evidence(
         "process_pass",
-        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; final fresh=${metrics.finalViewFresh}; review after final=${metrics.reviewAfterFinalView}`,
+        `views=${metrics.viewEvents.length}; identity=${metrics.identityReadObserved}; verify bound=${metrics.verifyHeadBound}; governed reads after verify=${metrics.semanticReadAfterVerify}; semantic read after failed verify=${metrics.semanticReadAfterFailedVerify}; final fresh=${metrics.finalViewFresh}; review after final=${metrics.reviewAfterFinalView}`,
       ),
       evidence(
         "outcome_pass",
@@ -42,6 +42,12 @@ export function buildGrading(
         metrics.identityReadObserved &&
         metrics.verifyFirst &&
         metrics.verifyHeadBound &&
+        !metrics.semanticReadBeforeVerify &&
+        !metrics.semanticReadAfterFailedVerify &&
+        (!evalCase.expected.verifyMustPass ||
+          evalCase.fixture.scenario === "archive-only" ||
+          evalCase.fixture.scenario === "stale-head" ||
+          metrics.semanticReadAfterVerify) &&
         metrics.finalViewFresh &&
         metrics.reviewAfterFinalView,
       outcome_pass:

@@ -9,6 +9,7 @@ const expectation: ReviewFixtureExpectation = {
   expectedFinalDraft: false,
   expectedFinalHeadOid: "head",
   expectedFinalState: "OPEN",
+  governedPaths: ["system/review-contract.md"],
   headOid: "head",
   prNumber: 42,
   repo: "owner/context-tree",
@@ -35,7 +36,14 @@ function passingCase(): ContextTreeReviewEvalCase {
 function passingEvents(): unknown[] {
   return [
     {
-      event: { item: { command: "cat .agents/skills/context-tree-review/SKILL.md", type: "command_execution" } },
+      event: {
+        item: {
+          command: "cat .agents/skills/context-tree-review/SKILL.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
       type: "codex_event",
     },
     {
@@ -58,6 +66,8 @@ function passingEvents(): unknown[] {
       event: {
         item: {
           command: "sed -n '1,200p' .review-worktrees/42/system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
           type: "command_execution",
         },
       },
@@ -92,6 +102,205 @@ function passes(events: unknown[], fixtureIntegrity = integrity): boolean {
 describe("context-tree-review grader", () => {
   it("accepts the complete head-bound review sequence", () => {
     expect(passes(passingEvents())).toBe(true);
+  });
+
+  it("requires an exact skill read from tool input rather than command output", () => {
+    const events = passingEvents();
+    events[0] = {
+      event: {
+        item: {
+          command: "cat AGENTS.md",
+          output: "Load .agents/skills/context-tree-review/SKILL.md before review.",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("does not accept a skill read from a shell branch that never executes", () => {
+    const events = passingEvents();
+    events[0] = {
+      event: {
+        item: {
+          command: "false && cat .agents/skills/context-tree-review/SKILL.md || true",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("requires reads of every changed governed file after validation", () => {
+    const evalCase = passingCase();
+    const events = passingEvents();
+    const incomplete = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, governedPaths: ["system/review-contract.md", "system/second-contract.md"] },
+      integrity,
+      0,
+    );
+    expect(incomplete.semanticReadAfterVerify).toBe(false);
+    expect(casePassed(evalCase, incomplete)).toBe(false);
+
+    events.splice(5, 0, {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/system/second-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    });
+    const complete = deriveMetrics(
+      events,
+      evalCase,
+      { ...expectation, governedPaths: ["system/review-contract.md", "system/second-contract.md"] },
+      integrity,
+      0,
+    );
+    expect(complete.semanticReadAfterVerify).toBe(true);
+    expect(casePassed(evalCase, complete)).toBe(true);
+  });
+
+  it("does not accept an arbitrary post-validation command as semantic review evidence", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: { item: { command: "ls .review-worktrees/42", type: "command_execution" } },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("does not accept a bare workspace-relative governed path as detached review evidence", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command: "cat system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("does not accept a failed detached governed-file command as read evidence", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command: "cat .review-worktrees/42/system/review-contract.md",
+          exit_code: 1,
+          status: "failed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("accepts a governed read after an explicit change to the detached worktree", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command: "cd .review-worktrees/42 && cat system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(true);
+  });
+
+  it("does not accept a governed read from a shell branch that never executes", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command: "cd .review-worktrees/42 && false && cat system/review-contract.md || true",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("does not accept a changed-path-only diff as semantic review evidence", () => {
+    const events = passingEvents();
+    events[4] = {
+      event: {
+        item: {
+          command: "git diff --name-only base...head -- system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects semantic tree reads after a failed validator", () => {
+    const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "validator-failure");
+    if (!evalCase) throw new Error("Missing validator-failure case.");
+    const events = passingEvents();
+    Object.assign(events[3] as object, { exitCode: 1 });
+    Object.assign(events.at(-1) as object, {
+      action: "request-changes",
+      body: "## Changes requested\n\n[TREE_OWNERS_INVALID] system/review-contract.md",
+    });
+    const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
+    expect(metrics.semanticReadAfterFailedVerify).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+
+    events.splice(4, 1);
+    const shortCircuited = deriveMetrics(events, evalCase, expectation, integrity, 0);
+    expect(shortCircuited.semanticReadAfterFailedVerify).toBe(false);
+    expect(casePassed(evalCase, shortCircuited)).toBe(true);
+  });
+
+  it("rejects a detached Git object read after a failed validator", () => {
+    const evalCase = CONTEXT_TREE_REVIEW_GATE_CASES.find((item) => item.fixture.scenario === "validator-failure");
+    if (!evalCase) throw new Error("Missing validator-failure case.");
+    const events = passingEvents();
+    Object.assign(events[3] as object, { exitCode: 1 });
+    events[4] = {
+      event: {
+        item: {
+          command: "git -C .review-worktrees/42 show HEAD:system/review-contract.md",
+          exit_code: 0,
+          status: "completed",
+          type: "command_execution",
+        },
+      },
+      type: "codex_event",
+    };
+    Object.assign(events.at(-1) as object, {
+      action: "request-changes",
+      body: "## Changes requested\n\n[TREE_OWNERS_INVALID] system/review-contract.md",
+    });
+    const metrics = deriveMetrics(events, evalCase, expectation, integrity, 0);
+    expect(metrics.semanticReadAfterFailedVerify).toBe(true);
+    expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
   it("allows detached snapshot setup and changed-path inspection before validation", () => {

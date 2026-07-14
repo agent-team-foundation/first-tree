@@ -53,6 +53,7 @@ export type ReviewFixtureExpectation = {
   expectedFinalDraft: boolean;
   expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
+  governedPaths: readonly string[];
   headOid: string;
   prNumber: number;
   repo: string;
@@ -98,6 +99,7 @@ export type EvalMetrics = {
   runnerExitCode: number | null;
   skillFileReadObserved: boolean;
   semanticReadAfterVerify: boolean;
+  semanticReadAfterFailedVerify: boolean;
   semanticReadBeforeVerify: boolean;
   submissionRaceContained: boolean;
   targetMatches: boolean;

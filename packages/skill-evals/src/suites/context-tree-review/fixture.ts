@@ -176,6 +176,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       expectedFinalDraft: view.isDraft,
       expectedFinalHeadOid: secondView.headRefOid,
       expectedFinalState: "OPEN",
+      governedPaths: evalCase.fixture.scenario === "archive-only" ? [] : [changed.path],
       headOid,
       prNumber,
       repo,

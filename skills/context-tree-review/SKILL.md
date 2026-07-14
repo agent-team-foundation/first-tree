@@ -91,6 +91,11 @@ parsed, submit no content verdict and report the execution failure.
 When validation passes, read the complete changed normal/member files and the
 minimum surrounding context needed to apply the generated policy:
 
+Keep every semantic file read visibly bound to the registered detached
+snapshot: use its explicit absolute or workspace-relative worktree path, or
+change to that worktree in the same shell invocation. Do not rely on an
+unrecorded tool working directory or read a same-named path from the main tree.
+
 - each changed file's parent `NODE.md`;
 - relevant changed or newly introduced `soft_links` targets;
 - siblings needed to judge replacement or canonical placement;
