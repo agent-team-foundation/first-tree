@@ -53,7 +53,11 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
     return !metrics.skeletonObserved;
   }
   if (evalCase.expected.action === "create_tree_via_init") {
-    return metrics.treeInitWithContextTreeDirObserved;
+    return (
+      metrics.treeInitWithContextTreeDirObserved &&
+      (!evalCase.expected.requireGithubGovernanceBootstrap || metrics.githubGovernanceBootstrapObserved) &&
+      (!evalCase.expected.requireGithubGovernanceRecovery || metrics.githubGovernanceRecoveryObserved)
+    );
   }
   if (evalCase.expected.action === "continue_phase2") {
     return metrics.phase2ContinuationObserved && !metrics.phase2RefusalObserved;
@@ -99,7 +103,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}; github governance bootstrap observed=${metrics.githubGovernanceBootstrapObserved}; github governance recovery observed=${metrics.githubGovernanceRecoveryObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}; require github governance bootstrap=${Boolean(evalCase.expected.requireGithubGovernanceBootstrap)}; github governance bootstrap observed=${metrics.githubGovernanceBootstrapObserved}; require github governance recovery=${Boolean(evalCase.expected.requireGithubGovernanceRecovery)}; github governance recovery observed=${metrics.githubGovernanceRecoveryObserved}`,
       ),
       evidence(
         "risk_pass",

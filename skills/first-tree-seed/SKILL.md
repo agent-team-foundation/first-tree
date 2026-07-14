@@ -173,8 +173,18 @@ remote=$(git -C "<tree>" remote get-url origin)
 repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)
 default_branch=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
 repo_owner=${repo%%/*}
+repo_owner_type=$(gh api "repos/$repo" --jq .owner.type)
 pr_author_login=$(gh api user --jq .login)
-team_slug=$(gh api "repos/$repo/teams?per_page=100" --jq '[.[] | select(.permission == "admin" or .permission == "maintain" or .permission == "push")][0].slug // empty')
+team_slug=""
+if [ "$repo_owner_type" = "Organization" ]; then
+  for candidate_team_slug in $(gh api "repos/$repo/teams?per_page=100" --jq '.[] | select((.permission == "admin" or .permission == "maintain" or .permission == "push") and (.privacy != "secret")) | .slug'); do
+    non_author_member=$(gh api "orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100" --jq --arg author "$pr_author_login" '[.[] | select(.login != $author)][0].login // empty')
+    if [ -n "$non_author_member" ]; then
+      team_slug="$candidate_team_slug"
+      break
+    fi
+  done
+fi
 if [ -n "$team_slug" ]; then
   code_owner_ref="@$repo_owner/$team_slug"
 else
@@ -187,13 +197,21 @@ printf '* %s\n' "$code_owner_ref" > "<tree>/.github/CODEOWNERS"
 git -C "<tree>" add .github/CODEOWNERS
 git -C "<tree>" commit -m "chore: add context tree code owner mapping"
 git -C "<tree>" push origin "HEAD:$default_branch"
+remote_codeowners=$(gh api "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch" --jq .content | base64 --decode)
+expected_codeowners=$(printf '* %s\n' "$code_owner_ref")
+test "$remote_codeowners" = "$expected_codeowners"
+test "$(gh api "repos/$repo/codeowners/errors?ref=$default_branch" --jq '.errors | length')" = "0"
 ```
 
 The bootstrap mapping intentionally covers every path (`*`) so GitHub's Code
-Owner review requirement applies to all Context Tree PRs. If no satisfiable Code
-Owner can be resolved, automatic GitHub governance setup fails: do not create a
-self-owned `CODEOWNERS`, do not enable `require_code_owner_review`, and tell the
-user to add a root `CODEOWNERS` entry for a non-author user or org team with
+Owner review requirement applies to all Context Tree PRs. Personal repositories
+skip the teams lookup and use the non-author direct-collaborator fallback. Org
+repositories may use a team only when the team is not secret and has at least one
+member other than the PR author. If no satisfiable Code Owner can be resolved, or
+if the pushed `CODEOWNERS` file fails GitHub's CODEOWNERS validation, automatic
+GitHub governance setup fails: do not create a self-owned `CODEOWNERS`, do not
+enable `require_code_owner_review`, do not `POST` or `PUT` the ruleset, and tell
+the user to add a root `CODEOWNERS` entry for a non-author user or org team with
 write access before enabling the ruleset. If a future team wants a narrower owner
 or a different org team, that is a follow-on maintenance change after bootstrap.
 

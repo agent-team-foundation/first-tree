@@ -40,16 +40,22 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/only when the\s+new Context Repo is a GitHub repository/);
     expect(skillMarkdown).toContain("Do not run it for an already-bound tree");
     expect(skillMarkdown).toContain("First make the Code Owner gate real and satisfiable");
+    expect(skillMarkdown).toContain('repo_owner_type=$(gh api "repos/$repo" --jq .owner.type)');
     expect(skillMarkdown).toContain("pr_author_login=$(gh api user --jq .login)");
-    expect(skillMarkdown).toContain('team_slug=$(gh api "repos/$repo/teams?per_page=100"');
+    expect(skillMarkdown).toContain('if [ "$repo_owner_type" = "Organization" ]; then');
+    expect(skillMarkdown).toContain("repos/$repo/teams?per_page=100");
+    expect(skillMarkdown).toContain('.privacy != "secret"');
+    expect(skillMarkdown).toContain("orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100");
+    expect(skillMarkdown).toContain("non_author_member");
     expect(skillMarkdown).toContain(".login != $author");
+    expect(skillMarkdown).toContain("Personal repositories\nskip the teams lookup");
     expect(skillMarkdown).toContain("Do **not** make the\nactive `gh` user the only Code Owner");
     expect(skillMarkdown).toContain('printf \'* %s\\n\' "$code_owner_ref" > "<tree>/.github/CODEOWNERS"');
     expect(skillMarkdown).toContain('git -C "<tree>" push origin "HEAD:$default_branch"');
+    expect(skillMarkdown).toContain("contents/.github/CODEOWNERS?ref=$default_branch");
+    expect(skillMarkdown).toContain("codeowners/errors?ref=$default_branch");
     expect(skillMarkdown).toContain("covers every path (`*`)");
-    expect(skillMarkdown).toContain(
-      "If no satisfiable Code\nOwner can be resolved, automatic GitHub governance setup fails",
-    );
+    expect(skillMarkdown).toContain("do not\nenable `require_code_owner_review`, do not `POST` or `PUT` the ruleset");
     expect(skillMarkdown).toContain("includes_parents=false&per_page=100");
     expect(skillMarkdown).toContain('(.source_type == null or .source_type == "Repository")');
     expect(skillMarkdown).toContain("Do not\nlook up inherited organization rulesets");

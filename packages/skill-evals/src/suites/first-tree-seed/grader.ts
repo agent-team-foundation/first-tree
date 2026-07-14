@@ -582,20 +582,78 @@ function commandTrace(events: readonly unknown[]): string[] {
   return commands;
 }
 
+function findCommandIndexAfter(commands: readonly string[], startIndex: number, pattern: RegExp): number {
+  return commands.findIndex((command, index) => index > startIndex && pattern.test(command));
+}
+
+function githubGovernanceOwnerResolutionObserved(trace: string): boolean {
+  const ownerTypeObserved = /repos\/\$repo["']?\s+--jq \.owner\.type/u.test(trace);
+  const orgTeamObserved =
+    /repo_owner_type.{0,120}Organization/su.test(trace) &&
+    /repos\/\$repo\/teams\?per_page=100/u.test(trace) &&
+    /\.privacy != "secret"/u.test(trace) &&
+    /orgs\/\$repo_owner\/teams\/\$candidate_team_slug\/members\?per_page=100/u.test(trace) &&
+    /\.login != \$author/u.test(trace) &&
+    /non_author_member/u.test(trace);
+  const collaboratorFallbackObserved =
+    /repos\/\$repo\/collaborators\?affiliation=direct&permission=push&per_page=100/u.test(trace) &&
+    /\.login != \$author/u.test(trace) &&
+    /code_owner_login/u.test(trace);
+
+  return ownerTypeObserved && (orgTeamObserved || collaboratorFallbackObserved);
+}
+
 function githubGovernanceBootstrapObserved(events: readonly unknown[]): boolean {
   const commands = commandTrace(events);
   const trace = commands.join("\n");
   const treeInitIndex = commands.findIndex((command) => /\bfirst-tree\s+tree\s+init\b|\btree\s+init\b/u.test(command));
-  const codeownersIndex = commands.findIndex((command) => /\.github\/CODEOWNERS/u.test(command));
-  const rulesetIndex = commands.findIndex((command) => /rulesets\?includes_parents=false&per_page=100/u.test(command));
+  const codeownersWriteIndex = findCommandIndexAfter(
+    commands,
+    treeInitIndex,
+    /printf\s+['"]\* %s\\n['"]\s+"\$code_owner_ref"\s+>\s+"?[^"]*\.github\/CODEOWNERS"?/u,
+  );
+  const codeownersAddIndex = findCommandIndexAfter(
+    commands,
+    codeownersWriteIndex,
+    /\bgit\s+-C\s+"?<tree>"?\s+add\s+\.github\/CODEOWNERS\b|\bgit\s+-C\s+"?[^"]*"?\s+add\s+\.github\/CODEOWNERS\b/u,
+  );
+  const codeownersCommitIndex = findCommandIndexAfter(
+    commands,
+    codeownersAddIndex,
+    /\bgit\s+-C\s+"?[^"]*"?\s+commit\s+-m\s+"chore: add context tree code owner mapping"/u,
+  );
+  const codeownersPushIndex = findCommandIndexAfter(
+    commands,
+    codeownersCommitIndex,
+    /\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:\$default_branch"?/u,
+  );
+  const codeownersContentValidationIndex = findCommandIndexAfter(
+    commands,
+    codeownersPushIndex,
+    /contents\/\.github\/CODEOWNERS\?ref=\$default_branch/u,
+  );
+  const codeownersErrorValidationIndex = findCommandIndexAfter(
+    commands,
+    codeownersContentValidationIndex,
+    /codeowners\/errors\?ref=\$default_branch/u,
+  );
+  const rulesetMutationIndex = findCommandIndexAfter(
+    commands,
+    codeownersErrorValidationIndex,
+    /gh\s+api\s+(-X\s+(POST|PUT)\s+)?"?repos\/\$repo\/rulesets(?:\/\$ruleset_id)?"?|gh\s+api\s+"?repos\/\$repo\/rulesets(?:\/\$ruleset_id)?"?\s+-X\s+(POST|PUT)/u,
+  );
 
   return (
     treeInitIndex >= 0 &&
-    codeownersIndex > treeInitIndex &&
-    rulesetIndex > codeownersIndex &&
-    /pr_author_login=.*gh api user|gh api user --jq \.login/u.test(trace) &&
-    /repos\/\$repo\/teams\?per_page=100/u.test(trace) &&
-    /\.login != \$author/u.test(trace) &&
+    codeownersWriteIndex > treeInitIndex &&
+    codeownersAddIndex > codeownersWriteIndex &&
+    codeownersCommitIndex > codeownersAddIndex &&
+    codeownersPushIndex > codeownersCommitIndex &&
+    codeownersContentValidationIndex > codeownersPushIndex &&
+    codeownersErrorValidationIndex > codeownersContentValidationIndex &&
+    rulesetMutationIndex > codeownersErrorValidationIndex &&
+    githubGovernanceOwnerResolutionObserved(trace) &&
+    /rulesets\?includes_parents=false&per_page=100/u.test(trace) &&
     /code_owner_ref/u.test(trace) &&
     !/printf\s+['"]\* @%s\\n['"]\s+"\$code_owner_login"/u.test(trace) &&
     !/gh api [^\n|]+\|\s*head/u.test(trace)
@@ -606,8 +664,26 @@ function githubGovernanceRecoveryObserved(text: string): boolean {
   return (
     /automatic GitHub governance setup failed|automatic governance setup failed/iu.test(text) &&
     /CODEOWNERS/iu.test(text) &&
-    /non-author|org team|team with write|branch rules|ruleset/iu.test(text)
+    /non-author|org team|team with write|branch rules|ruleset/iu.test(text) &&
+    /do not enable|do not POST|do not PUT|fail(?:s|ed)? closed|before enabling/iu.test(text)
   );
+}
+
+function githubGovernanceSideEffectAllowed(command: string): boolean {
+  if (/\bgh\s+repo\s+view\b/u.test(command)) return true;
+  if (
+    /\bgh\s+api\s+(user\b|"?repos\/\$repo\b|"?repos\/\$repo\/teams\?|"?orgs\/\$repo_owner\/teams\/\$candidate_team_slug\/members\?|"?repos\/\$repo\/collaborators\?|"?repos\/\$repo\/contents\/\.github\/CODEOWNERS\?|"?repos\/\$repo\/codeowners\/errors\?|"?repos\/\$repo\/rulesets)/u.test(
+      command,
+    )
+  ) {
+    return true;
+  }
+  if (/\bgit\s+-C\s+"?[^"]*"?\s+add\s+\.github\/CODEOWNERS\b/u.test(command)) return true;
+  if (/\bgit\s+-C\s+"?[^"]*"?\s+commit\s+-m\s+"chore: add context tree code owner mapping"/u.test(command)) {
+    return true;
+  }
+  if (/\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:\$default_branch"?/u.test(command)) return true;
+  return false;
 }
 
 function forbiddenSideEffectHits(
@@ -622,6 +698,9 @@ function forbiddenSideEffectHits(
   // `gh repo create` / `git push` / `git commit` below. Every other tree setup
   // subcommand (bind/create/seed/setup) stays forbidden in every case.
   const initExpected = evalCase.expected.action === "create_tree_via_init";
+  const githubGovernanceExpected = Boolean(
+    evalCase.expected.requireGithubGovernanceBootstrap || evalCase.expected.requireGithubGovernanceRecovery,
+  );
   const forbiddenTreeSubcommands = initExpected
     ? ["bind", "create", "seed", "setup"]
     : ["bind", "create", "init", "seed", "setup"];
@@ -639,18 +718,23 @@ function forbiddenSideEffectHits(
   for (const event of events) {
     if (isRecord(event) && eventType(event) === "gh_call" && isModelPhase(event)) {
       const argv = isStringArray(event.argv) ? event.argv : [];
-      if (ghArgvIsForbidden(argv)) {
-        hits.push(`gh ${argv.join(" ")}`.trim());
+      const command = `gh ${argv.join(" ")}`.trim();
+      if (ghArgvIsForbidden(argv) && !(githubGovernanceExpected && githubGovernanceSideEffectAllowed(command))) {
+        hits.push(command);
       }
     }
     if (!isRecord(event) || eventType(event) !== "codex_event") continue;
     for (const command of collectCommandStrings(event.event)) {
-      if (/\bgh\s+(auth|pr|api)\b/u.test(command)) hits.push(command);
-      if (/\bgh\s+repo\s+(archive|clone|create|delete|deploy-key|edit|fork|rename|set-default|sync)\b/u.test(command)) {
+      const governanceAllowed = githubGovernanceExpected && githubGovernanceSideEffectAllowed(command);
+      if (/\bgh\s+(auth|pr|api)\b/u.test(command) && !governanceAllowed) hits.push(command);
+      if (
+        /\bgh\s+repo\s+(archive|clone|create|delete|deploy-key|edit|fork|rename|set-default|sync)\b/u.test(command) &&
+        !governanceAllowed
+      ) {
         hits.push(command);
       }
-      if (/\bgit\s+push\b/u.test(command)) hits.push(command);
-      if (/\bgit\s+commit\b/u.test(command)) hits.push(command);
+      if (/\bgit\s+push\b/u.test(command) && !governanceAllowed) hits.push(command);
+      if (/\bgit\s+commit\b/u.test(command) && !governanceAllowed) hits.push(command);
       if (/\bfirst-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
       if (forbiddenTreeCommandPattern.test(command)) hits.push(command);
     }
@@ -1369,6 +1453,8 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (!metrics.seedSkillFileReadObserved) return false;
   if (!metrics.workspaceManifestReadObserved) return false;
   if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) return false;
+  if (evalCase.expected.requireGithubGovernanceBootstrap && !metrics.githubGovernanceBootstrapObserved) return false;
+  if (evalCase.expected.requireGithubGovernanceRecovery && !metrics.githubGovernanceRecoveryObserved) return false;
   if (metrics.contextTreeChanged) return false;
   if (metrics.sourceRepoChanged) return false;
   if (metrics.forbiddenActionHits.length > 0) return false;
@@ -1417,6 +1503,9 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   }
 
   if (evalCase.expected.action === "create_tree_via_init") {
+    const githubGovernancePass =
+      (!evalCase.expected.requireGithubGovernanceBootstrap || metrics.githubGovernanceBootstrapObserved) &&
+      (!evalCase.expected.requireGithubGovernanceRecovery || metrics.githubGovernanceRecoveryObserved);
     // PASS only when the state check routes to `tree init` WITH a `--dir` resolving to
     // the workspace `context-tree`. `tree init` without that `--dir` (or with a
     // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
@@ -1438,6 +1527,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     // source read is off-contract).
     return (
       metrics.treeInitWithContextTreeDirObserved &&
+      githubGovernancePass &&
       !metrics.directBareSourceContentReadObserved &&
       !metrics.sourceWorktreeCreated &&
       !metrics.sourceWorktreeAccessObserved
@@ -1479,6 +1569,12 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (metrics.directBareSourceContentReadObserved) {
     notes.push("Model attempted to read source files directly from the bare source repo path.");
+  }
+  if (evalCase.expected.requireGithubGovernanceBootstrap && !metrics.githubGovernanceBootstrapObserved) {
+    notes.push("Required GitHub governance bootstrap was not observed in the event trace.");
+  }
+  if (evalCase.expected.requireGithubGovernanceRecovery && !metrics.githubGovernanceRecoveryObserved) {
+    notes.push("Required GitHub governance recovery guidance was not observed.");
   }
   if (metrics.contextTreeChanged) {
     notes.push("Context Tree fixture changed; seed gate cases must stop before writing or deleting tree content.");

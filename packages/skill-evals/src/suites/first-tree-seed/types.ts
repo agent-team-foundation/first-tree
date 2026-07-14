@@ -23,6 +23,8 @@ export type FirstTreeSeedExpected = {
   action: SeedExpectedAction;
   approvalHints?: readonly string[];
   requireChatHistoryRead?: boolean;
+  requireGithubGovernanceBootstrap?: boolean;
+  requireGithubGovernanceRecovery?: boolean;
   requireSourceRead: boolean;
   requireWorktree: boolean;
   responseHints: readonly string[];
