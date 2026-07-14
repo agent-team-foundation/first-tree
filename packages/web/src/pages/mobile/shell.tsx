@@ -6,7 +6,7 @@ import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { MobileBottomTabs } from "./components.js";
-import { countAttentionRows, countUnreadRows } from "./data.js";
+import { countAttentionRows, countUnreadRows, mobileRowsFromList } from "./data.js";
 import { InstallGuideSheet } from "./install-guide-sheet.js";
 import { useInstallGuideAuto } from "./use-install-guide.js";
 
@@ -35,7 +35,7 @@ export function MobileShell() {
 
   const selectedChatId = searchParams.get("c");
   const immersiveChat = location.pathname === "/m/chat" && selectedChatId !== null;
-  const rows = tabCountsQuery.data?.rows ?? [];
+  const rows = mobileRowsFromList(tabCountsQuery.data);
 
   // Kept above the onboarding early-return so hook order stays unconditional.
   const installGuide = useInstallGuideAuto({ hasContent: rows.length > 0, immersive: immersiveChat });

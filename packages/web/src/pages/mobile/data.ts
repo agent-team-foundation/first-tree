@@ -1,4 +1,4 @@
-import type { MeChatRow } from "@first-tree/shared";
+import type { ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { rowAttentionReason } from "../workspace/conversations/group-rows.js";
 
@@ -91,12 +91,43 @@ export function formatMobileAge(iso: string | null): string {
   return `${Math.floor(age / AGE_MONTH_MS)}mo`;
 }
 
+/**
+ * Materialize the server's priority projection for a finite mobile list.
+ * Priority rows cover the full filtered result set while `rows` is only the
+ * loaded recency page, and the latter deliberately remains additive for older
+ * clients. Preserve the contract's attention > pinned > recency precedence
+ * while de-duplicating every chat id.
+ */
+export function mobileRowsFromList(data: ListMeChatsResponse | undefined): MeChatRow[] {
+  if (!data) return [];
+  const seen = new Set<string>();
+  return [...data.priorityRows.attention, ...data.priorityRows.pinned, ...data.rows].filter((row) => {
+    if (seen.has(row.chatId)) return false;
+    seen.add(row.chatId);
+    return true;
+  });
+}
+
 export function sortMobileChats(rows: readonly MeChatRow[]): MeChatRow[] {
   return [...rows].sort((a, b) => {
-    const signalDelta = mobileChatSignal(a).rank - mobileChatSignal(b).rank;
+    const signalA = mobileChatSignal(a);
+    const signalB = mobileChatSignal(b);
+    const priorityDelta = mobilePriorityRank(a, signalA) - mobilePriorityRank(b, signalB);
+    if (priorityDelta !== 0) return priorityDelta;
+    if (a.pinnedAt && b.pinnedAt && !signalA.attention && !signalB.attention) {
+      return timestampValue(b.pinnedAt) - timestampValue(a.pinnedAt);
+    }
+    const signalDelta = signalA.rank - signalB.rank;
     if (signalDelta !== 0) return signalDelta;
-    return timestampValue(b.lastMessageAt) - timestampValue(a.lastMessageAt);
+    return timestampValue(b.activityAt ?? b.lastMessageAt) - timestampValue(a.activityAt ?? a.lastMessageAt);
   });
+}
+
+function mobilePriorityRank(row: MeChatRow, signal: MobileChatSignal): number {
+  // Failed/request attention always wins, even when the chat is also pinned.
+  if (signal.attention) return 0;
+  if (row.pinnedAt) return 1;
+  return 2;
 }
 
 /**

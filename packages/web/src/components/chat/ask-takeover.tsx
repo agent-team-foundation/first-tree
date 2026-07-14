@@ -691,56 +691,61 @@ export function AskTakeover({
         {/* Pinned footer — Skip / Reply. Fixed (flex 0 0 auto) so it never
             scrolls out of view: Reply is reachable at any viewport height. */}
         <div
+          data-ask-takeover-footer
+          className={mobile ? "pb-safe-bottom" : undefined}
           style={{
             flex: "0 0 auto",
-            display: "flex",
-            justifyContent: "flex-end",
-            alignItems: "center",
-            gap: "var(--sp-3)",
-            padding: `var(--sp-3) ${padX}`,
             borderTop: "var(--hairline) solid var(--border-faint)",
           }}
         >
-          <button
-            type="button"
-            onClick={onSkip}
-            disabled={sending}
-            title="Skip (Esc)"
-            className="text-label"
+          <div
+            className="flex items-center justify-end"
             style={{
-              // Mobile: 44 height clears the touch minimum.
-              height: mobile ? 44 : 34,
-              padding: "0 var(--sp-4)",
-              borderRadius: "var(--radius-input)",
-              border: "var(--hairline) solid transparent",
-              background: "transparent",
-              color: "var(--fg-2)",
-              cursor: sending ? "default" : "pointer",
+              gap: "var(--sp-3)",
+              padding: `var(--sp-3) ${padX}`,
             }}
           >
-            Skip
-          </button>
-          <button
-            type="button"
-            onClick={reply}
-            disabled={!canReply}
-            title={mobile ? "Reply" : "Reply (Enter)"}
-            className="text-label"
-            style={{
-              // Mobile: 44 height clears the touch minimum (Reply is the only
-              // submit path there — Enter inserts a newline).
-              height: mobile ? 44 : 34,
-              padding: "0 var(--sp-4)",
-              borderRadius: "var(--radius-input)",
-              border: "var(--hairline) solid transparent",
-              background: "var(--primary)",
-              color: "var(--primary-on)",
-              cursor: canReply ? "pointer" : "default",
-              opacity: canReply ? 1 : 0.5,
-            }}
-          >
-            {sending ? "Replying…" : "Reply"}
-          </button>
+            <button
+              type="button"
+              onClick={onSkip}
+              disabled={sending}
+              title="Skip (Esc)"
+              className="text-label"
+              style={{
+                // Mobile: 44 height clears the touch minimum.
+                height: mobile ? 44 : 34,
+                padding: "0 var(--sp-4)",
+                borderRadius: "var(--radius-input)",
+                border: "var(--hairline) solid transparent",
+                background: "transparent",
+                color: "var(--fg-2)",
+                cursor: sending ? "default" : "pointer",
+              }}
+            >
+              Skip
+            </button>
+            <button
+              type="button"
+              onClick={reply}
+              disabled={!canReply}
+              title={mobile ? "Reply" : "Reply (Enter)"}
+              className="text-label"
+              style={{
+                // Mobile: 44 height clears the touch minimum (Reply is the only
+                // submit path there — Enter inserts a newline).
+                height: mobile ? 44 : 34,
+                padding: "0 var(--sp-4)",
+                borderRadius: "var(--radius-input)",
+                border: "var(--hairline) solid transparent",
+                background: "var(--primary)",
+                color: "var(--primary-on)",
+                cursor: canReply ? "pointer" : "default",
+                opacity: canReply ? 1 : 0.5,
+              }}
+            >
+              {sending ? "Replying…" : "Reply"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

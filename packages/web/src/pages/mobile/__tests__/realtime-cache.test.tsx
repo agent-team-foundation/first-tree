@@ -18,7 +18,11 @@ describe("mobile projections share the realtime invalidation prefix", () => {
   beforeEach(() => {
     harness = createDomHarness();
     meChatMocks.listMeChats.mockReset();
-    meChatMocks.listMeChats.mockResolvedValue({ rows: [] });
+    meChatMocks.listMeChats.mockResolvedValue({
+      rows: [],
+      priorityRows: { attention: [], pinned: [] },
+      nextCursor: null,
+    });
   });
 
   it("refetches Now when ['me','chats'] is invalidated (answer / new message / failure)", async () => {

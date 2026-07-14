@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatDetail, MeChatRow, Message } from "@first-tree/shared";
+import type { ChatDetail, ListMeChatsResponse, MeChatRow, Message } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
@@ -133,14 +133,23 @@ const detail: ChatDetail = {
 };
 
 let currentLocation = "";
+let listResponse: ListMeChatsResponse;
 function LocationProbe() {
   const location = useLocation();
   currentLocation = `${location.pathname}${location.search}`;
   return null;
 }
 
-function renderPage(harness: DomHarness, page: "now" | "chat") {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderPage(harness: DomHarness, page: "now" | "chat"): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+  });
+  queryClient.setQueryData(["chat-open-requests", row.chatId], { items: [request] });
+  queryClient.setQueryData(["chat-detail", row.chatId], detail);
+  queryClient.setQueryData(
+    page === "now" ? ["me", "chats", "mobile", "now"] : ["me", "chats", "mobile", "chats", "all"],
+    listResponse,
+  );
   harness.render(
     <MemoryRouter initialEntries={[`/m/${page}`]}>
       <QueryClientProvider client={queryClient}>
@@ -154,6 +163,7 @@ function renderPage(harness: DomHarness, page: "now" | "chat") {
       </QueryClientProvider>
     </MemoryRouter>,
   );
+  return queryClient;
 }
 
 async function click(element: Element | null): Promise<void> {
@@ -172,11 +182,12 @@ describe("mobile card actions", () => {
     currentLocation = "";
     for (const mock of Object.values(meChatMocks)) mock.mockReset();
     for (const mock of Object.values(chatMocks)) mock.mockReset();
-    meChatMocks.listMeChats.mockResolvedValue({
+    listResponse = {
       rows: [row],
       priorityRows: { attention: [], pinned: [] },
       nextCursor: null,
-    });
+    };
+    meChatMocks.listMeChats.mockResolvedValue(listResponse);
     meChatMocks.pinMeChat.mockResolvedValue({ chatId: row.chatId, pinnedAt: "2026-07-14T12:00:00.000Z" });
     meChatMocks.markMeChatUnread.mockResolvedValue({ chatId: row.chatId, unreadMentionCount: 1 });
     chatMocks.patchChatEngagement.mockResolvedValue({ chatId: row.chatId, engagementStatus: "archived" });
@@ -204,6 +215,34 @@ describe("mobile card actions", () => {
     );
     await harness.waitFor(() => expect(meChatMocks.pinMeChat).toHaveBeenCalledWith(row.chatId, true));
     expect(currentLocation).toBe("/m/chat");
+  });
+
+  it("renders and hoists a pinned chat that exists only in the server priority projection", async () => {
+    const recent = {
+      ...row,
+      chatId: "recent",
+      title: "Newest ordinary chat",
+      openRequestCount: 0,
+      lastMessageAt: "2026-07-14T12:00:00.000Z",
+    };
+    const pinnedOnly = {
+      ...row,
+      chatId: "pinned-only",
+      title: "Older pinned chat",
+      openRequestCount: 0,
+      pinnedAt: "2026-07-14T11:00:00.000Z",
+      lastMessageAt: "2026-06-01T12:00:00.000Z",
+    };
+    listResponse = {
+      rows: [recent],
+      priorityRows: { attention: [], pinned: [pinnedOnly] },
+      nextCursor: null,
+    } satisfies ListMeChatsResponse;
+
+    renderPage(harness, "chat");
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(recent.title));
+    const titles = [...harness.container.querySelectorAll("[data-mobile-card-title]")].map((node) => node.textContent);
+    expect(titles).toEqual([pinnedOnly.title, recent.title]);
   });
 
   it("keeps the shortcut tray open after a swipe while suppressing the card click", async () => {
@@ -253,7 +292,7 @@ describe("mobile card actions", () => {
   });
 
   it("opens the question over Now, sends the answer, and never navigates into detail", async () => {
-    renderPage(harness, "now");
+    const queryClient = renderPage(harness, "now");
     await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
 
     await click(harness.container.querySelector("[data-mobile-primary-action]"));
@@ -280,6 +319,24 @@ describe("mobile card actions", () => {
     );
     expect(currentLocation).toBe("/m/now");
     await harness.waitFor(() => expect(document.body.querySelector("[data-mobile-ask-sheet]")).toBeNull());
+    await harness.waitFor(() => expect(harness.container.textContent).not.toContain(row.title));
+
+    // Simulate delayed stale projections arriving after the sheet closed. The
+    // row may briefly expose Answer again, but the request-id tombstone keeps
+    // the resolved request inert and prevents a second transport submission.
+    queryClient.setQueryData(["chat-open-requests", row.chatId], { items: [request] });
+    queryClient.setQueryData<ListMeChatsResponse>(["me", "chats", "mobile", "now"], {
+      rows: [row],
+      priorityRows: { attention: [row], pinned: [] },
+      nextCursor: null,
+    });
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+    await click(harness.container.querySelector("[data-mobile-primary-action]"));
+    await harness.waitFor(() =>
+      expect(document.body.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe("Question unavailable"),
+    );
+    expect(document.body.textContent).toContain("Question already handled");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledTimes(1);
   });
 
   it("lets the feed sheet close without resolving the question", async () => {

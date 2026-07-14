@@ -1,4 +1,4 @@
-import type { MeChatRow } from "@first-tree/shared";
+import type { ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   countAttentionRows,
@@ -7,6 +7,7 @@ import {
   isNowFeedRow,
   mobileChatPreview,
   mobileChatSignal,
+  mobileRowsFromList,
   sortMobileChats,
 } from "../data.js";
 
@@ -43,8 +44,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -71,6 +72,31 @@ describe("mobile chat projection", () => {
       "working",
       "unread",
     ]);
+  });
+
+  it("includes priority-only pinned chats, de-duplicates additive rows, and keeps priority order", () => {
+    const failed = chatRow({ chatId: "failed", failedAgentIds: ["agent-1"] });
+    const pinnedOnly = chatRow({
+      chatId: "pinned-only",
+      pinnedAt: "2026-07-09T09:00:00.000Z",
+      lastMessageAt: "2026-06-01T09:00:00.000Z",
+    });
+    const olderPin = chatRow({
+      chatId: "older-pin",
+      pinnedAt: "2026-07-08T09:00:00.000Z",
+      lastMessageAt: "2026-07-09T12:00:00.000Z",
+    });
+    const newer = chatRow({ chatId: "newer", lastMessageAt: "2026-07-09T11:00:00.000Z" });
+    const duplicatePinned = { ...pinnedOnly, title: "Wrong additive copy" };
+    const response: ListMeChatsResponse = {
+      priorityRows: { attention: [failed], pinned: [pinnedOnly, olderPin] },
+      rows: [newer, duplicatePinned, failed],
+      nextCursor: null,
+    };
+
+    const rows = sortMobileChats(mobileRowsFromList(response));
+    expect(rows.map((row) => row.chatId)).toEqual(["failed", "pinned-only", "older-pin", "newer"]);
+    expect(rows.find((row) => row.chatId === "pinned-only")?.title).toBe(pinnedOnly.title);
   });
 
   it("counts attention and unread rows separately for mobile tab badges", () => {

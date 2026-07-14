@@ -10,7 +10,14 @@ import { Button } from "../../components/ui/button.js";
 import { MobileAskSheet } from "./ask-sheet.js";
 import { MobileCardActionsMenu, MobileSwipeCard, useMobileChatActions } from "./chat-card-actions.js";
 import { MobilePage, MobileSignalChip, MobileSystemState, mobileAccentColor, mobileCardStyle } from "./components.js";
-import { formatMobileAge, isNowFeedRow, mobileChatPreview, mobileChatSignal, sortMobileChats } from "./data.js";
+import {
+  formatMobileAge,
+  isNowFeedRow,
+  mobileChatPreview,
+  mobileChatSignal,
+  mobileRowsFromList,
+  sortMobileChats,
+} from "./data.js";
 
 export function MobileNowPage() {
   const { agentId } = useAuth();
@@ -29,7 +36,7 @@ export function MobileNowPage() {
   // with an AUTHORITATIVE active signal (see isNowFeedRow — failed agent, open
   // request, explicit @me, or an in-flight turn), then keep the canonical
   // attention order. Quiet / watching-only chats live in the Chat tab.
-  const sortedRows = sortMobileChats(chatsQuery.data?.rows ?? []).filter(isNowFeedRow);
+  const sortedRows = sortMobileChats(mobileRowsFromList(chatsQuery.data)).filter(isNowFeedRow);
 
   return (
     <>

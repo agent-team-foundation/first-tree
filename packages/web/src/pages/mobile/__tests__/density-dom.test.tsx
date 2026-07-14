@@ -143,6 +143,7 @@ describe("mobile density tiers", () => {
         chatRow({ chatId: "working", title: "Context docs", busyAgentIds: ["agent-1"] }),
         chatRow({ chatId: "recent", title: "Team roster polish" }),
       ],
+      priorityRows: { attention: [], pinned: [] },
       nextCursor: null,
     });
   });
@@ -200,6 +201,7 @@ describe("mobile density tiers", () => {
           description: "**Task:** run the seed (`first-tree-seed`)",
         }),
       ],
+      priorityRows: { attention: [], pinned: [] },
       nextCursor: null,
     });
     renderWithClient(harness, <MobileNowPage />, "/m/now");
