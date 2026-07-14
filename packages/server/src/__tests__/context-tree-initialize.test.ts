@@ -189,6 +189,49 @@ owners: [${ACCOUNT_LOGIN}]
     });
   });
 
+  it("returns 409 without overwriting a binding committed after initialization side effects", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    const concurrentBinding = {
+      repo: "https://github.com/example/manual-context-tree.git",
+      branch: "manual",
+    };
+    let concurrentWriteDone = false;
+    const fetchSpy = mockFetch(async (url) => {
+      if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) return githubRepoResponse(201);
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        if (!concurrentWriteDone) {
+          concurrentWriteDone = true;
+          await putOrgSetting(app.db, admin.organizationId, "context_tree", concurrentBinding, {
+            updatedBy: admin.userId,
+          });
+        }
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(409);
+    expect(concurrentWriteDone).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+    await expect(getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(concurrentBinding);
+  });
+
   it("rejects non-admin members before calling GitHub", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

@@ -34,7 +34,11 @@ import {
   kickoffOnboarding,
   type TreeSetupRecoveryMessage,
 } from "../../services/onboarding-kickoff.js";
-import { getOrgContextTreeBinding, getOrgSetting, putOrgSetting } from "../../services/org-settings.js";
+import {
+  getOrgContextTreeBinding,
+  getOrgSetting,
+  putInitializedOrgContextTreeBinding,
+} from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
 
 const BRANCH = "main";
@@ -330,10 +334,9 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       throw err;
     }
 
-    const setting = await putOrgSetting(
+    const setting = await putInitializedOrgContextTreeBinding(
       app.db,
       scope.organizationId,
-      "context_tree",
       { repo: repo.cloneUrl, branch: BRANCH },
       { updatedBy: scope.userId },
     );

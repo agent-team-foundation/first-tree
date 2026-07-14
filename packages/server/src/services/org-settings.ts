@@ -16,7 +16,7 @@ import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
-import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
 
 /**
@@ -264,6 +264,57 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
       });
 
     return toOutput(txDb, orgId, namespace, validated);
+  });
+}
+
+/**
+ * Persist an initialized Context Tree binding only if no repo was bound after
+ * initialization began. GitHub side effects happen outside this transaction,
+ * so the final write must re-check under the same organization settings lock
+ * used by regular settings writes.
+ */
+export async function putInitializedOrgContextTreeBinding(
+  db: Database,
+  orgId: string,
+  rawInput: unknown,
+  options: { updatedBy: string },
+): Promise<OrgSettingOutput<"context_tree">> {
+  const input = ORG_SETTINGS_NAMESPACES.context_tree.input.parse(rawInput) as OrgSettingInput<"context_tree">;
+
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockOrganizationForSettingsMutation(txDb, orgId);
+
+    const current = (await fetchStorageRow(txDb, orgId, "context_tree")) ?? emptyStorage("context_tree");
+    if (current.repo !== undefined) {
+      throw new ConflictError("Context Tree repo is already configured for this team");
+    }
+
+    const merged = applyInputDelta("context_tree", current, input);
+    const validated = ORG_SETTINGS_NAMESPACES.context_tree.storage.parse(merged) as OrgContextTreeStorage;
+    contextTreeActiveBindingSchema.parse(validated);
+
+    await tx
+      .insert(organizationSettings)
+      .values({
+        organizationId: orgId,
+        namespace: "context_tree",
+        value: validated,
+        version: 1,
+        updatedBy: options.updatedBy,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [organizationSettings.organizationId, organizationSettings.namespace],
+        set: {
+          value: validated,
+          version: sql`${organizationSettings.version} + 1`,
+          updatedBy: options.updatedBy,
+          updatedAt: new Date(),
+        },
+      });
+
+    return toOutput(txDb, orgId, "context_tree", validated);
   });
 }
 
