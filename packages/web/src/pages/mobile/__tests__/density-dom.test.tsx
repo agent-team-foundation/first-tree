@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "../../../components/ui/toast.js";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
 import { MobileChatPage } from "../chat.js";
 import { MobileNowPage } from "../now.js";
@@ -99,10 +100,12 @@ function renderWithClient(harness: DomHarness, element: ReactElement, path: stri
   harness.render(
     <MemoryRouter initialEntries={[path]}>
       <QueryClientProvider client={queryClient}>
-        <Routes>
-          <Route path="/m/now" element={element} />
-          <Route path="/m/chat" element={element} />
-        </Routes>
+        <ToastProvider>
+          <Routes>
+            <Route path="/m/now" element={element} />
+            <Route path="/m/chat" element={element} />
+          </Routes>
+        </ToastProvider>
       </QueryClientProvider>
     </MemoryRouter>,
   );
@@ -147,7 +150,7 @@ describe("mobile density tiers", () => {
   it("renders Now work as one priority feed without section grouping", async () => {
     renderWithClient(harness, <MobileNowPage />, "/m/now");
     await harness.waitFor(() => expect(harness.container.textContent).toContain("Release readiness"));
-    expect(harness.container.textContent).toContain("Work feed");
+    expect(harness.container.textContent).toContain("Now");
     expect(harness.container.textContent).not.toContain("need attention");
 
     const sectionHeadings = [...harness.container.querySelectorAll("h2")].map((heading) => heading.textContent);
@@ -162,12 +165,12 @@ describe("mobile density tiers", () => {
     // the question (priority) and working (feed) cards.
     expect(feedCards).toHaveLength(2);
     expect(feedCards[0]?.textContent).toContain("Release readiness");
-    expect(feedCards[0]?.getAttribute("style")).toContain("min-height: var(--sp-45)");
-    expect(feedCards[1]?.getAttribute("style")).toContain("min-height: var(--sp-35)");
+    expect(feedCards[0]?.getAttribute("style")).toContain("min-height: var(--sp-35)");
+    expect(feedCards[1]?.getAttribute("style")).toContain("min-height: var(--sp-20)");
     expect(feedCards[0]?.querySelector("[data-mobile-card-title]")?.className).toContain("text-mobile-title");
     expect(feedCards[0]?.querySelector("[data-mobile-card-preview]")?.className).toContain("text-mobile-body");
     const labels = [...feed.querySelectorAll("[data-mobile-signal-label]")].map((label) => label.textContent);
-    expect(labels).toEqual(["Question waiting", "Working now"]);
+    expect(labels).toEqual(["Needs your answer", "Working now"]);
     expect(feedCards[0]?.querySelector("[data-mobile-signal-label]")?.className).toContain("truncate");
     expect(feedCards[0]?.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
     expect(feedCards[1]?.querySelector("[data-mobile-primary-action]")).toBeNull();

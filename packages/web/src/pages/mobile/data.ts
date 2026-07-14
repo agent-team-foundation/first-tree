@@ -16,7 +16,7 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
   if (attentionReason === "failed") {
     return {
       tone: "error",
-      label: row.failedAgentIds.length === 1 ? "Failed" : `${row.failedAgentIds.length} failed`,
+      label: row.failedAgentIds.length === 1 ? "Run failed" : `${row.failedAgentIds.length} runs failed`,
       rank: 0,
       attention: true,
     };
@@ -24,7 +24,7 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
   if (attentionReason === "request") {
     return {
       tone: "needs-you",
-      label: row.openRequestCount === 1 ? "Needs answer" : `${row.openRequestCount} questions`,
+      label: row.openRequestCount === 1 ? "Needs your answer" : `${row.openRequestCount} questions`,
       rank: 1,
       attention: true,
     };
@@ -41,7 +41,7 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
   if (row.busyAgentIds.length > 0 || row.liveActivity !== null) {
     return {
       tone: "working",
-      label: row.liveActivity?.label ?? "Working",
+      label: row.liveActivity?.label ?? "Working now",
       rank: 2,
       attention: false,
     };
@@ -64,27 +64,31 @@ export function mobileChatPreview(row: MeChatRow): string {
   return stripped || "No messages yet.";
 }
 
-export function mobileFeedReasonLabel(row: MeChatRow): string {
-  const attentionReason = rowAttentionReason(row);
-  if (attentionReason === "failed") {
-    return row.failedAgentIds.length === 1 ? "Failed run" : `${row.failedAgentIds.length} failed runs`;
-  }
-  if (attentionReason === "request") {
-    if (row.openRequestCount === 1) {
-      return "Question waiting";
-    }
-    return `${row.openRequestCount} questions waiting`;
-  }
-  if (row.chatHasExplicitMentionToMe || row.unreadMentionCount > 0) {
-    return row.unreadMentionCount > 1 ? `${row.unreadMentionCount} unread mentions` : "Unread mention";
-  }
-  if (row.busyAgentIds.length > 0 || row.liveActivity !== null) {
-    return "Working now";
-  }
-  if (row.membershipKind === "watching") {
-    return "Watching";
-  }
-  return "Recent update";
+const AGE_MINUTE_MS = 60_000;
+const AGE_HOUR_MS = 3_600_000;
+const AGE_DAY_MS = 86_400_000;
+const AGE_WEEK_MS = 7 * AGE_DAY_MS;
+const AGE_MONTH_MS = 30 * AGE_DAY_MS;
+
+/**
+ * Ultra-compact age for the attention feed: "now", "5m", "3h", "4d", "2w",
+ * "3mo". Unlike `formatRowTime`, it never falls back to an absolute `MM/DD`
+ * date — on a needs-attention surface, how long a question has been waiting
+ * or a failure has sat unhandled is itself the signal; a dead date reads as
+ * neither urgent nor stale. Returns "" for null/invalid input so the card
+ * simply omits the slot.
+ */
+export function formatMobileAge(iso: string | null): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const age = Date.now() - t;
+  if (age < AGE_MINUTE_MS) return "now";
+  if (age < AGE_HOUR_MS) return `${Math.floor(age / AGE_MINUTE_MS)}m`;
+  if (age < AGE_DAY_MS) return `${Math.floor(age / AGE_HOUR_MS)}h`;
+  if (age < AGE_WEEK_MS) return `${Math.floor(age / AGE_DAY_MS)}d`;
+  if (age < AGE_MONTH_MS) return `${Math.floor(age / AGE_WEEK_MS)}w`;
+  return `${Math.floor(age / AGE_MONTH_MS)}mo`;
 }
 
 export function sortMobileChats(rows: readonly MeChatRow[]): MeChatRow[] {

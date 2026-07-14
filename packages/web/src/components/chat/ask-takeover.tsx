@@ -17,7 +17,9 @@
  *     sends the composed answer; Skip sends a "skipped" answer (the caller's
  *     `onSkip` writes the resolving reply) so the asking agent unblocks rather
  *     than waiting on a never-answered question. There is no "dismiss but keep it
- *     open" path — skip is an answer, not a deferral.
+ *     open" path in the blocking chat view — skip is an answer, not a deferral.
+ *     A feed-level shortcut may supply `onDismiss` so the user can lower the
+ *     sheet and keep triaging without resolving the question.
  *
  * The free-text answer surface mirrors the chat composer: it supports `@mention`
  * autocomplete (against chat speakers plus host-supplied inviteable agents) and
@@ -113,6 +115,7 @@ export function AskTakeover({
   error,
   onReply,
   onSkip,
+  onDismiss,
   isTrial = false,
   mobile = false,
 }: {
@@ -139,6 +142,9 @@ export function AskTakeover({
   onReply: (answer: AskAnswer) => void;
   /** Resolve the question with a "skipped" answer (caller sends the reply). */
   onSkip: () => void;
+  /** Optional feed-sheet close: leaves the question open. Blocking chat views
+   *  intentionally omit this so their existing must-answer contract remains. */
+  onDismiss?: () => void;
 }) {
   const options = payload.options;
   const multi = payload.multiSelect === true;
@@ -255,7 +261,8 @@ export function AskTakeover({
       if (e.key === "Escape") {
         if (sending) return;
         e.preventDefault();
-        onSkip();
+        if (onDismiss) onDismiss();
+        else onSkip();
         return;
       }
       // Mobile soft keyboards have no Shift+Enter, so Enter must insert a
@@ -272,7 +279,7 @@ export function AskTakeover({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sending, canReply, onSkip, reply, mobile]);
+  }, [sending, canReply, onSkip, onDismiss, reply, mobile]);
 
   // Visible chrome (border + fill + radius) lives on the WRAPPER, not the
   // textarea: the textarea is painted transparent so the mention overlay
@@ -553,9 +560,9 @@ export function AskTakeover({
         bottom: keyboardInset,
         zIndex: 30,
         display: "flex",
-        alignItems: "center",
+        alignItems: mobile ? "flex-end" : "center",
         justifyContent: "center",
-        padding: "clamp(var(--sp-2_5), 2.5%, var(--sp-7))",
+        padding: mobile ? "var(--sp-2) 0 0" : "clamp(var(--sp-2_5), 2.5%, var(--sp-7))",
         background: "color-mix(in oklch, var(--fg) 10%, transparent)",
       }}
     >
@@ -568,16 +575,40 @@ export function AskTakeover({
           // Slightly wider than the message reading column; height fits the
           // content and is capped to the area (50rem cap).
           width: "min(100%, 50rem)",
-          maxHeight: "100%",
+          maxHeight: mobile ? "min(92%, 50rem)" : "100%",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
+          position: "relative",
           background: "var(--bg-raised)",
           border: "var(--hairline) solid var(--border)",
-          borderRadius: "var(--radius-dialog)",
+          borderRadius: mobile ? "var(--radius-dialog) var(--radius-dialog) 0 0" : "var(--radius-dialog)",
           boxShadow: "var(--shadow-md)",
         }}
       >
+        {onDismiss ? (
+          <button
+            type="button"
+            aria-label="Close question"
+            onClick={onDismiss}
+            disabled={sending}
+            className="absolute inline-flex items-center justify-center"
+            style={{
+              top: "var(--sp-2)",
+              right: "var(--sp-2)",
+              zIndex: 2,
+              width: 44,
+              height: 44,
+              border: 0,
+              borderRadius: "var(--radius-input)",
+              background: "var(--bg-raised)",
+              color: "var(--fg-3)",
+              opacity: sending ? 0.5 : 1,
+            }}
+          >
+            <X aria-hidden className="h-5 w-5" />
+          </button>
+        ) : null}
         {/* Scrolling region: the ask body PLUS the answer surface. Keeping the
             options inside the scroller (rather than in a fixed block) is what
             guarantees Reply is reachable — when the card is shorter than its

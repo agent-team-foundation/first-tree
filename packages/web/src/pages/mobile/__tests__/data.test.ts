@@ -1,12 +1,12 @@
 import type { MeChatRow } from "@first-tree/shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   countAttentionRows,
   countUnreadRows,
+  formatMobileAge,
   isNowFeedRow,
   mobileChatPreview,
   mobileChatSignal,
-  mobileFeedReasonLabel,
   sortMobileChats,
 } from "../data.js";
 
@@ -88,32 +88,6 @@ describe("mobile chat projection", () => {
     expect(mobileChatSignal(explicitMention).label).toBe("Unread");
     expect(mobileChatSignal(explicitMention).attention).toBe(false);
   });
-
-  it("does not infer the requester from chat participants", () => {
-    expect(
-      mobileFeedReasonLabel(
-        chatRow({
-          openRequestCount: 1,
-          participants: [
-            {
-              agentId: "human-agent-self",
-              displayName: "Gandy",
-              type: "human",
-              avatarColorToken: null,
-              avatarImageUrl: null,
-            },
-            {
-              agentId: "unrelated-agent",
-              displayName: "Unrelated agent",
-              type: "agent",
-              avatarColorToken: null,
-              avatarImageUrl: null,
-            },
-          ],
-        }),
-      ),
-    ).toBe("Question waiting");
-  });
 });
 
 describe("isNowFeedRow (needs-attention admission)", () => {
@@ -171,5 +145,33 @@ describe("mobileChatPreview", () => {
     expect(mobileChatPreview(chatRow({ description: null, lastMessagePreview: "![](https://x/y.png)" }))).toBe(
       "No messages yet.",
     );
+  });
+});
+
+describe("formatMobileAge", () => {
+  it("keeps waiting time relative and never rounds into the next unit early", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
+    try {
+      expect(formatMobileAge("2026-07-14T11:59:30.000Z")).toBe("now");
+      expect(formatMobileAge("2026-07-14T11:00:01.000Z")).toBe("59m");
+      expect(formatMobileAge("2026-07-13T12:00:01.000Z")).toBe("23h");
+      expect(formatMobileAge("2026-07-10T12:00:00.000Z")).toBe("4d");
+      expect(formatMobileAge("2026-06-30T12:00:00.000Z")).toBe("2w");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits invalid values and treats clock-skewed future timestamps as now", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
+    try {
+      expect(formatMobileAge(null)).toBe("");
+      expect(formatMobileAge("not-a-date")).toBe("");
+      expect(formatMobileAge("2026-07-14T12:05:00.000Z")).toBe("now");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
