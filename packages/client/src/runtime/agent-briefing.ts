@@ -913,7 +913,7 @@ guidance above to surface/setup/seed first.
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | \`first-tree-seed\` | set up the team's Context Tree from readable sources — declared workspace repos or a local Git repo / GitHub URL supplied in chat; creates + binds the tree if none exists, fills a bound-but-empty tree, and can continue Phase 2 in the same setup chat after Phase 1 merges |
-| \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo via the user's \`gh\` CLI |`;
+| \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's \`gh\` CLI |`;
   }
   return `## First Tree Family
 
@@ -929,7 +929,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | \`first-tree-seed\`    | bootstrap the team's Context Tree from readable sources (declared repos or a local Git repo / GitHub URL supplied in chat); create + bind if none exists, fill a bound-but-empty tree, or continue Phase 2 in the same setup chat after Phase 1 merges |
-| \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo via the user's \`gh\` CLI |`;
+| \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's \`gh\` CLI |`;
 }
 
 /**
