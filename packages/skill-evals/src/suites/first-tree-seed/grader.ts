@@ -1136,6 +1136,7 @@ function singlePrBuildObserved(text: string): boolean {
 
 function legacyHandoffObserved(text: string): boolean {
   const affirmativeText = text
+    .replace(/\b(?:rather\s+than|instead\s+of)\b[^,.;!?\n]*(?:,|(?=[.;!?\n]|$))/giu, "")
     .replace(
       /\b(?:do not|don't|will not|won't|must not|should not|never)\s+(?:open|create|submit|raise|wait|ask|require)\b[^.!?;\n]*/giu,
       "",
@@ -1163,23 +1164,23 @@ function legacyHandoffObserved(text: string): boolean {
     if (!structurePrObserved) return false;
 
     const handoffContext = clauses.slice(index, index + 4).join(". ");
-    const mergeMatch = /\bmerge\w*\b/iu.exec(handoffContext);
-    if (!mergeMatch) return false;
-    const beforeMerge = handoffContext.slice(0, mergeMatch.index);
+    const handoffMatch = /\b(?:merge\w*|land(?:s|ed|ing)?)\b/iu.exec(handoffContext);
+    if (!handoffMatch) return false;
+    const beforeHandoff = handoffContext.slice(0, handoffMatch.index);
     const samePrIncludesLeaves =
       /\b(?:pr|pull\s+request)\b[\s\S]{0,100}\b(?:with|for|containing|covering)\b[\s\S]{0,80}\b(?:structure|skeleton)\b[\s\S]{0,50}\b(?:and|plus|alongside|together\s+with)\b[\s\S]{0,50}\b(?:content|lea(?:f|ves))\b/iu.test(
-        beforeMerge,
+        beforeHandoff,
       ) ||
       /\b(?:it|this\s+(?:seed\s+)?(?:pr|pull\s+request)|that\s+(?:seed\s+)?(?:pr|pull\s+request)|the\s+same\s+(?:seed\s+)?(?:pr|pull\s+request))\b[\s\S]{0,80}\b(?:contain\w*|includ\w*|cover\w*|carr\w*|hold\w*)\b[\s\S]{0,50}\b(?:content|lea(?:f|ves))\b/iu.test(
-        beforeMerge,
+        beforeHandoff,
       );
     if (samePrIncludesLeaves) return false;
 
-    const afterMerge = handoffContext.slice(mergeMatch.index + mergeMatch[0].length);
-    if (/\b(?:return|reply|ping|come\s+back|continue)\b/iu.test(afterMerge)) return true;
-    if (/\b(?:lea(?:f|ves)|phase\s*2)\b/iu.test(afterMerge)) return true;
-    if (!/\bcontent\b/iu.test(afterMerge)) return false;
-    return !/\b(?:first-tree-write|future|follow-up|subsequent|later\s+source-backed)\b/iu.test(afterMerge);
+    const afterHandoff = handoffContext.slice(handoffMatch.index + handoffMatch[0].length);
+    if (/\b(?:return|reply|ping|come\s+back|continue)\b/iu.test(afterHandoff)) return true;
+    if (/\b(?:lea(?:f|ves)|phase\s*2)\b/iu.test(afterHandoff)) return true;
+    if (!/\bcontent\b/iu.test(afterHandoff)) return false;
+    return !/\b(?:first-tree-write|future|follow-up|subsequent|later\s+source-backed)\b/iu.test(afterHandoff);
   });
 }
 
