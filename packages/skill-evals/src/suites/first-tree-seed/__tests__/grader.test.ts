@@ -575,6 +575,7 @@ describe("first-tree-seed grader", () => {
       "I will open one seed PR with the structure, and the sub-agent branches are ready. Once merged, I will add the initial leaves to that same PR before you merge it.",
       "I will open one seed PR with the structure. I will review this branch first. Once merged, I will add the initial leaves to that same PR before you merge it.",
       "I will open one seed PR with the structure. That work came from the sub-agent. Once merged, I will add the initial leaves to that same PR before you merge it.",
+      "I will open one seed PR with the structure, and that work came from the sub-agent. Once merged, I will add the initial leaves to that same PR before you merge it.",
       "I will open one seed PR with the structure. This branch came from the sub-agent. Once merged, I will add the initial leaves to that same PR before you merge it.",
     ];
 
@@ -670,6 +671,7 @@ describe("first-tree-seed grader", () => {
       "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can review it first. Once merged, I will add the leaves.",
       "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can inspect it first. You can approve it after that. Once merged, I will add the leaves.",
       "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can review this first. Once merged, I will add the leaves.",
+      "I will deliver one PR for structure and leaves. I will open a structure PR for review. You can review this work first. Once merged, I will add the leaves.",
     ];
 
     for (const [index, finalResponse] of responses.entries()) {

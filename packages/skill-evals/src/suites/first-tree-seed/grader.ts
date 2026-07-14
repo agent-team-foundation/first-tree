@@ -1159,7 +1159,7 @@ function passiveHandoffRefersToCandidatePr(
     const referentEvents = [
       ...[
         ...segment.matchAll(
-          /\b(?:sub-?agent|agent)\b[^.!?;\n]{0,50}\b(?:branch(?:es)?|changes?|drafts?|work)\b|\b(?:(?:a(?:n)?|the|this|that)\s+)?(?:branch(?:es)?|drafts?)\b|\b(?:the|this|that)\s+(?:changes?|work)\b/giu,
+          /\b(?:sub-?agent|agent)\b[^.!?;\n]{0,50}\b(?:branch(?:es)?|changes?|drafts?|work)\b|\b(?:(?:a(?:n)?|the|this|that)\s+)?(?:branch(?:es)?|drafts?)\b|\b(?:the|this|that)\s+(?:changes?|work)\b[^.!?;\n]{0,50}\b(?:came|comes?|originat\w*|is|was|were)\s+from\s+(?:the\s+)?(?:sub-?agent|agent)\b/giu,
         ),
       ].map((match) => ({ index: match.index, type: "competing" as const })),
       ...[
@@ -1167,10 +1167,15 @@ function passiveHandoffRefersToCandidatePr(
           /\b(?:(?:this|that|the)\s+)?(?:(?:seed|structure|phase\s*1)\s+)?(?:pr|pull\s+request)\b/giu,
         ),
       ].map((match) => ({ index: match.index, type: "candidate" as const })),
-      ...[...segment.matchAll(/\bit\b|\b(?:that|this)\b(?!\s+(?:branch(?:es)?|changes?|drafts?|work)\b)/giu)].map(
-        (match) => ({ index: match.index, type: "pronoun" as const }),
-      ),
-    ].sort((left, right) => left.index - right.index);
+      ...[...segment.matchAll(/\b(?:it|that|this)\b/giu)].map((match) => ({
+        index: match.index,
+        type: "pronoun" as const,
+      })),
+    ].sort((left, right) => {
+      if (left.index !== right.index) return left.index - right.index;
+      const priority = { candidate: 1, competing: 0, pronoun: 2 } as const;
+      return priority[left.type] - priority[right.type];
+    });
 
     for (const event of referentEvents) {
       if (event.type === "competing") {
