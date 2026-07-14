@@ -22,38 +22,43 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/rather than asking for the First\s+Tree GitHub App/);
   });
 
-  it("checks same-chat Phase 2 continuation before refusing state C", () => {
-    const continuation = skillMarkdown.indexOf("Check for a Phase 2 continuation before classifying state C");
-    const stateC = skillMarkdown.indexOf("**C — Already seeded.**");
-
-    expect(continuation).toBeGreaterThan(-1);
-    expect(stateC).toBeGreaterThan(continuation);
-    expect(skillMarkdown).toContain("this setup chat's visible history");
-    expect(skillMarkdown).toContain("re-resolve the same readable sources and enter Phase 2");
-    expect(skillMarkdown).toContain("applies only to the Context Tree checkout");
+  it("keeps the confirmation gate while collapsing delivery to one PR", () => {
+    expect(skillMarkdown).toContain("same run");
+    expect(skillMarkdown).toContain("single reviewable PR");
+    expect(skillMarkdown).toContain("There is no\nintermediate PR and no merge between the passes");
+    expect(skillMarkdown).toContain("The one human gate is the **in-chat checklist approval**, not a PR merge.");
+    expect(skillMarkdown).toContain("Do not write anything — structure or content — before the user has signed");
+    expect(skillMarkdown).toContain("there is no ping, no merge, and no waiting");
+    expect(skillMarkdown).toContain("chore/seed-tree");
     expect(skillMarkdown).toMatch(/Do not\s+use `git ls-tree`, `git show`, `git grep`/);
-    expect(skillMarkdown).toContain("not a leftover checkout");
   });
 
   it("delays App coverage guidance until a reviewable milestone", () => {
-    expect(skillMarkdown).toContain("After the Phase 1 PR is open");
+    expect(skillMarkdown).toContain("After the seed PR is open");
     expect(skillMarkdown).toContain("do not interrupt source resolution, structure");
     expect(skillMarkdown).toContain("relay only a recovery URL returned");
   });
 
-  it("ships behavioral gates for chat-supplied sources and same-chat Phase 2 continuation", () => {
+  it("ships behavioral gates for chat-supplied sources and post-confirmation single-PR delivery", () => {
     const chatSource = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "empty-manifest-chat-source");
     expect(chatSource).toMatchObject({
-      expected: { action: "propose_phase1_skeleton", requireSourceRead: true, requireWorktree: false },
+      expected: { action: "propose_skeleton", requireSourceRead: true, requireWorktree: false },
       fixture: { sourceRepoState: "chat-local-readable", treeState: "empty" },
     });
     expect(chatSource?.forbidden.actions).toContain("require_github_app");
 
-    const continuation = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "same-chat-phase2-continuation");
-    expect(continuation).toMatchObject({
-      expected: { action: "continue_phase2", requireSourceRead: true, requireWorktree: true },
-      fixture: { sourceRepoState: "bare-readable", treeState: "phase1-approved" },
+    const build = FIRST_TREE_SEED_GATE_CASES.find(
+      (evalCase) => evalCase.id === "same-chat-approved-skeleton-builds-single-pr",
+    );
+    expect(build).toMatchObject({
+      expected: {
+        action: "build_single_pr",
+        requireChatHistoryRead: true,
+        requireSourceRead: true,
+        requireWorktree: true,
+      },
+      fixture: { chatHistoryState: "approved-skeleton", sourceRepoState: "bare-readable", treeState: "empty" },
     });
-    expect(continuation?.forbidden.actions).toContain("refuse_nonempty_tree");
+    expect(build?.forbidden.actions).toContain("restart_skeleton_proposal");
   });
 });

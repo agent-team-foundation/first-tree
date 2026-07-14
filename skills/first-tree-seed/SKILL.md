@@ -778,7 +778,9 @@ After all sub-agents return:
 - Commits: the structure commit (the Phase 1 pass), then one commit per
   sub-agent for content (preserve domain boundaries for review), plus one
   consolidation commit at the end.
-- Show the diff to the user before push.
+- Inspect the complete diff before push and summarize it in the final handoff.
+  Do not introduce another approval or waiting point: the earlier checklist
+  confirmation is the build's only human gate.
 - Run `first-tree tree verify --tree-path <tree>` from a clean checkout of
   the branch. Non-zero exit blocks.
 - PR title: `Seed initial Context Tree — structure + initial leaves across <N> domain(s)`
@@ -801,11 +803,11 @@ explicit scope.
 
 ### If the seed PR is abandoned
 
-A user may open the seed PR and never merge it. Nothing lands — the tree
-stays exactly as it was (either unbound, or bound-but-empty from `tree
-init`), with no half-built state to recover. A later seed request simply
-runs again from the current state. Once the seed PR *is* merged the tree
-has domain structure (state C); further writes go through
+A user may open the seed PR and never merge it. No domain structure or leaf
+content lands, so there is no half-built seed to recover. In state A, the
+earlier `tree init` may still have bound the workspace to an empty tree; that
+bound-but-empty tree remains eligible for a later seed run. Once the seed PR
+*is* merged the tree has domain structure (state C); further writes go through
 `first-tree-write` one source at a time.
 
 ---

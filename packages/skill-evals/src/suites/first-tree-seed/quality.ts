@@ -21,8 +21,8 @@ const SEED_SKELETON_QUALITY_DIMENSIONS: readonly JudgeRubricDimension[] = [
   },
   {
     description:
-      "The output stays Phase 1 only: skeleton/checklist plus approval request, with no leaf content or tree writes.",
-    key: "phase_boundary",
+      "The output proposes the domain skeleton and asks for explicit chat confirmation before any structure or leaf content is written.",
+    key: "confirmation_boundary",
     threshold: 5,
   },
   {
@@ -45,12 +45,12 @@ export const FIRST_TREE_SEED_QUALITY_CASE: QualityEvalCase = {
     rubric: "first-tree-seed skeleton quality",
   },
   fixture: {
-    artifact: "actual Phase 1 skeleton proposal produced by empty-tree-source-present",
+    artifact: "actual domain skeleton proposal produced by empty-tree-source-present",
     gateCaseId: "empty-tree-source-present",
     source: "source evidence from the empty-tree-source-present fixture",
   },
   id: "first-tree-seed-skeleton-quality",
-  prompt: "Judge the quality of a first-tree-seed Phase 1 skeleton proposal from the empty-tree-source-present gate.",
+  prompt: "Judge the quality of a first-tree-seed domain skeleton proposal from the empty-tree-source-present gate.",
   provider: "codex",
   skill: "first-tree-seed",
   status: "implemented",
@@ -65,10 +65,10 @@ function dimensionLines(dimensions: readonly JudgeRubricDimension[]): string {
 }
 
 function buildSeedJudgePrompt(input: QualityArtifactInput): string {
-  return `You are judging a First Tree Phase 1 Context Tree skeleton proposed by first-tree-seed.
+  return `You are judging a First Tree Context Tree domain skeleton proposed by first-tree-seed.
 
 Return ONLY strict JSON with this shape:
-{"scores":{"source_grounding":1,"structure_fit":1,"phase_boundary":1,"coverage_calibration":1,"conciseness":1},"reasoning":"one concise paragraph"}
+{"scores":{"source_grounding":1,"structure_fit":1,"confirmation_boundary":1,"coverage_calibration":1,"conciseness":1},"reasoning":"one concise paragraph"}
 
 Scores are integers from 1 to 5. Do not include markdown or any extra text.
 
@@ -80,7 +80,7 @@ Source material:
 ${input.source}
 \`\`\`
 
-Actual Phase 1 skeleton proposal from the live gate:
+Actual domain skeleton proposal from the live gate:
 \`\`\`text
 ${input.artifact}
 \`\`\`
@@ -121,7 +121,7 @@ export const FIRST_TREE_SEED_QUALITY_SANITY_FIXTURES: readonly QualitySanityFixt
     input: sanityInput(
       "good",
       [
-        "Phase 1 skeleton proposal:",
+        "Domain skeleton proposal:",
         "- system/",
         "  - cli.md (ON: source names local CLI operations)",
         "  - cloud.md (ON: onboarding and operator dashboard evidence)",
@@ -136,7 +136,7 @@ export const FIRST_TREE_SEED_QUALITY_SANITY_FIXTURES: readonly QualitySanityFixt
       {
         conciseness: 4,
         coverage_calibration: 4,
-        phase_boundary: 5,
+        confirmation_boundary: 5,
         source_grounding: 5,
         structure_fit: 5,
       },
@@ -149,7 +149,7 @@ export const FIRST_TREE_SEED_QUALITY_SANITY_FIXTURES: readonly QualitySanityFixt
     input: sanityInput(
       "borderline",
       [
-        "Phase 1 only: propose system/, product/, and team-practice/ with CLI/web/runtime second-level nodes.",
+        "Propose system/, product/, and team-practice/ with CLI/web/runtime second-level nodes.",
         "Signals are strongest for CLI and web; runtime and members are weak and need confirmation.",
         "Reply approve or edit before I create leaf nodes.",
       ].join("\n"),
@@ -158,7 +158,7 @@ export const FIRST_TREE_SEED_QUALITY_SANITY_FIXTURES: readonly QualitySanityFixt
       {
         conciseness: 3,
         coverage_calibration: 3,
-        phase_boundary: 5,
+        confirmation_boundary: 5,
         source_grounding: 4,
         structure_fit: 4,
       },
@@ -181,11 +181,11 @@ export const FIRST_TREE_SEED_QUALITY_SANITY_FIXTURES: readonly QualitySanityFixt
       {
         conciseness: 2,
         coverage_calibration: 1,
-        phase_boundary: 1,
+        confirmation_boundary: 1,
         source_grounding: 2,
         structure_fit: 2,
       },
-      "Generic template, Phase 2 leaf content, and no approval boundary.",
+      "Generic template, premature leaf content, and no confirmation boundary.",
     ),
     name: "bad",
   },

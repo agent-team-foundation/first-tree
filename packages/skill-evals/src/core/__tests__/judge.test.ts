@@ -324,11 +324,11 @@ describe("quality runner with fake judge", () => {
           [
             "first-tree-seed-skeleton-quality",
             JSON.stringify({
-              reasoning: "The skeleton is source-grounded and stays in Phase 1.",
+              reasoning: "The skeleton is source-grounded and preserves the chat confirmation boundary.",
               scores: {
                 conciseness: 4,
                 coverage_calibration: 4,
-                phase_boundary: 5,
+                confirmation_boundary: 5,
                 source_grounding: 5,
                 structure_fit: 4,
               },
@@ -358,7 +358,7 @@ describe("quality runner with fake judge", () => {
       expect(batch.failed).toBe(0);
       expect(batch.passed).toBe(1);
       expect(batch.cases[0]?.judge_scores).toMatchObject({
-        phase_boundary: 5,
+        confirmation_boundary: 5,
         source_grounding: 5,
       });
     } finally {

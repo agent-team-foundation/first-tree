@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
 import type { RunPaths } from "../../core/types.js";
-import { approvedPhase1ChatHistoryMarkdown } from "./fixture.js";
+import { approvedSkeletonChatHistoryMarkdown } from "./fixture.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
@@ -67,7 +67,7 @@ const REAL_FIRST_TREE_SOURCE_EVIDENCE_HINTS = [
   "skill-evals",
 ];
 const CHAT_HISTORY_PATH = ".first-tree-eval/chat-history.md";
-const CHAT_HISTORY_EVIDENCE_HINTS = ["Phase 1 proposal", "Approved", "Phase 1 PR handoff"];
+const CHAT_HISTORY_EVIDENCE_HINTS = ["Skeleton proposal", "Approved"];
 
 function sourceEvidenceHints(evalCase: FirstTreeSeedEvalCase): readonly string[] {
   return evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
@@ -978,7 +978,7 @@ function pathIsChatHistory(value: string, paths: RunPaths): boolean {
     const canonicalWorkspace = realpathSync(paths.workspacePath);
     return (
       canonicalCandidate === join(canonicalWorkspace, CHAT_HISTORY_PATH) &&
-      readFileSync(candidate, "utf8") === approvedPhase1ChatHistoryMarkdown()
+      readFileSync(candidate, "utf8") === approvedSkeletonChatHistoryMarkdown()
     );
   } catch {
     return false;
@@ -1093,26 +1093,16 @@ function containsChatHistoryEvidence(event: unknown, paths: RunPaths): boolean {
   });
 }
 
-function phase2LeafContentObserved(text: string): boolean {
+function leafContentObserved(text: string): boolean {
   return /^##\s+(Decision|Rationale|Constraints)\b/mu.test(text);
 }
 
-function phase2RefusalObserved(text: string): boolean {
-  if (/\bI(?:['’]m| am)\s+refus(?:e|ing)\s+(?:the\s+)?(?:seed\s+)?continuation\b/iu.test(text)) {
-    return true;
-  }
-  if (
-    /(?:phase\s*2|leaf)[\s\S]{0,400}\b(?:I(?:'m| am)\s+refus(?:e|ing)|refus(?:e|es|ed|ing|al)\s+(?:the\s+)?continuation|cannot\s+continue)\b/iu.test(
-      text,
-    )
-  ) {
-    return true;
-  }
+function singlePrBuildRefusalObserved(text: string): boolean {
   return text.split(/[.!?;\n]+/u).some((segment) => {
-    if (!/(?:phase\s*2|leaf)/iu.test(segment)) return false;
+    if (!/(?:single[- ]pr|seed\s+build|structure|lea(?:f|ves))/iu.test(segment)) return false;
     if (
       /\b(?:eval|fixture|test)\s+(?:restriction|rule)\b/iu.test(segment) &&
-      /\bstopp?\w*\s+before\b/iu.test(segment)
+      /\b(?:stopp?\w*|pause\w*)\s+before\b/iu.test(segment)
     ) {
       return false;
     }
@@ -1126,17 +1116,16 @@ function phase2RefusalObserved(text: string): boolean {
   });
 }
 
-function phase2ContinuationObserved(text: string): boolean {
-  if (phase2RefusalObserved(text)) return false;
-  return text
-    .split(/[.!?;\n]+/u)
-    .some(
-      (segment) =>
-        /(?:phase\s*2|leaf)/iu.test(segment) &&
-        /\b(?:begin|continuation|continue|dispatch|draft|enter|move|proceed|route|start|valid|write|writing)\w*\b/iu.test(
-          segment,
-        ),
+function singlePrBuildObserved(text: string): boolean {
+  if (singlePrBuildRefusalObserved(text)) return false;
+  const actionObserved =
+    /\b(?:begin|build|continue|dispatch|draft|enter|move|open|proceed|route|start|write|writing)\w*\b/iu.test(text);
+  const singlePrObserved = /\b(?:one|single)\s+(?:reviewable\s+)?(?:seed\s+)?pr\b|chore\/seed-tree/iu.test(text);
+  const structureAndLeavesObserved =
+    /structure[\s\S]{0,240}\b(?:initial\s+)?lea(?:f|ves)\b|\b(?:initial\s+)?lea(?:f|ves)\b[\s\S]{0,240}structure/iu.test(
+      text,
     );
+  return actionObserved && singlePrObserved && structureAndLeavesObserved;
 }
 
 function githubAppRequirementObserved(text: string): boolean {
@@ -1155,13 +1144,13 @@ function githubAppRequirementObserved(text: string): boolean {
   });
 }
 
-function phase1RestartObserved(text: string): boolean {
+function skeletonRestartObserved(text: string): boolean {
   return text.split(/[.!?;\n]+/u).some((segment) => {
-    if (!/phase\s*1/iu.test(segment)) return false;
+    if (!/skeleton/iu.test(segment)) return false;
     if (
       /\bwithout\s+(?:restarting|repeating|redoing|re-proposing)\b/iu.test(segment) ||
       /\b(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:restart|repeat|redo|re-propose)\b/iu.test(segment) ||
-      /\bno\s+phase\s*1\s+(?:restart|repeat|redo|re-proposal)\b/iu.test(segment)
+      /\bno\s+skeleton\s+(?:restart|repeat|redo|re-proposal)\b/iu.test(segment)
     ) {
       return false;
     }
@@ -1180,7 +1169,7 @@ function forbiddenActionHits(
 
   for (const action of evalCase.forbidden.actions) {
     if (action === "direct_bare_source_read" && metrics.directBareSourceContentReadObserved) hits.push(action);
-    if (action === "phase2_leaf_content_before_approval" && metrics.phase2LeafContentObserved) hits.push(action);
+    if (action === "content_before_confirmation" && metrics.leafContentObserved) hits.push(action);
     if (action === "skip_user_confirmation" && metrics.skeletonObserved && !metrics.approvalRequestObserved) {
       hits.push(action);
     }
@@ -1193,14 +1182,14 @@ function forbiddenActionHits(
     ) {
       hits.push(action);
     }
-    if (action === "phase1_skeleton" && metrics.skeletonObserved) hits.push(action);
+    if (action === "skeleton_proposal" && metrics.skeletonObserved) hits.push(action);
     if (action === "partial_seed" && metrics.skeletonObserved) hits.push(action);
     if (action === "require_github_app" && metrics.githubAppRequirementObserved) {
       hits.push(action);
     }
-    if (action === "refuse_nonempty_tree" && metrics.phase2RefusalObserved) hits.push(action);
-    if (action === "continue_phase2" && metrics.phase2ContinuationObserved) hits.push(action);
-    if (action === "restart_phase1" && phase1RestartObserved(text)) {
+    if (action === "refuse_nonempty_tree" && metrics.singlePrBuildRefusalObserved) hits.push(action);
+    if (action === "build_single_pr" && metrics.singlePrBuildObserved) hits.push(action);
+    if (action === "restart_skeleton_proposal" && skeletonRestartObserved(text)) {
       hits.push(action);
     }
     if (
@@ -1245,7 +1234,7 @@ export function deriveMetrics(
     if (containsChatHistoryEvidence(event, paths)) chatHistoryReadObserved = true;
     // Any operation ON the source worktree (`git worktree add/remove`, reading a
     // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
-    // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
+    // survives a later `git worktree remove`, so an add/read/cleanup
     // cannot pass the state check by leaving the final filesystem clean. Detected
     // structurally (see `commandTouchesSourceWorktree`) so both full-path and
     // `cd worktrees && … seed-source-repo …` relative forms are caught, while a
@@ -1291,9 +1280,9 @@ export function deriveMetrics(
     forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv, evalCase),
     fixtureValidationOk: fixtureValidation.ok,
     githubAppRequirementObserved: githubAppRequirementObserved(finalResponse),
-    phase2ContinuationObserved: phase2ContinuationObserved(finalResponse),
-    phase2LeafContentObserved: phase2LeafContentObserved(finalResponse),
-    phase2RefusalObserved: phase2RefusalObserved(finalResponse),
+    singlePrBuildObserved: singlePrBuildObserved(finalResponse),
+    leafContentObserved: leafContentObserved(finalResponse),
+    singlePrBuildRefusalObserved: singlePrBuildRefusalObserved(finalResponse),
     runnerExitCode,
     seedSkillFileReadObserved,
     skeletonObserved: skeletonHints.length > 0 && countMatches(finalResponse, skeletonHints) >= 2,
@@ -1330,7 +1319,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (metrics.forbiddenSideEffectHits.length > 0) return false;
   if (!metrics.expectedResponseObserved) return false;
 
-  if (evalCase.expected.action === "propose_phase1_skeleton") {
+  if (evalCase.expected.action === "propose_skeleton") {
     return (
       (evalCase.expected.requireWorktree
         ? metrics.sourceWorktreeMaterializedObserved
@@ -1378,7 +1367,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     // fails — that omission is the regression this case guards.
     //
     // The state check's real invariant is the `tree init --dir <managed>` routing above.
-    // Going past the state check into Phase 1 source exploration still fails, via three
+    // Going past the state check into source exploration still fails, via three
     // signals: materializing a source worktree (`sourceWorktreeCreated`, final
     // filesystem), TOUCHING a source worktree at all (`sourceWorktreeAccessObserved`,
     // event-level — so an add/read/`git worktree remove` sequence cannot pass by
@@ -1399,12 +1388,12 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     );
   }
 
-  if (evalCase.expected.action === "continue_phase2") {
+  if (evalCase.expected.action === "build_single_pr") {
     return (
       metrics.sourceWorktreeMaterializedObserved &&
       metrics.sourceEvidenceReadObserved &&
-      metrics.phase2ContinuationObserved &&
-      !metrics.phase2RefusalObserved &&
+      metrics.singlePrBuildObserved &&
+      !metrics.singlePrBuildRefusalObserved &&
       !metrics.directBareSourceContentReadObserved
     );
   }
@@ -1461,18 +1450,18 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
       notes.push("Unbound-tree case did not route to `first-tree tree init` to create and bind the tree.");
     } else if (!metrics.treeInitWithContextTreeDirObserved) {
       notes.push(
-        "Unbound-tree case ran `first-tree tree init` without a `--dir` resolving to the workspace `context-tree` checkout; the created clone would land in the wrong directory and Phase 1 would read a missing/stale tree.",
+        "Unbound-tree case ran `first-tree tree init` without a `--dir` resolving to the workspace `context-tree` checkout; the created clone would land in the wrong directory and the seed build would read a missing/stale tree.",
       );
     }
   }
-  if (metrics.phase2LeafContentObserved && evalCase.expected.action !== "continue_phase2") {
-    notes.push("Phase 2-style leaf content was observed before user approval.");
+  if (metrics.leafContentObserved && evalCase.expected.action !== "build_single_pr") {
+    notes.push("Leaf content was observed before user confirmation.");
   }
-  if (evalCase.expected.action === "continue_phase2" && !metrics.phase2ContinuationObserved) {
-    notes.push("Same-chat continuation did not positively route into Phase 2 leaf drafting.");
+  if (evalCase.expected.action === "build_single_pr" && !metrics.singlePrBuildObserved) {
+    notes.push("Approved same-chat setup did not route into the single-PR structure-and-leaves build.");
   }
-  if (metrics.phase2RefusalObserved) {
-    notes.push("Model refused the verified same-chat Phase 2 continuation.");
+  if (metrics.singlePrBuildRefusalObserved) {
+    notes.push("Model refused the verified same-chat single-PR seed build.");
   }
   return notes.length > 0 ? notes.join(" ") : null;
 }

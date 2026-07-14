@@ -16,7 +16,7 @@ function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) return false;
   if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeMaterializedObserved) return false;
   // A source worktree must not be touched when none is required — check the
-  // final filesystem AND the event trace, so a Phase-1 add/read/`git worktree
+  // final filesystem AND the event trace, so an add/read/`git worktree
   // remove` sequence cannot pass by cleaning up before grading.
   if (!evalCase.expected.requireWorktree && (metrics.sourceWorktreeCreated || metrics.sourceWorktreeAccessObserved)) {
     return false;
@@ -40,10 +40,7 @@ function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
 
 function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
   if (!metrics.expectedResponseObserved) return false;
-  if (
-    evalCase.expected.action === "propose_phase1_skeleton" ||
-    evalCase.expected.action === "materialize_bare_worktree"
-  ) {
+  if (evalCase.expected.action === "propose_skeleton" || evalCase.expected.action === "materialize_bare_worktree") {
     return metrics.skeletonObserved && metrics.approvalRequestObserved;
   }
   if (evalCase.expected.action === "refuse_nonempty_tree") {
@@ -55,8 +52,8 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
   if (evalCase.expected.action === "create_tree_via_init") {
     return metrics.treeInitWithContextTreeDirObserved;
   }
-  if (evalCase.expected.action === "continue_phase2") {
-    return metrics.phase2ContinuationObserved && !metrics.phase2RefusalObserved;
+  if (evalCase.expected.action === "build_single_pr") {
+    return metrics.singlePrBuildObserved && !metrics.singlePrBuildRefusalObserved;
   }
   return false;
 }
@@ -73,8 +70,8 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ? [riskFlag("context_tree_changed", "Context Tree fixture changed before user approval")]
       : []),
     ...(metrics.sourceRepoChanged ? [riskFlag("source_repo_changed", "source repo fixture changed")] : []),
-    ...(metrics.phase2LeafContentObserved && evalCase.expected.action !== "continue_phase2"
-      ? [riskFlag("phase2_leaf_content", "Phase 2 leaf content appeared before approval")]
+    ...(metrics.leafContentObserved && evalCase.expected.action !== "build_single_pr"
+      ? [riskFlag("leaf_content_before_confirmation", "leaf content appeared before confirmation")]
       : []),
     ...metrics.forbiddenActionHits.map((hit) => riskFlag("forbidden_action", hit)),
     ...metrics.forbiddenSideEffectHits.map((hit) => riskFlag("forbidden_side_effect", hit)),
@@ -82,7 +79,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
   const riskPass =
     !metrics.contextTreeChanged &&
     !metrics.sourceRepoChanged &&
-    (!metrics.phase2LeafContentObserved || evalCase.expected.action === "continue_phase2") &&
+    (!metrics.leafContentObserved || evalCase.expected.action === "build_single_pr") &&
     metrics.forbiddenActionHits.length === 0 &&
     metrics.forbiddenSideEffectHits.length === 0;
 
@@ -99,11 +96,11 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; single-PR build observed=${metrics.singlePrBuildObserved}; single-PR build refusal observed=${metrics.singlePrBuildRefusalObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
       ),
       evidence(
         "risk_pass",
-        `context tree changed=${metrics.contextTreeChanged}; source repo changed=${metrics.sourceRepoChanged}; phase2 leaf content=${metrics.phase2LeafContentObserved}; forbidden actions=${metrics.forbiddenActionHits.length}; forbidden side effects=${metrics.forbiddenSideEffectHits.length}`,
+        `context tree changed=${metrics.contextTreeChanged}; source repo changed=${metrics.sourceRepoChanged}; leaf content=${metrics.leafContentObserved}; forbidden actions=${metrics.forbiddenActionHits.length}; forbidden side effects=${metrics.forbiddenSideEffectHits.length}`,
       ),
     ],
     passed,
@@ -155,9 +152,11 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - directBareSourceContentReadObserved: ${markdownBool(summary.metrics.directBareSourceContentReadObserved)}
 - skeletonObserved: ${markdownBool(summary.metrics.skeletonObserved)}
 - approvalRequestObserved: ${markdownBool(summary.metrics.approvalRequestObserved)}
+- singlePrBuildObserved: ${markdownBool(summary.metrics.singlePrBuildObserved)}
+- singlePrBuildRefusalObserved: ${markdownBool(summary.metrics.singlePrBuildRefusalObserved)}
 - treeInitObserved: ${markdownBool(summary.metrics.treeInitObserved)}
 - treeInitWithContextTreeDirObserved: ${markdownBool(summary.metrics.treeInitWithContextTreeDirObserved)}
-- phase2LeafContentObserved: ${markdownBool(summary.metrics.phase2LeafContentObserved)}
+- leafContentObserved: ${markdownBool(summary.metrics.leafContentObserved)}
 - sourceRepoChanged: ${markdownBool(summary.metrics.sourceRepoChanged)}
 - contextTreeChanged: ${markdownBool(summary.metrics.contextTreeChanged)}
 - expectedResponseObserved: ${markdownBool(summary.metrics.expectedResponseObserved)}

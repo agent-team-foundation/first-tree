@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RunPaths } from "../../../core/types.js";
 import { FIRST_TREE_SEED_GATE_CASES, FIRST_TREE_SEED_PERIODIC_CASES } from "../cases.js";
-import { approvedPhase1ChatHistoryMarkdown } from "../fixture.js";
+import { approvedSkeletonChatHistoryMarkdown } from "../fixture.js";
 import { casePassed, deriveMetrics } from "../grader.js";
 import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "../types.js";
@@ -37,15 +37,15 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     contextTreeStatus: "",
     directBareSourceContentReadObserved: false,
     expectedResponseObserved: true,
-    finalResponse: "Phase 1 skeleton ready for approval.",
+    finalResponse: "domain skeleton ready for approval.",
     firstTreeArgv: [],
     forbiddenActionHits: [],
     forbiddenSideEffectHits: [],
     fixtureValidationOk: true,
     githubAppRequirementObserved: false,
-    phase2ContinuationObserved: false,
-    phase2LeafContentObserved: false,
-    phase2RefusalObserved: false,
+    singlePrBuildObserved: false,
+    leafContentObserved: false,
+    singlePrBuildRefusalObserved: false,
     runnerExitCode: 0,
     seedSkillFileReadObserved: true,
     skeletonObserved: true,
@@ -121,33 +121,33 @@ describe("first-tree-seed grader", () => {
         findCase("empty-tree-source-present"),
         baseMetrics({
           finalResponse:
-            "Proposed Phase 1 skeleton: system, product, team-practice, members, raw-context. Reply to approve.",
+            "Proposed domain skeleton: system, product, team-practice, members, raw-context. Reply to approve.",
         }),
       ),
     ).toBe(true);
   });
 
-  it("fails empty-tree source-present when Phase 2 leaf content appears before approval", () => {
+  it("fails empty-tree source-present when leaf content appears before confirmation", () => {
     expect(
       casePassed(
         findCase("empty-tree-source-present"),
         baseMetrics({
-          forbiddenActionHits: ["phase2_leaf_content_before_approval"],
-          phase2LeafContentObserved: true,
+          forbiddenActionHits: ["content_before_confirmation"],
+          leafContentObserved: true,
         }),
       ),
     ).toBe(false);
   });
 
-  it("requires a positive Phase 2 continuation and does not misread no-App prose as an App requirement", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-positive-"));
+  it("recognizes the approved structure-and-leaves single-PR build without requiring the GitHub App", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-positive-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
               item: {
-                text: "Phase 2 is not blocked, so I will continue leaf drafting without restarting the Phase 1 proposal. No need to install the GitHub App.",
+                text: "Approval is confirmed. I will now build the structure and initial leaves on chore/seed-tree and open one reviewable seed PR. No GitHub App is required.",
                 type: "agent_message",
               },
               type: "item.completed",
@@ -155,24 +155,24 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.phase2ContinuationObserved).toBe(true);
-      expect(metrics.phase2RefusalObserved).toBe(false);
+      expect(metrics.singlePrBuildObserved).toBe(true);
+      expect(metrics.singlePrBuildRefusalObserved).toBe(false);
       expect(metrics.githubAppRequirementObserved).toBe(false);
       expect(metrics.forbiddenActionHits).toEqual([]);
       expect(
         casePassed(
-          findCase("same-chat-phase2-continuation"),
+          findCase("same-chat-approved-skeleton-builds-single-pr"),
           baseMetrics({
             finalResponse: metrics.finalResponse,
-            phase2ContinuationObserved: true,
-            phase2RefusalObserved: false,
+            singlePrBuildObserved: true,
+            singlePrBuildRefusalObserved: false,
             skeletonObserved: false,
           }),
         ),
@@ -182,12 +182,13 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("requires the positive continuation case to read the visible prior-turn transcript", () => {
-    const evalCase = findCase("same-chat-phase2-continuation");
+  it("requires the approved single-PR build case to read the visible prior-turn transcript", () => {
+    const evalCase = findCase("same-chat-approved-skeleton-builds-single-pr");
     const metrics = baseMetrics({
       chatHistoryReadObserved: false,
-      finalResponse: "The Phase 2 continuation is valid, so I will continue leaf drafting.",
-      phase2ContinuationObserved: true,
+      finalResponse:
+        "Approval is confirmed. I will build the structure and initial leaves and open one reviewable seed PR.",
+      singlePrBuildObserved: true,
       skeletonObserved: false,
     });
 
@@ -195,15 +196,15 @@ describe("first-tree-seed grader", () => {
     expect(buildGrading(evalCase, metrics, false).scores.process_pass).toBe(false);
   });
 
-  it("does not treat an eval-only stop before writes as refusing a verified Phase 2 continuation", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-eval-stop-"));
+  it("does not treat an eval-only stop before side effects as refusing the approved build", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-eval-stop-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
               item: {
-                text: "The populated-tree exception applies, and this setup routes to Phase 2. Per the eval restriction, I stopped before dispatching leaf-writing work or modifying the tree.",
+                text: "Approval is confirmed. I will build the structure and initial leaves on chore/seed-tree and open one seed PR. Per the eval restriction, I stopped before side effects.",
                 type: "agent_message",
               },
               type: "item.completed",
@@ -211,31 +212,34 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
         join(tempRoot, "context-tree"),
       );
 
-      expect(metrics.phase2ContinuationObserved).toBe(true);
-      expect(metrics.phase2RefusalObserved).toBe(false);
-      expect(metrics.forbiddenActionHits).not.toContain("refuse_nonempty_tree");
+      expect(metrics.singlePrBuildObserved).toBe(true);
+      expect(metrics.singlePrBuildRefusalObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
   });
 
   it("records same-chat history only after a successful content read with transcript evidence", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-history-read-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-history-read-"));
     try {
       mkdirSync(join(tempRoot, ".first-tree-eval"), { recursive: true });
-      writeFileSync(join(tempRoot, ".first-tree-eval", "chat-history.md"), approvedPhase1ChatHistoryMarkdown(), "utf8");
+      writeFileSync(
+        join(tempRoot, ".first-tree-eval", "chat-history.md"),
+        approvedSkeletonChatHistoryMarkdown(),
+        "utf8",
+      );
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: approvedPhase1ChatHistoryMarkdown(),
+              aggregated_output: approvedSkeletonChatHistoryMarkdown(),
               command: "cat .first-tree-eval/chat-history.md",
               exit_code: 0,
               status: "completed",
@@ -244,7 +248,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -263,14 +267,14 @@ describe("first-tree-seed grader", () => {
       mkdirSync(join(tempRoot, ".first-tree-eval"), { recursive: true });
       writeFileSync(
         join(tempRoot, ".first-tree-eval", "chat-history.md"),
-        "Phase 1 proposal\nApproved\nPhase 1 PR handoff\n",
+        "Skeleton proposal\nApproved\none reviewable PR\n",
         "utf8",
       );
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              aggregated_output: "Skeleton proposal\nApproved\none reviewable PR",
               command: "cat .first-tree-eval/chat-history.md",
               exit_code: 0,
               status: "completed",
@@ -279,7 +283,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -296,12 +300,16 @@ describe("first-tree-seed grader", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-restored-history-"));
     try {
       mkdirSync(join(tempRoot, ".first-tree-eval"), { recursive: true });
-      writeFileSync(join(tempRoot, ".first-tree-eval", "chat-history.md"), approvedPhase1ChatHistoryMarkdown(), "utf8");
+      writeFileSync(
+        join(tempRoot, ".first-tree-eval", "chat-history.md"),
+        approvedSkeletonChatHistoryMarkdown(),
+        "utf8",
+      );
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff\n",
+              aggregated_output: "Skeleton proposal\nApproved\none reviewable PR\n",
               command: "cat .first-tree-eval/chat-history.md",
               exit_code: 0,
               status: "completed",
@@ -310,7 +318,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -328,13 +336,13 @@ describe("first-tree-seed grader", () => {
     const externalEvalDir = join(tempRoot, "external-eval");
     try {
       mkdirSync(externalEvalDir, { recursive: true });
-      writeFileSync(join(externalEvalDir, "chat-history.md"), approvedPhase1ChatHistoryMarkdown(), "utf8");
+      writeFileSync(join(externalEvalDir, "chat-history.md"), approvedSkeletonChatHistoryMarkdown(), "utf8");
       symlinkSync(externalEvalDir, join(tempRoot, ".first-tree-eval"));
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: approvedPhase1ChatHistoryMarkdown(),
+              aggregated_output: approvedSkeletonChatHistoryMarkdown(),
               command: "cat .first-tree-eval/chat-history.md",
               exit_code: 0,
               status: "completed",
@@ -343,7 +351,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -356,14 +364,14 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("requires proposal, approval, and PR handoff evidence from the transcript read", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-incomplete-history-"));
+  it("requires proposal and approval evidence from the transcript read", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-incomplete-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal: product and system.\nApproved.",
+              aggregated_output: "Skeleton proposal: product and system.\nApproved.",
               command: "cat .first-tree-eval/chat-history.md",
               exit_code: 0,
               status: "completed",
@@ -372,7 +380,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -386,14 +394,14 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not borrow same-chat evidence from an independent Context Tree read", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-mixed-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-mixed-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
               aggregated_output:
-                "Phase 1 proposal: product and system.\nApproved.\nPhase 1 PR handoff: merge then return here.",
+                "Skeleton proposal: product and system.\nApproved.\nBuild structure and leaves in one reviewable PR.",
               command:
                 "test -f .first-tree-eval/chat-history.md && cat .first-tree-eval/chat-history.md; sed -n 1,120p context-tree/NODE.md",
               exit_code: 0,
@@ -403,7 +411,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -417,15 +425,15 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit a skipped transcript read followed by literal evidence", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-skipped-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-skipped-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff: merge then return here.",
+              aggregated_output: "Skeleton proposal\nApproved\nBuild structure and leaves in one reviewable PR.",
               command:
-                "false && cat .first-tree-eval/chat-history.md; printf 'Phase 1 proposal\\nApproved\\nPhase 1 PR handoff: merge then return here.\\n'",
+                "false && cat .first-tree-eval/chat-history.md; printf 'Skeleton proposal\\nApproved\\nBuild structure and leaves in one reviewable PR.\\n'",
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -433,7 +441,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -447,15 +455,15 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit a skipped transcript read followed by variable-expanded evidence", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-variable-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-variable-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              aggregated_output: "Skeleton proposal\nApproved\none reviewable PR",
               command:
-                "H='Phase 1 proposal\\nApproved\\nPhase 1 PR handoff'; false && cat .first-tree-eval/chat-history.md; printf '%b\\n' \"$H\"",
+                "H='Skeleton proposal\\nApproved\\none reviewable PR'; false && cat .first-tree-eval/chat-history.md; printf '%b\\n' \"$H\"",
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -463,7 +471,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -477,13 +485,13 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit transcript evidence from another file operand in the same reader", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-multi-file-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-multi-file-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              aggregated_output: "Skeleton proposal\nApproved\none reviewable PR",
               command: "cat .first-tree-eval/chat-history.md context-tree/NODE.md",
               exit_code: 0,
               status: "completed",
@@ -492,7 +500,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -506,13 +514,13 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit a transcript path outside the current eval workspace", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-wrong-root-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-wrong-root-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              aggregated_output: "Skeleton proposal\nApproved\none reviewable PR",
               command: "cat /tmp/.first-tree-eval/chat-history.md",
               exit_code: 0,
               status: "completed",
@@ -521,7 +529,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -535,7 +543,7 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit transcript operands with shell expansion or an untrusted reader", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-expanded-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-expanded-history-"));
     const commands = [
       'cat ".first-tree-eval/$(printf chat-history.md)"',
       'cat ".first-tree-eval/$H"',
@@ -548,7 +556,7 @@ describe("first-tree-seed grader", () => {
           [
             {
               event: {
-                aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+                aggregated_output: "Skeleton proposal\nApproved\none reviewable PR",
                 command,
                 exit_code: 0,
                 status: "completed",
@@ -557,7 +565,7 @@ describe("first-tree-seed grader", () => {
               type: "codex_event",
             },
           ],
-          findCase("same-chat-phase2-continuation"),
+          findCase("same-chat-approved-skeleton-builds-single-pr"),
           fixtureValidation(),
           0,
           baseRunPaths(tempRoot),
@@ -572,15 +580,15 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit transcript hints synthesized by a rewriting pipeline filter", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-rewrite-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-rewrite-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal Approved Phase 1 PR handoff",
+              aggregated_output: "Skeleton proposal Approved one reviewable PR",
               command:
-                "cat .first-tree-eval/chat-history.md | rg --replace='Phase 1 proposal Approved Phase 1 PR handoff' '.+'",
+                "cat .first-tree-eval/chat-history.md | rg --replace='Skeleton proposal Approved one reviewable PR' '.+'",
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -588,7 +596,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -602,15 +610,15 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit transcript hints synthesized by an awk BEGIN block", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-awk-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-awk-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
-              aggregated_output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+              aggregated_output: "Skeleton proposal\nApproved\none reviewable PR",
               command:
-                'awk \'BEGIN { print "Phase 1 proposal"; print "Approved"; print "Phase 1 PR handoff"; exit }\' .first-tree-eval/chat-history.md',
+                'awk \'BEGIN { print "Skeleton proposal"; print "Approved"; print "one reviewable PR"; exit }\' .first-tree-eval/chat-history.md',
               exit_code: 0,
               status: "completed",
               type: "command_execution",
@@ -618,7 +626,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -632,14 +640,14 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit a failed transcript content read", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-failed-history-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-failed-history-"));
     try {
       const metrics = deriveMetrics(
         [
           {
             event: {
               aggregated_output:
-                "cat: .first-tree-eval/chat-history.md: No such file\nPhase 1 proposal\nApproved\nPhase 1 PR handoff",
+                "cat: .first-tree-eval/chat-history.md: No such file\nSkeleton proposal\nApproved\none reviewable PR",
               command: "cat .first-tree-eval/chat-history.md",
               exit_code: 1,
               status: "failed",
@@ -648,7 +656,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -662,7 +670,7 @@ describe("first-tree-seed grader", () => {
   });
 
   it("does not credit a transcript path mention or existence check as reading prior turns", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-history-spoof-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-history-spoof-"));
     try {
       const metrics = deriveMetrics(
         [
@@ -677,7 +685,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -690,222 +698,6 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("passes the Phase-1-shaped negative sibling only when it refuses without source exploration", () => {
-    const evalCase = findCase("phase1-shaped-tree-without-same-chat-history-refuses");
-    const metrics = baseMetrics({
-      chatHistoryReadObserved: false,
-      finalResponse:
-        "This populated tree has no visible same-chat history, so first-tree-seed cannot continue; use first-tree-write or focused maintenance.",
-      phase2ContinuationObserved: false,
-      skeletonObserved: false,
-      sourceEvidenceReadObserved: false,
-      sourceWorktreeAccessObserved: false,
-      sourceWorktreeCreated: false,
-      sourceWorktreeMaterializedObserved: false,
-    });
-
-    expect(casePassed(evalCase, metrics)).toBe(true);
-  });
-
-  it("flags Phase 2 continuation when the same-chat history fixture is absent", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-missing-history-"));
-    try {
-      const metrics = deriveMetrics(
-        [
-          {
-            event: {
-              item: {
-                text: "The visible history is absent, but I will continue Phase 2 leaf drafting anyway.",
-                type: "agent_message",
-              },
-              type: "item.completed",
-            },
-            type: "codex_event",
-          },
-        ],
-        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
-
-      expect(metrics.phase2ContinuationObserved).toBe(true);
-      expect(metrics.forbiddenActionHits).toContain("continue_phase2");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("classifies an explicit refusal after explaining the missing Phase 2 authorization", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-explicit-refusal-"));
-    try {
-      const metrics = deriveMetrics(
-        [
-          {
-            event: {
-              item: {
-                text: "This chat lacks the visible proposal, approval, and handoff, so Phase 2 continuation is unauthorized. The tree shape cannot substitute for that history. I’m refusing the seed continuation.",
-                type: "agent_message",
-              },
-              type: "item.completed",
-            },
-            type: "codex_event",
-          },
-        ],
-        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
-
-      expect(metrics.phase2RefusalObserved).toBe(true);
-      expect(metrics.phase2ContinuationObserved).toBe(false);
-      expect(metrics.forbiddenActionHits).not.toContain("continue_phase2");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("classifies a curly-apostrophe seed-continuation refusal after a separate Phase 2 explanation", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-curly-refusal-"));
-    try {
-      const metrics = deriveMetrics(
-        [
-          {
-            event: {
-              item: {
-                text: "This chat lacks the visible history required for Phase 2 continuation. I’m refusing seed continuation.",
-                type: "agent_message",
-              },
-              type: "item.completed",
-            },
-            type: "codex_event",
-          },
-        ],
-        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
-
-      expect(metrics.phase2RefusalObserved).toBe(true);
-      expect(metrics.phase2ContinuationObserved).toBe(false);
-      expect(metrics.forbiddenActionHits).not.toContain("continue_phase2");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("classifies an explicit not-authorized Phase 2 response as a refusal", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-not-authorized-refusal-"));
-    try {
-      const metrics = deriveMetrics(
-        [
-          {
-            event: {
-              item: {
-                text: "Refused: this is state C—already seeded. It is not authorized as a Phase 2 continuation. No source repositories were explored and nothing was written.",
-                type: "agent_message",
-              },
-              type: "item.completed",
-            },
-            type: "codex_event",
-          },
-        ],
-        findCase("phase1-shaped-tree-without-same-chat-history-refuses"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
-
-      expect(metrics.phase2RefusalObserved).toBe(true);
-      expect(metrics.phase2ContinuationObserved).toBe(false);
-      expect(metrics.forbiddenActionHits).not.toContain("continue_phase2");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("recognizes passive no-refusal prose as a positive continuation", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-passive-positive-"));
-    try {
-      const metrics = deriveMetrics(
-        [
-          {
-            event: {
-              item: {
-                text: "Phase 2 continuation is valid and should not be refused. Phase 2 will dispatch leaf drafting.",
-                type: "agent_message",
-              },
-              type: "item.completed",
-            },
-            type: "codex_event",
-          },
-        ],
-        findCase("same-chat-phase2-continuation"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
-
-      expect(metrics.phase2ContinuationObserved).toBe(true);
-      expect(metrics.phase2RefusalObserved).toBe(false);
-      expect(metrics.forbiddenActionHits).not.toContain("refuse_nonempty_tree");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects a Phase 2 refusal and detects a real GitHub App requirement", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-refusal-"));
-    try {
-      const metrics = deriveMetrics(
-        [
-          {
-            event: {
-              item: {
-                text: "I cannot continue Phase 2 leaf drafting because the tree is non-empty. Install a GitHub App first.",
-                type: "agent_message",
-              },
-              type: "item.completed",
-            },
-            type: "codex_event",
-          },
-        ],
-        findCase("same-chat-phase2-continuation"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
-
-      expect(metrics.phase2ContinuationObserved).toBe(false);
-      expect(metrics.phase2RefusalObserved).toBe(true);
-      expect(metrics.githubAppRequirementObserved).toBe(true);
-      expect(metrics.forbiddenActionHits).toEqual(
-        expect.arrayContaining(["refuse_nonempty_tree", "require_github_app"]),
-      );
-      expect(
-        casePassed(
-          findCase("same-chat-phase2-continuation"),
-          baseMetrics({
-            forbiddenActionHits: metrics.forbiddenActionHits,
-            phase2ContinuationObserved: false,
-            phase2RefusalObserved: true,
-            skeletonObserved: false,
-          }),
-        ),
-      ).toBe(false);
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
-  });
-
   it("does not count Context Tree output as source evidence without a source path read", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-is-not-source-"));
     try {
@@ -913,7 +705,7 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
-              aggregated_output: "# Apollo Console\nApproved Phase 1 skeleton.",
+              aggregated_output: "# Apollo Console\nApproved domain skeleton.",
               command: "sed -n '1,120p' context-tree/NODE.md",
               exit_code: 0,
               status: "completed",
@@ -922,7 +714,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1096,7 +888,7 @@ describe("first-tree-seed grader", () => {
       casePassed(
         findCase("bare-source-worktree-protocol"),
         baseMetrics({
-          finalResponse: "I created a seed-source-repo worktree and propose a Phase 1 skeleton for approval.",
+          finalResponse: "I created a seed-source-repo worktree and propose a domain skeleton for approval.",
         }),
       ),
     ).toBe(true);
@@ -1105,7 +897,7 @@ describe("first-tree-seed grader", () => {
   it("does not pass worktree provenance after the read worktree is cleaned up", () => {
     const evalCase = findCase("bare-source-worktree-protocol");
     const metrics = baseMetrics({
-      finalResponse: "I read the source worktree, cleaned it up, and propose a Phase 1 skeleton for approval.",
+      finalResponse: "I read the source worktree, cleaned it up, and propose a domain skeleton for approval.",
       sourceWorktreeAccessObserved: true,
       sourceWorktreeCreated: false,
       sourceWorktreeMaterializedObserved: false,
@@ -1375,7 +1167,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1409,7 +1201,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1441,7 +1233,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1605,7 +1397,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1641,7 +1433,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1677,7 +1469,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1714,7 +1506,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1747,7 +1539,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1929,7 +1721,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1969,7 +1761,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -1981,7 +1773,7 @@ describe("first-tree-seed grader", () => {
       expect(metrics.sourceEvidenceReadObserved).toBe(false);
       expect(
         casePassed(
-          findCase("same-chat-phase2-continuation"),
+          findCase("same-chat-approved-skeleton-builds-single-pr"),
           baseMetrics({
             sourceEvidenceReadObserved: metrics.sourceEvidenceReadObserved,
             sourceWorktreeMaterializedObserved: metrics.sourceWorktreeMaterializedObserved,
@@ -1999,7 +1791,7 @@ describe("first-tree-seed grader", () => {
         findCase("first-tree-seed-real-first-tree-source-periodic"),
         baseMetrics({
           finalResponse:
-            "Proposed Phase 1 skeleton: system, context-management, cloud, team-practice, members. Reply to approve.",
+            "Proposed domain skeleton: system, context-management, cloud, team-practice, members. Reply to approve.",
         }),
       ),
     ).toBe(true);
@@ -2086,7 +1878,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2115,7 +1907,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2145,7 +1937,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2175,7 +1967,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2204,7 +1996,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2239,7 +2031,7 @@ describe("first-tree-seed grader", () => {
               type: "codex_event",
             },
           ],
-          findCase("same-chat-phase2-continuation"),
+          findCase("same-chat-approved-skeleton-builds-single-pr"),
           fixtureValidation(),
           0,
           baseRunPaths(tempRoot),
@@ -2277,7 +2069,7 @@ describe("first-tree-seed grader", () => {
               type: "codex_event",
             },
           ],
-          findCase("same-chat-phase2-continuation"),
+          findCase("same-chat-approved-skeleton-builds-single-pr"),
           fixtureValidation(),
           0,
           baseRunPaths(tempRoot),
@@ -2296,38 +2088,38 @@ describe("first-tree-seed grader", () => {
     const cases = [
       {
         command: "cat worktrees/seed-source-repo/package.json -<context-tree/NODE.md",
-        evalCase: findCase("same-chat-phase2-continuation"),
+        evalCase: findCase("same-chat-approved-skeleton-builds-single-pr"),
         output: "Apollo Console\nruntime coordination",
         readMetric: "sourceEvidenceReadObserved" as const,
       },
       {
         command: "head -n 50 worktrees/seed-source-repo/package.json -<context-tree/NODE.md",
-        evalCase: findCase("same-chat-phase2-continuation"),
+        evalCase: findCase("same-chat-approved-skeleton-builds-single-pr"),
         output: "Apollo Console\nruntime coordination",
         readMetric: "sourceEvidenceReadObserved" as const,
       },
       {
         command: "tail -n 50 worktrees/seed-source-repo/package.json -<context-tree/NODE.md",
-        evalCase: findCase("same-chat-phase2-continuation"),
+        evalCase: findCase("same-chat-approved-skeleton-builds-single-pr"),
         output: "Apollo Console\nruntime coordination",
         readMetric: "sourceEvidenceReadObserved" as const,
       },
       {
         command: "head -n $N worktrees/seed-source-repo/package.json",
-        evalCase: findCase("same-chat-phase2-continuation"),
+        evalCase: findCase("same-chat-approved-skeleton-builds-single-pr"),
         output: "Apollo Console\nruntime coordination",
         readMetric: "sourceEvidenceReadObserved" as const,
       },
       {
         command: "head -n {5,context-tree/NODE.md} worktrees/seed-source-repo/package.json",
-        evalCase: findCase("same-chat-phase2-continuation"),
+        evalCase: findCase("same-chat-approved-skeleton-builds-single-pr"),
         output: "Apollo Console\nruntime coordination",
         readMetric: "sourceEvidenceReadObserved" as const,
       },
       {
         command: "cat .first-tree-eval/chat-history.md -<context-tree/NODE.md",
-        evalCase: findCase("same-chat-phase2-continuation"),
-        output: "Phase 1 proposal\nApproved\nPhase 1 PR handoff",
+        evalCase: findCase("same-chat-approved-skeleton-builds-single-pr"),
+        output: "Skeleton proposal\nApproved\none reviewable PR",
         readMetric: "chatHistoryReadObserved" as const,
       },
     ];
@@ -2377,7 +2169,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2407,7 +2199,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2437,7 +2229,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2467,7 +2259,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2497,7 +2289,7 @@ describe("first-tree-seed grader", () => {
             type: "codex_event",
           },
         ],
-        findCase("same-chat-phase2-continuation"),
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
         fixtureValidation(),
         0,
         baseRunPaths(tempRoot),
@@ -2664,7 +2456,7 @@ describe("first-tree-seed grader", () => {
       casePassed(
         findCase("unbound-tree-inits-with-dir"),
         baseMetrics({
-          finalResponse: "The tree is empty; here is the Phase 1 skeleton for approval.",
+          finalResponse: "The tree is empty; here is the domain skeleton for approval.",
           skeletonObserved: false,
           sourceEvidenceReadObserved: false,
           sourceWorktreeCreated: false,

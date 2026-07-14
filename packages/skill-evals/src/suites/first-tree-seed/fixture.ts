@@ -31,16 +31,14 @@ function workspaceAgentsMarkdown(
       ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
       : evalCase.fixture.treeState === "empty"
         ? "The Context Tree at `./context-tree` is newly provisioned and empty."
-        : evalCase.fixture.treeState === "phase1-approved"
-          ? "The Context Tree at `./context-tree` has a Phase-1-shaped skeleton. Its shape alone does not prove that this chat owns the setup lifecycle; inspect the visible prior-turn transcript when one is provided."
-          : "The Context Tree at `./context-tree` is already populated with durable domains.";
+        : "The Context Tree at `./context-tree` is already populated with durable domains.";
   const contextTreeStateLine =
     evalCase.fixture.treeState === "unbound"
       ? "- Context Tree: unbound (no `tree` field in the manifest; conventional path would be `./context-tree`)"
       : "- Context Tree: `./context-tree`";
   const chatHistoryLine =
-    evalCase.fixture.chatHistoryState === "approved-phase1"
-      ? "- Visible prior-turn transcript: `./.first-tree-eval/chat-history.md` (inspect it before applying the populated-tree continuation exception)"
+    evalCase.fixture.chatHistoryState === "approved-skeleton"
+      ? "- Visible prior-turn transcript: `./.first-tree-eval/chat-history.md` (inspect it before continuing the approved single-PR seed build)"
       : evalCase.fixture.chatHistoryState === "absent"
         ? "- Visible prior-turn transcript: absent for this chat"
         : null;
@@ -105,8 +103,9 @@ Then read files under \`${sourceWorktreePath}\`.`
 }
 
 Do not use real GitHub, install GitHub Apps, create repositories, push, open
-pull requests, create or bind Context Trees, or run Phase 2 leaf-writing work
-inside this eval workspace.
+pull requests, create or bind Context Trees, or write seed structure or leaf
+content inside this eval workspace. After approval, describe the single-PR
+build action you would take and stop before side effects.
 `;
 }
 
@@ -127,29 +126,26 @@ function writeWorkspaceManifest(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
   writeText(join(paths.workspacePath, ".first-tree", "workspace.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-export function approvedPhase1ChatHistoryMarkdown(): string {
+export function approvedSkeletonChatHistoryMarkdown(): string {
   return `# Visible Context Tree setup chat transcript
 
 ## Assistant — earlier turn
 
-Phase 1 proposal: create the reviewed top-level \`product\` and \`system\`
+Skeleton proposal: create the reviewed top-level \`product\` and \`system\`
 domains, with \`product/onboarding\` and \`system/cloud\` as second-level
-domains. Please approve this skeleton before I write the structure PR.
+domains. Please approve this skeleton before I write any structure or leaf
+content.
 
 ## User — earlier turn
 
-Approved. Use that exact Phase 1 skeleton.
-
-## Assistant — earlier turn
-
-Phase 1 PR handoff: the approved structure PR is ready. Merge it, then reply in
-this setup chat so I can verify the default branch and continue Phase 2.
+Approved. Use that exact skeleton and build the structure plus initial leaves
+as one reviewable PR.
 `;
 }
 
 function writeChatHistoryFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): void {
-  if (evalCase.fixture.chatHistoryState !== "approved-phase1") return;
-  writeText(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"), approvedPhase1ChatHistoryMarkdown());
+  if (evalCase.fixture.chatHistoryState !== "approved-skeleton") return;
+  writeText(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"), approvedSkeletonChatHistoryMarkdown());
 }
 
 function rootNodeMarkdown(): string {
@@ -174,30 +170,6 @@ owners: [eval-owner]
 # System
 
 Durable system constraints for the seed eval fixture.
-`;
-}
-
-function approvedSkeletonRootMarkdown(): string {
-  return `---
-title: "Approved Seed Skeleton"
-owners: [eval-owner]
----
-
-# Approved Seed Skeleton
-
-Approved Phase 1 domain skeleton. Phase 2 leaf content is not drafted yet.
-`;
-}
-
-function approvedSkeletonNodeMarkdown(title: string): string {
-  return `---
-title: "${title}"
-owners: [eval-owner]
----
-
-# ${title}
-
-Approved Phase 1 node awaiting Phase 2 leaf content.
 `;
 }
 
@@ -274,29 +246,14 @@ function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCas
     writeText(join(contextTreePath, "system", "NODE.md"), systemNodeMarkdown());
     writeText(join(contextTreePath, "system", "cli.md"), cliNodeMarkdown());
     writeText(join(contextTreePath, "members", "eval-owner", "NODE.md"), memberNodeMarkdown());
-  } else if (evalCase.fixture.treeState === "phase1-approved") {
-    writeText(join(contextTreePath, "NODE.md"), approvedSkeletonRootMarkdown());
-    writeText(join(contextTreePath, "system", "NODE.md"), approvedSkeletonNodeMarkdown("System"));
-    writeText(join(contextTreePath, "system", "cloud", "NODE.md"), approvedSkeletonNodeMarkdown("Cloud"));
-    writeText(join(contextTreePath, "product", "NODE.md"), approvedSkeletonNodeMarkdown("Product"));
-    writeText(join(contextTreePath, "product", "onboarding", "NODE.md"), approvedSkeletonNodeMarkdown("Onboarding"));
   }
 
   initGitRepo(
     contextTreePath,
     evalCase.fixture.treeState === "empty"
       ? "chore: provision empty context tree"
-      : evalCase.fixture.treeState === "phase1-approved"
-        ? "docs: merge approved phase one skeleton"
-        : "chore: seed populated context tree",
+      : "chore: seed populated context tree",
   );
-  if (evalCase.fixture.treeState === "phase1-approved") {
-    const treeOriginPath = join(paths.runRoot, "context-tree-origin.git");
-    assertCommandOk(runCommand("git", ["clone", "--bare", contextTreePath, treeOriginPath], paths.workspacePath));
-    assertCommandOk(runCommand("git", ["remote", "add", "origin", treeOriginPath], contextTreePath));
-    assertCommandOk(runCommand("git", ["fetch", "origin"], contextTreePath));
-    assertCommandOk(runCommand("git", ["remote", "set-head", "origin", "main"], contextTreePath));
-  }
   return contextTreePath;
 }
 
@@ -548,16 +505,6 @@ function validateTreeEmpty(
   errors: string[],
 ): boolean {
   if (evalCase.fixture.treeState === "nonempty") return true;
-  if (evalCase.fixture.treeState === "phase1-approved") {
-    const localHead = gitHead(contextTreePath);
-    const remoteHead = gitHead(contextTreePath, "refs/remotes/origin/main");
-    const remoteDefault = runCommand("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], contextTreePath);
-    if (localHead === null || remoteHead !== localHead || remoteDefault.stdout.trim() !== "refs/remotes/origin/main") {
-      errors.push("approved Phase 1 fixture must be merged into the configured origin default branch.");
-      return false;
-    }
-    return true;
-  }
   if (evalCase.fixture.treeState === "unbound") return validateTreeUnbound(paths, contextTreePath, errors);
   const forbiddenEntries = readdirSync(contextTreePath).filter((entry) => {
     if (entry === ".git" || entry === ".first-tree" || entry === ".github") return false;
@@ -589,7 +536,7 @@ export function validateFixture(
           join(contextTreePath, ".first-tree", "VERSION"),
           join(contextTreePath, ".first-tree", "tree.json"),
         ];
-  if (evalCase.fixture.chatHistoryState === "approved-phase1") {
+  if (evalCase.fixture.chatHistoryState === "approved-skeleton") {
     requiredFiles.push(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"));
   }
   const missingFiles = requiredFiles.filter((file) => !existsSync(file));
