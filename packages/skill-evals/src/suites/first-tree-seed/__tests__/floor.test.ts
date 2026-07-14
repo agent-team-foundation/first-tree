@@ -35,6 +35,25 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("not a leftover checkout");
   });
 
+  it("configures GitHub branch rules only after creating a GitHub Context Repo", () => {
+    expect(skillMarkdown).toContain("only after `tree init` succeeds");
+    expect(skillMarkdown).toMatch(/only when the\s+new Context Repo is a GitHub repository/);
+    expect(skillMarkdown).toContain("Do not run it for an already-bound tree");
+    expect(skillMarkdown).toContain("repo=$(gh repo view");
+    expect(skillMarkdown).toContain('gh api "repos/$repo/rulesets"');
+    expect(skillMarkdown).toContain('"include": ["~DEFAULT_BRANCH"]');
+    expect(skillMarkdown).toContain('"type": "non_fast_forward"');
+    expect(skillMarkdown).toContain('"type": "pull_request"');
+    expect(skillMarkdown).toContain('"required_approving_review_count": 1');
+    expect(skillMarkdown).toContain('"require_code_owner_review": true');
+    expect(skillMarkdown).toContain('"dismiss_stale_reviews_on_push": false');
+    expect(skillMarkdown).toContain('"require_last_push_approval": false');
+    expect(skillMarkdown).toContain('"required_review_thread_resolution": false');
+    expect(skillMarkdown).toMatch(/automatic\s+branch-rule setup failed/);
+    expect(skillMarkdown).toContain("newly created GitHub Context Repo (validate workflows, CODEOWNERS, extra");
+    expect(skillMarkdown).not.toMatch(/rulesets,\s+CODEOWNERS\) — out of scope/);
+  });
+
   it("delays App coverage guidance until a reviewable milestone", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR is open");
     expect(skillMarkdown).toContain("do not interrupt source resolution, structure");

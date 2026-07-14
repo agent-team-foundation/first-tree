@@ -153,6 +153,55 @@ clone exactly where Phase 1 (and the runtime) expect it. If the manifest
 carries no tree name yet (a fully unbound workspace), use the conventional
 `<workspaceRoot>/context-tree`.
 
+**Configure GitHub branch rules after a newly created Context Repo.**
+This applies only in state A, only after `tree init` succeeds, and only when the
+new Context Repo is a GitHub repository. Do not run it for an already-bound tree,
+a non-GitHub remote, or a failed/partial `tree init`. Use host `gh`; do not send
+the user to the browser first. Resolve the repository from the new tree checkout,
+then upsert one active repository ruleset scoped to the default branch:
+
+```bash
+remote=$(git -C "<tree>" remote get-url origin)
+repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)
+ruleset_id=$(gh api "repos/$repo/rulesets" --jq '.[] | select(.name == "First Tree Context Repo branch rules") | .id' | head -n 1)
+```
+
+Use `gh api` to `POST repos/$repo/rulesets` when no existing ruleset has that
+name, otherwise `PUT repos/$repo/rulesets/$ruleset_id`. The payload must keep
+these exact semantics:
+
+```json
+{
+  "name": "First Tree Context Repo branch rules",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "require_code_owner_review": true,
+        "dismiss_stale_reviews_on_push": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false
+      }
+    }
+  ]
+}
+```
+
+This blocks force / non-fast-forward pushes, requires changes through pull
+requests, requires at least one approving review and Code Owner approval, keeps
+existing reviews when new commits are pushed, does not require approval from
+someone other than the last pusher, and does not require every review
+conversation to be resolved. If any `gh` step fails after you know the repo is a
+GitHub Context Repo, continue with the seed flow and tell the user automatic
+branch-rule setup failed. Give the manual checklist above in plain words so they
+can add the rules in GitHub settings. Do not treat this setup failure as a reason
+to delete or recreate the Context Repo.
+
 **Delay App coverage guidance until there is a reviewable milestone — recommend,
 never block.**
 A newly created tree is only visible to the team's web view and the
@@ -873,9 +922,10 @@ These apply the generated Context Tree Policy to the seed-specific surface.
   (the user's local `gh`), not the server `/initialize` path — the two
   coexist. Seed does not write the workspace-root `workspace.json`; that
   stays a runtime concern.
-- Install GitHub automation (validate workflows, rulesets,
-  CODEOWNERS) — out of scope. If the team wants those, they are
-  separate follow-on workflows after seed lands.
+- Install GitHub automation beyond the default-branch ruleset applied after a
+  newly created GitHub Context Repo (validate workflows, CODEOWNERS, extra
+  rulesets) — out of scope. If the team wants those, they are separate follow-on
+  workflows after seed lands.
 - Touch `AGENTS.md` / `CLAUDE.md` managed blocks at the tree root —
   those are owned by the CLI runtime.
 - Generate content beyond what the signals support. If a candidate

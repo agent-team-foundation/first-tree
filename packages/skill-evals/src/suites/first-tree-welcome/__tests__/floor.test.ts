@@ -167,6 +167,18 @@ describe("first-tree-welcome floor invariants", () => {
     expect(briefing).not.toContain("onboarding system messages ask for welcome");
   });
 
+  it("carries GitHub Context Repo branch-rule setup in the tree-build handoff", () => {
+    expect(skillMarkdown).toMatch(/when it creates a new\s+Context Repo on GitHub/);
+    expect(skillMarkdown).toContain("use host `gh` to configure the default branch");
+    expect(skillMarkdown).toMatch(/force\s+\/ non-fast-forward pushes are blocked/);
+    expect(skillMarkdown).toContain("changes require pull requests");
+    expect(skillMarkdown).toContain("at least one approving review and Code Owner approval");
+    expect(skillMarkdown).toMatch(/new pushes keep existing\s+reviews/);
+    expect(skillMarkdown).toContain("last-push approval by someone else is not required");
+    expect(skillMarkdown).toMatch(/resolved\s+review conversations are not required/);
+    expect(skillMarkdown).toMatch(/automatic GitHub rule setup\s+fails/);
+  });
+
   it("keeps production-scan fix fan-out aligned with the scan's 3-5 blocker contract", () => {
     expect(skillMarkdown).toContain("up to 5 eligible blockers");
     expect(skillMarkdown).toMatch(/Production-scan normally\s+reports 3-5 blockers/);
