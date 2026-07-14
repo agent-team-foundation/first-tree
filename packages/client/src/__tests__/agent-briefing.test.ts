@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -344,6 +345,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toContain("first-tree-welcome");
     expect(treelessFamily).toContain("first-tree-seed");
     expect(treelessFamily).toContain("first-tree-file-bug");
+    expect(treelessFamily).toContain("first-tree-gitlab");
     expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(treelessFamily).toContain("These First Tree skills are installed in every workspace");
@@ -534,6 +536,10 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
     expect(briefing).toContain("try the host `gh` CLI first");
     expect(briefing).toContain("not by itself a reason to ask for First Tree GitHub App");
+    expect(briefing).toContain("`gh` on the final provider `PATH`");
+    expect(briefing).toContain("gh auth status");
+    expect(briefing).toContain("gh auth login");
+    expect(briefing).toContain("gh <command> --help");
     expect(briefing).toContain("If the current member is not an org admin");
     expect(briefing).toContain("hidden server sync path");
 
@@ -559,7 +565,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).not.toContain("`first-tree-github` skill");
   });
 
-  it("keeps GitLab CLI posture and native entity subscription rules inline", () => {
+  it("keeps compact GitLab posture inline and routes detailed operations on demand", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const gitlab = briefing.slice(briefing.indexOf("## GitLab Working Posture"), briefing.indexOf("## Asking Humans"));
 
@@ -570,6 +576,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("GitLab Dedicated");
     expect(gitlab).toContain("GitLab Self-Managed");
     expect(gitlab).toContain("infers the host from the current repository remote");
+    expect(gitlab).toContain("`glab` on the final provider `PATH`");
     expect(gitlab).toContain("missing, unauthenticated, points at the wrong host, or lacks access");
     expect(gitlab).toContain("install GitLab CLI");
     expect(gitlab).toContain("glab auth status");
@@ -577,6 +584,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("glab auth login --hostname <host>");
     expect(gitlab).toContain("fix project permissions");
     expect(gitlab).toContain("use a local clone");
+    expect(gitlab).toContain("glab <command> --help");
     expect(gitlab).toContain("Never expose a token");
     expect(gitlab).toContain("command output, logs, or shell history");
     expect(gitlab).toContain("only notifications for the current authenticated account");
@@ -585,45 +593,81 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
     expect(gitlab).toContain("subscribe by default");
     expect(gitlab).toContain("skip an unrelated entity or one the user explicitly does not want notifications for");
-    expect(gitlab).toContain("glab issue subscribe <id-or-url>");
-    expect(gitlab).toContain("glab mr subscribe <iid-or-branch>");
-    expect(gitlab).toContain("-R <group/project>");
-    expect(gitlab).toContain("MR form promises an IID or branch, not a URL");
     expect(gitlab).toContain("subscription failure means only that GitLab notifications are missing");
     expect(gitlab).toContain("does not invalidate the entity that was created");
-    expect(gitlab).toContain("glab issue unsubscribe <id-or-url>");
-    expect(gitlab).toContain("glab mr unsubscribe <iid-or-branch>");
-    expect(gitlab).toContain("only when a human explicitly asks to stop notifications");
+    expect(gitlab).toContain("only when a human explicitly asks");
     expect(gitlab).toContain("never automatically when an issue closes");
     expect(gitlab).toContain("an MR merges, or the task finishes");
+    expect(gitlab).toContain("Load `first-tree-gitlab`");
+    expect(gitlab).toContain("glab issue --help");
+    expect(gitlab).toContain("glab mr --help");
 
     expect(briefing).not.toMatch(/first-tree gitlab (?:follow|unfollow)/u);
     expect(gitlab).not.toContain("install the First Tree GitHub App");
-    expect(gitlab.match(/`glab mr (?:subscribe|unsubscribe) [^`]+`/gu)).toEqual([
-      "`glab mr subscribe <iid-or-branch>`",
-      "`glab mr unsubscribe <iid-or-branch>`",
-    ]);
+    expect(gitlab).not.toMatch(/`glab (?:issue|mr) (?:subscribe|unsubscribe) [^`]+`/u);
+    expect(gitlab).not.toContain("-R <group/project>");
   });
 
-  it("renders host CLI sections by availability while keeping First Tree GitHub attention", () => {
+  it("always renders compact host posture while reflecting final provider CLI availability", () => {
     const githubOnly = buildAgentBriefing(makeOpts({ localCli: { github: true, gitlab: false } }));
     expect(githubOnly).toContain("## GitHub Working Posture");
     expect(githubOnly).toContain("## GitHub Entity Attention");
-    expect(githubOnly).not.toContain("## GitLab Working Posture");
-    expect(githubOnly).not.toContain("## GitLab Entity Attention");
+    expect(githubOnly).toContain("## GitLab Working Posture");
+    expect(githubOnly).toContain("## GitLab Entity Attention");
+    expect(githubOnly).toContain("detected `gh` on the final provider `PATH`");
+    expect(githubOnly).toContain("did not detect `glab` on the final provider `PATH`");
 
     const gitlabOnly = buildAgentBriefing(makeOpts({ localCli: { github: false, gitlab: true } }));
-    expect(gitlabOnly).not.toContain("## GitHub Working Posture");
+    expect(gitlabOnly).toContain("## GitHub Working Posture");
     expect(gitlabOnly).toContain("## GitHub Entity Attention");
     expect(gitlabOnly).toContain("## GitLab Working Posture");
     expect(gitlabOnly).toContain("## GitLab Entity Attention");
+    expect(gitlabOnly).toContain("did not detect `gh` on the final provider `PATH`");
+    expect(gitlabOnly).toContain("detected `glab` on the final provider `PATH`");
 
     const noProviderCli = buildAgentBriefing(makeOpts({ localCli: { github: false, gitlab: false } }));
-    expect(noProviderCli).not.toContain("## GitHub Working Posture");
+    expect(noProviderCli).toContain("## GitHub Working Posture");
     expect(noProviderCli).toContain("## GitHub Entity Attention");
-    expect(noProviderCli).not.toContain("## GitLab Working Posture");
-    expect(noProviderCli).not.toContain("## GitLab Entity Attention");
+    expect(noProviderCli).toContain("## GitLab Working Posture");
+    expect(noProviderCli).toContain("## GitLab Entity Attention");
+    expect(noProviderCli).toContain("did not detect `gh` on the final provider `PATH`");
+    expect(noProviderCli).toContain("did not detect `glab` on the final provider `PATH`");
     expect(noProviderCli).toContain("## Asking Humans");
+  });
+
+  it.runIf(process.platform !== "win32")("probes only the supplied final provider environment", () => {
+    const providerBin = mkdtempSync(join(tmpdir(), "first-tree-provider-env-"));
+    try {
+      writeFileSync(join(providerBin, "glab"), "#!/bin/sh\n", { mode: 0o755 });
+
+      const briefing = buildAgentBriefing(
+        makeOpts({
+          localCli: undefined,
+          providerEnv: { PATH: providerBin },
+        }),
+      );
+
+      expect(briefing).toContain("did not detect `gh` on the final provider `PATH`");
+      expect(briefing).toContain("detected `glab` on the final provider `PATH`");
+    } finally {
+      rmSync(providerBin, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the detailed GitLab command catalog in the on-demand skill", () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+    const skillSource = readFileSync(join(repoRoot, "skills", "first-tree-gitlab", "SKILL.md"), "utf8");
+
+    expect(skillSource).toContain("glab issue subscribe <id-or-url>");
+    expect(skillSource).toContain("glab mr subscribe <iid-or-branch>");
+    expect(skillSource).toContain("glab issue unsubscribe <id-or-url>");
+    expect(skillSource).toContain("glab mr unsubscribe <iid-or-branch>");
+    expect(skillSource).toContain("-R <group/project>");
+    expect(skillSource).toContain("do not claim URL support");
+    expect(skillSource).toContain("does not invalidate\nan issue or merge request that was already created");
+    expect(skillSource).toContain("only when a human explicitly asks");
+    expect(skillSource).toContain("do not bind GitLab events to a First Tree\nchat");
+    expect(skillSource).toContain("Do not invent or run `first-tree gitlab follow`");
   });
 
   it("keeps chat metadata rules compact but actionable", () => {

@@ -781,6 +781,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let cwd: string | null = null;
   let claudeSessionId: string | null = null;
   let currentQuery: Query | null = null;
+  let activeProviderEnv: Record<string, string | undefined> | null = null;
   let inputController: InputController<PendingSdkInput> | null = null;
   let abortController: AbortController | null = null;
   let consumerDone: Promise<void> | null = null;
@@ -1133,13 +1134,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /** Create query and input controller, then start consumer loop. */
-  function spawnQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
+  function spawnQuery(
+    sessionId: string,
+    sessionCtx: SessionContext,
+    resume?: string,
+    providerEnv?: Record<string, string | undefined>,
+  ): void {
     // The latest chat-context and source-repo snapshot live in module-scoped
     // caches (`chatContextForPrompt`, `sourceReposForPrompt`) which the
     // handler refreshes in start/resume BEFORE this call. `maybeSwitchConfig`
     // additionally rewrites the briefing before invoking `buildQuery` so a
     // mid-session config swap surfaces in the freshly read CLAUDE.md.
-    buildQuery(sessionId, sessionCtx, resume);
+    buildQuery(sessionId, sessionCtx, resume, providerEnv);
     recordAppliedPayload(sessionCtx);
     consumerDone = consumeOutput(sessionCtx);
   }
@@ -1352,7 +1358,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * input normally.
    */
   function respawnQuery(sessionId: string, sessionCtx: SessionContext): void {
-    buildQuery(sessionId, sessionCtx, sessionId);
+    buildQuery(sessionId, sessionCtx, sessionId, activeProviderEnv ?? buildEnv(sessionCtx));
     const replay = unclosedSdkInputs.slice();
     for (const input of replay) {
       inputController?.push(input);
@@ -1371,7 +1377,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     appliedPayload = cached?.payload ?? null;
   }
 
-  function buildQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
+  function buildQuery(
+    sessionId: string,
+    sessionCtx: SessionContext,
+    resume?: string,
+    providerEnv?: Record<string, string | undefined>,
+  ): void {
     inputRecoveryReason = null;
     inputController = new InputController<PendingSdkInput>();
     abortController = new AbortController();
@@ -1381,6 +1392,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     const permissionMode: PermissionMode = "bypassPermissions";
 
     const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
+
+    const childEnv = providerEnv ?? buildEnv(sessionCtx);
 
     currentQuery = claudeQuery({
       prompt: providerPromptInputs(inputController.iterable),
@@ -1409,7 +1422,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         //     `mcpServers` list) still win because they are passed as
         //     explicit SDK options below, which layer on top of settings.
         settingSources: ["user", "project"],
-        env: buildEnv(sessionCtx),
+        env: childEnv,
         // AskUserQuestion is not supported in First Tree — agents resolve
         // ask-a-human inline. Disable the tool at the SDK level so it never
         // surfaces in a session.
@@ -1420,6 +1433,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         ...buildClaudeQueryOptions(payload, chatContextForPrompt),
       },
     });
+    activeProviderEnv = childEnv;
   }
 
   /**
@@ -1464,6 +1478,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // briefing is now the single channel; without this rewrite the swap
     // would update model/mcp/effort but silently leave the per-agent prompt
     // at the old version until the next session restart.
+    const providerEnv = buildEnv(sessionCtx);
     if (cwd) {
       // A resource skill bound mid-session (config version bumped, model
       // unchanged) reaches the active session on this restart path. Materialize
@@ -1476,7 +1491,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (cached.version > appliedConfigVersion) {
         await materializeResourceSkills(cwd, newPayload, sessionCtx);
       }
-      const switchedBriefing = currentBriefing(sessionCtx, cwd, newPayload);
+      const switchedBriefing = currentBriefing(sessionCtx, cwd, newPayload, providerEnv);
       writeAgentBriefing(cwd, switchedBriefing);
       // Refresh the on-disk briefing fingerprint so the NEXT delivered message
       // (drained right after this restart in pushInjectedMessage) sees the
@@ -1486,7 +1501,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
     const sid = claudeSessionId;
     const oldQuery = currentQuery;
-    buildQuery(sid, sessionCtx, sid);
+    buildQuery(sid, sessionCtx, sid, providerEnv);
     recordAppliedPayload(sessionCtx);
     consumerDone = consumeOutput(sessionCtx);
     try {
@@ -1982,6 +1997,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     workspace: string,
     payload: AgentRuntimeConfigPayload | null | undefined,
+    providerEnv: NodeJS.ProcessEnv,
   ): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
@@ -1991,6 +2007,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       contextTreePath,
       contextTreeRepoUrl,
       contextTreeBranch,
+      providerEnv,
     });
   }
 
@@ -2056,7 +2073,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
-      const briefing = currentBriefing(sessionCtx, cwd, payload);
+      const providerEnv = buildEnv(sessionCtx);
+      const briefing = currentBriefing(sessionCtx, cwd, payload, providerEnv);
       ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
       // Stage-2 sentinel: written once per agent home. Future starts short-
@@ -2079,7 +2097,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // replay payload while still attaching ACK metadata before the SDK can
       // pull the prompt.
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, claudeSessionId);
-      spawnQuery(claudeSessionId, sessionCtx);
+      spawnQuery(claudeSessionId, sessionCtx, undefined, providerEnv);
       deliverUserMessage(sdkMsg, message, deliveryToken, claudeSessionId, sessionCtx);
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
@@ -2142,7 +2160,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // (set above), NOT the agent home, so the files land where this
         // session's briefing paths and the SDK cwd resolve them.
         await materializeResourceSkills(cwd, payload, sessionCtx);
-        writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
+        const providerEnv = buildEnv(sessionCtx);
+        writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload, providerEnv));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
         // through `respawnQuery`.
@@ -2150,7 +2169,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (message) {
           sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
         }
-        spawnQuery(sessionId, sessionCtx, sessionId);
+        spawnQuery(sessionId, sessionCtx, sessionId, providerEnv);
         if (sdkMsg) {
           if (message) pushPendingSdkInput(createPendingSdkInput(sdkMsg, message, deliveryToken));
         }
@@ -2174,7 +2193,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
-      const briefing = currentBriefing(sessionCtx, cwd, payload);
+      const providerEnv = buildEnv(sessionCtx);
+      const briefing = currentBriefing(sessionCtx, cwd, payload, providerEnv);
       ensureAgentBootstrap(cwd, sessionCtx, briefing, payload);
 
       markWorkspaceInitComplete(cwd);
@@ -2200,7 +2220,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (message) {
           freshSdkMsg = await toSDKUserMessage(message, sessionCtx, freshSessionId);
         }
-        spawnQuery(freshSessionId, sessionCtx);
+        spawnQuery(freshSessionId, sessionCtx, undefined, providerEnv);
         if (freshSdkMsg && message) {
           deliverUserMessage(freshSdkMsg, message, deliveryToken, freshSessionId, sessionCtx);
         }
@@ -2227,7 +2247,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (message) {
         resumeSdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
       }
-      spawnQuery(sessionId, sessionCtx, sessionId);
+      spawnQuery(sessionId, sessionCtx, sessionId, providerEnv);
       if (resumeSdkMsg && message) {
         deliverUserMessage(resumeSdkMsg, message, deliveryToken, sessionId, sessionCtx);
       }
@@ -2272,6 +2292,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
 
       abortController = null;
+      activeProviderEnv = null;
       // The session is no longer active — any pending replay inputs would be
       // moot. Resume goes through `handler.resume(message, sessionId)`, which
       // builds a fresh replay buffer from its own pushed inputs.

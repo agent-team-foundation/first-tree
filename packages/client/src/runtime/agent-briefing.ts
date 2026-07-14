@@ -95,7 +95,13 @@ export type BuildAgentBriefingOptions = {
   /** Upstream coordinates used by the agent-managed Context Tree clone. */
   contextTreeRepoUrl?: string | null;
   contextTreeBranch?: string | null;
-  /** Detected provider CLIs; omitted to probe the current process PATH. */
+  /**
+   * Final environment passed to the provider child process. Detection is
+   * intentionally scoped to this environment, never the daemon's ambient
+   * `process.env`.
+   */
+  providerEnv?: NodeJS.ProcessEnv;
+  /** Explicit availability override, primarily useful for deterministic tests. */
   localCli?: LocalCliAvailability;
 };
 
@@ -106,7 +112,11 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
 
 function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBriefingRenderModel {
   const { binName: bin } = getCliBinding();
-  const localCli = opts.localCli ?? detectLocalCliAvailability();
+  // An omitted provider environment means "no capability detected". Runtime
+  // handlers pass the exact environment they later hand to the child; keeping
+  // this fallback empty prevents briefing generation from observing a stale
+  // daemon PATH.
+  const localCli = opts.localCli ?? detectLocalCliAvailability(opts.providerEnv ?? {});
   const promptSections = opts.payload?.prompt.sections ?? [];
   const teamPromptRows = buildNamedPromptRows(
     promptSections.filter((section) => section.scope === "team"),

@@ -187,7 +187,12 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
    * (with `<cwd>/CLAUDE.md` symlinked to it) before claude spawns; per-chat
    * context is appended through the CLI system prompt file.
    */
-  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
+  function buildBriefing(
+    sessionCtx: SessionContext,
+    payload: AgentRuntimeConfigPayload,
+    workspaceCwd: string,
+    providerEnv: NodeJS.ProcessEnv,
+  ): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
@@ -196,6 +201,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       contextTreePath,
       contextTreeRepoUrl,
       contextTreeBranch,
+      providerEnv,
     });
   }
 
@@ -274,11 +280,14 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     return refreshed.payload;
   }
 
-  async function startClaude(input: { sessionCtx: SessionContext; resumeSessionId: string | null }): Promise<string> {
-    const { sessionCtx, resumeSessionId } = input;
+  async function startClaude(input: {
+    sessionCtx: SessionContext;
+    resumeSessionId: string | null;
+    payload: AgentRuntimeConfigPayload;
+    providerEnv: Record<string, string>;
+  }): Promise<string> {
+    const { sessionCtx, resumeSessionId, payload, providerEnv } = input;
     if (!cwd) throw new Error("startClaude called before cwd was acquired");
-
-    const payload = (await loadPayload(sessionCtx)) ?? defaultPayload();
 
     const sessionId = resumeSessionId ?? randomUUID();
     const sessionName = deriveSessionName(clientId, sessionCtx.agent.agentId, sessionCtx.chatId);
@@ -298,7 +307,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       name: sessionName,
       cwd,
       command,
-      env: buildEnv(sessionCtx, payload),
+      env: providerEnv,
     });
     // Track the session name immediately so a waitForReady failure still has a
     // teardown path — otherwise the detached tmux session (and its claude
@@ -668,11 +677,12 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           // its briefing protocol; the listed paths may not exist yet.
           sourceReposForPrompt = declaredSourceRepos(cwd, payload);
           await materializeResourceSkills(cwd, payload, sessionCtx);
+          const providerEnv = buildEnv(sessionCtx, payload);
           ensureAgentBootstrap({
             workspace: cwd,
             sessionCtx,
             contextTreePath,
-            briefing: buildBriefing(sessionCtx, payload, cwd),
+            briefing: buildBriefing(sessionCtx, payload, cwd, providerEnv),
             // `null` when we fell back to `defaultPayload()` — the empty
             // `gitRepos: []` is then NOT authoritative, and the workspace
             // manifest write is deferred for this session.
@@ -683,7 +693,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           });
           markWorkspaceInitComplete(cwd);
 
-          const sessionId = await startClaude({ sessionCtx, resumeSessionId: null });
+          const sessionId = await startClaude({ sessionCtx, resumeSessionId: null, payload, providerEnv });
           if (lifecycleFence.stopRequested) {
             deliveryToken.retry(message, "tui_start_stopped_before_turn");
             return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
@@ -726,6 +736,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           // Pure declaration — same as the start() path.
           sourceReposForPrompt = declaredSourceRepos(cwd, payload);
           await materializeResourceSkills(cwd, payload, sessionCtx);
+          const providerEnv = buildEnv(sessionCtx, payload);
           // Same shared bootstrap as start(): ensureAgentBootstrap handles the
           // sentinel + CLI-version drift internally, so a stale or failed
           // integration is re-run on resume instead of being skipped.
@@ -733,7 +744,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
             workspace: cwd,
             sessionCtx,
             contextTreePath,
-            briefing: buildBriefing(sessionCtx, payload, cwd),
+            briefing: buildBriefing(sessionCtx, payload, cwd, providerEnv),
             // See PR #869 baixiaohang round-3 P0 — same gate as start().
             currentSourceRepoNames: currentSourceRepoNamesFromPayload(
               payload,
@@ -742,7 +753,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           });
           markWorkspaceInitComplete(cwd);
 
-          const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId });
+          const restartedId = await startClaude({ sessionCtx, resumeSessionId: sessionId, payload, providerEnv });
 
           if (message) {
             if (lifecycleFence.stopRequested) {

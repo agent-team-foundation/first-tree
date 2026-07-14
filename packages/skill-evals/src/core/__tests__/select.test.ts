@@ -176,12 +176,16 @@ describe("skill eval selection", () => {
     expect(summary.notes).toEqual(["No skill-eval-related changes were detected."]);
   });
 
-  it("emits an explicit note (not silence) for a shipped skill intentionally outside skill-evals", () => {
-    const summary = selectSkillEvalRecommendations(["skills/first-tree-file-bug/SKILL.md"]);
+  it.each([
+    "first-tree-file-bug",
+    "first-tree-gitlab",
+  ])("emits an explicit note (not silence) for unevaluated shipped skill %s", (skill) => {
+    const path = `skills/${skill}/SKILL.md`;
+    const summary = selectSkillEvalRecommendations([path]);
 
     expect(summary.recommendations).toEqual([]);
     expect(summary.notes).toEqual([
-      "skills/first-tree-file-bug/SKILL.md belongs to first-tree-file-bug, a shipped skill intentionally outside skill-evals (see UNEVALUATED_SHIPPED_SKILLS); no eval selected.",
+      `${path} belongs to ${skill}, a shipped skill intentionally outside skill-evals (see UNEVALUATED_SHIPPED_SKILLS); no eval selected.`,
     ]);
   });
 

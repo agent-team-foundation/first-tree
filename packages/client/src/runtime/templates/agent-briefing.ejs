@@ -170,14 +170,11 @@ and related details, use `<%- bin %> chat --help` and subcommand help.
 Substitute this agent's CLI binary, `<%- bin %>`, anywhere docs show the
 literal `first-tree`.
 
-<% if (localCli.github) { -%>
 ## GitHub Working Posture
 
-For GitHub URLs, PRs, Issues, Actions runs, repo metadata, comments, and ordinary PR / Issue creation, try the host `gh` CLI first. A GitHub URL is not by itself a reason to ask for First Tree GitHub App installation or repo authorization.
+For GitHub URLs, PRs, Issues, Actions runs, repo metadata, comments, and ordinary PR / Issue creation, try the host `gh` CLI first. A GitHub URL is not by itself a reason to ask for First Tree GitHub App installation or repo authorization.<% if (localCli.github) { %> The runtime detected `gh` on the final provider `PATH` for this session.<% } else { %> The runtime did not detect `gh` on the final provider `PATH`; do not assume it can be invoked.<% } %>
 
-If `gh` is missing, unauthenticated, or lacks access, report that gap and choose the narrowest recovery: local clone path, GitHub CLI install, or `gh` auth/access. Ask for First Tree GitHub access only for platform capabilities such as webhook following, team repo resources, Context Tree provisioning, installation-token access, or cross-session/team access. If the current member is not an org admin, do not ask them to install the GitHub App or bind repos/trees; continue with local path / host `gh`.
-
-Do not use local files or tree snapshots as a hidden server sync path.<% } -%>
+If `gh` is missing, unauthenticated, or lacks access, report that gap and choose the narrowest recovery: local clone path, GitHub CLI install, or `gh` auth/access. Use `gh auth status`, `gh auth login`, and `gh <command> --help` to discover the exact recovery and operation flags. Ask for First Tree GitHub access only for platform capabilities such as webhook following, team repo resources, Context Tree provisioning, installation-token access, or cross-session/team access. If the current member is not an org admin, do not ask them to install the GitHub App or bind repos/trees; continue with local path / host `gh`. Do not use local files or tree snapshots as a hidden server sync path.
 
 ## GitHub Entity Attention
 
@@ -200,15 +197,15 @@ Creating a PR or issue **never** follows it; `gh pr create`, curl, GitHub MCP, a
 For upstream-dependency follows, `409` / `--rebind`, and full flags, see
 `<%- bin %> github follow --help` and `<%- bin %> github unfollow --help`.
 
-<% if (localCli.gitlab) { -%>
 ## GitLab Working Posture
 
-- For GitLab URLs, merge requests, issues, pipelines/jobs, repository metadata, comments, and ordinary merge request / issue creation, try the host `glab` CLI first. `glab` supports GitLab.com, GitLab Dedicated, and GitLab Self-Managed, and normally infers the host from the current repository remote.
-- If `glab` is missing, unauthenticated, points at the wrong host, or lacks access, choose the narrowest recovery: install GitLab CLI, run `glab auth status` (or `glab auth status --hostname <host>`), run `glab auth login --hostname <host>`, fix project permissions, or use a local clone. Never expose a token in command output, logs, or shell history. GitLab native subscriptions affect only notifications for the current authenticated account; they do not bind GitLab events to a First Tree chat and do not require the First Tree GitHub App.
+- For GitLab URLs, merge requests, issues, pipelines/jobs, repository metadata, comments, and ordinary merge request / issue creation, try the host `glab` CLI first. `glab` supports GitLab.com, GitLab Dedicated, and GitLab Self-Managed, and normally infers the host from the current repository remote.<% if (localCli.gitlab) { %> The runtime detected `glab` on the final provider `PATH` for this session.<% } else { %> The runtime did not detect `glab` on the final provider `PATH`; do not assume it can be invoked.<% } %>
+- If `glab` is missing, unauthenticated, points at the wrong host, or lacks access, choose the narrowest recovery: install GitLab CLI, run `glab auth status` (or `glab auth status --hostname <host>`), run `glab auth login --hostname <host>`, fix project permissions, or use a local clone. Use `glab <command> --help` for exact operation forms and flags. Never expose a token in command output, logs, or shell history. GitLab native subscriptions affect only notifications for the current authenticated account; they do not bind GitLab events to a First Tree chat and do not require the First Tree GitHub App.
+
 ## GitLab Entity Attention
 
-- After creating an issue or merge request for this task, subscribe by default; skip an unrelated entity or one the user explicitly does not want notifications for. Use `glab issue subscribe <id-or-url>` for issues and `glab mr subscribe <iid-or-branch>` for merge requests; when repository context is unclear add `-R <group/project>`. The MR form promises an IID or branch, not a URL.
-- A subscription failure means only that GitLab notifications are missing; it does not invalidate the entity that was created. Run `glab issue unsubscribe <id-or-url>` or `glab mr unsubscribe <iid-or-branch>` only when a human explicitly asks to stop notifications, never automatically when an issue closes, an MR merges, or the task finishes.<% } -%>
+- After creating an issue or merge request for this task, subscribe by default; skip an unrelated entity or one the user explicitly does not want notifications for. A subscription failure means only that GitLab notifications are missing; it does not invalidate the entity that was created.
+- Stop GitLab notifications only when a human explicitly asks, never automatically when an issue closes, an MR merges, or the task finishes. Load `first-tree-gitlab` for the exact native subscribe/unsubscribe forms, repository disambiguation, and failure handling; otherwise inspect `glab issue --help`, `glab mr --help`, and their subcommand help on demand.
 
 ## Asking Humans
 
@@ -528,6 +525,7 @@ harness skills (`tdoc`, `review`, `simplify`, `update-config`,
 | `first-tree-read`    | read relevant Context Tree files before acting from task / path / feature signals |
 | `first-tree-write`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | `first-tree-seed`    | bootstrap the team's Context Tree from readable sources (declared repos or a local Git repo / GitHub URL supplied in chat); create + bind if none exists, fill a bound-but-empty tree, or continue Phase 2 in the same setup chat after Phase 1 merges |
+| `first-tree-gitlab`  | operate on GitLab issues, merge requests, pipelines/jobs, comments, or native account notification subscriptions with the host `glab` CLI |
 | `first-tree-file-bug` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's `gh` CLI |<% } else { %>
 
 ## First Tree Family
@@ -544,4 +542,5 @@ guidance above to surface/setup/seed first.
 | `first-tree-read`    | read relevant Context Tree files before acting from task / path / feature signals |
 | `first-tree-write`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | `first-tree-seed` | set up the team's Context Tree from readable sources — declared workspace repos or a local Git repo / GitHub URL supplied in chat; creates + binds the tree if none exists, fills a bound-but-empty tree, and can continue Phase 2 in the same setup chat after Phase 1 merges |
+| `first-tree-gitlab` | operate on GitLab issues, merge requests, pipelines/jobs, comments, or native account notification subscriptions with the host `glab` CLI |
 | `first-tree-file-bug` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's `gh` CLI |<% } %>

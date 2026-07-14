@@ -7,23 +7,24 @@ export type LocalCliAvailability = Readonly<{
 }>;
 
 export type LocalCliProbeOptions = Readonly<{
-  env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   pathDelimiter?: string;
   isExecutable?: (filePath: string, platform: NodeJS.Platform) => boolean;
 }>;
 
 /** Detect provider CLIs without launching them or checking authentication. */
-export function detectLocalCliAvailability(options: LocalCliProbeOptions = {}): LocalCliAvailability {
+export function detectLocalCliAvailability(
+  env: NodeJS.ProcessEnv,
+  options: LocalCliProbeOptions = {},
+): LocalCliAvailability {
   return {
-    github: isExecutableOnPath("gh", options),
-    gitlab: isExecutableOnPath("glab", options),
+    github: isExecutableOnPath("gh", env, options),
+    gitlab: isExecutableOnPath("glab", env, options),
   };
 }
 
 /** Return true when a named executable is present on the supplied PATH. */
-export function isExecutableOnPath(name: string, options: LocalCliProbeOptions = {}): boolean {
-  const env = options.env ?? process.env;
+export function isExecutableOnPath(name: string, env: NodeJS.ProcessEnv, options: LocalCliProbeOptions = {}): boolean {
   const platform = options.platform ?? process.platform;
   const pathApi = platform === "win32" ? win32 : posix;
   const pathSeparator = options.pathDelimiter ?? pathApi.delimiter;
@@ -43,13 +44,12 @@ export function isExecutableOnPath(name: string, options: LocalCliProbeOptions =
 }
 
 function readEnvironmentValue(env: NodeJS.ProcessEnv, name: string, platform: NodeJS.Platform): string | undefined {
-  const keys =
-    platform === "win32"
-      ? Object.keys(env).filter((candidate) => candidate.toLowerCase() === name.toLowerCase())
-      : name === "PATH"
-        ? ["PATH", "Path", "path"]
-        : [name];
+  // POSIX environment names are case-sensitive. On Windows, Node sorts env
+  // keys and passes only the first case-insensitive match to a child process;
+  // mirror that selection so the probe observes the same value as the child.
+  const keys = platform === "win32" ? Object.keys(env).sort() : [name];
   for (const key of keys) {
+    if (platform === "win32" && key.toLowerCase() !== name.toLowerCase()) continue;
     const value = env[key];
     if (value !== undefined) return value;
   }

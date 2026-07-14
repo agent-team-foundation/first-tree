@@ -195,6 +195,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let cwd: string | null = null;
   let ctx: SessionContext | null = null;
   let appServer: AppServerClientLike | null = null;
+  let activeProviderEnv: NodeJS.ProcessEnv | null = null;
   let threadId: string | null = null;
   let currentModel = "";
   let currentReasoningEffort = "high";
@@ -355,7 +356,12 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     return cfg;
   }
 
-  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
+  function buildBriefing(
+    sessionCtx: SessionContext,
+    payload: AgentRuntimeConfigPayload,
+    workspaceCwd: string,
+    providerEnv: NodeJS.ProcessEnv,
+  ): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
@@ -364,6 +370,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       contextTreePath,
       contextTreeRepoUrl,
       contextTreeBranch,
+      providerEnv,
     });
   }
 
@@ -432,11 +439,6 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     pendingChatContextPrompt = renderChatContextPrompt(chatContext);
     declareSourceRepos(payload, cwd);
     await materializeResourceSkills(cwd, payload, sessionCtx);
-    const briefing = buildBriefing(sessionCtx, payload, cwd);
-    ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resolved);
-    markWorkspaceInitComplete(cwd);
-    currentModel = payload.model || "";
-    currentReasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
     let env = buildEnv(sessionCtx);
     if (workspaceOnly) {
       const { accessToken } = await sessionCtx.sdk.createAgentOutboxToken(sessionCtx.chatId);
@@ -460,6 +462,11 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       workspaceOnlyCodexHome = null;
       workspaceOnlyHostHome = null;
     }
+    const briefing = buildBriefing(sessionCtx, payload, cwd, env);
+    ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resolved);
+    markWorkspaceInitComplete(cwd);
+    currentModel = payload.model || "";
+    currentReasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
     return { payload, env, briefingFingerprint: computeBriefingFingerprint(briefing) };
   }
 
@@ -486,6 +493,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         onClose: handleTransportClose,
         onLog: (message) => sessionCtx.log(message),
       });
+      activeProviderEnv = env;
     } catch (err) {
       throw new CodexAppServerStartupError("initialize", err);
     }
@@ -942,6 +950,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const client = appServer;
     const resumeThreadId = threadId ?? undefined;
     appServer = null;
+    activeProviderEnv = null;
     threadId = null;
     resetThreadUsageTracking(null);
     pendingNotificationsByTurn.clear();
@@ -965,6 +974,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const client = appServer;
     const resumeThreadId = threadId ?? undefined;
     appServer = null;
+    activeProviderEnv = null;
     threadId = null;
     resetThreadUsageTracking(null);
     pendingNotificationsByTurn.clear();
@@ -981,6 +991,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const client = appServer;
     const resumeThreadId = threadId ?? undefined;
     appServer = null;
+    activeProviderEnv = null;
     threadId = null;
     resetThreadUsageTracking(null);
     pendingNotificationsByTurn.clear();
@@ -1533,7 +1544,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
    * model / MCP hot-switch (which needs a thread restart) stays out of scope.
    */
   function refreshBriefingForActiveTurn(sessionCtx: SessionContext): { fingerprint: string; changed: boolean } | null {
-    if (!agentConfigCache || !cwd || !threadId) return null;
+    if (!agentConfigCache || !cwd || !threadId || !activeProviderEnv) return null;
     // Never throw: `startTurnFromPendingInputs` has already dequeued the batch
     // by the time this runs, so a thrown briefing rewrite would strand the
     // message (no turn/start, no token.retry). On any failure, skip the
@@ -1542,7 +1553,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     try {
       const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
       if (!payload) return null;
-      const briefing = buildBriefing(sessionCtx, payload, cwd);
+      const briefing = buildBriefing(sessionCtx, payload, cwd, activeProviderEnv);
       const fingerprint = computeBriefingFingerprint(briefing);
       if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
       writeAgentBriefing(cwd, briefing);
@@ -1767,6 +1778,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;
+      activeProviderEnv = null;
       activePayload = null;
       pendingChatContextPrompt = null;
       workspaceOnly = false;
@@ -1781,6 +1793,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;
+      activeProviderEnv = null;
       activePayload = null;
       currentTurn = null;
       currentTurnPromise = null;

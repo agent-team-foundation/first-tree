@@ -9,10 +9,11 @@ surfaces: [client, cli]
 
 ## Goal
 
-Verify that a runtime-generated `AGENTS.md` gives an agent the correct
-provider-specific GitLab workflow when `glab` is present, omits the optional
-GitLab runbook when it is absent, and keeps GitLab native notifications
-separate from First Tree chat tracking.
+Verify that a runtime-generated `AGENTS.md` always gives an agent a compact
+GitLab posture and recovery path, reports whether the final provider `PATH`
+contains `glab`, routes detailed operations through the on-demand
+`first-tree-gitlab` skill / native `--help`, and keeps GitLab account
+notifications separate from First Tree chat tracking.
 
 This is a behavior-level QA case for the generated briefing. It does not add a
 First Tree GitLab API, event mapper, follow command, or database state.
@@ -20,7 +21,10 @@ First Tree GitLab API, event mapper, follow command, or database state.
 ## Preconditions
 
 - Run in an isolated QA worktree and run cell as required by the QA package.
-- Record whether `glab` is on `PATH`; presence is not evidence of authentication.
+- Record whether `glab` is on the final child-provider `PATH`; presence is not
+  evidence of authentication.
+- Confirm `.agents/skills/first-tree-gitlab/SKILL.md` is installed in the
+  workspace before exercising the detailed workflow.
 - Use a disposable GitLab project or an existing test issue/MR. Do not use a
   production project unless the owner explicitly approves it.
 - Keep tokens out of command arguments, shell history, transcripts, and logs.
@@ -30,8 +34,11 @@ First Tree GitLab API, event mapper, follow command, or database state.
 
 ## Operate
 
-Run the generated briefing through the selected agent provider and ask for a
-small GitLab task with these subcases:
+Run the generated briefing through the selected agent provider and first
+confirm that both GitLab headings, the compact recovery path, and the
+`first-tree-gitlab` / `glab <command> --help` discovery pointers are present
+whether or not `glab` is installed. Then ask for a small GitLab task with these
+subcases:
 
 1. Create an issue or merge request with `glab` first, then subscribe the
    current account to the created entity.
@@ -41,8 +48,10 @@ small GitLab task with these subcases:
    matching unsubscribe command. Do not use a lifecycle event (close, merge,
    or task completion) as the unsubscribe request.
 
+The agent should load `first-tree-gitlab` before choosing the detailed command.
 When project context is unclear, the command trace may include
-`-R <group/project>`. The accepted native forms are:
+`-R <group/project>`. The accepted native forms, owned by that on-demand skill,
+are:
 
 ```text
 glab issue subscribe <id-or-url>
@@ -59,7 +68,10 @@ that was already created.
 
 Capture a redacted transcript and command trace showing:
 
-- `glab` was selected when available, with host/auth checks such as
+- the generated briefing's availability sentence matches the executable
+  lookup result in the final provider environment;
+- `glab` was selected when available, after the `first-tree-gitlab` skill was
+  loaded, with host/auth checks such as
   `glab auth status` or `glab auth status --hostname <host>` that reveal no
   token;
 - the create command completed before the subscribe command;
@@ -70,9 +82,11 @@ Capture a redacted transcript and command trace showing:
 - no `first-tree gitlab follow/unfollow` command, First Tree chat binding, or
   GitHub App installation request is emitted for native GitLab subscriptions.
 
-If `glab` is missing, also verify that the generated briefing does not present
-the GitLab runbook as an available provider path and that the agent can report
-the missing CLI without exposing credentials.
+If `glab` is missing, also verify that the generated briefing still presents
+the compact GitLab posture and recovery / discovery pointers, explicitly says
+the final provider `PATH` probe did not find `glab`, and lets the agent report
+the missing CLI without exposing credentials. The full command catalog must
+remain outside the generated briefing in this branch.
 
 ## Expected Result
 
