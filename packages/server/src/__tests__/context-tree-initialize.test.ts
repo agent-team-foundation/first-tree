@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -149,6 +149,105 @@ owners: [${ACCOUNT_LOGIN}]
     expect(setting).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
+  it("does not let initialize overwrite a binding committed after its absent precheck", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+
+    const setterBinding = {
+      repo: "https://github.com/example/setter-context-tree.git",
+      branch: "setter-branch",
+    };
+    const workflowPutReached = deferred();
+    const releaseWorkflowPut = deferred();
+    let workflowPutCalls = 0;
+    const fetchSpy = mockFetch(async (url, init) => {
+      if (url === installationTokenUrl(installationId)) {
+        expectAuth(init, "Bearer");
+        return installationTokenResponse();
+      }
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        return githubRepoResponse(201);
+      }
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        return githubRepoResponse(200);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        expectAuth(init, `Bearer ${INSTALLATION_TOKEN}`);
+        parseJsonBody(init);
+        workflowPutCalls += 1;
+        // Reaching this handler represents the final GitHub side effect. Keep
+        // initialize suspended until the competing settings PUT has committed.
+        workflowPutReached.resolve();
+        await releaseWorkflowPut.promise;
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const initializePromise = initialize(app, admin);
+    try {
+      // The workflow PUT occurs only after initialize has completed its initial
+      // absent-binding check and all earlier GitHub side effects.
+      await Promise.race([
+        workflowPutReached.promise,
+        initializePromise.then((response) => {
+          throw new Error(
+            `initialize completed before the workflow barrier (${response.statusCode}): ${response.body}`,
+          );
+        }),
+      ]);
+
+      const setter = await app.inject({
+        method: "PUT",
+        url: `/api/v1/orgs/${admin.organizationId}/settings/context_tree`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: setterBinding,
+      });
+      expect(setter.statusCode).toBe(200);
+      expect(setter.json()).toEqual(setterBinding);
+
+      releaseWorkflowPut.resolve();
+      const initialized = await initializePromise;
+      expect(initialized.statusCode).toBe(409);
+      expect(initialized.json()).toMatchObject({
+        error: "Context Tree setting changed after tree initialization began",
+      });
+      expect(workflowPutCalls).toBe(1);
+      expect(fetchSpy).toHaveBeenCalledTimes(7);
+
+      await expect(getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(setterBinding);
+      const [row] = await app.db
+        .select({ value: organizationSettings.value, version: organizationSettings.version })
+        .from(organizationSettings)
+        .where(
+          and(
+            eq(organizationSettings.organizationId, admin.organizationId),
+            eq(organizationSettings.namespace, "context_tree"),
+          ),
+        );
+      expect(row).toEqual({ value: setterBinding, version: 1 });
+    } finally {
+      releaseWorkflowPut.resolve();
+      await initializePromise.catch(() => undefined);
+    }
+  });
+
   it("returns 409 without calling GitHub when context_tree.repo already exists", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -187,6 +286,50 @@ owners: [${ACCOUNT_LOGIN}]
       repo: "http://legacy.example/context-tree.git",
       branch: "bad..branch",
     });
+  });
+
+  it("returns 409 before GitHub calls for a repo-less row with an invalid branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "--bad" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    const fetchSpy = mockFetch(async () => new Response("unexpected", { status: 500 }));
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(409);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await expect(getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual({ branch: "--bad" });
+  });
+
+  it("returns 409 before GitHub calls for a JSON null Context Tree row", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = 'null'::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+    const fetchSpy = mockFetch(async () => new Response("unexpected", { status: 500 }));
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(409);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await expect(getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
   });
 
   it("returns 409 without overwriting a binding committed after initialization side effects", async () => {
@@ -1134,6 +1277,14 @@ function mockFetch(handler: (url: string, init: FetchInit) => Promise<Response>)
   });
   globalThis.fetch = fetchSpy;
   return fetchSpy;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function installationTokenResponse(

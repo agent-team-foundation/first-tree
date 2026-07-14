@@ -120,6 +120,7 @@ describe("Context Tree binding write core", () => {
 
   it.each([
     ["missing fields", {}],
+    ["missing branch", { repo: REPO }],
     ["unbound", { repo: null, branch: null }],
     ["different repository", { repo: "git@github.com:acme/other.git", branch: "main" }],
     ["different explicit branch", { repo: REPO, branch: "other" }],
@@ -127,6 +128,7 @@ describe("Context Tree binding write core", () => {
     ["invalid repository", { repo: "http://github.com/acme/context-tree.git", branch: "main" }],
     ["invalid branch", { repo: REPO, branch: " main" }],
     ["Git-invalid branch", { repo: REPO, branch: "feature..next" }],
+    ["unexpected field", { repo: REPO, branch: "main", version: 1 }],
   ])("rejects a %s update response", async (_label, response) => {
     const setAgentContextTreeConfig = vi.fn(async () => response);
 

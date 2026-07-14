@@ -58,16 +58,26 @@ function yamlDoubleQuote(value: string): string {
   return JSON.stringify(value.replace(/\s+/g, " ").trim());
 }
 
-// NOTE: `validate-tree-workflow.yml.ejs` and `root-node.md.ejs` are kept
-// byte-for-byte in sync with the server one-click bootstrap's
-// `VALIDATE_TREE_WORKFLOW_CONTENT` / `initialRootNode`
+function yamlSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+// NOTE: The default-main output of `validate-tree-workflow.yml.ejs` and the
+// output of `root-node.md.ejs` are kept byte-for-byte in sync with the server
+// one-click bootstrap's `VALIDATE_TREE_WORKFLOW_CONTENT` / `initialRootNode`
 // (`packages/server/src/api/orgs/context-tree.ts`) so a tree created by either
 // path is identical. There is no cross-package test guarding this (the server
 // constants are module-private); if you touch either side, mirror the other.
 
 /** `.github/workflows/validate-tree.yml` — the optional CI workflow (`--with-workflow`). */
-export function validateTreeWorkflowContent(): string {
-  return render("validate-tree-workflow.yml.ejs", {});
+export function validateTreeWorkflowContent(branch = "main"): string {
+  // GitHub Actions treats `!` and `+` as branch-pattern operators even though
+  // both are valid in Git branch names. Escape them so this filter names the
+  // newly created branch literally.
+  const branchPattern = branch.replace(/[!+]/g, "\\$&");
+  return render("validate-tree-workflow.yml.ejs", {
+    branchField: branchPattern === "main" ? "main" : yamlSingleQuote(branchPattern),
+  });
 }
 
 /** Root `NODE.md` for a freshly created team Context Tree. */

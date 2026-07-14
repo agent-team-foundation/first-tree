@@ -1,5 +1,5 @@
 import { createLogger } from "@first-tree/client";
-import { contextTreeBranchSchema, contextTreeInfoSchema, contextTreeRepoSchema } from "@first-tree/shared";
+import { contextTreeActiveBindingSchema, contextTreeBranchSchema, contextTreeRepoSchema } from "@first-tree/shared";
 import {
   type ContextTreeBindingResult,
   type ContextTreeConfigReader,
@@ -97,8 +97,21 @@ export async function setAgentContextTreeBinding(
 
   try {
     const response = await sdk.setAgentContextTreeConfig(input);
-    const parsedResponse = contextTreeInfoSchema.safeParse(response);
-    if (!parsedResponse.success || (input.branch !== undefined && parsedResponse.data.branch !== input.branch)) {
+    const hasExplicitBindingFields =
+      response !== null &&
+      typeof response === "object" &&
+      "repo" in response &&
+      Object.hasOwn(response, "repo") &&
+      typeof response.repo === "string" &&
+      "branch" in response &&
+      Object.hasOwn(response, "branch") &&
+      typeof response.branch === "string";
+    const parsedResponse = contextTreeActiveBindingSchema.safeParse(response);
+    if (
+      !hasExplicitBindingFields ||
+      !parsedResponse.success ||
+      (input.branch !== undefined && parsedResponse.data.branch !== input.branch)
+    ) {
       throw invalidUpdateResponseError();
     }
     const binding = normalizeContextTreeBinding(parsedResponse.data);

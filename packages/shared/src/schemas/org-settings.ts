@@ -124,9 +124,24 @@ function hasControlCharacter(value: string): boolean {
   });
 }
 
+function hasUnpairedUtf16Surrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || nextCodeUnit < 0xdc00 || nextCodeUnit > 0xdfff) return true;
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return true;
+  }
+  return false;
+}
+
 function isValidGitBranchName(value: string): boolean {
   if (
     value.length === 0 ||
+    hasUnpairedUtf16Surrogate(value) ||
     value === "HEAD" ||
     value.startsWith("-") ||
     value.startsWith("/") ||
@@ -167,6 +182,12 @@ export const contextTreeRepoSchema = repoUrlSchema.superRefine((value, ctx) => {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "Context Tree repo must not contain control characters.",
+    });
+  }
+  if (hasUnpairedUtf16Surrogate(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not contain unpaired UTF-16 surrogates.",
     });
   }
   if (LINE_BREAK_RE.test(value)) {
@@ -266,12 +287,48 @@ export const orgContextTreeStorageSchema = z.object({
   branch: z.string().default("main"),
 });
 
+export type ContextTreeSettingState =
+  | { kind: "bound"; binding: ContextTreeActiveBinding }
+  | { kind: "unbound"; branch: string }
+  | { kind: "invalid" };
+
+/**
+ * Classify a raw Context Tree setting without exposing invalid historical
+ * values. This mirrors a future repo-only update: storage must first satisfy
+ * the historical shape, then the retained branch and any active binding must
+ * satisfy the strict runtime contract.
+ */
+export function classifyContextTreeSetting(value: unknown): ContextTreeSettingState {
+  const storage = orgContextTreeStorageSchema.safeParse(value);
+  if (!storage.success) return { kind: "invalid" };
+
+  if (storage.data.repo === undefined) {
+    const branch = contextTreeBranchSchema.safeParse(storage.data.branch);
+    return branch.success ? { kind: "unbound", branch: branch.data } : { kind: "invalid" };
+  }
+
+  const binding = contextTreeActiveBindingSchema.safeParse(storage.data);
+  return binding.success ? { kind: "bound", binding: binding.data } : { kind: "invalid" };
+}
+
 export const orgContextTreeInputSchema = z
   .object({
     /** Set / replace (HTTPS, ssh://, or scp-like — no embedded credentials). `null` clears. `undefined` leaves unchanged. */
     repo: contextTreeRepoSchema.nullish(),
     /** Set / replace (valid Git branch name). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
     branch: contextTreeBranchSchema.nullish(),
+  })
+  .strict();
+
+/**
+ * Conflict-safe finalization used by `tree init`. It is served from a dedicated
+ * endpoint so older servers return 404 without reaching a generic write path.
+ */
+export const orgContextTreeFinalizeInputSchema = z
+  .object({
+    repo: contextTreeRepoSchema,
+    branch: contextTreeBranchSchema,
+    expectedUnboundBranch: contextTreeBranchSchema,
   })
   .strict();
 

@@ -1,6 +1,6 @@
 import crypto, { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
@@ -153,6 +153,144 @@ describe("org-settings service", () => {
       { updatedBy: admin.userId },
     );
     expect(rebound).toEqual({ repo: "git@github.com:example/rebound.git", branch: "release/2026-07" });
+  });
+
+  it("putInitializedOrgContextTreeBinding initializes a branch-only row", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "legacy-branch" },
+      version: 4,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/initialized.git", branch: "main" },
+        { expectedUnboundBranch: "legacy-branch", updatedBy: admin.userId },
+      ),
+    ).resolves.toEqual({ repo: "https://github.com/example/initialized.git", branch: "main" });
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({
+      value: { repo: "https://github.com/example/initialized.git", branch: "main" },
+      version: 5,
+    });
+  });
+
+  it("putInitializedOrgContextTreeBinding preserves a branch changed after preflight", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const current = { branch: "release/concurrent" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: current,
+      version: 3,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/stale-initializer.git", branch: "main" },
+        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow("Context Tree setting changed after tree initialization began");
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: current, version: 3 });
+  });
+
+  it("putInitializedOrgContextTreeBinding preserves an existing raw repo binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const historical = { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 7,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/initialized.git", branch: "main" },
+        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow("Context Tree setting changed after tree initialization began");
+
+    const [row] = await app.db
+      .select({
+        value: organizationSettings.value,
+        version: organizationSettings.version,
+        updatedBy: organizationSettings.updatedBy,
+      })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: historical, version: 7, updatedBy: admin.userId });
+  });
+
+  it("putInitializedOrgContextTreeBinding preserves a repo-less invalid branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const historical = { branch: "--bad" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 8,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        admin.organizationId,
+        { repo: "https://github.com/example/initialized.git", branch: "main" },
+        { expectedUnboundBranch: "main", updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow("Context Tree setting changed after tree initialization began");
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: historical, version: 8 });
   });
 
   it("can read and repair a historical Context Tree row that is looser than the write schema", async () => {
@@ -939,11 +1077,252 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ branch: "main" });
   });
 
-  it("conditionally finalizes tree init bindings without retaining an old unbound branch", async () => {
+  it("accepts a Context Tree binding when expectedUnboundBranch matches", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
+    const branch = "release/candidate";
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+
+    const unbound = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null, branch },
+    });
+    expect(unbound.statusCode).toBe(200);
+    expect(unbound.json()).toEqual({ branch });
+
+    const binding = {
+      repo: "https://github.com/example/precondition-match.git",
+      branch,
+    };
+    const bound = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: binding.repo, branch: binding.branch, expectedUnboundBranch: branch },
+    });
+
+    expect(bound.statusCode).toBe(200);
+    // The precondition is request metadata and must never be persisted or
+    // exposed in the settings response.
+    expect(bound.json()).toEqual(binding);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: binding, version: 2 });
+  });
+
+  it("rejects an invalid expectedUnboundBranch sentinel without writing", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+
+    const response = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "https://github.com/example/invalid-precondition.git",
+        branch: "main",
+        expectedUnboundBranch: "bad..branch",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toBeUndefined();
+  });
+
+  it("rejects a stale expectedUnboundBranch after another writer binds the Context Tree", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+    const winningBinding = {
+      repo: "https://github.com/example/concurrent-winner.git",
+      branch: "main",
+    };
+
+    const winner = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: winningBinding,
+    });
+    expect(winner.statusCode).toBe(200);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "https://github.com/example/stale-initializer.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: "Context Tree setting changed after tree initialization began" });
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: winningBinding, version: 1 });
+  });
+
+  it("rejects a stale expectedUnboundBranch after another writer changes only the branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+
+    const branchChange = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { branch: "release/concurrent" },
+    });
+    expect(branchChange.statusCode).toBe(200);
+    expect(branchChange.json()).toEqual({ branch: "release/concurrent" });
+
+    const stale = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "https://github.com/example/stale-branch-initializer.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: "Context Tree setting changed after tree initialization began" });
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: { branch: "release/concurrent" }, version: 1 });
+  });
+
+  it("rejects a conditional binding over invalid historical storage", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 6,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = '{"repo":null,"branch":"main"}'::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+
+    const response = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "https://github.com/example/conditional-repair.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: { repo: null, branch: "main" }, version: 6 });
+  });
+
+  it("allows only one of two concurrent initializer binding writes to commit", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${url}/initialize`;
+    const candidates = [
+      { repo: "https://github.com/example/initializer-a.git", branch: "main" },
+      { repo: "https://github.com/example/initializer-b.git", branch: "main" },
+    ] as const;
+
+    const responses = await Promise.all(
+      candidates.map((payload) =>
+        app.inject({
+          method: "POST",
+          url: finalizeUrl,
+          headers: { authorization: `Bearer ${admin.accessToken}` },
+          payload: { repo: payload.repo, branch: payload.branch, expectedUnboundBranch: "main" },
+        }),
+      ),
+    );
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const successful = responses.find((response) => response.statusCode === 200);
+    const conflicted = responses.find((response) => response.statusCode === 409);
+    expect(successful).toBeDefined();
+    expect(conflicted?.json()).toMatchObject({
+      error: "Context Tree setting changed after tree initialization began",
+    });
+    const winningBinding = successful?.json();
+    expect(candidates).toContainEqual(winningBinding);
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: winningBinding, version: 1 });
+  });
+
+  it("keeps an intentional branch-only clear readable on the member-safe endpoint", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
     const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const finalizeUrl = `${safeUrl}/initialize`;
 
     const cleared = await app.inject({
       method: "PUT",
@@ -954,54 +1333,304 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(cleared.statusCode).toBe(200);
     expect(cleared.json()).toEqual({ branch: "trunk" });
 
-    const finalized = await app.inject({
-      method: "POST",
-      url: finalizeUrl,
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(200);
+      expect(safeRead.json()).toEqual({ branch: "trunk" });
+    }
+
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { repo: "https://github.com/example/new-context-tree.git", branch: "main" },
     });
-    expect(finalized.statusCode).toBe(200);
-    expect(finalized.json()).toEqual({ repo: "https://github.com/example/new-context-tree.git", branch: "main" });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toEqual({ branch: "trunk" });
   });
 
-  it("conditional tree init finalization preserves a binding committed after preflight", async () => {
+  it("fails closed for a repo-less historical row with an invalid branch", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "--bad" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(409);
+      expect(safeRead.json()).toMatchObject({
+        error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+      });
+      expect(safeRead.body).not.toContain("--bad");
+    }
+
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toEqual({ branch: "--bad" });
+  });
+
+  it("fails closed for an empty historical repo while keeping the raw row repairable", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = { repo: "", branch: "main" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(409);
+      expect(safeRead.json()).toMatchObject({
+        error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+      });
+    }
+
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toEqual(historical);
+  });
+
+  it("treats a JSON null row as invalid instead of an absent Context Tree setting", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = 'null'::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+
+    for (const accessToken of [admin.accessToken, member.accessToken]) {
+      const safeRead = await app.inject({
+        method: "GET",
+        url: safeUrl,
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(safeRead.statusCode).toBe(409);
+    }
+    const rawRead = await app.inject({
+      method: "GET",
+      url: `${safeUrl}/raw`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(rawRead.statusCode).toBe(200);
+    expect(rawRead.json()).toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeWithMeta(app.db, admin.organizationId)).resolves.toMatchObject({
+      binding: null,
+      updatedAt: expect.any(Date),
+    });
+  });
+
+  it("returns a JSONB string scalar from the raw repair endpoint as valid JSON", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const finalizeUrl = `${safeUrl}/initialize`;
-    const competing = { repo: "https://github.com/example/competing.git", branch: "release" };
+    const rawUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree/raw`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = '"legacy"'::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
 
-    const preflight = await app.inject({
+    const response = await app.inject({
       method: "GET",
-      url: safeUrl,
+      url: rawUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(preflight.statusCode).toBe(200);
-    expect(preflight.json()).toEqual({ branch: "main" });
 
-    const competitor = await app.inject({
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toMatch(/^application\/json/u);
+    expect(response.body).toBe('"legacy"');
+    expect(response.json()).toBe("legacy");
+  });
+
+  it.each([
+    ["JSON null", "null"],
+    ["array JSON", "[]"],
+    ["scalar JSON", '"legacy"'],
+    ["null repo", '{"repo":null,"branch":"main"}'],
+    ["null branch", '{"repo":"https://github.com/legacy/tree.git","branch":null}'],
+  ])("allows a complete replacement to repair %s storage while partial updates fail closed", async (_label, rawJson) => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    await app.db.execute(sql`
+      UPDATE ${organizationSettings}
+      SET value = ${rawJson}::jsonb
+      WHERE ${organizationSettings.organizationId} = ${admin.organizationId}
+        AND ${organizationSettings.namespace} = 'context_tree'
+    `);
+
+    const partial = await app.inject({
       method: "PUT",
-      url: safeUrl,
+      url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: competing,
+      payload: { repo: "https://github.com/example/partial-repair.git" },
     });
-    expect(competitor.statusCode).toBe(200);
+    expect(partial.statusCode).toBe(400);
+    const [afterPartial] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(afterPartial).toEqual({ value: JSON.parse(rawJson), version: 1 });
 
-    const finalized = await app.inject({
-      method: "POST",
-      url: finalizeUrl,
+    const repairedBinding = {
+      repo: "https://github.com/example/repaired-context-tree.git",
+      branch: "repair/storage",
+    };
+    const repaired = await app.inject({
+      method: "PUT",
+      url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { repo: "https://github.com/example/tree-init.git", branch: "main" },
+      payload: repairedBinding,
     });
-    expect(finalized.statusCode).toBe(409);
+    expect(repaired.statusCode).toBe(200);
+    expect(repaired.json()).toEqual(repairedBinding);
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(
+      repairedBinding,
+    );
+    const [afterRepair] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(afterRepair).toEqual({ value: repairedBinding, version: 2 });
+  });
 
-    const after = await app.inject({
+  it("does not partially clear an invalid historical Context Tree binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 7,
+      updatedBy: admin.userId,
+    });
+
+    const partialClear = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null },
+    });
+
+    expect(partialClear.statusCode).toBe(400);
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: historical, version: 7 });
+  });
+
+  it("allows a complete unbound replacement to repair an invalid historical Context Tree binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 7,
+      updatedBy: admin.userId,
+    });
+
+    const repaired = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null, branch: "main" },
+    });
+
+    expect(repaired.statusCode).toBe(200);
+    expect(repaired.json()).toEqual({ branch: "main" });
+    const safeRead = await app.inject({
       method: "GET",
-      url: safeUrl,
+      url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(after.statusCode).toBe(200);
-    expect(after.json()).toEqual(competing);
+    expect(safeRead.statusCode).toBe(200);
+    expect(safeRead.json()).toEqual({ branch: "main" });
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: { branch: "main" }, version: 8 });
   });
 
   it("keeps context_tree GET runtime-safe and exposes raw repair data only on the admin endpoint", async () => {
@@ -1078,127 +1707,6 @@ describe("org-settings API (admin gating + masking)", () => {
       repo: "https://github.com/example/repaired-context-tree.git",
       branch: "release/2026-07",
     });
-  });
-
-  it("returns a non-secret conflict for a repo-less invalid historical context_tree branch", async () => {
-    const app = getApp();
-    const { admin, member } = await adminAndMember(app);
-    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const historical = { branch: "--bad" };
-    await app.db.insert(organizationSettings).values({
-      organizationId: admin.organizationId,
-      namespace: "context_tree",
-      value: historical,
-      version: 1,
-      updatedBy: admin.userId,
-    });
-
-    const adminSafeRead = await app.inject({
-      method: "GET",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-    });
-    expect(adminSafeRead.statusCode).toBe(409);
-    expect(adminSafeRead.json()).toMatchObject({
-      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
-    });
-    expect(adminSafeRead.body).not.toContain("--bad");
-
-    const memberSafeRead = await app.inject({
-      method: "GET",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${member.accessToken}` },
-    });
-    expect(memberSafeRead.statusCode).toBe(409);
-    expect(memberSafeRead.body).not.toContain("--bad");
-  });
-
-  it("returns a non-secret conflict for an empty-string historical context_tree repo", async () => {
-    const app = getApp();
-    const { admin, member } = await adminAndMember(app);
-    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const rawUrl = `${safeUrl}/raw`;
-    const historical = { repo: "", branch: "main" };
-    await app.db.insert(organizationSettings).values({
-      organizationId: admin.organizationId,
-      namespace: "context_tree",
-      value: historical,
-      version: 1,
-      updatedBy: admin.userId,
-    });
-
-    const adminSafeRead = await app.inject({
-      method: "GET",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-    });
-    expect(adminSafeRead.statusCode).toBe(409);
-    expect(adminSafeRead.json()).toMatchObject({
-      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
-    });
-
-    const memberSafeRead = await app.inject({
-      method: "GET",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${member.accessToken}` },
-    });
-    expect(memberSafeRead.statusCode).toBe(409);
-
-    const adminRawRead = await app.inject({
-      method: "GET",
-      url: rawUrl,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-    });
-    expect(adminRawRead.statusCode).toBe(200);
-    expect(adminRawRead.json()).toEqual(historical);
-  });
-
-  it("keeps an intentionally cleared context_tree row readable as unbound", async () => {
-    const app = getApp();
-    const { admin, member } = await adminAndMember(app);
-    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
-    const rawUrl = `${safeUrl}/raw`;
-
-    const bound = await app.inject({
-      method: "PUT",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { repo: "https://github.com/example/context-tree.git", branch: "release" },
-    });
-    expect(bound.statusCode).toBe(200);
-
-    const cleared = await app.inject({
-      method: "PUT",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { repo: null, branch: "trunk" },
-    });
-    expect(cleared.statusCode).toBe(200);
-    expect(cleared.json()).toEqual({ branch: "trunk" });
-
-    const adminSafeRead = await app.inject({
-      method: "GET",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-    });
-    expect(adminSafeRead.statusCode).toBe(200);
-    expect(adminSafeRead.json()).toEqual({ branch: "trunk" });
-
-    const memberSafeRead = await app.inject({
-      method: "GET",
-      url: safeUrl,
-      headers: { authorization: `Bearer ${member.accessToken}` },
-    });
-    expect(memberSafeRead.statusCode).toBe(200);
-    expect(memberSafeRead.json()).toEqual({ branch: "trunk" });
-
-    const rawRead = await app.inject({
-      method: "GET",
-      url: rawUrl,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-    });
-    expect(rawRead.statusCode).toBe(200);
-    expect(rawRead.json()).toEqual({ branch: "trunk" });
   });
 
   it("strictly validates Context Tree PUT bodies without partially updating the setting", async () => {
@@ -1351,7 +1859,7 @@ describe("org-settings API (admin gating + masking)", () => {
     });
   });
 
-  it("non-admin member is forbidden from PUT / DELETE on context_tree (write is admin-only)", async () => {
+  it("non-admin member is forbidden from every context_tree write surface", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
@@ -1360,14 +1868,28 @@ describe("org-settings API (admin gating + masking)", () => {
       updatedBy: admin.userId,
     });
 
-    for (const method of ["PUT", "DELETE"] as const) {
+    const writes = [
+      { method: "PUT", url, payload: { branch: "x" } },
+      {
+        method: "POST",
+        url: `${url}/initialize`,
+        payload: {
+          repo: "https://github.com/example/member-finalize-guard.git",
+          branch: "main",
+          expectedUnboundBranch: "main",
+        },
+      },
+      { method: "DELETE", url, payload: undefined },
+    ] as const;
+
+    for (const write of writes) {
       const res = await app.inject({
-        method,
-        url,
+        method: write.method,
+        url: write.url,
         headers: { authorization: `Bearer ${member.accessToken}` },
-        ...(method === "PUT" ? { payload: { branch: "x" } } : {}),
+        ...(write.payload ? { payload: write.payload } : {}),
       });
-      expect(res.statusCode, `${method} should be 403 for non-admin`).toBe(403);
+      expect(res.statusCode, `${write.method} ${write.url} should be 403 for non-admin`).toBe(403);
     }
 
     const [row] = await app.db
@@ -1382,7 +1904,7 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(row).toEqual({ value: original, version: 1 });
   });
 
-  it("re-evaluates admin membership on every Context Tree PUT and leaves the setting unchanged", async () => {
+  it("re-evaluates admin membership on every Context Tree write and leaves the setting unchanged", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
@@ -1399,6 +1921,17 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { repo: "https://github.com/example/forbidden-downgrade.git" },
     });
     expect(downgraded.statusCode).toBe(403);
+    const downgradedFinalize = await app.inject({
+      method: "POST",
+      url: `${url}/initialize`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "https://github.com/example/forbidden-downgrade-finalize.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+    expect(downgradedFinalize.statusCode).toBe(403);
     await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
       original,
     );
@@ -1411,6 +1944,17 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { repo: "https://github.com/example/forbidden-departure.git" },
     });
     expect(departed.statusCode).toBe(403);
+    const departedFinalize = await app.inject({
+      method: "POST",
+      url: `${url}/initialize`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        repo: "https://github.com/example/forbidden-departure-finalize.git",
+        branch: "main",
+        expectedUnboundBranch: "main",
+      },
+    });
+    expect(departedFinalize.statusCode).toBe(403);
 
     const [row] = await app.db
       .select({ value: organizationSettings.value, version: organizationSettings.version })

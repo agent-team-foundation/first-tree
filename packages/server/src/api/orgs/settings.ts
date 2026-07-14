@@ -1,4 +1,9 @@
-import { isOrgSettingNamespace, ORG_SETTINGS_NAMESPACES, type OrgSettingNamespace } from "@first-tree/shared";
+import {
+  isOrgSettingNamespace,
+  ORG_SETTINGS_NAMESPACES,
+  type OrgSettingNamespace,
+  orgContextTreeFinalizeInputSchema,
+} from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, ConflictError, GoneError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
@@ -24,9 +29,14 @@ import * as orgSettingsService from "../../services/org-settings.js";
  * loose historical rows.
  */
 export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { orgId: string } }>("/context_tree/raw", async (request) => {
+  app.get<{ Params: { orgId: string } }>("/context_tree/raw", async (request, reply) => {
     const scope = await requireOrgAdmin(request, app.db);
-    return orgSettingsService.getOrgSetting(app.db, scope.organizationId, "context_tree");
+    const value = await orgSettingsService.getRawOrgContextTreeSetting(app.db, scope.organizationId);
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw new Error("Context Tree raw setting could not be serialized as JSON");
+    }
+    return reply.type("application/json").send(serialized);
   });
 
   app.post<{ Params: { orgId: string }; Body: unknown }>(
@@ -34,9 +44,16 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
     { config: { otelRecordBody: false } },
     async (request) => {
       const scope = await requireOrgAdmin(request, app.db);
-      return orgSettingsService.putInitializedOrgContextTreeBinding(app.db, scope.organizationId, request.body, {
-        updatedBy: scope.userId,
-      });
+      const input = orgContextTreeFinalizeInputSchema.parse(request.body);
+      return orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        scope.organizationId,
+        { repo: input.repo, branch: input.branch },
+        {
+          updatedBy: scope.userId,
+          expectedUnboundBranch: input.expectedUnboundBranch,
+        },
+      );
     },
   );
 
@@ -47,9 +64,9 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
     if (namespace === "context_tree") {
-      const current = await orgSettingsService.getOrgContextTreeSafeProjection(app.db, scope.organizationId);
-      if (current.status === "active") return current.binding;
-      if (current.status === "unbound") return { branch: current.branch };
+      const state = await orgSettingsService.getOrgContextTreeSettingState(app.db, scope.organizationId);
+      if (state.kind === "bound") return state.binding;
+      if (state.kind === "unbound") return { branch: state.branch };
       throw new ConflictError("Context Tree setting contains invalid historical data and must be repaired by an admin");
     }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);

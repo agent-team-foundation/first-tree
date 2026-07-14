@@ -208,4 +208,9 @@ describe("scaffold-templates (ejs)", () => {
   it("renders the validate-tree workflow", () => {
     expect(validateTreeWorkflowContent()).toContain("first-tree tree verify");
   });
+
+  it("preserves a valid branch exactly in the validate-tree workflow", () => {
+    const branch = "feature\u00a0context-tree";
+    expect(validateTreeWorkflowContent(branch)).toContain(`branches: ['${branch}']`);
+  });
 });

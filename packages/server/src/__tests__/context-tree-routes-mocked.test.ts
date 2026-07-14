@@ -73,7 +73,7 @@ async function setupRoute() {
   const getRepoFileWithToken = vi.fn().mockResolvedValue({ path: "NODE.md" });
   const createRepoFileWithToken = vi.fn().mockResolvedValue({ content: { path: "NODE.md" } });
   const getOrgContextTreeBinding = vi.fn().mockResolvedValue(null);
-  const getOrgSetting = vi.fn().mockResolvedValue({ branch: "main" });
+  const getOrgContextTreeSettingState = vi.fn().mockResolvedValue({ kind: "unbound", branch: "main" });
   const putInitializedOrgContextTreeBinding = vi.fn().mockResolvedValue({ repo: repo.cloneUrl, branch: "main" });
   const getOrganization = vi.fn().mockResolvedValue({ id: scope.organizationId, name: "Acme", displayName: "Acme" });
 
@@ -92,7 +92,7 @@ async function setupRoute() {
   vi.doMock("../services/github-user-token.js", () => ({ GithubUserTokenError, getFreshGithubUserToken }));
   vi.doMock("../services/org-settings.js", () => ({
     getOrgContextTreeBinding,
-    getOrgSetting,
+    getOrgContextTreeSettingState,
     putInitializedOrgContextTreeBinding,
   }));
   vi.doMock("../services/organization.js", () => ({ getOrganization }));
@@ -124,7 +124,7 @@ async function setupRoute() {
       getRepoFileWithToken,
       createRepoFileWithToken,
       getOrgContextTreeBinding,
-      getOrgSetting,
+      getOrgContextTreeSettingState,
       putInitializedOrgContextTreeBinding,
       getOrganization,
     },
@@ -179,6 +179,69 @@ describe("org context tree routes with mocked service edges", () => {
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: "Reconnect GitHub", code: "github_user_token_required" });
     expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { field: "clone URL", repoOverride: { cloneUrl: "https://user:secret@github.com/acme/tree.git" } },
+    { field: "HTML URL", repoOverride: { htmlUrl: "not-a-url" } },
+    { field: "HTTP HTML URL", repoOverride: { htmlUrl: "http://github.com/acme/tree" } },
+    { field: "credentialed HTML URL", repoOverride: { htmlUrl: "https://user:secret@github.com/acme/tree" } },
+    { field: "off-host HTML URL", repoOverride: { htmlUrl: "https://example.com/acme/tree" } },
+    { field: "off-host clone URL", repoOverride: { cloneUrl: "https://example.com/acme/acme-context-tree.git" } },
+    { field: "mismatched clone URL", repoOverride: { cloneUrl: "https://github.com/acme/other-tree.git" } },
+    { field: "mismatched HTML URL", repoOverride: { htmlUrl: "https://github.com/acme/other-tree" } },
+    { field: "mismatched full name", repoOverride: { fullName: "acme/other-tree" } },
+    { field: "mismatched owner", repoOverride: { ownerLogin: "other" } },
+    { field: "mismatched name", repoOverride: { name: "other-tree" } },
+  ])("maps an invalid provider $field to a fixed upstream error before writing files", async ({ repoOverride }) => {
+    const ctx = await setupRoute();
+    ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockResolvedValueOnce({ ...ctx.repo, ...repoOverride });
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "GitHub returned invalid repository details. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      field: "owner",
+      repo: {
+        ownerLogin: "other",
+        name: "acme-context-tree",
+        fullName: "other/acme-context-tree",
+        cloneUrl: "https://github.com/other/acme-context-tree.git",
+        htmlUrl: "https://github.com/other/acme-context-tree",
+      },
+    },
+    {
+      field: "name",
+      repo: {
+        ownerLogin: "acme",
+        name: "other-context-tree",
+        fullName: "acme/other-context-tree",
+        cloneUrl: "https://github.com/acme/other-context-tree.git",
+        htmlUrl: "https://github.com/acme/other-context-tree",
+      },
+    },
+  ])("rejects a self-consistent provider response for the wrong expected $field", async ({ repo }) => {
+    const ctx = await setupRoute();
+    ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockResolvedValueOnce(repo);
+
+    const res = await initialize(ctx);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({
+      error: "GitHub returned invalid repository details. Try again in a moment.",
+      code: "upstream",
+    });
+    expect(ctx.mocks.createRepoFileWithToken).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
   });
 
   it("rethrows unexpected provision failures as a server error", async () => {
@@ -292,10 +355,22 @@ describe("org context tree routes with mocked service edges", () => {
 
   it("initializes missing root and workflow files before saving the org setting", async () => {
     const ctx = await setupRoute();
+    const expectedRepo = {
+      ...ctx.repo,
+      name: "acme-research-team-context-tree",
+      fullName: "acme/acme-research-team-context-tree",
+      cloneUrl: "https://github.com/acme/acme-research-team-context-tree.git",
+      htmlUrl: "https://github.com/acme/acme-research-team-context-tree",
+    };
     ctx.mocks.getOrganization.mockResolvedValueOnce({
       id: ctx.scope.organizationId,
       name: "fallback-name",
       displayName: "  Àcme   Research Team  ",
+    });
+    ctx.mocks.ensureInstallationOwnedContextTreeRepo.mockResolvedValueOnce(expectedRepo);
+    ctx.mocks.putInitializedOrgContextTreeBinding.mockResolvedValueOnce({
+      repo: expectedRepo.cloneUrl,
+      branch: "main",
     });
     ctx.mocks.getRepoFileWithToken
       .mockRejectedValueOnce(new ctx.classes.GithubAppApiError(404))
@@ -305,8 +380,8 @@ describe("org context tree routes with mocked service edges", () => {
 
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({
-      repo: ctx.repo.cloneUrl,
-      htmlUrl: ctx.repo.htmlUrl,
+      repo: expectedRepo.cloneUrl,
+      htmlUrl: expectedRepo.htmlUrl,
       branch: "main",
       nodePath: "NODE.md",
     });
@@ -333,8 +408,8 @@ describe("org context tree routes with mocked service edges", () => {
     expect(ctx.mocks.putInitializedOrgContextTreeBinding).toHaveBeenCalledWith(
       ctx.app.db,
       ctx.scope.organizationId,
-      { repo: ctx.repo.cloneUrl, branch: "main" },
-      { updatedBy: ctx.scope.userId },
+      { repo: expectedRepo.cloneUrl, branch: "main" },
+      { expectedUnboundBranch: "main", updatedBy: ctx.scope.userId },
     );
   });
 });

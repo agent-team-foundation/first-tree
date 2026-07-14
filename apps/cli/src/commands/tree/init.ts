@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { contextTreeBranchSchema, contextTreeInstallationInfoResponseSchema } from "@first-tree/shared";
+import {
+  classifyContextTreeSetting,
+  contextTreeActiveBindingSchema,
+  contextTreeInstallationInfoResponseSchema,
+} from "@first-tree/shared";
 import type { Command } from "commander";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
@@ -63,14 +67,22 @@ export function defaultRepoName(title: string): string {
  * creator (verify hard-fails on a `members/` dir with no member nodes). The node
  * bodies are rendered from `./templates/*.ejs` (see `scaffold-templates.ts`).
  */
-export function buildScaffoldFiles(opts: { title: string; ownerLogin: string; withWorkflow: boolean }): ScaffoldFile[] {
+export function buildScaffoldFiles(opts: {
+  title: string;
+  ownerLogin: string;
+  withWorkflow: boolean;
+  branch?: string;
+}): ScaffoldFile[] {
   const files: ScaffoldFile[] = [
     { relPath: "NODE.md", content: rootNodeContent(opts.title, opts.ownerLogin) },
     { relPath: join("members", "NODE.md"), content: membersIndexContent(opts.ownerLogin) },
     { relPath: join("members", opts.ownerLogin, "NODE.md"), content: memberNodeContent(opts.ownerLogin) },
   ];
   if (opts.withWorkflow) {
-    files.push({ relPath: join(".github", "workflows", "validate-tree.yml"), content: validateTreeWorkflowContent() });
+    files.push({
+      relPath: join(".github", "workflows", "validate-tree.yml"),
+      content: validateTreeWorkflowContent(opts.branch ?? DEFAULT_BRANCH),
+    });
   }
   return files;
 }
@@ -194,7 +206,15 @@ async function fetchInstallation(serverUrl: string, accessToken: string, orgId: 
     return { kind: "error", status: 0 };
   }
   if (res.status === 404) {
-    return { kind: "none" };
+    try {
+      const body: unknown = await res.json();
+      if (body && typeof body === "object" && "code" in body && body.code === "no_installation") {
+        return { kind: "none" };
+      }
+    } catch {
+      // An unrelated or malformed 404 must remain fail-closed.
+    }
+    return { kind: "error", status: res.status };
   }
   if (!res.ok) {
     return { kind: "error", status: res.status };
@@ -276,43 +296,15 @@ function buildCoverage(lookup: InstallationLookup, repoFullName: string): Covera
   };
 }
 
-type ContextTreeBindingRead = { repo: string | null; branch: string; hasRepo: boolean; rawSupported: boolean };
-
-type ParsedContextTreeBindingRead = Omit<ContextTreeBindingRead, "rawSupported">;
-
-function parseContextTreeBindingRead(body: unknown): ParsedContextTreeBindingRead {
-  if (!body || typeof body !== "object") {
-    throw new Error("Context Tree binding response was not an object");
-  }
-  const record = body as Record<string, unknown>;
-  const branchParsed = contextTreeBranchSchema.safeParse(record.branch ?? DEFAULT_BRANCH);
-  if (!branchParsed.success) {
-    throw new Error("Context Tree binding contains an invalid branch");
-  }
-
-  if (Object.hasOwn(record, "repo")) {
-    if (typeof record.repo === "string") {
-      return { repo: record.repo, branch: branchParsed.data, hasRepo: true };
-    }
-    if (record.repo === null || record.repo === undefined) {
-      return { repo: null, branch: branchParsed.data, hasRepo: false };
-    }
-    throw new Error("Context Tree binding contains an invalid repo");
-  }
-
-  return { repo: null, branch: branchParsed.data, hasRepo: false };
-}
-
-// Read the raw `context_tree` repair view so `tree init` refuses to clobber
-// any configured row, including loose historical values that are not active
-// runtime bindings yet. A missing raw endpoint marks an old Server that cannot
-// offer conflict-safe tree-init finalization, so non-rebind callers fail before
-// creating a GitHub repository.
+// Read the raw `context_tree` repair view so `tree init` can retain a valid
+// unbound branch while rejecting active or invalid historical settings. A
+// missing raw endpoint marks an old Server that cannot offer conflict-safe
+// finalization, so non-rebind callers fail before creating a GitHub repository.
 async function readContextTreeBinding(
   serverUrl: string,
   accessToken: string,
   orgId: string,
-): Promise<ContextTreeBindingRead> {
+): Promise<{ repo: string | null; branch: string; supportsConditionalFinalize: boolean }> {
   const raw = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree/raw`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
@@ -329,18 +321,33 @@ async function readContextTreeBinding(
       `Could not read the team's current Context Tree binding (server returned ${res.status}); refusing to proceed so an existing tree is not replaced. Retry, or pass --no-bind.`,
     );
   }
+  let body: unknown;
   try {
-    return { ...parseContextTreeBindingRead(await res.json()), rawSupported };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  const state = classifyContextTreeSetting(body);
+  if (state.kind === "invalid") {
     throw new Error(
-      `Could not read the team's current Context Tree binding (${reason}); refusing to proceed so an existing tree is not replaced. Retry, or pass --no-bind.`,
+      "The team's current Context Tree setting contains invalid historical data; refusing to create a repository until an admin repairs both its repo and branch.",
     );
   }
+  return state.kind === "bound"
+    ? {
+        repo: state.binding.repo,
+        branch: state.binding.branch,
+        supportsConditionalFinalize: raw.status !== 404,
+      }
+    : { repo: null, branch: state.branch, supportsConditionalFinalize: raw.status !== 404 };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 function explicitBindCommand(repoUrl: string, orgId: string, branch: string): string {
-  return `${channelConfig.binName} org bind-tree ${repoUrl} --org ${orgId} --branch ${branch}`;
+  return `${channelConfig.binName} org bind-tree ${shellQuote(repoUrl)} --org ${shellQuote(orgId)} --branch ${shellQuote(branch)}`;
 }
 
 async function bindOrgToTree(args: {
@@ -353,37 +360,64 @@ async function bindOrgToTree(args: {
 }): Promise<void> {
   const path = args.rebind ? "settings/context_tree" : "settings/context_tree/initialize";
   const endpoint = `${args.serverUrl}/api/v1/orgs/${encodeURIComponent(args.orgId)}/${path}`;
+  const requestBody = args.rebind
+    ? { repo: args.repoUrl, branch: args.branch }
+    : { repo: args.repoUrl, branch: args.branch, expectedUnboundBranch: args.branch };
   let res: Response;
   try {
     res = await fetch(endpoint, {
       method: args.rebind ? "PUT" : "POST",
       headers: { Authorization: `Bearer ${args.accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ repo: args.repoUrl, branch: args.branch }),
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(10_000),
     });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+  } catch {
+    const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but the binding outcome for org ${args.orgId} is unknown (${reason}). Read back /api/v1/orgs/${args.orgId}/settings/context_tree before retrying. If it is still unbound and you intentionally want to bind this repo, run \`${explicitBindCommand(args.repoUrl, args.orgId, args.branch)}\`.`,
+      `Repo created and pushed, but the binding outcome is unknown for organization ${args.orgId} after a network or timeout failure. Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
-
-  if (res.ok) return;
-
-  const text = await res.text().catch(() => "");
-  const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
-  if (!args.rebind && res.status === 409) {
+  if (!res.ok) {
+    if (!args.rebind && res.status === 409) {
+      throw new Error(
+        `Repo created and pushed, but organization ${args.orgId}'s Context Tree setting changed before finalization (server returned 409). The competing setting was preserved; do not retry or overwrite it. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree first. The newly created repo is ${args.repoUrl} at branch ${args.branch}.`,
+      );
+    }
+    if (!args.rebind && res.status === 404) {
+      throw new Error(
+        `Repo created and pushed, but this server does not support conflict-safe tree init finalization for organization ${args.orgId}. No binding was written. Upgrade the server, then read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before deciding how to bind repo ${args.repoUrl} at branch ${args.branch}.`,
+      );
+    }
+    const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but org ${args.orgId} was bound by another writer before finalization; the existing binding was preserved. Read the current Context Tree binding before deciding whether to replace it. If you intentionally want to replace it with this repo and branch, run \`${retry}\`. ${text.slice(0, 200)}`,
+      `Repo created and pushed, but binding failed (server returned ${res.status}) for organization ${args.orgId}. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before any retry. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
-  if (!args.rebind && res.status === 404) {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  const hasExplicitBindingFields =
+    body !== null &&
+    typeof body === "object" &&
+    "repo" in body &&
+    typeof body.repo === "string" &&
+    "branch" in body &&
+    typeof body.branch === "string";
+  const binding = contextTreeActiveBindingSchema.safeParse(body);
+  if (
+    !hasExplicitBindingFields ||
+    !binding.success ||
+    binding.data.repo !== args.repoUrl ||
+    binding.data.branch !== args.branch
+  ) {
+    const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but this server does not support conflict-safe tree init finalization (404 on /orgs/${args.orgId}/${path}). Read back /api/v1/orgs/${args.orgId}/settings/context_tree before retrying. After the server supports safe finalization, rerun tree init; if the binding is still unbound and you intentionally want to bind this repo, run \`${retry}\`.`,
+      `Repo created and pushed, but the binding outcome is unknown because the server did not confirm the requested Context Tree binding for organization ${args.orgId}. Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
-  throw new Error(
-    `Repo created and pushed, but binding failed for org ${args.orgId} (server returned ${res.status}). Read back /api/v1/orgs/${args.orgId}/settings/context_tree before retrying. If it is still unbound and you intentionally want to bind this repo, run \`${retry}\`. ${text.slice(0, 200)}`,
-  );
 }
 
 type TreeInitSummary = {
@@ -444,6 +478,7 @@ async function runInitCommand(context: CommandContext): Promise<void> {
     let bindContext: { serverUrl: string; accessToken: string; orgId: string } | null = null;
     let lookup: InstallationLookup | null = null;
     let installationAccount: string | null = null;
+    let treeBranch = DEFAULT_BRANCH;
     if (options.bind) {
       const serverUrl = resolveServerUrl();
       const accessToken = await ensureFreshAccessToken();
@@ -454,15 +489,15 @@ async function runInitCommand(context: CommandContext): Promise<void> {
         );
       }
       const existing = await readContextTreeBinding(serverUrl, accessToken, orgId);
-      if (existing.hasRepo && !options.rebind) {
-        const configuredRepo = existing.repo?.trim() ? existing.repo : "an invalid historical repo value";
+      treeBranch = existing.branch;
+      if (existing.repo && !options.rebind) {
         throw new Error(
-          `This team is already bound to a Context Tree (${configuredRepo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
+          `This team is already bound to a Context Tree (${existing.repo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
         );
       }
-      if (!options.rebind && !existing.rawSupported) {
+      if (!options.rebind && !existing.supportsConditionalFinalize) {
         throw new Error(
-          "This server does not support conflict-safe Context Tree initialization finalization; refusing before any GitHub repo is created. Upgrade the server, pass --rebind to intentionally replace through the legacy settings write, or pass --no-bind to only create a repo.",
+          `Server support for conflict-safe tree init finalization is required for organization ${orgId}. Upgrade the server before retrying; no repository was created.`,
         );
       }
       lookup = await fetchInstallation(serverUrl, accessToken, orgId);
@@ -492,9 +527,9 @@ async function runInitCommand(context: CommandContext): Promise<void> {
     mkdirSync(treeRoot, { recursive: true });
     writeScaffold(
       treeRoot,
-      buildScaffoldFiles({ title, ownerLogin: creatorLogin, withWorkflow: options.withWorkflow }),
+      buildScaffoldFiles({ title, ownerLogin: creatorLogin, withWorkflow: options.withWorkflow, branch: treeBranch }),
     );
-    runCommand("git", ["init", "-b", DEFAULT_BRANCH], treeRoot);
+    runCommand("git", ["init", "-b", treeBranch], treeRoot);
 
     const verifySummary = verifyTreeRoot(treeRoot);
     if (!verifySummary.ok) {
@@ -516,8 +551,8 @@ async function runInitCommand(context: CommandContext): Promise<void> {
 
     const repo = ghApiJson(`repos/${repoFullName}`);
     const htmlUrl = typeof repo.html_url === "string" ? repo.html_url : "";
-    if (!htmlUrl) {
-      throw new Error(`Repo created but could not read its URL back from GitHub for ${repoFullName}.`);
+    if (htmlUrl !== `https://github.com/${repoFullName}`) {
+      throw new Error(`Repo created but GitHub did not confirm the expected URL for ${repoFullName}.`);
     }
 
     let bound = false;
@@ -527,7 +562,7 @@ async function runInitCommand(context: CommandContext): Promise<void> {
         accessToken: bindContext.accessToken,
         orgId: bindContext.orgId,
         repoUrl: htmlUrl,
-        branch: DEFAULT_BRANCH,
+        branch: treeBranch,
         rebind: options.rebind,
       });
       bound = true;
@@ -539,7 +574,7 @@ async function runInitCommand(context: CommandContext): Promise<void> {
       owner: repoOwner,
       name: repoName,
       treeRoot,
-      branch: DEFAULT_BRANCH,
+      branch: treeBranch,
       withWorkflow: options.withWorkflow,
       bound,
       coverage,

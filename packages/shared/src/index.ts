@@ -692,6 +692,8 @@ export {
 } from "./schemas/oauth.js";
 export {
   type ContextTreeActiveBinding,
+  type ContextTreeSettingState,
+  classifyContextTreeSetting,
   contextTreeActiveBindingSchema,
   contextTreeBranchSchema,
   contextTreeRepoSchema,
@@ -715,6 +717,7 @@ export {
   orgContextTreeFeaturesInputSchema,
   orgContextTreeFeaturesOutputSchema,
   orgContextTreeFeaturesStorageSchema,
+  orgContextTreeFinalizeInputSchema,
   orgContextTreeInputSchema,
   orgContextTreeOutputSchema,
   orgContextTreeStorageSchema,

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import {
+  type ContextTreeActiveBinding,
   type ContextTreeRecoveryAction,
+  contextTreeActiveBindingSchema,
   contextTreeInstallationInfoResponseSchema,
   initializeContextTreeRequestSchema,
   initializeContextTreeResponseSchema,
@@ -36,7 +38,7 @@ import {
 } from "../../services/onboarding-kickoff.js";
 import {
   getOrgContextTreeBinding,
-  getOrgSetting,
+  getOrgContextTreeSettingState,
   putInitializedOrgContextTreeBinding,
 } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
@@ -127,9 +129,9 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
   });
 
   // Read-only routing view of the team's bound GitHub App installation. The
-  // agent-driven `first-tree tree init` flow calls this after creating the tree
-  // repo with local `gh` to build the "add this repo to your installation"
-  // guidance URL. Context: GitHub auto-attaches a repo to an installation only
+  // agent-driven `first-tree tree init` flow calls this before creating the tree
+  // repo with local `gh` to select its owner and later build the "add this repo
+  // to your installation" guidance URL. GitHub auto-attaches a repo only
   // when the *App* creates it (via its installation token); a repo created by
   // the *user* (local `gh`) is not auto-covered by a selected-repositories
   // installation, and the local `gh` token cannot add it (it is not authorized
@@ -162,8 +164,8 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     initializeContextTreeRequestSchema.parse(request.body ?? {});
     const scope = await requireOrgAdmin(request, app.db);
 
-    const existing = await getOrgSetting(app.db, scope.organizationId, "context_tree");
-    if (existing.repo !== undefined) {
+    const existing = await getOrgContextTreeSettingState(app.db, scope.organizationId);
+    if (existing.kind !== "unbound") {
       throw new ConflictError("Context Tree repo is already configured for this team");
     }
 
@@ -189,14 +191,14 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     const org = await getOrganization(app.db, scope.organizationId);
     const teamName = normalizeInlineText(org.displayName) || org.name;
     const repoName = contextTreeRepoName(teamName);
+    const expectedRepoFingerprint = fingerprintGithubRepository(`${installation.accountLogin}/${repoName}`);
     app.log.info(
       {
         event: "context_tree.initialize.start",
         organizationId: scope.organizationId,
         userId: scope.userId,
         installationId: installation.installationId,
-        githubAccount: installation.accountLogin,
-        repoName,
+        repoFingerprint: expectedRepoFingerprint,
       },
       "context tree initialize: creating or adopting github repo",
     );
@@ -216,13 +218,11 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       if (err instanceof ContextTreeRepoProvisionError) {
         app.log.warn(
           {
-            err,
             organizationId: scope.organizationId,
             installationId: installation.installationId,
-            githubAccount: installation.accountLogin,
-            accountType: installation.accountType,
-            repoName,
-            code: err.code,
+            repoFingerprint: expectedRepoFingerprint,
+            errorCode: err.code,
+            errorStatus: err.statusCode,
           },
           "context tree initialize: provision repo failed",
         );
@@ -231,11 +231,12 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       if (err instanceof GithubUserTokenError) {
         app.log.warn(
           {
-            err: err.cause ?? err,
             organizationId: scope.organizationId,
             userId: scope.userId,
             installationId: installation.installationId,
-            githubAccount: installation.accountLogin,
+            errorCode: err.code,
+            errorStatus: err.statusCode,
+            errorType: err.cause instanceof Error ? err.cause.name : err.name,
           },
           "context tree initialize: github user token unavailable",
         );
@@ -243,16 +244,43 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       }
       app.log.warn(
         {
-          err,
           organizationId: scope.organizationId,
           installationId: installation.installationId,
-          githubAccount: installation.accountLogin,
-          repoName,
+          repoFingerprint: expectedRepoFingerprint,
+          errorType: err instanceof Error ? err.name : typeof err,
         },
         "context tree initialize: provision repo failed",
       );
       throw err;
     }
+
+    const initializedBinding = contextTreeActiveBindingSchema.safeParse({ repo: repo.cloneUrl, branch: BRANCH });
+    const initializedResponse = initializeContextTreeResponseSchema.safeParse({
+      repo: repo.cloneUrl,
+      htmlUrl: repo.htmlUrl,
+      branch: BRANCH,
+      nodePath: ROOT_NODE_PATH,
+    });
+    if (
+      !initializedBinding.success ||
+      !initializedResponse.success ||
+      !matchesExpectedGithubRepository(repo, installation.accountLogin, repoName)
+    ) {
+      app.log.warn(
+        {
+          event: "context_tree.initialize.invalid_repo_response",
+          organizationId: scope.organizationId,
+          userId: scope.userId,
+          installationId: installation.installationId,
+        },
+        "context tree initialize: github returned invalid repository coordinates",
+      );
+      return reply.status(502).send({
+        error: "GitHub returned invalid repository details. Try again in a moment.",
+        code: "upstream",
+      });
+    }
+    const repoFingerprint = fingerprintGithubRepository(repo.fullName);
 
     const nodeContent = initialRootNode(teamName, installation.accountLogin);
     try {
@@ -268,10 +296,11 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       if (err instanceof ContextTreeInitializeError) {
         app.log.warn(
           {
-            err,
             organizationId: scope.organizationId,
             userId: scope.userId,
-            repo: repo.fullName,
+            repoFingerprint,
+            errorCode: err.code,
+            errorStatus: err.statusCode,
             nodePath: ROOT_NODE_PATH,
             filePath: ROOT_NODE_PATH,
             code: err.code,
@@ -282,10 +311,10 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       }
       app.log.warn(
         {
-          err,
           organizationId: scope.organizationId,
           userId: scope.userId,
-          repo: repo.fullName,
+          repoFingerprint,
+          errorType: err instanceof Error ? err.name : typeof err,
           nodePath: ROOT_NODE_PATH,
           filePath: ROOT_NODE_PATH,
         },
@@ -308,10 +337,11 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       if (err instanceof ContextTreeInitializeError) {
         app.log.warn(
           {
-            err,
             organizationId: scope.organizationId,
             userId: scope.userId,
-            repo: repo.fullName,
+            repoFingerprint,
+            errorCode: err.code,
+            errorStatus: err.statusCode,
             workflowPath: VALIDATE_TREE_WORKFLOW_PATH,
             filePath: VALIDATE_TREE_WORKFLOW_PATH,
             code: err.code,
@@ -322,10 +352,10 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       }
       app.log.warn(
         {
-          err,
           organizationId: scope.organizationId,
           userId: scope.userId,
-          repo: repo.fullName,
+          repoFingerprint,
+          errorType: err instanceof Error ? err.name : typeof err,
           workflowPath: VALIDATE_TREE_WORKFLOW_PATH,
           filePath: VALIDATE_TREE_WORKFLOW_PATH,
         },
@@ -334,33 +364,45 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       throw err;
     }
 
-    const setting = await putInitializedOrgContextTreeBinding(
-      app.db,
-      scope.organizationId,
-      { repo: repo.cloneUrl, branch: BRANCH },
-      { updatedBy: scope.userId },
-    );
+    let setting: ContextTreeActiveBinding;
+    try {
+      setting = await putInitializedOrgContextTreeBinding(app.db, scope.organizationId, initializedBinding.data, {
+        expectedUnboundBranch: existing.branch,
+        updatedBy: scope.userId,
+      });
+    } catch (error) {
+      if (error instanceof ConflictError) {
+        app.log.info(
+          {
+            event: "context_tree.initialize.binding_conflict",
+            organizationId: scope.organizationId,
+            userId: scope.userId,
+            repoFingerprint,
+            sideEffectsCommitted: true,
+          },
+          "context tree initialize: binding changed before final commit; initialized repo left unbound",
+        );
+        throw new ConflictError(error.message, {
+          "context_tree.initialize.repo_fingerprint": repoFingerprint,
+          "context_tree.initialize.side_effects_committed": true,
+        });
+      }
+      throw error;
+    }
 
     app.log.info(
       {
         event: "context_tree.initialize.complete",
         organizationId: scope.organizationId,
         userId: scope.userId,
-        repo: repo.fullName,
+        repoFingerprint,
         nodePath: ROOT_NODE_PATH,
         workflowPath: VALIDATE_TREE_WORKFLOW_PATH,
       },
       "context tree initialize: saved organization setting",
     );
 
-    return reply.status(201).send(
-      initializeContextTreeResponseSchema.parse({
-        repo: setting.repo ?? repo.cloneUrl,
-        htmlUrl: repo.htmlUrl,
-        branch: BRANCH,
-        nodePath: ROOT_NODE_PATH,
-      }),
-    );
+    return reply.status(201).send({ ...initializedResponse.data, repo: setting.repo });
   });
 }
 
@@ -461,6 +503,26 @@ function hasInitializationPermissions(permissions: Record<string, "read" | "writ
   return (
     permissions.administration === "write" && permissions.contents === "write" && permissions.workflows === "write"
   );
+}
+
+function matchesExpectedGithubRepository(
+  repo: GithubCreatedRepo,
+  expectedOwner: string,
+  expectedName: string,
+): boolean {
+  const fullName = `${repo.ownerLogin}/${repo.name}`;
+  const htmlUrl = `https://github.com/${fullName}`;
+  return (
+    repo.ownerLogin.toLowerCase() === expectedOwner.toLowerCase() &&
+    repo.name.toLowerCase() === expectedName.toLowerCase() &&
+    repo.fullName === fullName &&
+    repo.htmlUrl === htmlUrl &&
+    repo.cloneUrl === `${htmlUrl}.git`
+  );
+}
+
+function fingerprintGithubRepository(fullName: string): string {
+  return createHash("sha256").update(fullName).digest("hex").slice(0, 16);
 }
 
 async function ensureRepoFile(

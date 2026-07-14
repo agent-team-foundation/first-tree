@@ -32,6 +32,14 @@ const tempDirs: string[] = [];
 type FetchInput = Parameters<typeof fetch>[0];
 type FetchInit = Parameters<typeof fetch>[1];
 
+function requestPath(input: FetchInput): string {
+  return new URL(String(input)).pathname;
+}
+
+function isPath(input: FetchInput, path: string): boolean {
+  return requestPath(input) === path;
+}
+
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "ft-tree-init-action-"));
   tempDirs.push(dir);
@@ -55,6 +63,15 @@ function response(body: unknown, init: ResponseInit = {}): Response {
     headers: { "content-type": "application/json" },
     ...init,
   });
+}
+
+function bindingResponse(init?: FetchInit): Response {
+  if (typeof init?.body !== "string") throw new Error("expected a JSON binding request body");
+  const body: unknown = JSON.parse(init.body);
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new Error("expected an object binding request body");
+  }
+  return response({ repo: Reflect.get(body, "repo"), branch: Reflect.get(body, "branch") });
 }
 
 function mockGithubApi(): void {
@@ -146,7 +163,7 @@ describe("tree init command action", () => {
         });
       }
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-        return response({ repo: null });
+        return response({ branch: "main" });
       }
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
         return response({
@@ -158,9 +175,13 @@ describe("tree init command action", () => {
       }
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
-          JSON.stringify({ repo: "https://github.com/acme-org/acme-context-tree", branch: "main" }),
+          JSON.stringify({
+            repo: "https://github.com/acme-org/acme-context-tree",
+            branch: "main",
+            expectedUnboundBranch: "main",
+          }),
         );
-        return response("ok");
+        return bindingResponse(init);
       }
       return response("not found", { status: 404 });
     });
@@ -206,13 +227,17 @@ describe("tree init command action", () => {
         return response({ branch: "trunk" });
       }
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
-        return response("missing", { status: 404 });
+        return response({ code: "no_installation" }, { status: 404 });
       }
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
-          JSON.stringify({ repo: "https://github.com/octocat/branch-only-context-tree", branch: "main" }),
+          JSON.stringify({
+            repo: "https://github.com/octocat/branch-only-context-tree",
+            branch: "trunk",
+            expectedUnboundBranch: "trunk",
+          }),
         );
-        return response("ok");
+        return bindingResponse(init);
       }
       return response("not found", { status: 404 });
     });
@@ -222,7 +247,7 @@ describe("tree init command action", () => {
 
     expect(process.exitCode).toBeUndefined();
     const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
-    expect(summary).toMatchObject({ bound: true, branch: "main" });
+    expect(summary).toMatchObject({ bound: true, branch: "trunk" });
   });
 
   it("rebinds a non-main existing binding to the branch it actually created", async () => {
@@ -238,13 +263,13 @@ describe("tree init command action", () => {
         return response({ repo: "https://github.com/acme/old-tree", branch: "trunk" });
       }
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
-        return response("missing", { status: 404 });
+        return response({ code: "no_installation" }, { status: 404 });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+      if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
         expect(init.body).toBe(
-          JSON.stringify({ repo: "https://github.com/octocat/rebind-context-tree", branch: "main" }),
+          JSON.stringify({ repo: "https://github.com/octocat/rebind-context-tree", branch: "trunk" }),
         );
-        return response("ok");
+        return bindingResponse(init);
       }
       return response("not found", { status: 404 });
     });
@@ -256,7 +281,7 @@ describe("tree init command action", () => {
 
     expect(process.exitCode).toBeUndefined();
     const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
-    expect(summary).toMatchObject({ bound: true, branch: "main" });
+    expect(summary).toMatchObject({ bound: true, branch: "trunk" });
   });
 
   it("falls back to the legacy settings read for an explicit rebind when the server lacks the raw endpoint", async () => {
@@ -271,14 +296,14 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
         return response("not found", { status: 404 });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
-        return response({ repo: null });
+      if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+        return response({ branch: "legacy-release" });
       }
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
-        return response("missing", { status: 404 });
+        return response({ code: "no_installation" }, { status: 404 });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
-        return response("ok");
+      if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        return bindingResponse(init);
       }
       return response("not found", { status: 404 });
     });
@@ -293,12 +318,168 @@ describe("tree init command action", () => {
       "https://server.example/api/v1/orgs/org_1/settings/context_tree/raw",
       expect.any(Object),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://server.example/api/v1/orgs/org_1/settings/context_tree",
-      expect.any(Object),
+    const legacyPutCall = fetchMock.mock.calls.find(
+      ([input, init]) => isPath(input, "/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT",
+    );
+    expect(legacyPutCall).toBeDefined();
+    expect(new URL(String(legacyPutCall?.[0])).search).toBe("");
+    expect(JSON.parse(String(legacyPutCall?.[1]?.body))).toEqual({
+      repo: "https://github.com/octocat/legacy-server-context-tree",
+      branch: "legacy-release",
+    });
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
+      "git",
+      ["init", "-b", "legacy-release"],
+      expect.any(String),
     );
     const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
-    expect(summary).toMatchObject({ bound: true, owner: "octocat" });
+    expect(summary).toMatchObject({ bound: true, branch: "legacy-release", owner: "octocat" });
+  });
+
+  it("preserves a literal !/+ retained branch in git and the validation workflow", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) {
+          return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+          return response({ branch: "!release+candidate" });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+          expect(init.body).toBe(
+            JSON.stringify({
+              repo: "https://github.com/octocat/literal-branch-context-tree",
+              branch: "!release+candidate",
+              expectedUnboundBranch: "!release+candidate",
+            }),
+          );
+          return bindingResponse(init);
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, org: "org_1", title: "Literal Branch", withWorkflow: true }), true),
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
+      "git",
+      ["init", "-b", "!release+candidate"],
+      expect.any(String),
+    );
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({ bound: true, branch: "!release+candidate" });
+    expect(readFileSync(join(String(summary.treeRoot), ".github", "workflows", "validate-tree.yml"), "utf8")).toContain(
+      String.raw`branches: ['\!release\+candidate']`,
+    );
+  });
+
+  it("uses the existing non-main branch when intentionally rebinding", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) {
+          return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+          return response({ repo: "https://github.com/acme/old-tree", branch: "release/next" });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+          expect(init.body).toBe(
+            JSON.stringify({ repo: "https://github.com/octocat/rebound-tree-context-tree", branch: "release/next" }),
+          );
+          return bindingResponse(init);
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, org: "org_1", rebind: true, title: "Rebound Tree" }), true),
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith("git", ["init", "-b", "release/next"], expect.any(String));
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({ bound: true, branch: "release/next" });
+  });
+
+  it.each([
+    {
+      label: "branch mismatch",
+      binding: { repo: "https://github.com/octocat/mismatch-context-tree", branch: "main" },
+    },
+    {
+      label: "repo mismatch",
+      binding: { repo: "https://github.com/octocat/other-context-tree", branch: "trunk" },
+    },
+    {
+      label: "missing branch",
+      binding: { repo: "https://github.com/octocat/mismatch-context-tree" },
+    },
+    {
+      label: "missing repo",
+      binding: { branch: "trunk" },
+    },
+    {
+      label: "unknown response field",
+      binding: {
+        repo: "https://github.com/octocat/mismatch-context-tree",
+        branch: "trunk",
+        unexpected: true,
+      },
+    },
+    { label: "invalid response shape", binding: "not-a-binding" },
+  ])("does not report success for a $label in the settings response", async ({ binding }) => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    process.chdir(makeTempDir());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) {
+          return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+          return response({ branch: "trunk" });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+          return response(binding);
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Mismatch" }), false));
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("server did not confirm the requested Context Tree binding");
+    expect(error).toContain("organization org_1");
+    expect(error).toContain("https://github.com/octocat/mismatch-context-tree");
+    expect(error).toContain("branch trunk");
+    expect(error).toContain("read back");
+    expect(error).toContain("Do not retry");
   });
 
   it("fails stop when an older server lacks conflict-safe tree init finalization", async () => {
@@ -314,13 +495,7 @@ describe("tree init command action", () => {
         return response("not found", { status: 404 });
       }
       if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
-        return response({ repo: null });
-      }
-      if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
-        return response("missing", { status: 404 });
-      }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
-        return response("not found", { status: 404 });
+        return response({ branch: "main" });
       }
       return response("not found", { status: 404 });
     });
@@ -330,13 +505,13 @@ describe("tree init command action", () => {
 
     expect(process.exitCode).toBe(1);
     const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
-    expect(error).toContain("does not support conflict-safe Context Tree initialization finalization");
-    expect(error).toContain("refusing before any GitHub repo is created");
+    expect(error).toContain("Server support for conflict-safe tree init finalization is required");
+    expect(error).toContain("Upgrade the server before retrying; no repository was created");
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/context-tree/installation"))).toBe(false);
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>
-          String(input).endsWith("/api/v1/orgs/org_1/settings/context_tree") &&
-          (init as RequestInit | undefined)?.method === "PUT",
+          String(input).endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST",
       ),
     ).toBe(false);
     expect(
@@ -358,13 +533,13 @@ describe("tree init command action", () => {
           return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
         }
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-          return response({ repo: null });
+          return response({ branch: "main" });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
-          return response("missing", { status: 404 });
+          return response({ code: "no_installation" }, { status: 404 });
         }
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
-          return response("ok");
+          return bindingResponse(init);
         }
         return response("not found", { status: 404 });
       }),
@@ -393,13 +568,13 @@ describe("tree init command action", () => {
           return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
         }
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-          return response({ repo: null });
+          return response({ branch: "main" });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
-          return response("missing", { status: 404 });
+          return response({ code: "no_installation" }, { status: 404 });
         }
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
-          return response("ok");
+          return bindingResponse(init);
         }
         return response("not found", { status: 404 });
       }),
@@ -444,6 +619,7 @@ describe("tree init command action", () => {
       command: Command;
       fetch: (input: FetchInput, init?: FetchInit) => Promise<Response>;
       message: string;
+      absent?: string[];
     }> = [
       {
         name: "non-admin",
@@ -470,8 +646,23 @@ describe("tree init command action", () => {
         message: "already bound to a Context Tree",
       },
       {
+        name: "repo-less invalid branch",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Invalid Branch" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+            return response({ branch: "--bad" });
+          }
+          throw new Error(`unexpected request after invalid Context Tree preflight: ${url}`);
+        },
+        message: "invalid historical data",
+      },
+      {
         name: "empty historical repo",
-        command: commandWithOptions({ bind: true, org: "org_1", title: "Empty Historical" }),
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Empty Repo" }),
         fetch: async (input) => {
           const url = String(input);
           if (url.endsWith("/api/v1/me")) {
@@ -480,9 +671,61 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response({ repo: "", branch: "main" });
           }
-          return response("not found", { status: 404 });
+          throw new Error(`unexpected request after empty Context Tree repo: ${url}`);
         },
-        message: "already bound to a Context Tree",
+        message: "invalid historical data",
+      },
+      {
+        name: "credential-bearing invalid historical repo",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Secret Repo" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+            return response({ repo: "https://user:super-secret@example.com/private/tree.git", branch: "main" });
+          }
+          throw new Error(`unexpected request after credential-bearing Context Tree repo: ${url}`);
+        },
+        message: "invalid historical data",
+        absent: ["super-secret", "private/tree.git"],
+      },
+      {
+        name: "legacy fallback repo-less invalid branch",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Legacy Invalid Branch" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+            return response("not found", { status: 404 });
+          }
+          if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree")) {
+            return response({ branch: "--bad" });
+          }
+          throw new Error(`unexpected request after invalid legacy Context Tree preflight: ${url}`);
+        },
+        message: "invalid historical data",
+      },
+      {
+        name: "legacy fallback empty historical repo",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Legacy Empty Repo" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+            return response("not found", { status: 404 });
+          }
+          if (isPath(input, "/api/v1/orgs/org_1/settings/context_tree")) {
+            return response({ repo: "", branch: "main" });
+          }
+          throw new Error(`unexpected request after legacy empty Context Tree repo: ${url}`);
+        },
+        message: "invalid historical data",
       },
       {
         name: "binding read failure",
@@ -495,24 +738,9 @@ describe("tree init command action", () => {
           if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
             return response("server down", { status: 503 });
           }
-          return response("not found", { status: 404 });
+          throw new Error(`unexpected fallback after raw Context Tree 503: ${url}`);
         },
         message: "Could not read the team's current Context Tree binding",
-      },
-      {
-        name: "invalid repo-less branch",
-        command: commandWithOptions({ bind: true, org: "org_1", title: "Invalid Branch" }),
-        fetch: async (input) => {
-          const url = String(input);
-          if (url.endsWith("/api/v1/me")) {
-            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
-          }
-          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-            return response({ branch: "--bad" });
-          }
-          return response("not found", { status: 404 });
-        },
-        message: "Context Tree binding contains an invalid branch",
       },
       {
         name: "installation lookup failure",
@@ -523,7 +751,7 @@ describe("tree init command action", () => {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
           if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-            return response({ repo: null });
+            return response({ branch: "main" });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
             return response("server down", { status: 500 });
@@ -541,7 +769,7 @@ describe("tree init command action", () => {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
           if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-            return response({ repo: null });
+            return response({ branch: "main" });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
             throw new Error("network down");
@@ -559,12 +787,30 @@ describe("tree init command action", () => {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
           if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-            return response({ repo: null });
+            return response({ branch: "main" });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
             return response({ installationId: "not-a-number" });
           }
           return response("not found", { status: 404 });
+        },
+        message: "Could not read the team's GitHub App installation",
+      },
+      {
+        name: "installation malformed 404",
+        command: commandWithOptions({ bind: true, org: "org_1", title: "Lookup Malformed 404" }),
+        fetch: async (input) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/me")) {
+            return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+            return response({ branch: "main" });
+          }
+          if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+            return response("not-json", { status: 404 });
+          }
+          throw new Error(`unexpected request after malformed installation 404: ${url}`);
         },
         message: "Could not read the team's GitHub App installation",
       },
@@ -577,7 +823,7 @@ describe("tree init command action", () => {
             return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
           }
           if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-            return response({ repo: null });
+            return response({ branch: "main" });
           }
           if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
             return response({
@@ -607,6 +853,9 @@ describe("tree init command action", () => {
 
       expect(process.exitCode, testCase.name).toBe(1);
       expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0]), testCase.name).toContain(testCase.message);
+      for (const forbidden of testCase.absent ?? []) {
+        expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0]), testCase.name).not.toContain(forbidden);
+      }
       expect(
         treeSharedMocks.runCommand.mock.calls.some(
           ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "repo" && args[1] === "create",
@@ -732,7 +981,7 @@ describe("tree init command action", () => {
     }
   });
 
-  it("surfaces repo URL lookup and org binding failures after remote create", async () => {
+  it("rejects an unconfirmed GitHub URL and sanitizes a failed binding response", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const base = makeTempDir();
     process.chdir(base);
@@ -747,7 +996,9 @@ describe("tree init command action", () => {
 
     await initCommand.action(context(commandWithOptions({ bind: false, title: "Missing Repo Url" }), false));
     expect(process.exitCode).toBe(1);
-    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("could not read its URL");
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain(
+      "GitHub did not confirm the expected URL for octocat/missing-repo-url-context-tree",
+    );
 
     vi.clearAllMocks();
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -761,11 +1012,13 @@ describe("tree init command action", () => {
         const url = String(input);
         if (url.endsWith("/api/v1/me")) return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-          return response({ repo: null });
+          return response({ branch: "main" });
         }
-        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) return response("missing", { status: 404 });
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
-          return response("server refused binding", { status: 500 });
+          return response("private upstream detail: do-not-leak", { status: 500 });
         }
         return response("not found", { status: 404 });
       }),
@@ -773,8 +1026,93 @@ describe("tree init command action", () => {
 
     await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Bind Fails" }), false));
     expect(process.exitCode).toBe(1);
-    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("binding failed");
-    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("server refused binding");
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("binding failed (server returned 500)");
+    expect(error).toContain("organization org_1");
+    expect(error).toContain("https://github.com/octocat/bind-fails-context-tree");
+    expect(error).toContain("branch main");
+    expect(error).toContain("Read back");
+    expect(error).not.toContain("do-not-leak");
+  });
+
+  it("reports a final binding conflict without retrying or overwriting the competing setting", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    process.chdir(makeTempDir());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) {
+          return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+          return response({ branch: "main" });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+          return response(
+            { competingRepo: "https://github.com/private/other-tree", secret: "do-not-leak" },
+            { status: 409 },
+          );
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Conflict Tree" }), false));
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("organization org_1");
+    expect(error).toContain("server returned 409");
+    expect(error).toContain("do not retry or overwrite");
+    expect(error).toContain("Read back");
+    expect(error).toContain("https://github.com/octocat/conflict-tree-context-tree");
+    expect(error).toContain("branch main");
+    expect(error).not.toContain("do-not-leak");
+    expect(
+      treeSharedMocks.runCommand.mock.calls.filter(
+        ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "repo" && args[1] === "create",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reports an unknown binding outcome after a finalize transport failure without leaking the cause", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    process.chdir(makeTempDir());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) {
+          return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+          return response({ branch: "main" });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+          throw new Error("socket secret do-not-leak");
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Transport Tree" }), false));
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("organization org_1");
+    expect(error).toContain("unknown");
+    expect(error).toContain("Do not retry");
+    expect(error).toContain("read back");
+    expect(error).toContain("https://github.com/octocat/transport-tree-context-tree");
+    expect(error).toContain("branch main");
+    expect(error).not.toContain("do-not-leak");
   });
 
   it("preserves the exact org and branch in conflict-safe finalization recovery", async () => {
@@ -796,9 +1134,16 @@ describe("tree init command action", () => {
         return response({ branch: "trunk" });
       }
       if (url.endsWith("/api/v1/orgs/org_2/context-tree/installation")) {
-        return response("missing", { status: 404 });
+        return response({ code: "no_installation" }, { status: 404 });
       }
       if (url.endsWith("/api/v1/orgs/org_2/settings/context_tree/initialize") && init?.method === "POST") {
+        expect(init.body).toBe(
+          JSON.stringify({
+            repo: "https://github.com/octocat/conflict-context-tree",
+            branch: "trunk",
+            expectedUnboundBranch: "trunk",
+          }),
+        );
         return response("already configured", { status: 409 });
       }
       return response("not found", { status: 404 });
@@ -809,9 +1154,12 @@ describe("tree init command action", () => {
 
     expect(process.exitCode).toBe(1);
     const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
-    expect(error).toContain("org org_2 was bound by another writer");
-    expect(error).toContain("Read the current Context Tree binding before deciding whether to replace it");
-    expect(error).toContain("org bind-tree https://github.com/octocat/conflict-context-tree --org org_2 --branch main");
+    expect(error).toContain("organization org_2");
+    expect(error).toContain("server returned 409");
+    expect(error).toContain("Read back /api/v1/orgs/org_2/settings/context_tree first");
+    expect(error).toContain("https://github.com/octocat/conflict-context-tree");
+    expect(error).toContain("branch trunk");
+    expect(error).not.toContain("org bind-tree");
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>
@@ -836,7 +1184,7 @@ describe("tree init command action", () => {
           return response({ branch: "trunk" });
         }
         if (url.endsWith("/api/v1/orgs/org_2/context-tree/installation")) {
-          return response("missing", { status: 404 });
+          return response({ code: "no_installation" }, { status: 404 });
         }
         if (url.endsWith("/api/v1/orgs/org_2/settings/context_tree/initialize") && init?.method === "POST") {
           throw new Error("socket closed");
@@ -849,9 +1197,12 @@ describe("tree init command action", () => {
 
     expect(process.exitCode).toBe(1);
     const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
-    expect(error).toContain("binding outcome for org org_2 is unknown");
-    expect(error).toContain("Read back /api/v1/orgs/org_2/settings/context_tree before retrying");
-    expect(error).toContain("org bind-tree https://github.com/octocat/unknown-context-tree --org org_2 --branch main");
+    expect(error).toContain("binding outcome is unknown for organization org_2");
+    expect(error).toContain("read back /api/v1/orgs/org_2/settings/context_tree");
+    expect(error).toContain("repo https://github.com/octocat/unknown-context-tree at branch trunk");
+    expect(error).toContain(
+      "org bind-tree 'https://github.com/octocat/unknown-context-tree' --org 'org_2' --branch 'trunk'",
+    );
   });
 
   it("surfaces unexpected GitHub API response shapes after remote create", async () => {
@@ -885,7 +1236,7 @@ describe("tree init command action", () => {
           return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
         }
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
-          return response({ repo: null });
+          return response({ branch: "main" });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
           return response({
@@ -896,7 +1247,7 @@ describe("tree init command action", () => {
           });
         }
         if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
-          return response("ok");
+          return bindingResponse(init);
         }
         return response("not found", { status: 404 });
       }),

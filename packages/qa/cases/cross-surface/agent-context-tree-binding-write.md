@@ -110,10 +110,12 @@ local checkout.
   between two attempts and confirm that the server rejects the write without a
   partial settings update.
 - After the normal write scenarios, inject an invalid historical B row (for
-  example, an HTTP repo plus a Git-invalid branch). Confirm that the admin
-  settings GET retains the raw repair view, while the member settings GET,
-  agent-scoped info/read, snapshot, and an isolated runtime startup all treat
-  it as inactive and do not attempt a clone. Attempt a repo-only repair and
+  example, an HTTP repo plus a Git-invalid branch). Confirm that the admin-only
+  `GET /api/v1/orgs/<orgId>/settings/context_tree/raw` retains the repair view,
+  while the member-safe settings GET returns a sanitized 409 and agent-scoped
+  info/read, snapshot, and an isolated runtime startup all treat it as inactive
+  and do not attempt a clone.
+  Attempt a repo-only repair and
   verify rejection with the row value and version unchanged, then provide both
   a valid repo and branch and verify that every active projection recovers.
 
