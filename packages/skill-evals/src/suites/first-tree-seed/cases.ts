@@ -177,7 +177,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
       treeState: "empty",
     },
     forbidden: {
-      actions: ["restart_skeleton_proposal", "require_github_app"],
+      actions: ["legacy_two_pr_handoff", "restart_skeleton_proposal", "require_github_app"],
       sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
     },
     id: "same-chat-approved-skeleton-builds-single-pr",

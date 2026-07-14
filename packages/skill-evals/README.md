@@ -89,8 +89,8 @@ judge:
   diff, with scores for durability, source-boundary discipline, rationale
   quality, and conciseness;
 - `first-tree-seed` skeleton quality from the actual `empty-tree-source-present`
-  Phase 1 proposal, with scores for source grounding, structure fit,
-  phase-boundary discipline, coverage calibration, and conciseness;
+  domain proposal, with scores for source grounding, structure fit,
+  confirmation-boundary discipline, coverage calibration, and conciseness;
 - `first-tree-welcome` first-task quality from the actual readable-repo +
   populated-tree row output, with scores for evidence grounding, boundedness,
   usefulness, verifiability, and avoiding setup-as-task.
@@ -159,35 +159,38 @@ accepts the source row id as an alias.
 `eval:gate -- --suite first-tree-seed` runs the live tested-agent gate for
 `first-tree-seed`. It covers the minimum bootstrap lifecycle boundaries:
 
-- empty tree + present bare source proposes only Phase 1 skeleton for user
-  approval;
+- empty tree + present bare source proposes the domain skeleton for explicit
+  chat confirmation before writing anything;
 - non-empty tree refuses seed and points to incremental write or focused
   maintenance;
 - missing source clone stops on incomplete provisioning instead of partial
   seed;
 - an unbound workspace routes through `tree init --dir <managed tree path>`
-  before Phase 1;
+  before proposing the domain skeleton;
 - bare source repos are read through a materialized read worktree, not as
   checkouts;
 - an empty manifest may use a readable local checkout supplied in chat without
   requiring GitHub App installation or team-resource registration;
-- an approved Phase 1 skeleton in the same visible setup chat routes to Phase 2
-  instead of being refused as an unrelated populated tree.
+- an approved skeleton in the same visible setup chat routes to one
+  structure-plus-leaves seed PR, and rejects any intermediate structure PR,
+  merge wait, or return ping.
 
 `eval:quality -- --suite first-tree-seed` runs the `empty-tree-source-present`
 deterministic gate first. If that hard-rule gate passes, the quality judge
-scores the actual Phase 1 skeleton proposal and source evidence. This judge is
+scores the actual domain skeleton proposal and source evidence. This judge is
 opt-in and does not replace the deterministic seed gate: empty-tree self-check,
 source boundary, bare worktree protocol, no tree/source/GitHub side effects, and
-no Phase 2 leaf content before approval remain hard-rule oracle conditions.
+no structure or leaf content before chat confirmation remain hard-rule oracle
+conditions.
 
 `eval:periodic -- --suite first-tree-seed` runs
 `first-tree-seed-real-first-tree-source-periodic`. The fixture creates an empty
 Context Tree plus a per-run bare source repo cloned from the current
 `first-tree` repo `HEAD`. The model must still materialize
 `worktrees/seed-source-repo`, read source evidence from that checkout, propose
-only a Phase 1 skeleton, and ask for approval. This realism case stays in the
-periodic tier and is not part of the default seed gate.
+the domain skeleton, and ask for explicit chat confirmation before writing.
+This realism case stays in the periodic tier and is not part of the default
+seed gate.
 
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs

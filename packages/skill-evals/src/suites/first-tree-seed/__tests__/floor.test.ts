@@ -60,5 +60,6 @@ describe("first-tree-seed floor invariants", () => {
       fixture: { chatHistoryState: "approved-skeleton", sourceRepoState: "bare-readable", treeState: "empty" },
     });
     expect(build?.forbidden.actions).toContain("restart_skeleton_proposal");
+    expect(build?.forbidden.actions).toContain("legacy_two_pr_handoff");
   });
 });

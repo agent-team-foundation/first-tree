@@ -80,6 +80,7 @@ export type EvalMetrics = {
   forbiddenSideEffectHits: readonly string[];
   fixtureValidationOk: boolean;
   githubAppRequirementObserved: boolean;
+  legacyHandoffObserved: boolean;
   leafContentObserved: boolean;
   runnerExitCode: number | null;
   seedSkillFileReadObserved: boolean;

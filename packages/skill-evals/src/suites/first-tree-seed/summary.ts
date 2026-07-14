@@ -53,7 +53,7 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
     return metrics.treeInitWithContextTreeDirObserved;
   }
   if (evalCase.expected.action === "build_single_pr") {
-    return metrics.singlePrBuildObserved && !metrics.singlePrBuildRefusalObserved;
+    return metrics.singlePrBuildObserved && !metrics.singlePrBuildRefusalObserved && !metrics.legacyHandoffObserved;
   }
   return false;
 }
@@ -96,7 +96,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; single-PR build observed=${metrics.singlePrBuildObserved}; single-PR build refusal observed=${metrics.singlePrBuildRefusalObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; single-PR build observed=${metrics.singlePrBuildObserved}; single-PR build refusal observed=${metrics.singlePrBuildRefusalObserved}; legacy handoff observed=${metrics.legacyHandoffObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
       ),
       evidence(
         "risk_pass",
@@ -154,6 +154,7 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - approvalRequestObserved: ${markdownBool(summary.metrics.approvalRequestObserved)}
 - singlePrBuildObserved: ${markdownBool(summary.metrics.singlePrBuildObserved)}
 - singlePrBuildRefusalObserved: ${markdownBool(summary.metrics.singlePrBuildRefusalObserved)}
+- legacyHandoffObserved: ${markdownBool(summary.metrics.legacyHandoffObserved)}
 - treeInitObserved: ${markdownBool(summary.metrics.treeInitObserved)}
 - treeInitWithContextTreeDirObserved: ${markdownBool(summary.metrics.treeInitWithContextTreeDirObserved)}
 - leafContentObserved: ${markdownBool(summary.metrics.leafContentObserved)}

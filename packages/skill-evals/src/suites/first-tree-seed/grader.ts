@@ -1106,10 +1106,15 @@ function singlePrBuildRefusalObserved(text: string): boolean {
     ) {
       return false;
     }
-    const withoutNegatedRefusal = segment.replace(
-      /\b(?:(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:refuse|stop)|(?:is|are|was|were)\s+not\s+(?:blocked|refused|stopped)|(?:should|must|will|would|can)\s+not\s+be\s+(?:blocked|refused|stopped))\b/giu,
-      "continue",
-    );
+    const withoutNegatedRefusal = segment
+      .replace(
+        /\b(?:(?:do not|don't|will not|won't|should not|shouldn't)\s+(?:refuse|stop)|(?:is|are|was|were)\s+not\s+(?:blocked|refused|stopped)|(?:should|must|will|would|can)\s+not\s+be\s+(?:blocked|refused|stopped))\b/giu,
+        "continue",
+      )
+      .replace(
+        /\b(?:without\s+(?:an?\s+)?|with\s+no\s+)(?:intermediate\s+)?(?:stop(?:ping)?|pause|wait)(?:\s+point)?\b/giu,
+        "continue",
+      );
     return /\b(?:cannot|can't|won't|will not|unable|unauthoriz\w*|not\s+authoriz\w*|refus(?:e|es|ed|ing|al)|blocked|stop(?:s|ped|ping)?)\b/iu.test(
       withoutNegatedRefusal,
     );
@@ -1126,6 +1131,38 @@ function singlePrBuildObserved(text: string): boolean {
       text,
     );
   return actionObserved && singlePrObserved && structureAndLeavesObserved;
+}
+
+function legacyHandoffObserved(text: string): boolean {
+  const affirmativeText = text
+    .replace(
+      /\b(?:do not|don't|will not|won't|must not|should not|never)\s+(?:open|create|submit|raise|wait|ask|require)\b[^.!?;\n]*/giu,
+      "",
+    )
+    .replace(
+      /\b(?:no|without(?:\s+an|\s+any)?)\s+(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?pr\b[^.!?;\n]*/giu,
+      "",
+    )
+    .replace(
+      /\b(?:no|without)\s+(?:intermediate\s+)?(?:merge(?:\s+wait)?|ping|return-to-chat|handoff)\b[^.!?;\n]*/giu,
+      "",
+    );
+  const stagedPrObserved =
+    /\b(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?pr\b/iu.test(
+      affirmativeText,
+    );
+  const handoffObserved = /\b(?:merge(?:d|s|ing)?|wait(?:s|ed|ing)?|return|reply|ping|come\s+back)\b/iu.test(
+    affirmativeText,
+  );
+  const orderedHandoffObserved =
+    /\b(?:merge|approve)\w*\b[\s\S]{0,160}\b(?:then|before)\b[\s\S]{0,160}\b(?:return|reply|ping|come\s+back|continue|phase\s*2|content)\b/iu.test(
+      affirmativeText,
+    ) ||
+    /\b(?:return|reply|ping|come\s+back)\b[\s\S]{0,160}\b(?:after|once|when)\b[\s\S]{0,160}\bmerge\w*\b/iu.test(
+      affirmativeText,
+    ) ||
+    /\bphase\s*2\b[\s\S]{0,160}\b(?:after|once|when)\b[\s\S]{0,160}\bmerge\w*\b/iu.test(affirmativeText);
+  return (stagedPrObserved && handoffObserved) || orderedHandoffObserved;
 }
 
 function githubAppRequirementObserved(text: string): boolean {
@@ -1170,6 +1207,7 @@ function forbiddenActionHits(
   for (const action of evalCase.forbidden.actions) {
     if (action === "direct_bare_source_read" && metrics.directBareSourceContentReadObserved) hits.push(action);
     if (action === "content_before_confirmation" && metrics.leafContentObserved) hits.push(action);
+    if (action === "legacy_two_pr_handoff" && metrics.legacyHandoffObserved) hits.push(action);
     if (action === "skip_user_confirmation" && metrics.skeletonObserved && !metrics.approvalRequestObserved) {
       hits.push(action);
     }
@@ -1280,6 +1318,7 @@ export function deriveMetrics(
     forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv, evalCase),
     fixtureValidationOk: fixtureValidation.ok,
     githubAppRequirementObserved: githubAppRequirementObserved(finalResponse),
+    legacyHandoffObserved: legacyHandoffObserved(finalResponse),
     singlePrBuildObserved: singlePrBuildObserved(finalResponse),
     leafContentObserved: leafContentObserved(finalResponse),
     singlePrBuildRefusalObserved: singlePrBuildRefusalObserved(finalResponse),
@@ -1394,6 +1433,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
       metrics.sourceEvidenceReadObserved &&
       metrics.singlePrBuildObserved &&
       !metrics.singlePrBuildRefusalObserved &&
+      !metrics.legacyHandoffObserved &&
       !metrics.directBareSourceContentReadObserved
     );
   }
@@ -1462,6 +1502,9 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (metrics.singlePrBuildRefusalObserved) {
     notes.push("Model refused the verified same-chat single-PR seed build.");
+  }
+  if (metrics.legacyHandoffObserved) {
+    notes.push("Model reintroduced an intermediate PR merge/wait/return handoff into the single-PR seed build.");
   }
   return notes.length > 0 ? notes.join(" ") : null;
 }

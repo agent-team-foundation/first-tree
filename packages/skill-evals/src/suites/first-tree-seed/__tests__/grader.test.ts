@@ -43,6 +43,7 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     forbiddenSideEffectHits: [],
     fixtureValidationOk: true,
     githubAppRequirementObserved: false,
+    legacyHandoffObserved: false,
     singlePrBuildObserved: false,
     leafContentObserved: false,
     singlePrBuildRefusalObserved: false,
@@ -164,6 +165,7 @@ describe("first-tree-seed grader", () => {
 
       expect(metrics.singlePrBuildObserved).toBe(true);
       expect(metrics.singlePrBuildRefusalObserved).toBe(false);
+      expect(metrics.legacyHandoffObserved).toBe(false);
       expect(metrics.githubAppRequirementObserved).toBe(false);
       expect(metrics.forbiddenActionHits).toEqual([]);
       expect(
@@ -179,6 +181,113 @@ describe("first-tree-seed grader", () => {
       ).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects mixed wording that reintroduces the retired merge-and-ping handoff", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-legacy-handoff-"));
+    try {
+      const evalCase = findCase("same-chat-approved-skeleton-builds-single-pr");
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will build the structure and initial leaves in one reviewable PR. First I will open a structure PR; merge it and ping me, then I will continue with the content.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.singlePrBuildObserved).toBe(true);
+      expect(metrics.legacyHandoffObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("legacy_two_pr_handoff");
+      expect(
+        casePassed(
+          evalCase,
+          baseMetrics({
+            finalResponse: metrics.finalResponse,
+            forbiddenActionHits: metrics.forbiddenActionHits,
+            legacyHandoffObserved: metrics.legacyHandoffObserved,
+            singlePrBuildObserved: metrics.singlePrBuildObserved,
+            skeletonObserved: false,
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not treat an explicit no-handoff statement as a legacy handoff", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-single-pr-no-legacy-handoff-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "I will build the structure and initial leaves in one reviewable seed PR, with no intermediate structure PR, merge wait, or return ping.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("same-chat-approved-skeleton-builds-single-pr"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.singlePrBuildObserved).toBe(true);
+      expect(metrics.legacyHandoffObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts natural no-stop wording as a negated refusal", () => {
+    const responses = [
+      "I will build the structure and initial leaves in one PR without stopping for another approval.",
+      "I will build the structure and initial leaves in one PR without an intermediate stop.",
+      "I will build the structure and initial leaves in one PR with no intermediate stopping point.",
+    ];
+
+    for (const [index, finalResponse] of responses.entries()) {
+      const tempRoot = mkdtempSync(join(tmpdir(), `seed-eval-single-pr-no-stop-${index}-`));
+      try {
+        const metrics = deriveMetrics(
+          [
+            {
+              event: { item: { text: finalResponse, type: "agent_message" }, type: "item.completed" },
+              type: "codex_event",
+            },
+          ],
+          findCase("same-chat-approved-skeleton-builds-single-pr"),
+          fixtureValidation(),
+          0,
+          baseRunPaths(tempRoot),
+          join(tempRoot, "context-tree"),
+        );
+
+        expect(metrics.singlePrBuildRefusalObserved, finalResponse).toBe(false);
+        expect(metrics.singlePrBuildObserved, finalResponse).toBe(true);
+      } finally {
+        rmSync(tempRoot, { force: true, recursive: true });
+      }
     }
   });
 
