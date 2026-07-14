@@ -117,11 +117,16 @@ function rulesetPayloadOk(argv) {
   const nonFastForward = rules.some((rule) => rule && rule.type === "non_fast_forward");
   const pullRequest = rules.find((rule) => rule && rule.type === "pull_request");
   const parameters = pullRequest && typeof pullRequest === "object" ? pullRequest.parameters || {} : {};
+  const refName = payload.conditions?.ref_name;
   return (
+    payload.name === "First Tree Context Repo branch rules" &&
     payload.target === "branch" &&
     payload.enforcement === "active" &&
-    Array.isArray(payload.conditions?.ref_name?.include) &&
-    payload.conditions.ref_name.include.includes("~DEFAULT_BRANCH") &&
+    Array.isArray(refName?.include) &&
+    refName.include.length === 1 &&
+    refName.include[0] === "~DEFAULT_BRANCH" &&
+    Array.isArray(refName?.exclude) &&
+    refName.exclude.length === 0 &&
     nonFastForward &&
     parameters.required_approving_review_count === 1 &&
     parameters.require_code_owner_review === true &&

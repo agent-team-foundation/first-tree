@@ -591,16 +591,21 @@ function findCommandIndexAfter(commands: readonly string[], startIndex: number, 
 }
 
 function githubGovernanceOwnerResolutionObserved(trace: string): boolean {
-  const ownerTypeObserved = /repos\/\$repo["']?\s+--jq \.owner\.type/u.test(trace);
+  const repoPath = String.raw`(?:\$repo|agent-team-foundation/context-tree)`;
+  const ownerPath = String.raw`(?:\$repo_owner|agent-team-foundation)`;
+  const teamPath = String.raw`(?:\$candidate_team_slug|context-maintainers)`;
+  const ownerTypeObserved = new RegExp(String.raw`repos/${repoPath}["']?\s+--jq \.owner\.type`, "u").test(trace);
   const orgTeamObserved =
     /repo_owner_type.{0,120}Organization/su.test(trace) &&
-    /repos\/\$repo\/teams\?per_page=100/u.test(trace) &&
+    new RegExp(String.raw`repos/${repoPath}/teams\?per_page=100`, "u").test(trace) &&
     /\.privacy != "secret"/u.test(trace) &&
-    /orgs\/\$repo_owner\/teams\/\$candidate_team_slug\/members\?per_page=100/u.test(trace) &&
+    new RegExp(String.raw`orgs/${ownerPath}/teams/${teamPath}/members\?per_page=100`, "u").test(trace) &&
     /\.login != \$author/u.test(trace) &&
     /non_author_member/u.test(trace);
   const collaboratorFallbackObserved =
-    /repos\/\$repo\/collaborators\?affiliation=direct&permission=push&per_page=100/u.test(trace) &&
+    new RegExp(String.raw`repos/${repoPath}/collaborators\?affiliation=direct&permission=push&per_page=100`, "u").test(
+      trace,
+    ) &&
     /\.login != \$author/u.test(trace) &&
     /code_owner_login/u.test(trace);
 
@@ -676,17 +681,17 @@ function githubGovernanceBootstrapObserved(events: readonly unknown[]): boolean 
   const codeownersPushIndex = findCommandIndexAfter(
     commands,
     codeownersCommitIndex,
-    /\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:\$default_branch"?/u,
+    /\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:(?:\$default_branch|main)"?/u,
   );
   const codeownersContentValidationIndex = findCommandIndexAfter(
     commands,
     codeownersPushIndex,
-    /contents\/\.github\/CODEOWNERS\?ref=\$default_branch/u,
+    /contents\/\.github\/CODEOWNERS\?ref=(?:\$default_branch|main)/u,
   );
   const codeownersErrorValidationIndex = findCommandIndexAfter(
     commands,
     codeownersContentValidationIndex,
-    /codeowners\/errors\?ref=\$default_branch/u,
+    /codeowners\/errors\?ref=(?:\$default_branch|main)/u,
   );
   const rulesetMutationIndex = commands.findIndex(
     (command, index) => index > codeownersErrorValidationIndex && commandHasGithubRulesetMutation(command),
@@ -725,9 +730,14 @@ function githubGovernanceReadSideEffectAllowed(command: string): boolean {
   if (/(?:^|\s)(?:-X|--method)(?:\s+|=)(?!GET\b)[A-Z]+\b/u.test(command)) return false;
   if (/\bgh\s+repo\s+view\b/u.test(command)) return true;
   if (commandHasGithubRulesetMutation(command)) return false;
-  return /\bgh\s+api\s+(user\b|"?repos\/\$repo(?:"|\s|$)|"?repos\/\$repo\/teams\?|"?orgs\/\$repo_owner\/teams\/\$candidate_team_slug\/members\?|"?repos\/\$repo\/collaborators\?|"?repos\/\$repo\/contents\/\.github\/CODEOWNERS\?|"?repos\/\$repo\/codeowners\/errors\?|"?repos\/\$repo\/rulesets\?includes_parents=false&per_page=100)/u.test(
-    command,
+  const repoPath = String.raw`(?:\$repo|agent-team-foundation/context-tree)`;
+  const ownerPath = String.raw`(?:\$repo_owner|agent-team-foundation)`;
+  const teamPath = String.raw`(?:\$candidate_team_slug|context-maintainers)`;
+  const readPattern = new RegExp(
+    String.raw`\bgh\s+api\s+(user\b|"?repos/${repoPath}(?:"|\s|$)|"?repos/${repoPath}/teams\?|"?orgs/${ownerPath}/teams/${teamPath}/members\?|"?repos/${repoPath}/collaborators\?|"?repos/${repoPath}/contents/\.github/CODEOWNERS\?|"?repos/${repoPath}/codeowners/errors\?|"?repos/${repoPath}/rulesets\?includes_parents=false&per_page=100)`,
+    "u",
   );
+  return readPattern.test(command);
 }
 
 function githubGovernanceBootstrapSideEffectAllowed(command: string): boolean {
@@ -735,7 +745,7 @@ function githubGovernanceBootstrapSideEffectAllowed(command: string): boolean {
   if (commandHasGithubRulesetMutation(command)) return true;
   if (/\bgit\s+-C\s+"?[^"]*"?\s+add\s+\.github\/CODEOWNERS\b/u.test(command)) return true;
   if (/\bgit\s+-C\s+"?[^"]*"?\s+commit\s+-m\s+"chore: add context tree code owner mapping"/u.test(command)) return true;
-  if (/\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:\$default_branch"?/u.test(command)) return true;
+  if (/\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:(?:\$default_branch|main)"?/u.test(command)) return true;
   return false;
 }
 

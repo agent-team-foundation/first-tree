@@ -29,8 +29,9 @@ describe("gh eval shim", () => {
       writeFileSync(
         join(shim.workspacePath, "ruleset.json"),
         JSON.stringify({
-          conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+          conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
           enforcement: "active",
+          name: "First Tree Context Repo branch rules",
           rules: [
             { type: "non_fast_forward" },
             {
@@ -99,6 +100,7 @@ describe("gh eval shim", () => {
         ["init", "--initial-branch=main"],
         ["config", "user.email", "eval@example.invalid"],
         ["config", "user.name", "First Tree Eval"],
+        ["config", "commit.gpgsign", "false"],
         ["add", "."],
         ["commit", "-m", "chore: add codeowners"],
       ]) {
@@ -142,8 +144,9 @@ describe("gh eval shim", () => {
       writeFileSync(
         join(shim.workspacePath, "bad-ruleset.json"),
         JSON.stringify({
-          conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+          conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
           enforcement: "active",
+          name: "First Tree Context Repo branch rules",
           rules: [
             { type: "non_fast_forward" },
             {
@@ -178,6 +181,78 @@ describe("gh eval shim", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Invalid ruleset payload");
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects ruleset payloads missing create-only semantics", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
+    try {
+      for (const [filename, payload] of [
+        [
+          "missing-name.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "malformed-conditions.json",
+          {
+            conditions: { ref_name: { include: ["~DEFAULT_BRANCH", "refs/heads/main"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+      ] as const) {
+        writeFileSync(join(shim.workspacePath, filename), JSON.stringify(payload), "utf8");
+        const result = spawnSync(
+          shim.ghPath,
+          ["api", "repos/agent-team-foundation/context-tree/rulesets", "--method=POST", "--input", filename],
+          {
+            cwd: shim.workspacePath,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+              FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+              FIRST_TREE_EVAL_PHASE: "model",
+            },
+          },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Invalid ruleset payload");
+      }
     } finally {
       rmSync(shim.repoRoot, { force: true, recursive: true });
     }

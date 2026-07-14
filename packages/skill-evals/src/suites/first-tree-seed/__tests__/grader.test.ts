@@ -3664,6 +3664,112 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("allows production-shaped expanded GitHub governance discovery calls", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-expanded-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: { command: "sed -n '1,220p' .agents/skills/first-tree-seed/SKILL.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: { command: "cat .first-tree/workspace.json", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree")],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command:
+                'repo_owner_type=$(gh api "repos/agent-team-foundation/context-tree" --jq .owner.type) && pr_author_login=$(gh api user --jq .login) && if [ "$repo_owner_type" = "Organization" ]; then for candidate_team_slug in $(gh api "repos/agent-team-foundation/context-tree/teams?per_page=100" --jq \'.[] | select((.permission == "admin" or .permission == "maintain" or .permission == "push") and (.privacy != "secret")) | .slug\'); do non_author_member=$(gh api "orgs/agent-team-foundation/teams/context-maintainers/members?per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author)][0].login // empty\'); done; fi && code_owner_login=$(gh api "repos/agent-team-foundation/context-tree/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'git -C "context-tree" add .github/CODEOWNERS', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: 'git -C "context-tree" commit -m "chore: add context tree code owner mapping"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'git -C "context-tree" push origin "HEAD:main"', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command:
+                'remote_codeowners=$(gh api "repos/agent-team-foundation/context-tree/contents/.github/CODEOWNERS?ref=main" --jq .content | base64 --decode)',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command:
+                'test "$(gh api "repos/agent-team-foundation/context-tree/codeowners/errors?ref=main" --jq \'.errors | length\')" = "0"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command:
+                'ruleset_id=$(gh api "repos/agent-team-foundation/context-tree/rulesets?includes_parents=false&per_page=100" --jq \'map(select(.name == "First Tree Context Repo branch rules" and (.source_type == null or .source_type == "Repository")))[0].id // empty\') && gh api --method=POST "repos/agent-team-foundation/context-tree/rulesets" --input ruleset.json',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            argv: [
+              "api",
+              "repos/agent-team-foundation/context-tree/rulesets",
+              "--method=POST",
+              "--input",
+              "ruleset.json",
+            ],
+            cwd: tempRoot,
+            exitCode: 0,
+            phase: "model",
+            rulesetPayloadValidated: true,
+            type: "gh_result",
+          },
+          {
+            event: {
+              message: {
+                content: "Ran tree init for context-tree, pushed CODEOWNERS, and created the ruleset.",
+                role: "assistant",
+                type: "message",
+              },
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-github-tree-governance-bootstrap"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.githubGovernanceBootstrapObserved).toBe(true);
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+      expect(casePassed(findCase("unbound-github-tree-governance-bootstrap"), metrics)).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit a self-owned CODEOWNERS bootstrap as satisfiable governance", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-self-"));
     try {
