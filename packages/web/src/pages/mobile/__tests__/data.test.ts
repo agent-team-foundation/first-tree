@@ -4,6 +4,7 @@ import {
   countAttentionRows,
   countUnreadRows,
   isNowFeedRow,
+  mobileChatPreview,
   mobileChatSignal,
   mobileFeedReasonLabel,
   sortMobileChats,
@@ -145,5 +146,30 @@ describe("isNowFeedRow (needs-attention admission)", () => {
     // unreadMentionCount also counts the implicit 1:1 DM auto-mention; only an
     // explicit @me qualifies.
     expect(isNowFeedRow(chatRow({ unreadMentionCount: 3, chatHasExplicitMentionToMe: false }))).toBe(false);
+  });
+});
+
+describe("mobileChatPreview", () => {
+  it("peels inline markdown so the card preview shows plain text", () => {
+    const preview = mobileChatPreview(
+      chatRow({ description: "**Task:** Build the tree from scratch (`first-tree-seed`)." }),
+    );
+    expect(preview).toBe("Task: Build the tree from scratch (first-tree-seed).");
+    expect(preview).not.toContain("**");
+    expect(preview).not.toContain("`");
+  });
+
+  it("prefers description, falls back to lastMessagePreview, then a placeholder", () => {
+    expect(mobileChatPreview(chatRow({ description: "  hello  ", lastMessagePreview: "later" }))).toBe("hello");
+    expect(mobileChatPreview(chatRow({ description: null, lastMessagePreview: "`only` this" }))).toBe("only this");
+    expect(mobileChatPreview(chatRow({ description: null, lastMessagePreview: "" }))).toBe("No messages yet.");
+  });
+
+  it("shows the placeholder when a markup-only preview strips to empty", () => {
+    // lastMessagePreview is stored verbatim server-side, so an image-only
+    // message arrives as `![](url)`, which strips to "" — must not render blank.
+    expect(mobileChatPreview(chatRow({ description: null, lastMessagePreview: "![](https://x/y.png)" }))).toBe(
+      "No messages yet.",
+    );
   });
 });
