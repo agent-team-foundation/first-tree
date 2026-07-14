@@ -167,6 +167,7 @@ describe("deriveRuntimeAuthView", () => {
   it("knows which providers support in-product auth", () => {
     expect(providerSupportsInProductAuth("codex")).toBe(true);
     expect(providerSupportsInProductAuth("claude-code")).toBe(true);
+    expect(providerSupportsInProductAuth("cursor")).toBe(true);
     expect(providerSupportsInProductAuth("claude-code-tui")).toBe(false);
   });
 

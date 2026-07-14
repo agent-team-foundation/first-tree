@@ -299,7 +299,7 @@ export async function checkWebSocket(): Promise<CheckResult> {
 // `daemon probe`)
 // ---------------------------------------------------------------------------
 
-const RUNTIME_PROVIDER_ORDER = ["claude-code", "claude-code-tui", "codex"];
+const RUNTIME_PROVIDER_ORDER = ["claude-code", "claude-code-tui", "codex", "cursor"];
 
 function formatCapabilityDetail(entry: CapabilityEntry): string {
   if (entry.state === "ok") {

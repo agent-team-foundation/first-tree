@@ -116,6 +116,19 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
    */
   function applyPatch(current: AgentRuntimeConfigPayload, patch: AgentRuntimeConfigPatch): AgentRuntimeConfigPayload {
     rejectLegacyMcpWrite(patch);
+    // Not every variant carries `reasoningEffort` (cursor has no effort
+    // channel). Reject an effort patch against such a variant explicitly:
+    // zod's re-parse would otherwise STRIP the unknown key and report a
+    // successful no-op write (version bump, config-change notification,
+    // nothing changed) — the operator must learn the field does not apply.
+    if (patch.reasoningEffort !== undefined && !("reasoningEffort" in current)) {
+      throw new BadRequestError(
+        "reasoningEffort is not supported by this agent's runtime provider (Cursor encodes effort in the model id)",
+        { code: "reasoning_effort_unsupported" },
+      );
+    }
+    const currentEffort = "reasoningEffort" in current ? current.reasoningEffort : undefined;
+    const nextEffort = patch.reasoningEffort ?? currentEffort;
     const next = {
       // `kind` is pinned to `agents.runtime_provider` and never patchable
       // from the config side; preserve the current value here and let
@@ -126,9 +139,7 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
       mcpServers: patch.mcpServers ?? current.mcpServers,
       env: patch.env ? mergeEnv(current.env, patch.env) : current.env,
       gitRepos: patch.gitRepos ?? current.gitRepos,
-      // `patch.reasoningEffort` is a loose string; provider-correct values are
-      // enforced when `commitWrite` re-parses `next` against the tagged union.
-      reasoningEffort: patch.reasoningEffort ?? current.reasoningEffort,
+      ...(nextEffort !== undefined ? { reasoningEffort: nextEffort } : {}),
     } as AgentRuntimeConfigPayload;
     return next;
   }
@@ -387,8 +398,10 @@ function computeDiff(
   const out: AgentRuntimeConfigDryRunResult["diff"] = [];
   const fields = ["prompt", "model", "mcpServers", "env", "gitRepos", "reasoningEffort"] as const;
   for (const f of fields) {
-    const before = a[f];
-    const after = b[f];
+    // `reasoningEffort` is absent on variants without an effort channel
+    // (cursor) — diff it as undefined rather than indexing the union.
+    const before = f === "reasoningEffort" ? ("reasoningEffort" in a ? a.reasoningEffort : undefined) : a[f];
+    const after = f === "reasoningEffort" ? ("reasoningEffort" in b ? b.reasoningEffort : undefined) : b[f];
     if (JSON.stringify(before) !== JSON.stringify(after)) {
       out.push({ path: f, op: "replace", before, after });
     }

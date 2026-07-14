@@ -278,3 +278,73 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
     );
   });
 });
+
+describe("runRuntimeAuthLogin — cursor (external-only binary)", () => {
+  function cursorHarness(opts: {
+    resolveOk?: boolean;
+    outcome?: LoginOutcome;
+    fireAuthUrl?: string;
+    probeResult?: CapabilityEntry;
+  }) {
+    const calls: Recorded2[] = [];
+    const logs: string[] = [];
+    const loginCalls: string[] = [];
+    const deps = {
+      currentEntry: (): CapabilityEntry | undefined => undefined,
+      setProviderEntry: async (provider: string, entry: CapabilityEntry): Promise<void> => {
+        calls.push({ provider, entry });
+      },
+      log: (_symbol: string, msg: string): void => {
+        logs.push(msg);
+      },
+      now: (): number => NOW,
+      resolveCursorBinary: () =>
+        opts.resolveOk === false
+          ? ({ ok: false, error: "Cursor Agent CLI is missing on this machine.", transient: false } as const)
+          : ({ ok: true, binary: "/home/op/.local/bin/cursor-agent", version: "2026.07.09" } as const),
+      runCursorBrowser: async (o: { binary: string; onAuthUrl?: (url: string) => void }): Promise<LoginOutcome> => {
+        loginCalls.push(o.binary);
+        if (opts.fireAuthUrl) o.onAuthUrl?.(opts.fireAuthUrl);
+        await new Promise((r) => setTimeout(r, 0));
+        return opts.outcome ?? ({ ok: true } as const);
+      },
+      probeCursor: async (): Promise<CapabilityEntry> => opts.probeResult ?? installedEntry(),
+    };
+    return { calls, logs, loginCalls, deps };
+  }
+  type Recorded2 = { provider: string; entry: CapabilityEntry };
+
+  it("drives <resolved-binary> login and publishes pending → re-probed ok", async () => {
+    const h = cursorHarness({ outcome: { ok: true }, probeResult: okEntry() });
+    await runRuntimeAuthLogin({ provider: "cursor", ref: "rc1" }, h.deps);
+
+    expect(h.loginCalls).toEqual(["/home/op/.local/bin/cursor-agent"]);
+    expect(h.calls[0]?.provider).toBe("cursor");
+    expect(h.calls[0]?.entry.pendingAuth).toMatchObject({ method: "browser" });
+    expect(h.calls.at(-1)?.entry.state).toBe("ok");
+    expect(h.calls.at(-1)?.entry.lastAuthError).toBeUndefined();
+  });
+
+  it("on unresolved/unverified binary, reflects a spawn-error lastAuthError and never logs in", async () => {
+    const h = cursorHarness({
+      resolveOk: false,
+      probeResult: { ...installedEntry(), state: "missing", available: false },
+    });
+    await runRuntimeAuthLogin({ provider: "cursor", ref: "rc2" }, h.deps);
+
+    expect(h.loginCalls).toEqual([]);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]?.entry.state).toBe("missing");
+    expect(h.calls[0]?.entry.lastAuthError).toMatchObject({ reason: "spawn-error" });
+    expect(h.logs.some((l) => l.includes("cursor binary unavailable"))).toBe(true);
+  });
+
+  it("stamps lastAuthError when the cursor login fails", async () => {
+    const h = cursorHarness({
+      outcome: { ok: false, reason: "exit-nonzero", error: "login failed" },
+      probeResult: installedEntry(),
+    });
+    await runRuntimeAuthLogin({ provider: "cursor", ref: "rc3" }, h.deps);
+    expect(h.calls.at(-1)?.entry.lastAuthError).toMatchObject({ reason: "exit-nonzero", message: "login failed" });
+  });
+});

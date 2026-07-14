@@ -190,7 +190,7 @@ export const COPY = {
     // wraps the command in a "please run this" line so the agent executes it
     // instead of just explaining a bare command.
     terminalBoxLabel: "Run this command in your terminal",
-    agentBoxLabel: "Or paste this to your Claude Code or Codex agent",
+    agentBoxLabel: "Or paste this to your Claude Code, Codex, or Cursor agent",
     agentPromptPrefix: "Help me install First Tree by running the command below:",
     // Quiet caption naming the nested coding-agent list, so the indented rows
     // read as "found ON this computer" (the relationship the nesting implies)

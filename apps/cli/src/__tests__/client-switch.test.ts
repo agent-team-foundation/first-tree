@@ -268,6 +268,14 @@ describe("client switch drain markers", () => {
     expect(isSwitchDrainEnvRequired("first-tree daemon status")).toBe(false);
     expect(isSwitchDrainEnvRequired("/bin/bash unrelated-script")).toBe(false);
   });
+
+  it("recognizes Cursor CLI processes (cursor-agent and the official `agent` command)", () => {
+    // The drain must fail closed: a live Cursor turn spawned by the runtime
+    // (either official symlink name) must require the env envelope check.
+    expect(isSwitchDrainEnvRequired("/home/op/.local/bin/cursor-agent -p --output-format stream-json")).toBe(true);
+    expect(isSwitchDrainEnvRequired("/home/op/.local/bin/agent -p --output-format stream-json")).toBe(true);
+    expect(isSwitchDrainEnvRequired("cursor-agent login")).toBe(true);
+  });
 });
 
 describe("client runtime markers", () => {

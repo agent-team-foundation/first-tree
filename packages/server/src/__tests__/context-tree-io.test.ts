@@ -347,6 +347,132 @@ describe("context-tree IO service", () => {
     ]);
   });
 
+  it("derives cursor read/edit/write IO from tool names, gated on runtimeProvider=cursor", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const mkEvent = (toolUseId: string, name: string, path: string, origin: "tool_arg" | "file_change") => ({
+      kind: "tool_call" as const,
+      payload: {
+        toolUseId,
+        name,
+        args: { path: `/tmp/context-tree/${path}` },
+        status: "ok" as const,
+        toolFileRefs: [
+          { origin, repoUrl: TREE_REPO, repoBranch: "main", repoRelativePath: path, pathKind: "file" as const },
+        ],
+      },
+    });
+
+    const readEvent = await appendEvent(
+      app.db,
+      seed.agent.uuid,
+      seed.chatId,
+      mkEvent("tu-c-read", "read", "NODE.md", "tool_arg"),
+    );
+    const editEvent = await appendEvent(
+      app.db,
+      seed.agent.uuid,
+      seed.chatId,
+      mkEvent("tu-c-edit", "edit", "system/NODE.md", "file_change"),
+    );
+    const writeEvent = await appendEvent(
+      app.db,
+      seed.agent.uuid,
+      seed.chatId,
+      mkEvent("tu-c-write", "write", "practices/new.md", "file_change"),
+    );
+
+    for (const sessionEvent of [readEvent, editEvent, writeEvent]) {
+      await recordFromSessionEvent(app.db, {
+        organizationId: seed.organizationId,
+        agentId: seed.agent.uuid,
+        chatId: seed.chatId,
+        runtimeProvider: "cursor",
+        sessionEvent,
+      });
+    }
+
+    const rows = await app.db.select().from(contextTreeIoEvents).where(eq(contextTreeIoEvents.chatId, seed.chatId));
+    expect(
+      rows
+        .map((row) => ({ action: row.action, source: row.source, targetPath: row.targetPath }))
+        .sort((a, b) => a.targetPath.localeCompare(b.targetPath)),
+    ).toEqual([
+      { action: "read", source: "cursor_read_tool", targetPath: "NODE.md" },
+      { action: "write", source: "cursor_write_tool", targetPath: "practices/new.md" },
+      { action: "write", source: "cursor_write_tool", targetPath: "system/NODE.md" },
+    ]);
+
+    // Provider gating both ways: cursor's lowercase names mean nothing to
+    // other providers, and codex's `command` means nothing to cursor.
+    expect(
+      explainContextTreeIoDecision({ runtimeProvider: "codex", sessionEvent: readEvent, bindingRepo: TREE_REPO }),
+    ).toEqual({ recordable: false, reason: "unsupported_tool" });
+    expect(
+      explainContextTreeIoDecision({
+        runtimeProvider: "cursor",
+        sessionEvent: {
+          kind: "tool_call",
+          payload: {
+            toolUseId: "tu-x",
+            name: "command",
+            args: { command: "cat /tmp/context-tree/NODE.md" },
+            status: "ok",
+          },
+        },
+        bindingRepo: TREE_REPO,
+      }),
+    ).toEqual({ recordable: false, reason: "unsupported_tool" });
+  });
+
+  it("end-to-end regression: a real-shaped completed cursor shell event lands as a repo-qualified read", async () => {
+    // The exact event shape the cursor handler emits after client enrichment
+    // for a tree read via shell (`cat <tree>/NODE.md`) — the path the old
+    // prototype's final review found missing. Must be recorded server-side.
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    const shellEvent = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tool_b4d948d0-f5c0-4367-a482-3eed23696d4",
+        name: "shell",
+        args: { command: "cat context-tree/NODE.md", cwd: "/home/op/.first-tree/workspaces/agent-1" },
+        status: "ok",
+        resultPreview: "# Context Tree Root",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            localPath: "context-tree/NODE.md",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    await recordFromSessionEvent(app.db, {
+      organizationId: seed.organizationId,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      runtimeProvider: "cursor",
+      sessionEvent: shellEvent,
+    });
+
+    const rows = await app.db.select().from(contextTreeIoEvents).where(eq(contextTreeIoEvents.chatId, seed.chatId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      runtimeProvider: "cursor",
+      action: "read",
+      source: "shell_command",
+      treeRepoUrl: TREE_REPO,
+      targetPath: "NODE.md",
+    });
+  });
+
   it("keeps shell write commands unsupported and explains common skip reasons", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();

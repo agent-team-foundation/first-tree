@@ -2,15 +2,19 @@ import {
   BROWSER_LOGIN_TIMEOUT_MS,
   type ClaudeLoginInvocation,
   type CodexBinaryResolution,
+  type CursorRuntimeBinaryResolution,
   type LoginOutcome,
   probeClaudeCodeCapability,
   probeClaudeCodeTuiCapability,
   probeCodexCapability,
+  probeCursorCapability,
   type RuntimeAuthCommand,
   resolveClaudeLoginInvocation,
   resolveCodexRuntimeBinary,
+  resolveCursorRuntimeBinary,
   runClaudeBrowserLogin,
   runCodexBrowserLogin,
+  runCursorBrowserLogin,
 } from "@first-tree/client";
 import {
   type CapabilityEntry,
@@ -49,6 +53,9 @@ export type RuntimeAuthLoginDeps = {
   runClaudeBrowser?: typeof runClaudeBrowserLogin;
   probeClaude?: () => Promise<CapabilityEntry>;
   probeClaudeTui?: () => Promise<CapabilityEntry>;
+  resolveCursorBinary?: () => CursorRuntimeBinaryResolution;
+  runCursorBrowser?: typeof runCursorBrowserLogin;
+  probeCursor?: () => Promise<CapabilityEntry>;
   now?: () => number;
 };
 
@@ -134,7 +141,55 @@ export async function runRuntimeAuthLogin(command: RuntimeAuthCommand, deps: Run
     await runClaudeRuntimeAuth(command, deps);
     return;
   }
+  if (command.provider === "cursor") {
+    await runCursorRuntimeAuth(command, deps);
+    return;
+  }
   deps.log("⚠️", `runtime-auth: provider "${command.provider}" is not supported yet (ref ${command.ref})`);
+}
+
+/** cursor: `<cursor-binary> login` (official browser OAuth on the host). */
+async function runCursorRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAuthLoginDeps): Promise<void> {
+  const now = deps.now ?? Date.now;
+  const resolveBinary = deps.resolveCursorBinary ?? resolveCursorRuntimeBinary;
+  const probeCursor = deps.probeCursor ?? probeCursorCapability;
+  const runCursorBrowser = deps.runCursorBrowser ?? runCursorBrowserLogin;
+
+  const reflect = async (label: string, failure: AuthFailure | null): Promise<void> => {
+    try {
+      await deps.setProviderEntry("cursor", attachAuthError(await probeCursor(), failure, now()));
+    } catch (err) {
+      deps.log("⚠️", `runtime-auth: cursor re-probe ${label} failed: ${message(err)}`);
+    }
+  };
+
+  deps.log("•", `runtime-auth: starting cursor login (method=browser, ref ${command.ref})`);
+
+  // Login drives the SAME resolved binary the handler spawns (external-only),
+  // including its bounded `--version` smoke check — the first real use.
+  const resolved = resolveBinary();
+  if (!resolved.ok) {
+    deps.log("⚠️", `runtime-auth: cursor binary unavailable: ${resolved.error}`);
+    await reflect("after unresolved binary", { reason: "spawn-error", message: resolved.error });
+    return;
+  }
+
+  const setPending = (authUrl?: string): Promise<void> =>
+    deps.setProviderEntry("cursor", pendingEntry(deps.currentEntry("cursor"), browserPending(now(), authUrl), now()));
+  await setPending();
+  deps.log("•", "runtime-auth: cursor browser sign-in opened on this host");
+
+  let outcome: LoginOutcome;
+  try {
+    outcome = await runCursorBrowser({ binary: resolved.binary, onAuthUrl: (url) => void setPending(url) });
+  } catch (err) {
+    deps.log("⚠️", `runtime-auth: cursor login threw: ${message(err)}`);
+    await reflect("after login threw", { reason: "spawn-error", message: message(err) });
+    return;
+  }
+
+  await reflect("after login", outcome.ok ? null : { reason: outcome.reason, message: outcome.error });
+  logOutcome("cursor", command.ref, outcome, deps);
 }
 
 async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAuthLoginDeps): Promise<void> {

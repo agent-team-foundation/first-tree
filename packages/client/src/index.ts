@@ -40,6 +40,7 @@ export {
   probeCodexCapability,
   resolveCodexRuntimeBinary,
 } from "./runtime/capabilities/codex.js";
+export { probeCursorCapability } from "./runtime/capabilities/cursor.js";
 export {
   CAPABILITY_REFRESH_BASE_MS,
   CAPABILITY_REFRESH_MAX_MS,
@@ -72,6 +73,14 @@ export { setCliBinding } from "./runtime/cli-binding.js";
 export { type CodexBrowserLoginOptions, runCodexBrowserLogin } from "./runtime/codex-login.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
+export {
+  CURSOR_INSTALL_COMMAND,
+  type CursorRuntimeBinaryResolution,
+  findCursorExecutableOnPath,
+  formatCursorBinaryMissingMessage,
+  resolveCursorRuntimeBinary,
+} from "./runtime/cursor-binary.js";
+export { type CursorBrowserLoginOptions, runCursorBrowserLogin } from "./runtime/cursor-login.js";
 export { Deduplicator } from "./runtime/deduplicator.js";
 export type { AttachmentUploader, SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
 export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";

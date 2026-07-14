@@ -56,6 +56,11 @@ const TOOL_VERBS: Record<string, string> = {
   WebSearch: "search web",
   Task: "delegate",
   TodoWrite: "plan",
+  // Cursor handler tool names (lowercase, provider-scoped).
+  shell: "run",
+  read: "read",
+  edit: "edit",
+  write: "write",
 };
 
 function formatDuration(ms: number): string {
@@ -108,12 +113,16 @@ function describeTool(p: ToolCallEventPayload): { verb: string; target: string }
     case "Bash":
       return { verb, target: readString(p.args, "command").split("\n")[0] ?? "" };
     case "command":
+    case "shell":
       return { verb, target: stripShellCommandDisplayWrapper(readString(p.args, "command")).split("\n")[0] ?? "" };
     case "Read":
     case "Edit":
     case "MultiEdit":
     case "Write":
-    case "NotebookEdit": {
+    case "NotebookEdit":
+    case "read":
+    case "edit":
+    case "write": {
       const path = readString(p.args, "file_path") || readString(p.args, "path") || readString(p.args, "notebook_path");
       return { verb, target: path ? basename(path) : "" };
     }

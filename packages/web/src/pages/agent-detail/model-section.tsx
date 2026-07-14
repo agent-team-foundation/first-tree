@@ -1,5 +1,6 @@
 import type { RuntimeProvider } from "@first-tree/shared";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Input } from "../../components/ui/input.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
 import { ConfigRow } from "./flat-section.js";
 
@@ -59,12 +60,18 @@ const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
   "claude-code": CLAUDE_MODEL_OPTIONS,
   "claude-code-tui": CLAUDE_MODEL_OPTIONS,
   codex: CODEX_MODEL_OPTIONS,
+  // Cursor deliberately has NO curated list: the account-dependent SKU catalog
+  // is large and shifting, so the control is a free-form exact-id input (see
+  // ModelSection) and First Tree does not maintain a model matrix.
+  cursor: [],
 };
 
 const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   "claude-code": "Applies to new sessions immediately. Unset falls back to the CLI default.",
   "claude-code-tui": "Applies to new sessions immediately. Model swap restarts the tmux session (~2–4s).",
   codex: "Applies to new sessions immediately. Unset lets the CLI pick by auth mode.",
+  cursor:
+    "Exact Cursor model id, passed through verbatim on the next turn. Leave empty for the Cursor default (auto). An id your account can't use fails visibly — no silent fallback.",
 };
 
 export type ModelSectionProps = {
@@ -88,9 +95,64 @@ export function ModelSection({ value, onChange, disabled, provider = "claude-cod
     return list;
   }, [presetOptions, value]);
 
+  if (provider === "cursor") {
+    return (
+      <ConfigRow label="Model" helpText={MODEL_HELP_BY_PROVIDER[provider]}>
+        <FreeFormModelInput value={value} onChange={onChange} disabled={disabled} />
+      </ConfigRow>
+    );
+  }
+
   return (
     <ConfigRow label="Model" helpText={MODEL_HELP_BY_PROVIDER[provider]}>
       <Select options={items} value={value} onChange={onChange} disabled={disabled} mono aria-label="Model" />
     </ConfigRow>
+  );
+}
+
+/**
+ * Free-form exact-model input (cursor). Commits on blur / Enter rather than
+ * per keystroke — every other control on this page saves on change, but a
+ * text field saving each character would spam config writes.
+ */
+function FreeFormModelInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState(value);
+  // Tracks the last value we sent, so Enter followed by an immediate blur
+  // does not fire a second identical save while the first round-trip is still
+  // in flight (the `value` prop only advances after the save lands, and a
+  // duplicate write would carry a stale expectedVersion → spurious conflict).
+  const lastSentRef = useRef<string | null>(null);
+  useEffect(() => {
+    setDraft(value);
+    lastSentRef.current = null;
+  }, [value]);
+  const commit = () => {
+    const next = draft.trim();
+    if (next !== value && next !== lastSentRef.current) {
+      lastSentRef.current = next;
+      onChange(next);
+    }
+  };
+  return (
+    <Input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+      }}
+      disabled={disabled}
+      placeholder="auto (Cursor default)"
+      className="font-mono"
+      aria-label="Model"
+    />
   );
 }
