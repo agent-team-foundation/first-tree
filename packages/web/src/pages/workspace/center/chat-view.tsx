@@ -1051,10 +1051,15 @@ function isInlineImageContent(content: unknown): content is FileMessageContent {
  *   aspect ratios read as one tidy row — the fix for the old `flex` default
  *   `align-items: stretch`, which stretched every sibling to the tallest one.
  *
- * Neither variant upscales past the source; both open the lightbox on click.
+ * The width caps are `min(<desktop cap>, 100%)` so they never exceed the
+ * (narrow, on mobile) message column — an inline `maxWidth` would otherwise
+ * override the responsive `img { max-width: 100% }` preflight and overflow the
+ * shared mobile chat surface. Neither variant upscales past the source; both
+ * open the lightbox on click. The wrapping button carries `minWidth: 0` so a
+ * gallery flex item can shrink below its intrinsic width on a narrow column.
  */
 const STANDALONE_IMG_STYLE = {
-  maxWidth: 400,
+  maxWidth: "min(25rem, 100%)",
   maxHeight: 360,
   borderRadius: "var(--radius-panel)",
   cursor: "zoom-in",
@@ -1063,7 +1068,7 @@ const STANDALONE_IMG_STYLE = {
 const GALLERY_IMG_STYLE = {
   height: 172,
   width: "auto",
-  maxWidth: 460,
+  maxWidth: "min(28.75rem, 100%)",
   objectFit: "cover",
   borderRadius: "var(--radius-panel)",
   cursor: "zoom-in",
@@ -1097,7 +1102,9 @@ function ImageFromRef({
         onClick={onOpen}
         aria-label={`Open image ${content.filename}`}
         className="block border-none bg-transparent p-0"
-        style={{ marginTop: variant === "standalone" ? 4 : 0 }}
+        // `minWidth: 0` lets a gallery flex item shrink below the image's
+        // intrinsic width on a narrow column instead of overflowing.
+        style={{ marginTop: variant === "standalone" ? 4 : 0, maxWidth: "100%", minWidth: 0 }}
       >
         <img
           src={state.src}
@@ -1151,7 +1158,7 @@ function InlineImage({ content }: { content: FileMessageContent }) {
         onClick={() => setOpenIndex(0)}
         aria-label={`Open image ${filename}`}
         className="block border-none bg-transparent p-0"
-        style={{ marginTop: 4 }}
+        style={{ marginTop: 4, maxWidth: "100%", minWidth: 0 }}
       >
         <img src={dataSrc} alt={filename} style={STANDALONE_IMG_STYLE} />
       </button>

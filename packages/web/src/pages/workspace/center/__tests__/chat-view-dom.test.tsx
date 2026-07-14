@@ -2092,6 +2092,23 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("bounds the image thumbnail by the message column (no fixed-px overflow on narrow/mobile)", async () => {
+    // The inline maxWidth must stay container-relative (`min(..., 100%)`), not a
+    // bare fixed cap that would override `img { max-width: 100% }` and overflow
+    // the narrow mobile message column. Layout isn't measurable in jsdom, so
+    // assert the container-aware declaration is present.
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+    const thumbImg = () => container.querySelector<HTMLImageElement>('button[aria-label="Open image preview.png"] img');
+    await waitForCondition(() => thumbImg() !== null, "image thumbnail did not render");
+
+    const style = thumbImg()?.getAttribute("style") ?? "";
+    expect(style).toContain("100%");
+    expect(style).toContain("min(");
+
+    await act(async () => root.unmount());
+  });
+
   // The chat summary (`chat.description`) now renders in the pinned ChatSummary
   // between the chat header and the message stream — NOT in the right rail.
   describe("pinned summary", () => {
