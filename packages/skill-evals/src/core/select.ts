@@ -23,6 +23,14 @@ const SKILL_BY_PATH: readonly {
   paths: readonly string[];
 }[] = [
   {
+    paths: [
+      "skills/context-tree-review/",
+      "packages/skill-evals/src/suites/context-tree-review/",
+      "packages/server/src/prompts/context-reviewer-pr.ejs",
+    ],
+    skill: "context-tree-review",
+  },
+  {
     paths: ["skills/first-tree-read/", "packages/skill-evals/src/suites/first-tree-read/"],
     skill: "first-tree-read",
   },
@@ -106,7 +114,13 @@ function addAllImplementedGateRecommendations(recommendations: Map<string, EvalR
     reason,
     suite: "all",
   });
-  for (const skill of ["first-tree-read", "first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
+  for (const skill of [
+    "first-tree-read",
+    "first-tree-write",
+    "first-tree-seed",
+    "first-tree-welcome",
+    "context-tree-review",
+  ] as const) {
     addRecommendation(recommendations, {
       command: gateCommand(skill),
       kind: "gate",
@@ -143,6 +157,12 @@ function addAgentBriefingRecommendations(recommendations: Map<string, EvalRecomm
     kind: "periodic",
     reason,
     suite: "first-tree-read",
+  });
+  addRecommendation(recommendations, {
+    command: gateCommand("context-tree-review"),
+    kind: "gate",
+    reason,
+    suite: "context-tree-review",
   });
   addRecommendation(recommendations, {
     command: gateCommand("first-tree-write"),

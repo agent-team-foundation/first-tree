@@ -245,6 +245,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(familyMap).toContain("The generated Context Tree Policy above is the always-present baseline");
     expect(familyMap).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
+    expect(familyMap).toMatch(/\|\s*`context-tree-review`\s*\| a Cloud Context Reviewer wake-up/);
 
     const treelessFamily = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: null })),
@@ -255,6 +256,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toContain("first-tree-file-bug");
     expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
+    expect(treelessFamily).toMatch(/\|\s*`context-tree-review`\s*\| a Cloud Context Reviewer wake-up/);
     expect(treelessFamily).toContain("These First Tree skills are installed in every workspace");
     expect(treelessFamily).not.toContain("# Required Reading");
   });

@@ -1,4 +1,10 @@
-export const SHIPPED_SKILLS = ["first-tree-read", "first-tree-write", "first-tree-seed", "first-tree-welcome"] as const;
+export const SHIPPED_SKILLS = [
+  "first-tree-read",
+  "first-tree-write",
+  "first-tree-seed",
+  "first-tree-welcome",
+  "context-tree-review",
+] as const;
 
 // Skills that ship in the runtime but are intentionally NOT modeled by this
 // eval harness. skill-evals is built around per-suite, model-graded live runners

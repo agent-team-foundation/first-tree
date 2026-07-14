@@ -15,6 +15,7 @@ pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --in
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review
 pnpm --filter @first-tree/skill-evals eval:periodic
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed
@@ -122,6 +123,15 @@ Tree skill family, binds a deterministic Context Tree fixture, and then runs
 the same read trigger oracle. This covers the generated-briefing and
 skill-topology boundary only; real Cloud chat delivery, GitHub webhooks, and
 live First Tree runtime E2E remain outside skill evals.
+
+`eval:gate -- --suite context-tree-review` runs the read-only Context Tree pull
+request review gate. Its deterministic GitHub shim permits only PR state reads,
+identity lookup, and one body-file review submission; all other `gh` commands
+remain blocked. The cases require validator-first ordering and cover structural
+failure, semantic failure, ready approval, draft deferral, archive-only scope,
+human authority, self-approval, and stale-head suppression. The fixture records
+the real source-tree validator result before the sandboxed model run so the
+agent receives the exact structural verdict without contacting GitHub.
 
 `eval:gate -- --suite first-tree-write` runs the live tested-agent gate for
 `first-tree-write`. It covers the minimum source-boundary cases:
