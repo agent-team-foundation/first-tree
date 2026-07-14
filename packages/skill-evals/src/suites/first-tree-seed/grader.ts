@@ -1125,7 +1125,8 @@ function singlePrBuildObserved(text: string): boolean {
   if (singlePrBuildRefusalObserved(text)) return false;
   const actionObserved =
     /\b(?:begin|build|continue|dispatch|draft|enter|move|open|proceed|route|start|write|writing)\w*\b/iu.test(text);
-  const singlePrObserved = /\b(?:one|single)\s+(?:reviewable\s+)?(?:seed\s+)?pr\b|chore\/seed-tree/iu.test(text);
+  const singlePrObserved =
+    /\b(?:one|single)\s+(?:reviewable\s+)?(?:seed\s+)?(?:pr|pull\s+request)\b|chore\/seed-tree/iu.test(text);
   const structureAndLeavesObserved =
     /structure[\s\S]{0,240}\b(?:initial\s+)?lea(?:f|ves)\b|\b(?:initial\s+)?lea(?:f|ves)\b[\s\S]{0,240}structure/iu.test(
       text,
@@ -1140,35 +1141,46 @@ function legacyHandoffObserved(text: string): boolean {
       "",
     )
     .replace(
-      /\b(?:no|without(?:\s+an|\s+any)?)\s+(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?pr\b[^.!?;\n]*/giu,
+      /\b(?:no|without(?:\s+an|\s+any)?)\s+(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?(?:pr|pull\s+request)\b[^.!?;\n]*/giu,
       "",
     )
     .replace(
       /\b(?:no|without)\s+(?:intermediate\s+)?(?:merge(?:\s+wait)?|ping|return-to-chat|handoff)\b[^.!?;\n]*/giu,
       "",
     );
-  const stagedPrObserved = affirmativeText.split(/[.!?;\n]+/u).some((segment) => {
+  const clauses = affirmativeText
+    .split(/[.!?;\n]+/u)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length > 0);
+  return clauses.some((clause, index) => {
     const structurePrObserved =
-      /\b(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?pr\b/iu.test(
-        segment,
+      /\b(?:intermediate(?:\s+structure(?:-only)?)?|structure(?:-only)?|phase\s*1|first)\s+(?:seed\s+)?(?:pr|pull\s+request)\b/iu.test(
+        clause,
       ) ||
-      /\b(?:seed\s+)?pr\b[\s\S]{0,80}\b(?:with|for|containing|covering)\b[\s\S]{0,50}\b(?:structure|skeleton|phase\s*1)\b/iu.test(
-        segment,
+      /\b(?:seed\s+)?(?:pr|pull\s+request)\b[\s\S]{0,80}\b(?:with|for|containing|covering)\b[\s\S]{0,50}\b(?:structure|skeleton|phase\s*1)\b/iu.test(
+        clause,
       );
-    const structureAndLeavesObserved =
-      /\b(?:structure|skeleton)\b[\s\S]{0,100}\b(?:content|lea(?:f|ves))\b|\b(?:content|lea(?:f|ves))\b[\s\S]{0,100}\b(?:structure|skeleton)\b/iu.test(
-        segment,
+    if (!structurePrObserved) return false;
+
+    const handoffContext = clauses.slice(index, index + 4).join(". ");
+    const mergeMatch = /\bmerge\w*\b/iu.exec(handoffContext);
+    if (!mergeMatch) return false;
+    const beforeMerge = handoffContext.slice(0, mergeMatch.index);
+    const samePrIncludesLeaves =
+      /\b(?:pr|pull\s+request)\b[\s\S]{0,100}\b(?:with|for|containing|covering)\b[\s\S]{0,80}\b(?:structure|skeleton)\b[\s\S]{0,50}\b(?:and|plus|alongside|together\s+with)\b[\s\S]{0,50}\b(?:content|lea(?:f|ves))\b/iu.test(
+        beforeMerge,
+      ) ||
+      /\b(?:it|this\s+(?:seed\s+)?(?:pr|pull\s+request)|that\s+(?:seed\s+)?(?:pr|pull\s+request)|the\s+same\s+(?:seed\s+)?(?:pr|pull\s+request))\b[\s\S]{0,80}\b(?:contain\w*|includ\w*|cover\w*|carr\w*|hold\w*)\b[\s\S]{0,50}\b(?:content|lea(?:f|ves))\b/iu.test(
+        beforeMerge,
       );
-    return structurePrObserved && !structureAndLeavesObserved;
+    if (samePrIncludesLeaves) return false;
+
+    const afterMerge = handoffContext.slice(mergeMatch.index + mergeMatch[0].length);
+    if (/\b(?:return|reply|ping|come\s+back|continue)\b/iu.test(afterMerge)) return true;
+    if (/\b(?:lea(?:f|ves)|phase\s*2)\b/iu.test(afterMerge)) return true;
+    if (!/\bcontent\b/iu.test(afterMerge)) return false;
+    return !/\b(?:first-tree-write|future|follow-up|subsequent|later\s+source-backed)\b/iu.test(afterMerge);
   });
-  const seedContinuationAfterMergeObserved =
-    /\bmerge\w*\b[\s\S]{0,180}\b(?:return|reply|ping|come\s+back|continue|(?:add|build|draft|write)\w*[\s\S]{0,60}(?:content|lea(?:f|ves)|phase\s*2))\b/iu.test(
-      affirmativeText,
-    ) ||
-    /\b(?:return|reply|ping|come\s+back)\b[\s\S]{0,160}\b(?:after|once|when)\b[\s\S]{0,160}\bmerge\w*\b/iu.test(
-      affirmativeText,
-    );
-  return stagedPrObserved && seedContinuationAfterMergeObserved;
 }
 
 function githubAppRequirementObserved(text: string): boolean {
