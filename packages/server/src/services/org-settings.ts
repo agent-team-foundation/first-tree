@@ -1,4 +1,6 @@
 import {
+  type ContextTreeActiveBinding,
+  contextTreeActiveBindingSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACES,
   type OrgContextTreeFeaturesInput,
@@ -49,6 +51,18 @@ async function fetchStorageRow<K extends OrgSettingNamespace>(
   if (!row) return null;
   const schema = ORG_SETTINGS_NAMESPACES[namespace].storage;
   return schema.parse(row.value) as OrgSettingStorage<K>;
+}
+
+async function lockOrganizationForSettingsMutation(db: Database, orgId: string): Promise<void> {
+  const [org] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .for("update")
+    .limit(1);
+  if (!org) {
+    throw new NotFoundError(`Organization "${orgId}" not found`);
+  }
 }
 
 function emptyStorage<K extends OrgSettingNamespace>(namespace: K): OrgSettingStorage<K> {
@@ -157,12 +171,17 @@ export async function getOrgSetting<K extends OrgSettingNamespace>(
 }
 
 /**
- * Read the per-org Context Tree binding for server-internal consumers
- * (`/context-tree/info`, snapshot service). No secrets in this namespace,
- * so the storage shape is safe to expose directly. Missing row → defaults.
+ * Read a runtime-safe Context Tree binding for server-internal consumers.
+ *
+ * The generic settings read intentionally preserves loose historical values so
+ * an administrator can see and repair them. Runtime consumers must fail closed:
+ * an incomplete or invalid historical row is not an active binding.
  */
-export async function getOrgContextTree(db: Database, orgId: string): Promise<OrgContextTreeStorage> {
-  return (await fetchStorageRow(db, orgId, "context_tree")) ?? emptyStorage("context_tree");
+export async function getOrgContextTreeBinding(db: Database, orgId: string): Promise<ContextTreeActiveBinding | null> {
+  const storage = await fetchStorageRow(db, orgId, "context_tree");
+  if (!storage) return null;
+  const parsed = contextTreeActiveBindingSchema.safeParse(storage);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -173,25 +192,24 @@ export async function getOrgContextTree(db: Database, orgId: string): Promise<Or
 export async function getOrgContextTreeWithMeta(
   db: Database,
   orgId: string,
-): Promise<OrgContextTreeStorage & { updatedAt: Date | null }> {
+): Promise<{ binding: ContextTreeActiveBinding | null; updatedAt: Date | null }> {
   const [row] = await db
     .select({ value: organizationSettings.value, updatedAt: organizationSettings.updatedAt })
     .from(organizationSettings)
     .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, "context_tree")))
     .limit(1);
-  if (!row) return { ...emptyStorage("context_tree"), updatedAt: null };
+  if (!row) return { binding: null, updatedAt: null };
   const storage = ORG_SETTINGS_NAMESPACES.context_tree.storage.parse(row.value) as OrgContextTreeStorage;
-  return { ...storage, updatedAt: row.updatedAt };
+  const parsed = contextTreeActiveBindingSchema.safeParse(storage);
+  return { binding: parsed.success ? parsed.data : null, updatedAt: row.updatedAt };
 }
 
 /**
  * Upsert a setting. Returns the masked output of the resulting row.
  *
- * The fetch + merge + upsert sequence runs inside a single transaction so
- * two concurrent admin writes can't both base their delta on the same
- * pre-image and silently lose each other's fields. Optimistic locking
- * (the `version` column) remains reserved for a future If-Match flip.
- * (#6)
+ * The transaction locks the stable organization parent row before reading the
+ * current JSON value. This also serializes writes when the namespace row does
+ * not exist yet, so partial updates cannot lose each other's fields.
  */
 export async function putOrgSetting<K extends OrgSettingNamespace>(
   db: Database,
@@ -207,14 +225,7 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
 
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
-    const [org] = await txDb
-      .select({ id: organizations.id })
-      .from(organizations)
-      .where(eq(organizations.id, orgId))
-      .limit(1);
-    if (!org) {
-      throw new NotFoundError(`Organization "${orgId}" not found`);
-    }
+    await lockOrganizationForSettingsMutation(txDb, orgId);
 
     const current = (await fetchStorageRow(txDb, orgId, namespace)) ?? emptyStorage(namespace);
     const merged = applyInputDelta(namespace, current, input);
@@ -225,6 +236,12 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
     // Final shape check (defensive — should always pass after applyInputDelta).
     const storageSchema = ORG_SETTINGS_NAMESPACES[namespace].storage;
     const validated = storageSchema.parse(merged) as OrgSettingStorage<K>;
+    if (namespace === "context_tree") {
+      const contextTree = validated as OrgContextTreeStorage;
+      if (contextTree.repo !== undefined) {
+        contextTreeActiveBindingSchema.parse(contextTree);
+      }
+    }
 
     await tx
       .insert(organizationSettings)
@@ -304,9 +321,13 @@ async function assertContextReviewerAgentAllowed(
  */
 export async function deleteOrgSetting(db: Database, orgId: string, namespace: string): Promise<void> {
   assertNamespace(namespace);
-  await db
-    .delete(organizationSettings)
-    .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, namespace)));
+  await db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockOrganizationForSettingsMutation(txDb, orgId);
+    await tx
+      .delete(organizationSettings)
+      .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, namespace)));
+  });
 }
 
 /**

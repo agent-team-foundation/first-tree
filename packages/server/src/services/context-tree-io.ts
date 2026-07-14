@@ -27,7 +27,7 @@ import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createLogger } from "../observability/index.js";
 import { type TimingSink, timeSyncWithSink, timeWithSink } from "../observability/timing.js";
-import { getOrgContextTree } from "./org-settings.js";
+import { getOrgContextTreeBinding } from "./org-settings.js";
 
 const CONTEXT_TREE_IO_FEED_LIMIT = 50;
 // Grep/Glob count as reads at the granularity their refs carry: the client
@@ -422,9 +422,10 @@ export async function summarizeContextTreeIoSkippedEvents(
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const binding =
     options.contextTreeBinding ??
-    (await timeWithSink(options.timing, "io_skipped_binding", () => getOrgContextTree(db, organizationId), {
+    (await timeWithSink(options.timing, "io_skipped_binding", () => getOrgContextTreeBinding(db, organizationId), {
       organizationId,
-    }));
+    })) ??
+    {};
   const bindingBranch = binding.branch ?? "main";
   const candidateAgents = await listContextTreeIoCandidateAgents(db, organizationId, options.timing, "io_skipped");
   const runtimeProviderByAgent = new Map(candidateAgents.map((agent) => [agent.agentId, agent.runtimeProvider]));
@@ -566,7 +567,7 @@ export async function summarizeContextTreeIoSkippedEvents(
 }
 
 export async function recordFromSessionEvent(db: Database, input: RecordContextTreeIoInput): Promise<void> {
-  const binding = await getOrgContextTree(db, input.organizationId);
+  const binding: ContextTreeIoBinding = (await getOrgContextTreeBinding(db, input.organizationId)) ?? {};
   const bindingBranch = binding.branch ?? "main";
 
   const event = sessionEventSchema.parse({ kind: input.sessionEvent.kind, payload: input.sessionEvent.payload });

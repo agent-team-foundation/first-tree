@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { contextTreeActiveBindingSchema } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { getCliBinding } from "./cli-binding.js";
 import { installCoreSkills as installCoreSkillsImpl, installFirstTreeSkills } from "./first-tree-skills/installer.js";
@@ -63,19 +64,30 @@ export async function resolveAgentContextTreeBinding(
   log: (msg: string) => void,
 ): Promise<ContextTreeBinding | null> {
   try {
-    const config = await sdk.getAgentContextTreeConfig();
-    if (!config.repo) {
+    const config: unknown = await sdk.getAgentContextTreeConfig();
+    if (
+      typeof config === "object" &&
+      config !== null &&
+      "repo" in config &&
+      (config.repo === null || config.repo === undefined)
+    ) {
       log("Context Tree binding skipped: not configured on server");
       return null;
     }
+
+    const binding = contextTreeActiveBindingSchema.safeParse(config);
+    if (!binding.success) {
+      log("Context Tree binding skipped: server returned an invalid binding");
+      return null;
+    }
+
     return {
       path: join(workspaceRoot, CONTEXT_TREE_DIRNAME),
-      repoUrl: config.repo,
-      branch: config.branch ?? "main",
+      repoUrl: binding.data.repo,
+      branch: binding.data.branch,
     };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log(`Context Tree binding skipped: failed to fetch config from server (${msg})`);
+  } catch {
+    log("Context Tree binding skipped: failed to fetch config from server");
     return null;
   }
 }

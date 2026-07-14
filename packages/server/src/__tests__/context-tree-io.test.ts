@@ -6,6 +6,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
+import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import {
@@ -44,6 +45,33 @@ async function seedContextTreeChat() {
 }
 
 describe("context-tree IO service", () => {
+  it("does not record events against an invalid historical Context Tree binding", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    await app.db
+      .update(organizationSettings)
+      .set({ value: { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" } })
+      .where(eq(organizationSettings.organizationId, seed.organizationId));
+    const persisted = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "context_tree_usage",
+      payload: {
+        purpose: "design_decision",
+        treeRepoUrl: TREE_REPO,
+        nodePath: "NODE.md",
+      },
+    });
+
+    await recordFromSessionEvent(app.db, {
+      organizationId: seed.organizationId,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      runtimeProvider: "claude-code",
+      sessionEvent: persisted,
+    });
+
+    await expect(app.db.select({ id: contextTreeIoEvents.id }).from(contextTreeIoEvents)).resolves.toHaveLength(0);
+  });
+
   it("records legacy context_tree_usage as an idempotent read event", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();

@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
+import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
 import * as orgSettingsService from "../services/org-settings.js";
@@ -100,6 +101,20 @@ describe("agent context tree info route", () => {
       branch: "updated-side",
     });
 
+    await app.db
+      .update(organizationSettings)
+      .set({ value: { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" } })
+      .where(
+        and(eq(organizationSettings.organizationId, sideOrgId), eq(organizationSettings.namespace, "context_tree")),
+      );
+    const invalidAgentScoped = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/context-tree/info",
+      headers: { authorization: `Bearer ${admin.accessToken}`, "x-agent-id": sideAgent.uuid },
+    });
+    expect(invalidAgentScoped.statusCode).toBe(200);
+    expect(invalidAgentScoped.json()).toEqual({ repo: null, branch: null });
+
     const legacyUserScoped = await app.inject({
       method: "GET",
       url: "/api/v1/context-tree/info",
@@ -110,5 +125,22 @@ describe("agent context tree info route", () => {
       repo: "https://github.com/example/default-context",
       branch: "main",
     });
+
+    await app.db
+      .update(organizationSettings)
+      .set({ value: { repo: "http://legacy.example/default-context.git", branch: "bad..branch" } })
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    const invalidLegacyUserScoped = await app.inject({
+      method: "GET",
+      url: "/api/v1/context-tree/info",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(invalidLegacyUserScoped.statusCode).toBe(200);
+    expect(invalidLegacyUserScoped.json()).toEqual({ repo: null, branch: null });
   });
 });

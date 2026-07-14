@@ -75,7 +75,7 @@ export function validateContextTreeBindingInput(input: { repo: unknown; branch?:
   if (!branch.success) {
     throw new InvalidContextTreeBindingInputError(
       "INVALID_CONTEXT_TREE_BRANCH",
-      "Branch must be a non-empty single-line value without surrounding whitespace or control characters.",
+      "Branch must be a valid Git branch name without surrounding whitespace, line breaks, or forbidden ref syntax.",
     );
   }
 

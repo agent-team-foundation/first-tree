@@ -124,6 +124,31 @@ function hasControlCharacter(value: string): boolean {
   });
 }
 
+function isValidGitBranchName(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value === "HEAD" ||
+    value.startsWith("-") ||
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.endsWith(".") ||
+    value.includes("//") ||
+    value.includes("..") ||
+    value.includes("@{")
+  ) {
+    return false;
+  }
+
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined || codePoint <= 0x20 || codePoint === 0x7f || "~^:?*[\\".includes(character)) {
+      return false;
+    }
+  }
+
+  return value.split("/").every((component) => !component.startsWith(".") && !component.endsWith(".lock"));
+}
+
 /**
  * Context Tree bindings are consumed directly by the local git client, so the
  * write boundary is intentionally stricter than the historical storage shape.
@@ -219,7 +244,20 @@ export const contextTreeBranchSchema = z
         message: "Context Tree branch must not contain control characters.",
       });
     }
+    if (!isValidGitBranchName(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must be a valid Git branch name.",
+      });
+    }
   });
+
+export const contextTreeActiveBindingSchema = z
+  .object({
+    repo: contextTreeRepoSchema,
+    branch: contextTreeBranchSchema.nullish().transform((branch) => branch ?? "main"),
+  })
+  .strict();
 
 export const orgContextTreeStorageSchema = z.object({
   // Historical rows predate the strict write boundary. Keep storage loose so
@@ -232,7 +270,7 @@ export const orgContextTreeInputSchema = z
   .object({
     /** Set / replace (HTTPS, ssh://, or scp-like — no embedded credentials). `null` clears. `undefined` leaves unchanged. */
     repo: contextTreeRepoSchema.nullish(),
-    /** Set / replace (non-empty). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
+    /** Set / replace (valid Git branch name). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
     branch: contextTreeBranchSchema.nullish(),
   })
   .strict();
@@ -400,6 +438,7 @@ export type OrgSettingOutput<K extends OrgSettingNamespace> = z.infer<(typeof OR
 export type OrgContextTreeStorage = OrgSettingStorage<"context_tree">;
 export type OrgContextTreeInput = OrgSettingInput<"context_tree">;
 export type OrgContextTreeOutput = OrgSettingOutput<"context_tree">;
+export type ContextTreeActiveBinding = z.infer<typeof contextTreeActiveBindingSchema>;
 
 export type OrgSourceReposStorage = OrgSettingStorage<"source_repos">;
 export type OrgSourceReposInput = OrgSettingInput<"source_repos">;

@@ -26,12 +26,20 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
       ORG_SETTINGS_NAMESPACES[namespace].readPolicy === "member"
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
+    if (namespace === "context_tree" && scope.role !== "admin") {
+      // Historical rows may predate the no-credentials URL boundary. Keep the
+      // raw repair view admin-only; members only receive a runtime-safe binding.
+      return (await orgSettingsService.getOrgContextTreeBinding(app.db, scope.organizationId)) ?? { branch: "main" };
+    }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);
   });
 
   app.put<{ Params: { orgId: string; namespace: string } }>(
     "/:namespace",
-    { config: { otelRecordBody: true } },
+    // Context Tree settings can contain private repository coordinates, and
+    // rejected legacy values can contain embedded credentials. Do not attach
+    // this generic settings body to failure spans.
+    { config: { otelRecordBody: false } },
     async (request) => {
       const scope = await requireOrgAdmin(request, app.db);
       const namespace = parseNamespace(request.params.namespace);

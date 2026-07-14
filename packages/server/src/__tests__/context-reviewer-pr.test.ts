@@ -7,6 +7,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
+import { organizationSettings } from "../db/schema/organization-settings.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import {
@@ -405,6 +406,27 @@ describe("handleContextReviewerPrEvent", () => {
         organizationId: admin.organizationId,
       }),
     ).resolves.toEqual({ handled: false, reason: "context_tree_repo_unset" });
+  });
+
+  it("skips when the stored Context Tree binding is not runtime-safe", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "context_tree_repo_unset" });
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 
   it("creates a reviewer chat, membership, task message, and inbox notification for an opened context repo PR", async () => {

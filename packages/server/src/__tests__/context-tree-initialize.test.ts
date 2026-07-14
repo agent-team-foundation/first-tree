@@ -4,10 +4,11 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
+import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { encryptValue } from "../services/crypto.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
-import { getOrgContextTree, putOrgSetting } from "../services/org-settings.js";
+import { getOrgContextTreeBinding, getOrgSetting, putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -144,7 +145,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(readBase64Content(createWorkflowPayload)).toBe(VALIDATE_TREE_WORKFLOW_CONTENT);
     expect(fetchSpy).toHaveBeenCalledTimes(7);
 
-    const setting = await getOrgContextTree(app.db, admin.organizationId);
+    const setting = await getOrgContextTreeBinding(app.db, admin.organizationId);
     expect(setting).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
@@ -164,6 +165,28 @@ owners: [${ACCOUNT_LOGIN}]
 
     expect(res.statusCode).toBe(409);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 without overwriting an invalid historical Context Tree row", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" },
+      version: 1,
+      updatedBy: admin.userId,
+    });
+    const fetchSpy = mockFetch(async () => new Response("unexpected", { status: 500 }));
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(409);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await expect(getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual({
+      repo: "http://legacy.example/context-tree.git",
+      branch: "bad..branch",
+    });
   });
 
   it("rejects non-admin members before calling GitHub", async () => {
@@ -230,7 +253,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ code: "no_installation" });
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
   });
 
   it("returns 503 suspended when the bound installation is suspended", async () => {
@@ -300,7 +323,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(1);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
   it("returns 409 repo_unavailable when GitHub refuses to create the tree repo for the installation", async () => {
@@ -323,7 +346,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ code: "repo_unavailable" });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
   });
 
   const permissionCases: Array<[string, Record<string, "read" | "write" | "admin">]> = [
@@ -385,7 +408,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(1);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
   it("returns 409 repo_unavailable when an existing deterministic repo is not readable by the installation", async () => {
@@ -405,7 +428,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ code: "repo_unavailable" });
     expect(fetchSpy).toHaveBeenCalledTimes(3);
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
   });
 
   it("adopts an existing repo with an existing NODE.md without rewriting it and writes the missing workflow", async () => {
@@ -442,7 +465,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(rootNodeWrites).toBe(0);
     expect(workflowWrites).toBe(1);
     expect(fetchSpy).toHaveBeenCalledTimes(6);
-    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
   it("adopts an existing repo with an existing validation workflow without rewriting it", async () => {
@@ -476,7 +499,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(201);
     expect(fileWrites).toBe(0);
     expect(fetchSpy).toHaveBeenCalledTimes(5);
-    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
   it("returns 502 and does not persist context_tree when the validation workflow write fails", async () => {
@@ -508,7 +531,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ code: "upstream" });
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
   });
 
   it("returns repo_unavailable when the installation loses access before writing NODE.md", async () => {
@@ -531,7 +554,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ code: "repo_unavailable" });
     expect(fetchSpy).toHaveBeenCalledTimes(4);
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
   });
 
   it("returns repo_unavailable when validation workflow creation loses installation access", async () => {
@@ -563,7 +586,7 @@ owners: [${ACCOUNT_LOGIN}]
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ code: "repo_unavailable" });
     expect(fetchSpy).toHaveBeenCalledTimes(7);
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
   });
 
   for (const createConflictStatus of [409, 422]) {
@@ -603,7 +626,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(workflowReadCalls).toBe(2);
       expect(workflowCreateCalls).toBe(1);
       expect(fetchSpy).toHaveBeenCalledTimes(8);
-      expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
     });
   }
 
@@ -646,14 +669,14 @@ owners: [${ACCOUNT_LOGIN}]
     const first = await initialize(app, admin);
     expect(first.statusCode).toBe(502);
     expect(first.json()).toMatchObject({ code: "upstream" });
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
 
     const second = await initialize(app, admin);
     expect(second.statusCode).toBe(201);
     expect(repoCreateCalls).toBe(2);
     expect(rootNodeWriteCalls).toBe(2);
     expect(workflowWriteCalls).toBe(1);
-    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
   it("can retry successfully when DB save failed after repo creation, root-node write, and workflow write", async () => {
@@ -699,12 +722,12 @@ owners: [${ACCOUNT_LOGIN}]
     expect(first.statusCode).toBe(500);
     expect(rootNodeExists).toBe(true);
     expect(workflowExists).toBe(true);
-    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
 
     const second = await initialize(app, admin);
     expect(second.statusCode).toBe(201);
     expect(repoCreateCalls).toBe(2);
-    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+    expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
 
   describe("personal GitHub account (User installation)", () => {
@@ -743,7 +766,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(res.statusCode).toBe(201);
       expect(userReposCalls).toBe(0);
       expect(fetchSpy).toHaveBeenCalledTimes(6);
-      expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
         repo: USER_REPO_CLONE_URL,
         branch: "main",
       });
@@ -801,7 +824,7 @@ owners: [${ACCOUNT_LOGIN}]
       });
       expect(repoGetCalls).toBe(2);
       expect(fetchSpy).toHaveBeenCalledTimes(8);
-      expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toEqual({
         repo: USER_REPO_CLONE_URL,
         branch: "main",
       });
@@ -829,7 +852,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ code: "context_tree_repo_access_required" });
       expect(fetchSpy).toHaveBeenCalledTimes(4);
-      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
     });
 
     it("returns context_tree_repo_access_required when the personal repo already exists but the installation cannot see it", async () => {
@@ -854,7 +877,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({ code: "context_tree_repo_access_required" });
       expect(fetchSpy).toHaveBeenCalledTimes(3);
-      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
     });
 
     it("returns 503 github_user_token_required without creating a repo when the admin has no GitHub token", async () => {
@@ -880,7 +903,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(res.json()).toMatchObject({ code: "github_user_token_required" });
       expect(userReposCalls).toBe(0);
       expect(fetchSpy).toHaveBeenCalledTimes(2);
-      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
     });
 
     it("returns context_tree_repo_account_mismatch when the admin's GitHub account differs from the installation account", async () => {
@@ -910,7 +933,7 @@ owners: [${ACCOUNT_LOGIN}]
       expect(res.json()).toMatchObject({ code: "context_tree_repo_account_mismatch" });
       expect(userReposCalls).toBe(0);
       expect(fetchSpy).toHaveBeenCalledTimes(2);
-      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+      expect(await getOrgContextTreeBinding(app.db, admin.organizationId)).toBeNull();
     });
   });
 });

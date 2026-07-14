@@ -1,5 +1,5 @@
 import { createLogger, SdkError } from "@first-tree/client";
-import { contextTreeBranchSchema, contextTreeInfoSchema, contextTreeRepoSchema } from "@first-tree/shared";
+import { contextTreeActiveBindingSchema, contextTreeInfoSchema } from "@first-tree/shared";
 import { AuthRefreshFailedError } from "./bootstrap.js";
 
 export type ContextTreeBindingResult =
@@ -84,17 +84,15 @@ export function normalizeContextTreeBinding(response: unknown): ContextTreeBindi
     return { status: "unbound", repo: null, branch: null };
   }
 
-  const repo = contextTreeRepoSchema.safeParse(parsed.data.repo);
-  if (!repo.success) {
+  const binding = contextTreeActiveBindingSchema.safeParse(parsed.data);
+  if (!binding.success) {
     throw invalidResponseError();
   }
-  const branch = parsed.data.branch === null ? null : contextTreeBranchSchema.safeParse(parsed.data.branch);
-  if (branch !== null && !branch.success) throw invalidResponseError();
 
   return {
     status: "bound",
-    repo: repo.data,
-    branch: branch === null ? "main" : branch.data,
+    repo: binding.data.repo,
+    branch: binding.data.branch,
   };
 }
 

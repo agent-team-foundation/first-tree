@@ -34,7 +34,7 @@ import {
   kickoffOnboarding,
   type TreeSetupRecoveryMessage,
 } from "../../services/onboarding-kickoff.js";
-import { getOrgContextTree, putOrgSetting } from "../../services/org-settings.js";
+import { getOrgContextTreeBinding, getOrgSetting, putOrgSetting } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
 
 const BRANCH = "main";
@@ -70,7 +70,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
   app.post<{ Params: { orgId: string }; Body: unknown }>("/setup-chat", async (request, reply) => {
     const scope = await requireOrgAdmin(request, app.db);
     const body = treeSetupKickoffSchema.parse(request.body);
-    const binding = await getOrgContextTree(app.db, scope.organizationId);
+    const binding: ContextTreeBinding = (await getOrgContextTreeBinding(app.db, scope.organizationId)) ?? {};
     const recovery = await resolveTreeSetupRecoveryMessage(app, scope.organizationId, binding);
     await adoptSafeLegacyTreeSetupChat(app.db, {
       humanAgentId: scope.humanAgentId,
@@ -158,8 +158,8 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     initializeContextTreeRequestSchema.parse(request.body ?? {});
     const scope = await requireOrgAdmin(request, app.db);
 
-    const existing = await getOrgContextTree(app.db, scope.organizationId);
-    if (existing.repo) {
+    const existing = await getOrgSetting(app.db, scope.organizationId, "context_tree");
+    if (existing.repo !== undefined) {
       throw new ConflictError("Context Tree repo is already configured for this team");
     }
 

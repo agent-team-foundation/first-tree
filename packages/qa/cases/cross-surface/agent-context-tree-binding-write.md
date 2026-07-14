@@ -45,6 +45,10 @@ black-box case does not claim evidence for those internal behaviors.
   access. Verify that this fixture can complete `GET /api/v1/agent/me`; the
   identity must lack only the organization-admin permission needed by the
   settings PUT. Seed A and B with distinct bound repositories and branches.
+- Prepare a run-local database fixture step that can replace B's setting with
+  an invalid historical string value after the normal binding scenarios. This
+  direct fixture mutation is permitted only inside the isolated run cell and
+  must not target a real organization.
 - Use throwaway syntactically valid HTTPS, `ssh://`, and scp-like SSH
   repository coordinates. No clone or external Git provider access is needed.
   Place a valid but deliberately conflicting Context Tree checkout, workspace
@@ -85,10 +89,11 @@ local checkout.
   HTTP, `git://`, malformed URL separators, embedded credentials, query or
   fragment components, backslashes or local drive paths, missing host or path,
   surrounding whitespace, control characters, empty branch, padded branch,
-  and multiline branch. Include `--org` to prove that the new command rejects
-  it. These failures must occur without network access. Exact schema behavior
-  and the absence of SDK construction or credential refresh are owned by
-  deterministic tests.
+  multiline branch, and Git-invalid branch forms such as `feature..next`,
+  `.hidden`, `release.lock`, `topic~1`, and `--bad`. Include `--org` to prove
+  that the new command rejects it. These failures must occur without network
+  access. Exact schema behavior and the absence of SDK construction or
+  credential refresh are owned by deterministic tests.
 - In task-local homes, exercise the four selector failures
   (`MISSING_AGENT`, `AMBIGUOUS_AGENT`, `ENV_AGENT_NOT_LOCAL`, and
   `UNKNOWN_AGENT`) and confirm exit `2` with no request. Return an invalid or
@@ -104,6 +109,13 @@ local checkout.
 - Remove or downgrade the caller's B admin membership
   between two attempts and confirm that the server rejects the write without a
   partial settings update.
+- After the normal write scenarios, inject an invalid historical B row (for
+  example, an HTTP repo plus a Git-invalid branch). Confirm that the admin
+  settings GET retains the raw repair view, while the member settings GET,
+  agent-scoped info/read, snapshot, and an isolated runtime startup all treat
+  it as inactive and do not attempt a clone. Attempt a repo-only repair and
+  verify rejection with the row value and version unchanged, then provide both
+  a valid repo and branch and verify that every active projection recovers.
 
 ## Observe
 
@@ -138,13 +150,17 @@ local checkout.
   and final status. Warning logs expose only the sanitized category, exit code,
   and HTTP status. No automatic PUT retry or duplicate settings-version
   increment occurs.
+- Loose historical values are visible only through the admin repair surface.
+  They never become active agent/runtime bindings, and a repair that omits an
+  invalid retained branch cannot partially update the row.
 
 ## Expected Result
 
 `PASS`: live boundary evidence proves that only the selected agent's
 organization is mutated, branch semantics and exact request bodies are correct,
 admin scope is enforced, local and selection validation is network-free, and
-all failure classes, output, and logging match the documented contract.
+all failure classes, output, logging, and raw-repair/active-binding boundaries
+match the documented contract.
 
 `FAIL`: a reproducible product defect causes a primary, web-selected, or local
 fallback; uses the wrong organization, endpoint, or body; permits an

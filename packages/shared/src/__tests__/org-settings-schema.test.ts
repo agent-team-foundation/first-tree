@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  contextTreeActiveBindingSchema,
   contextTreeBranchSchema,
   contextTreeRepoSchema,
   isOrgSettingNamespace,
@@ -69,21 +70,61 @@ describe("org settings schemas", () => {
     }
   });
 
-  it("requires a non-empty, single-line Context Tree branch without surrounding whitespace", () => {
-    for (const branch of ["main", "release/2026-07", "feature.context-tree"]) {
+  it("accepts Context Tree branches allowed by git check-ref-format --branch", () => {
+    for (const branch of [
+      "main",
+      "release/2026-07",
+      "feature.context-tree",
+      "@",
+      "foo/-bar",
+      "foo=bar",
+      "foo!bar",
+      "café/修复",
+      "foo.LOCK",
+    ]) {
       expect(contextTreeBranchSchema.parse(branch)).toBe(branch);
       expect(orgContextTreeInputSchema.parse({ branch }).branch).toBe(branch);
     }
+  });
+
+  it("rejects Context Tree branches forbidden by git check-ref-format --branch", () => {
     for (const branch of [
       "",
+      "HEAD",
+      "--bad",
       " main",
       "main ",
       "main\nnext",
       "main\rnext",
       "main\u0001",
-      "main\u0085",
-      "main\u2028next",
+      "feature..next",
+      ".hidden",
+      "feature/.hidden",
+      "release.lock",
+      "feature/release.lock",
+      "topic~1",
+      "topic^1",
+      "topic:next",
+      "topic?next",
+      "topic*next",
+      "topic[next",
+      "topic\\next",
+      "topic@{next",
+      "/topic",
+      "topic/",
+      "topic//next",
+      "topic.",
+      `topic${String.fromCharCode(0x7f)}next`,
     ]) {
+      expect(contextTreeBranchSchema.safeParse(branch).success, JSON.stringify(branch)).toBe(false);
+      expect(orgContextTreeInputSchema.safeParse({ branch }).success, JSON.stringify(branch)).toBe(false);
+    }
+  });
+
+  it("rejects additional control and line-separator characters", () => {
+    // Git accepts these Unicode characters, but they can split terminal or
+    // structured output and are outside the Context Tree single-line contract.
+    for (const branch of ["main\u0085", "main\u2028next", "main\u2029next"]) {
       expect(contextTreeBranchSchema.safeParse(branch).success, JSON.stringify(branch)).toBe(false);
       expect(orgContextTreeInputSchema.safeParse({ branch }).success, JSON.stringify(branch)).toBe(false);
     }
@@ -106,6 +147,25 @@ describe("org settings schemas", () => {
       branch: " legacy\nbranch ",
     });
     expect(orgContextTreeStorageSchema.parse({})).toEqual({ branch: "main" });
+  });
+
+  it("normalizes and validates active Context Tree bindings", () => {
+    const repo = "git@github.com:org/tree.git";
+
+    expect(contextTreeActiveBindingSchema.parse({ repo })).toEqual({ repo, branch: "main" });
+    expect(contextTreeActiveBindingSchema.parse({ repo, branch: null })).toEqual({ repo, branch: "main" });
+    expect(contextTreeActiveBindingSchema.parse({ repo, branch: "release/2026-07" })).toEqual({
+      repo,
+      branch: "release/2026-07",
+    });
+
+    for (const binding of [
+      {},
+      { repo: "http://legacy.example.com/context-tree.git", branch: "main" },
+      { repo, branch: "feature..next" },
+    ]) {
+      expect(contextTreeActiveBindingSchema.safeParse(binding).success, JSON.stringify(binding)).toBe(false);
+    }
   });
 
   it("validates source repo list entries with the same URL rules", () => {

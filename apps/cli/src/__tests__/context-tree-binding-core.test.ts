@@ -72,6 +72,7 @@ describe("Context Tree binding core", () => {
     ["multiline repo", { repo: "https://github.com/acme/context-tree.git\nforged", branch: "main" }],
     ["padded branch", { repo: "https://github.com/acme/context-tree.git", branch: " main" }],
     ["multiline branch", { repo: "https://github.com/acme/context-tree.git", branch: "main\nforged" }],
+    ["Git-invalid branch", { repo: "https://github.com/acme/context-tree.git", branch: "feature..next" }],
     ["invalid response shape", ["not", "an", "object"]],
   ])("rejects %s as an unreadable response", (_label, response) => {
     expect(() => normalizeContextTreeBinding(response)).toThrowError(

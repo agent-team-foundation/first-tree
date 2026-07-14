@@ -61,6 +61,16 @@ describe("Context Tree binding write core", () => {
     "main\nforged",
     "main\r",
     "main\u0001",
+    "HEAD",
+    "--bad",
+    ".hidden",
+    "feature/.hidden",
+    "feature..next",
+    "release.lock",
+    "topic~1",
+    "foo//bar",
+    "foo.",
+    "@{-1}",
   ])("rejects invalid branch input %j", (branch) => {
     expect(() => validateContextTreeBindingInput({ repo: REPO, branch })).toThrowError(
       expect.objectContaining({
@@ -68,6 +78,19 @@ describe("Context Tree binding write core", () => {
         exitCode: 2,
       }),
     );
+  });
+
+  it.each([
+    "main",
+    "release/v2",
+    "foo/-bar",
+    "feature/@bar",
+    "foo=bar",
+    "foo!bar",
+    "@",
+    "foo.LOCK",
+  ])("accepts Git-valid branch input %j", (branch) => {
+    expect(validateContextTreeBindingInput({ repo: REPO, branch })).toEqual({ repo: REPO, branch });
   });
 
   it("omits branch when requested and accepts the server's preserved branch", async () => {
@@ -103,6 +126,7 @@ describe("Context Tree binding write core", () => {
     ["null explicit branch", { repo: REPO, branch: null }],
     ["invalid repository", { repo: "http://github.com/acme/context-tree.git", branch: "main" }],
     ["invalid branch", { repo: REPO, branch: " main" }],
+    ["Git-invalid branch", { repo: REPO, branch: "feature..next" }],
   ])("rejects a %s update response", async (_label, response) => {
     const setAgentContextTreeConfig = vi.fn(async () => response);
 

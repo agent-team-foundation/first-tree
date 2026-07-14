@@ -2,7 +2,9 @@ import crypto, { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import postgres from "postgres";
 import { describe, expect, it } from "vitest";
+import { connectDatabase, sslOptions } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
@@ -15,6 +17,33 @@ import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
 const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
+
+function databaseUrlWithApplicationName(url: string, applicationName: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("application_name", applicationName);
+  return parsed.toString();
+}
+
+async function waitForPostgresLockWait(
+  observer: ReturnType<typeof postgres>,
+  applicationNames: readonly string[],
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ application_name: string; wait_event_type: string | null }[]>`
+      SELECT application_name, wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name IN ${observer(applicationNames)}
+    `;
+    const waitingNames = new Set(
+      rows.filter((row) => row.wait_event_type === "Lock").map((row) => row.application_name),
+    );
+    if (applicationNames.every((name) => waitingNames.has(name))) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for PostgreSQL lock waits: ${applicationNames.join(", ")}`);
+}
 
 async function createReviewerAgent(
   app: FastifyInstance,
@@ -57,6 +86,11 @@ describe("org-settings service", () => {
 
     const ct = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree");
     expect(ct).toEqual({ branch: "main" });
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeWithMeta(app.db, admin.organizationId)).resolves.toEqual({
+      binding: null,
+      updatedAt: null,
+    });
   });
 
   it("putOrgSetting stores context_tree and round-trips via getOrgSetting", async () => {
@@ -136,6 +170,25 @@ describe("org-settings service", () => {
     await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
       historical,
     );
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
+    await expect(orgSettingsService.getOrgContextTreeWithMeta(app.db, admin.organizationId)).resolves.toMatchObject({
+      binding: null,
+      updatedAt: expect.any(Date),
+    });
+
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree",
+        { repo: "https://github.com/example/repaired.git" },
+        { updatedBy: admin.userId },
+      ),
+    ).rejects.toThrow(/valid Git branch name/);
+
+    await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
+      historical,
+    );
 
     const repaired = await orgSettingsService.putOrgSetting(
       app.db,
@@ -145,6 +198,7 @@ describe("org-settings service", () => {
       { updatedBy: admin.userId },
     );
     expect(repaired).toEqual({ repo: "https://github.com/example/repaired.git", branch: "main" });
+    await expect(orgSettingsService.getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(repaired);
 
     const [row] = await app.db
       .select({ value: organizationSettings.value, version: organizationSettings.version })
@@ -244,6 +298,109 @@ describe("org-settings service", () => {
         ),
       );
     expect(v2?.version).toBe(2);
+  });
+
+  it.each([
+    { label: "an existing setting row", seedExisting: true, expectedVersion: 3 },
+    { label: "the first setting write", seedExisting: false, expectedVersion: 2 },
+  ])("serializes concurrent partial updates for $label", async ({ seedExisting, expectedVersion }) => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const suffix = randomUUID().slice(0, 8);
+    const repoWriterName = `ct_repo_${suffix}`;
+    const branchWriterName = `ct_branch_${suffix}`;
+    const holder = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const observer = postgres(databaseUrl, { max: 1, ...sslOptions(databaseUrl) });
+    const repoWriter = connectDatabase(databaseUrlWithApplicationName(databaseUrl, repoWriterName));
+    const branchWriter = connectDatabase(databaseUrlWithApplicationName(databaseUrl, branchWriterName));
+    let releaseHolder = (): void => undefined;
+    const holderRelease = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let reportHolderLocked = (): void => undefined;
+    const holderLocked = new Promise<void>((resolve) => {
+      reportHolderLocked = resolve;
+    });
+    let holderTransaction: Promise<unknown> | undefined;
+    let repoUpdate: Promise<unknown> | undefined;
+    let branchUpdate: Promise<unknown> | undefined;
+
+    try {
+      if (seedExisting) {
+        await orgSettingsService.putOrgSetting(
+          app.db,
+          admin.organizationId,
+          "context_tree",
+          { repo: "https://github.com/example/original.git", branch: "main" },
+          { updatedBy: admin.userId },
+        );
+      }
+
+      holderTransaction = holder.begin(async (tx) => {
+        await tx.unsafe("SELECT id FROM organizations WHERE id = $1 FOR UPDATE", [admin.organizationId]);
+        if (seedExisting) {
+          await tx.unsafe(
+            `
+            SELECT organization_id
+            FROM organization_settings
+            WHERE organization_id = $1
+              AND namespace = 'context_tree'
+            FOR UPDATE
+          `,
+            [admin.organizationId],
+          );
+        }
+        reportHolderLocked();
+        await holderRelease;
+      });
+      const holderFailure = holderTransaction.catch((error: unknown) => {
+        throw error;
+      });
+      await Promise.race([holderLocked, holderFailure]);
+
+      repoUpdate = orgSettingsService.putOrgSetting(
+        repoWriter,
+        admin.organizationId,
+        "context_tree",
+        { repo: "https://github.com/example/concurrent.git" },
+        { updatedBy: admin.userId },
+      );
+      branchUpdate = orgSettingsService.putOrgSetting(
+        branchWriter,
+        admin.organizationId,
+        "context_tree",
+        { branch: "release/concurrent" },
+        { updatedBy: admin.userId },
+      );
+
+      await waitForPostgresLockWait(observer, [repoWriterName, branchWriterName]);
+      releaseHolder();
+      await Promise.all([repoUpdate, branchUpdate, holderTransaction]);
+
+      const [row] = await app.db
+        .select({ value: organizationSettings.value, version: organizationSettings.version })
+        .from(organizationSettings)
+        .where(
+          and(
+            eq(organizationSettings.organizationId, admin.organizationId),
+            eq(organizationSettings.namespace, "context_tree"),
+          ),
+        );
+      expect(row).toEqual({
+        value: { repo: "https://github.com/example/concurrent.git", branch: "release/concurrent" },
+        version: expectedVersion,
+      });
+    } finally {
+      releaseHolder();
+      await Promise.allSettled(
+        [holderTransaction, repoUpdate, branchUpdate].filter(
+          (operation): operation is Promise<unknown> => operation !== undefined,
+        ),
+      );
+      await Promise.allSettled([repoWriter.end(), branchWriter.end(), holder.end(), observer.end()]);
+    }
   });
 
   it("deleteOrgSetting drops the row; subsequent get returns defaults", async () => {
@@ -782,6 +939,60 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ branch: "main" });
   });
 
+  it("keeps the raw Context Tree repair view admin-only while members receive safe bindings", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const historical = {
+      repo: "https://legacy-user:legacy-secret@github.com/example/context-tree.git",
+      branch: "main",
+    };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    const adminRead = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(adminRead.statusCode).toBe(200);
+    expect(adminRead.json()).toEqual(historical);
+
+    const memberRead = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(memberRead.statusCode).toBe(200);
+    expect(memberRead.json()).toEqual({ branch: "main" });
+    expect(memberRead.body).not.toContain("legacy-user");
+    expect(memberRead.body).not.toContain("legacy-secret");
+
+    const repaired = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/repaired-context-tree.git", branch: "release/2026-07" },
+    });
+    expect(repaired.statusCode).toBe(200);
+
+    const repairedMemberRead = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(repairedMemberRead.statusCode).toBe(200);
+    expect(repairedMemberRead.json()).toEqual({
+      repo: "https://github.com/example/repaired-context-tree.git",
+      branch: "release/2026-07",
+    });
+  });
+
   it("strictly validates Context Tree PUT bodies without partially updating the setting", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -809,6 +1020,11 @@ describe("org-settings API (admin gating + masking)", () => {
       { branch: "" },
       { branch: " release" },
       { branch: "release\nnext" },
+      { branch: "feature..next" },
+      { branch: ".hidden" },
+      { branch: "release.lock" },
+      { branch: "topic~1" },
+      { branch: "--bad" },
       { repo: "https://github.com/example/new.git", branch: "main", unexpected: true },
     ]) {
       const res = await app.inject({
@@ -836,11 +1052,12 @@ describe("org-settings API (admin gating + masking)", () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const sideOrgId = await attachOrg(app, admin.userId);
+    const sideRepo = "https://127.0.0.1:1/example/current-team-context.git";
     await orgSettingsService.putOrgSetting(
       app.db,
       sideOrgId,
       "context_tree",
-      { repo: "https://github.com/example/current-team-context", branch: "--bad" },
+      { repo: sideRepo, branch: "route-org" },
       { updatedBy: admin.userId },
     );
 
@@ -851,8 +1068,8 @@ describe("org-settings API (admin gating + masking)", () => {
     });
     expect(sideSnapshot.statusCode).toBe(200);
     expect(sideSnapshot.json()).toMatchObject({
-      repo: "https://github.com/example/current-team-context",
-      branch: "--bad",
+      repo: sideRepo,
+      branch: "route-org",
       snapshotStatus: "unavailable",
     });
 
@@ -864,6 +1081,64 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(defaultSnapshot.statusCode).toBe(200);
     expect(defaultSnapshot.json()).toMatchObject({
       repo: null,
+      snapshotStatus: "unavailable",
+    });
+  });
+
+  it("context tree snapshots treat invalid historical bindings as unbound", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const sideOrgId = await attachOrg(app, admin.userId);
+    await app.db.insert(organizationSettings).values([
+      {
+        organizationId: sideOrgId,
+        namespace: "context_tree",
+        value: { repo: "https://github.com/example/current-team-context", branch: "--bad" },
+        version: 1,
+        updatedBy: admin.userId,
+      },
+      {
+        organizationId: admin.organizationId,
+        namespace: "context_tree",
+        value: { repo: "http://legacy.example/context-tree.git", branch: "main" },
+        version: 1,
+        updatedBy: admin.userId,
+      },
+    ]);
+
+    const sideSnapshot = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${sideOrgId}/context-tree/snapshot?window=7d`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(sideSnapshot.statusCode).toBe(200);
+    expect(sideSnapshot.json()).toMatchObject({
+      repo: null,
+      branch: null,
+      snapshotStatus: "unavailable",
+    });
+
+    const defaultSnapshot = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/context-tree/snapshot?window=7d`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(defaultSnapshot.statusCode).toBe(200);
+    expect(defaultSnapshot.json()).toMatchObject({
+      repo: null,
+      branch: null,
+      snapshotStatus: "unavailable",
+    });
+
+    const userSnapshot = await app.inject({
+      method: "GET",
+      url: "/api/v1/context-tree/snapshot?window=7d",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(userSnapshot.statusCode).toBe(200);
+    expect(userSnapshot.json()).toMatchObject({
+      repo: null,
+      branch: null,
       snapshotStatus: "unavailable",
     });
   });

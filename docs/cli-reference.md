@@ -709,8 +709,11 @@ value must have a host and repository path, contain no embedded credentials,
 have no surrounding whitespace, and contain no control characters. URL forms
 must use literal `https://` or `ssh://` syntax; queries, fragments, backslashes,
 and local drive paths are rejected. HTTP and `git://` URLs are rejected.
-`--branch` must be non-empty, single-line, free of surrounding whitespace and
-control characters. Invalid repo and branch values fail locally with
+`--branch` must be a valid Git branch name. In addition to being non-empty,
+single-line, and free of surrounding whitespace and control characters, it
+must satisfy Git ref-format rules such as rejecting `..`, `@{`, components
+that start with `.` or end with `.lock`, a branch name that starts with `-`,
+and forbidden ref characters. Invalid repo and branch values fail locally with
 `INVALID_CONTEXT_TREE_REPO` and
 `INVALID_CONTEXT_TREE_BRANCH`, respectively, exit `2`, and make no SDK,
 credential, or HTTP request.
@@ -724,11 +727,13 @@ git@github.com:acme/context-tree.git
 ```
 
 When `--branch` is omitted, the request body contains only `{ "repo": "..." }`
-and the existing branch is preserved. On a first binding, the server's default
-branch is `main`. Supplying `--branch` replaces the branch. A successful
-response must be `bound`, must echo the requested repository, and must echo a
-provided branch; an inconsistent or otherwise invalid response is an update
-failure.
+and an existing valid branch is preserved. On a first binding, the server's
+default branch is `main`. Supplying `--branch` replaces the branch. If a loose
+historical row contains an invalid branch, a repo-only update is rejected
+without a partial write; repair it by supplying both the repository and a
+valid `--branch`. A successful response must be `bound`, must echo the
+requested repository, and must echo a provided branch; an inconsistent or
+otherwise invalid response is an update failure.
 
 Human output reports `Bound` and shows the repository and final branch. With
 `--json` or `FIRST_TREE_JSON=1`, successful output is exactly:

@@ -152,6 +152,7 @@ describe("org context-tree set CLI", () => {
   it.each([
     ["repository", ["http://github.com/acme/context-tree.git"], "INVALID_CONTEXT_TREE_REPO"],
     ["branch", [REPO, "--branch", " main"], "INVALID_CONTEXT_TREE_BRANCH"],
+    ["Git-invalid branch", [REPO, "--branch", "feature..next"], "INVALID_CONTEXT_TREE_BRANCH"],
   ])("rejects invalid $label input before creating the SDK", async (_label, args, code) => {
     process.exit = ((exitCode?: string | number | null): never => {
       throw new ProcessExit(Number(exitCode ?? 0));

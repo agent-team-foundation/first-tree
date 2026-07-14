@@ -691,6 +691,8 @@ export {
   githubStartQuerySchema,
 } from "./schemas/oauth.js";
 export {
+  type ContextTreeActiveBinding,
+  contextTreeActiveBindingSchema,
   contextTreeBranchSchema,
   contextTreeRepoSchema,
   isOrgSettingNamespace,

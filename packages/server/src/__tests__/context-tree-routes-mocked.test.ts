@@ -72,7 +72,8 @@ async function setupRoute() {
   const getFreshGithubUserToken = vi.fn();
   const getRepoFileWithToken = vi.fn().mockResolvedValue({ path: "NODE.md" });
   const createRepoFileWithToken = vi.fn().mockResolvedValue({ content: { path: "NODE.md" } });
-  const getOrgContextTree = vi.fn().mockResolvedValue({ repo: undefined, branch: undefined });
+  const getOrgContextTreeBinding = vi.fn().mockResolvedValue(null);
+  const getOrgSetting = vi.fn().mockResolvedValue({ branch: "main" });
   const putOrgSetting = vi.fn().mockResolvedValue({ repo: repo.cloneUrl, branch: "main" });
   const getOrganization = vi.fn().mockResolvedValue({ id: scope.organizationId, name: "Acme", displayName: "Acme" });
 
@@ -89,7 +90,7 @@ async function setupRoute() {
   vi.doMock("../services/github-app-installations.js", () => ({ findInstallationByOrg }));
   vi.doMock("../services/github-app-token.js", () => ({ mintContextTreeInstallationToken }));
   vi.doMock("../services/github-user-token.js", () => ({ GithubUserTokenError, getFreshGithubUserToken }));
-  vi.doMock("../services/org-settings.js", () => ({ getOrgContextTree, putOrgSetting }));
+  vi.doMock("../services/org-settings.js", () => ({ getOrgContextTreeBinding, getOrgSetting, putOrgSetting }));
   vi.doMock("../services/organization.js", () => ({ getOrganization }));
 
   const { orgContextTreeRoutes } = await import("../api/orgs/context-tree.js");
@@ -118,7 +119,8 @@ async function setupRoute() {
       getFreshGithubUserToken,
       getRepoFileWithToken,
       createRepoFileWithToken,
-      getOrgContextTree,
+      getOrgContextTreeBinding,
+      getOrgSetting,
       putOrgSetting,
       getOrganization,
     },
