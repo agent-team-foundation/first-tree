@@ -1,10 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@first-tree/shared";
+import { githubAppInstallationPermissionsSchema, type ScmIngressContext } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
 import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
-import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
   deleteInstallationByGithubId,
@@ -13,10 +12,11 @@ import {
   markInstallationUnsuspended,
   upsertInstallationFromMetadata,
 } from "../../services/github-app-installations.js";
-import { resolveAudience } from "../../services/github-audience.js";
-import { deliverNormalizedEvent } from "../../services/github-delivery.js";
+import { resolveGithubAudience } from "../../services/github-audience.js";
+import { deliverGithubEvent } from "../../services/github-delivery.js";
 import { type EntityStateSeed, setEntityState } from "../../services/github-entity-state.js";
 import { normalizeGithubEvent } from "../../services/github-normalize.js";
+import { processScmWebhookDelivery } from "../../services/scm-webhook-processing.js";
 import { isRecord, readNumber, readString } from "./github-entity.js";
 
 const log = createLogger("GithubAppWebhook");
@@ -270,9 +270,9 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
  *   3. installation / installation_repositories → lifecycle handler, NOT
  *      the normalize pipeline (these events shouldn't fan out as cards)
  *   4. other events → installation.id → hub_organization_id reverse-lookup,
- *      then Stage 1 normalize → claimEvent → Stage 2 audience → Stage 3
- *      deliver. unclaimEvent on handler failure so GitHub's retry has a
- *      chance to clear.
+ *      then GitHub normalize → provider-neutral SCM processing seam →
+ *      GitHub audience/delivery adapters. The seam best-effort unclaims on
+ *      uncaught handler failure so GitHub's retry has a chance to clear.
  *
  * Routes return 200 for "ignored" cases (no installation context, not
  * bound, suspended, duplicate delivery) so GitHub doesn't accumulate
@@ -345,15 +345,19 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     if (installation.suspendedAt !== null) {
       return reply.status(200).send({ ok: true, event: eventType, ignored: "suspended" });
     }
-
-    const source: WebhookSource = {
-      kind: "github-app-installation",
-      installationId,
-      organizationId: installation.hubOrganizationId,
-    };
+    const organizationId = installation.hubOrganizationId;
 
     const deliveryHeader = request.headers["x-github-delivery"];
     const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
+    const ingress: ScmIngressContext = {
+      provider: "github",
+      source: {
+        organizationId,
+        externalId: `installation:${installationId}`,
+      },
+      stableDeliveryId: deliveryId,
+      ingressAuthority: "verified_signature",
+    };
 
     // Bypass: sync the upstream PR/Issue lifecycle onto
     // `github_entity_chat_mappings.entity_state`. Runs independently of
@@ -374,7 +378,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         if (stateUpdate) {
           try {
             const stats = await setEntityState(app.db, {
-              organizationId: installation.hubOrganizationId,
+              organizationId,
               entityType: stateUpdate.entityType,
               entityKey: stateUpdate.entityKey,
               state: stateUpdate.state,
@@ -397,68 +401,61 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     }
 
     const rawAction = isRecord(payload) ? readString(payload.action) : null;
-    const event = normalizeGithubEvent(eventType, payload, source, deliveryId);
+    const event = normalizeGithubEvent(eventType, payload, ingress);
     const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction);
     if (!event && !shouldRunContextReviewer) {
       log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
       return reply.status(200).send({ ok: true, event: eventType, handled: false });
     }
 
-    if (deliveryId) {
-      const claimed = await claimEvent(app.db, deliveryId, "github");
-      if (!claimed) {
-        log.info({ deliveryId, eventType }, "duplicate delivery, skipping");
+    const result = await processScmWebhookDelivery({
+      db: app.db,
+      ingress,
+      event,
+      runProviderWork: () =>
+        shouldRunContextReviewer
+          ? handleContextReviewerPrEvent(app, {
+              eventType,
+              payload,
+              organizationId,
+            })
+          : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
+      resolveAudience: (normalizedEvent) => resolveGithubAudience(app.db, normalizedEvent),
+      deliver: (normalizedEvent, audience) =>
+        deliverGithubEvent(app, normalizedEvent, audience.targets, {
+          entityStateSeed,
+          actorHumanId: audience.actorHumanId,
+        }),
+    });
+
+    switch (result.outcome) {
+      case "duplicate":
         return reply.status(200).send({ ok: true, event: eventType, deduped: true });
-      }
-    }
-
-    try {
-      const contextReviewer = shouldRunContextReviewer
-        ? await handleContextReviewerPrEvent(app, {
-            eventType,
-            payload,
-            organizationId: installation.hubOrganizationId,
-          })
-        : ({ handled: false, reason: "unsupported_event" } as const);
-      if (!event) {
+      case "provider_only":
         log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
-        return reply.status(200).send({ ok: true, event: eventType, handled: false, contextReviewer });
-      }
-
-      const audience = await resolveAudience(app.db, event);
-      if (audience.targets.length === 0) {
-        // Distinguish "expected nobody" (no involves, no subscription)
-        // from "had explicit involves but resolved to zero agents" — the
-        // latter usually means a mentioned GitHub login has no
-        // `delegateMention`-configured agent in this org, which is a
-        // potential mis-configuration worth surfacing on a dashboard.
-        // See #507.
-        const reason: "audience_empty_no_involves" | "audience_empty_with_involves" =
-          event.involves.length > 0 ? "audience_empty_with_involves" : "audience_empty_no_involves";
-        log.info(
-          {
-            entityType: event.entity.type,
-            entityKey: event.entity.key,
-            actor: event.actor.githubLogin,
-            involvesCount: event.involves.length,
-            reason,
-          },
-          "audience empty, skipping",
-        );
-        return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason, contextReviewer });
-      }
-      const stats = await deliverNormalizedEvent(app, event, audience.targets, {
-        entityStateSeed,
-        actorHumanId: audience.actorHumanId,
-      });
-      return reply.status(200).send({ ok: true, event: eventType, ...stats, contextReviewer });
-    } catch (err) {
-      if (deliveryId) {
-        await unclaimEvent(app.db, deliveryId, "github").catch((unclaimErr) => {
-          log.error({ err: unclaimErr, deliveryId }, "failed to unclaim delivery after handler error");
+        return reply
+          .status(200)
+          .send({ ok: true, event: eventType, handled: false, contextReviewer: result.providerResult });
+      case "audience_empty": {
+        const reason =
+          result.reason === "audience_empty_with_targets"
+            ? "audience_empty_with_involves"
+            : "audience_empty_no_involves";
+        return reply.status(200).send({
+          ok: true,
+          event: eventType,
+          audience: 0,
+          reason,
+          contextReviewer: result.providerResult,
         });
       }
-      throw err;
+      case "delivered":
+        return reply.status(200).send({
+          ok: true,
+          event: eventType,
+          ...result.deliveryStats,
+          contextReviewer: result.providerResult,
+        });
     }
   });
 }
