@@ -501,7 +501,7 @@ Creating a PR or issue **never** follows it; \`gh pr create\`, curl, GitHub MCP,
       ${bin} github follow <url>
 
   Skip the follow only when the entity is clearly unrelated to this chat's task.
-- **If the follow fails because the org has not installed the First Tree GitHub App**, frame the optional upgrade value first, not as an error or chore.
+- **If the follow fails because the First Tree GitHub App is not installed on, or does not cover, the GitHub account/repo that owns the PR/issue**, frame the optional upgrade value first, not as an error or chore.
   Promise only current events: for a PR, comments, review activity, new commits,
   and merge/close state; for an issue, comments and open/close state. Make clear the PR/issue still works either way.
   - Only when the current human is a confirmed org admin, offer one clickable **Connect GitHub** CTA. Build its absolute URL from the complete \`Server:\` value printed by \`${bin} agent status\`:

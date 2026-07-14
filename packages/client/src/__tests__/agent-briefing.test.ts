@@ -421,13 +421,15 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).not.toContain("`first-tree-github` skill");
   });
 
-  it("frames the missing-App follow failure as a value-first Connect CTA, not a chore", () => {
+  it("frames missing-App and repo-coverage failures as a value-first Connect CTA", () => {
     const briefing = buildAgentBriefing(makeOpts());
     const attention = briefing.slice(
       briefing.indexOf("## GitHub Entity Attention"),
       briefing.indexOf("## Asking Humans"),
     );
     // Value first, not an error/chore report.
+    expect(attention).toContain("is not installed on, or does not cover");
+    expect(attention).toContain("account/repo that owns the PR/issue");
     expect(attention).toContain("frame the optional upgrade value first");
     expect(attention).toContain("Promise only current events");
     expect(attention).toMatch(/for a PR, comments, review activity, new commits,\s+and merge\/close state/);
