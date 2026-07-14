@@ -191,6 +191,46 @@ describe("tree init command action", () => {
     );
   });
 
+  it("falls back to the legacy settings read when the server lacks the raw endpoint", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/me")) {
+        return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+        return response("not found", { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+        return response({ repo: null });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+        return response("missing", { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        return response("ok");
+      }
+      return response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Legacy Server" }), true));
+
+    expect(process.exitCode).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://server.example/api/v1/orgs/org_1/settings/context_tree/raw",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://server.example/api/v1/orgs/org_1/settings/context_tree",
+      expect.any(Object),
+    );
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({ bound: true, owner: "octocat" });
+  });
+
   it("continues binding with no installation and warns that snapshots are not covered yet", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const base = makeTempDir();

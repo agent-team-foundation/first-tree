@@ -623,9 +623,11 @@ scripts: without `--org`, it resolves the caller's default organization through
 ID. It is not agent-scoped and is separate from `context-tree set` below.
 
 The Class B settings read `GET /api/v1/orgs/:orgId/settings/context_tree`
-returns the same runtime-safe binding representation for admins and members.
-Loose historical rows that are visible for repair are exposed only through the
-admin-only raw read `GET /api/v1/orgs/:orgId/settings/context_tree/raw`.
+returns the same runtime-safe binding representation for admins and members. If
+a loose historical row exists but is not a valid active binding, this safe read
+fails without returning the raw value. Loose historical rows that are visible for
+repair are exposed only through the admin-only raw read
+`GET /api/v1/orgs/:orgId/settings/context_tree/raw`.
 
 ### org context-tree
 
@@ -705,7 +707,9 @@ paired Class B read `GET /api/v1/orgs/:orgId/settings/context_tree` is the
 member-safe active-binding view; the admin-only
 `GET /api/v1/orgs/:orgId/settings/context_tree/raw` endpoint is reserved for
 repairing loose historical rows and for replace-preflight flows that must not
-clobber any stored Context Tree row. The selected agent identity, current user
+clobber any stored Context Tree row. New CLIs fall back from a raw-read 404 to
+the legacy safe read so they remain compatible with older servers, but any other
+raw-read failure remains fail-stop. The selected agent identity, current user
 JWT, and current runtime-session token are used for both requests. It never
 falls back to `/api/v1/me`, the legacy `/api/v1/context-tree/*` endpoints, the
 web app's current organization, a

@@ -1,6 +1,6 @@
 import { isOrgSettingNamespace, ORG_SETTINGS_NAMESPACES, type OrgSettingNamespace } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { BadRequestError, GoneError } from "../../errors.js";
+import { BadRequestError, ConflictError, GoneError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import * as orgSettingsService from "../../services/org-settings.js";
 
@@ -36,7 +36,14 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
     if (namespace === "context_tree") {
-      return (await orgSettingsService.getOrgContextTreeBinding(app.db, scope.organizationId)) ?? { branch: "main" };
+      const current = await orgSettingsService.getOrgContextTreeWithMeta(app.db, scope.organizationId);
+      if (current.binding) return current.binding;
+      if (current.updatedAt) {
+        throw new ConflictError(
+          "Context Tree setting contains invalid historical data and must be repaired by an admin",
+        );
+      }
+      return { branch: "main" };
     }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);
   });

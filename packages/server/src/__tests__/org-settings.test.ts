@@ -961,8 +961,10 @@ describe("org-settings API (admin gating + masking)", () => {
       url: safeUrl,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(adminSafeRead.statusCode).toBe(200);
-    expect(adminSafeRead.json()).toEqual({ branch: "main" });
+    expect(adminSafeRead.statusCode).toBe(409);
+    expect(adminSafeRead.json()).toMatchObject({
+      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+    });
     expect(adminSafeRead.body).not.toContain("legacy-user");
     expect(adminSafeRead.body).not.toContain("legacy-secret");
 
@@ -971,8 +973,10 @@ describe("org-settings API (admin gating + masking)", () => {
       url: safeUrl,
       headers: { authorization: `Bearer ${member.accessToken}` },
     });
-    expect(memberSafeRead.statusCode).toBe(200);
-    expect(memberSafeRead.json()).toEqual({ branch: "main" });
+    expect(memberSafeRead.statusCode).toBe(409);
+    expect(memberSafeRead.json()).toMatchObject({
+      error: "Context Tree setting contains invalid historical data and must be repaired by an admin",
+    });
     expect(memberSafeRead.body).not.toContain("legacy-user");
     expect(memberSafeRead.body).not.toContain("legacy-secret");
 
