@@ -567,6 +567,49 @@ function ghArgvIsForbidden(argv: readonly string[]): boolean {
   ].includes(subcommand);
 }
 
+function commandTrace(events: readonly unknown[]): string[] {
+  const commands: string[] = [];
+  for (const event of events) {
+    if (isRecord(event) && (eventType(event) === "gh_call" || eventType(event) === "first_tree_call")) {
+      const argv = isStringArray(event.argv) ? event.argv : [];
+      const prefix = eventType(event) === "gh_call" ? "gh" : "first-tree";
+      commands.push(`${prefix} ${argv.join(" ")}`.trim());
+    }
+    if (isRecord(event) && eventType(event) === "codex_event") {
+      commands.push(...collectCommandStrings(event.event));
+    }
+  }
+  return commands;
+}
+
+function githubGovernanceBootstrapObserved(events: readonly unknown[]): boolean {
+  const commands = commandTrace(events);
+  const trace = commands.join("\n");
+  const treeInitIndex = commands.findIndex((command) => /\bfirst-tree\s+tree\s+init\b|\btree\s+init\b/u.test(command));
+  const codeownersIndex = commands.findIndex((command) => /\.github\/CODEOWNERS/u.test(command));
+  const rulesetIndex = commands.findIndex((command) => /rulesets\?includes_parents=false&per_page=100/u.test(command));
+
+  return (
+    treeInitIndex >= 0 &&
+    codeownersIndex > treeInitIndex &&
+    rulesetIndex > codeownersIndex &&
+    /pr_author_login=.*gh api user|gh api user --jq \.login/u.test(trace) &&
+    /repos\/\$repo\/teams\?per_page=100/u.test(trace) &&
+    /\.login != \$author/u.test(trace) &&
+    /code_owner_ref/u.test(trace) &&
+    !/printf\s+['"]\* @%s\\n['"]\s+"\$code_owner_login"/u.test(trace) &&
+    !/gh api [^\n|]+\|\s*head/u.test(trace)
+  );
+}
+
+function githubGovernanceRecoveryObserved(text: string): boolean {
+  return (
+    /automatic GitHub governance setup failed|automatic governance setup failed/iu.test(text) &&
+    /CODEOWNERS/iu.test(text) &&
+    /non-author|org team|team with write|branch rules|ruleset/iu.test(text)
+  );
+}
+
 function forbiddenSideEffectHits(
   events: readonly unknown[],
   firstTreeArgv: readonly (readonly string[])[],
@@ -1290,6 +1333,8 @@ export function deriveMetrics(
     firstTreeArgv,
     forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv, evalCase),
     fixtureValidationOk: fixtureValidation.ok,
+    githubGovernanceBootstrapObserved: githubGovernanceBootstrapObserved(events),
+    githubGovernanceRecoveryObserved: githubGovernanceRecoveryObserved(finalResponse),
     githubAppRequirementObserved: githubAppRequirementObserved(finalResponse),
     phase2ContinuationObserved: phase2ContinuationObserved(finalResponse),
     phase2LeafContentObserved: phase2LeafContentObserved(finalResponse),

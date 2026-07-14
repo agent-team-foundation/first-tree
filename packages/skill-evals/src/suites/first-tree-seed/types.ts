@@ -79,6 +79,8 @@ export type EvalMetrics = {
   forbiddenActionHits: readonly string[];
   forbiddenSideEffectHits: readonly string[];
   fixtureValidationOk: boolean;
+  githubGovernanceBootstrapObserved: boolean;
+  githubGovernanceRecoveryObserved: boolean;
   githubAppRequirementObserved: boolean;
   phase2ContinuationObserved: boolean;
   phase2LeafContentObserved: boolean;

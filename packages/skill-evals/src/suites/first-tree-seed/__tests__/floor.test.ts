@@ -39,11 +39,17 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("only after `tree init` succeeds");
     expect(skillMarkdown).toMatch(/only when the\s+new Context Repo is a GitHub repository/);
     expect(skillMarkdown).toContain("Do not run it for an already-bound tree");
-    expect(skillMarkdown).toContain("First make the Code Owner gate real");
-    expect(skillMarkdown).toContain("code_owner_login=$(gh api user --jq .login)");
-    expect(skillMarkdown).toContain('printf \'* @%s\\n\' "$code_owner_login" > "<tree>/.github/CODEOWNERS"');
+    expect(skillMarkdown).toContain("First make the Code Owner gate real and satisfiable");
+    expect(skillMarkdown).toContain("pr_author_login=$(gh api user --jq .login)");
+    expect(skillMarkdown).toContain('team_slug=$(gh api "repos/$repo/teams?per_page=100"');
+    expect(skillMarkdown).toContain(".login != $author");
+    expect(skillMarkdown).toContain("Do **not** make the\nactive `gh` user the only Code Owner");
+    expect(skillMarkdown).toContain('printf \'* %s\\n\' "$code_owner_ref" > "<tree>/.github/CODEOWNERS"');
     expect(skillMarkdown).toContain('git -C "<tree>" push origin "HEAD:$default_branch"');
     expect(skillMarkdown).toContain("covers every path (`*`)");
+    expect(skillMarkdown).toContain(
+      "If no satisfiable Code\nOwner can be resolved, automatic GitHub governance setup fails",
+    );
     expect(skillMarkdown).toContain("includes_parents=false&per_page=100");
     expect(skillMarkdown).toContain('(.source_type == null or .source_type == "Repository")');
     expect(skillMarkdown).toContain("Do not\nlook up inherited organization rulesets");

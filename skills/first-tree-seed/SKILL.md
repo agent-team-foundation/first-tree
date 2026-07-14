@@ -159,28 +159,43 @@ new Context Repo is a GitHub repository. Do not run it for an already-bound tree
 a non-GitHub remote, or a failed/partial `tree init`. Use host `gh`; do not send
 the user to the browser first.
 
-First make the Code Owner gate real on the default branch, before enabling the
-ruleset. Resolve the repository from the new tree checkout, resolve the active
-GitHub login, then add a root `CODEOWNERS` mapping and push it directly while the
-fresh repo is still unprotected:
+First make the Code Owner gate real and satisfiable on the default branch,
+before enabling the ruleset. Resolve the repository from the new tree checkout
+and the active GitHub login that will author the seed PRs. Then resolve a Code
+Owner who can approve those PRs: prefer a repository-visible org team with
+write/maintain/admin access; otherwise use a direct collaborator with push/admin
+access whose login is different from the active `gh` login. Do **not** make the
+active `gh` user the only Code Owner, because GitHub rejects self-approval from
+the PR author.
 
 ```bash
 remote=$(git -C "<tree>" remote get-url origin)
 repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)
 default_branch=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
-code_owner_login=$(gh api user --jq .login)
+repo_owner=${repo%%/*}
+pr_author_login=$(gh api user --jq .login)
+team_slug=$(gh api "repos/$repo/teams?per_page=100" --jq '[.[] | select(.permission == "admin" or .permission == "maintain" or .permission == "push")][0].slug // empty')
+if [ -n "$team_slug" ]; then
+  code_owner_ref="@$repo_owner/$team_slug"
+else
+  code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" '[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty')
+  test -n "$code_owner_login"
+  code_owner_ref="@$code_owner_login"
+fi
 mkdir -p "<tree>/.github"
-printf '* @%s\n' "$code_owner_login" > "<tree>/.github/CODEOWNERS"
+printf '* %s\n' "$code_owner_ref" > "<tree>/.github/CODEOWNERS"
 git -C "<tree>" add .github/CODEOWNERS
 git -C "<tree>" commit -m "chore: add context tree code owner mapping"
 git -C "<tree>" push origin "HEAD:$default_branch"
 ```
 
 The bootstrap mapping intentionally covers every path (`*`) so GitHub's Code
-Owner review requirement applies to all Context Tree PRs. Use the active `gh`
-login because it is the principal that just created the repo and has write/admin
-rights. If a future team wants a narrower owner or an org team such as
-`@org/team`, that is a follow-on maintenance change after bootstrap.
+Owner review requirement applies to all Context Tree PRs. If no satisfiable Code
+Owner can be resolved, automatic GitHub governance setup fails: do not create a
+self-owned `CODEOWNERS`, do not enable `require_code_owner_review`, and tell the
+user to add a root `CODEOWNERS` entry for a non-author user or org team with
+write access before enabling the ruleset. If a future team wants a narrower owner
+or a different org team, that is a follow-on maintenance change after bootstrap.
 
 Then upsert one active repository-local ruleset scoped to the default branch:
 

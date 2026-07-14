@@ -42,6 +42,8 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     forbiddenActionHits: [],
     forbiddenSideEffectHits: [],
     fixtureValidationOk: true,
+    githubGovernanceBootstrapObserved: false,
+    githubGovernanceRecoveryObserved: false,
     githubAppRequirementObserved: false,
     phase2ContinuationObserved: false,
     phase2LeafContentObserved: false,
@@ -3569,6 +3571,111 @@ describe("first-tree-seed grader", () => {
       expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
       expect(metrics.forbiddenSideEffectHits.length).toBeGreaterThan(0);
       expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects ordered GitHub governance bootstrap after tree init", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree")],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command:
+                'pr_author_login=$(gh api user --jq .login) && team_slug=$(gh api "repos/$repo/teams?per_page=100" --jq \'[.[] | select(.permission == "admin" or .permission == "maintain" or .permission == "push")][0].slug // empty\') && code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command:
+                'ruleset_id=$(gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --jq \'map(select(.name == "First Tree Context Repo branch rules" and (.source_type == null or .source_type == "Repository")))[0].id // empty\')',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.githubGovernanceBootstrapObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a self-owned CODEOWNERS bootstrap as satisfiable governance", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-self-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree")],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command:
+                'code_owner_login=$(gh api user --jq .login) && printf \'* @%s\\n\' "$code_owner_login" > "context-tree/.github/CODEOWNERS" && gh api "repos/$repo/rulesets?includes_parents=false&per_page=100"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.githubGovernanceBootstrapObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects GitHub governance manual recovery guidance", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-recovery-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              message: {
+                content:
+                  "Automatic GitHub governance setup failed. Manually add CODEOWNERS with a non-author org team with write access, then configure the branch ruleset.",
+                role: "assistant",
+                type: "message",
+              },
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.githubGovernanceRecoveryObserved).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

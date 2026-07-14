@@ -99,7 +99,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}; github governance bootstrap observed=${metrics.githubGovernanceBootstrapObserved}; github governance recovery observed=${metrics.githubGovernanceRecoveryObserved}`,
       ),
       evidence(
         "risk_pass",
@@ -157,6 +157,8 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - approvalRequestObserved: ${markdownBool(summary.metrics.approvalRequestObserved)}
 - treeInitObserved: ${markdownBool(summary.metrics.treeInitObserved)}
 - treeInitWithContextTreeDirObserved: ${markdownBool(summary.metrics.treeInitWithContextTreeDirObserved)}
+- githubGovernanceBootstrapObserved: ${markdownBool(summary.metrics.githubGovernanceBootstrapObserved)}
+- githubGovernanceRecoveryObserved: ${markdownBool(summary.metrics.githubGovernanceRecoveryObserved)}
 - phase2LeafContentObserved: ${markdownBool(summary.metrics.phase2LeafContentObserved)}
 - sourceRepoChanged: ${markdownBool(summary.metrics.sourceRepoChanged)}
 - contextTreeChanged: ${markdownBool(summary.metrics.contextTreeChanged)}
