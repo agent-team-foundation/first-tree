@@ -423,16 +423,31 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
   it("frames the missing-App follow failure as a value-first Connect CTA, not a chore", () => {
     const briefing = buildAgentBriefing(makeOpts());
+    const attention = briefing.slice(
+      briefing.indexOf("## GitHub Entity Attention"),
+      briefing.indexOf("## Asking Humans"),
+    );
     // Value first, not an error/chore report.
-    expect(briefing).toContain("frame it value first, not an error or chore");
-    expect(briefing).toContain("brings this PR/issue's live updates");
-    // One clickable, ABSOLUTE settings link, with a real host the agent can resolve
-    // (a bare path or literal placeholder would render as a broken/dead link).
-    expect(briefing).toContain("https://<your-host>/settings/github");
-    expect(briefing).toContain("agent status");
+    expect(attention).toContain("frame the optional upgrade value first");
+    expect(attention).toContain("Promise only current events");
+    expect(attention).toMatch(/for a PR, comments, review activity, new commits,\s+and merge\/close state/);
+    expect(attention).toMatch(/for an issue,\s+comments and open\/close state/);
+    expect(attention).not.toContain("checks");
+    expect(attention).not.toContain("CI");
+    // Admins alone receive the CTA; members and unknown roles stay out of the
+    // admin-only surface.
+    expect(attention).toContain("Only when the current human is a confirmed org admin");
+    expect(attention).toContain("If the human is a member or their role is unknown");
+    // Derive the link from the full Server URL without a scheme-breaking host
+    // placeholder, while preserving valid self-hosted http origins.
+    expect(attention).toContain("complete `Server:`");
+    expect(attention).toContain("trim its trailing slash, append");
+    expect(attention).toContain("preserve its `http://` or `https://` scheme");
+    expect(attention).not.toContain("https://<your-host>/settings/github");
+    expect(attention).toContain("If the web origin cannot be resolved");
     // Explicit jargon ban so the agent stops parroting CLI wording.
-    expect(briefing).toContain('Never say "webhook", "wire"');
-    expect(briefing).toContain('"install the App"');
+    expect(attention).toContain('Never say "webhook", "wire"');
+    expect(attention).toContain('"install the App"');
   });
 
   it("keeps chat metadata rules compact but actionable", () => {

@@ -501,14 +501,13 @@ Creating a PR or issue **never** follows it; \`gh pr create\`, curl, GitHub MCP,
       ${bin} github follow <url>
 
   Skip the follow only when the entity is clearly unrelated to this chat's task.
-- **If the follow fails because the org has not installed the First Tree
-  GitHub App**, frame it value first, not an error or chore: connecting GitHub
-  brings this PR/issue's live updates (comments, reviews, checks, merge status)
-  into this chat — it still works either way. Offer one clickable **absolute**
-  \`https://<your-host>/settings/github\` link — take <your-host> from
-  \`${bin} agent status\`, and never emit a bare path or the literal placeholder.
-  Never say "webhook", "wire", "re-follow", "install the App", or "action
-  needed".
+- **If the follow fails because the org has not installed the First Tree GitHub App**, frame the optional upgrade value first, not as an error or chore.
+  Promise only current events: for a PR, comments, review activity, new commits,
+  and merge/close state; for an issue, comments and open/close state. Make clear the PR/issue still works either way.
+  - Only when the current human is a confirmed org admin, offer one clickable **Connect GitHub** CTA. Build its absolute URL from the complete \`Server:\` value printed by \`${bin} agent status\`:
+    trim its trailing slash, append \`/settings/github\`, and preserve its \`http://\` or \`https://\` scheme. If the web origin cannot be resolved, name **Settings → GitHub** in words and do not emit a link.
+  - If the human is a member or their role is unknown, do not send the CTA or route them into admin-only setup; say a team admin can enable live updates.
+  Never say "webhook", "wire", "re-follow", "install the App", or "action needed".
 - **Unfollow only when the human explicitly asks to stop tracking** the
   entity (\`${bin} github unfollow <entity>\`). Do not proactively unfollow merely because a PR or Issue completed, merged, or closed.
 

@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.2.1
+version: 1.2.2
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -386,11 +386,11 @@ map of what is in flight.
 
 ### After a value PR opens: guide App install once
 
-A review-ready PR gives the admin a concrete reason to install or update First
-Tree GitHub App coverage: CI results, review comments, and merge state can flow
-back into chat. The welcome launcher owns one concise install/coverage guidance
-at this moment; do not rely only on the generic PR-following failure text that a
-spawned task may have shown.
+A review-ready PR gives the admin a concrete reason to connect or update First
+Tree GitHub App coverage: comments, review activity, new commits, and merge
+state can flow back into chat. The welcome launcher owns one concise
+install/coverage guidance at this moment; do not rely only on the generic
+PR-following failure text that a spawned task may have shown.
 
 - The spawned value task owns following its PR in its own task chat
   (`first-tree github follow <url>`) and reporting whether live tracking is
@@ -402,19 +402,21 @@ spawned task may have shown.
 - If tracking is blocked because the First Tree GitHub App is not installed on,
   or does not cover, the GitHub account/repo that owns the PR, and the human is a
   confirmed **admin**, include one launcher-level line when you report that PR
-  result. Lead with value, tied to the win, for example: "Want this PR's checks,
-  reviews, and merge status to land in this chat as they happen?
-  **[Connect GitHub →](https://<your-host>/settings/github)** — one-time setup
-  for the team." Emit a clickable **absolute** `https://<your-host>/settings/github`
-  URL, taking `<your-host>` from the `Server:` value of `first-tree agent status`
-  (a bare path or the literal placeholder will not render); if you cannot resolve
-  the host, name **Settings → GitHub** rather than emit a broken link. Do not
-  fabricate a raw GitHub App install URL. Say value, then the link — and never use
-  mechanics words ("webhook", "wire", "re-follow", "install the App", "action
-  needed").
+  result. Lead with value, tied to the win: "Want this PR's comments, reviews,
+  new commits, and merge status to land in this chat as they happen?" Follow it
+  with one **Connect GitHub →** CTA and say it is a one-time setup for the team.
+  Make the CTA clickable only after deriving its URL: take the complete `Server:`
+  URL from `first-tree agent status`, trim its trailing slash, and append
+  `/settings/github`, preserving the original `http://` or `https://` scheme.
+  Use that resulting absolute URL directly as the link destination. If the web
+  origin cannot be resolved, name **Settings → GitHub** in words instead of
+  emitting a link. Do not fabricate a raw GitHub App install URL. Say value,
+  then the CTA — and never use mechanics words ("webhook", "wire", "re-follow",
+  "install the App", "action needed").
 - If the human is an invitee/member or role is unclear, do not route them into
   an admin-only install surface. Say a team admin can turn on live PR updates
-  (checks, reviews, merge status) for this repo, if useful.
+  (comments, review activity, new commits, and merge status) for this repo, if
+  useful.
 - Give this App-install guidance at most once in the onboarding launcher. If the
   spawned task chat already mentioned the missing App, still include the short
   launcher-level line; do not repeat a full setup explanation.
