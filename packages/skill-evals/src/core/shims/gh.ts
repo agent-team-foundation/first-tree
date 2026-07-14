@@ -36,26 +36,106 @@ function trace(message) {
   }
 }
 
+function finish(argv, phase, exitCode, stdout, stderr, extra = {}) {
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  append({
+    type: "gh_result",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    exitCode,
+    signal: null,
+    stdoutPreview: preview(stdout),
+    stderrPreview: preview(stderr),
+    ...extra,
+  });
+  trace("gh result: exit=" + exitCode + " " + commandLine(argv));
+  process.exit(exitCode);
+}
+
+function argAfter(argv, name) {
+  const index = argv.indexOf(name);
+  return index >= 0 ? argv[index + 1] || "" : "";
+}
+
+function ghMethod(argv) {
+  return argAfter(argv, "-X") || argAfter(argv, "--method") || "GET";
+}
+
+function endpointArg(argv) {
+  if (argv[0] !== "api") return "";
+  return argv.find((arg, index) => index > 0 && !arg.startsWith("-") && argv[index - 1] !== "--jq" && argv[index - 1] !== "--input" && argv[index - 1] !== "-X" && argv[index - 1] !== "--method") || "";
+}
+
+function isGovernanceBootstrapCase() {
+  return (process.env.FIRST_TREE_EVAL_CASE_ID || "") === "unbound-github-tree-governance-bootstrap";
+}
+
+function isGovernanceRecoveryCase() {
+  return (process.env.FIRST_TREE_EVAL_CASE_ID || "") === "unbound-github-governance-fail-closed";
+}
+
+function encodedCodeowners() {
+  return Buffer.from("* @agent-team-foundation/context-maintainers\\n", "utf8").toString("base64") + "\\n";
+}
+
+function bootstrapResponse(argv) {
+  const endpoint = endpointArg(argv);
+  const method = ghMethod(argv);
+  if (argv[0] === "repo" && argv[1] === "view") {
+    const jq = argAfter(argv, "--jq");
+    if (jq === ".nameWithOwner") return { stdout: "agent-team-foundation/context-tree\\n" };
+    if (jq === ".defaultBranchRef.name") return { stdout: "main\\n" };
+    return { stdout: '{"nameWithOwner":"agent-team-foundation/context-tree","defaultBranchRef":{"name":"main"}}\\n' };
+  }
+  if (argv[0] !== "api") return null;
+  if (endpoint === "user") return { stdout: "seed-author\\n" };
+  if (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree") return { stdout: "Organization\\n" };
+  if (endpoint === "repos/$repo/teams?per_page=100") return { stdout: "context-maintainers\\n" };
+  if (endpoint === "orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100") return { stdout: "tree-reviewer\\n" };
+  if (endpoint === "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100") return { stdout: "tree-reviewer\\n" };
+  if (endpoint === "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch") return { stdout: encodedCodeowners() };
+  if (endpoint === "repos/$repo/codeowners/errors?ref=$default_branch") return { stdout: "0\\n" };
+  if (endpoint === "repos/$repo/rulesets?includes_parents=false&per_page=100") return { stdout: "\\n" };
+  if ((endpoint === "repos/$repo/rulesets" || endpoint === "repos/$repo/rulesets/$ruleset_id") && (method === "POST" || method === "PUT")) {
+    return { stdout: '{"id":42,"name":"First Tree Context Repo branch rules"}\\n' };
+  }
+  return null;
+}
+
+function recoveryResponse(argv) {
+  const endpoint = endpointArg(argv);
+  if (argv[0] === "repo" && argv[1] === "view") {
+    const jq = argAfter(argv, "--jq");
+    if (jq === ".nameWithOwner") return { exitCode: 0, stdout: "agent-team-foundation/context-tree\\n" };
+    if (jq === ".defaultBranchRef.name") return { exitCode: 0, stdout: "main\\n" };
+  }
+  if (argv[0] === "api" && endpoint === "user") return { exitCode: 0, stdout: "seed-author\\n" };
+  if (argv[0] === "api" && (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree")) {
+    return { exitCode: 0, stdout: "Organization\\n" };
+  }
+  if (argv[0] === "api" && endpoint === "repos/$repo/teams?per_page=100") {
+    return { exitCode: 1, stderr: "No qualifying visible non-author team in eval fixture.\\n" };
+  }
+  if (argv[0] === "api" && endpoint === "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100") {
+    return { exitCode: 1, stderr: "No qualifying non-author collaborator in eval fixture.\\n" };
+  }
+  return null;
+}
+
 const argv = process.argv.slice(2);
 const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "gh_call", phase, argv, cwd: process.cwd() });
-trace("gh call blocked: " + commandLine(argv));
+trace("gh call: " + commandLine(argv));
+
+const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;
+if (simulated !== null) {
+  finish(argv, phase, simulated.exitCode ?? 0, simulated.stdout || "", simulated.stderr || "", { shimmedByEval: true });
+}
 
 const stderr = "Blocked gh command in skill eval. No real GitHub side effect was attempted.\\n";
-process.stderr.write(stderr);
-append({
-  type: "gh_result",
-  phase,
-  argv,
-  cwd: process.cwd(),
-  exitCode: 1,
-  signal: null,
-  stdoutPreview: "",
-  stderrPreview: preview(stderr),
-  blockedByEval: true,
-});
-
-process.exit(1);
+finish(argv, phase, 1, "", stderr, { blockedByEval: true });
 `;
 
   writeText(shimPath, script);

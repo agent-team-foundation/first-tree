@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +39,47 @@ describe("first-tree eval shim", () => {
             argv: ["tree", "tree", "--help"],
             exitCode: 0,
             shimmedByEval: true,
+            type: "first_tree_result",
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("allows governance seed cases to simulate tree init success", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-governance-"));
+    try {
+      const packageRoot = join(repoRoot, "packages", "skill-evals");
+      mkdirSync(packageRoot, { recursive: true });
+      const paths = createRunPaths({
+        caseId: "unbound-github-tree-governance-bootstrap",
+        packageRoot,
+        startedAt: "2026-06-30T00:00:00.000Z",
+      });
+      createFirstTreeShim(paths);
+
+      const result = spawnSync(join(paths.binDir, "first-tree"), ["tree", "init", "--dir", "context-tree"], {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+          FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+          FIRST_TREE_EVAL_PHASE: "model",
+        },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Created and bound Context Tree");
+      expect(existsSync(join(paths.workspacePath, "context-tree", ".first-tree", "tree.json"))).toBe(true);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            argv: ["tree", "init", "--dir", "context-tree"],
+            exitCode: 0,
+            governanceTreeInit: true,
             type: "first_tree_result",
           }),
         ]),
