@@ -391,6 +391,10 @@ function collectCommandExecutions(value: unknown): CommandExecution[] {
   return executions;
 }
 
+function commandExitFailed(value: unknown): boolean {
+  return collectCommandExecutions(value).some((execution) => execution.exitCode !== null && execution.exitCode !== 0);
+}
+
 function normalizeForMatch(value: string): string {
   return value
     .toLowerCase()
@@ -615,10 +619,37 @@ function commandHasGithubRulesetMutation(command: string): boolean {
 
 function githubGovernanceFailureObserved(events: readonly unknown[]): boolean {
   return events.some((event) => {
-    if (!isRecord(event) || eventType(event) !== "gh_result" || !isModelPhase(event)) return false;
-    const exitCode = event.exitCode;
-    return typeof exitCode === "number" && exitCode !== 0;
+    if (isRecord(event) && eventType(event) === "gh_result" && isModelPhase(event)) {
+      const exitCode = event.exitCode;
+      return typeof exitCode === "number" && exitCode !== 0;
+    }
+    if (isRecord(event) && eventType(event) === "codex_event") {
+      return (
+        collectCommandStrings(event.event).some((command) =>
+          /\b(git\s+-C\s+"?[^"]*"?\s+push|gh\s+api)\b/u.test(command),
+        ) && commandExitFailed(event.event)
+      );
+    }
+    return false;
   });
+}
+
+function githubRulesetPayloadObserved(events: readonly unknown[], trace: string): boolean {
+  if (
+    events.some(
+      (event) => isRecord(event) && eventType(event) === "gh_result" && event.rulesetPayloadValidated === true,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /"~DEFAULT_BRANCH"/u.test(trace) &&
+    /"non_fast_forward"/u.test(trace) &&
+    /"pull_request"/u.test(trace) &&
+    /"required_approving_review_count"\s*:\s*1/u.test(trace) &&
+    /"require_code_owner_review"\s*:\s*true/u.test(trace) &&
+    /"dismiss_stale_reviews_on_push"\s*:\s*false/u.test(trace)
+  );
 }
 
 function githubGovernanceBootstrapObserved(events: readonly unknown[]): boolean {
@@ -668,6 +699,8 @@ function githubGovernanceBootstrapObserved(events: readonly unknown[]): boolean 
     codeownersContentValidationIndex > codeownersPushIndex &&
     codeownersErrorValidationIndex > codeownersContentValidationIndex &&
     rulesetMutationIndex > codeownersErrorValidationIndex &&
+    !githubGovernanceFailureObserved(events) &&
+    githubRulesetPayloadObserved(events, trace) &&
     githubGovernanceOwnerResolutionObserved(trace) &&
     /rulesets\?includes_parents=false&per_page=100/u.test(trace) &&
     /code_owner_ref/u.test(trace) &&
@@ -687,6 +720,7 @@ function githubGovernanceRecoveryObserved(events: readonly unknown[], text: stri
 }
 
 function githubGovernanceReadSideEffectAllowed(command: string): boolean {
+  if (/(?:^|\s)(?:-X|--method)\s+(?!GET\b)[A-Z]+\b/u.test(command)) return false;
   if (/\bgh\s+repo\s+view\b/u.test(command)) return true;
   if (commandHasGithubRulesetMutation(command)) return false;
   return /\bgh\s+api\s+(user\b|"?repos\/\$repo(?:"|\s|$)|"?repos\/\$repo\/teams\?|"?orgs\/\$repo_owner\/teams\/\$candidate_team_slug\/members\?|"?repos\/\$repo\/collaborators\?|"?repos\/\$repo\/contents\/\.github\/CODEOWNERS\?|"?repos\/\$repo\/codeowners\/errors\?|"?repos\/\$repo\/rulesets\?includes_parents=false&per_page=100)/u.test(

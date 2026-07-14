@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,24 @@ describe("gh eval shim", () => {
   it("simulates successful GitHub governance bootstrap calls", () => {
     const shim = createShim("unbound-github-tree-governance-bootstrap");
     try {
+      writeFileSync(
+        join(shim.workspacePath, "ruleset.json"),
+        JSON.stringify({
+          conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+          rules: [
+            { type: "non_fast_forward" },
+            {
+              parameters: {
+                dismiss_stale_reviews_on_push: false,
+                require_code_owner_review: true,
+                required_approving_review_count: 1,
+              },
+              type: "pull_request",
+            },
+          ],
+        }),
+        "utf8",
+      );
       const result = spawnSync(
         shim.ghPath,
         ["api", "repos/$repo/rulesets", "--method", "POST", "--input", "ruleset.json"],
@@ -48,11 +66,33 @@ describe("gh eval shim", () => {
           expect.objectContaining({
             argv: ["api", "repos/$repo/rulesets", "--method", "POST", "--input", "ruleset.json"],
             exitCode: 0,
+            rulesetPayloadValidated: true,
             shimmedByEval: true,
             type: "gh_result",
           }),
         ]),
       );
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("blocks destructive methods on governance read endpoints", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
+    try {
+      const result = spawnSync(shim.ghPath, ["api", "repos/$repo", "-X", "DELETE"], {
+        cwd: shim.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+          FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+          FIRST_TREE_EVAL_PHASE: "model",
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Blocked gh command");
     } finally {
       rmSync(shim.repoRoot, { force: true, recursive: true });
     }

@@ -8,7 +8,7 @@ import type { RunPaths } from "../types.js";
 export function createGhShim(paths: RunPaths): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 
@@ -80,6 +80,23 @@ function encodedCodeowners() {
   return Buffer.from("* @agent-team-foundation/context-maintainers\\n", "utf8").toString("base64") + "\\n";
 }
 
+function rulesetPayloadOk(argv) {
+  const input = argAfter(argv, "--input");
+  if (!input || !existsSync(input)) return false;
+  const text = readFileSync(input, "utf8");
+  return (
+    text.includes('"~DEFAULT_BRANCH"') &&
+    text.includes('"non_fast_forward"') &&
+    text.includes('"pull_request"') &&
+    text.includes('"required_approving_review_count"') &&
+    text.includes("1") &&
+    text.includes('"require_code_owner_review"') &&
+    text.includes("true") &&
+    text.includes('"dismiss_stale_reviews_on_push"') &&
+    text.includes("false")
+  );
+}
+
 function bootstrapResponse(argv) {
   const endpoint = endpointArg(argv);
   const method = ghMethod(argv);
@@ -90,6 +107,8 @@ function bootstrapResponse(argv) {
     return { stdout: '{"nameWithOwner":"agent-team-foundation/context-tree","defaultBranchRef":{"name":"main"}}\\n' };
   }
   if (argv[0] !== "api") return null;
+  const rulesetMutation = (endpoint === "repos/$repo/rulesets" || endpoint === "repos/$repo/rulesets/$ruleset_id") && (method === "POST" || method === "PUT");
+  if (method !== "GET" && !rulesetMutation) return null;
   if (endpoint === "user") return { stdout: "seed-author\\n" };
   if (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree") return { stdout: "Organization\\n" };
   if (endpoint === "repos/$repo/teams?per_page=100") return { stdout: "context-maintainers\\n" };
@@ -98,8 +117,9 @@ function bootstrapResponse(argv) {
   if (endpoint === "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch") return { stdout: encodedCodeowners() };
   if (endpoint === "repos/$repo/codeowners/errors?ref=$default_branch") return { stdout: "0\\n" };
   if (endpoint === "repos/$repo/rulesets?includes_parents=false&per_page=100") return { stdout: "\\n" };
-  if ((endpoint === "repos/$repo/rulesets" || endpoint === "repos/$repo/rulesets/$ruleset_id") && (method === "POST" || method === "PUT")) {
-    return { stdout: '{"id":42,"name":"First Tree Context Repo branch rules"}\\n' };
+  if (rulesetMutation) {
+    if (!rulesetPayloadOk(argv)) return { exitCode: 1, stderr: "Invalid ruleset payload in eval fixture.\\n" };
+    return { stdout: '{"id":42,"name":"First Tree Context Repo branch rules"}\\n', rulesetPayloadValidated: true };
   }
   return null;
 }
@@ -111,6 +131,7 @@ function recoveryResponse(argv) {
     if (jq === ".nameWithOwner") return { exitCode: 0, stdout: "agent-team-foundation/context-tree\\n" };
     if (jq === ".defaultBranchRef.name") return { exitCode: 0, stdout: "main\\n" };
   }
+  if (argv[0] === "api" && ghMethod(argv) !== "GET") return null;
   if (argv[0] === "api" && endpoint === "user") return { exitCode: 0, stdout: "seed-author\\n" };
   if (argv[0] === "api" && (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree")) {
     return { exitCode: 0, stdout: "Organization\\n" };
@@ -131,7 +152,10 @@ trace("gh call: " + commandLine(argv));
 
 const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;
 if (simulated !== null) {
-  finish(argv, phase, simulated.exitCode ?? 0, simulated.stdout || "", simulated.stderr || "", { shimmedByEval: true });
+  finish(argv, phase, simulated.exitCode ?? 0, simulated.stdout || "", simulated.stderr || "", {
+    shimmedByEval: true,
+    rulesetPayloadValidated: Boolean(simulated.rulesetPayloadValidated),
+  });
 }
 
 const stderr = "Blocked gh command in skill eval. No real GitHub side effect was attempted.\\n";

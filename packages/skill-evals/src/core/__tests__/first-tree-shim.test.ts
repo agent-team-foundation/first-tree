@@ -74,6 +74,15 @@ describe("first-tree eval shim", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Created and bound Context Tree");
       expect(existsSync(join(paths.workspacePath, "context-tree", ".first-tree", "tree.json"))).toBe(true);
+      const remote = spawnSync(
+        "git",
+        ["-C", join(paths.workspacePath, "context-tree"), "remote", "get-url", "origin"],
+        {
+          encoding: "utf8",
+        },
+      );
+      expect(remote.status).toBe(0);
+      expect(remote.stdout.trim()).toContain("context-tree-origin.git");
       expect(readEvents(paths.eventsPath)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

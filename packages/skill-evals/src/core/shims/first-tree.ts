@@ -96,6 +96,10 @@ function runGovernanceTreeInit(argv, phase) {
     spawnSync("git", ["config", "commit.gpgsign", "false"], { cwd: target, encoding: "utf8" });
     spawnSync("git", ["add", "."], { cwd: target, encoding: "utf8" });
     spawnSync("git", ["commit", "-m", "chore: initialize context tree"], { cwd: target, encoding: "utf8" });
+    const origin = target + "-origin.git";
+    spawnSync("git", ["clone", "--bare", target, origin], { cwd: process.cwd(), encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", origin], { cwd: target, encoding: "utf8" });
+    spawnSync("git", ["remote", "set-head", "origin", "main"], { cwd: target, encoding: "utf8" });
   }
   finish(
     argv,

@@ -3640,6 +3640,14 @@ describe("first-tree-seed grader", () => {
             },
             type: "codex_event",
           },
+          {
+            argv: ["api", "repos/$repo/rulesets", "-X", "POST", "--input", "ruleset.json"],
+            cwd: tempRoot,
+            exitCode: 0,
+            phase: "model",
+            rulesetPayloadValidated: true,
+            type: "gh_result",
+          },
         ],
         findCase("unbound-github-tree-governance-bootstrap"),
         fixtureValidation(),
@@ -3726,6 +3734,29 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("rejects destructive methods on governance read endpoints", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-delete-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: { command: 'gh api "repos/$repo" -X DELETE', type: "command_execution" },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-github-governance-fail-closed"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.forbiddenSideEffectHits).toEqual(['gh api "repos/$repo" -X DELETE']);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("does not credit a ruleset GET as a GitHub governance mutation", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-get-only-"));
     try {
@@ -3780,6 +3811,154 @@ describe("first-tree-seed grader", () => {
               type: "command_execution",
             },
             type: "codex_event",
+          },
+        ],
+        findCase("unbound-github-tree-governance-bootstrap"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.githubGovernanceBootstrapObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit bootstrap when the ruleset payload validation fails", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-bad-payload-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree")],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command:
+                'repo_owner_type=$(gh api "repos/$repo" --jq .owner.type) && pr_author_login=$(gh api user --jq .login) && code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'git -C "context-tree" add .github/CODEOWNERS', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: 'git -C "context-tree" commit -m "chore: add context tree code owner mapping"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'git -C "context-tree" push origin "HEAD:$default_branch"', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: 'gh api "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'gh api "repos/$repo/codeowners/errors?ref=$default_branch"', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: 'gh api -X POST "repos/$repo/rulesets" --input bad-ruleset.json',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            argv: ["api", "repos/$repo/rulesets", "-X", "POST", "--input", "bad-ruleset.json"],
+            cwd: tempRoot,
+            exitCode: 1,
+            phase: "model",
+            type: "gh_result",
+          },
+        ],
+        findCase("unbound-github-tree-governance-bootstrap"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.githubGovernanceBootstrapObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit bootstrap when the CODEOWNERS push fails", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-failed-push-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree")],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command:
+                'repo_owner_type=$(gh api "repos/$repo" --jq .owner.type) && pr_author_login=$(gh api user --jq .login) && code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'git -C "context-tree" add .github/CODEOWNERS', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: 'git -C "context-tree" commit -m "chore: add context tree code owner mapping"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: 'git -C "context-tree" push origin "HEAD:$default_branch"',
+              exit_code: 1,
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: 'gh api "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch"',
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'gh api "repos/$repo/codeowners/errors?ref=$default_branch"', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: { command: 'gh api -X POST "repos/$repo/rulesets" --input ruleset.json', type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            argv: ["api", "repos/$repo/rulesets", "-X", "POST", "--input", "ruleset.json"],
+            cwd: tempRoot,
+            exitCode: 0,
+            phase: "model",
+            rulesetPayloadValidated: true,
+            type: "gh_result",
           },
         ],
         findCase("unbound-github-tree-governance-bootstrap"),
