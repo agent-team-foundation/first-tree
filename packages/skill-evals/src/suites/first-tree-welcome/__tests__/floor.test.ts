@@ -155,6 +155,10 @@ describe("first-tree-welcome floor invariants", () => {
 
     expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
     expect(yamlDescription, "openai.yaml description must match SKILL.md description").toBe(skillDescription);
+    expect(skillDescription).toContain("PR/MR reviews");
+    expect(yamlDescription).toContain("PR/MR reviews");
+    expect(skillDescription).not.toContain("PR reviews");
+    expect(yamlDescription).not.toContain("PR reviews");
     // Guard the specific retired trigger the drift-guard exists to catch.
     expect(yamlDescription).not.toContain("explicitly names first-tree-welcome");
     expect(yamlDescription).toContain("repo scans");
