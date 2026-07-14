@@ -10,6 +10,7 @@ import type * as ejs from "ejs";
 import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity } from "./handler.js";
+import { detectLocalCliAvailability, type LocalCliAvailability } from "./local-cli.js";
 import { buildResourceSkillBriefingRows, type ResourceSkillBriefingRow } from "./resource-skills.js";
 
 const require = createRequire(import.meta.url);
@@ -60,6 +61,7 @@ type ContextTreeRenderModel = Readonly<{
 
 type AgentBriefingRenderModel = Readonly<{
   bin: string;
+  localCli: LocalCliAvailability;
   generatedMarker: string;
   identityName: string;
   identityKind: string;
@@ -93,6 +95,8 @@ export type BuildAgentBriefingOptions = {
   /** Upstream coordinates used by the agent-managed Context Tree clone. */
   contextTreeRepoUrl?: string | null;
   contextTreeBranch?: string | null;
+  /** Detected provider CLIs; omitted to probe the current process PATH. */
+  localCli?: LocalCliAvailability;
 };
 
 /** Build the unified agent-level briefing materialized as `AGENTS.md`. */
@@ -102,6 +106,7 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
 
 function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBriefingRenderModel {
   const { binName: bin } = getCliBinding();
+  const localCli = opts.localCli ?? detectLocalCliAvailability();
   const promptSections = opts.payload?.prompt.sections ?? [];
   const teamPromptRows = buildNamedPromptRows(
     promptSections.filter((section) => section.scope === "team"),
@@ -131,6 +136,7 @@ function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBr
 
   return {
     bin,
+    localCli,
     generatedMarker: AGENT_BRIEFING_GENERATED_MARKER,
     identityName: opts.identity.displayName ?? opts.identity.agentId,
     identityKind: opts.identity.visibility === "private" ? "a personal assistant agent" : "an autonomous agent",

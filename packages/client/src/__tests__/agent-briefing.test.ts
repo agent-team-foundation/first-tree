@@ -38,6 +38,7 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
     workspacePath: AGENT_HOME,
     sourceRepos: [],
     contextTreePath: null,
+    localCli: { github: true, gitlab: true },
     ...overrides,
   };
 }
@@ -602,6 +603,27 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
       "`glab mr subscribe <iid-or-branch>`",
       "`glab mr unsubscribe <iid-or-branch>`",
     ]);
+  });
+
+  it("renders host CLI sections by availability while keeping First Tree GitHub attention", () => {
+    const githubOnly = buildAgentBriefing(makeOpts({ localCli: { github: true, gitlab: false } }));
+    expect(githubOnly).toContain("## GitHub Working Posture");
+    expect(githubOnly).toContain("## GitHub Entity Attention");
+    expect(githubOnly).not.toContain("## GitLab Working Posture");
+    expect(githubOnly).not.toContain("## GitLab Entity Attention");
+
+    const gitlabOnly = buildAgentBriefing(makeOpts({ localCli: { github: false, gitlab: true } }));
+    expect(gitlabOnly).not.toContain("## GitHub Working Posture");
+    expect(gitlabOnly).toContain("## GitHub Entity Attention");
+    expect(gitlabOnly).toContain("## GitLab Working Posture");
+    expect(gitlabOnly).toContain("## GitLab Entity Attention");
+
+    const noProviderCli = buildAgentBriefing(makeOpts({ localCli: { github: false, gitlab: false } }));
+    expect(noProviderCli).not.toContain("## GitHub Working Posture");
+    expect(noProviderCli).toContain("## GitHub Entity Attention");
+    expect(noProviderCli).not.toContain("## GitLab Working Posture");
+    expect(noProviderCli).not.toContain("## GitLab Entity Attention");
+    expect(noProviderCli).toContain("## Asking Humans");
   });
 
   it("keeps chat metadata rules compact but actionable", () => {

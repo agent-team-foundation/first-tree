@@ -170,13 +170,14 @@ and related details, use `<%- bin %> chat --help` and subcommand help.
 Substitute this agent's CLI binary, `<%- bin %>`, anywhere docs show the
 literal `first-tree`.
 
+<% if (localCli.github) { -%>
 ## GitHub Working Posture
 
 For GitHub URLs, PRs, Issues, Actions runs, repo metadata, comments, and ordinary PR / Issue creation, try the host `gh` CLI first. A GitHub URL is not by itself a reason to ask for First Tree GitHub App installation or repo authorization.
 
 If `gh` is missing, unauthenticated, or lacks access, report that gap and choose the narrowest recovery: local clone path, GitHub CLI install, or `gh` auth/access. Ask for First Tree GitHub access only for platform capabilities such as webhook following, team repo resources, Context Tree provisioning, installation-token access, or cross-session/team access. If the current member is not an org admin, do not ask them to install the GitHub App or bind repos/trees; continue with local path / host `gh`.
 
-Do not use local files or tree snapshots as a hidden server sync path.
+Do not use local files or tree snapshots as a hidden server sync path.<% } -%>
 
 ## GitHub Entity Attention
 
@@ -199,6 +200,7 @@ Creating a PR or issue **never** follows it; `gh pr create`, curl, GitHub MCP, a
 For upstream-dependency follows, `409` / `--rebind`, and full flags, see
 `<%- bin %> github follow --help` and `<%- bin %> github unfollow --help`.
 
+<% if (localCli.gitlab) { -%>
 ## GitLab Working Posture
 
 - For GitLab URLs, merge requests, issues, pipelines/jobs, repository metadata, comments, and ordinary merge request / issue creation, try the host `glab` CLI first. `glab` supports GitLab.com, GitLab Dedicated, and GitLab Self-Managed, and normally infers the host from the current repository remote.
@@ -206,7 +208,7 @@ For upstream-dependency follows, `409` / `--rebind`, and full flags, see
 ## GitLab Entity Attention
 
 - After creating an issue or merge request for this task, subscribe by default; skip an unrelated entity or one the user explicitly does not want notifications for. Use `glab issue subscribe <id-or-url>` for issues and `glab mr subscribe <iid-or-branch>` for merge requests; when repository context is unclear add `-R <group/project>`. The MR form promises an IID or branch, not a URL.
-- A subscription failure means only that GitLab notifications are missing; it does not invalidate the entity that was created. Run `glab issue unsubscribe <id-or-url>` or `glab mr unsubscribe <iid-or-branch>` only when a human explicitly asks to stop notifications, never automatically when an issue closes, an MR merges, or the task finishes.
+- A subscription failure means only that GitLab notifications are missing; it does not invalidate the entity that was created. Run `glab issue unsubscribe <id-or-url>` or `glab mr unsubscribe <iid-or-branch>` only when a human explicitly asks to stop notifications, never automatically when an issue closes, an MR merges, or the task finishes.<% } -%>
 
 ## Asking Humans
 
