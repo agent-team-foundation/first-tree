@@ -41,8 +41,10 @@ describe("first-tree-seed floor invariants", () => {
 
   it("materializes declared source worktrees from the resolved source ref, not origin/main", () => {
     expect(skillMarkdown).toContain("declared/pinned ref when one exists");
+    expect(skillMarkdown).toContain('remote_ref="refs/remotes/origin/$source_ref"');
     expect(skillMarkdown).toContain("refs/remotes/origin/HEAD");
     expect(skillMarkdown).toContain("Do not hard-code `origin/main`");
+    expect(skillMarkdown).toContain("Do not pass a branch-like declared");
 
     const sourceWorktreeSection =
       skillMarkdown.match(/### Materialize source read worktrees[\s\S]*?## The Two Phases/u)?.[0] ?? "";
@@ -120,7 +122,13 @@ describe("first-tree-seed floor invariants", () => {
     );
     expect(gitlabNonMain).toMatchObject({
       expected: { action: "materialize_bare_worktree", requireSourceRead: true, requireWorktree: true },
-      fixture: { sourceDefaultBranch: "trunk", sourceForge: "gitlab", sourceRepoState: "bare-readable" },
+      fixture: {
+        sourceDeclaredRef: "trunk",
+        sourceDefaultBranch: "trunk",
+        sourceForge: "gitlab",
+        sourceLocalBranchState: "stale",
+        sourceRepoState: "bare-readable",
+      },
     });
 
     const continuation = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "same-chat-phase2-continuation");

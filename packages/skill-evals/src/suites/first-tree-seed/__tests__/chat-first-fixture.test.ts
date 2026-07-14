@@ -58,12 +58,19 @@ describe("first-tree-seed chat-first fixtures", () => {
         cwd: sourceRepoPath,
         encoding: "utf8",
       }).trim();
+      const localHead = execFileSync("git", ["rev-parse", "refs/heads/trunk"], {
+        cwd: sourceRepoPath,
+        encoding: "utf8",
+      }).trim();
       const agentsMarkdown = readFileSync(join(paths.workspacePath, "AGENTS.md"), "utf8");
 
       expect(remoteHead).toBe("refs/remotes/origin/trunk");
       expect(sourceHead).not.toBe("");
+      expect(localHead).not.toBe(sourceHead);
       expect(agentsMarkdown).toContain("Source forge: gitlab");
       expect(agentsMarkdown).toContain("Source default branch: `trunk`");
+      expect(agentsMarkdown).toContain("Declared source ref: `ref=trunk`");
+      expect(agentsMarkdown).toContain("Local source branch state: `stale`");
       expect(agentsMarkdown).toContain("worktree add");
       expect(agentsMarkdown).toContain("origin/trunk");
       expect(agentsMarkdown).not.toContain("origin/main");

@@ -198,8 +198,10 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
       skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
     },
     fixture: {
+      sourceDeclaredRef: "trunk",
       sourceDefaultBranch: "trunk",
       sourceForge: "gitlab",
+      sourceLocalBranchState: "stale",
       sourceRepoState: "bare-readable",
       treeState: "empty",
     },
@@ -209,11 +211,11 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "gitlab-non-main-source-worktree-protocol",
     prompt:
-      "Use first-tree-seed to inspect the bound GitLab source repo. The source under source-repos/source-repo is a bare clone whose default branch is trunk, so follow the Worktrees protocol without hard-coding origin/main. Leave that managed worktree in place for final eval provenance, and stop after proposing the Phase 1 skeleton for approval.",
+      "Use first-tree-seed to inspect the bound GitLab source repo. The source under source-repos/source-repo is a bare clone whose runtime declaration pins ref=trunk. The local trunk branch is intentionally stale while origin/trunk is current, so follow the Worktrees protocol without hard-coding origin/main or using the stale local branch. Leave that managed worktree in place for final eval provenance, and stop after proposing the Phase 1 skeleton for approval.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
-    tags: ["gitlab", "bare-source", "non-main-default", "worktree-protocol"],
+    tags: ["gitlab", "bare-source", "declared-ref", "non-main-default", "stale-local", "worktree-protocol"],
     tier: "gate",
   },
   {

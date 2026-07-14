@@ -19,7 +19,7 @@ export function sourceRemoteRef(evalCase: FirstTreeSeedEvalCase): string {
 }
 
 function sourceWorktreeRef(evalCase: FirstTreeSeedEvalCase): string {
-  return `origin/${sourceDefaultBranch(evalCase)}`;
+  return `origin/${evalCase.fixture.sourceDeclaredRef ?? sourceDefaultBranch(evalCase)}`;
 }
 
 function workspaceAgentsMarkdown(
@@ -31,7 +31,9 @@ function workspaceAgentsMarkdown(
   const sourceWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
   const chatSourcePath = join(workspacePath, "provided-source");
   const sourceBranch = sourceDefaultBranch(evalCase);
+  const sourceDeclaredRef = evalCase.fixture.sourceDeclaredRef;
   const sourceForge = evalCase.fixture.sourceForge ?? "github";
+  const sourceLocalBranchState = evalCase.fixture.sourceLocalBranchState ?? "fresh";
   const sourceLine =
     evalCase.fixture.sourceRepoState === "missing"
       ? `The manifest source \`source-repo\` is intentionally missing from \`${sourceRepoPath}\`.`
@@ -39,7 +41,7 @@ function workspaceAgentsMarkdown(
         ? `The workspace manifest intentionally declares no sources. The user supplied the readable local Git checkout \`${chatSourcePath}\` in this setup chat; use it directly without requiring GitHub App installation or team-resource registration.`
         : evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
           ? `The manifest source \`source-repo\` exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
-          : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`. Its forge is ${sourceForge}, and its default branch is \`${sourceBranch}\`.`;
+          : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`. Its forge is ${sourceForge}, its default branch is \`${sourceBranch}\`${sourceDeclaredRef ? `, and the runtime declaration pins \`ref=${sourceDeclaredRef}\`` : ""}.${sourceLocalBranchState === "stale" ? ` The local branch \`${sourceDeclaredRef ?? sourceBranch}\` is intentionally stale; the freshly fetched remote-tracking ref is current.` : ""}`;
   const treeLine =
     evalCase.fixture.treeState === "unbound"
       ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
@@ -95,6 +97,8 @@ ${chatHistoryLine ?? ""}
 - Source state: ${evalCase.fixture.sourceRepoState}
 - Source forge: ${sourceForge}
 - Source default branch: \`${sourceBranch}\`
+${sourceDeclaredRef ? `- Declared source ref: \`ref=${sourceDeclaredRef}\`` : ""}
+${sourceLocalBranchState === "stale" ? `- Local source branch state: \`${sourceLocalBranchState}\`` : ""}
 
 ${treeLine}
 ${sourceLine}
@@ -397,6 +401,16 @@ function writeSourceOriginFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCa
   return sourceOriginPath;
 }
 
+function advanceSourceOriginFixture(sourceOriginPath: string, evalCase: FirstTreeSeedEvalCase): void {
+  if (evalCase.fixture.sourceLocalBranchState !== "stale") return;
+  writeText(
+    join(sourceOriginPath, "docs", "current-remote.md"),
+    "# Current Remote\n\nThis file exists only on the current remote-tracking ref.\n",
+  );
+  assertCommandOk(runCommand("git", ["add", "docs/current-remote.md"], sourceOriginPath));
+  assertCommandOk(runCommand("git", ["commit", "-m", "docs: advance remote source fixture"], sourceOriginPath));
+}
+
 function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): string | null {
   if (evalCase.fixture.sourceRepoState === "missing") {
     return null;
@@ -416,6 +430,7 @@ function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   mkdirSync(join(paths.workspacePath, "source-repos"), { recursive: true });
   assertCommandOk(runCommand("git", ["clone", "--bare", sourceOriginPath, sourceRepoPath], paths.workspacePath));
+  advanceSourceOriginFixture(sourceOriginPath, evalCase);
   assertCommandOk(
     runCommand("git", ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath),
   );

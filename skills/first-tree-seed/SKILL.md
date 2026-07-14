@@ -399,6 +399,12 @@ default branch. Follow the **Worktrees** protocol in your `AGENTS.md` /
 # for each <source> in manifest.sources, with <source-clone> resolved as above:
 git -C <source-clone> fetch origin
 source_ref="<declared-or-pinned-ref-if-present>"
+if [ -n "$source_ref" ]; then
+  remote_ref="refs/remotes/origin/$source_ref"
+  if git -C <source-clone> rev-parse --verify --quiet "$remote_ref^{commit}" >/dev/null; then
+    source_ref="origin/$source_ref"
+  fi
+fi
 if [ -z "$source_ref" ]; then
   source_ref="$(git -C <source-clone> symbolic-ref --quiet --short refs/remotes/origin/HEAD || true)"
 fi
@@ -410,10 +416,13 @@ git -C <source-clone> worktree add <workspaceRoot>/worktrees/seed-<source> "$sou
 ```
 
 Do not hard-code `origin/main`: GitLab and imported repositories often use
-`master`, `trunk`, or another default branch. Every "read every resolved
-source" / Tier 0–2 scan in Phase 1 operates on these read worktrees, not the
-bare clone paths. Remove them (`git -C <source-clone> worktree remove <path>`)
-once both PRs/MRs are open.
+`master`, `trunk`, or another default branch. Do not pass a branch-like declared
+ref such as `main` or `release` directly to `worktree add`; prefer the freshly
+fetched remote-tracking ref (`origin/main`, `origin/release`) when it exists.
+Preserve pinned SHAs, tags, and fully qualified refs that do not resolve as a
+remote-tracking branch. Every "read every resolved source" / Tier 0–2 scan in
+Phase 1 operates on these read worktrees, not the bare clone paths. Remove them
+(`git -C <source-clone> worktree remove <path>`) once both PRs/MRs are open.
 
 ## The Two Phases
 
