@@ -114,8 +114,9 @@ function rulesetPayloadOk(argv) {
     return false;
   }
   const rules = Array.isArray(payload.rules) ? payload.rules : [];
-  const nonFastForward = rules.some((rule) => rule && rule.type === "non_fast_forward");
-  const pullRequest = rules.find((rule) => rule && rule.type === "pull_request");
+  const nonFastForwardRules = rules.filter((rule) => rule && rule.type === "non_fast_forward");
+  const pullRequestRules = rules.filter((rule) => rule && rule.type === "pull_request");
+  const pullRequest = pullRequestRules[0];
   const parameters = pullRequest && typeof pullRequest === "object" ? pullRequest.parameters || {} : {};
   const refName = payload.conditions?.ref_name;
   return (
@@ -127,7 +128,9 @@ function rulesetPayloadOk(argv) {
     refName.include[0] === "~DEFAULT_BRANCH" &&
     Array.isArray(refName?.exclude) &&
     refName.exclude.length === 0 &&
-    nonFastForward &&
+    rules.length === 2 &&
+    nonFastForwardRules.length === 1 &&
+    pullRequestRules.length === 1 &&
     parameters.required_approving_review_count === 1 &&
     parameters.require_code_owner_review === true &&
     parameters.dismiss_stale_reviews_on_push === false &&

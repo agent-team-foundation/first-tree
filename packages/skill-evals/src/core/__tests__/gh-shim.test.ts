@@ -256,6 +256,61 @@ describe("gh eval shim", () => {
           },
         ],
         [
+          "additional-rule.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+              { type: "required_signatures" },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "duplicate-rule.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: true,
+                  require_code_owner_review: false,
+                  require_last_push_approval: true,
+                  required_approving_review_count: 0,
+                  required_review_thread_resolution: true,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
           "malformed-conditions.json",
           {
             conditions: { ref_name: { exclude: ["refs/heads/release"], include: ["~DEFAULT_BRANCH"] } },
