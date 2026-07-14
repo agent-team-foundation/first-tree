@@ -439,6 +439,11 @@
   /* Dialog / lightbox scrim (both modes — uniformly dark). */
   --overlay-scrim: oklch(0 0 0 / 0.55);
 
+  /* Lightbox control chips — translucent-dark backing with a near-white icon,
+     legible over any image (bright or dark) and identical in both themes. */
+  --overlay-control: oklch(0 0 0 / 0.4);
+  --overlay-control-hover: oklch(0 0 0 / 0.58);
+
   /* ── Context page palette ─────────────────────────────────────────────────
      The /context tab now consumes the neutral semantic ramp like every other
      tab. Every entry resolves through --fg* / --bg* / --border* / --brand /
@@ -767,6 +772,28 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-md);
+  }
+
+  /* Image-lightbox chips: near-white content over a translucent dark backing,
+     legible over any image. `.lightbox-chip` is the static readout (counter);
+     `.lightbox-control` adds the interactive states for the buttons. */
+  .lightbox-chip {
+    color: var(--fg-on-vivid);
+    background: var(--overlay-control);
+  }
+  .lightbox-control {
+    color: var(--fg-on-vivid);
+    background: var(--overlay-control);
+    border: none;
+    cursor: pointer;
+    transition: background 120ms ease-out;
+  }
+  .lightbox-control:hover {
+    background: var(--overlay-control-hover);
+  }
+  .lightbox-control:focus-visible {
+    outline: 2px solid var(--fg-on-vivid);
+    outline-offset: 2px;
   }
 }
 

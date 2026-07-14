@@ -36,6 +36,7 @@ import {
   X as XIcon,
 } from "lucide-react";
 import {
+  type CSSProperties,
   memo,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -52,12 +53,7 @@ import { useSearchParams } from "react-router";
 import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
-import {
-  downloadAttachment,
-  fetchAttachmentBase64,
-  uploadAttachment,
-  uploadMimeFor,
-} from "../../../api/attachments.js";
+import { downloadAttachment, uploadAttachment, uploadMimeFor } from "../../../api/attachments.js";
 import {
   type FileMessageContent,
   getChat,
@@ -74,7 +70,7 @@ import {
   sendChatMessage,
   sendFileMessageBatch,
 } from "../../../api/chats.js";
-import { getImage, putImage } from "../../../api/image-store.js";
+import { putImage } from "../../../api/image-store.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
@@ -122,6 +118,7 @@ import {
 } from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
+import { ImageLightbox, type LightboxImage } from "../../../components/ui/image-lightbox.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
@@ -137,6 +134,7 @@ import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-nam
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
+import { useImageSrc } from "../../../lib/use-image-src.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
@@ -757,13 +755,9 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           rehypePlugins={messageRehypePlugins}
         />
       ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
-        <img
-          src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
-          alt={msg.content.filename ?? "image"}
-          style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-        />
+        <InlineImage content={msg.content} />
       ) : msg.format === "file" && isImageRefContent(msg.content) ? (
-        <ImageFromRef content={msg.content} />
+        <StandaloneImageRef content={msg.content} />
       ) : msg.format === "text" || msg.format === "markdown" || msg.format === "request" ? (
         // A `request` ("ask") renders as a normal message — just its markdown
         // body. The answering surface is the AskTakeover overlay; the timeline
@@ -1049,48 +1043,68 @@ function isInlineImageContent(content: unknown): content is FileMessageContent {
 }
 
 /**
- * Render an image referenced by `{imageId}`. The per-browser IndexedDB cache
- * is consulted first (sender's own sends warm it on send); on a miss the bytes
- * are fetched from the org attachment store and the cache is warmed for next
- * time. Only a failed fetch (deleted attachment / network) falls through to
- * the placeholder.
+ * Chat-image thumbnail styling.
+ *
+ * - `standalone` (a single-image message): shown at its natural aspect within
+ *   a width AND height cap, so a tall image no longer runs the full column.
+ * - `gallery` (a multi-image batch): aligned to one common row height so mixed
+ *   aspect ratios read as one tidy row — the fix for the old `flex` default
+ *   `align-items: stretch`, which stretched every sibling to the tallest one.
+ *
+ * Neither variant upscales past the source; both open the lightbox on click.
  */
-function ImageFromRef({ content }: { content: ImageRefContent }) {
-  const [state, setState] = useState<{ kind: "loading" } | { kind: "hit"; src: string } | { kind: "miss" }>({
-    kind: "loading",
-  });
+const STANDALONE_IMG_STYLE = {
+  maxWidth: 400,
+  maxHeight: 360,
+  borderRadius: "var(--radius-panel)",
+  cursor: "zoom-in",
+  display: "block",
+} satisfies CSSProperties;
+const GALLERY_IMG_STYLE = {
+  height: 172,
+  width: "auto",
+  maxWidth: 460,
+  objectFit: "cover",
+  borderRadius: "var(--radius-panel)",
+  cursor: "zoom-in",
+  display: "block",
+} satisfies CSSProperties;
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const hit = await getImage(content.imageId);
-      if (cancelled) return;
-      if (hit) {
-        setState({ kind: "hit", src: `data:${hit.mimeType};base64,${hit.base64}` });
-        return;
-      }
-      try {
-        const fetched = await fetchAttachmentBase64(content.imageId);
-        if (cancelled) return;
-        // Warm the cache for subsequent renders; best-effort.
-        putImage({ imageId: content.imageId, base64: fetched.base64, mimeType: fetched.mimeType }).catch(() => {});
-        setState({ kind: "hit", src: `data:${fetched.mimeType};base64,${fetched.base64}` });
-      } catch {
-        if (!cancelled) setState({ kind: "miss" });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [content.imageId]);
+/**
+ * Clickable thumbnail for an image referenced by `{imageId}`. Bytes resolve
+ * via {@link useImageSrc} (IndexedDB cache first, then the org attachment
+ * store, warming the cache) — the sender's own sends and any already-rendered
+ * thumbnail keep it warm, so the click-through to the lightbox is instant. A
+ * failed fetch (deleted attachment / network) falls through to a placeholder.
+ * The owning wrapper (standalone or batch) holds the lightbox and is notified
+ * via `onOpen`.
+ */
+function ImageFromRef({
+  content,
+  variant,
+  onOpen,
+}: {
+  content: ImageRefContent;
+  variant: "standalone" | "gallery";
+  onOpen: () => void;
+}) {
+  const state = useImageSrc(content.imageId);
 
   if (state.kind === "hit") {
     return (
-      <img
-        src={state.src}
-        alt={content.filename}
-        style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-      />
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open image ${content.filename}`}
+        className="block border-none bg-transparent p-0"
+        style={{ marginTop: variant === "standalone" ? 4 : 0 }}
+      >
+        <img
+          src={state.src}
+          alt={content.filename}
+          style={variant === "standalone" ? STANDALONE_IMG_STYLE : GALLERY_IMG_STYLE}
+        />
+      </button>
     );
   }
   if (state.kind === "miss") {
@@ -1108,10 +1122,49 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
 }
 
 /**
+ * A single-image `{imageId}` message: the thumbnail plus its own lightbox.
+ */
+function StandaloneImageRef({ content }: { content: ImageRefContent }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const images: LightboxImage[] = [{ imageId: content.imageId, filename: content.filename }];
+  return (
+    <>
+      <ImageFromRef content={content} variant="standalone" onOpen={() => setOpenIndex(0)} />
+      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
+    </>
+  );
+}
+
+/**
+ * A single inline base64 image message (no attachment row): the thumbnail plus
+ * its own lightbox. Download in the lightbox saves the `data:` URL directly.
+ */
+function InlineImage({ content }: { content: FileMessageContent }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const filename = content.filename ?? "image";
+  const dataSrc = `data:${content.mimeType};base64,${content.data}`;
+  const images: LightboxImage[] = [{ dataSrc, filename }];
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpenIndex(0)}
+        aria-label={`Open image ${filename}`}
+        className="block border-none bg-transparent p-0"
+        style={{ marginTop: 4 }}
+      >
+        <img src={dataSrc} alt={filename} style={STANDALONE_IMG_STYLE} />
+      </button>
+      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
+    </>
+  );
+}
+
+/**
  * Render a batched image message: optional caption rendered as markdown
  * (matching the regular text path so mention chips and links look the
- * same), followed by each attachment via {@link ImageFromRef}. One bubble
- * per send, regardless of how many images the user attached.
+ * same), then the images as a tidy equal-height gallery. One bubble per send,
+ * one shared lightbox that pages through the batch.
  */
 function ImageBatchFromRef({
   content,
@@ -1123,6 +1176,14 @@ function ImageBatchFromRef({
   rehypePlugins: MarkdownProps["rehypePlugins"];
 }) {
   const caption = content.caption?.trim() ?? "";
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const images: LightboxImage[] = content.attachments.map((att) => ({
+    imageId: att.imageId,
+    filename: att.filename,
+  }));
+  // A batch of one (the composer sends even a single image this way) reads as a
+  // single image, not a lone gallery tile: show it at the larger standalone size.
+  const only = content.attachments.length === 1 ? content.attachments[0] : undefined;
   return (
     <div className="flex flex-col" style={{ gap: 4 }}>
       {caption.length > 0 ? (
@@ -1130,11 +1191,16 @@ function ImageBatchFromRef({
           {caption}
         </Markdown>
       ) : null}
-      <div className="flex flex-wrap" style={{ gap: 6, marginTop: caption.length > 0 ? 2 : 0 }}>
-        {content.attachments.map((att) => (
-          <ImageFromRef key={att.imageId} content={att} />
-        ))}
-      </div>
+      {only ? (
+        <ImageFromRef content={only} variant="standalone" onOpen={() => setOpenIndex(0)} />
+      ) : (
+        <div className="flex flex-wrap items-start" style={{ gap: 6, marginTop: caption.length > 0 ? 2 : 0 }}>
+          {content.attachments.map((att, i) => (
+            <ImageFromRef key={att.imageId} content={att} variant="gallery" onOpen={() => setOpenIndex(i)} />
+          ))}
+        </div>
+      )}
+      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
     </div>
   );
 }

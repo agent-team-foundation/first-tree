@@ -39,6 +39,7 @@ const agentMocks = vi.hoisted(() => ({
 }));
 
 const attachmentMocks = vi.hoisted(() => ({
+  downloadAttachment: vi.fn(),
   fetchAttachmentBase64: vi.fn(),
   uploadAttachment: vi.fn(),
   uploadImageAttachment: vi.fn(),
@@ -2059,6 +2060,34 @@ describe("ChatView", () => {
     expect(container.textContent).toContain("worktrees/build-tree");
     // A genuine external link in the same message still renders as an anchor.
     expect(anchorHrefs).toContain("https://example.com/guide");
+
+    await act(async () => root.unmount());
+  });
+
+  it("opens the image lightbox on thumbnail click and closes on Escape", async () => {
+    // BASE_MESSAGES' msg-3 is a one-image message ("preview.png").
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+    const thumb = () => container.querySelector<HTMLButtonElement>('button[aria-label="Open image preview.png"]');
+    await waitForCondition(() => thumb() !== null, "image thumbnail did not render");
+
+    await click(thumb());
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelector('img[alt="preview.png"]')).not.toBeNull();
+    expect(dialog?.querySelector('button[aria-label="Download original"]')).not.toBeNull();
+    expect(dialog?.querySelector('button[aria-label="Close"]')).not.toBeNull();
+    // Single image: no prev/next paging affordances.
+    expect(dialog?.querySelector('button[aria-label="Next image"]')).toBeNull();
+
+    // Radix listens for Escape on document; this closes the lightbox.
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await waitForCondition(
+      () => document.querySelector('[role="dialog"]') === null,
+      "lightbox did not close on Escape",
+    );
 
     await act(async () => root.unmount());
   });
