@@ -3,7 +3,7 @@ name: first-tree-seed
 version: 0.3.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Bootstrap a team's Context Tree from readable source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or a GitHub/GitLab repository URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR/MR is merged.
+description: "Bootstrap a team's Context Tree from readable source repos — for an onboarding \"build / set up the Context Tree\" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or a GitHub/GitLab repository URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR/MR is merged."
 ---
 
 # First Tree — Seed
@@ -391,18 +391,29 @@ optional):
   `<source-clone>` = `<workspaceRoot>/<source>`
 
 Before any structural read, materialize one read worktree per source off
-its latest default branch, following the **Worktrees** protocol in your
-`AGENTS.md` / `CLAUDE.md` briefing:
+its declared/pinned ref when one exists, otherwise off the source's latest
+default branch. Follow the **Worktrees** protocol in your `AGENTS.md` /
+`CLAUDE.md` briefing:
 
 ```bash
 # for each <source> in manifest.sources, with <source-clone> resolved as above:
 git -C <source-clone> fetch origin
-git -C <source-clone> worktree add <workspaceRoot>/worktrees/seed-<source> origin/main
+source_ref="<declared-or-pinned-ref-if-present>"
+if [ -z "$source_ref" ]; then
+  source_ref="$(git -C <source-clone> symbolic-ref --quiet --short refs/remotes/origin/HEAD || true)"
+fi
+if [ -z "$source_ref" ]; then
+  git -C <source-clone> remote set-head origin --auto
+  source_ref="$(git -C <source-clone> symbolic-ref --quiet --short refs/remotes/origin/HEAD)"
+fi
+git -C <source-clone> worktree add <workspaceRoot>/worktrees/seed-<source> "$source_ref"
 ```
 
-Every "read every resolved source" / Tier 0–2 scan in Phase 1 operates on
-these read worktrees, not the bare clone paths. Remove them
-(`git -C <source-clone> worktree remove <path>`) once both PRs/MRs are open.
+Do not hard-code `origin/main`: GitLab and imported repositories often use
+`master`, `trunk`, or another default branch. Every "read every resolved
+source" / Tier 0–2 scan in Phase 1 operates on these read worktrees, not the
+bare clone paths. Remove them (`git -C <source-clone> worktree remove <path>`)
+once both PRs/MRs are open.
 
 ## The Two Phases
 

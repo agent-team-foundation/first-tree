@@ -5,6 +5,7 @@ import type { CommandResult } from "../../core/types.js";
 export type SeedTreeState = "empty" | "nonempty" | "phase1-approved" | "unbound";
 export type SeedSourceRepoState = "bare-readable" | "chat-local-readable" | "missing" | "real-first-tree-bare-readable";
 export type SeedChatHistoryState = "absent" | "approved-phase1";
+export type SeedSourceForge = "github" | "gitlab";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
@@ -15,6 +16,8 @@ export type SeedExpectedAction =
 
 export type FirstTreeSeedFixture = {
   chatHistoryState?: SeedChatHistoryState;
+  sourceDefaultBranch?: string;
+  sourceForge?: SeedSourceForge;
   sourceRepoState: SeedSourceRepoState;
   treeState: SeedTreeState;
 };

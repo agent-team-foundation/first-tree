@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parseDocument } from "yaml";
 import { FIRST_TREE_SEED_GATE_CASES, FIRST_TREE_SEED_SUITE } from "../cases.js";
 
 const validateFloor = FIRST_TREE_SEED_SUITE.validateFloor;
@@ -22,12 +23,30 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/rather\s+than asking for the First\s+Tree GitHub App/);
   });
 
+  it("ships valid YAML frontmatter", () => {
+    const frontmatter = skillMarkdown.match(/^---\n([\s\S]*?)\n---/u)?.[1] ?? "";
+    const parsed = parseDocument(frontmatter);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.get("description")).toContain("yet: either no tree exists");
+  });
+
   it("supports GitLab sources without inventing GitLab tree provisioning", () => {
     expect(skillMarkdown).toContain("Use `gh` for GitHub and `glab` for GitLab");
     expect(skillMarkdown).toMatch(/Preserve the full GitLab\s+namespace/);
     expect(skillMarkdown).toMatch(/current\s+`first-tree tree init` provisioning is GitHub-only/);
     expect(skillMarkdown).toContain("do not substitute `glab` for this command");
     expect(skillMarkdown).toContain("Never substitute `/settings/github`");
+  });
+
+  it("materializes declared source worktrees from the resolved source ref, not origin/main", () => {
+    expect(skillMarkdown).toContain("declared/pinned ref when one exists");
+    expect(skillMarkdown).toContain("refs/remotes/origin/HEAD");
+    expect(skillMarkdown).toContain("Do not hard-code `origin/main`");
+
+    const sourceWorktreeSection =
+      skillMarkdown.match(/### Materialize source read worktrees[\s\S]*?## The Two Phases/u)?.[0] ?? "";
+    expect(sourceWorktreeSection).not.toContain("worktree add <workspaceRoot>/worktrees/seed-<source> origin/main");
   });
 
   it("checks same-chat Phase 2 continuation before refusing state C", () => {
@@ -95,6 +114,14 @@ describe("first-tree-seed floor invariants", () => {
       fixture: { sourceRepoState: "chat-local-readable", treeState: "empty" },
     });
     expect(chatSource?.forbidden.actions).toContain("require_github_app");
+
+    const gitlabNonMain = FIRST_TREE_SEED_GATE_CASES.find(
+      (evalCase) => evalCase.id === "gitlab-non-main-source-worktree-protocol",
+    );
+    expect(gitlabNonMain).toMatchObject({
+      expected: { action: "materialize_bare_worktree", requireSourceRead: true, requireWorktree: true },
+      fixture: { sourceDefaultBranch: "trunk", sourceForge: "gitlab", sourceRepoState: "bare-readable" },
+    });
 
     const continuation = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "same-chat-phase2-continuation");
     expect(continuation).toMatchObject({
