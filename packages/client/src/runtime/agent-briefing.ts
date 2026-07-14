@@ -910,7 +910,7 @@ guidance above to surface/setup/seed first.
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
-| \`first-tree-seed\` | set up the team's Context Tree from readable sources — declared workspace repos or a local Git repo / GitHub URL supplied in chat; creates + binds the tree if none exists, fills a bound-but-empty tree, and can continue Phase 2 in the same setup chat after Phase 1 merges |
+| \`first-tree-seed\` | set up the team's Context Tree from readable sources — declared workspace repos or a local Git repo / GitHub URL supplied in chat; creates + binds the tree if none exists, fills a bound-but-empty tree, and opens a single PR with the initial structure and leaves |
 | \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
   }
   return `## First Tree Family
@@ -926,7 +926,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-write\`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
-| \`first-tree-seed\`    | bootstrap the team's Context Tree from readable sources (declared repos or a local Git repo / GitHub URL supplied in chat); create + bind if none exists, fill a bound-but-empty tree, or continue Phase 2 in the same setup chat after Phase 1 merges |
+| \`first-tree-seed\`    | bootstrap the team's Context Tree from readable sources (declared repos or a local Git repo / GitHub URL supplied in chat); create + bind if none exists, fill a bound-but-empty tree, delivered as a single reviewable PR |
 | \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
 }
 

@@ -381,7 +381,7 @@ Key mechanics — read these carefully, they are easy to get wrong:
 
 Then, back in THIS launcher chat, post a short line naming the chats you opened
 so the user can see the parallel streams. As each spawned chat produces a result
-(a PR, a passing test, the seed PRs), note it here so the launcher stays the
+(a PR, a passing test, the seed PR), note it here so the launcher stays the
 map of what is in flight.
 
 ### After a value PR opens: guide App install once
