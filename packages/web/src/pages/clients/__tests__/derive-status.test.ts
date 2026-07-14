@@ -215,6 +215,9 @@ describe("hasUpdateProblem", () => {
       // channel mismatch: a staging prerelease has NOT reached a stable prod target
       ["1.4.0-staging.5.1", "1.4.0"],
       ["1.4.0", "1.4.0-staging.49.1"],
+      // leading-zero numeric identifiers are invalid SemVer → fail closed
+      ["01.4.0", "1.4.0"],
+      ["1.4.0-staging.049.1", "1.4.0-staging.49.1"],
       // missing / non-numeric current
       [null, "1.4.0"],
       ["dev", "1.4.0"],
@@ -224,6 +227,20 @@ describe("hasUpdateProblem", () => {
     for (const [sdkVersion, target] of cases) {
       expect(hasUpdateProblem(client({ sdkVersion, lastUpdateAttempt: updateAttempt("blocked", target) }))).toBe(true);
     }
+  });
+
+  it("compares numeric identifiers exactly past 2^53 (no IEEE-754 collapse)", () => {
+    // These differ by 1 but round to the same JS double; string compare keeps them apart.
+    const lower = "9007199254740992.0.0";
+    const higher = "9007199254740993.0.0";
+    // current one build behind target → still unresolved
+    expect(hasUpdateProblem(client({ sdkVersion: lower, lastUpdateAttempt: updateAttempt("blocked", higher) }))).toBe(
+      true,
+    );
+    // current at/beyond target → resolved
+    expect(hasUpdateProblem(client({ sdkVersion: higher, lastUpdateAttempt: updateAttempt("failed", lower) }))).toBe(
+      false,
+    );
   });
 });
 

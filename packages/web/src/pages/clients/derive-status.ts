@@ -95,28 +95,45 @@ export function compareByPillPriority(a: HubClient, b: HubClient): number {
  * A version parsed into a same-channel comparable form. Only the two shapes
  * First Tree's durable channel contract accepts are supported (mirrors
  * `inferChannelFromVersion` in `@first-tree/shared`'s channel module):
- *   - prod:    `X.Y.Z`             → { channel: "prod",    parts: [X, Y, Z] }
- *   - staging: `X.Y.Z-staging.N.M` → { channel: "staging", parts: [X, Y, Z, N, M] }
- * Anything else — dev, alpha/beta/rc, partial (`1.4`), or otherwise malformed
- * — is unsupported and returns null so callers fail closed.
+ *   - prod:    `X.Y.Z`             → { channel: "prod",    parts: ["X","Y","Z"] }
+ *   - staging: `X.Y.Z-staging.N.M` → { channel: "staging", parts: ["X".."M"] }
+ * Each component is a SemVer-valid numeric identifier — no leading zeros, so
+ * `01.4.0` / `…staging.049.1` are rejected the same way `semver.valid` does.
+ * Parts stay as strings and are compared digit-wise (below) so ordering is
+ * exact past `Number.MAX_SAFE_INTEGER`. Anything else — dev, alpha/beta/rc,
+ * partial (`1.4`), leading-zero, or otherwise malformed — returns null so
+ * callers fail closed.
  */
-type ParsedVersion = { channel: "prod" | "staging"; parts: number[] };
+type ParsedVersion = { channel: "prod" | "staging"; parts: string[] };
+
+// SemVer numeric identifier: 0, or a non-zero digit followed by any digits.
+const PROD_VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const STAGING_VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function parseSupportedVersion(version: string | null | undefined): ParsedVersion | null {
   if (!version) return null;
-  const staging = /^(\d+)\.(\d+)\.(\d+)-staging\.(\d+)\.(\d+)$/.exec(version);
-  if (staging) return { channel: "staging", parts: staging.slice(1).map((n) => Number.parseInt(n, 10)) };
-  const prod = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (prod) return { channel: "prod", parts: prod.slice(1).map((n) => Number.parseInt(n, 10)) };
+  const staging = STAGING_VERSION_RE.exec(version);
+  if (staging) return { channel: "staging", parts: staging.slice(1) };
+  const prod = PROD_VERSION_RE.exec(version);
+  if (prod) return { channel: "prod", parts: prod.slice(1) };
   return null;
 }
 
-function comparePartsAscending(a: number[], b: number[]): number {
+/**
+ * Compare two SemVer-valid numeric identifiers (digit strings, no leading
+ * zeros) without `Number` precision loss: more digits ⇒ larger, otherwise
+ * lexicographic.
+ */
+function compareNumericIdentifier(a: string, b: string): number {
+  if (a.length !== b.length) return a.length - b.length;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function comparePartsAscending(a: string[], b: string[]): number {
   const len = Math.max(a.length, b.length);
   for (let i = 0; i < len; i++) {
-    const av = a[i] ?? 0;
-    const bv = b[i] ?? 0;
-    if (av !== bv) return av - bv;
+    const cmp = compareNumericIdentifier(a[i] ?? "0", b[i] ?? "0");
+    if (cmp !== 0) return cmp;
   }
   return 0;
 }
