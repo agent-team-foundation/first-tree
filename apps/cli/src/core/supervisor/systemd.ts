@@ -43,6 +43,12 @@ function systemdUserUnitPath(): string {
   return join(xdg, "systemd", "user", SYSTEMD_UNIT);
 }
 
+function rootSystemdUserUnitPath(): string {
+  const info = userInfo();
+  const rootHome = info.uid === 0 && info.homedir ? info.homedir : "/root";
+  return join(rootHome, ".config", "systemd", "user", SYSTEMD_UNIT);
+}
+
 function systemdUnitPath(scope: SystemdScope = systemdScope()): string {
   if (scope === "system") {
     return join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "/etc/systemd/system", SYSTEMD_UNIT);
@@ -51,11 +57,11 @@ function systemdUnitPath(scope: SystemdScope = systemdScope()): string {
 }
 
 function rootUserSystemctlEnv(): NodeJS.ProcessEnv {
-  const runtimeDir = process.env.XDG_RUNTIME_DIR ?? "/run/user/0";
+  const runtimeDir = "/run/user/0";
   return {
     ...process.env,
     XDG_RUNTIME_DIR: runtimeDir,
-    DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS ?? `unix:path=${runtimeDir}/bus`,
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtimeDir}/bus`,
   };
 }
 
@@ -180,7 +186,7 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
 }
 
 function migrateLegacyRootUserUnitToSystemScope(): void {
-  const legacyUnitPath = systemdUserUnitPath();
+  const legacyUnitPath = rootSystemdUserUnitPath();
   if (!existsSync(legacyUnitPath)) return;
 
   migrateBakedProxyEnv(extractProxyFromSystemd(readFileSync(legacyUnitPath, "utf-8")));
@@ -209,6 +215,14 @@ function migrateLegacyRootUserUnitToSystemScope(): void {
       throw new Error(`legacy root systemd user daemon-reload failed: ${reason}`);
     }
   }
+}
+
+function assertNoLegacyRootUserUnitDuringRefresh(): void {
+  const legacyUnitPath = rootSystemdUserUnitPath();
+  if (!existsSync(legacyUnitPath)) return;
+  throw new Error(
+    `legacy root systemd user unit requires an out-of-service migration before refresh: ${legacyUnitPath}`,
+  );
 }
 
 function installSystemd(): ServiceInfo {
@@ -263,6 +277,12 @@ function installSystemd(): ServiceInfo {
 
   const { state, pid, detail } = systemdState();
   return systemdInfo(unitPath, scope, state, pid, detail);
+}
+
+function refreshSystemdForUpdate(): ServiceInfo {
+  const scope = systemdScope();
+  if (scope === "system") assertNoLegacyRootUserUnitDuringRefresh();
+  return installSystemd();
 }
 
 function uninstallSystemd(): ServiceInfo {
@@ -365,7 +385,7 @@ export const systemdBackend: SupervisorBackend = {
   platform: "systemd",
   isSupported: () => true,
   install: installSystemd,
-  refreshForUpdate: installSystemd,
+  refreshForUpdate: refreshSystemdForUpdate,
   isUnitDriftDetected: systemdUnitDriftDetected,
   status: getSystemdServiceStatus,
   start: startSystemdService,

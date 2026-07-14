@@ -69,6 +69,8 @@ const originalCwd = process.cwd;
 const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
 const originalSystemdSystemDir = process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR;
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+const originalXdgRuntimeDir = process.env.XDG_RUNTIME_DIR;
+const originalDbusSessionBusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
@@ -80,6 +82,18 @@ function setExecPath(value: string): void {
 
 function tempHome(): string {
   return join(tmpdir(), `ft-service-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+}
+
+function rootHome(): string {
+  return join(home, "root");
+}
+
+function rootUserInfo(): { uid: 0; username: string; homedir: string } {
+  return { uid: 0, username: "root", homedir: rootHome() };
+}
+
+function rootLegacySystemdUserUnitPath(): string {
+  return join(rootHome(), ".config", "systemd", "user", channelConfig.serviceUnitFile);
 }
 
 function windowsProcessIdentityJson(
@@ -145,6 +159,10 @@ afterEach(() => {
   else process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR = originalSystemdSystemDir;
   if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
   else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  if (originalXdgRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+  else process.env.XDG_RUNTIME_DIR = originalXdgRuntimeDir;
+  if (originalDbusSessionBusAddress === undefined) delete process.env.DBUS_SESSION_BUS_ADDRESS;
+  else process.env.DBUS_SESSION_BUS_ADDRESS = originalDbusSessionBusAddress;
   process.argv = [...originalArgv];
   setExecPath(originalExecPath);
   process.cwd = originalCwd;
@@ -451,7 +469,7 @@ describe("service install helpers", () => {
 
   it("installs a root systemd system service without a user bus", () => {
     setPlatform("linux");
-    userInfoMock.mockReturnValue({ uid: 0, username: "root" });
+    userInfoMock.mockReturnValue(rootUserInfo());
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
@@ -493,8 +511,11 @@ describe("service install helpers", () => {
 
   it("migrates a legacy root systemd user unit before enabling the system unit", () => {
     setPlatform("linux");
-    userInfoMock.mockReturnValue({ uid: 0, username: "root" });
-    const legacyUnitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    userInfoMock.mockReturnValue(rootUserInfo());
+    process.env.XDG_CONFIG_HOME = join(home, "sudo-user-xdg");
+    process.env.XDG_RUNTIME_DIR = "/run/user/501";
+    process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/run/user/501/bus";
+    const legacyUnitPath = rootLegacySystemdUserUnitPath();
     mkdirSync(dirname(legacyUnitPath), { recursive: true });
     writeFileSync(legacyUnitPath, 'Environment=HTTP_PROXY="http://legacy-proxy:8080"\n');
     spawnSyncMock
@@ -516,12 +537,16 @@ describe("service install helpers", () => {
       ["systemctl", ["enable", "--now", channelConfig.serviceUnitFile]],
       ["systemctl", ["is-active", channelConfig.serviceUnitFile]],
     ]);
+    expect(spawnSyncMock.mock.calls[0][2].env).toMatchObject({
+      XDG_RUNTIME_DIR: "/run/user/0",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+    });
   });
 
   it("fails root systemd migration when the legacy user bus is unavailable", () => {
     setPlatform("linux");
-    userInfoMock.mockReturnValue({ uid: 0, username: "root" });
-    const legacyUnitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    userInfoMock.mockReturnValue(rootUserInfo());
+    const legacyUnitPath = rootLegacySystemdUserUnitPath();
     mkdirSync(dirname(legacyUnitPath), { recursive: true });
     writeFileSync(legacyUnitPath, "unit");
     spawnSyncMock.mockReturnValueOnce({
@@ -541,8 +566,8 @@ describe("service install helpers", () => {
 
   it("fails root systemd migration when the legacy user unit cannot be stopped", () => {
     setPlatform("linux");
-    userInfoMock.mockReturnValue({ uid: 0, username: "root" });
-    const legacyUnitPath = join(process.env.XDG_CONFIG_HOME ?? "", "systemd", "user", channelConfig.serviceUnitFile);
+    userInfoMock.mockReturnValue(rootUserInfo());
+    const legacyUnitPath = rootLegacySystemdUserUnitPath();
     mkdirSync(dirname(legacyUnitPath), { recursive: true });
     writeFileSync(legacyUnitPath, "unit");
     spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "", stderr: "access denied" });
@@ -551,6 +576,23 @@ describe("service install helpers", () => {
     expect(existsSync(join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "", channelConfig.serviceUnitFile))).toBe(
       false,
     );
+  });
+
+  it("refuses in-daemon refresh during root user-to-system systemd migration", () => {
+    setPlatform("linux");
+    userInfoMock.mockReturnValue(rootUserInfo());
+    const legacyUnitPath = rootLegacySystemdUserUnitPath();
+    mkdirSync(dirname(legacyUnitPath), { recursive: true });
+    writeFileSync(legacyUnitPath, "unit");
+
+    expect(() => refreshClientServiceUnitForUpdate()).toThrow(
+      `legacy root systemd user unit requires an out-of-service migration before refresh: ${legacyUnitPath}`,
+    );
+    expect(existsSync(legacyUnitPath)).toBe(true);
+    expect(existsSync(join(process.env.FIRST_TREE_SYSTEMD_SYSTEM_DIR ?? "", channelConfig.serviceUnitFile))).toBe(
+      false,
+    );
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
   it("surfaces systemd install and uninstall warnings", () => {
