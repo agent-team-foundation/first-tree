@@ -35,12 +35,19 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("not a leftover checkout");
   });
 
-  it("configures GitHub branch rules only after creating a GitHub Context Repo", () => {
+  it("configures GitHub governance only after creating a GitHub Context Repo", () => {
     expect(skillMarkdown).toContain("only after `tree init` succeeds");
     expect(skillMarkdown).toMatch(/only when the\s+new Context Repo is a GitHub repository/);
     expect(skillMarkdown).toContain("Do not run it for an already-bound tree");
-    expect(skillMarkdown).toContain("repo=$(gh repo view");
-    expect(skillMarkdown).toContain('gh api "repos/$repo/rulesets"');
+    expect(skillMarkdown).toContain("First make the Code Owner gate real");
+    expect(skillMarkdown).toContain("code_owner_login=$(gh api user --jq .login)");
+    expect(skillMarkdown).toContain('printf \'* @%s\\n\' "$code_owner_login" > "<tree>/.github/CODEOWNERS"');
+    expect(skillMarkdown).toContain('git -C "<tree>" push origin "HEAD:$default_branch"');
+    expect(skillMarkdown).toContain("covers every path (`*`)");
+    expect(skillMarkdown).toContain("includes_parents=false&per_page=100");
+    expect(skillMarkdown).toContain('(.source_type == null or .source_type == "Repository")');
+    expect(skillMarkdown).toContain("Do not\nlook up inherited organization rulesets");
+    expect(skillMarkdown).toContain("do not use a pipeline such as\n`gh api ... | head`");
     expect(skillMarkdown).toContain('"include": ["~DEFAULT_BRANCH"]');
     expect(skillMarkdown).toContain('"type": "non_fast_forward"');
     expect(skillMarkdown).toContain('"type": "pull_request"');
@@ -49,8 +56,9 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain('"dismiss_stale_reviews_on_push": false');
     expect(skillMarkdown).toContain('"require_last_push_approval": false');
     expect(skillMarkdown).toContain('"required_review_thread_resolution": false');
-    expect(skillMarkdown).toMatch(/automatic\s+branch-rule setup failed/);
-    expect(skillMarkdown).toContain("newly created GitHub Context Repo (validate workflows, CODEOWNERS, extra");
+    expect(skillMarkdown).toMatch(/automatic GitHub governance\s+setup failed/);
+    expect(skillMarkdown).toContain("root `CODEOWNERS` mapping and branch rules");
+    expect(skillMarkdown).toContain("bootstrap root `CODEOWNERS` mapping and\n  default-branch ruleset");
     expect(skillMarkdown).not.toMatch(/rulesets,\s+CODEOWNERS\) — out of scope/);
   });
 

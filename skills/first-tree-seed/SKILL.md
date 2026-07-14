@@ -153,22 +153,46 @@ clone exactly where Phase 1 (and the runtime) expect it. If the manifest
 carries no tree name yet (a fully unbound workspace), use the conventional
 `<workspaceRoot>/context-tree`.
 
-**Configure GitHub branch rules after a newly created Context Repo.**
+**Configure GitHub governance after a newly created Context Repo.**
 This applies only in state A, only after `tree init` succeeds, and only when the
 new Context Repo is a GitHub repository. Do not run it for an already-bound tree,
 a non-GitHub remote, or a failed/partial `tree init`. Use host `gh`; do not send
-the user to the browser first. Resolve the repository from the new tree checkout,
-then upsert one active repository ruleset scoped to the default branch:
+the user to the browser first.
+
+First make the Code Owner gate real on the default branch, before enabling the
+ruleset. Resolve the repository from the new tree checkout, resolve the active
+GitHub login, then add a root `CODEOWNERS` mapping and push it directly while the
+fresh repo is still unprotected:
 
 ```bash
 remote=$(git -C "<tree>" remote get-url origin)
 repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)
-ruleset_id=$(gh api "repos/$repo/rulesets" --jq '.[] | select(.name == "First Tree Context Repo branch rules") | .id' | head -n 1)
+default_branch=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
+code_owner_login=$(gh api user --jq .login)
+mkdir -p "<tree>/.github"
+printf '* @%s\n' "$code_owner_login" > "<tree>/.github/CODEOWNERS"
+git -C "<tree>" add .github/CODEOWNERS
+git -C "<tree>" commit -m "chore: add context tree code owner mapping"
+git -C "<tree>" push origin "HEAD:$default_branch"
 ```
 
-Use `gh api` to `POST repos/$repo/rulesets` when no existing ruleset has that
-name, otherwise `PUT repos/$repo/rulesets/$ruleset_id`. The payload must keep
-these exact semantics:
+The bootstrap mapping intentionally covers every path (`*`) so GitHub's Code
+Owner review requirement applies to all Context Tree PRs. Use the active `gh`
+login because it is the principal that just created the repo and has write/admin
+rights. If a future team wants a narrower owner or an org team such as
+`@org/team`, that is a follow-on maintenance change after bootstrap.
+
+Then upsert one active repository-local ruleset scoped to the default branch:
+
+```bash
+ruleset_id=$(gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --jq 'map(select(.name == "First Tree Context Repo branch rules" and (.source_type == null or .source_type == "Repository")))[0].id // empty')
+```
+
+Use `gh api` to `POST repos/$repo/rulesets` when no existing repository-local
+ruleset has that name, otherwise `PUT repos/$repo/rulesets/$ruleset_id`. Do not
+look up inherited organization rulesets, and do not use a pipeline such as
+`gh api ... | head` because it can mask a failed list request as an empty lookup.
+The payload must keep these exact semantics:
 
 ```json
 {
@@ -192,15 +216,16 @@ these exact semantics:
 }
 ```
 
-This blocks force / non-fast-forward pushes, requires changes through pull
-requests, requires at least one approving review and Code Owner approval, keeps
-existing reviews when new commits are pushed, does not require approval from
-someone other than the last pusher, and does not require every review
-conversation to be resolved. If any `gh` step fails after you know the repo is a
-GitHub Context Repo, continue with the seed flow and tell the user automatic
-branch-rule setup failed. Give the manual checklist above in plain words so they
-can add the rules in GitHub settings. Do not treat this setup failure as a reason
-to delete or recreate the Context Repo.
+Together, the root `CODEOWNERS` file and ruleset block force /
+non-fast-forward pushes, require changes through pull requests, require at least
+one approving review from the Code Owner, keep existing reviews when new commits
+are pushed, do not require approval from someone other than the last pusher, and
+do not require every review conversation to be resolved. If any `gh`,
+`CODEOWNERS`, or ruleset step fails after you know the repo is a GitHub Context
+Repo, continue with the seed flow and tell the user automatic GitHub governance
+setup failed. Give the manual checklist above in plain words so they can add the
+root `CODEOWNERS` mapping and branch rules in GitHub settings. Do not treat this
+setup failure as a reason to delete or recreate the Context Repo.
 
 **Delay App coverage guidance until there is a reviewable milestone — recommend,
 never block.**
@@ -922,10 +947,11 @@ These apply the generated Context Tree Policy to the seed-specific surface.
   (the user's local `gh`), not the server `/initialize` path — the two
   coexist. Seed does not write the workspace-root `workspace.json`; that
   stays a runtime concern.
-- Install GitHub automation beyond the default-branch ruleset applied after a
-  newly created GitHub Context Repo (validate workflows, CODEOWNERS, extra
-  rulesets) — out of scope. If the team wants those, they are separate follow-on
-  workflows after seed lands.
+- Install GitHub automation beyond the bootstrap root `CODEOWNERS` mapping and
+  default-branch ruleset applied after a newly created GitHub Context Repo
+  (validate workflows, narrower CODEOWNERS ownership, extra rulesets) — out of
+  scope. If the team wants those, they are separate follow-on workflows after
+  seed lands.
 - Touch `AGENTS.md` / `CLAUDE.md` managed blocks at the tree root —
   those are owned by the CLI runtime.
 - Generate content beyond what the signals support. If a candidate
