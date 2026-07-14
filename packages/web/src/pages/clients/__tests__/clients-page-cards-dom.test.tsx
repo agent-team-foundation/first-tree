@@ -441,6 +441,10 @@ describe("ClientsPage computer cards", () => {
 
     await click(exactButton(container, "Show"));
     await waitForText(container, "Team computers");
+    // Distributed audit columns: the header labels owner / OS / version so the
+    // row fills the width instead of leaving a mid-row void.
+    await waitForText(container, "Hostname");
+    await waitForText(container, "First Tree");
     await waitForText(container, "alice-linux");
     await waitForText(container, "Alice");
     // A connected + Ready-runtime team machine whose self-update failed must

@@ -1867,37 +1867,77 @@
   border-top: var(--hairline) solid var(--border-faint);
 }
 
-/* Team computers audit list (admin) — compact grouped rows with a hairline
-   between every row/group-header and a neutral hover. The health split is
+/* Team computers audit list (admin) — a grouped data table that fills the
+   Settings content width via distributed columns
+   (Hostname | Owner | OS | First Tree | Agents | Status), with a hairline
+   between every row / group-header and a neutral hover. The health split is
    carried by row order + the "Needs attention" group header + each row's
-   status pill, not a full-row color wash. */
+   status pill, not a full-row color wash.
+
+   Width strategy: Hostname is the only elastic column (minmax(0,1fr)) so long
+   names absorb the slack and short names leave no mid-row void; Owner is
+   capped + truncates; OS / First Tree / Agents are fixed (content-bounded);
+   Status is fixed to its worst case ("Offline · N days" / "Setup incomplete").
+   Agents + Status right-align. */
 .team-computers-list {
   /* Query the list's own width (not the viewport): the Settings nav eats
-     width, so a row can be narrow even on a wide screen. */
+     width, so the list can be narrow even on a wide screen. */
   container-type: inline-size;
 }
 .team-computers-list > * + * {
   border-top: var(--hairline) solid var(--border-faint);
 }
+.team-computers-header,
 .team-computer-row {
   display: grid;
-  /* identity | agents | status. Fixed trailing tracks keep the agent counts
-     and status pills column-aligned across rows when there's room. */
-  grid-template-columns: minmax(0, 1fr) var(--sp-20) var(--sp-45);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 11rem) 5rem 6rem 5.5rem 8.5rem;
   align-items: center;
-  column-gap: var(--sp-3);
+  column-gap: var(--sp-3_5);
   padding: var(--sp-2_5) var(--sp-3_5);
+}
+.team-computer-row {
   transition: background-color 120ms ease-out;
 }
 .team-computer-row:hover {
   background-color: var(--bg-hover);
 }
-/* Narrow list (mobile / cramped Settings): drop the fixed trailing tracks to
-   intrinsic width so the hostname/meta identity column never collapses. */
-@container (max-width: 34rem) {
+/* `__meta` is the owner · OS · version line under the hostname, used only on a
+   narrow container (below) where those columns collapse. */
+.team-computer-row__meta {
+  display: none;
+}
+/* Narrow container (mobile / cramped Settings): drop the owner / OS / version
+   columns and reflow them under the hostname as the meta line; keep Hostname
+   (elastic) | Agents | Status with intrinsic trailing tracks so the identity
+   column never collapses.
+
+   Breakpoint math: the five non-hostname columns + gaps + padding sum to
+   ~42rem, and grid fills those finite tracks (incl. the `minmax(0,11rem)`
+   owner) to their caps *before* the `1fr` hostname gets any width. So the
+   columns only earn their keep once the container clears that sum plus a
+   comfortable hostname floor — switch to the stacked layout below ~52rem
+   rather than let the primary identity column collapse to a sliver. */
+@container (max-width: 52rem) {
+  .team-computers-header {
+    display: none;
+  }
+  /* The hidden header still occupies a DOM slot, so the `> * + *` separator
+     would paint a stray hairline above the first *visible* element. Cancel it
+     so the narrow list's top edge stays flush like the wide one. */
+  .team-computers-header + * {
+    border-top: 0;
+  }
   .team-computer-row {
     grid-template-columns: minmax(0, 1fr) auto auto;
     column-gap: var(--sp-2_5);
+  }
+  .team-computer-row__col-owner,
+  .team-computer-row__col-os,
+  .team-computer-row__col-ver {
+    display: none;
+  }
+  .team-computer-row__meta {
+    display: block;
   }
 }
 

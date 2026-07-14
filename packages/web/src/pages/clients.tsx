@@ -656,6 +656,7 @@ function TeamComputersList({
       className="team-computers-list"
       style={{ marginLeft: "calc(-1 * var(--sp-3_5))", marginRight: "calc(-1 * var(--sp-3_5))" }}
     >
+      <TeamColumnHeader />
       {grouped && <TeamGroupHeader label="Needs attention" count={attention.length} attention />}
       {attention.map((client) => (
         <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
@@ -664,6 +665,26 @@ function TeamComputersList({
       {ready.map((client) => (
         <TeamComputerRow key={client.id} client={client} ownerLabel={resolveOwner(client)} />
       ))}
+    </div>
+  );
+}
+
+/**
+ * Column headers for the audit table — flat sentence-case labels (matching the
+ * DenseTable convention). Distributes owner / OS / version into their own
+ * columns so the row fills the Settings content width instead of leaving a
+ * mid-row void. Hidden on a narrow container, where rows reflow to a stacked
+ * hostname + meta line (see the `@container` rule in index.css).
+ */
+function TeamColumnHeader() {
+  return (
+    <div className="team-computers-header text-label" style={{ color: "var(--fg-3)" }}>
+      <span>Hostname</span>
+      <span>Owner</span>
+      <span>OS</span>
+      <span>First Tree</span>
+      <span style={{ textAlign: "right" }}>Agents</span>
+      <span style={{ textAlign: "right" }}>Status</span>
     </div>
   );
 }
@@ -716,6 +737,8 @@ function updateProblemView(client: HubClient): { label: string; color: string; t
   return null;
 }
 
+const ELLIPSIS: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+
 function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel: { text: string; title?: string } }) {
   const status = deriveComputerStatus(client);
   const version = client.sdkVersion;
@@ -726,31 +749,43 @@ function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel
   // status only for offline machines, where "how long" is the actionable bit.
   const offlineFor = status.pill === "offline" ? formatOfflineDuration(client.lastSeenAt) : null;
   const agentCount = client.agentCount;
+  // Owner · OS · version, shown *only* on a narrow container where the owner /
+  // OS / version columns collapse — reflows them back under the hostname (the
+  // shipped mobile-friendly layout) so the identity column never gets starved.
+  // `title` carries the full (un-truncated, full-build-version) meta so a
+  // narrow viewer can still recover it on hover, matching the desktop columns.
+  const metaSegments = [ownerLabel.text, client.os, version ? shortVersion(version) : null].filter(Boolean);
+  const metaTitle = [ownerLabel.text, client.os, version].filter(Boolean).join(" · ");
   return (
     <div className="team-computer-row">
       <div style={{ minWidth: 0 }}>
-        <div
-          className="mono text-subtitle"
-          style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          title={client.hostname ?? undefined}
-        >
+        <div className="mono text-subtitle" style={ELLIPSIS} title={client.hostname ?? undefined}>
           {client.hostname ?? "—"}
         </div>
         <div
-          className="text-caption"
-          style={{ color: "var(--fg-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          className="team-computer-row__meta text-caption"
+          style={{ color: "var(--fg-3)", ...ELLIPSIS }}
+          title={metaTitle}
         >
-          <span title={ownerLabel.title}>{ownerLabel.text}</span>
-          {client.os ? ` · ${client.os}` : ""}
-          {version ? (
-            <>
-              {" · "}
-              <span className="mono" title={version}>
-                {shortVersion(version)}
-              </span>
-            </>
-          ) : null}
+          {metaSegments.join(" · ")}
         </div>
+      </div>
+      <div
+        className="team-computer-row__col-owner text-body"
+        style={{ color: "var(--fg-2)", ...ELLIPSIS }}
+        title={ownerLabel.title}
+      >
+        {ownerLabel.text}
+      </div>
+      <div className="team-computer-row__col-os text-body" style={{ color: "var(--fg-3)", ...ELLIPSIS }}>
+        {client.os ?? "—"}
+      </div>
+      <div
+        className="team-computer-row__col-ver mono text-caption"
+        style={{ color: "var(--fg-3)", ...ELLIPSIS }}
+        title={version ?? undefined}
+      >
+        {version ? shortVersion(version) : "—"}
       </div>
       <span
         className="text-caption tnum"
