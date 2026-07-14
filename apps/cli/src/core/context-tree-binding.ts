@@ -1,5 +1,5 @@
 import { createLogger, SdkError } from "@first-tree/client";
-import { contextTreeInfoSchema, repoUrlSchema } from "@first-tree/shared";
+import { contextTreeBranchSchema, contextTreeInfoSchema, contextTreeRepoSchema } from "@first-tree/shared";
 import { AuthRefreshFailedError } from "./bootstrap.js";
 
 export type ContextTreeBindingResult =
@@ -84,54 +84,18 @@ export function normalizeContextTreeBinding(response: unknown): ContextTreeBindi
     return { status: "unbound", repo: null, branch: null };
   }
 
-  // URL parsers accept surrounding whitespace, and the wire schema permits
-  // arbitrary strings. Reject formatting that could corrupt human output or
-  // disguise a different checkout coordinate.
-  if (!isSingleLineUnpadded(parsed.data.repo)) {
+  const repo = contextTreeRepoSchema.safeParse(parsed.data.repo);
+  if (!repo.success) {
     throw invalidResponseError();
   }
-  if (parsed.data.branch !== null && !isSingleLineUnpadded(parsed.data.branch)) {
-    throw invalidResponseError();
-  }
-
-  const repo = repoUrlSchema.safeParse(parsed.data.repo);
-  if (!repo.success || !hasRepositoryCoordinate(repo.data)) {
-    throw invalidResponseError();
-  }
+  const branch = parsed.data.branch === null ? null : contextTreeBranchSchema.safeParse(parsed.data.branch);
+  if (branch !== null && !branch.success) throw invalidResponseError();
 
   return {
     status: "bound",
     repo: repo.data,
-    branch: parsed.data.branch ?? "main",
+    branch: branch === null ? "main" : branch.data,
   };
-}
-
-function isSingleLineUnpadded(value: string): boolean {
-  if (value.length === 0 || value.trim() !== value) return false;
-
-  for (let index = 0; index < value.length; index++) {
-    const codeUnit = value.charCodeAt(index);
-    if (codeUnit <= 31 || codeUnit === 127) return false;
-  }
-  return true;
-}
-
-/**
- * `repoUrlSchema` owns the transport allow-list and credential checks. Keep
- * the read path strict about the two URL components that schema intentionally
- * leaves structural: a host and a non-root repository path.
- */
-function hasRepositoryCoordinate(value: string): boolean {
-  if (!value.includes("://")) return true;
-
-  try {
-    const parsed = new URL(value);
-    if (parsed.hostname.length === 0) return false;
-    const path = parsed.pathname.replaceAll("/", "");
-    return path.length > 0;
-  } catch {
-    return false;
-  }
 }
 
 /** Read the binding through the SDK's agent-scoped endpoint and fail closed. */
@@ -186,6 +150,16 @@ export function classifyContextTreeReadError(error: unknown): ContextTreeUnreada
     });
   }
 
+  // Response parsing/validation failures remain invalid responses even when
+  // their parser-generated message happens to contain transport/auth words.
+  if (error instanceof SyntaxError) {
+    return invalidResponseError();
+  }
+
+  if (readStringProperty(error, "name") === "ZodError" || Array.isArray(readProperty(error, "issues"))) {
+    return invalidResponseError();
+  }
+
   if (error instanceof AuthRefreshFailedError || readStringProperty(error, "name") === "AuthRefreshFailedError") {
     return new ContextTreeUnreadableError(
       "Authentication expired while reading the Context Tree binding. Sign in again and retry.",
@@ -220,14 +194,6 @@ export function classifyContextTreeReadError(error: unknown): ContextTreeUnreada
       category: "connection",
       exitCode: 6,
     });
-  }
-
-  if (error instanceof SyntaxError) {
-    return invalidResponseError();
-  }
-
-  if (readStringProperty(error, "name") === "ZodError" || Array.isArray(readProperty(error, "issues"))) {
-    return invalidResponseError();
   }
 
   return new ContextTreeUnreadableError("Could not read the Context Tree binding.", {

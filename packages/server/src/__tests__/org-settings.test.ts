@@ -99,6 +99,68 @@ describe("org-settings service", () => {
     expect(after).toEqual({ repo: "https://github.com/example/tree", branch: "main" });
   });
 
+  it("putOrgSetting replaces the repo without changing an existing branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "https://github.com/example/original.git", branch: "release/2026-07" },
+      { updatedBy: admin.userId },
+    );
+
+    const rebound = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "git@github.com:example/rebound.git" },
+      { updatedBy: admin.userId },
+    );
+    expect(rebound).toEqual({ repo: "git@github.com:example/rebound.git", branch: "release/2026-07" });
+  });
+
+  it("can read and repair a historical Context Tree row that is looser than the write schema", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const historical = { repo: "http://legacy.example.com/context-tree.git", branch: " legacy\nbranch " };
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: historical,
+      version: 1,
+      updatedBy: admin.userId,
+    });
+
+    await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
+      historical,
+    );
+
+    const repaired = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "https://github.com/example/repaired.git", branch: "main" },
+      { updatedBy: admin.userId },
+    );
+    expect(repaired).toEqual({ repo: "https://github.com/example/repaired.git", branch: "main" });
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({
+      value: { repo: "https://github.com/example/repaired.git", branch: "main" },
+      version: 2,
+    });
+  });
+
   it("rejects empty-string repo at the schema layer (#3)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -682,10 +744,28 @@ describe("org-settings API (admin gating + masking)", () => {
       method: "PUT",
       url,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { repo: "https://github.com/example/api", branch: "api" },
+      payload: { repo: "https://github.com/example/api" },
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toMatchObject({ repo: "https://github.com/example/api", branch: "api" });
+    expect(put.json()).toEqual({ repo: "https://github.com/example/api", branch: "main" });
+
+    const branched = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/api", branch: "api" },
+    });
+    expect(branched.statusCode).toBe(200);
+    expect(branched.json()).toEqual({ repo: "https://github.com/example/api", branch: "api" });
+
+    const rebound = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "git@github.com:example/rebound-api.git" },
+    });
+    expect(rebound.statusCode).toBe(200);
+    expect(rebound.json()).toEqual({ repo: "git@github.com:example/rebound-api.git", branch: "api" });
 
     const del = await app.inject({
       method: "DELETE",
@@ -700,6 +780,56 @@ describe("org-settings API (admin gating + masking)", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(get2.json()).toEqual({ branch: "main" });
+  });
+
+  it("strictly validates Context Tree PUT bodies without partially updating the setting", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const original = { repo: "https://github.com/example/original.git", branch: "release" };
+
+    const initial = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: original,
+    });
+    expect(initial.statusCode).toBe(200);
+
+    for (const payload of [
+      { repo: "https://github.com" },
+      { repo: " https://github.com/example/tree.git" },
+      { repo: "https://github.com/example/tree.git\u0000" },
+      { repo: "https:/github.com/example/tree.git" },
+      { repo: "https:///github.com/example/tree.git" },
+      { repo: "https://github.com\\example/tree.git" },
+      { repo: "C:\\workspace\\context-tree.git" },
+      { repo: "https://github.com/example/tree.git?access_token=secret" },
+      { repo: "https://github.com/example/tree.git\u2028forged" },
+      { branch: "" },
+      { branch: " release" },
+      { branch: "release\nnext" },
+      { repo: "https://github.com/example/new.git", branch: "main", unexpected: true },
+    ]) {
+      const res = await app.inject({
+        method: "PUT",
+        url,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: original, version: 1 });
   });
 
   it("context tree snapshot uses the org id from the route, not the caller's primary org", async () => {
@@ -742,6 +872,10 @@ describe("org-settings API (admin gating + masking)", () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const original = { repo: "https://github.com/example/member-guard.git", branch: "main" };
+    await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", original, {
+      updatedBy: admin.userId,
+    });
 
     for (const method of ["PUT", "DELETE"] as const) {
       const res = await app.inject({
@@ -752,6 +886,59 @@ describe("org-settings API (admin gating + masking)", () => {
       });
       expect(res.statusCode, `${method} should be 403 for non-admin`).toBe(403);
     }
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: original, version: 1 });
+  });
+
+  it("re-evaluates admin membership on every Context Tree PUT and leaves the setting unchanged", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const original = { repo: "https://github.com/example/realtime-guard.git", branch: "main" };
+    await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", original, {
+      updatedBy: admin.userId,
+    });
+
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, admin.memberId));
+    const downgraded = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/forbidden-downgrade.git" },
+    });
+    expect(downgraded.statusCode).toBe(403);
+    await expect(orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree")).resolves.toEqual(
+      original,
+    );
+
+    await app.db.update(members).set({ role: "admin", status: "left" }).where(eq(members.id, admin.memberId));
+    const departed = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/forbidden-departure.git" },
+    });
+    expect(departed.statusCode).toBe(403);
+
+    const [row] = await app.db
+      .select({ value: organizationSettings.value, version: organizationSettings.version })
+      .from(organizationSettings)
+      .where(
+        and(
+          eq(organizationSettings.organizationId, admin.organizationId),
+          eq(organizationSettings.namespace, "context_tree"),
+        ),
+      );
+    expect(row).toEqual({ value: original, version: 1 });
   });
 
   it("unknown namespace returns 400", async () => {

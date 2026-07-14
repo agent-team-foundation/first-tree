@@ -609,14 +609,18 @@ GitHub App installation to cover the repo (`422` otherwise).
 
 ```
 first-tree org
-├── bind-tree <url>                                  # record this org's Context Tree repo URL
+├── bind-tree <url> [--org <orgId>]                  # legacy caller-org binding write
 └── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
+    └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
 
 `bind-tree` records the team's Context Tree URL in
 `organization_settings(context_tree)`. Used by the onboarding flow's
 "create new tree" path, where the agent calls back into the server
-after scaffolding the tree.
+after scaffolding the tree. It is retained for compatibility with existing
+scripts: without `--org`, it resolves the caller's default organization through
+`GET /api/v1/me`; with `--org`, it targets the explicitly supplied organization
+ID. It is not agent-scoped and is separate from `context-tree set` below.
 
 ### org context-tree
 
@@ -671,6 +675,86 @@ use the following JSON error shape and a non-zero exit code:
 Authentication failures exit `3`; connection and timeout failures exit `6`;
 other remote or invalid-response failures exit `1`. Agent-selection failures
 retain exit code `2` and their existing error envelopes.
+
+### org context-tree set
+
+```bash
+first-tree org context-tree set <repo> [--branch <branch>] [--agent <name>]
+```
+
+`context-tree set` directly sets or replaces the Cloud `context_tree` binding
+for the selected local agent's organization. It does not accept `--org` or
+`--rebind`, and it provides no unset/clear operation. Agent selection uses the
+same precedence and exit-code-`2` failures as the read command above:
+explicit `--agent`, then `FIRST_TREE_AGENT_ID`, then the only configured local
+agent. Selection failures retain their existing `MISSING_AGENT`,
+`AMBIGUOUS_AGENT`, `ENV_AGENT_NOT_LOCAL`, or `UNKNOWN_AGENT` envelopes; they
+are not wrapped as `CONTEXT_TREE_UPDATE_FAILED`. Selection is completed before
+the SDK is created or any credentials or network are accessed.
+
+The command performs a two-step, agent-scoped write. It first sends
+`GET /api/v1/agent/me` with the selected agent to obtain a non-empty
+`organizationId`, then sends the existing admin-only Class B request
+`PUT /api/v1/orgs/:orgId/settings/context_tree`, URL-encoding `orgId`. The
+selected agent identity, current user JWT, and current runtime-session token
+are used for both requests. It never falls back to `/api/v1/me`, the legacy
+`/api/v1/context-tree/*` endpoints, the web app's current organization, a
+local workspace manifest, or a local checkout. The safe GET may use the
+client's normal read retry behavior. The PUT is never retried automatically,
+so one invocation cannot repeat a settings-version increment after an
+ambiguous transport failure.
+
+`<repo>` accepts HTTPS, `ssh://`, and scp-like SSH repository coordinates. The
+value must have a host and repository path, contain no embedded credentials,
+have no surrounding whitespace, and contain no control characters. URL forms
+must use literal `https://` or `ssh://` syntax; queries, fragments, backslashes,
+and local drive paths are rejected. HTTP and `git://` URLs are rejected.
+`--branch` must be non-empty, single-line, free of surrounding whitespace and
+control characters. Invalid repo and branch values fail locally with
+`INVALID_CONTEXT_TREE_REPO` and
+`INVALID_CONTEXT_TREE_BRANCH`, respectively, exit `2`, and make no SDK,
+credential, or HTTP request.
+
+For example, these repository forms are accepted:
+
+```text
+https://github.com/acme/context-tree.git
+ssh://git@github.com/acme/context-tree.git
+git@github.com:acme/context-tree.git
+```
+
+When `--branch` is omitted, the request body contains only `{ "repo": "..." }`
+and the existing branch is preserved. On a first binding, the server's default
+branch is `main`. Supplying `--branch` replaces the branch. A successful
+response must be `bound`, must echo the requested repository, and must echo a
+provided branch; an inconsistent or otherwise invalid response is an update
+failure.
+
+Human output reports `Bound` and shows the repository and final branch. With
+`--json` or `FIRST_TREE_JSON=1`, successful output is exactly:
+
+```json
+{"ok":true,"data":{"status":"bound","repo":"git@github.com:acme/context-tree.git","branch":"main"}}
+```
+
+Only authentication, connection, timeout, remote, and response-validation
+failures use this exact error envelope:
+
+```json
+{"ok":false,"error":{"code":"CONTEXT_TREE_UPDATE_FAILED","message":"..."}}
+```
+
+Authentication failures exit `3`; connection and timeout failures exit `6`;
+403, other HTTP failures, and invalid or inconsistent responses exit `1`.
+When a network or server failure leaves the PUT result uncertain, the message
+directs the operator to rerun `first-tree org context-tree` with the same agent
+selection before retrying. Failure output never prints raw response bodies,
+tokens, credentials, or a full private repository coordinate; successful
+output includes the requested repository as documented above.
+
+Debug logs may identify the selected agent, request phase, derived organization,
+and final status. Warning logs contain only the sanitized failure category,
+exit code, and HTTP status; they do not contain secrets or raw response data.
 
 ---
 

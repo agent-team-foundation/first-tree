@@ -53,7 +53,7 @@ import { z } from "zod";
 //     forbids `:` and `@` (already consumed by the earlier captures), and
 //     can't start with `/` (legal scp paths start with the first repo path
 //     segment, e.g. `owner/repo.git`)
-const SCP_LIKE_SSH_RE = /^(?:[A-Za-z0-9_.-]+@)?[A-Za-z0-9.-]+:(?!\d+(?:\/|$))[^/:@\s][^:@\s]*$/;
+const SCP_LIKE_SSH_RE = /^(?:[A-Za-z0-9_.-]+@)?[A-Za-z0-9_.-]+:(?!\d+(?:\/|$))[^/:@\s][^:@\s]*$/;
 
 function isScpLikeSshUrl(value: string): boolean {
   // Belt-and-braces guard: anything containing `://` is a URL form, not
@@ -112,17 +112,130 @@ export const repoUrlSchema = z
 
 // -- context_tree --
 
+const LINE_BREAK_RE = /[\r\n\u2028\u2029]/;
+const CONTEXT_TREE_URL_FORM_RE = /^(?:https|ssh):\/\/[^/\\\s]/i;
+const MALFORMED_HTTP_URL_PREFIX_RE = /^https?:/i;
+const WINDOWS_DRIVE_PATH_RE = /^[A-Za-z]:/;
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f));
+  });
+}
+
+/**
+ * Context Tree bindings are consumed directly by the local git client, so the
+ * write boundary is intentionally stricter than the historical storage shape.
+ * The generic `repoUrlSchema` remains wider for existing rows and other repo
+ * settings, while new Context Tree values must include a host and repo path and
+ * must not rely on URL parser whitespace/control-character normalization.
+ */
+export const contextTreeRepoSchema = repoUrlSchema.superRefine((value, ctx) => {
+  if (value.trim() !== value) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not have leading or trailing whitespace.",
+    });
+  }
+  if (hasControlCharacter(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not contain control characters.",
+    });
+  }
+  if (LINE_BREAK_RE.test(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not contain line separators.",
+    });
+  }
+  if (value.includes("\\")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must use URL or SSH path separators.",
+    });
+  }
+  if (value.includes("?") || value.includes("#")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not include a query or fragment.",
+    });
+  }
+
+  if (
+    isScpLikeSshUrl(value) &&
+    !MALFORMED_HTTP_URL_PREFIX_RE.test(value) &&
+    !WINDOWS_DRIVE_PATH_RE.test(value) &&
+    !value.includes("\\")
+  ) {
+    return;
+  }
+
+  // WHATWG URL parsing repairs malformed authority delimiters and converts
+  // backslashes to slashes for special schemes. Require the transport form
+  // in the raw input so validation matches what `git clone` will execute.
+  if (!CONTEXT_TREE_URL_FORM_RE.test(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must use https://, ssh://, or scp-like SSH syntax.",
+    });
+    return;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return;
+  }
+  if (!url.hostname || !url.pathname.split("/").some((segment) => segment.length > 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must include a host and repository path.",
+    });
+  }
+});
+
+export const contextTreeBranchSchema = z
+  .string()
+  .min(1)
+  .superRefine((value, ctx) => {
+    if (value.trim() !== value) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must not have leading or trailing whitespace.",
+      });
+    }
+    if (LINE_BREAK_RE.test(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must be a single line.",
+      });
+    }
+    if (hasControlCharacter(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must not contain control characters.",
+      });
+    }
+  });
+
 export const orgContextTreeStorageSchema = z.object({
-  repo: repoUrlSchema.optional(),
+  // Historical rows predate the strict write boundary. Keep storage loose so
+  // an administrator can read and replace an invalid legacy binding.
+  repo: z.string().optional(),
   branch: z.string().default("main"),
 });
 
-export const orgContextTreeInputSchema = z.object({
-  /** Set / replace (HTTPS, ssh://, or scp-like — no embedded credentials). `null` clears. `undefined` leaves unchanged. */
-  repo: repoUrlSchema.nullish(),
-  /** Set / replace (non-empty). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
-  branch: z.string().min(1).nullish(),
-});
+export const orgContextTreeInputSchema = z
+  .object({
+    /** Set / replace (HTTPS, ssh://, or scp-like — no embedded credentials). `null` clears. `undefined` leaves unchanged. */
+    repo: contextTreeRepoSchema.nullish(),
+    /** Set / replace (non-empty). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
+    branch: contextTreeBranchSchema.nullish(),
+  })
+  .strict();
 
 export const orgContextTreeOutputSchema = z.object({
   repo: z.string().optional(),

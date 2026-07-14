@@ -68,6 +68,27 @@ describe("agent context tree info route", () => {
       { updatedBy: admin.userId },
     );
 
+    const agentMe = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: { authorization: `Bearer ${admin.accessToken}`, "x-agent-id": sideAgent.uuid },
+    });
+    expect(agentMe.statusCode).toBe(200);
+    const derivedOrgId = agentMe.json<{ organizationId: string }>().organizationId;
+    expect(derivedOrgId).toBe(sideOrgId);
+
+    const updatedSide = await app.inject({
+      method: "PUT",
+      url: `/api/v1/orgs/${encodeURIComponent(derivedOrgId)}/settings/context_tree`,
+      headers: { authorization: `Bearer ${admin.accessToken}`, "x-agent-id": sideAgent.uuid },
+      payload: { repo: "git@github.com:example/updated-side-context.git", branch: "updated-side" },
+    });
+    expect(updatedSide.statusCode).toBe(200);
+    expect(updatedSide.json()).toEqual({
+      repo: "git@github.com:example/updated-side-context.git",
+      branch: "updated-side",
+    });
+
     const agentScoped = await app.inject({
       method: "GET",
       url: "/api/v1/agent/context-tree/info",
@@ -75,8 +96,8 @@ describe("agent context tree info route", () => {
     });
     expect(agentScoped.statusCode).toBe(200);
     expect(agentScoped.json()).toEqual({
-      repo: "https://github.com/example/side-context",
-      branch: "side",
+      repo: "git@github.com:example/updated-side-context.git",
+      branch: "updated-side",
     });
 
     const legacyUserScoped = await app.inject({

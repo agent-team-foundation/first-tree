@@ -5,8 +5,8 @@ import { registerOrgContextTreeCommand } from "./context-tree.js";
 /**
  * `first-tree org` — organization-level operations.
  *
- * `bind-tree` records an organization binding, while `context-tree` reads the
- * binding selected by the current local agent's server-side organization.
+ * `bind-tree` preserves the legacy user/default-org write path, while
+ * `context-tree` reads or updates the organization selected by a local agent.
  */
 export function registerOrgCommands(program: Command): void {
   const org = program.command("org").description("Organization-level operations");

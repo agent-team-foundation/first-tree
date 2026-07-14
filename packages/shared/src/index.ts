@@ -691,6 +691,8 @@ export {
   githubStartQuerySchema,
 } from "./schemas/oauth.js";
 export {
+  contextTreeBranchSchema,
+  contextTreeRepoSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACE_KEYS,
   ORG_SETTINGS_NAMESPACES,

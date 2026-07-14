@@ -128,6 +128,20 @@ describe("CLI command registration", () => {
     expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "tree", "verify"]);
   });
 
+  it("registers Context Tree set as a nested write without changing the parent read options", () => {
+    const root = new Command();
+    registerOrgCommands(root);
+
+    const contextTree = command(command(root, "org"), "context-tree");
+    const set = command(contextTree, "set");
+    const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
+
+    expect(contextTree.commands.map((entry) => entry.name())).toEqual(["set"]);
+    expect(optionNames(contextTree)).toEqual(["--agent"]);
+    expect(optionNames(set)).toEqual(["--agent", "--branch"]);
+    expect(set.registeredArguments.map((argument) => argument.name())).toEqual(["repo"]);
+  });
+
   it("keeps important options on high-risk commands", () => {
     const root = new Command();
     registerLoginCommand(root);

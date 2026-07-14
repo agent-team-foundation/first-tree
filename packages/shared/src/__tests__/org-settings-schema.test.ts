@@ -1,46 +1,111 @@
 import { describe, expect, it } from "vitest";
 import {
+  contextTreeBranchSchema,
+  contextTreeRepoSchema,
   isOrgSettingNamespace,
   orgContextTreeFeaturesInputSchema,
   orgContextTreeFeaturesOutputSchema,
   orgContextTreeFeaturesStorageSchema,
   orgContextTreeInputSchema,
+  orgContextTreeStorageSchema,
   orgSettingNamespaceSchema,
   orgSourceReposInputSchema,
 } from "../schemas/org-settings.js";
 
 describe("org settings schemas", () => {
   it("accepts supported repository URL forms", () => {
-    expect(orgContextTreeInputSchema.parse({ repo: "https://github.com/org/tree.git" }).repo).toBe(
+    for (const repo of [
       "https://github.com/org/tree.git",
-    );
-    expect(orgContextTreeInputSchema.parse({ repo: "ssh://git@github.com/org/tree.git" }).repo).toBe(
       "ssh://git@github.com/org/tree.git",
-    );
-    expect(orgContextTreeInputSchema.parse({ repo: "git@github.com:org/tree.git" }).repo).toBe(
       "git@github.com:org/tree.git",
-    );
+      "git@github_com:org/tree.git",
+      "git:org/tree.git",
+      "ssh:org/tree.git",
+    ]) {
+      expect(contextTreeRepoSchema.parse(repo)).toBe(repo);
+      expect(orgContextTreeInputSchema.parse({ repo }).repo).toBe(repo);
+    }
   });
 
   it("rejects unsupported or malformed repository URLs", () => {
-    expect(() => orgContextTreeInputSchema.parse({ repo: "not a url" })).toThrow(
+    expect(() => contextTreeRepoSchema.parse("not a url")).toThrow(
       "Repo URL must be HTTPS, SSH (ssh://...), or scp-like (git@host:path).",
     );
-    expect(() => orgContextTreeInputSchema.parse({ repo: "http://github.com/org/tree.git" })).toThrow(
+    expect(() => contextTreeRepoSchema.parse("http://github.com/org/tree.git")).toThrow(
       "Repo URL must use HTTPS or SSH.",
     );
-    expect(() => orgContextTreeInputSchema.parse({ repo: "git://github.com/org/tree.git" })).toThrow(
+    expect(() => contextTreeRepoSchema.parse("git://github.com/org/tree.git")).toThrow(
       "Repo URL must use HTTPS or SSH.",
     );
-    expect(() => orgContextTreeInputSchema.parse({ repo: "https://user@github.com/org/tree.git" })).toThrow(
+    expect(() => contextTreeRepoSchema.parse("https://user@github.com/org/tree.git")).toThrow(
       "Repo URL must not include credentials.",
     );
-    expect(() => orgContextTreeInputSchema.parse({ repo: "ssh://git:secret@github.com/org/tree.git" })).toThrow(
+    expect(() => contextTreeRepoSchema.parse("ssh://git:secret@github.com/org/tree.git")).toThrow(
       "Repo URL must not include credentials.",
     );
-    expect(() => orgContextTreeInputSchema.parse({ repo: "github.com:1234" })).toThrow(
-      "Repo URL must use HTTPS or SSH.",
-    );
+    expect(() => contextTreeRepoSchema.parse("github.com:1234")).toThrow("Repo URL must use HTTPS or SSH.");
+
+    for (const repo of [
+      "https://github.com",
+      "ssh://git@github.com",
+      "git@github.com:",
+      " https://github.com/org/tree.git",
+      "https://github.com/org/tree.git ",
+      "https://github.com/org/tree.git\n",
+      "git@github.com:org/\u0000tree.git",
+      "https:/github.com/org/tree.git",
+      "https:github.com/org/tree.git",
+      "https:///github.com/org/tree.git",
+      "ssh:/git@github.com/org/tree.git",
+      "https://github.com\\org/tree.git",
+      "C:\\Users\\alice\\context-tree.git",
+      "C:context-tree.git",
+      "https://github.com/org/tree.git?access_token=secret",
+      "ssh://git@github.com/org/tree.git#password=secret",
+      "https://github.com/org/tree.git\u2028forged",
+    ]) {
+      expect(contextTreeRepoSchema.safeParse(repo).success, repo).toBe(false);
+      expect(orgContextTreeInputSchema.safeParse({ repo }).success, repo).toBe(false);
+    }
+  });
+
+  it("requires a non-empty, single-line Context Tree branch without surrounding whitespace", () => {
+    for (const branch of ["main", "release/2026-07", "feature.context-tree"]) {
+      expect(contextTreeBranchSchema.parse(branch)).toBe(branch);
+      expect(orgContextTreeInputSchema.parse({ branch }).branch).toBe(branch);
+    }
+    for (const branch of [
+      "",
+      " main",
+      "main ",
+      "main\nnext",
+      "main\rnext",
+      "main\u0001",
+      "main\u0085",
+      "main\u2028next",
+    ]) {
+      expect(contextTreeBranchSchema.safeParse(branch).success, JSON.stringify(branch)).toBe(false);
+      expect(orgContextTreeInputSchema.safeParse({ branch }).success, JSON.stringify(branch)).toBe(false);
+    }
+  });
+
+  it("rejects unknown Context Tree input fields", () => {
+    expect(
+      orgContextTreeInputSchema.safeParse({ repo: "https://github.com/org/tree.git", unexpected: true }).success,
+    ).toBe(false);
+  });
+
+  it("keeps the Context Tree storage schema compatible with historical loose values", () => {
+    expect(
+      orgContextTreeStorageSchema.parse({
+        repo: "http://legacy.example.com/context-tree.git",
+        branch: " legacy\nbranch ",
+      }),
+    ).toEqual({
+      repo: "http://legacy.example.com/context-tree.git",
+      branch: " legacy\nbranch ",
+    });
+    expect(orgContextTreeStorageSchema.parse({})).toEqual({ branch: "main" });
   });
 
   it("validates source repo list entries with the same URL rules", () => {
