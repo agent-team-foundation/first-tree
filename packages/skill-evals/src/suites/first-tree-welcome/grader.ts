@@ -38,6 +38,15 @@ function containsPathAccess(event: unknown, patterns: readonly string[]): boolea
   return patterns.some((pattern) => serialized.includes(pattern));
 }
 
+function containsRepoRemoteRead(event: unknown): boolean {
+  if (!isRecord(event) || eventType(event) !== "codex_event") return false;
+  const serialized = JSON.stringify(event.event) ?? "";
+  return (
+    serialized.includes("source-repo") &&
+    /git.{0,80}(?:remote|get-url)|(?:remote|get-url).{0,80}git|source-repo\/\.git\/config/iu.test(serialized)
+  );
+}
+
 function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
   const type = eventType(record);
   const role = typeof record.role === "string" ? record.role : null;
@@ -257,6 +266,24 @@ function containsRepoSelectionLanguage(text: string): boolean {
   );
 }
 
+function containsRepoConfirmationLanguage(text: string): boolean {
+  return /(?:use|save|set|make|keep).{0,50}(?:team|default|long[- ]term).{0,30}(?:repo|repository|code)|(?:repo|repository).{0,40}(?:team default|long[- ]term team code)/iu.test(
+    text,
+  );
+}
+
+function repoConfirmationObserved(chatOptionTexts: readonly string[], combinedText: string): boolean {
+  const candidateObserved = /github\.com[\s/]+acme[\s/]+support-dashboard/iu.test(combinedText);
+  const consequenceObserved = /team.{0,25}(?:repo|repository)|(?:repo|repository).{0,25}team/iu.test(combinedText);
+  const positiveOptionObserved = chatOptionTexts.some((text) =>
+    /use.{0,20}team.{0,20}(?:repo|repository)/iu.test(text),
+  );
+  const temporaryOptionObserved = chatOptionTexts.some((text) =>
+    /only this time|temporary|do not save|don't save/iu.test(text),
+  );
+  return candidateObserved && consequenceObserved && positiveOptionObserved && temporaryOptionObserved;
+}
+
 function containsAdminSetupAction(text: string): boolean {
   const checkedText = withoutNegatedSetupLanguage(text)
     .replace(/\b(?:an?\s+)?admin\s+(?:finishes|handles|owns|will finish|can finish)\s+(?:team\s+)?setup\b/giu, "")
@@ -403,6 +430,7 @@ function forbiddenActionHits(
     if (action === "first-task-options" && (chatAskCount > 0 || taskOptionsObserved)) hits.push(action);
     if (action === "skip-for-now-option" && normalized.includes("skip for now")) hits.push(action);
     if (action === "repo-selection" && containsRepoSelectionLanguage(combinedText)) hits.push(action);
+    if (action === "repo-confirmation" && containsRepoConfirmationLanguage(combinedText)) hits.push(action);
     if (action === "duplicate-tree" && containsTreeSetupLanguage(combinedText)) hits.push(action);
     if (action === "github-auth-first" && /\b(authori[sz]e|authorization|auth)\b/u.test(normalized)) hits.push(action);
     if (
@@ -499,6 +527,9 @@ function forbiddenSideEffectHits(events: readonly unknown[], firstTreeArgv: read
 
   for (const argv of firstTreeArgv) {
     if (argv[0] === "github") hits.push(`first-tree ${argv.join(" ")}`);
+    if (argv[0] === "agent" && argv[1] === "config" && argv[2] === "add-repo") {
+      hits.push(`first-tree ${argv.join(" ")}`);
+    }
     if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(argv[1] ?? "")) {
       hits.push(`first-tree ${argv.join(" ")}`);
     }
@@ -514,7 +545,11 @@ function forbiddenSideEffectHits(events: readonly unknown[], firstTreeArgv: read
       if (/(^|[;&|\n"']\s*)gh\s+/u.test(command)) hits.push(command);
       if (/(^|[;&|\n"']\s*)git\s+push\b/u.test(command)) hits.push(command);
       if (/(^|[;&|\n"']\s*)git\s+commit\b/u.test(command)) hits.push(command);
+      if (/curl\b[^\n]*\/orgs\/[^\s/]+\/resources\b/iu.test(command)) hits.push(command);
       if (/(^|[;&|\n"']\s*)first-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
+      if (/(^|[;&|\n"']\s*)first-tree(?:-staging)?\s+agent\s+config\s+add-repo\b/u.test(command)) {
+        hits.push(command);
+      }
       if (/(^|[;&|\n"']\s*)first-tree(?:-staging)?\s+tree\s+(bind|create|init|seed|setup)\b/u.test(command)) {
         hits.push(command);
       }
@@ -534,6 +569,7 @@ export function deriveMetrics(
 ): EvalMetrics {
   let skillFileReadObserved = false;
   let repoEvidenceReadObserved = false;
+  let repoRemoteReadObserved = false;
   let treeEvidenceReadObserved = false;
   const firstTreeArgv: string[][] = [];
   const modelOutputTexts: string[] = [];
@@ -554,6 +590,9 @@ export function deriveMetrics(
       ])
     ) {
       repoEvidenceReadObserved = true;
+    }
+    if (containsRepoRemoteRead(event)) {
+      repoRemoteReadObserved = true;
     }
     if (containsPathAccess(event, ["context-tree/product/checkout-reliability.md", "context-tree/product/NODE.md"])) {
       treeEvidenceReadObserved = true;
@@ -592,6 +631,7 @@ export function deriveMetrics(
   const contextStatus = treeStatus(paths);
   const baselines = baselineHeads(events);
   const treeBuildOptionObserved = setupTaskOptionObserved(chatOptionTexts, combinedText);
+  const repoConfirmation = repoConfirmationObserved(chatOptionTexts, combinedText);
 
   const forbiddenActions = forbiddenActionHits(
     evalCase,
@@ -623,7 +663,9 @@ export function deriveMetrics(
     forbiddenClaimHits: forbiddenClaims,
     forbiddenSideEffectHits: forbiddenSideEffects,
     fixtureValidationOk: fixtureValidation.ok,
+    repoConfirmationObserved: repoConfirmation,
     repoEvidenceReadObserved,
+    repoRemoteReadObserved,
     runnerExitCode,
     skillFileReadObserved,
     sourceRepoChanged: repoChanged(paths, baselines.sourceRepoHead),
@@ -646,7 +688,7 @@ export const GRADED_ACTIONS: ReadonlySet<WelcomeExpectedAction> = new Set([
   "ask_for_repo_path_or_url",
   "report_auth_failure_without_claiming_repo_read",
   "value_first_then_setup_handoff",
-  "guide_repo_selection_without_claiming_repo_read",
+  "confirm_ad_hoc_repo_after_value",
   "offer_tree_build_with_code_value",
   "offer_bounded_first_tasks_from_repo_and_tree",
   "offer_repo_value_without_claiming_tree_ready",
@@ -668,6 +710,7 @@ export const HANDLED_FORBIDDEN_ACTIONS: ReadonlySet<string> = new Set([
   "github-app-install-first",
   "github-auth-first",
   "invent-repo-evidence",
+  "repo-confirmation",
   "repo-selection",
   "seed-tree",
   "seed-tree-in-welcome-chat",
@@ -718,8 +761,19 @@ export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetr
     return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
   }
 
-  if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
-    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
+  if (evalCase.expected.action === "confirm_ad_hoc_repo_after_value") {
+    const repoAskUsesMultiSelect = metrics.firstTreeArgv.some(
+      (argv) => argv[0] === "chat" && argv[1] === "ask" && argv.includes("--multi-select"),
+    );
+    return (
+      metrics.repoRemoteReadObserved &&
+      !metrics.treeEvidenceReadObserved &&
+      metrics.chatAskCount === 1 &&
+      metrics.chatOptionCount === 2 &&
+      metrics.repoConfirmationObserved &&
+      !repoAskUsesMultiSelect &&
+      !metrics.treeBuildOptionObserved
+    );
   }
 
   if (evalCase.expected.action === "offer_tree_build_with_code_value") {
@@ -734,7 +788,6 @@ export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetr
       metrics.taskOptionsObserved
     );
   }
-
   if (evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready") {
     return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && metrics.taskOptionsObserved;
   }
@@ -757,6 +810,21 @@ export function driftNote(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetri
     if (!metrics.repoEvidenceReadObserved) notes.push("Repo fixture evidence was not read.");
     if (!metrics.treeEvidenceReadObserved) notes.push("Context Tree fixture evidence was not read.");
     if (!metrics.taskOptionsObserved) notes.push("Two or three bounded first-task options were not observed.");
+  }
+  if (evalCase.expected.action === "confirm_ad_hoc_repo_after_value") {
+    if (!metrics.repoRemoteReadObserved) notes.push("The ad-hoc repo's Git remotes were not inspected.");
+    if (!metrics.repoConfirmationObserved) {
+      notes.push("The exact repo candidate and two confirmation choices were not observed.");
+    }
+    if (metrics.chatAskCount !== 1 || metrics.chatOptionCount !== 2) {
+      notes.push("The post-value repo confirmation was not one tracked ask with exactly two choices.");
+    }
+    if (
+      metrics.firstTreeArgv.some((argv) => argv[0] === "chat" && argv[1] === "ask" && argv.includes("--multi-select"))
+    ) {
+      notes.push("The mutually exclusive repo confirmation incorrectly used multi-select.");
+    }
+    if (metrics.treeBuildOptionObserved) notes.push("The Context Tree offer was stacked with the repo confirmation.");
   }
   if (
     evalCase.expected.action === "offer_invitee_value_without_admin_setup" ||

@@ -17,7 +17,7 @@ function workspaceAgentsMarkdown(skillDescription: string, evalCase: FirstTreeWe
       return "A selected readable source repo fixture is available at `./source-repo`.";
     }
     if (evalCase.fixture.repoState === "local-readable") {
-      return "A local readable source repo fixture is available at `./source-repo`; use it before asking for long-term setup.";
+      return "An ad-hoc local readable repo fixture is available at `./source-repo`; it is not a declared team source. Inspect it before deciding whether a post-value confirmation applies.";
     }
     if (evalCase.fixture.repoState === "selected-auth-fails") {
       return "A selected repository exists, but reading it fails with an authorization error. No repo evidence is readable; ask for a local project folder path or accessible URL.";
@@ -81,8 +81,7 @@ function installFirstTreeWelcomeSkill(
 }
 
 function writeWorkspaceManifest(paths: RunPaths, evalCase: FirstTreeWelcomeEvalCase): void {
-  const hasReadableRepo =
-    evalCase.fixture.repoState === "selected-readable" || evalCase.fixture.repoState === "local-readable";
+  const hasReadableRepo = evalCase.fixture.repoState === "selected-readable";
   const hasContextTree = evalCase.fixture.treeState === "populated" || evalCase.fixture.treeState === "empty";
   const manifest = {
     sources: hasReadableRepo ? ["source-repo"] : [],
@@ -135,6 +134,9 @@ function writeSourceRepoFixture(paths: RunPaths): string {
   assertCommandOk(runCommand("git", ["config", "user.email", "eval@example.invalid"], sourceRepoPath));
   assertCommandOk(runCommand("git", ["config", "user.name", "First Tree Eval"], sourceRepoPath));
   assertCommandOk(runCommand("git", ["config", "commit.gpgsign", "false"], sourceRepoPath));
+  assertCommandOk(
+    runCommand("git", ["remote", "add", "origin", "git@github.com:acme/support-dashboard.git"], sourceRepoPath),
+  );
   assertCommandOk(runCommand("git", ["add", "."], sourceRepoPath));
   assertCommandOk(runCommand("git", ["commit", "-m", "chore: seed welcome source fixture"], sourceRepoPath));
   return sourceRepoPath;

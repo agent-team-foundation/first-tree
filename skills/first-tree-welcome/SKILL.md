@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.2.1
+version: 1.3.0
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -77,7 +77,9 @@ available local files:
 - **role**: admin, invitee, or unclear — read it from the onboarding greeting
   (see **Reading role from the greeting** below); the runtime gives you no other
   reliable role signal, so do not assume;
-- **code repo**: connected/recommended, local path/URL provided, or none;
+- **code repo**: connected/recommended team source, ad-hoc local path/URL, or
+  none — preserve that provenance; using an ad-hoc repo once does not make it
+  team code;
 - **Context Tree**: no binding, bound-but-empty, bound-and-populated, or unknown
   — a mere binding does not imply a populated tree, and the tree you may have
   bound is not necessarily this team's; confirm state by reading the **target
@@ -414,6 +416,53 @@ spawned task may have shown.
   spawned task chat already mentioned the missing App, still include the short
   launcher-level line; do not repeat a full setup explanation.
 
+## After value lands: confirm an ad-hoc repo once
+
+A local path or URL used for the first task is temporary by default. After the
+first verified result, confirm whether it should become long-term team code —
+never before value and never as a first-task option.
+
+Offer this only when all of these are true:
+
+- the human is a confirmed **admin** from the onboarding greeting;
+- the readable repo came from an ad-hoc path or URL, not a connected/recommended
+  team source;
+- it resolves to a specific GitHub repo candidate; and
+- this confirmation has not already been asked or declined.
+
+Resolve the candidate before asking:
+
+- For a GitHub URL, normalize it to a clear `github.com/owner/repo` display.
+- For a local path, find its Git root and inspect its fetch remotes. One unique
+  GitHub repo is the candidate. If distinct GitHub remotes point to different
+  repos, do not guess — ask which one should be a team repo, and treat that as
+  candidate disambiguation rather than persistence consent. The two-choice
+  confirmation below applies only after one candidate is resolved. If there is
+  no GitHub remote, keep the repo temporary and do not offer persistence.
+- Show the exact candidate. An `origin` that is a fork is still only a candidate;
+  let the admin correct it. Do not infer or promise a branch setting.
+
+Use one single-select tracked ask with two mutually exclusive choices: **Use as
+team repo** and **Only this time**. Do not use `--multi-select` for this
+confirmation. Explain the consequence in plain language: a team repo is
+available to the team's agents by default. The choice is consent to guide the
+admin, not consent for the agent to write organization settings.
+
+On **Use as team repo**, repeat the exact candidate and guide the admin to
+**Settings -> GitHub -> Source repos** to create it. Use an absolute product link
+only when the server origin is known; otherwise name the stable Settings area.
+The admin must make the final change there. Do not create a team resource, do
+not call `agent config add-repo`, and do not claim the setting changed. On
+**Only this time**, "later", skip, or no, keep it temporary and never ask again
+in this onboarding chat.
+
+Do not stack setup asks on the same result. If this confirmation and the
+one-time Context Tree offer are both due, ask about the repo first; make the tree
+offer on the next natural reply after the repo decision. GitHub App coverage is
+independent: if this result is a PR whose tracking is blocked, give the brief
+informational App-coverage line with the result, then make only the repo decision
+ask. Never add App setup to the repo choices.
+
 ## After value lands: the one-time tree offer
 
 Delivering value is the moment the user is most open to the durable next step —
@@ -427,7 +476,9 @@ was not picked up front. Offer it **once**, after value, on these conditions:
   **Reading role from the greeting**) and the team's Context Tree is still
   **missing or empty** (confirm by reading the target team's tree, not by
   trusting a binding).
-- **Trigger on the first verified result** — the moment a value task returns
+- **Trigger on the first verified result**, unless the ad-hoc repo confirmation
+  above is due; in that case, wait until the next natural reply after the repo
+  decision. The trigger is the moment a value task returns
   something the user can see work, whether it ran in a spawned chat or was fixed
   in place (a passing test, a review-ready PR, a
   shipped doc), tie the offer to that win — not after everything finishes, and
@@ -503,8 +554,9 @@ for tree build; other authorizations use a tracked ask.
 **Role.**
 
 - **Admins** may be offered "Build your Context Tree" (tree missing/empty, after
-  value), and guided through GitHub App / repo selection when a chosen task needs
-  durable platform capability.
+  value), guided through GitHub App setup when a chosen task needs durable
+  platform capability, and given the one-time post-value team-repo confirmation
+  defined above.
 - **Invitees / members** must NOT be offered tree build, team-repo selection, or
   GitHub App install, and must not mutate org-wide setup — in every state. Note
   an admin owns those.
@@ -531,9 +583,11 @@ for tree build; other authorizations use a tracked ask.
   until there is readable code and the human is a confirmed admin.
 
 **Setup handoff (steps you cannot perform — durable GitHub App install, repo
-authorization).** Raise them only when the chosen work genuinely needs them, then
-guide that one step to completion — do not raise setup as an opening menu, and do
-not give brittle click-by-click paths. When you do hand off, give the most
+authorization).** Raise them only when the chosen work genuinely needs them,
+apart from the one-time post-value team-repo confirmation above. That
+confirmation completes onboarding; it is never a task prerequisite or opening
+menu item. Guide one step to completion without brittle click-by-click paths.
+When you do hand off, give the most
 specific stable target available (product deep link; GitHub install URL only when
 the URL/App slug is known; otherwise the console base URL plus a durable area like
 Settings / Integrations). Do not guess slugs or URLs, and do not expose tokens or
@@ -549,6 +603,11 @@ surface; involve the responsible admin.
   mechanism choice that is yours to make (see **You drive** / **Handling snags**).
 - Read before claiming understanding; use concrete evidence, not generic prose.
 - Lead with value understanding; never open with setup.
+- Treat an ad-hoc path or URL as temporary. Only after the first verified result,
+  only for a confirmed admin, and only once, show the exact GitHub candidate and
+  ask whether it should become a team repo. Never write team repo settings or
+  use agent-private `agent config add-repo`; the admin confirms the change in
+  Settings -> GitHub.
 - Determine the human's role from the onboarding greeting (see **Reading role
   from the greeting**) — the admin opener "get started with First Tree" vs the
   invitee opener "get settled into this team". This is your only reliable role
@@ -564,13 +623,15 @@ surface; involve the responsible admin.
 - When the first value result is a PR, consume the task chat's follow/tracking
   status and, only for a confirmed admin when App coverage is missing, surface
   the one-time App-install guidance from **After a value PR opens** in this
-  launcher. This does not replace the tree offer; if both apply, keep each to a
-  short sentence and do not repeat either later.
+  launcher. This does not replace the repo confirmation or tree offer. Never
+  stack the repo confirmation and tree offer on the same result; follow the
+  post-value ordering rules above and do not repeat any of them later.
 - Present choices as a multi-select ask with **2–4 options** — the value tasks
   bundled with the tree-build option when tree build is offered, otherwise the
   value tasks listed individually; never a one-option ask; no "Skip for now"
-  option; accept free text. (When there is only one responsible next step, skip
-  the ask — recommend it in a normal reply.)
+  option; accept free text. This rule is for the first-task menu; the ad-hoc repo
+  confirmation is the single-select exception defined above. (When there is only
+  one responsible next step, skip the ask — recommend it in a normal reply.)
 - Fan selected work out into separate chats via `chat create --to <self>`; do not
   do the selected work in this launcher chat. (Exception: a production-scan fix
   launcher with exactly one eligible blocker fixes it in place — see

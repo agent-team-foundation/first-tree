@@ -113,6 +113,26 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).not.toContain("First Tree sent it");
   });
 
+  it("locks the post-value team-repo confirmation and its scope guardrails", () => {
+    expect(skillMarkdown).toContain("After value lands: confirm an ad-hoc repo once");
+    expect(skillMarkdown).toContain("never before value and never as a first-task option");
+    expect(skillMarkdown).toContain("the human is a confirmed **admin**");
+    expect(skillMarkdown).toMatch(/not a connected\/recommended\s+team source/);
+    expect(skillMarkdown).toContain("If distinct GitHub remotes point to different");
+    expect(skillMarkdown).toContain("candidate disambiguation rather than persistence consent");
+    expect(skillMarkdown).toContain("applies only after one candidate is resolved");
+    expect(skillMarkdown).toMatch(/If there is\s+no GitHub/);
+    expect(skillMarkdown).toContain("keep the repo temporary and do not offer persistence");
+    expect(skillMarkdown).toContain("never ask again");
+    expect(skillMarkdown).toContain("Do not use `--multi-select`");
+    expect(skillMarkdown).toContain("the single-select exception defined above");
+    expect(skillMarkdown).toContain("Settings -> GitHub -> Source repos");
+    expect(skillMarkdown).toMatch(/do\s+not call `agent config add-repo`/);
+    expect(skillMarkdown).toContain("Never write team repo settings");
+    expect(skillMarkdown).toContain("ask about the repo first");
+    expect(skillMarkdown).toContain("Never add App setup to the repo choices");
+  });
+
   it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {
     // Skill activation now rests entirely on the visible message matching the
     // skill description (no hidden directive — see the onboarding kickoff

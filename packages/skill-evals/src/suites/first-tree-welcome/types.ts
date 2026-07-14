@@ -15,7 +15,7 @@ export type WelcomeExpectedAction =
   | "ask_for_repo_path_or_url"
   | "report_auth_failure_without_claiming_repo_read"
   | "value_first_then_setup_handoff"
-  | "guide_repo_selection_without_claiming_repo_read"
+  | "confirm_ad_hoc_repo_after_value"
   | "offer_tree_build_with_code_value"
   | "offer_bounded_first_tasks_from_repo_and_tree"
   | "offer_repo_value_without_claiming_tree_ready"
@@ -89,7 +89,9 @@ export type EvalMetrics = {
   forbiddenSideEffectHits: readonly string[];
   firstTreeArgv: readonly (readonly string[])[];
   fixtureValidationOk: boolean;
+  repoConfirmationObserved: boolean;
   repoEvidenceReadObserved: boolean;
+  repoRemoteReadObserved: boolean;
   runnerExitCode: number | null;
   skillFileReadObserved: boolean;
   sourceRepoChanged: boolean;
