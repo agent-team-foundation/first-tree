@@ -609,7 +609,7 @@ GitHub App installation to cover the repo (`422` otherwise).
 
 ```
 first-tree org
-├── bind-tree <url> [--org <orgId>]                  # legacy caller-org binding write
+├── bind-tree <url> [--org <orgId>] [--branch <branch>] # legacy caller-org binding write
 └── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
     └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
@@ -620,7 +620,10 @@ first-tree org
 after scaffolding the tree. It is retained for compatibility with existing
 scripts: without `--org`, it resolves the caller's default organization through
 `GET /api/v1/me`; with `--org`, it targets the explicitly supplied organization
-ID. It is not agent-scoped and is separate from `context-tree set` below.
+ID. `--branch` is optional and sends an explicit branch when a recovery path must
+reproduce an exact repo/branch binding; when omitted, the server preserves the
+existing branch or defaults to `main`. It is not agent-scoped and is separate
+from `context-tree set` below.
 
 The Class B settings read `GET /api/v1/orgs/:orgId/settings/context_tree`
 returns the same runtime-safe binding representation for admins and members: an
@@ -882,9 +885,13 @@ team's GitHub App installation. It does not seed `.github/workflows/validate-tre
 by default (that needs the interactive `workflow` gh scope); pass `--with-workflow`
 to include it. In the bound path the repo is created under the team's GitHub App
 installation account (so the installation can cover it), and `tree init` refuses
-to replace an existing team binding unless `--rebind` is passed. Key options:
-`--owner`, `--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
-`--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
+to replace an existing team binding unless `--rebind` is passed. Non-rebind
+finalization is conflict-safe: if another writer binds the org after preflight
+but before the local GitHub side effects finish, the server preserves that
+competing binding and `tree init` reports the conflict rather than overwriting
+it. Key options: `--owner`, `--name`, `--title`, `--public`, `--dir`,
+`--with-workflow`, `--no-bind`, `--rebind`, `--org`. Run `first-tree tree init
+--help` for the full list.
 
 `first-tree tree verify` applies the current strict structural policy. Normal
 content requires parseable YAML frontmatter with non-empty `title` and `owners`;

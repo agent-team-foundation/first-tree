@@ -162,6 +162,7 @@ describe("CLI command registration", () => {
       "--type",
     ]);
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
+    expect(optionNames(command(command(root, "org"), "bind-tree"))).toEqual(["--branch", "--org"]);
     expect(optionNames(command(command(root, "org"), "context-tree"))).toEqual(["--agent"]);
     expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--no-pull", "--pattern"]);
   });

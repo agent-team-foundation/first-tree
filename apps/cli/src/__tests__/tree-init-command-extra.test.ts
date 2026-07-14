@@ -156,7 +156,7 @@ describe("tree init command action", () => {
           suspended: false,
         });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
           JSON.stringify({ repo: "https://github.com/acme-org/acme-context-tree", branch: "main" }),
         );
@@ -188,8 +188,8 @@ describe("tree init command action", () => {
       status: "guided",
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://server.example/api/v1/orgs/org_1/settings/context_tree",
-      expect.objectContaining({ method: "PUT" }),
+      "https://server.example/api/v1/orgs/org_1/settings/context_tree/initialize",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 
@@ -208,7 +208,7 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
         return response("missing", { status: 404 });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         expect(init.body).toBe(
           JSON.stringify({ repo: "https://github.com/octocat/branch-only-context-tree", branch: "main" }),
         );
@@ -277,7 +277,7 @@ describe("tree init command action", () => {
       if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
         return response("missing", { status: 404 });
       }
-      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
         return response("ok");
       }
       return response("not found", { status: 404 });
@@ -299,6 +299,46 @@ describe("tree init command action", () => {
     expect(summary).toMatchObject({ bound: true, owner: "octocat" });
   });
 
+  it("fails stop when an older server lacks conflict-safe tree init finalization", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/me")) {
+        return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+        return response("not found", { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method !== "PUT") {
+        return response({ repo: null });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+        return response("missing", { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+        return response("not found", { status: 404 });
+      }
+      return response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_1", title: "Old Server" }), false));
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("does not support conflict-safe tree init finalization");
+    expect(error).toContain("Read back /api/v1/orgs/org_1/settings/context_tree before retrying");
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith("/api/v1/orgs/org_1/settings/context_tree") &&
+          (init as RequestInit | undefined)?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
   it("continues binding with no installation and warns that snapshots are not covered yet", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const base = makeTempDir();
@@ -316,7 +356,7 @@ describe("tree init command action", () => {
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
           return response("missing", { status: 404 });
         }
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
           return response("ok");
         }
         return response("not found", { status: 404 });
@@ -351,7 +391,7 @@ describe("tree init command action", () => {
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
           return response("missing", { status: 404 });
         }
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
           return response("ok");
         }
         return response("not found", { status: 404 });
@@ -717,7 +757,7 @@ describe("tree init command action", () => {
           return response({ repo: null });
         }
         if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) return response("missing", { status: 404 });
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
           return response("server refused binding", { status: 500 });
         }
         return response("not found", { status: 404 });
@@ -728,6 +768,83 @@ describe("tree init command action", () => {
     expect(process.exitCode).toBe(1);
     expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("binding failed");
     expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain("server refused binding");
+  });
+
+  it("preserves the exact org and branch in conflict-safe finalization recovery", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/me")) {
+        return response({
+          defaultOrganizationId: "org_1",
+          memberships: [
+            { organizationId: "org_1", role: "admin" },
+            { organizationId: "org_2", role: "admin" },
+          ],
+        });
+      }
+      if (url.endsWith("/api/v1/orgs/org_2/settings/context_tree/raw")) {
+        return response({ branch: "trunk" });
+      }
+      if (url.endsWith("/api/v1/orgs/org_2/context-tree/installation")) {
+        return response("missing", { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_2/settings/context_tree/initialize") && init?.method === "POST") {
+        return response("already configured", { status: 409 });
+      }
+      return response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_2", title: "Conflict" }), false));
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("org org_2 was bound by another writer");
+    expect(error).toContain("Read the current Context Tree binding before deciding whether to replace it");
+    expect(error).toContain("org bind-tree https://github.com/octocat/conflict-context-tree --org org_2 --branch main");
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith("/api/v1/orgs/org_2/settings/context_tree") &&
+          (init as RequestInit | undefined)?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  it("requires read-back before retry when final binding outcome is unknown", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/me")) {
+          return response({ memberships: [{ organizationId: "org_2", role: "admin" }] });
+        }
+        if (url.endsWith("/api/v1/orgs/org_2/settings/context_tree/raw")) {
+          return response({ branch: "trunk" });
+        }
+        if (url.endsWith("/api/v1/orgs/org_2/context-tree/installation")) {
+          return response("missing", { status: 404 });
+        }
+        if (url.endsWith("/api/v1/orgs/org_2/settings/context_tree/initialize") && init?.method === "POST") {
+          throw new Error("socket closed");
+        }
+        return response("not found", { status: 404 });
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, org: "org_2", title: "Unknown" }), false));
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("binding outcome for org org_2 is unknown");
+    expect(error).toContain("Read back /api/v1/orgs/org_2/settings/context_tree before retrying");
+    expect(error).toContain("org bind-tree https://github.com/octocat/unknown-context-tree --org org_2 --branch main");
   });
 
   it("surfaces unexpected GitHub API response shapes after remote create", async () => {
@@ -771,7 +888,7 @@ describe("tree init command action", () => {
             suspended: true,
           });
         }
-        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree") && init?.method === "PUT") {
+        if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
           return response("ok");
         }
         return response("not found", { status: 404 });

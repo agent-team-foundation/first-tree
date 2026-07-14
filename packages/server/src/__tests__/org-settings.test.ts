@@ -939,6 +939,71 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ branch: "main" });
   });
 
+  it("conditionally finalizes tree init bindings without retaining an old unbound branch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${safeUrl}/initialize`;
+
+    const cleared = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: null, branch: "trunk" },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toEqual({ branch: "trunk" });
+
+    const finalized = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/new-context-tree.git", branch: "main" },
+    });
+    expect(finalized.statusCode).toBe(200);
+    expect(finalized.json()).toEqual({ repo: "https://github.com/example/new-context-tree.git", branch: "main" });
+  });
+
+  it("conditional tree init finalization preserves a binding committed after preflight", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const safeUrl = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const finalizeUrl = `${safeUrl}/initialize`;
+    const competing = { repo: "https://github.com/example/competing.git", branch: "release" };
+
+    const preflight = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(preflight.statusCode).toBe(200);
+    expect(preflight.json()).toEqual({ branch: "main" });
+
+    const competitor = await app.inject({
+      method: "PUT",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: competing,
+    });
+    expect(competitor.statusCode).toBe(200);
+
+    const finalized = await app.inject({
+      method: "POST",
+      url: finalizeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repo: "https://github.com/example/tree-init.git", branch: "main" },
+    });
+    expect(finalized.statusCode).toBe(409);
+
+    const after = await app.inject({
+      method: "GET",
+      url: safeUrl,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json()).toEqual(competing);
+  });
+
   it("keeps context_tree GET runtime-safe and exposes raw repair data only on the admin endpoint", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);

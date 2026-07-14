@@ -29,6 +29,17 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, "context_tree");
   });
 
+  app.post<{ Params: { orgId: string }; Body: unknown }>(
+    "/context_tree/initialize",
+    { config: { otelRecordBody: false } },
+    async (request) => {
+      const scope = await requireOrgAdmin(request, app.db);
+      return orgSettingsService.putInitializedOrgContextTreeBinding(app.db, scope.organizationId, request.body, {
+        updatedBy: scope.userId,
+      });
+    },
+  );
+
   app.get<{ Params: { orgId: string; namespace: string } }>("/:namespace", async (request) => {
     const namespace = parseNamespace(request.params.namespace);
     const scope =

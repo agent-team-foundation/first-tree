@@ -335,24 +335,51 @@ async function readContextTreeBinding(
   }
 }
 
-async function bindOrgToTree(
-  serverUrl: string,
-  accessToken: string,
-  orgId: string,
-  repoUrl: string,
-  branch: string,
-): Promise<void> {
-  const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree`, {
-    method: "PUT",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ repo: repoUrl, branch }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
+function explicitBindCommand(repoUrl: string, orgId: string, branch: string): string {
+  return `${channelConfig.binName} org bind-tree ${repoUrl} --org ${orgId} --branch ${branch}`;
+}
+
+async function bindOrgToTree(args: {
+  serverUrl: string;
+  accessToken: string;
+  orgId: string;
+  repoUrl: string;
+  branch: string;
+  rebind: boolean;
+}): Promise<void> {
+  const path = args.rebind ? "settings/context_tree" : "settings/context_tree/initialize";
+  const endpoint = `${args.serverUrl}/api/v1/orgs/${encodeURIComponent(args.orgId)}/${path}`;
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: args.rebind ? "PUT" : "POST",
+      headers: { Authorization: `Bearer ${args.accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ repo: args.repoUrl, branch: args.branch }),
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Repo created and pushed, but binding failed (server returned ${res.status}). Retry with \`${channelConfig.binName} org bind-tree ${repoUrl}\`. ${text.slice(0, 200)}`,
+      `Repo created and pushed, but the binding outcome for org ${args.orgId} is unknown (${reason}). Read back /api/v1/orgs/${args.orgId}/settings/context_tree before retrying. If it is still unbound and you intentionally want to bind this repo, run \`${explicitBindCommand(args.repoUrl, args.orgId, args.branch)}\`.`,
     );
   }
+
+  if (res.ok) return;
+
+  const text = await res.text().catch(() => "");
+  const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
+  if (!args.rebind && res.status === 409) {
+    throw new Error(
+      `Repo created and pushed, but org ${args.orgId} was bound by another writer before finalization; the existing binding was preserved. Read the current Context Tree binding before deciding whether to replace it. If you intentionally want to replace it with this repo and branch, run \`${retry}\`. ${text.slice(0, 200)}`,
+    );
+  }
+  if (!args.rebind && res.status === 404) {
+    throw new Error(
+      `Repo created and pushed, but this server does not support conflict-safe tree init finalization (404 on /orgs/${args.orgId}/${path}). Read back /api/v1/orgs/${args.orgId}/settings/context_tree before retrying. After the server supports safe finalization, rerun tree init; if the binding is still unbound and you intentionally want to bind this repo, run \`${retry}\`.`,
+    );
+  }
+  throw new Error(
+    `Repo created and pushed, but binding failed for org ${args.orgId} (server returned ${res.status}). Read back /api/v1/orgs/${args.orgId}/settings/context_tree before retrying. If it is still unbound and you intentionally want to bind this repo, run \`${retry}\`. ${text.slice(0, 200)}`,
+  );
 }
 
 type TreeInitSummary = {
@@ -486,7 +513,14 @@ async function runInitCommand(context: CommandContext): Promise<void> {
 
     let bound = false;
     if (bindContext) {
-      await bindOrgToTree(bindContext.serverUrl, bindContext.accessToken, bindContext.orgId, htmlUrl, DEFAULT_BRANCH);
+      await bindOrgToTree({
+        serverUrl: bindContext.serverUrl,
+        accessToken: bindContext.accessToken,
+        orgId: bindContext.orgId,
+        repoUrl: htmlUrl,
+        branch: DEFAULT_BRANCH,
+        rebind: options.rebind,
+      });
       bound = true;
     }
 
