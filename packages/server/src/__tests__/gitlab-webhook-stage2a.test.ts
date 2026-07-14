@@ -29,7 +29,6 @@ import {
 import { declareGitlabEntityFollow, observeGitlabEntityAndResolveFollowers } from "../services/gitlab-entity-follow.js";
 import { createOrganization } from "../services/organization.js";
 import * as scmCardDelivery from "../services/scm-card-delivery.js";
-import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -60,7 +59,13 @@ async function postWebhook(
   app: App,
   bearer: string,
   body: object,
-  options: { event?: string; stableId?: string; remoteAddress?: string } = {},
+  options: {
+    event?: string;
+    stableId?: string;
+    webhookId?: string;
+    webhookUuid?: string;
+    remoteAddress?: string;
+  } = {},
 ) {
   return app.inject({
     method: "POST",
@@ -69,6 +74,8 @@ async function postWebhook(
       "content-type": "application/json",
       "x-gitlab-event": options.event ?? "Issue Hook",
       ...(options.stableId ? { "idempotency-key": options.stableId } : {}),
+      ...(options.webhookId ? { "webhook-id": options.webhookId } : {}),
+      ...(options.webhookUuid ? { "x-gitlab-webhook-uuid": options.webhookUuid } : {}),
     },
     payload: JSON.stringify(body),
     ...(options.remoteAddress ? { remoteAddress: options.remoteAddress } : {}),
@@ -314,9 +321,22 @@ describe("GitLab Stage 2A backend", () => {
     expect(claimed.filter((row) => row.eventId.startsWith(second.connectionId))).toHaveLength(1);
 
     const before = claimed.length;
-    expect((await postWebhook(app, first.bearer, issuePayload(43))).statusCode).toBe(200);
+    expect(
+      (
+        await postWebhook(app, first.bearer, issuePayload(43), {
+          webhookUuid: `request-${randomUUID()}`,
+        })
+      ).statusCode,
+    ).toBe(200);
     const after = await app.db.select().from(processedEvents).where(eq(processedEvents.platform, "gitlab"));
     expect(after).toHaveLength(before);
+
+    const webhookStableId = `standard-${randomUUID()}`;
+    expect((await postWebhook(app, first.bearer, issuePayload(44), { webhookId: webhookStableId })).statusCode).toBe(
+      200,
+    );
+    const afterWebhookId = await app.db.select().from(processedEvents).where(eq(processedEvents.platform, "gitlab"));
+    expect(afterWebhookId).toHaveLength(before + 1);
   });
 
   it("resolves a pending follow and delivers one basic card per chat without wake or outbound fetch", async () => {
@@ -418,54 +438,79 @@ describe("GitLab Stage 2A backend", () => {
     expect(oversized.statusCode).toBe(413);
   });
 
-  it("keeps a pending declaration unresolved when its chat is already bound to a different numeric project", async () => {
+  it("allows one chat to follow the same type and IID in two numeric projects", async () => {
     const app = getApp();
     const first = await connection(app);
     const chatId = `chat_${randomUUID()}`;
     await app.db
       .insert(chats)
       .values({ id: chatId, organizationId: first.admin.organizationId, type: "group", metadata: {} });
-    const pending = await declareGitlabEntityFollow(app.db, {
-      organizationId: first.admin.organizationId,
-      connectionId: first.connectionId,
-      chatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
-      entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
-    });
-    await app.db.insert(gitlabEntityChatMappings).values({
-      id: uuidv7(),
-      organizationId: first.admin.organizationId,
-      connectionId: first.connectionId,
-      chatId,
-      declaredByAgentId: first.admin.humanAgentUuid,
-      entityType: "issue",
+    for (const projectPath of ["Acme/API", "Other/API"]) {
+      await declareGitlabEntityFollow(app.db, {
+        organizationId: first.admin.organizationId,
+        connectionId: first.connectionId,
+        chatId,
+        declaredByAgentId: first.admin.humanAgentUuid,
+        entityUrl: `https://gitlab.internal/${projectPath}/-/issues/42`,
+      });
+    }
+    const identity = (projectId: number, projectPath: string) => ({
+      entityType: "issue" as const,
       entityIid: 42,
-      projectId: 999,
-      projectPath: "Other/API",
-      projectPathNormalized: "other/api",
-      entityUrl: "https://gitlab.internal/Other/API/-/issues/42",
-      status: "observed",
+      projectId,
+      projectPath,
+      entityUrl: `https://gitlab.internal/${projectPath}/-/issues/42`,
+      title: "Webhook issue",
+      entityState: "opened",
     });
-    const resolved = await observeGitlabEntityAndResolveFollowers(
+    expect(
+      await observeGitlabEntityAndResolveFollowers(
+        app.db,
+        first.admin.organizationId,
+        first.connectionId,
+        identity(501, "Acme/API"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      await observeGitlabEntityAndResolveFollowers(
+        app.db,
+        first.admin.organizationId,
+        first.connectionId,
+        identity(502, "Other/API"),
+      ),
+    ).toHaveLength(1);
+    const secondProjectRepeat = await observeGitlabEntityAndResolveFollowers(
       app.db,
       first.admin.organizationId,
       first.connectionId,
-      {
-        entityType: "issue",
-        entityIid: 42,
-        projectId: 501,
-        projectPath: "Acme/API",
-        entityUrl: "https://gitlab.internal/Acme/API/-/issues/42",
-        title: "Webhook issue",
-        entityState: "opened",
-      },
+      identity(502, "Other/API"),
     );
-    expect(resolved).toHaveLength(0);
-    const [stored] = await app.db
+    expect(secondProjectRepeat).toHaveLength(1);
+    expect(secondProjectRepeat[0]).toMatchObject({
+      chatId,
+      projectId: 502,
+      entityType: "issue",
+      entityIid: 42,
+      status: "observed",
+    });
+    const stored = await app.db
       .select()
       .from(gitlabEntityChatMappings)
-      .where(eq(gitlabEntityChatMappings.id, pending?.id ?? ""));
-    expect(stored).toMatchObject({ status: "pending", lastConflictReason: "chat_already_bound_to_different_project" });
+      .where(
+        and(
+          eq(gitlabEntityChatMappings.connectionId, first.connectionId),
+          eq(gitlabEntityChatMappings.chatId, chatId),
+          eq(gitlabEntityChatMappings.entityType, "issue"),
+          eq(gitlabEntityChatMappings.entityIid, 42),
+        ),
+      );
+    expect(stored).toHaveLength(2);
+    expect(stored).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ projectId: 501, status: "observed" }),
+        expect.objectContaining({ projectId: 502, status: "observed" }),
+      ]),
+    );
   });
 
   it("serializes incident disable against in-flight ingress and queued follow declarations", async () => {

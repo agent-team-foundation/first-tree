@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildClaimReadyGitlabDeliveryId } from "../services/gitlab-connections.js";
-import { normalizeGitlabWebhook } from "../services/gitlab-webhook.js";
+import { extractStableGitlabDeliveryId, normalizeGitlabWebhook } from "../services/gitlab-webhook.js";
 
 const base = {
   organizationId: "org-1",
@@ -138,5 +138,18 @@ describe("GitLab webhook normalization", () => {
     expect(a).not.toBe(b);
     expect(a).toMatch(/^connection-a:/);
     expect(b).toMatch(/^connection-b:/);
+  });
+
+  it("claims only retry-stable delivery headers and requires modern headers to agree", () => {
+    const expected = buildClaimReadyGitlabDeliveryId("connection-1", "delivery-1");
+    expect(extractStableGitlabDeliveryId({ "idempotency-key": "delivery-1" }, "connection-1")).toBe(expected);
+    expect(extractStableGitlabDeliveryId({ "webhook-id": "delivery-1" }, "connection-1")).toBe(expected);
+    expect(
+      extractStableGitlabDeliveryId({ "idempotency-key": "delivery-1", "webhook-id": "delivery-1" }, "connection-1"),
+    ).toBe(expected);
+    expect(extractStableGitlabDeliveryId({ "x-gitlab-webhook-uuid": "request-only-uuid" }, "connection-1")).toBeNull();
+    expect(() =>
+      extractStableGitlabDeliveryId({ "idempotency-key": "delivery-1", "webhook-id": "delivery-2" }, "connection-1"),
+    ).toThrow("must match");
   });
 });

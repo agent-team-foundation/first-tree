@@ -240,23 +240,11 @@ export async function observeGitlabEntityAndResolveFollowers(
           and(
             eq(gitlabEntityChatMappings.connectionId, connectionId),
             eq(gitlabEntityChatMappings.chatId, row.chatId),
-            eq(gitlabEntityChatMappings.entityType, entity.entityType),
-            eq(gitlabEntityChatMappings.entityIid, entity.entityIid),
+            eq(gitlabEntityChatMappings.entityId, projection.id),
             eq(gitlabEntityChatMappings.status, "observed"),
           ),
         )
         .limit(1);
-      if (observed && observed.id !== row.id && observed.entityId !== projection.id) {
-        await tx
-          .update(gitlabEntityChatMappings)
-          .set({
-            lastConflictAt: new Date(),
-            lastConflictReason: "chat_already_bound_to_different_project",
-            updatedAt: new Date(),
-          })
-          .where(eq(gitlabEntityChatMappings.id, row.id));
-        continue;
-      }
       if (observed && observed.id !== row.id && observed.entityId === projection.id) {
         await tx.delete(gitlabEntityChatMappings).where(eq(gitlabEntityChatMappings.id, row.id));
         if (!resolved.some((candidate) => candidate.id === observed.id)) resolved.push(observed);

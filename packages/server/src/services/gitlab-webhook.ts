@@ -79,9 +79,20 @@ function actionKind(action: string | null, fallback: NormalizedScmEvent["kind"])
 }
 
 export function extractStableGitlabDeliveryId(headers: Record<string, unknown>, connectionId: string): string | null {
-  const raw = headers["idempotency-key"] ?? headers["x-gitlab-webhook-uuid"];
-  if (raw === undefined) return null;
-  if (typeof raw !== "string" || raw.length < 1 || raw.length > 256 || /[^\x21-\x7e]/.test(raw)) {
+  const idempotencyKey = headers["idempotency-key"];
+  const webhookId = headers["webhook-id"];
+  if (idempotencyKey === undefined && webhookId === undefined) return null;
+  for (const raw of [idempotencyKey, webhookId]) {
+    if (raw === undefined) continue;
+    if (typeof raw !== "string" || raw.length < 1 || raw.length > 256 || /[^\x21-\x7e]/.test(raw)) {
+      throw new BadRequestError("GitLab stable delivery id header is invalid");
+    }
+  }
+  if (idempotencyKey !== undefined && webhookId !== undefined && idempotencyKey !== webhookId) {
+    throw new BadRequestError("GitLab stable delivery id headers must match");
+  }
+  const raw = webhookId ?? idempotencyKey;
+  if (typeof raw !== "string") {
     throw new BadRequestError("GitLab stable delivery id header is invalid");
   }
   return buildClaimReadyGitlabDeliveryId(connectionId, raw);
