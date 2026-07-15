@@ -28,9 +28,7 @@ import { resolvePublicUrl } from "../../utils/public-url.js";
 import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
 
 export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
-  // OAuth routes use the global actor-aware limiter registered in app.ts.
-  // codeql[js/missing-rate-limiting]
-  app.get("/start", async (request, reply) => {
+  app.get("/start", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     const config = app.config.oauth?.google;
     if (!config) return reply.status(503).send({ code: "provider-not-configured", error: "Google is not configured" });
     const { next } = oauthStartQuerySchema.parse(request.query);
@@ -42,7 +40,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     });
     // The cookie stores only a random, short-lived CSRF nonce, not a token or
     // provider identity. It is HttpOnly, SameSite=Lax, and Secure in prod.
-    // codeql[js/clear-text-storage-sensitive-data]
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookie(nonce));
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/google/callback`;
     app.log.info({ event: "oauth.start", provider: "google", intent: "sign-in" }, "OAuth flow started");
@@ -52,9 +50,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     );
   });
 
-  // OAuth routes use the global actor-aware limiter registered in app.ts.
-  // codeql[js/missing-rate-limiting]
-  app.get("/callback", async (request, reply) => {
+  app.get("/callback", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     const config = app.config.oauth?.google;
     if (!config) return redirectError(reply, "provider-not-configured");
     const { code, state, error: providerError } = googleCallbackQuerySchema.parse(request.query);
@@ -69,7 +65,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       return redirectError(reply, "state-expired");
     }
     // This deletion header clears the same nonce-only cookie.
-    // codeql[js/clear-text-storage-sensitive-data]
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookie("", 0));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 

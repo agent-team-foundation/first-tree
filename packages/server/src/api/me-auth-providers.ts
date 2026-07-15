@@ -93,7 +93,7 @@ async function startProviderAction(
   // The cookie contains only a random, short-lived CSRF nonce. It is not a
   // credential and is protected with HttpOnly, SameSite=Lax, and Secure in
   // production; CodeQL otherwise mistakes the Set-Cookie header for storage.
-  // codeql[js/clear-text-storage-sensitive-data]
+  // codeql[js/clear-text-storage-of-sensitive-data]
   reply.header(
     "Set-Cookie",
     buildCookie({
