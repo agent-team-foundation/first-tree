@@ -10,6 +10,8 @@ const AUTHORIZATION_SCHEME_VALUE = `[A-Za-z][A-Za-z0-9_-]*\\s+[^\\s'"}]+|[^\\s,'
 
 const PRIVATE_KEY_BLOCK_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
 const AUTHORIZATION_HEADER_RE = new RegExp(`(^|\\r?\\n)(\\s*${AUTHORIZATION_KEY}\\s*:\\s*)([^\\r\\n]*)`, "gi");
+const SINGLE_QUOTED_AUTHORIZATION_HEADER_RE = /(')(authorization\s*:\s*)[^'\r\n]*(')/gi;
+const DOUBLE_QUOTED_AUTHORIZATION_HEADER_RE = /(")(authorization\s*:\s*)(?:\\.|[^"\\\r\n])*(")/gi;
 const AUTHORIZATION_QUOTED_ASSIGNMENT_RE = new RegExp(`(${AUTHORIZATION_KEY}\\s*[:=]\\s*)(${QUOTED_VALUE})`, "gi");
 const AUTHORIZATION_SCHEME_ASSIGNMENT_RE = new RegExp(
   `(${AUTHORIZATION_KEY}\\s*=\\s*)(${AUTHORIZATION_SCHEME_VALUE})`,
@@ -28,6 +30,12 @@ const SENSITIVE_ASSIGNMENT_RE = new RegExp(`(${SENSITIVE_KEY}\\s*[:=]\\s*)(${ASS
 export function redactCredentialText(value: string): string {
   return value
     .replace(PRIVATE_KEY_BLOCK_RE, "[REDACTED_PRIVATE_KEY]")
+    .replace(SINGLE_QUOTED_AUTHORIZATION_HEADER_RE, (_match, open: string, prefix: string, close: string) => {
+      return `${open}${prefix}${REDACTED}${close}`;
+    })
+    .replace(DOUBLE_QUOTED_AUTHORIZATION_HEADER_RE, (_match, open: string, prefix: string, close: string) => {
+      return `${open}${prefix}${REDACTED}${close}`;
+    })
     .replace(AUTHORIZATION_HEADER_RE, (_match, lineStart: string, prefix: string, assignedValue: string) => {
       return `${lineStart}${prefix}${redactedAssignmentValue(assignedValue)}`;
     })
