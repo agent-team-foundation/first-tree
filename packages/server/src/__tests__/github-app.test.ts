@@ -14,6 +14,7 @@ import {
   getRepoFileWithToken,
   getRepository,
   listInstallationRepos,
+  listPullRequestReviewsForRun,
   mintInstallationToken,
   refreshAppUserToken,
   verifyUserCanAdministerInstallation,
@@ -232,6 +233,47 @@ describe("services/github-app", () => {
         event: "APPROVE",
         body: "Approved",
       });
+    });
+
+    it("paginates review reconciliation until it finds the hidden run marker", async () => {
+      const marker = "<!-- first-tree-context-review-run:run-42 -->";
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        id: index + 1,
+        html_url: `https://github.com/owner/repo/pull/42#pullrequestreview-${index + 1}`,
+        user: { login: "someone-else" },
+        commit_id: "a".repeat(40),
+        body: "Unrelated review",
+      }));
+      const fakeFetch = vi.fn<typeof fetch>(async (url) => {
+        const target = String(url);
+        const reviews = target.endsWith("&page=2")
+          ? [
+              {
+                id: 101,
+                html_url: "https://github.com/owner/repo/pull/42#pullrequestreview-101",
+                user: { login: "first-tree[bot]" },
+                commit_id: "a".repeat(40),
+                body: marker,
+              },
+            ]
+          : firstPage;
+        return new Response(JSON.stringify(reviews), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      await expect(
+        listPullRequestReviewsForRun(
+          "token",
+          { owner: "owner", repo: "repo", prNumber: 42, marker, appSlug: "first-tree" },
+          { fetcher: fakeFetch },
+        ),
+      ).resolves.toMatchObject([{ id: 101, actor: "first-tree[bot]" }]);
+      expect(fakeFetch.mock.calls.map(([url]) => String(url))).toEqual([
+        "https://api.github.com/repos/owner/repo/pulls/42/reviews?per_page=100",
+        "https://api.github.com/repos/owner/repo/pulls/42/reviews?per_page=100&page=2",
+      ]);
     });
   });
 

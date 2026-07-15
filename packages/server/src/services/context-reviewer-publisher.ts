@@ -1,10 +1,21 @@
 import { createHash } from "node:crypto";
-import type { ContextReviewEvent, ContextReviewSubmitRequest, ContextReviewSubmitResponse } from "@first-tree/shared";
+import {
+  type ContextReviewEvent,
+  type ContextReviewSubmitRequest,
+  type ContextReviewSubmitResponse,
+  contextReviewSubmitRequestSchema,
+} from "@first-tree/shared";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
+import { clients } from "../db/schema/clients.js";
+import { githubAppInstallations } from "../db/schema/github-app-installations.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { organizations } from "../db/schema/organizations.js";
 import { uuidv7 } from "../uuid.js";
+import { validateAgentRuntimeSession } from "./agent-runtime-session.js";
 import { normalizeGithubRepo } from "./context-reviewer-pr.js";
 import {
   createAppJwt,
@@ -16,7 +27,6 @@ import {
   listPullRequestReviewsForRun,
   mintInstallationToken,
 } from "./github-app.js";
-import { findInstallationByOrg } from "./github-app-installations.js";
 import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
 
 type SubmissionState =
@@ -86,11 +96,13 @@ export async function submitContextReviewOutcome(input: {
   runId: string;
   callerAgentUuid: string;
   callerClientId: string;
+  callerRuntimeSessionToken: string;
   request: ContextReviewSubmitRequest;
   appCredentials: (GithubAppCredentials & { slug?: string }) | undefined;
   fetcher?: typeof fetch;
 }): Promise<ContextReviewSubmitResponse> {
-  const payloadHash = hashPayload(input.request);
+  const request = contextReviewSubmitRequestSchema.parse(input.request);
+  const payloadHash = hashPayload(request);
   const inspection = await input.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockReviewChat(db, input.chatId);
@@ -107,7 +119,11 @@ export async function submitContextReviewOutcome(input: {
       throw alreadySubmitted();
     }
 
-    const current = await assertCurrentAuthority(db, run, input.callerAgentUuid);
+    const current = await assertCurrentAuthority(db, run, {
+      callerAgentUuid: input.callerAgentUuid,
+      callerClientId: input.callerClientId,
+      runtimeSessionToken: input.callerRuntimeSessionToken,
+    });
     if (run.submission.state === "submitting" || run.submission.state === "unknown") {
       if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
       return {
@@ -121,9 +137,8 @@ export async function submitContextReviewOutcome(input: {
   });
   if (inspection.kind === "submitted") return inspection.response;
   const github = await prepareGithubPublisher({
-    db: input.db,
-    organizationId: inspection.run.organizationId,
     repository: inspection.run.repository,
+    installationId: inspection.current.installationId,
     appCredentials: input.appCredentials,
     fetcher: input.fetcher,
   });
@@ -136,7 +151,7 @@ export async function submitContextReviewOutcome(input: {
   ).catch((error: unknown) => {
     throw mapGithubPreflightError(error);
   });
-  assertPullRequestReviewable(pullRequest, input.request);
+  assertPullRequestReviewable(pullRequest, request);
 
   if (inspection.kind === "pending" && inspection.run.blockedByRunId) {
     await reconcileBlockingSubmission({
@@ -152,7 +167,7 @@ export async function submitContextReviewOutcome(input: {
       db: input.db,
       run: inspection.run,
       runId: input.runId,
-      request: input.request,
+      request,
       github,
       payloadHash,
       reviewerClientId: inspection.reviewerClientId,
@@ -166,7 +181,12 @@ export async function submitContextReviewOutcome(input: {
     const run = await loadRunFacts(db, input.chatId, input.runId);
     authorizeRun(run, input.callerAgentUuid);
     await assertCurrentRun(db, run);
-    await assertCurrentAuthority(db, run, input.callerAgentUuid);
+    await assertCurrentAuthority(db, run, {
+      callerAgentUuid: input.callerAgentUuid,
+      callerClientId: input.callerClientId,
+      runtimeSessionToken: input.callerRuntimeSessionToken,
+      expectedInstallationId: inspection.current.installationId,
+    });
 
     if (run.submission.state === "submitted") {
       if (run.submission.payloadHash !== payloadHash) throw payloadMismatch();
@@ -190,8 +210,8 @@ export async function submitContextReviewOutcome(input: {
       state: "submitting",
       payloadHash,
       attemptId,
-      reviewedHead: input.request.reviewedHead,
-      event: input.request.event,
+      reviewedHead: request.reviewedHead,
+      event: request.event,
       claimedAt: new Date().toISOString(),
       reviewerClientId: input.callerClientId,
     });
@@ -204,7 +224,7 @@ export async function submitContextReviewOutcome(input: {
       db: input.db,
       run: claim.run,
       runId: input.runId,
-      request: input.request,
+      request,
       github,
       payloadHash,
       reviewerClientId: claim.reviewerClientId,
@@ -221,9 +241,9 @@ export async function submitContextReviewOutcome(input: {
         owner: inspection.current.owner,
         repo: inspection.current.repo,
         prNumber: claim.run.prNumber,
-        commitId: input.request.reviewedHead,
-        event: input.request.event,
-        body: `${input.request.body.trimEnd()}\n\n${marker}`,
+        commitId: request.reviewedHead,
+        event: request.event,
+        body: `${request.body.trimEnd()}\n\n${marker}`,
       },
       { fetcher: input.fetcher },
     );
@@ -233,8 +253,8 @@ export async function submitContextReviewOutcome(input: {
         state: "unknown",
         payloadHash,
         attemptId: claim.attemptId,
-        reviewedHead: input.request.reviewedHead,
-        event: input.request.event,
+        reviewedHead: request.reviewedHead,
+        event: request.event,
         failedAt: new Date().toISOString(),
         reviewerClientId: input.callerClientId,
       });
@@ -255,8 +275,8 @@ export async function submitContextReviewOutcome(input: {
   }
 
   const submitted = submissionFromReview({
-    reviewedHead: input.request.reviewedHead,
-    event: input.request.event,
+    reviewedHead: request.reviewedHead,
+    event: request.event,
     payloadHash,
     review,
     run: claim.run,
@@ -386,9 +406,28 @@ function authorizeRun(run: RunFacts, callerAgentUuid: string): void {
   }
 }
 
-async function assertCurrentAuthority(db: Database, run: RunFacts, callerAgentUuid: string) {
+async function assertCurrentAuthority(
+  db: Database,
+  run: RunFacts,
+  input: {
+    callerAgentUuid: string;
+    callerClientId: string;
+    runtimeSessionToken: string;
+    expectedInstallationId?: number;
+  },
+) {
+  const [organization] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.id, run.organizationId))
+    .for("update")
+    .limit(1);
+  if (!organization) {
+    throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Organization is unavailable.");
+  }
+
   const features = await getOrgSetting(db, run.organizationId, "context_tree_features");
-  if (!features.contextReviewer.enabled || features.contextReviewer.agentUuid !== callerAgentUuid) {
+  if (!features.contextReviewer.enabled || features.contextReviewer.agentUuid !== input.callerAgentUuid) {
     throw new ContextReviewPublisherError(
       403,
       "CONTEXT_REVIEW_RUN_FORBIDDEN",
@@ -406,29 +445,94 @@ async function assertCurrentAuthority(db: Database, run: RunFacts, callerAgentUu
   }
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Invalid repo.");
-  return { owner, repo };
-}
 
-async function prepareGithubPublisher(input: {
-  db: Database;
-  organizationId: string;
-  repository: string;
-  appCredentials: (GithubAppCredentials & { slug?: string }) | undefined;
-  fetcher?: typeof fetch;
-}) {
-  if (!input.appCredentials?.slug) {
+  const [reviewer] = await db
+    .select({
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      status: agents.status,
+      clientId: agents.clientId,
+      managerId: agents.managerId,
+    })
+    .from(agents)
+    .where(eq(agents.uuid, input.callerAgentUuid))
+    .for("update")
+    .limit(1);
+  if (
+    !reviewer ||
+    reviewer.organizationId !== run.organizationId ||
+    reviewer.type !== "agent" ||
+    reviewer.status !== "active" ||
+    reviewer.clientId !== input.callerClientId
+  ) {
     throw new ContextReviewPublisherError(
-      503,
-      "CONTEXT_REVIEW_APP_NOT_INSTALLED",
-      "GitHub App publication is not configured on this First Tree environment.",
+      403,
+      "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      "The configured Context Reviewer runtime is no longer active for this run.",
     );
   }
-  const installation = await findInstallationByOrg(input.db, input.organizationId);
-  if (!installation) {
+
+  const [client] = await db
+    .select({
+      id: clients.id,
+      organizationId: clients.organizationId,
+      userId: clients.userId,
+      retiredAt: clients.retiredAt,
+    })
+    .from(clients)
+    .where(eq(clients.id, input.callerClientId))
+    .for("update")
+    .limit(1);
+  const [manager] = await db
+    .select({
+      id: members.id,
+      organizationId: members.organizationId,
+      userId: members.userId,
+      agentId: members.agentId,
+      status: members.status,
+    })
+    .from(members)
+    .where(eq(members.id, reviewer.managerId))
+    .for("update")
+    .limit(1);
+  if (
+    !client ||
+    client.organizationId !== run.organizationId ||
+    client.retiredAt !== null ||
+    !client.userId ||
+    !manager ||
+    manager.organizationId !== run.organizationId ||
+    manager.status !== "active" ||
+    manager.agentId !== run.reviewerManagerHumanAgentId ||
+    manager.userId !== client.userId ||
+    !(await validateAgentRuntimeSession(db, input.callerAgentUuid, input.callerClientId, input.runtimeSessionToken))
+  ) {
+    throw new ContextReviewPublisherError(
+      403,
+      "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      "The reviewer manager, client, or runtime session authority was revoked before publication.",
+    );
+  }
+
+  const [installation] = await db
+    .select({
+      installationId: githubAppInstallations.installationId,
+      permissions: githubAppInstallations.permissions,
+      suspendedAt: githubAppInstallations.suspendedAt,
+    })
+    .from(githubAppInstallations)
+    .where(eq(githubAppInstallations.hubOrganizationId, run.organizationId))
+    .for("update")
+    .limit(1);
+  if (
+    !installation ||
+    (input.expectedInstallationId !== undefined && installation.installationId !== input.expectedInstallationId)
+  ) {
     throw new ContextReviewPublisherError(
       422,
       "CONTEXT_REVIEW_APP_NOT_INSTALLED",
-      "Connect the GitHub App installation for this team before publishing Context reviews.",
+      "The GitHub App installation binding changed before the review publication claim.",
     );
   }
   if (installation.suspendedAt) {
@@ -445,11 +549,27 @@ async function prepareGithubPublisher(input: {
       "The installation owner must accept the GitHub App Pull requests: write permission upgrade.",
     );
   }
+  return { owner, repo, installationId: installation.installationId };
+}
+
+async function prepareGithubPublisher(input: {
+  repository: string;
+  installationId: number;
+  appCredentials: (GithubAppCredentials & { slug?: string }) | undefined;
+  fetcher?: typeof fetch;
+}) {
+  if (!input.appCredentials?.slug) {
+    throw new ContextReviewPublisherError(
+      503,
+      "CONTEXT_REVIEW_APP_NOT_INSTALLED",
+      "GitHub App publication is not configured on this First Tree environment.",
+    );
+  }
   const [, repo] = input.repository.split("/");
   if (!repo) throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Invalid repo.");
   try {
     const appJwt = await createAppJwt(input.appCredentials);
-    const minted = await mintInstallationToken(appJwt, installation.installationId, {
+    const minted = await mintInstallationToken(appJwt, input.installationId, {
       fetcher: input.fetcher,
       repositories: [repo],
       permissions: { metadata: "read", pull_requests: "write" },

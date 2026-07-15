@@ -39,6 +39,7 @@ export async function agentContextReviewRunRoutes(app: FastifyInstance): Promise
           runId: request.params.runId,
           callerAgentUuid: identity.uuid,
           callerClientId: identity.clientId,
+          callerRuntimeSessionToken: runtimeToken,
           request: parsed.data,
           appCredentials: app.config.oauth?.githubApp,
         });

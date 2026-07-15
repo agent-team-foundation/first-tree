@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -289,6 +290,19 @@ export async function handleContextReviewerPrEvent(
         suppressed: true,
       };
     }
+    const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
+      chatId: existingChatId,
+      info,
+    });
+    if (supersedingSynchronizeMessageId) {
+      return {
+        handled: true,
+        chatId: existingChatId,
+        messageId: supersedingSynchronizeMessageId,
+        reused: true,
+        suppressed: true,
+      };
+    }
 
     const contextReviewRunId = uuidv7();
     const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer, contextReviewRunId));
@@ -327,6 +341,7 @@ export async function handleContextReviewerPrEvent(
     initialRecipientAgentIds: [reviewer.uuid],
     contextParticipantAgentIds: [],
     topic: `Context Review PR #${info.prNumber}: ${info.title}`,
+    onboardingKickoffKey: contextReviewerChatReservationKey(input.organizationId, info.entityKey),
     initialMessage: {
       source: "github",
       format: "markdown",
@@ -337,6 +352,41 @@ export async function handleContextReviewerPrEvent(
     source: "manual",
   });
   await app.db.update(chats).set({ metadata }).where(eq(chats.id, created.chat.id));
+  if (!created.initialMessageCreated) {
+    await applyMembershipWrite(
+      app.db,
+      created.chat.id,
+      [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
+      { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
+    );
+    const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
+      chatId: created.chat.id,
+      info,
+    });
+    if (supersedingSynchronizeMessageId) {
+      return {
+        handled: true,
+        chatId: created.chat.id,
+        messageId: supersedingSynchronizeMessageId,
+        reused: true,
+        suppressed: true,
+      };
+    }
+    const { message, recipients } = await sendMessage(
+      app.db,
+      created.chat.id,
+      reviewer.managerHumanAgentId,
+      {
+        source: "github",
+        format: "markdown",
+        content: prompt,
+        metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
+      },
+      { normalizeMentionsInContent: false, allowContextReviewRun: true },
+    );
+    notifyRecipients(app.notifier, recipients, message.id);
+    return { handled: true, chatId: created.chat.id, messageId: message.id, reused: true };
+  }
   notifyRecipients(app.notifier, created.recipients, created.message.id);
   log.info(
     {
@@ -349,6 +399,11 @@ export async function handleContextReviewerPrEvent(
     "context reviewer task chat created",
   );
   return { handled: true, chatId: created.chat.id, messageId: created.message.id, reused: false };
+}
+
+function contextReviewerChatReservationKey(organizationId: string, entityKey: string): string {
+  const digest = createHash("sha256").update(`${organizationId}\0${entityKey}`).digest("hex");
+  return `context-review:${digest}`;
 }
 
 export async function handleContextReviewerPullRequest(
@@ -601,6 +656,28 @@ async function findExistingReviewerChat(
     )
     .limit(1);
   return row?.id ?? null;
+}
+
+async function findSupersedingSynchronizeMessageId(
+  db: Database,
+  input: { chatId: string; info: PullRequestPayloadInfo },
+): Promise<string | null> {
+  if (input.info.triggerEvent !== "pull_request.opened") return null;
+  const [row] = await db
+    .select({ id: messages.id, headSha: sql<string | null>`${messages.metadata}->>'contextReviewHeadSha'` })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.chatId, input.chatId),
+        eq(messages.source, "github"),
+        sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
+        sql`${messages.metadata}->>'triggerEvent' = 'pull_request.synchronize'`,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(1);
+  if (!row) return null;
+  return input.info.headSha && row.headSha === input.info.headSha ? null : row.id;
 }
 
 async function findSuppressibleReviewerEchoMessageId(

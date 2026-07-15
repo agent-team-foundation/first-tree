@@ -7,7 +7,10 @@ export const contextReviewEventSchema = z.enum(CONTEXT_REVIEW_EVENTS);
 export type ContextReviewEvent = z.infer<typeof contextReviewEventSchema>;
 
 export const contextReviewSubmitRequestSchema = z.object({
-  reviewedHead: z.string().regex(/^[0-9a-f]{40}$/i, "reviewedHead must be a full 40-character commit OID"),
+  reviewedHead: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/i, "reviewedHead must be a full 40-character commit OID")
+    .transform((value) => value.toLowerCase()),
   event: contextReviewEventSchema,
   body: z
     .string()

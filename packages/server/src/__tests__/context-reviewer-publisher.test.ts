@@ -3,12 +3,19 @@ import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree
 import { eq, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { clients } from "../db/schema/clients.js";
+import { githubAppInstallations } from "../db/schema/github-app-installations.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
-import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
+import { bindAgentRuntimeSession, revokeAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { handleContextReviewerPrEvent } from "../services/context-reviewer-pr.js";
 import { submitContextReviewOutcome } from "../services/context-reviewer-publisher.js";
-import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import {
+  bindInstallationToOrg,
+  disconnectInstallationFromOrg,
+  upsertInstallationFromMetadata,
+} from "../services/github-app-installations.js";
 import { editMessage } from "../services/message.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
@@ -33,6 +40,7 @@ describe("Context Reviewer App publisher", () => {
       runId: fixture.runId,
       callerAgentUuid: fixture.reviewer.uuid,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       request,
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher,
@@ -43,6 +51,7 @@ describe("Context Reviewer App publisher", () => {
       runId: fixture.runId,
       callerAgentUuid: fixture.reviewer.uuid,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       request,
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher,
@@ -81,6 +90,7 @@ describe("Context Reviewer App publisher", () => {
       chatId: fixture.chatId,
       runId: fixture.runId,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       request: { reviewedHead: "a".repeat(40), event: "APPROVE" as const, body: "Approved" },
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher,
@@ -160,6 +170,7 @@ describe("Context Reviewer App publisher", () => {
         runId: fixture.runId,
         callerAgentUuid: fixture.reviewer.uuid,
         callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
         request: { reviewedHead: "a".repeat(40), event: "APPROVE", body: "Real run remains current" },
         appCredentials: fixture.app.config.oauth?.githubApp,
         fetcher: successfulGithubFetcher(),
@@ -187,6 +198,124 @@ describe("Context Reviewer App publisher", () => {
     expect(response.json()).toMatchObject({ action: "APPROVE", appActor: "test-app-slug[bot]" });
   });
 
+  it.each([
+    {
+      name: "installation disconnect and rebind",
+      code: "CONTEXT_REVIEW_APP_NOT_INSTALLED",
+      mutate: async (fixture: RunFixture) => {
+        const [installation] = await fixture.app.db
+          .select({ installationId: githubAppInstallations.installationId })
+          .from(githubAppInstallations)
+          .where(eq(githubAppInstallations.hubOrganizationId, fixture.admin.organizationId));
+        if (!installation) throw new Error("missing installation");
+        await disconnectInstallationFromOrg(fixture.app.db, fixture.admin.organizationId);
+        const replacementInstallationId = installation.installationId + 1;
+        await upsertInstallationFromMetadata(fixture.app.db, {
+          installation: {
+            id: replacementInstallationId,
+            accountType: "Organization",
+            accountLogin: "replacement-owner",
+            accountGithubId: replacementInstallationId,
+            permissions: { metadata: "read", pull_requests: "write" },
+            events: ["pull_request"],
+            suspendedAt: null,
+          },
+          hubOrganizationId: fixture.admin.organizationId,
+        });
+        await bindInstallationToOrg(fixture.app.db, replacementInstallationId, fixture.admin.organizationId);
+      },
+    },
+    {
+      name: "installation permission downgrade",
+      code: "CONTEXT_REVIEW_APP_PERMISSION_REQUIRED",
+      mutate: async (fixture: RunFixture) => {
+        await fixture.app.db
+          .update(githubAppInstallations)
+          .set({ permissions: { metadata: "read", pull_requests: "read" } })
+          .where(eq(githubAppInstallations.hubOrganizationId, fixture.admin.organizationId));
+      },
+    },
+    {
+      name: "installation suspension",
+      code: "CONTEXT_REVIEW_APP_NOT_INSTALLED",
+      mutate: async (fixture: RunFixture) => {
+        await fixture.app.db
+          .update(githubAppInstallations)
+          .set({ suspendedAt: new Date() })
+          .where(eq(githubAppInstallations.hubOrganizationId, fixture.admin.organizationId));
+      },
+    },
+    {
+      name: "client retirement",
+      code: "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      mutate: async (fixture: RunFixture) => {
+        await fixture.app.db
+          .update(clients)
+          .set({ retiredAt: new Date() })
+          .where(eq(clients.id, fixture.admin.clientId));
+      },
+    },
+    {
+      name: "runtime-session revocation",
+      code: "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      mutate: async (fixture: RunFixture) => {
+        await revokeAgentRuntimeSession(fixture.app.db, fixture.reviewer.uuid, fixture.admin.clientId);
+      },
+    },
+    {
+      name: "configured reviewer replacement",
+      code: "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      mutate: async (fixture: RunFixture) => {
+        const replacement = await createAgent(fixture.app.db, {
+          name: `replacement-${randomUUID().slice(0, 8)}`,
+          type: "agent",
+          displayName: "Replacement Context Reviewer",
+          managerId: fixture.admin.memberId,
+          clientId: fixture.admin.clientId,
+        });
+        await putOrgSetting(
+          fixture.app.db,
+          fixture.admin.organizationId,
+          "context_tree_features",
+          { contextReviewer: { enabled: true, agentUuid: replacement.uuid } },
+          { updatedBy: fixture.admin.userId, memberId: fixture.admin.memberId },
+        );
+      },
+    },
+    {
+      name: "manager membership removal",
+      code: "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      mutate: async (fixture: RunFixture) => {
+        await fixture.app.db.update(members).set({ status: "removed" }).where(eq(members.id, fixture.admin.memberId));
+      },
+    },
+  ])("revalidates $name at the durable publication claim", async ({ code, mutate }) => {
+    const fixture = await createRunFixture(getApp());
+    const fetcher = successfulGithubFetcher({ beforePullRequestResponse: () => mutate(fixture) });
+
+    await expect(
+      submitContextReviewOutcome({
+        db: fixture.app.db,
+        chatId: fixture.chatId,
+        runId: fixture.runId,
+        callerAgentUuid: fixture.reviewer.uuid,
+        callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
+        request: { reviewedHead: "a".repeat(40), event: "APPROVE", body: "Approved" },
+        appCredentials: fixture.app.config.oauth?.githubApp,
+        fetcher,
+      }),
+    ).rejects.toMatchObject({ code });
+    expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/reviews") && init?.method === "POST")).toBe(
+      false,
+    );
+    const [message] = await fixture.app.db
+      .select({ metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.id, fixture.messageId));
+    expect(message?.metadata.contextReviewSubmission).toEqual({ state: "pending" });
+  });
+
   it("allows one logical outcome under concurrent duplicate submissions", async () => {
     const fixture = await createRunFixture(getApp());
     const fetcher = successfulGithubFetcher();
@@ -196,6 +325,7 @@ describe("Context Reviewer App publisher", () => {
       runId: fixture.runId,
       callerAgentUuid: fixture.reviewer.uuid,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       request: { reviewedHead: "a".repeat(40), event: "APPROVE" as const, body: "Approved" },
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher,
@@ -220,6 +350,7 @@ describe("Context Reviewer App publisher", () => {
       chatId: fixture.chatId,
       callerAgentUuid: fixture.reviewer.uuid,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher,
     };
@@ -271,6 +402,7 @@ describe("Context Reviewer App publisher", () => {
       runId: fixture.runId,
       callerAgentUuid: fixture.reviewer.uuid,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       request: { reviewedHead: "a".repeat(40), event: "APPROVE", body: "Older run approved" },
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher,
@@ -294,6 +426,7 @@ describe("Context Reviewer App publisher", () => {
         runId: newer.runId,
         callerAgentUuid: fixture.reviewer.uuid,
         callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
         request: { reviewedHead: "a".repeat(40), event: "REQUEST_CHANGES", body: "Newer run blocks" },
         appCredentials: fixture.app.config.oauth?.githubApp,
         fetcher,
@@ -316,6 +449,7 @@ describe("Context Reviewer App publisher", () => {
         runId: fixture.runId,
         callerAgentUuid: fixture.reviewer.uuid,
         callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
         request: { reviewedHead: "a".repeat(40), event: "APPROVE", body: "Approved" },
         appCredentials: fixture.app.config.oauth?.githubApp,
         fetcher,
@@ -346,6 +480,7 @@ describe("Context Reviewer App publisher", () => {
       runId: fixture.runId,
       callerAgentUuid: fixture.reviewer.uuid,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       request: { reviewedHead: "a".repeat(40), event: "COMMENT" as const, body: "Deferred" },
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher,
@@ -363,6 +498,33 @@ describe("Context Reviewer App publisher", () => {
     expect(message?.metadata.contextReviewSubmission).toMatchObject({
       state: "submitted",
       reviewerClientId: fixture.admin.clientId,
+    });
+  });
+
+  it("normalizes uppercase reviewed heads before unknown-write reconciliation", async () => {
+    const fixture = await createRunFixture(getApp());
+    const fetcher = unknownThenReconciledGithubFetcher(fixture.runId);
+    const input = {
+      db: fixture.app.db,
+      chatId: fixture.chatId,
+      runId: fixture.runId,
+      callerAgentUuid: fixture.reviewer.uuid,
+      callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
+      request: { reviewedHead: "A".repeat(40), event: "COMMENT" as const, body: "Deferred" },
+      appCredentials: fixture.app.config.oauth?.githubApp,
+      fetcher,
+    };
+
+    await expect(submitContextReviewOutcome(input)).rejects.toMatchObject({ code: "CONTEXT_REVIEW_GITHUB_UNKNOWN" });
+    await expect(submitContextReviewOutcome(input)).resolves.toMatchObject({ action: "COMMENT", reviewId: 9002 });
+    const [message] = await fixture.app.db
+      .select({ metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.id, fixture.messageId));
+    expect(message?.metadata.contextReviewSubmission).toMatchObject({
+      state: "submitted",
+      reviewedHead: "a".repeat(40),
     });
   });
 
@@ -387,6 +549,7 @@ describe("Context Reviewer App publisher", () => {
         runId: fixture.runId,
         callerAgentUuid: fixture.reviewer.uuid,
         callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
         request,
         appCredentials: fixture.app.config.oauth?.githubApp,
         fetcher,
@@ -426,6 +589,7 @@ describe("Context Reviewer App publisher", () => {
         runId: newer.runId,
         callerAgentUuid: fixture.reviewer.uuid,
         callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
         request: { reviewedHead: "b".repeat(40), event: "REQUEST_CHANGES", body: "New-head outcome" },
         appCredentials: fixture.app.config.oauth?.githubApp,
         fetcher,
@@ -462,6 +626,7 @@ describe("Context Reviewer App publisher", () => {
       chatId: fixture.chatId,
       callerAgentUuid: fixture.reviewer.uuid,
       callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
       appCredentials: fixture.app.config.oauth?.githubApp,
       fetcher: github.fetcher,
     };
@@ -530,6 +695,7 @@ describe("Context Reviewer App publisher", () => {
         runId: fixture.runId,
         callerAgentUuid: fixture.reviewer.uuid,
         callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
         request: { reviewedHead: "a".repeat(40), event: "COMMENT", body: "Deferred" },
         appCredentials: fixture.app.config.oauth?.githubApp,
         fetcher: successfulGithubFetcher(),
@@ -541,6 +707,8 @@ describe("Context Reviewer App publisher", () => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+type RunFixture = Awaited<ReturnType<typeof createRunFixture>>;
 
 async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) {
   const admin = await createAdminContext(app);
@@ -560,6 +728,7 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
     managerId: admin.memberId,
     clientId: admin.clientId,
   });
+  const runtimeToken = await bindAgentRuntimeSession(app.db, reviewer.uuid, admin.clientId);
   await upsertInstallationFromMetadata(app.db, {
     installation: {
       id: Number(`8${Math.floor(Math.random() * 1_000_000)}`),
@@ -608,7 +777,7 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
   const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId));
   const runId = message?.metadata.contextReviewRunId;
   if (typeof runId !== "string") throw new Error("run id missing");
-  return { app, admin, reviewer, chatId: result.chatId, messageId: result.messageId, runId };
+  return { app, admin, reviewer, runtimeToken, chatId: result.chatId, messageId: result.messageId, runId };
 }
 
 async function setRunSubmission(
@@ -701,7 +870,10 @@ async function createFollowUpRun(fixture: Awaited<ReturnType<typeof createRunFix
   return { runId, messageId: result.messageId };
 }
 
-function successfulGithubFetcher(overrides: { headSha?: string } = {}) {
+function successfulGithubFetcher(
+  overrides: { headSha?: string; beforePullRequestResponse?: () => Promise<void> } = {},
+) {
+  let preflightHookRan = false;
   return vi.fn<typeof fetch>(async (url, init) => {
     const target = String(url);
     if (target.endsWith("/access_tokens")) {
@@ -716,6 +888,10 @@ function successfulGithubFetcher(overrides: { headSha?: string } = {}) {
       );
     }
     if (target.endsWith("/pulls/123") && (!init?.method || init.method === "GET")) {
+      if (!preflightHookRan && overrides.beforePullRequestResponse) {
+        preflightHookRan = true;
+        await overrides.beforePullRequestResponse();
+      }
       return new Response(
         JSON.stringify({
           number: 123,

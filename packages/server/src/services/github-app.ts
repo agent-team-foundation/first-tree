@@ -387,17 +387,24 @@ export async function listPullRequestReviewsForRun(
   input: { owner: string; repo: string; prNumber: number; marker: string; appSlug: string },
   opts: { fetcher?: typeof fetch } = {},
 ): Promise<GithubPullRequestReview[]> {
-  const res = await (opts.fetcher ?? fetch)(
-    `${pullRequestUrl(input.owner, input.repo, input.prNumber)}/reviews?per_page=100`,
-    { headers: installationHeaders(installationToken) },
-  );
-  if (!res.ok) {
-    throw new GithubAppApiError(res.status, `GitHub pull request review list failed (${res.status})`);
+  const matches: GithubPullRequestReview[] = [];
+  for (let page = 1; ; page += 1) {
+    const pageParam = page === 1 ? "" : `&page=${page}`;
+    const res = await (opts.fetcher ?? fetch)(
+      `${pullRequestUrl(input.owner, input.repo, input.prNumber)}/reviews?per_page=100${pageParam}`,
+      { headers: installationHeaders(installationToken) },
+    );
+    if (!res.ok) {
+      throw new GithubAppApiError(res.status, `GitHub pull request review list failed (${res.status})`);
+    }
+    const reviews = (await res.json()) as unknown[];
+    matches.push(
+      ...reviews
+        .map(parsePullRequestReview)
+        .filter((review) => review.actor === `${input.appSlug}[bot]` && review.body.includes(input.marker)),
+    );
+    if (reviews.length < 100) return matches;
   }
-  const reviews = (await res.json()) as unknown[];
-  return reviews
-    .map(parsePullRequestReview)
-    .filter((review) => review.actor === `${input.appSlug}[bot]` && review.body.includes(input.marker));
 }
 
 function parsePullRequestReview(value: unknown): GithubPullRequestReview {

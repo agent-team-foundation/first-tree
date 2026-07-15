@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -554,6 +554,49 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.content).not.toContain("gh pr review");
     const chatRows = await app.db.select({ id: chats.id }).from(chats);
     expect(chatRows).toHaveLength(1);
+  });
+
+  it("atomically reserves one reviewer chat for concurrent first deliveries", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    const opened = pullRequestPayload({
+      pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
+    });
+    const synchronized = pullRequestPayload({
+      action: "synchronize",
+      pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
+    });
+    const [first, second] = await Promise.all([
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: opened,
+        organizationId: admin.organizationId,
+      }),
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: synchronized,
+        organizationId: admin.organizationId,
+      }),
+    ]);
+
+    if (!first.handled || !second.handled) throw new Error("expected concurrent events to be handled");
+    expect(second.chatId).toBe(first.chatId);
+    const chatRows = await app.db.select({ id: chats.id }).from(chats);
+    expect(chatRows).toEqual([{ id: first.chatId }]);
+    const runMessages = await app.db
+      .select({ metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, first.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id));
+    expect(runMessages.length).toBeGreaterThanOrEqual(1);
+    expect(runMessages.length).toBeLessThanOrEqual(2);
+    expect(runMessages[0]?.metadata).toMatchObject({
+      triggerEvent: "pull_request.synchronize",
+      contextReviewHeadSha: "b".repeat(40),
+    });
   });
 
   it("reuses the reviewer chat for pull_request.synchronize and notifies the reviewer", async () => {
