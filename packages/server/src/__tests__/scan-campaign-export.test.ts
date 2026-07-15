@@ -76,6 +76,8 @@ describe("scan campaign export routes", () => {
       agentContent?: string;
       includeBootstrap?: boolean;
       includeUnrelatedChat?: boolean;
+      includeMalformedTrialChat?: boolean;
+      includeCrossOrgTrialChat?: boolean;
     } = {},
   ) {
     const app = getApp();
@@ -146,6 +148,46 @@ describe("scan campaign export routes", () => {
         { chatId: unrelatedChatId, agentId: admin.humanAgentUuid, role: "owner", accessMode: "speaker" },
         { chatId: unrelatedChatId, agentId: agent.uuid, role: "member", accessMode: "speaker" },
       ]);
+    }
+
+    if (opts.includeMalformedTrialChat) {
+      const malformedChatId = uuidv7();
+      await app.db.insert(chats).values({
+        id: malformedChatId,
+        organizationId: admin.organizationId,
+        type: "direct",
+        topic: "Malformed scanner chat",
+        metadata: { landingCampaignTrial: { campaign: "production-scan", agentId: agent.uuid } },
+      });
+      await app.db.insert(chatMembership).values([
+        { chatId: malformedChatId, agentId: admin.humanAgentUuid, role: "owner", accessMode: "speaker" },
+        { chatId: malformedChatId, agentId: agent.uuid, role: "member", accessMode: "speaker" },
+      ]);
+    }
+
+    if (opts.includeCrossOrgTrialChat) {
+      const otherOrgId = `scan-export-other-${crypto.randomUUID().slice(0, 8)}`;
+      const crossOrgChatId = uuidv7();
+      await app.db.insert(organizations).values({ id: otherOrgId, name: otherOrgId, displayName: "Other Scan Org" });
+      await app.db.insert(chats).values({
+        id: crossOrgChatId,
+        organizationId: otherOrgId,
+        type: "direct",
+        topic: "Cross org scanner chat",
+        metadata: buildLandingCampaignChatMetadata({
+          campaign: "production-scan",
+          agentId: agent.uuid,
+          skillSetId: "production-scan",
+          skillSetVersion: "test",
+          repo: { url: "https://github.com/acme/api", canonicalKey: "github.com/acme/api" },
+          state: "completed",
+          inputLocked: true,
+          maxAgentTurns: 2,
+        }),
+      });
+      await app.db
+        .insert(chatMembership)
+        .values({ chatId: crossOrgChatId, agentId: agent.uuid, role: "member", accessMode: "speaker" });
     }
 
     await app.db.insert(messages).values([
@@ -327,8 +369,12 @@ describe("scan campaign export routes", () => {
     expect(leftServiceMember.statusCode).toBe(403);
   });
 
-  it("denies the wrong configured client and excludes unrelated customer chats", async () => {
-    const { app, admin, agentName } = await seedTrialHistory({ includeUnrelatedChat: true });
+  it("denies the wrong configured client and excludes invalid or unrelated customer chats", async () => {
+    const { app, admin, agentName } = await seedTrialHistory({
+      includeUnrelatedChat: true,
+      includeMalformedTrialChat: true,
+      includeCrossOrgTrialChat: true,
+    });
 
     const wrongClient = await app.inject({
       method: "POST",
@@ -349,7 +395,9 @@ describe("scan campaign export routes", () => {
   });
 
   it("does not treat user repository URLs as agent report links", async () => {
-    const { app, admin, agentName } = await seedTrialHistory({ agentContent: "I am still working on the scan." });
+    const { app, admin, agentName } = await seedTrialHistory({
+      agentContent: "I am scanning https://github.com/acme/api now.",
+    });
 
     const create = await app.inject({
       method: "POST",

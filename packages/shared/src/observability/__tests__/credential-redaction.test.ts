@@ -4,6 +4,10 @@ import { redactCredentialText } from "../credential-redaction.js";
 describe("redactCredentialText", () => {
   it("redacts authorization headers and bare bearer tokens without truncation leaks", () => {
     expect(redactCredentialText("Authorization: Bearer abcdefghijkl")).toBe("Authorization: [REDACTED]");
+    expect(redactCredentialText("Authorization: Basic YWxhZGRpbjpvcGVuc2VzYW1l")).toBe("Authorization: [REDACTED]");
+    expect(redactCredentialText('"Authorization": "Basic YWxhZGRpbjpvcGVuc2VzYW1l"')).toBe(
+      '"Authorization": "[REDACTED]"',
+    );
     expect(redactCredentialText("curl -H 'Authorization=Bearer abcdefghijkl'")).toBe(
       "curl -H 'Authorization=[REDACTED]'",
     );
@@ -38,5 +42,13 @@ describe("redactCredentialText", () => {
     expect(redacted).not.toContain("sk-proj-");
     expect(redacted).not.toContain("sk-ant-");
     expect(redacted).not.toContain("abcdefghijklmnop");
+  });
+
+  it("redacts multiline private key material", () => {
+    const redacted = redactCredentialText(
+      ["before", "-----BEGIN PRIVATE KEY-----", "abc123", "-----END PRIVATE KEY-----", "after"].join("\n"),
+    );
+
+    expect(redacted).toBe("before\n[REDACTED_PRIVATE_KEY]\nafter");
   });
 });

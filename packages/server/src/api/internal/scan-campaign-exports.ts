@@ -43,6 +43,7 @@ const MAX_AGENT_ROWS = 5_000;
 const MAX_CHAT_ROWS = 10_000;
 const MAX_MESSAGE_ROWS = 50_000;
 const MAX_EXPORT_BYTES = 25 * 1024 * 1024;
+const MAX_MESSAGE_CONTENT_BYTES = 25 * 1024 * 1024;
 
 /**
  * Internal landing-campaign analytics authorization class.
@@ -160,10 +161,18 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
   for (const row of chatRows) {
     if (!chatById.has(row.chatId)) chatById.set(row.chatId, row);
   }
-  const visibleChats = [...chatById.values()];
+  const visibleChats = [...chatById.values()].filter((chat) => {
+    const trial = parseLandingCampaignTrialChatMetadata(chat.metadata);
+    const agent = agentById.get(chat.trialAgentId);
+    return (
+      trial?.campaign === input.campaign &&
+      trial.agentId === chat.trialAgentId &&
+      agent?.organizationId === chat.organizationId
+    );
+  });
   const chatIds = visibleChats.map((chat) => chat.chatId);
 
-  const messageRows =
+  const messageMetadataRows =
     chatIds.length > 0
       ? await app.db
           .select({
@@ -171,10 +180,10 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
             chatId: messages.chatId,
             senderId: messages.senderId,
             format: messages.format,
-            content: messages.content,
             metadata: messages.metadata,
             source: messages.source,
             createdAt: messages.createdAt,
+            contentBytes: sql<number>`octet_length(${messages.content}::text)::int`,
           })
           .from(messages)
           .where(inArray(messages.chatId, chatIds))
@@ -182,7 +191,27 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
           .limit(MAX_MESSAGE_ROWS + 1)
       : [];
 
-  assertRowLimit(messageRows, MAX_MESSAGE_ROWS, "trial messages");
+  assertRowLimit(messageMetadataRows, MAX_MESSAGE_ROWS, "trial messages");
+  assertContentByteLimit(messageMetadataRows);
+
+  const messageIds = messageMetadataRows.map((message) => message.id);
+  const contentByMessageId =
+    messageIds.length > 0
+      ? new Map(
+          (
+            await app.db
+              .select({ id: messages.id, content: messages.content })
+              .from(messages)
+              .where(inArray(messages.id, messageIds))
+          ).map((message) => [message.id, message.content]),
+        )
+      : new Map<string, unknown>();
+
+  const messageRows = messageMetadataRows.map((message) => ({
+    ...message,
+    content: contentByMessageId.get(message.id) ?? null,
+  }));
+
   const messagesByChat = new Map<string, typeof messageRows>();
   for (const message of messageRows) {
     const existing = messagesByChat.get(message.chatId);
@@ -240,11 +269,7 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
       totalMessageCount: rows.length,
       firstHumanMessageAt: counted.firstHumanMessageAt?.toISOString() ?? null,
       firstHumanResponseSeconds: counted.firstHumanResponseSeconds,
-      hasLikelyReportLink: rows.some(
-        (message) =>
-          classifySender(message.senderId, message.source, message.metadata, agentIds) === "agent" &&
-          /https?:\/\/\S+/i.test(contentToText(message.content)),
-      ),
+      hasLikelyReportLink: hasLikelyReportLink(rows, agentIds, trial?.repo ?? null),
       createdAt: chat.createdAt.toISOString(),
       lastMessageAt: lastMessageAt?.toISOString() ?? null,
       durationSeconds: lastMessageAt ? secondsBetween(chat.createdAt, lastMessageAt) : null,
@@ -285,7 +310,8 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
       redaction: input.redaction,
     },
     authorization: {
-      model: "caller must be active admin in each exported agent organization",
+      model:
+        "caller must have current active membership in the configured landing campaign service organization; any role is allowed",
       exportedAgentCount: visibleAgents.length,
     },
     counts: {
@@ -353,12 +379,51 @@ function assertRowLimit(rows: unknown[], maxRows: number, label: string): void {
   throw new BadRequestError(`Scan campaign export matched more than ${maxRows} ${label}; narrow the date range.`);
 }
 
+function assertContentByteLimit(rows: Array<{ contentBytes: number }>): void {
+  const totalBytes = rows.reduce((sum, row) => sum + Number(row.contentBytes ?? 0), 0);
+  if (totalBytes <= MAX_MESSAGE_CONTENT_BYTES) return;
+  throw new BadRequestError(
+    `Scan campaign export message content is larger than ${MAX_MESSAGE_CONTENT_BYTES} bytes; narrow the date range.`,
+  );
+}
+
 function assertExportByteLimit(files: Partial<Record<ExportFileName, string>>): void {
   const totalBytes = Object.values(files).reduce((sum, content) => sum + Buffer.byteLength(content ?? "", "utf8"), 0);
   if (totalBytes <= MAX_EXPORT_BYTES) return;
   throw new BadRequestError(
     `Scan campaign export is larger than ${MAX_EXPORT_BYTES} bytes; disable messages or narrow the date range.`,
   );
+}
+
+function hasLikelyReportLink(
+  rows: Array<{ senderId: string; source: string; metadata: Record<string, unknown>; content: unknown }>,
+  trialAgentIds: Set<string>,
+  repo: { url: string; canonicalKey: string } | null,
+): boolean {
+  return rows.some((message) => {
+    if (classifySender(message.senderId, message.source, message.metadata, trialAgentIds) !== "agent") return false;
+    return extractUrls(contentToText(message.content)).some((url) => !isTrialRepoUrl(url, repo));
+  });
+}
+
+function extractUrls(text: string): string[] {
+  return text.match(/https?:\/\/[^\s)"'<>]+/gi) ?? [];
+}
+
+function isTrialRepoUrl(url: string, repo: { url: string; canonicalKey: string } | null): boolean {
+  if (!repo) return false;
+  const normalizedUrl = normalizeRepoLikeUrl(url);
+  return normalizedUrl === normalizeRepoLikeUrl(repo.url) || normalizedUrl === normalizeRepoLikeUrl(repo.canonicalKey);
+}
+
+function normalizeRepoLikeUrl(value: string): string {
+  return value
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^git@([^:]+):/i, "$1/")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/g, "")
+    .toLowerCase();
 }
 
 function classifySender(

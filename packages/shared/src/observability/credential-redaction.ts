@@ -1,14 +1,15 @@
 const REDACTED = "[REDACTED]";
 
 const SENSITIVE_ASSIGNMENT_KEYS =
-  "api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|token|secret|password|authorization|credential|credentials|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?session[_-]?token";
-const ASSIGNMENT_VALUE = `"[^"]*"|'[^']*'|Bearer\\s+[^\\s,'"}&]+|[^\\s,'"}&]+`;
+  "api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|token|secret|password|credential|credentials|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?session[_-]?token";
+const SENSITIVE_KEY = `"?(?:${SENSITIVE_ASSIGNMENT_KEYS})"?`;
+const ASSIGNMENT_VALUE = `"[^"]*"|'[^']*'|[^\\s,'"}&]+`;
+const AUTHORIZATION_KEY = `"?authorization"?`;
+const AUTHORIZATION_VALUE = `"[^"]*"|'[^']*'|[A-Za-z][A-Za-z0-9_-]*\\s+[^\\s,'"}]+|[^\\s,'"}]+`;
 
-const AUTHORIZATION_ASSIGNMENT_RE = new RegExp(`\\b(authorization\\s*[:=]\\s*)(${ASSIGNMENT_VALUE})`, "gi");
-const SENSITIVE_ASSIGNMENT_RE = new RegExp(
-  `\\b((${SENSITIVE_ASSIGNMENT_KEYS})\\s*[:=]\\s*)(${ASSIGNMENT_VALUE})`,
-  "gi",
-);
+const PRIVATE_KEY_BLOCK_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
+const AUTHORIZATION_ASSIGNMENT_RE = new RegExp(`(${AUTHORIZATION_KEY}\\s*[:=]\\s*)(${AUTHORIZATION_VALUE})`, "gi");
+const SENSITIVE_ASSIGNMENT_RE = new RegExp(`(${SENSITIVE_KEY}\\s*[:=]\\s*)(${ASSIGNMENT_VALUE})`, "gi");
 
 /**
  * Redact credential-shaped values inside free-form text.
@@ -20,6 +21,7 @@ const SENSITIVE_ASSIGNMENT_RE = new RegExp(
  */
 export function redactCredentialText(value: string): string {
   return value
+    .replace(PRIVATE_KEY_BLOCK_RE, "[REDACTED_PRIVATE_KEY]")
     .replace(AUTHORIZATION_ASSIGNMENT_RE, (_match, prefix: string, assignedValue: string) => {
       return `${prefix}${redactedAssignmentValue(assignedValue)}`;
     })
