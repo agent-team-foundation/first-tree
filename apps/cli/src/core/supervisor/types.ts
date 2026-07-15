@@ -8,6 +8,10 @@ export type ServiceInfo = {
   state: ServiceState;
   /** PID of the active service process, if running. */
   pid?: number;
+  /** systemd manager scope when platform === "systemd". */
+  managerScope?: "user" | "system";
+  /** Structured migration guard for known transitional supervisor states. */
+  migrationRequired?: "root-systemd-user-to-system";
   detail?: string;
 };
 

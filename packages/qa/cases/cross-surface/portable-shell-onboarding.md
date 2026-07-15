@@ -42,10 +42,13 @@ identity, real first login, daemon startup, and server-side client registration.
   database and client state before switching channel configuration.
 - Give each channel a clean writable `HOME`. The runner must have `sh`, `curl`, CA certificates, and the installer's
   normal archive/checksum tools, but no system Node.js requirement; the portable artifact must supply its own runtime.
-- On Linux, give the runner's test user a real systemd user manager and D-Bus user session. Verify that
-  `systemctl --user status` can reach the manager before testing. A plain container without a working user bus cannot
-  validate this case: `login` must install and start the background daemon, so a missing manager or bus is `BLOCKED`.
-  Do not add `--no-start`, mock the supervisor, or accept a credentials-only login as a substitute.
+- On Linux, match the service-manager precondition to the user under test. For a normal user, give the runner a real
+  systemd user manager and D-Bus user session, and verify that `systemctl --user status` can reach the manager before
+  testing. For root, give the runner a working system systemd manager and verify `systemctl status` can reach it; root
+  login installs the channel service in system scope and must not depend on a root user bus. A plain container without
+  the required manager for the chosen user cannot validate this case: `login` must install and start the background
+  daemon, so a missing manager is `BLOCKED`. Do not add `--no-start`, mock the supervisor, or accept a credentials-only
+  login as a substitute.
 - Public network access to `https://download.first-tree.ai` is required. Record the resolved public metadata/version for
   each mutable `install.sh` entry point so the report distinguishes the tested public release from the source target ref.
 - Use throwaway server secrets, databases, users, and connect codes. A non-production QA auth bootstrap may be enabled
@@ -94,8 +97,10 @@ For each of `prod` and `staging`:
   shell profile, and installed metadata identifies the matching channel and portable install mode.
 - `observe cli-output`: the installed executable launches with its bundled Node.js runtime and the first `login` exits
   successfully against the isolated server without `--no-start`.
-- `observe service-state`: login installs and starts the channel-correct systemd user service, and `systemctl --user`
-  reports it active through the runner's real user manager and bus.
+- `observe service-state`: login installs and starts the channel-correct systemd service. For a normal Linux user,
+  `systemctl --user` reports the user unit active through the runner's real user manager and bus. For root,
+  `systemctl status <channel-service-unit>` reports the system unit active, and `journalctl -u <channel-service-unit>`
+  is the supervisor fallback.
 - `observe http-api`: the isolated server reports the newly registered client for the throwaway user after login. Prod
   and staging homes and clients stay isolated; neither flow invokes the other channel's binary.
 
@@ -116,8 +121,9 @@ failure, daemon installation/start failing despite a healthy user manager and bu
 to register against a healthy isolated server.
 
 `BLOCKED`: Docker or public download access is unavailable, QA auth/data bootstrap cannot mint a connect code, a required
-public channel release has not been published, or the Linux runner lacks a reachable systemd user manager and D-Bus user
-session. Do not downgrade this case to `login --no-start`.
+public channel release has not been published, or the Linux runner lacks the reachable systemd manager required for the
+chosen user (user manager + D-Bus user session for normal users, system manager for root). Do not downgrade this case to
+`login --no-start`.
 
 `INCONCLUSIVE`: only one channel completed, the mutable public installer changed during the run, the public artifact
 could not be attributed to the recorded metadata/version, or clipboard, login, daemon, or registration evidence was
@@ -127,6 +133,6 @@ partial or unstable.
 
 Keep redacted API responses, browser screenshots plus clipboard capture, installer, latest metadata, immutable-manifest,
 and `SHA256SUMS` HTTP responses, `sh -n` output, checksum/install logs, installed binary/version/channel evidence, CLI
-login output, systemd user-service state, and server-side client registration. Record the target ref, public artifact
-versions, container image digests, and run-local routing overrides. Never retain connect codes, bearer tokens, cookies,
-or generated client credentials in shared artifacts.
+login output, systemd service state (user scope for normal users, system scope for root), and server-side client
+registration. Record the target ref, public artifact versions, container image digests, and run-local routing overrides.
+Never retain connect codes, bearer tokens, cookies, or generated client credentials in shared artifacts.
