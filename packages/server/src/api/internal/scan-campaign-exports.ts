@@ -46,6 +46,7 @@ const MAX_CHAT_ROWS = 10_000;
 const MAX_MESSAGE_ROWS = 50_000;
 const MAX_EXPORT_BYTES = 25 * 1024 * 1024;
 const MAX_MESSAGE_CONTENT_BYTES = 25 * 1024 * 1024;
+const MAX_PRELOAD_VARIABLE_BYTES = 25 * 1024 * 1024;
 
 /**
  * Internal landing-campaign analytics authorization class.
@@ -103,18 +104,21 @@ async function buildScanCampaignExportFromDb(db: Database, input: ScanCampaignEx
   const exportId = randomUUID();
   const createdAt = new Date().toISOString();
 
-  const candidateAgents = await db
+  const candidateAgentPreflightRows = await db
     .select({
       uuid: agents.uuid,
-      name: agents.name,
-      displayName: agents.displayName,
-      organizationId: agents.organizationId,
-      status: agents.status,
-      metadata: agents.metadata,
-      clientId: agents.clientId,
-      runtimeProvider: agents.runtimeProvider,
-      createdAt: agents.createdAt,
-      updatedAt: agents.updatedAt,
+      variableBytes: sql<number>`
+        (
+          octet_length(${agents.uuid}) +
+          octet_length(coalesce(${agents.name}, '')) +
+          octet_length(${agents.organizationId}) +
+          octet_length(${agents.displayName}) +
+          octet_length(${agents.status}) +
+          octet_length(coalesce(${agents.clientId}, '')) +
+          octet_length(${agents.runtimeProvider}) +
+          octet_length(${agents.metadata}::text)
+        )::int
+      `,
     })
     .from(agents)
     .where(
@@ -129,27 +133,56 @@ async function buildScanCampaignExportFromDb(db: Database, input: ScanCampaignEx
     .orderBy(asc(agents.createdAt), asc(agents.uuid))
     .limit(MAX_AGENT_ROWS + 1);
 
-  assertRowLimit(candidateAgents, MAX_AGENT_ROWS, "trial agents");
-  const visibleAgents = candidateAgents
-    .slice(0, MAX_AGENT_ROWS)
-    .filter((agent) => parseLandingCampaignTrialAgentMetadata(agent.metadata)?.campaign === input.campaign);
+  assertRowLimit(candidateAgentPreflightRows, MAX_AGENT_ROWS, "trial agents");
+  assertVariableByteLimit(candidateAgentPreflightRows, MAX_PRELOAD_VARIABLE_BYTES, "trial agent metadata");
+  const candidateAgentIds = candidateAgentPreflightRows.slice(0, MAX_AGENT_ROWS).map((agent) => agent.uuid);
+  const candidateAgentRows =
+    candidateAgentIds.length > 0
+      ? await db
+          .select({
+            uuid: agents.uuid,
+            name: agents.name,
+            displayName: agents.displayName,
+            organizationId: agents.organizationId,
+            status: agents.status,
+            metadata: agents.metadata,
+            clientId: agents.clientId,
+            runtimeProvider: agents.runtimeProvider,
+            createdAt: agents.createdAt,
+            updatedAt: agents.updatedAt,
+          })
+          .from(agents)
+          .where(inArray(agents.uuid, candidateAgentIds))
+      : [];
+  const candidateAgentById = new Map(candidateAgentRows.map((agent) => [agent.uuid, agent]));
+  const candidateAgents = candidateAgentIds.flatMap((id) => {
+    const agent = candidateAgentById.get(id);
+    return agent ? [agent] : [];
+  });
+  const visibleAgents = candidateAgents.filter(
+    (agent) => parseLandingCampaignTrialAgentMetadata(agent.metadata)?.campaign === input.campaign,
+  );
   const visibleAgentIds = visibleAgents.map((agent) => agent.uuid);
   const agentById = new Map(visibleAgents.map((agent) => [agent.uuid, agent]));
   const agentIds = new Set(visibleAgentIds);
 
-  const chatRows =
+  const chatPreflightRows =
     visibleAgentIds.length === 0
       ? []
       : await db
           .select({
             chatId: chats.id,
-            organizationId: chats.organizationId,
-            topic: chats.topic,
-            description: chats.description,
-            metadata: chats.metadata,
-            lastMessageAt: chats.lastMessageAt,
-            createdAt: chats.createdAt,
             trialAgentId: chatMembership.agentId,
+            variableBytes: sql<number>`
+              (
+                octet_length(${chats.id}) +
+                octet_length(${chats.organizationId}) +
+                octet_length(${chatMembership.agentId}) +
+                octet_length(coalesce(${chats.topic}, '')) +
+                octet_length(coalesce(${chats.description}, '')) +
+                octet_length(${chats.metadata}::text)
+              )::int
+            `,
           })
           .from(chatMembership)
           .innerJoin(chats, eq(chatMembership.chatId, chats.id))
@@ -166,7 +199,29 @@ async function buildScanCampaignExportFromDb(db: Database, input: ScanCampaignEx
           .orderBy(asc(chats.createdAt), asc(chats.id))
           .limit(MAX_CHAT_ROWS + 1);
 
-  assertRowLimit(chatRows, MAX_CHAT_ROWS, "trial chats");
+  assertRowLimit(chatPreflightRows, MAX_CHAT_ROWS, "trial chats");
+  assertVariableByteLimit(chatPreflightRows, MAX_PRELOAD_VARIABLE_BYTES, "trial chat metadata");
+  const chatIdsForContent = [...new Set(chatPreflightRows.slice(0, MAX_CHAT_ROWS).map((chat) => chat.chatId))];
+  const chatContentRows =
+    chatIdsForContent.length > 0
+      ? await db
+          .select({
+            chatId: chats.id,
+            organizationId: chats.organizationId,
+            topic: chats.topic,
+            description: chats.description,
+            metadata: chats.metadata,
+            lastMessageAt: chats.lastMessageAt,
+            createdAt: chats.createdAt,
+          })
+          .from(chats)
+          .where(inArray(chats.id, chatIdsForContent))
+      : [];
+  const chatContentById = new Map(chatContentRows.map((chat) => [chat.chatId, chat]));
+  const chatRows = chatPreflightRows.flatMap((chat) => {
+    const content = chatContentById.get(chat.chatId);
+    return content ? [{ ...content, trialAgentId: chat.trialAgentId }] : [];
+  });
 
   const chatById = new Map<string, (typeof chatRows)[number]>();
   for (const row of chatRows) {
@@ -193,6 +248,17 @@ async function buildScanCampaignExportFromDb(db: Database, input: ScanCampaignEx
             format: messages.format,
             source: messages.source,
             createdAt: messages.createdAt,
+            variableBytes: sql<number>`
+              (
+                octet_length(${messages.id}) +
+                octet_length(${messages.chatId}) +
+                octet_length(${messages.senderId}) +
+                octet_length(${messages.format}) +
+                octet_length(${messages.source}) +
+                octet_length(${messages.metadata}::text) +
+                octet_length(${messages.content}::text)
+              )::int
+            `,
             metadataBytes: sql<number>`octet_length(${messages.metadata}::text)::int`,
             contentBytes: sql<number>`octet_length(${messages.content}::text)::int`,
           })
@@ -391,11 +457,17 @@ function assertRowLimit(rows: unknown[], maxRows: number, label: string): void {
   throw new BadRequestError(`Scan campaign export matched more than ${maxRows} ${label}; narrow the date range.`);
 }
 
-function assertContentByteLimit(rows: Array<{ metadataBytes: number; contentBytes: number }>): void {
-  const totalBytes = rows.reduce((sum, row) => sum + Number(row.metadataBytes ?? 0) + Number(row.contentBytes ?? 0), 0);
+function assertVariableByteLimit(rows: Array<{ variableBytes: number }>, maxBytes: number, label: string): void {
+  const totalBytes = rows.reduce((sum, row) => sum + Number(row.variableBytes ?? 0), 0);
+  if (totalBytes <= maxBytes) return;
+  throw new BadRequestError(`Scan campaign export ${label} is larger than ${maxBytes} bytes; narrow the date range.`);
+}
+
+function assertContentByteLimit(rows: Array<{ variableBytes: number }>): void {
+  const totalBytes = rows.reduce((sum, row) => sum + Number(row.variableBytes ?? 0), 0);
   if (totalBytes <= MAX_MESSAGE_CONTENT_BYTES) return;
   throw new BadRequestError(
-    `Scan campaign export message content and metadata are larger than ${MAX_MESSAGE_CONTENT_BYTES} bytes; narrow the date range.`,
+    `Scan campaign export message data is larger than ${MAX_MESSAGE_CONTENT_BYTES} bytes; narrow the date range.`,
   );
 }
 

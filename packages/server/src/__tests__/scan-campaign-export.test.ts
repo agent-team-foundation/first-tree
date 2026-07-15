@@ -461,17 +461,36 @@ describe("scan campaign export configuration guard", () => {
   });
 
   it("fails closed when the caller belongs to a different service organization than the configured one", async () => {
+    const configuredServiceOrgId = "scan-export-wrong-service-org";
     const app = await createTestApp({
       landingCampaignServiceUserId: SERVICE_USER_ID,
-      landingCampaignServiceOrgId: "scan-export-wrong-service-org",
+      landingCampaignServiceOrgId: configuredServiceOrgId,
       landingCampaignClientId: OFFICIAL_CLIENT_ID,
     });
     try {
       const admin = await createAdminContext(app);
       await app.db
-        .insert(organizations)
-        .values({ id: SERVICE_ORG_ID, name: SERVICE_ORG_ID, displayName: "Scan Export Service" })
+        .insert(users)
+        .values({
+          id: SERVICE_USER_ID,
+          username: SERVICE_USER_ID,
+          passwordHash: INVALID_BCRYPT_PLACEHOLDER,
+          displayName: "Scan Export Service User",
+        })
         .onConflictDoNothing();
+      await app.db
+        .insert(organizations)
+        .values([
+          { id: SERVICE_ORG_ID, name: SERVICE_ORG_ID, displayName: "Scan Export Service" },
+          { id: configuredServiceOrgId, name: configuredServiceOrgId, displayName: "Configured Scan Export Service" },
+        ])
+        .onConflictDoNothing();
+      await app.db.insert(clients).values({
+        id: OFFICIAL_CLIENT_ID,
+        userId: SERVICE_USER_ID,
+        organizationId: configuredServiceOrgId,
+        status: "connected",
+      });
       const memberId = uuidv7();
       await app.db.transaction(async (tx) => {
         const serviceHuman = await createAgent(tx as unknown as typeof app.db, {

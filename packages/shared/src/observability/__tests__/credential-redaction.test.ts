@@ -14,8 +14,20 @@ describe("redactCredentialText", () => {
     expect(redactCredentialText('"Authorization": "Basic YWxhZGRpbjpvcGVuc2VzYW1l"')).toBe(
       '"Authorization": "[REDACTED]"',
     );
+    expect(redactCredentialText(`'Authorization': 'Basic YWxhZGRpbjpvcGVuc2VzYW1l'`)).toBe(
+      `'Authorization': '[REDACTED]'`,
+    );
+    expect(redactCredentialText(`"Authorization": "Digest username=\\"mufasa\\", response=\\"live-secret\\""`)).toBe(
+      `"Authorization": "[REDACTED]"`,
+    );
     expect(redactCredentialText("curl -H 'Authorization=Bearer abcdefghijkl'")).toBe(
       "curl -H 'Authorization=[REDACTED]'",
+    );
+    expect(redactCredentialText("curl -H Authorization=Bearer abcdefghijkl https://example.test")).toBe(
+      "curl -H Authorization=[REDACTED] https://example.test",
+    );
+    expect(redactCredentialText("curl -H 'Authorization: Bearer abcdefghijkl' https://example.test")).toBe(
+      "curl -H 'Authorization: Bearer [REDACTED]' https://example.test",
     );
     expect(redactCredentialText("retry with Bearer abcdefghijkl")).toBe("retry with Bearer [REDACTED]");
   });

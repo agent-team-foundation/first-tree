@@ -2,13 +2,19 @@ const REDACTED = "[REDACTED]";
 
 const SENSITIVE_ASSIGNMENT_KEYS =
   "api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|token|secret|password|credential|credentials|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?session[_-]?token";
-const SENSITIVE_KEY = `"?(?:${SENSITIVE_ASSIGNMENT_KEYS})"?`;
-const ASSIGNMENT_VALUE = `"[^"]*"|'[^']*'|[^\\s,'"}&]+`;
-const AUTHORIZATION_KEY = `"?authorization"?`;
-const AUTHORIZATION_VALUE = `"[^"]*"|'[^']*'|[^\\r\\n]+`;
+const QUOTED_VALUE = `"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'`;
+const SENSITIVE_KEY = `["']?(?:${SENSITIVE_ASSIGNMENT_KEYS})["']?`;
+const ASSIGNMENT_VALUE = `${QUOTED_VALUE}|[^\\s,'"}&]+`;
+const AUTHORIZATION_KEY = `["']?authorization["']?`;
+const AUTHORIZATION_SCHEME_VALUE = `[A-Za-z][A-Za-z0-9_-]*\\s+[^\\s'"}]+|[^\\s,'"}]+`;
 
 const PRIVATE_KEY_BLOCK_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
-const AUTHORIZATION_ASSIGNMENT_RE = new RegExp(`(${AUTHORIZATION_KEY}\\s*[:=]\\s*)(${AUTHORIZATION_VALUE})`, "gi");
+const AUTHORIZATION_HEADER_RE = new RegExp(`(^|\\r?\\n)(\\s*${AUTHORIZATION_KEY}\\s*:\\s*)([^\\r\\n]*)`, "gi");
+const AUTHORIZATION_QUOTED_ASSIGNMENT_RE = new RegExp(`(${AUTHORIZATION_KEY}\\s*[:=]\\s*)(${QUOTED_VALUE})`, "gi");
+const AUTHORIZATION_SCHEME_ASSIGNMENT_RE = new RegExp(
+  `(${AUTHORIZATION_KEY}\\s*=\\s*)(${AUTHORIZATION_SCHEME_VALUE})`,
+  "gi",
+);
 const SENSITIVE_ASSIGNMENT_RE = new RegExp(`(${SENSITIVE_KEY}\\s*[:=]\\s*)(${ASSIGNMENT_VALUE})`, "gi");
 
 /**
@@ -22,7 +28,13 @@ const SENSITIVE_ASSIGNMENT_RE = new RegExp(`(${SENSITIVE_KEY}\\s*[:=]\\s*)(${ASS
 export function redactCredentialText(value: string): string {
   return value
     .replace(PRIVATE_KEY_BLOCK_RE, "[REDACTED_PRIVATE_KEY]")
-    .replace(AUTHORIZATION_ASSIGNMENT_RE, (_match, prefix: string, assignedValue: string) => {
+    .replace(AUTHORIZATION_HEADER_RE, (_match, lineStart: string, prefix: string, assignedValue: string) => {
+      return `${lineStart}${prefix}${redactedAssignmentValue(assignedValue)}`;
+    })
+    .replace(AUTHORIZATION_QUOTED_ASSIGNMENT_RE, (_match, prefix: string, assignedValue: string) => {
+      return `${prefix}${redactedAssignmentValue(assignedValue)}`;
+    })
+    .replace(AUTHORIZATION_SCHEME_ASSIGNMENT_RE, (_match, prefix: string, assignedValue: string) => {
       return `${prefix}${redactedAssignmentValue(assignedValue)}`;
     })
     .replace(SENSITIVE_ASSIGNMENT_RE, (_match, prefix: string, assignedValue: string) => {
