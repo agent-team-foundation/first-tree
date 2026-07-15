@@ -20,10 +20,11 @@ import {
  *     here so a server change can't silently relax validation.
  */
 describe("runtimeProviderSchema", () => {
-  it("accepts all three built-in providers", () => {
+  it("accepts all four built-in providers", () => {
     expect(runtimeProviderSchema.parse("claude-code")).toBe("claude-code");
     expect(runtimeProviderSchema.parse("claude-code-tui")).toBe("claude-code-tui");
     expect(runtimeProviderSchema.parse("codex")).toBe("codex");
+    expect(runtimeProviderSchema.parse("cursor")).toBe("cursor");
   });
 
   it("rejects unknown providers", () => {
@@ -35,6 +36,7 @@ describe("runtimeProviderSchema", () => {
     expect(runtimeProviderSchema.parse(RUNTIME_PROVIDERS.CLAUDE_CODE)).toBe("claude-code");
     expect(runtimeProviderSchema.parse(RUNTIME_PROVIDERS.CLAUDE_CODE_TUI)).toBe("claude-code-tui");
     expect(runtimeProviderSchema.parse(RUNTIME_PROVIDERS.CODEX)).toBe("codex");
+    expect(runtimeProviderSchema.parse(RUNTIME_PROVIDERS.CURSOR)).toBe("cursor");
   });
 
   it("DEFAULT_RUNTIME_PROVIDER is claude-code (existing rows pre-0026 have no kind)", () => {
@@ -44,6 +46,7 @@ describe("runtimeProviderSchema", () => {
   it("marks temporarily disabled providers as unavailable for selection", () => {
     expect(isRuntimeProviderEnabled("claude-code")).toBe(true);
     expect(isRuntimeProviderEnabled("codex")).toBe(true);
+    expect(isRuntimeProviderEnabled("cursor")).toBe(true);
     expect(isRuntimeProviderEnabled("claude-code-tui")).toBe(false);
     expect(isRuntimeProviderEnabled("future-provider")).toBe(true);
   });

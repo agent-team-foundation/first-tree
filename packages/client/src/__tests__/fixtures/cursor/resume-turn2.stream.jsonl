@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","apiKeySource":"env","cwd":"/private/tmp/cursor-cli-resume-3qSQXm","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","model":"Composer 2.5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Without reading any file or using tools, reply with only the exact nonce I asked you to remember in the previous turn."}]},"session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4"}
+{"type":"thinking","subtype":"delta","text":"Recalling the nonce ","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675610593}
+{"type":"thinking","subtype":"delta","text":"from the previous turn.","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675610593}
+{"type":"thinking","subtype":"delta","text":"\n\nThe nonce is FT_RESUME_NONCE_7D2A91.","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675610593}
+{"type":"thinking","subtype":"completed","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675610594}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"FT_RESUME_NONCE_7D2A91"}]},"session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4"}
+{"type":"result","subtype":"success","duration_ms":8463,"duration_api_ms":8463,"is_error":false,"result":"FT_RESUME_NONCE_7D2A91","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","request_id":"832d3ff6-7c2d-4825-9d55-546fabc421ec","usage":{"inputTokens":143,"outputTokens":64,"cacheReadTokens":12064,"cacheWriteTokens":0}}

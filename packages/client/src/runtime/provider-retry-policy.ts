@@ -73,7 +73,7 @@ export function classifyProviderFailure(
       sourceKind: base.kind,
     };
   }
-  if (isCredential(text, base, status)) {
+  if (isCredential(text, base, status, context.provider)) {
     return {
       category: "credential",
       reasonCode: credentialReason(base),
@@ -91,7 +91,7 @@ export function classifyProviderFailure(
       sourceKind: base.kind,
     };
   }
-  if (isConfiguration(text, base)) {
+  if (isConfiguration(text, base, context.provider)) {
     return {
       category: "configuration",
       reasonCode: configurationReason(base),
@@ -397,8 +397,13 @@ function readRetryAfterMs(shape: ErrorShape): number | undefined {
   return undefined;
 }
 
-function isCredential(text: string, base: Classification, status: number | undefined): boolean {
-  return (
+function isCredential(
+  text: string,
+  base: Classification,
+  status: number | undefined,
+  provider: RuntimeProvider,
+): boolean {
+  if (
     status === 401 ||
     status === 403 ||
     base.reasonCode.includes("auth") ||
@@ -407,7 +412,15 @@ function isCredential(text: string, base: Classification, status: number | undef
     /unauthorized|forbidden|invalid api key|invalid_api_key|authentication|login required|not authenticated|oauth_org_not_allowed/.test(
       text,
     )
-  );
+  ) {
+    return true;
+  }
+  // Cursor CLI logged-out phrasings (kept in sync with isCursorAuthError in
+  // handlers/auth-error-hint.ts). Provider-gated: the in-chat "Log in to
+  // Cursor" CTA renders only for category=credential, so a wording variant
+  // that drops the word "authentication" must still classify credential —
+  // without leaking these generic phrases into other providers' traffic.
+  return provider === "cursor" && /not logged in|agent login|cursor_api_key/.test(text);
 }
 
 function credentialReason(base: Classification): string {
@@ -418,10 +431,20 @@ function isCapability(text: string, base: Classification): boolean {
   return base.reasonCode.includes("binary_missing") || /binary missing|executable missing|unable to locate/.test(text);
 }
 
-function isConfiguration(text: string, base: Classification): boolean {
-  return (
+function isConfiguration(text: string, base: Classification, provider: RuntimeProvider): boolean {
+  if (
     base.reasonCode.includes("mismatch") ||
     /provider mismatch|runtime_provider_mismatch|bad config|sandbox|approval|model_not_found|model not found/.test(text)
+  ) {
+    return true;
+  }
+  // Cursor CLI literal invalid-model / explicit-deny / trust-wall phrasings
+  // (captured in Phase 0). Gated to the cursor provider: this classifier is
+  // shared and configuration wins over capacity in the classify chain, so an
+  // ungated generic English phrase like "cannot use this model" could turn
+  // another provider's retryable capacity message into a terminal stop.
+  return (
+    provider === "cursor" && /cannot use this model|blocked by permissions configuration|workspace trust/.test(text)
   );
 }
 

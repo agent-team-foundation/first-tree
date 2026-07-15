@@ -1,4 +1,4 @@
-import type { AgentType } from "@first-tree/shared";
+import type { AgentType, RuntimeProvider } from "@first-tree/shared";
 import { setConfig } from "@first-tree/shared/config";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
@@ -331,13 +331,16 @@ export async function seedAgentFactory(app: FastifyInstance) {
     status: "connected",
   });
 
-  return async (opts: { name?: string; type?: AgentType; displayName?: string } = {}) => {
+  return async (
+    opts: { name?: string; type?: AgentType; displayName?: string; runtimeProvider?: RuntimeProvider } = {},
+  ) => {
     return createAgent(app.db, {
       name: opts.name ?? `seed-agent-${crypto.randomUUID().slice(0, 8)}`,
       type: opts.type ?? "agent",
       displayName: opts.displayName ?? "Seed Agent",
       managerId: admin.memberId,
       clientId: opts.type === "human" ? undefined : clientId,
+      ...(opts.runtimeProvider ? { runtimeProvider: opts.runtimeProvider } : {}),
     });
   };
 }

@@ -197,6 +197,35 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  it("rejects reasoningEffort writes for cursor agents with an explicit 400 (no silent no-op)", async () => {
+    const app = getApp();
+    const req = await authedRequest(app);
+    const agent = await (await seedAgentFactory(app))({
+      name: `cfg-cursor-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      runtimeProvider: "cursor",
+    });
+
+    // The cursor payload variant has no effort channel — zod would silently
+    // strip the key on re-parse, so the service must reject instead of
+    // reporting a successful no-op write.
+    const rejected = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+      expectedVersion: 1,
+      payload: { reasoningEffort: "high" },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json<{ error: string }>().error).toContain("not supported");
+
+    // The rejection must not have consumed a version; a model write still lands.
+    const model = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+      expectedVersion: 1,
+      payload: { model: "composer-2.5" },
+    });
+    expect(model.statusCode).toBe(200);
+    expect(model.json().payload.model).toBe("composer-2.5");
+    expect("reasoningEffort" in model.json().payload).toBe(false);
+  });
+
   it("persists model-dependent max and ultra values for codex agents", async () => {
     const app = getApp();
     const req = await authedRequest(app);

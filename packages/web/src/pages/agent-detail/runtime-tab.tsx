@@ -79,12 +79,17 @@ export function RuntimeTab() {
               disabled={editsDisabled}
               provider={ctx.setupRuntimeProvider}
             />
-            <ReasoningEffortSection
-              value={config.payload.reasoningEffort}
-              onChange={(v) => configSave.save({ reasoningEffort: v }, { field: "effort" })}
-              disabled={editsDisabled}
-              provider={ctx.setupRuntimeProvider}
-            />
+            {/* Cursor has no separate reasoning-effort channel — effort/fast
+                variants live in the provider-native model id, so the control
+                is hidden rather than rendered empty. */}
+            {ctx.setupRuntimeProvider !== "cursor" ? (
+              <ReasoningEffortSection
+                value={"reasoningEffort" in config.payload ? config.payload.reasoningEffort : ""}
+                onChange={(v) => configSave.save({ reasoningEffort: v }, { field: "effort" })}
+                disabled={editsDisabled}
+                provider={ctx.setupRuntimeProvider}
+              />
+            ) : null}
           </Section>
           {/* Only model/effort failures belong here; env failures surface at the
               Env section (dialog for add/edit, toast for delete). */}

@@ -4,6 +4,7 @@ import { createClaudeCodeHandler } from "./claude-code.js";
 import { createClaudeCodeTuiHandler } from "./claude-code-tui/index.js";
 import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "./claude-executable.js";
 import { createCodexHandler } from "./codex/index.js";
+import { createCursorHandler } from "./cursor/index.js";
 
 /** Injectable seam so tests can force a Claude-executable resolution (no real PATH / shell spawn). */
 export type RegisterBuiltinHandlersDeps = {
@@ -44,4 +45,8 @@ export function registerBuiltinHandlers(deps: RegisterBuiltinHandlersDeps = {}):
   // The handler factory consumes the same HandlerConfig (workspaceRoot /
   // agentConfigCache / contextTreePath).
   registerHandler("codex", (config) => createCodexHandler(config));
+  // Cursor is external-only: no bundled engine, no daemon-run installer. The
+  // handler resolves `cursor-agent` / `agent` lazily at session start (with
+  // the login-shell probe) and spawns one CLI process per provider turn.
+  registerHandler("cursor", (config) => createCursorHandler(config));
 }

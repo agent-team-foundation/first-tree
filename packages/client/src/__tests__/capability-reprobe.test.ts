@@ -73,11 +73,12 @@ describe("hasNonOkProvider", () => {
   });
 
   it("all enabled built-in providers ok → not degraded (stops the poll)", () => {
-    // claude-code-tui is disabled, so only claude-code + codex must be ok.
+    // claude-code-tui is disabled, so claude-code + codex + cursor must be ok.
     expect(
       hasNonOkProvider({
         "claude-code": okEntry(),
         codex: okEntry(),
+        cursor: okEntry(),
       }),
     ).toBe(false);
   });

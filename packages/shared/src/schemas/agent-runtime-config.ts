@@ -271,10 +271,20 @@ const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   reasoningEffort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).default("high"),
 });
 
+const cursorRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("cursor"),
+  // No `reasoningEffort` — Cursor has no separate effort channel; effort/fast/
+  // context selection is already encoded in the provider-native model id the
+  // free-form `model` field carries. The safety posture (`--sandbox disabled
+  // --force`) is a runtime decision, not a configurable field, so no
+  // `sandboxMode` / `approvalPolicy` either.
+});
+
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
   claudeRuntimeConfigPayloadShape,
   claudeCodeTuiRuntimeConfigPayloadShape,
   codexRuntimeConfigPayloadShape,
+  cursorRuntimeConfigPayloadShape,
 ]);
 type TaggedPayload = z.infer<typeof taggedPayloadUnion>;
 
@@ -395,6 +405,21 @@ export const DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigP
 };
 
 /**
+ * Default payload for a fresh cursor agent. `model` is empty by default so the
+ * spawn omits `--model` and the Cursor CLI picks its local default (`auto`); a
+ * non-empty operator value is passed through verbatim as one argv entry.
+ */
+export const DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "cursor",
+  prompt: { append: "" },
+  model: "",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+  resourceSkills: [],
+};
+
+/**
  * Default payload selector by runtime provider.
  */
 export function defaultRuntimeConfigPayload(
@@ -403,6 +428,8 @@ export function defaultRuntimeConfigPayload(
   switch (provider) {
     case "codex":
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
+    case "cursor":
+      return { ...DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code-tui":
       return { ...DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code":

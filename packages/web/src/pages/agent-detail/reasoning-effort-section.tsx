@@ -36,12 +36,17 @@ const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
   // the identical effort options + inherit sentinel.
   "claude-code-tui": CLAUDE_EFFORT_OPTIONS,
   codex: CODEX_EFFORT_OPTIONS,
+  // Cursor has no separate effort channel — effort/fast variants are encoded
+  // in the model id itself, so RuntimeTab hides this section entirely for
+  // cursor agents. The empty entry keeps the Record exhaustive.
+  cursor: [],
 };
 
 const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   "claude-code": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   "claude-code-tui": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   codex: "Applies to new sessions. Higher means more reasoning per turn; max and ultra require a compatible model.",
+  cursor: "Cursor encodes effort in the model id; there is no separate control.",
 };
 
 export type ReasoningEffortSectionProps = {
