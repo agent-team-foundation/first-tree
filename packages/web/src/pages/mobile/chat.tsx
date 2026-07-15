@@ -18,7 +18,7 @@ import {
   MobileSystemState,
   mobileCardStyle,
 } from "./components.js";
-import { mobileChatListSignal, mobileChatPreview, sortMobileChatList } from "./data.js";
+import { mobileChatListSignal, mobileChatPreview, mobileRowsFromList, sortMobileChats } from "./data.js";
 
 type MobileChatView = "all" | "unread" | "watching";
 
@@ -87,7 +87,7 @@ function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
       }),
     refetchInterval: 30_000,
   });
-  const rows = sortMobileChatList(chatsQuery.data?.rows ?? []);
+  const rows = sortMobileChats(mobileRowsFromList(chatsQuery.data));
 
   return (
     <MobilePage className="flex flex-col" padded>

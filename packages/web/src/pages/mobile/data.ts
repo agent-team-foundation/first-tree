@@ -133,15 +133,6 @@ export function sortMobileChats(rows: readonly MeChatRow[]): MeChatRow[] {
   });
 }
 
-/** Preserve the pre-refresh ordering of the complete Chat list. */
-export function sortMobileChatList(rows: readonly MeChatRow[]): MeChatRow[] {
-  return [...rows].sort((a, b) => {
-    const signalDelta = mobileChatSignal(a).rank - mobileChatSignal(b).rank;
-    if (signalDelta !== 0) return signalDelta;
-    return timestampValue(b.lastMessageAt) - timestampValue(a.lastMessageAt);
-  });
-}
-
 /**
  * Now feed admission. A chat enters the needs-attention feed only when it
  * carries an AUTHORITATIVE active signal, read from the source-of-truth fields

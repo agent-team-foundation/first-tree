@@ -204,6 +204,11 @@ describe("mobile card behavior", () => {
   });
 
   it("keeps Chat rows as direct detail links without Now actions or swipe wrappers", async () => {
+    listResponse = {
+      rows: [],
+      priorityRows: { attention: [row], pinned: [] },
+      nextCursor: null,
+    };
     renderPage(harness, "chat");
     await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
 

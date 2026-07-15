@@ -9,7 +9,6 @@ import {
   mobileChatPreview,
   mobileChatSignal,
   mobileRowsFromList,
-  sortMobileChatList,
   sortMobileChats,
 } from "../data.js";
 
@@ -102,8 +101,13 @@ describe("mobile chat projection", () => {
     expect(rows.some((row) => row.chatId === olderPin.chatId)).toBe(false);
   });
 
-  it("keeps Chat's established labels and recency ordering", () => {
-    const newer = chatRow({ chatId: "newer", lastMessageAt: "2026-07-09T11:00:00.000Z" });
+  it("keeps Chat's quiet labels while real-work activity advances recency", () => {
+    const messageUpdate = chatRow({ chatId: "message-update", lastMessageAt: "2026-07-09T11:00:00.000Z" });
+    const descriptionUpdate = chatRow({
+      chatId: "description-update",
+      lastMessageAt: "2026-07-09T08:00:00.000Z",
+      activityAt: "2026-07-09T12:00:00.000Z",
+    });
     const olderWorking = chatRow({
       chatId: "working",
       busyAgentIds: ["agent-1"],
@@ -115,11 +119,9 @@ describe("mobile chat projection", () => {
       lastMessageAt: "2026-07-09T08:00:00.000Z",
     });
 
-    expect(sortMobileChatList([newer, olderWorking, question]).map((row) => row.chatId)).toEqual([
-      "question",
-      "newer",
-      "working",
-    ]);
+    expect(
+      sortMobileChats([messageUpdate, descriptionUpdate, olderWorking, question]).map((row) => row.chatId),
+    ).toEqual(["question", "description-update", "message-update", "working"]);
     expect(mobileChatListSignal(question).label).toBe("Needs answer");
     expect(mobileChatListSignal(olderWorking).label).toBe("Working");
   });
