@@ -31,6 +31,18 @@ chats and the adjacent campaign quickstart handoff.
   its complete membership is exactly the initiating human and selected agent,
   preserving safe Phase 1 history. Any ownership mismatch leaves the legacy
   chat untouched and creates the caller's scoped chat instead.
+- A `/me/onboarding/kickoff` request may carry `stamp` to say how the
+  membership's onboarding state is stamped once the kickoff chat exists:
+  `"completed"` (default, same as the older `complete: true`), `"none"`
+  (same as `complete: false`), or `"invitee_skip"` — the team-agent start.
+  `"invitee_skip"` is used when a joining member starts their first chat with a
+  teammate's org-visible agent instead of creating their own: it writes only
+  the auto-open suppressor (`onboarding_suppressed_reason = "invitee_skip"`),
+  never `onboarding_completed_at`, so the standard connect-computer →
+  create-agent journey stays pending and resumable. `stamp` supersedes
+  `complete` when both are present; the kickoff key stays the normal
+  `<humanAgent>:<agent>:onboarding` key, so a team-agent start and a later
+  personal-agent start-chat are distinct chats.
 - A `/me/onboarding/kickoff` request carrying `scanFixRepoSlug` (`owner/repo`)
   is a production-scan fix conversion arriving via onboarding. It keys the
   kickoff chat `<humanAgent>:scan-fix:<repoSlug>` instead of the default

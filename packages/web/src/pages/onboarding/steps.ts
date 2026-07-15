@@ -223,6 +223,29 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
 }
 
 /**
+ * Whether the connect-computer wall may offer the install-free team-agent
+ * start: begin working in a teammate's org-visible agent chat now, and finish
+ * the standard connect-computer → create-agent setup later.
+ *
+ * Offered only while BOTH hold:
+ *   - the selected org has a usable agent this member did not create
+ *     (`currentOrgHasUsableAgent` can include org-visible agents owned by
+ *     another member — a fresh solo team never qualifies), and
+ *   - this membership still has no personal agent (once it does, the standard
+ *     journey is nearly done and the shortcut would only confuse).
+ *
+ * Deliberately not path-gated: the admin creating a brand-new team can never
+ * satisfy the usable-agent condition, so the predicate self-selects joining
+ * members without hard-coding path.
+ */
+export function canOfferTeamAgentStart(facts: {
+  currentOrgHasUsableAgent: boolean;
+  currentOrgHasPersonalAgent: boolean;
+}): boolean {
+  return facts.currentOrgHasUsableAgent && !facts.currentOrgHasPersonalAgent;
+}
+
+/**
  * Which invitee start-chat state to show, given what the team has set up. Just two:
  *   - "ready"     → the team has BOTH a Context Tree and a GitHub connection;
  *                   the agent can do real work, so launch.

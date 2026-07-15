@@ -8,6 +8,13 @@ export type StartOnboardingChatArgs = {
   topic?: string;
   complete?: boolean;
   /**
+   * How the membership's onboarding state is stamped once the chat exists.
+   * Supersedes `complete` server-side. `"invitee_skip"` is the team-agent
+   * start: suppress onboarding auto-open without stamping completion, so the
+   * member's own connect-computer → create-agent journey stays resumable.
+   */
+  stamp?: "completed" | "invitee_skip" | "none";
+  /**
    * Production-scan fix conversion: `owner/repo`. When set, the server keys the
    * kickoff chat `<humanAgent>:scan-fix:<repoSlug>` so this fix launcher dedups
    * with the already-onboarded direct path instead of duplicating it.

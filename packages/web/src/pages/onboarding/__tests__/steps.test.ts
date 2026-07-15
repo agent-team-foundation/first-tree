@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ADMIN_STEPS,
+  canOfferTeamAgentStart,
   clampStepIndex,
   getStepSequence,
   INVITEE_STEPS,
@@ -145,6 +146,25 @@ describe("shouldEnterOnboarding", () => {
         onboardingSuppressedAt: null,
       }),
     ).toBe(true);
+  });
+});
+
+describe("canOfferTeamAgentStart", () => {
+  it("offers the install-free start only while the org has a usable agent and no personal one", () => {
+    expect(
+      canOfferTeamAgentStart({ currentOrgHasUsableAgent: true, currentOrgHasPersonalAgent: false }),
+    ).toBe(true);
+  });
+  it("never offers it on a fresh team or once the member has their own agent", () => {
+    expect(
+      canOfferTeamAgentStart({ currentOrgHasUsableAgent: false, currentOrgHasPersonalAgent: false }),
+    ).toBe(false);
+    expect(
+      canOfferTeamAgentStart({ currentOrgHasUsableAgent: true, currentOrgHasPersonalAgent: true }),
+    ).toBe(false);
+    expect(
+      canOfferTeamAgentStart({ currentOrgHasUsableAgent: false, currentOrgHasPersonalAgent: true }),
+    ).toBe(false);
   });
 });
 

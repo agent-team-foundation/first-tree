@@ -16,6 +16,27 @@ describe("kickoffOnboardingSchema", () => {
     expect(parsed.complete).toBe(false);
   });
 
+  it("accepts the stamp variants alongside the older complete boolean", () => {
+    for (const stamp of ["completed", "invitee_skip", "none"] as const) {
+      const parsed = kickoffOnboardingSchema.parse({
+        agentUuid: "agent-1",
+        bootstrap: "First Tree is getting the agent up to speed.",
+        stamp,
+      });
+      expect(parsed.stamp).toBe(stamp);
+    }
+  });
+
+  it("rejects an unknown stamp value", () => {
+    const parsed = kickoffOnboardingSchema.safeParse({
+      agentUuid: "agent-1",
+      bootstrap: "First Tree is getting the agent up to speed.",
+      stamp: "dismissed",
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
   it("rejects the retired kickoff kind field", () => {
     const parsed = kickoffOnboardingSchema.safeParse({
       agentUuid: "agent-1",
