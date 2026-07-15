@@ -5,6 +5,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { members } from "../db/schema/members.js";
 import { NotFoundError } from "../errors.js";
 import { stampAgentResource, stampChatResource, stampOrgScope } from "../observability/request-context.js";
@@ -242,6 +243,31 @@ export async function requireChatAccess<P extends { chatId: string }>(
   stampOrgScope(request, scope);
   stampChatResource(request, chat);
   return { chat: chat as ChatRow, scope };
+}
+
+export async function requireGitlabConnectionAccess(
+  request: FastifyRequest<{ Params: { connectionId: string } }>,
+  db: Database,
+  kind: "read" | "admin",
+): Promise<{ connection: typeof gitlabConnections.$inferSelect; scope: OrgScope }> {
+  const { userId } = requireUser(request);
+  const [connection] = await db
+    .select()
+    .from(gitlabConnections)
+    .where(eq(gitlabConnections.id, request.params.connectionId))
+    .limit(1);
+  if (!connection) throw new NotFoundError("GitLab connection not found");
+  const caller = await resolveCallerInOrg(db, userId, connection.organizationId);
+  if (kind === "admin" && caller.role !== "admin") throw new NotFoundError("GitLab connection not found");
+  const scope: OrgScope = {
+    userId,
+    organizationId: connection.organizationId,
+    memberId: caller.memberId,
+    role: caller.role,
+    humanAgentId: caller.humanAgentId,
+  };
+  stampOrgScope(request, scope);
+  return { connection, scope };
 }
 
 /**

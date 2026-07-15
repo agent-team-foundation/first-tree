@@ -123,3 +123,22 @@ export const githubEventCardSchema = z.object({
   mentionedUser: z.string().optional(),
 });
 export type GithubEventCard = z.infer<typeof githubEventCardSchema>;
+
+/** Content payload for a basic GitLab event card. Personnel routing is deliberately absent. */
+export const gitlabEventCardSchema = z.object({
+  type: z.literal("gitlab_event"),
+  event: z.string().min(1),
+  action: z.string().nullable(),
+  kind: normalizedEventKindSchema,
+  project: z.string().min(1),
+  sender: z.string().min(1),
+  title: z.string(),
+  body: z.string(),
+  url: z.string(),
+  entity: z.object({
+    type: z.enum(["issue", "pull_request"]),
+    key: z.string().min(1),
+    url: z.string().nullable(),
+  }),
+});
+export type GitlabEventCard = z.infer<typeof gitlabEventCardSchema>;

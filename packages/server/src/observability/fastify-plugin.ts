@@ -1,3 +1,4 @@
+import { redactUrl } from "@first-tree/shared/observability";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { createLogger } from "./logger.js";
 import { currentTraceId } from "./otel-helpers.js";
@@ -31,7 +32,10 @@ export const observabilityPlugin: FastifyPluginAsync = async (app: FastifyInstan
 
   app.addHook("onResponse", async (request: FastifyRequest, reply: FastifyReply) => {
     if (reply.statusCode >= 500) {
-      request.log.warn({ method: request.method, url: request.url, statusCode: reply.statusCode }, "request failed");
+      request.log.warn(
+        { method: request.method, url: redactUrl(request.url), statusCode: reply.statusCode },
+        "request failed",
+      );
     }
   });
 };

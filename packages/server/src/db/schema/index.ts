@@ -16,6 +16,8 @@ export { contextTreeIoEvents } from "./context-tree-io-events.js";
 export { docComments, docDocuments, docVersions } from "./doc-documents.js";
 export { githubAppInstallations } from "./github-app-installations.js";
 export { githubEntityChatMappings } from "./github-entity-chat-mappings.js";
+export { gitlabConnections } from "./gitlab-connections.js";
+export { gitlabEntityChatMappings } from "./gitlab-entity-chat-mappings.js";
 export { inboxEntries } from "./inbox-entries.js";
 export { invitationRedemptions, invitations } from "./invitations.js";
 export { members } from "./members.js";

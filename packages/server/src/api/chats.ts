@@ -3,6 +3,7 @@ import {
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   followGithubEntityRequestSchema,
+  followGitlabEntitySchema,
   paginationQuerySchema,
   parseLandingCampaignTrialChatMetadata,
   patchChatEngagementSchema,
@@ -19,12 +20,17 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
-import { BadRequestError, ForbiddenError } from "../errors.js";
+import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat, updateChatMetadata } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
+import {
+  declareGitlabEntityFollow,
+  listChatGitlabEntities,
+  removeGitlabEntityFollow,
+} from "../services/gitlab-entity-follow.js";
 import {
   hasRemainingLandingCampaignTrialBudget,
   normalizeLandingCampaignTrialChatMetadataForRead,
@@ -54,6 +60,15 @@ import { sendFollowResult } from "./github-entity-reply.js";
  * and gates participation/supervision.
  */
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
+  async function requireDirectHumanChatMembership(chatId: string, humanAgentId: string): Promise<void> {
+    const [direct] = await app.db
+      .select({ chatId: chatMembership.chatId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)))
+      .limit(1);
+    if (!direct) throw new NotFoundError(`Chat "${chatId}" not found`);
+  }
+
   function assertLandingCampaignTrialChatAcceptsHumanMessage(
     metadata: Record<string, unknown> | null,
     body: { metadata?: Record<string, unknown> },
@@ -320,6 +335,39 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         throw new BadRequestError("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
       }
       return removeEntityFollow(app.db, { chatId: chat.id, entity });
+    },
+  );
+
+  app.get<{ Params: { chatId: string } }>("/:chatId/gitlab-entities", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    return { entities: await listChatGitlabEntities(app.db, chat.id) };
+  });
+
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/gitlab-entities",
+    { config: { otelRecordBody: true } },
+    async (request, reply) => {
+      const { chat, scope } = await requireChatAccess(request, app.db);
+      await requireDirectHumanChatMembership(chat.id, scope.humanAgentId);
+      const body = followGitlabEntitySchema.parse(request.body);
+      const entity = await declareGitlabEntityFollow(app.db, {
+        organizationId: scope.organizationId,
+        connectionId: body.connectionId,
+        chatId: chat.id,
+        declaredByAgentId: scope.humanAgentId,
+        entityUrl: body.entityUrl,
+      });
+      return reply.status(201).send({ entity });
+    },
+  );
+
+  app.delete<{ Params: { chatId: string }; Querystring: { mappingId?: string } }>(
+    "/:chatId/gitlab-entities",
+    async (request) => {
+      const { chat, scope } = await requireChatAccess(request, app.db);
+      await requireDirectHumanChatMembership(chat.id, scope.humanAgentId);
+      if (!request.query.mappingId) throw new BadRequestError("Pass ?mappingId=<GitLab follow id> to unfollow.");
+      return { removed: await removeGitlabEntityFollow(app.db, chat.id, request.query.mappingId) };
     },
   );
 

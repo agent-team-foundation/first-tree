@@ -26,10 +26,11 @@ export const MESSAGE_SOURCES = {
   WEB: "web",
   CLI: "cli",
   GITHUB: "github",
+  GITLAB: "gitlab",
   API: "api",
 } as const;
 
-export const messageSourceSchema = z.enum(["web", "cli", "github", "api"]);
+export const messageSourceSchema = z.enum(["web", "cli", "github", "gitlab", "api"]);
 export type MessageSource = z.infer<typeof messageSourceSchema>;
 
 /**
