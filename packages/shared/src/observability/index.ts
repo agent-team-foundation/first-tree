@@ -1,3 +1,4 @@
+export { redactCredentialText } from "./credential-redaction.js";
 export {
   createLoggerOutputStream,
   DIM,
