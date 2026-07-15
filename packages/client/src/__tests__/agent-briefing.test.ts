@@ -47,9 +47,21 @@ function topLevelSection(briefing: string, heading: string): string {
   const start = briefing.indexOf(marker);
   expect(start, `missing section ${heading}`).toBeGreaterThanOrEqual(0);
   const contentStart = start + 1;
-  const next = briefing.slice(contentStart + heading.length + 1).search(/\n# [^\n]+\n/u);
-  if (next === -1) return briefing.slice(contentStart);
-  return briefing.slice(contentStart, contentStart + heading.length + 1 + next);
+  const searchStart = contentStart + heading.length + 1;
+  const knownHeadings = [
+    "# Identity",
+    "# Team Prompt (team-shared — read-only for agents)",
+    "# Agent Prompt (this agent only — editable)",
+    "# Agent Prompt Overrides (this agent only — managed via resource bindings)",
+    "# Working in First Tree (First Tree Managed)",
+    "# Context Tree (First Tree Managed)",
+    "# Skills (First Tree Managed)",
+  ];
+  const nextStarts = knownHeadings
+    .map((candidate) => briefing.indexOf(`\n${candidate}\n`, searchStart))
+    .filter((candidateStart) => candidateStart >= 0);
+  if (nextStarts.length === 0) return briefing.slice(contentStart);
+  return briefing.slice(contentStart, Math.min(...nextStarts));
 }
 
 function lineCount(text: string): number {
@@ -67,6 +79,31 @@ describe("buildAgentBriefing — generated skeleton", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("# Identity\n\nYou are Test Agent, an autonomous agent.");
     expect(briefing.endsWith("\n")).toBe(true);
+    expect(briefing.endsWith("\n\n")).toBe(false);
+  });
+
+  it("keeps complete briefing prose in EJS and runtime code limited to structured data", () => {
+    const templatePath = resolveAgentBriefingTemplatePath();
+    const templateSource = readFileSync(templatePath, "utf8");
+    const runtimeSource = readFileSync(resolve(dirname(templatePath), "..", "agent-briefing.ts"), "utf8");
+
+    for (const marker of [
+      "You are running inside **First Tree**",
+      "Blocking questions never ride inside plain `chat send`",
+      "The Context Tree is durable context",
+      "## GitLab Working Posture",
+      "# Skills (First Tree Managed)",
+    ]) {
+      expect(templateSource).toContain(marker);
+      expect(runtimeSource).not.toContain(marker);
+    }
+
+    expect(templateSource).not.toContain("<%=");
+    expect(runtimeSource).not.toContain("requiredReadingBlock");
+    expect(runtimeSource).not.toContain("function generatedBannerSection(");
+    expect(runtimeSource).not.toContain("function workingInFirstTreeSection(");
+    expect(runtimeSource).not.toContain("function contextTreeSection(");
+    expect(runtimeSource.match(/getCliBinding\(\)/gu)).toHaveLength(1);
   });
 
   it("keeps top-level section order stable and excludes per-chat Current Chat Context", () => {
@@ -126,12 +163,12 @@ describe("buildAgentBriefing — generated skeleton", () => {
     );
 
     expect(lineCount(topLevelSection(briefing, "# Working in First Tree (First Tree Managed)"))).toBeLessThanOrEqual(
-      190,
+      220,
     );
     expect(briefing).not.toContain("# Required Reading (First Tree Managed)");
     expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(210);
     expect(lineCount(topLevelSection(briefing, "# Skills (First Tree Managed)"))).toBeLessThanOrEqual(20);
-    expect(lineCount(briefing)).toBeLessThanOrEqual(550);
+    expect(lineCount(briefing)).toBeLessThanOrEqual(580);
   });
 
   it("renders identity from visibility", () => {
@@ -194,6 +231,59 @@ describe("buildAgentBriefing — prompt provenance sections", () => {
     expect(briefing).toMatch(/NOT editable with `prompt set`/);
     expect(briefing).not.toContain("## Agent-Specific Prompt");
   });
+
+  it("renders identity, prompt, and path values without HTML escaping", () => {
+    const workspacePath = "/tmp/<team>&/it's-`safe`";
+    const sourcePath = `${workspacePath}/source-repos/<repo>&'`;
+    const contextTreePath = `${workspacePath}/context-tree/<tree>&'`;
+    const payload = {
+      ...basePayload,
+      prompt: {
+        append: "legacy ignored",
+        sections: [
+          {
+            scope: "team" as const,
+            name: "Rules <raw> & O'Brien `ops`",
+            body: "Keep <prompt> & O'Brien `literal`.",
+            editable: false,
+          },
+          {
+            scope: "agent" as const,
+            name: "",
+            body: "Agent body <raw> & 'quoted' `ticks`.",
+            editable: true,
+          },
+        ],
+      },
+    };
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        identity: makeIdentity({ displayName: "A<ly & O'Brien `ops`" }),
+        payload,
+        workspacePath,
+        sourceRepos: [
+          {
+            absolutePath: sourcePath,
+            url: "ssh://git@example.com/group/<repo>&'`tick`.git",
+          },
+        ],
+        contextTreePath,
+        contextTreeRepoUrl: "ssh://git@example.com/context/<tree>&'`tick`.git",
+        contextTreeBranch: "feature/<raw>&'`tick`",
+      }),
+    );
+
+    expect(briefing).toContain("You are A<ly & O'Brien `ops`, an autonomous agent.");
+    expect(briefing).toContain("## Rules <raw> & O'Brien `ops`");
+    expect(briefing).toContain("Keep <prompt> & O'Brien `literal`.");
+    expect(briefing).toContain("Agent body <raw> & 'quoted' `ticks`.");
+    expect(briefing).toContain(`Your fixed working directory is \`${workspacePath}\`.`);
+    expect(briefing).toContain(`- \`${sourcePath}\``);
+    expect(briefing).toContain(contextTreePath);
+    expect(briefing).toContain("it'\\''s-`safe`");
+    expect(briefing).toContain("feature/<raw>&'\\''`tick`");
+    expect(briefing).not.toMatch(/&(?:amp|lt|gt|#39|#96);/u);
+  });
 });
 
 describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
@@ -253,6 +343,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toContain("first-tree-welcome");
     expect(treelessFamily).toContain("first-tree-seed");
     expect(treelessFamily).toContain("first-tree-file-bug");
+    expect(treelessFamily).not.toContain("first-tree-gitlab");
     expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(treelessFamily).toContain("These First Tree skills are installed in every workspace");
@@ -362,12 +453,34 @@ describe("buildAgentBriefing — Working in First Tree hard rules", () => {
     expect(communication).toMatch(/Use\s+`-f markdown`/);
   });
 
-  it("uses the channel-resolved binary name in chat commands", () => {
+  it("uses one channel-resolved binary name across prompt, chat, GitHub, and tree commands", () => {
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
     try {
-      const briefing = buildAgentBriefing(makeOpts());
+      const briefing = buildAgentBriefing(
+        makeOpts({
+          contextTreePath: "/tree",
+          payload: {
+            kind: "claude-code",
+            model: "",
+            prompt: {
+              append: "",
+              sections: [{ scope: "agent", name: "", body: "Channel prompt.", editable: true }],
+            },
+            mcpServers: [],
+            env: [],
+            gitRepos: [],
+            resourceSkills: [],
+            reasoningEffort: "",
+          },
+        }),
+      );
+      expect(briefing).toContain("first-tree-staging agent config prompt show <agent> --raw");
+      expect(briefing).toContain("first-tree-staging agent config prompt show test-agent --raw");
       expect(briefing).toContain("first-tree-staging chat send");
-      expect(briefing).not.toMatch(/\bfirst-tree chat /);
+      expect(briefing).toContain("first-tree-staging github follow <url>");
+      expect(briefing).toContain("first-tree-staging tree verify");
+      expect(briefing).toContain("first-tree-staging tree tree --help");
+      expect(briefing).not.toMatch(/\bfirst-tree (?:agent|chat|github|tree)\b/u);
     } finally {
       setCliBinding({ binName: "first-tree", packageName: "first-tree" });
     }
@@ -405,10 +518,26 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
 
   it("keeps GitHub posture and follow-after-create rules inline", () => {
     const briefing = buildAgentBriefing(makeOpts());
-    expect(briefing).toContain("## GitHub Working Posture");
-    expect(briefing.indexOf("## GitHub Working Posture")).toBeLessThan(briefing.indexOf("## GitHub Entity Attention"));
+    const orderedHeadings = [
+      "## GitHub Working Posture",
+      "## GitHub Entity Attention",
+      "## GitLab Working Posture",
+      "## GitLab Entity Attention",
+      "## Asking Humans",
+    ];
+    let previousIndex = -1;
+    for (const heading of orderedHeadings) {
+      const index = briefing.indexOf(heading);
+      expect(index, `${heading} missing or out of order`).toBeGreaterThan(previousIndex);
+      previousIndex = index;
+    }
+
     expect(briefing).toContain("try the host `gh` CLI first");
     expect(briefing).toContain("not by itself a reason to ask for First Tree GitHub App");
+    expect(briefing).not.toContain("final provider `PATH`");
+    expect(briefing).toContain("gh auth status");
+    expect(briefing).toContain("gh auth login");
+    expect(briefing).toContain("gh <command> --help");
     expect(briefing).toContain("If the current member is not an org admin");
     expect(briefing).toContain("hidden server sync path");
 
@@ -432,6 +561,64 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).toMatch(/human explicitly asks to stop tracking/);
     expect(briefing).toContain("first-tree github follow --help");
     expect(briefing).not.toContain("`first-tree-github` skill");
+  });
+
+  it("keeps compact GitLab posture inline and routes detailed operations on demand", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    const gitlab = briefing.slice(briefing.indexOf("## GitLab Working Posture"), briefing.indexOf("## Asking Humans"));
+
+    expect(gitlab).toContain("try the host `glab` CLI first");
+    expect(gitlab).toContain("merge requests, issues, pipelines/jobs, repository metadata, comments");
+    expect(gitlab).toContain("ordinary merge request / issue creation");
+    expect(gitlab).toContain("GitLab.com");
+    expect(gitlab).toContain("GitLab Dedicated");
+    expect(gitlab).toContain("GitLab Self-Managed");
+    expect(gitlab).toContain("infers the host from the current repository remote");
+    expect(gitlab).not.toContain("final provider `PATH`");
+    expect(gitlab).toContain("missing, unauthenticated, points at the wrong host, or lacks access");
+    expect(gitlab).toContain("install GitLab CLI");
+    expect(gitlab).toContain("fix auth/access/project permissions");
+    expect(gitlab).toContain("use a local clone");
+    expect(gitlab).toContain("glab <command> --help");
+    expect(gitlab).not.toContain("glab auth status");
+    expect(gitlab).not.toContain("--hostname <host>");
+    expect(gitlab).not.toContain("glab auth login");
+    expect(gitlab).toContain("Never expose a token");
+    expect(gitlab).toContain("command output, logs, or shell history");
+    expect(gitlab).toContain("only notifications for the current authenticated account");
+    expect(gitlab).toContain("do not bind GitLab events to a First Tree chat");
+    expect(gitlab).toContain("do not require the First Tree GitHub App");
+
+    expect(gitlab).toContain("subscribe by default");
+    expect(gitlab).toContain("skip an unrelated entity or one the user explicitly does not want notifications for");
+    expect(gitlab).toContain("subscription failure means only that GitLab notifications are missing");
+    expect(gitlab).toContain("does not invalidate the entity that was created");
+    expect(gitlab).toContain("only when a human explicitly asks");
+    expect(gitlab).toContain("never automatically when an issue closes");
+    expect(gitlab).toContain("an MR merges, or the task finishes");
+    expect(gitlab).not.toContain("first-tree-gitlab");
+    expect(gitlab).toContain("glab issue --help");
+    expect(gitlab).toContain("glab mr --help");
+
+    expect(briefing).not.toMatch(/first-tree gitlab (?:follow|unfollow)/u);
+    expect(gitlab).not.toContain("install the First Tree GitHub App");
+    expect(gitlab).not.toMatch(/`glab (?:issue|mr) (?:subscribe|unsubscribe) [^`]+`/u);
+    expect(gitlab).not.toContain("-R <group/project>");
+  });
+
+  it("always renders compact host posture without session-scoped CLI availability", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+
+    expect(briefing).toContain("## GitHub Working Posture");
+    expect(briefing).toContain("## GitHub Entity Attention");
+    expect(briefing).toContain("## GitLab Working Posture");
+    expect(briefing).toContain("## GitLab Entity Attention");
+    expect(briefing).not.toContain("detected `gh`");
+    expect(briefing).not.toContain("did not detect `gh`");
+    expect(briefing).not.toContain("detected `glab`");
+    expect(briefing).not.toContain("did not detect `glab`");
+    expect(briefing).not.toContain("final provider `PATH`");
+    expect(briefing).toContain("## Asking Humans");
   });
 
   it("keeps chat metadata rules compact but actionable", () => {

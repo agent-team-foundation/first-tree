@@ -53,6 +53,7 @@ describe("first-tree-read periodic cases", () => {
       expect(briefing).toContain("first-tree-welcome");
       expect(briefing).toContain("first-tree-write");
       expect(briefing).toContain("first-tree-file-bug");
+      expect(briefing).not.toContain("first-tree-gitlab");
       expect(existsSync(join(paths.workspacePath, ".first-tree-workspace", "identity.json"))).toBe(true);
       expect(lstatSync(claudePath).isSymbolicLink()).toBe(true);
       expect(readlinkSync(claudePath)).toBe("AGENTS.md");

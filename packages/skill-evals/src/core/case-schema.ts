@@ -3,13 +3,14 @@ export const SHIPPED_SKILLS = ["first-tree-read", "first-tree-write", "first-tre
 // Skills that ship in the runtime but are intentionally NOT modeled by this
 // eval harness. skill-evals is built around per-suite, model-graded live runners
 // for the Context-Tree / onboarding skill family (each suite carries a bespoke
-// fixture + grader + gate runner). `first-tree-file-bug` is a bug-reporting skill
-// whose core action is an external `gh` issue write gated on explicit human
-// confirmation — a side-effecting, human-in-the-loop flow the live harness is not
-// built to grade. Its guardrails (core-tier install, trigger boundary, family-map
-// wiring) are covered by unit / drift tests in `@first-tree/client` instead. It is
-// named here so the omission from `SHIPPED_SKILLS` is explicit rather than silent;
-// revisit if the skill grows a deterministic, model-gradable surface.
+// fixture + grader + gate runner). `first-tree-file-bug` performs an external
+// provider write by creating a public GitHub issue after human confirmation.
+// That side-effecting, credential-dependent flow belongs in isolated QA rather
+// than this live model harness. Its guardrails (core-tier install, trigger
+// boundary, family-map wiring, and generated-briefing routing) are covered by
+// client unit / drift tests. It is named here so its omission from
+// `SHIPPED_SKILLS` is explicit; revisit when it gains a deterministic,
+// model-gradable surface.
 export const UNEVALUATED_SHIPPED_SKILLS = ["first-tree-file-bug"] as const;
 
 export const SKILL_EVAL_TIERS = ["floor", "gate", "quality", "periodic"] as const;
