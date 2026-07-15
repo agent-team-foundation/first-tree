@@ -293,6 +293,7 @@ export async function handleContextReviewerPrEvent(
     const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
       chatId: existingChatId,
       info,
+      reviewer,
     });
     if (supersedingSynchronizeMessageId) {
       return {
@@ -362,6 +363,7 @@ export async function handleContextReviewerPrEvent(
     const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
       chatId: created.chat.id,
       info,
+      reviewer,
     });
     if (supersedingSynchronizeMessageId) {
       return {
@@ -660,7 +662,7 @@ async function findExistingReviewerChat(
 
 async function findSupersedingSynchronizeMessageId(
   db: Database,
-  input: { chatId: string; info: PullRequestPayloadInfo },
+  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent },
 ): Promise<string | null> {
   if (input.info.triggerEvent !== "pull_request.opened") return null;
   const [row] = await db
@@ -672,6 +674,8 @@ async function findSupersedingSynchronizeMessageId(
         eq(messages.source, "github"),
         sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
         sql`${messages.metadata}->>'triggerEvent' = 'pull_request.synchronize'`,
+        sql`${messages.metadata}->>'contextReviewReviewerAgentUuid' = ${input.reviewer.uuid}`,
+        sql`${messages.metadata}->>'contextReviewReviewerManagerHumanAgentId' = ${input.reviewer.managerHumanAgentId}`,
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messages.id))

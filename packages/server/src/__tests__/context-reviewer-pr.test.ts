@@ -18,6 +18,7 @@ import {
   renderContextReviewerPrPrompt,
 } from "../services/context-reviewer-pr.js";
 import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import { createMember } from "../services/member.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -596,6 +597,104 @@ describe("handleContextReviewerPrEvent", () => {
     expect(runMessages[0]?.metadata).toMatchObject({
       triggerEvent: "pull_request.synchronize",
       contextReviewHeadSha: "b".repeat(40),
+    });
+  });
+
+  it("does not suppress a delayed opened task after the configured reviewer changes", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const firstReviewer = await createReviewer(app, admin, { name: "first-reviewer" });
+    await enableReviewer(app, admin, firstReviewer.uuid);
+
+    const synchronized = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        action: "synchronize",
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+    if (!synchronized.handled) throw new Error("expected synchronize event handled");
+
+    const currentReviewer = await createReviewer(app, admin, { name: "current-reviewer" });
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: currentReviewer.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+    const opened = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+
+    expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
+    if (!opened.handled) throw new Error("expected delayed opened event handled");
+    const runMessages = await app.db
+      .select({ id: messages.id, metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, synchronized.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id));
+    expect(runMessages).toHaveLength(2);
+    expect(runMessages[0]).toMatchObject({
+      id: opened.messageId,
+      metadata: {
+        triggerEvent: "pull_request.opened",
+        contextReviewReviewerAgentUuid: currentReviewer.uuid,
+        contextReviewReviewerManagerHumanAgentId: admin.humanAgentUuid,
+      },
+    });
+  });
+
+  it("does not suppress a delayed opened task after the reviewer manager changes", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    const synchronized = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        action: "synchronize",
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+    if (!synchronized.handled) throw new Error("expected synchronize event handled");
+
+    const currentManager = await createMember(app.db, admin.organizationId, {
+      username: `review-manager-${randomUUID().slice(0, 8)}`,
+      displayName: "Current Review Manager",
+      role: "admin",
+    });
+    await app.db.update(agents).set({ managerId: currentManager.id }).where(eq(agents.uuid, reviewer.uuid));
+    const opened = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+
+    expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
+    if (!opened.handled) throw new Error("expected delayed opened event handled");
+    const runMessages = await app.db
+      .select({ id: messages.id, metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, synchronized.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id));
+    expect(runMessages).toHaveLength(2);
+    expect(runMessages[0]).toMatchObject({
+      id: opened.messageId,
+      metadata: {
+        triggerEvent: "pull_request.opened",
+        contextReviewReviewerAgentUuid: reviewer.uuid,
+        contextReviewReviewerManagerHumanAgentId: currentManager.agentId,
+      },
     });
   });
 
