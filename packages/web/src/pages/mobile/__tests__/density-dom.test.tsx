@@ -2,7 +2,7 @@
 
 import type { MeChatRow, MeMembership } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import { act, type ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../../components/ui/toast.js";
@@ -211,6 +211,11 @@ describe("mobile density tiers", () => {
       nextCursor: null,
     });
     renderWithClient(harness, <MobileNowPage />, "/m/now");
+    // React Query notifies observers on a timer; let that task settle inside
+    // act before the harness performs its microtask-only DOM polling.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     await harness.waitFor(() => expect(harness.container.textContent).toContain("Markdown preview"));
 
     const preview = harness.container.querySelector("[data-mobile-card-preview]");
