@@ -52,7 +52,7 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
     const { userId } = requireUser(request);
     const { provider } = authProviderParamsSchema.parse(request.params);
     const [identity] = await app.db
-      .select({ identifier: authIdentities.identifier })
+      .select({ id: authIdentities.id })
       .from(authIdentities)
       .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, provider)))
       .limit(1);
@@ -70,7 +70,6 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
       provider,
       userId,
       intent: "unlink",
-      expectedSubject: identity.identifier,
     });
   });
 }
@@ -83,7 +82,6 @@ async function startProviderAction(
     provider: "google" | "github";
     userId: string;
     intent: "link" | "unlink";
-    expectedSubject?: string;
   },
 ) {
   const publicUrl = resolvePublicUrl(app, request);
@@ -92,6 +90,10 @@ async function startProviderAction(
     ...input,
     oidcNonce,
   });
+  // The cookie contains only a random, short-lived CSRF nonce. It is not a
+  // credential and is protected with HttpOnly, SameSite=Lax, and Secure in
+  // production; CodeQL otherwise mistakes the Set-Cookie header for storage.
+  // codeql[js/clear-text-storage-sensitive-data]
   reply.header(
     "Set-Cookie",
     buildCookie({

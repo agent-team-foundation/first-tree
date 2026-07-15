@@ -50,7 +50,6 @@ type StatePayload = {
   intent?: "sign-in" | "link" | "unlink";
   userId?: string;
   provider?: "google" | "github";
-  expectedSubject?: string;
   oidcNonce?: string;
 };
 
@@ -62,7 +61,6 @@ export type SignOAuthStateOptions = {
   intent?: "sign-in" | "link" | "unlink";
   userId?: string;
   provider?: "google" | "github";
-  expectedSubject?: string;
   oidcNonce?: string;
 };
 
@@ -87,7 +85,6 @@ export async function signOAuthState(
   if (opts.intent) claims.intent = opts.intent;
   if (opts.userId) claims.userId = opts.userId;
   if (opts.provider) claims.provider = opts.provider;
-  if (opts.expectedSubject) claims.expectedSubject = opts.expectedSubject;
   if (opts.oidcNonce) claims.oidcNonce = opts.oidcNonce;
   const token = await new SignJWT({ ...claims })
     .setProtectedHeader({ alg: "HS256" })
@@ -118,7 +115,6 @@ export async function verifyOAuthState(
   intent?: "sign-in" | "link" | "unlink";
   userId?: string;
   provider?: "google" | "github";
-  expectedSubject?: string;
   oidcNonce?: string;
 }> {
   const secret = new TextEncoder().encode(jwtSecret);
@@ -145,7 +141,7 @@ export async function verifyOAuthState(
   if (payload.provider !== undefined && payload.provider !== "google" && payload.provider !== "github") {
     throw new Error("OAuth state payload malformed");
   }
-  for (const value of [payload.userId, payload.expectedSubject, payload.oidcNonce]) {
+  for (const value of [payload.userId, payload.oidcNonce]) {
     if (value !== undefined && typeof value !== "string") throw new Error("OAuth state payload malformed");
   }
 
@@ -160,7 +156,6 @@ export async function verifyOAuthState(
     ...(payload.intent ? { intent: payload.intent } : {}),
     ...(payload.userId ? { userId: payload.userId } : {}),
     ...(payload.provider ? { provider: payload.provider } : {}),
-    ...(payload.expectedSubject ? { expectedSubject: payload.expectedSubject } : {}),
     ...(payload.oidcNonce ? { oidcNonce: payload.oidcNonce } : {}),
   };
 }

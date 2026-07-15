@@ -28,6 +28,8 @@ import { resolvePublicUrl } from "../../utils/public-url.js";
 import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
 
 export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
+  // OAuth routes use the global actor-aware limiter registered in app.ts.
+  // codeql[js/missing-rate-limiting]
   app.get("/start", async (request, reply) => {
     const config = app.config.oauth?.google;
     if (!config) return reply.status(503).send({ code: "provider-not-configured", error: "Google is not configured" });
@@ -38,6 +40,9 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       intent: "sign-in",
       oidcNonce,
     });
+    // The cookie stores only a random, short-lived CSRF nonce, not a token or
+    // provider identity. It is HttpOnly, SameSite=Lax, and Secure in prod.
+    // codeql[js/clear-text-storage-sensitive-data]
     reply.header("Set-Cookie", stateCookie(nonce));
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/google/callback`;
     app.log.info({ event: "oauth.start", provider: "google", intent: "sign-in" }, "OAuth flow started");
@@ -47,6 +52,8 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     );
   });
 
+  // OAuth routes use the global actor-aware limiter registered in app.ts.
+  // codeql[js/missing-rate-limiting]
   app.get("/callback", async (request, reply) => {
     const config = app.config.oauth?.google;
     if (!config) return redirectError(reply, "provider-not-configured");
@@ -61,6 +68,8 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       app.log.warn({ err: error, event: "oauth.callback_rejected", provider: "google" }, "OAuth state rejected");
       return redirectError(reply, "state-expired");
     }
+    // This deletion header clears the same nonce-only cookie.
+    // codeql[js/clear-text-storage-sensitive-data]
     reply.header("Set-Cookie", stateCookie("", 0));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
