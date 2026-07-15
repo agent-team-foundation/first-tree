@@ -12,13 +12,10 @@ import { MobileNowPage } from "../now.js";
 
 const meChatMocks = vi.hoisted(() => ({
   listMeChats: vi.fn(),
-  markMeChatUnread: vi.fn(),
-  pinMeChat: vi.fn(),
 }));
 const chatMocks = vi.hoisted(() => ({
   getChat: vi.fn(),
   listChatOpenRequests: vi.fn(),
-  patchChatEngagement: vi.fn(),
   readFileAsBase64: vi.fn(),
   sendChatMessage: vi.fn(),
   sendFileMessageBatch: vi.fn(),
@@ -173,7 +170,7 @@ async function click(element: Element | null): Promise<void> {
   });
 }
 
-describe("mobile card actions", () => {
+describe("mobile card behavior", () => {
   let harness: DomHarness;
 
   beforeEach(() => {
@@ -188,9 +185,6 @@ describe("mobile card actions", () => {
       nextCursor: null,
     };
     meChatMocks.listMeChats.mockResolvedValue(listResponse);
-    meChatMocks.pinMeChat.mockResolvedValue({ chatId: row.chatId, pinnedAt: "2026-07-14T12:00:00.000Z" });
-    meChatMocks.markMeChatUnread.mockResolvedValue({ chatId: row.chatId, unreadMentionCount: 1 });
-    chatMocks.patchChatEngagement.mockResolvedValue({ chatId: row.chatId, engagementStatus: "archived" });
     chatMocks.listChatOpenRequests.mockResolvedValue({ items: [request] });
     chatMocks.getChat.mockResolvedValue(detail);
     chatMocks.sendChatMessage.mockResolvedValue({ ...request, id: "answer-1", format: "text", content: "Ship now" });
@@ -199,96 +193,30 @@ describe("mobile card actions", () => {
 
   afterEach(() => harness.cleanup());
 
-  it("offers only the approved reversible triage actions from the card menu", async () => {
-    renderPage(harness, "chat");
+  it("keeps Now cards free of management menus and swipe actions", async () => {
+    renderPage(harness, "now");
     await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
 
-    await click(harness.container.querySelector(`button[aria-label="Manage ${row.title}"]`));
-    const menu = document.body.querySelector('[role="menu"]');
-    expect(menu?.textContent).toContain("Pin chat");
-    expect(menu?.textContent).toContain("Mark as unread");
-    expect(menu?.textContent).toContain("Archive chat");
-    expect(menu?.textContent).not.toContain("Delete");
-
-    await click(
-      [...document.body.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent === "Pin chat") ?? null,
-    );
-    await harness.waitFor(() => expect(meChatMocks.pinMeChat).toHaveBeenCalledWith(row.chatId, true));
-    expect(currentLocation).toBe("/m/chat");
+    const card = harness.container.querySelector<HTMLElement>('[data-mobile-card="feed"]');
+    expect(card?.querySelector("[data-mobile-card-menu]")).toBeNull();
+    expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
   });
 
-  it("renders and hoists a pinned chat that exists only in the server priority projection", async () => {
-    const recent = {
-      ...row,
-      chatId: "recent",
-      title: "Newest ordinary chat",
-      openRequestCount: 0,
-      lastMessageAt: "2026-07-14T12:00:00.000Z",
-    };
-    const pinnedOnly = {
-      ...row,
-      chatId: "pinned-only",
-      title: "Older pinned chat",
-      openRequestCount: 0,
-      pinnedAt: "2026-07-14T11:00:00.000Z",
-      lastMessageAt: "2026-06-01T12:00:00.000Z",
-    };
+  it("keeps Chat rows as direct detail links without Now actions or swipe wrappers", async () => {
     listResponse = {
-      rows: [recent],
-      priorityRows: { attention: [], pinned: [pinnedOnly] },
+      rows: [],
+      priorityRows: { attention: [row], pinned: [] },
       nextCursor: null,
-    } satisfies ListMeChatsResponse;
-
-    renderPage(harness, "chat");
-    await harness.waitFor(() => expect(harness.container.textContent).toContain(recent.title));
-    const titles = [...harness.container.querySelectorAll("[data-mobile-card-title]")].map((node) => node.textContent);
-    expect(titles).toEqual([pinnedOnly.title, recent.title]);
-  });
-
-  it("keeps the shortcut tray open after a swipe while suppressing the card click", async () => {
+    };
     renderPage(harness, "chat");
     await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
-    const surface = harness.container.querySelector<HTMLElement>("[data-mobile-swipe-surface]");
-    if (!surface) throw new Error("Missing swipe surface");
-    surface.setPointerCapture = vi.fn();
 
-    await act(async () => {
-      surface.dispatchEvent(
-        new PointerEvent("pointerdown", {
-          bubbles: true,
-          pointerId: 1,
-          pointerType: "touch",
-          clientX: 320,
-          clientY: 200,
-        }),
-      );
-      surface.dispatchEvent(
-        new PointerEvent("pointermove", {
-          bubbles: true,
-          pointerId: 1,
-          pointerType: "touch",
-          clientX: 100,
-          clientY: 202,
-        }),
-      );
-      surface.dispatchEvent(
-        new PointerEvent("pointerup", {
-          bubbles: true,
-          pointerId: 1,
-          pointerType: "touch",
-          clientX: 100,
-          clientY: 202,
-        }),
-      );
-      // Browsers emit a synthetic click after pointerup. It must be swallowed
-      // without immediately closing the tray the swipe just opened.
-      surface.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    });
-
-    const translatedX = Number.parseFloat(surface.style.transform.match(/translate3d\(([^,]+)/)?.[1] ?? "0");
-    expect(translatedX).toBe(-3 * 68);
-    expect(surface.previousElementSibling?.getAttribute("aria-hidden")).toBe("false");
-    expect(currentLocation).toBe("/m/chat");
+    const card = harness.container.querySelector<HTMLElement>('[data-mobile-card="list"]');
+    expect(card?.tagName).toBe("BUTTON");
+    expect(card?.getAttribute("style")).toContain("min-height: calc(var(--sp-16) + var(--sp-6))");
+    expect(card?.querySelector("[data-mobile-card-menu]")).toBeNull();
+    expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
   });
 
   it("opens the question over Now, sends the answer, and never navigates into detail", async () => {

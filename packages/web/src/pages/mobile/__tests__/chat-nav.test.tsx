@@ -33,7 +33,11 @@ describe("MobileChatPage back navigation", () => {
   beforeEach(() => {
     harness = createDomHarness();
     meChatMocks.listMeChats.mockReset();
-    meChatMocks.listMeChats.mockResolvedValue({ priorityRows: { attention: [], pinned: [] }, rows: [] });
+    meChatMocks.listMeChats.mockResolvedValue({
+      priorityRows: { attention: [], pinned: [] },
+      rows: [],
+      nextCursor: null,
+    });
     lastNavType = "";
   });
 
@@ -59,6 +63,7 @@ describe("MobileChatPage back navigation", () => {
       back?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
     await harness.flush();
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("No chats"));
 
     // clearChat must REPLACE the detail with the list (not PUSH), so the
     // browser Back button / swipe cannot reopen the chat detail just exited.

@@ -1,15 +1,12 @@
 import {
   Activity,
-  Archive,
   ArrowLeft,
   ArrowRight,
   CircleUserRound,
   type LucideIcon,
-  Mail,
   MessageSquareText,
   MonitorCog,
   Palette,
-  Pin,
   Plus,
   Search,
   UsersRound,
@@ -19,7 +16,6 @@ import { useMemo, useState } from "react";
 import { AskTakeover } from "../components/chat/ask-takeover.js";
 import { Button } from "../components/ui/button.js";
 import { cn } from "../lib/utils.js";
-import { MobileCardActionsMenu, type MobileChatAction, MobileSwipeCard } from "./mobile/chat-card-actions.js";
 import {
   MobilePage,
   MobileSection,
@@ -556,37 +552,19 @@ function MockChatRow({
     ...(accent ? { boxShadow: `inset var(--hairline-bold) 0 0 0 ${accent}` } : {}),
     position: "relative" as const,
   };
-  const actions: MobileChatAction[] = [
-    { key: "pin", label: "Pin chat", shortLabel: "Pin", icon: Pin, disabled: false, onSelect: () => undefined },
-    {
-      key: "mark-unread",
-      label: "Mark as unread",
-      shortLabel: "Unread",
-      icon: Mail,
-      disabled: false,
-      onSelect: () => undefined,
-    },
-    {
-      key: "archive",
-      label: "Archive chat",
-      shortLabel: "Archive",
-      icon: Archive,
-      disabled: false,
-      onSelect: () => undefined,
-    },
-  ];
   const content = (
     <div className="relative flex h-full flex-col" style={{ gap: "var(--sp-3)", zIndex: 1, pointerEvents: "none" }}>
       <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
         <AvatarBubble label={chat.title} />
         <div className="min-w-0" style={{ flex: 1 }}>
-          <MobileSignalChip signal={chat.signal} />
+          <MobileSignalChip
+            signal={chat.signal}
+            label={cardTier === "list" ? previewListSignalLabel(chat) : undefined}
+            variant={cardTier === "feed" ? "pill" : "plain"}
+          />
         </div>
         <span className="mono text-mobile-caption shrink-0" style={{ color: "var(--fg-4)" }}>
           {chat.time}
-        </span>
-        <span style={{ pointerEvents: "auto" }}>
-          <MobileCardActionsMenu actions={actions} title={chat.title} />
         </span>
       </div>
       <p
@@ -639,20 +617,47 @@ function MockChatRow({
     </div>
   );
 
-  return (
-    <MobileSwipeCard actions={actions}>
-      <article style={cardStyle} data-mobile-card={cardTier}>
-        <button
-          type="button"
-          aria-label={`Open ${chat.title}`}
-          onClick={() => onOpen(chat.id)}
-          className="absolute inset-0 cursor-pointer border-0 bg-transparent"
-          style={{ zIndex: 0 }}
-        />
+  if (cardTier === "list") {
+    return (
+      <button
+        type="button"
+        aria-label={`Open ${chat.title}`}
+        onClick={() => onOpen(chat.id)}
+        className="block w-full text-left transition-colors hover:bg-[var(--bg-hover)]"
+        style={{ ...cardStyle, cursor: "pointer" }}
+        data-mobile-card="list"
+      >
         {content}
-      </article>
-    </MobileSwipeCard>
+      </button>
+    );
+  }
+
+  return (
+    <article style={cardStyle} data-mobile-card={cardTier}>
+      <button
+        type="button"
+        aria-label={`Open ${chat.title}`}
+        onClick={() => onOpen(chat.id)}
+        className="absolute inset-0 cursor-pointer border-0 bg-transparent"
+        style={{ zIndex: 0 }}
+      />
+      {content}
+    </article>
   );
+}
+
+function previewListSignalLabel(chat: MockChat): string {
+  switch (chat.signal.tone) {
+    case "needs-you":
+      return "Needs answer";
+    case "error":
+      return "Failed";
+    case "working":
+      return chat.signal.label === "Working now" ? "Working" : chat.signal.label;
+    case "unread":
+    case "idle":
+      return chat.signal.label;
+  }
 }
 
 function previewTabTitle(tab: PreviewTab): string {

@@ -54,6 +54,22 @@ export function mobileChatSignal(row: MeChatRow): MobileChatSignal {
   };
 }
 
+/** Keep the complete Chat list's established, quieter status language. */
+export function mobileChatListSignal(row: MeChatRow): MobileChatSignal {
+  const signal = mobileChatSignal(row);
+  switch (signal.tone) {
+    case "error":
+      return { ...signal, label: row.failedAgentIds.length === 1 ? "Failed" : `${row.failedAgentIds.length} failed` };
+    case "needs-you":
+      return { ...signal, label: row.openRequestCount === 1 ? "Needs answer" : `${row.openRequestCount} questions` };
+    case "working":
+      return { ...signal, label: row.liveActivity?.label ?? "Working" };
+    case "unread":
+    case "idle":
+      return signal;
+  }
+}
+
 export function mobileChatPreview(row: MeChatRow): string {
   const raw = row.description?.trim() || row.lastMessagePreview?.trim();
   // Card previews are a one-line glance, not a rendered surface: peel inline
@@ -92,16 +108,15 @@ export function formatMobileAge(iso: string | null): string {
 }
 
 /**
- * Materialize the server's priority projection for a finite mobile list.
- * Priority rows cover the full filtered result set while `rows` is only the
- * loaded recency page, and the latter deliberately remains additive for older
- * clients. Preserve the contract's attention > pinned > recency precedence
- * while de-duplicating every chat id.
+ * Materialize the server's complete attention projection for Now and tab
+ * badges. Mobile does not expose pinning, so priority-only pinned rows do not
+ * enter its finite lists; the additive recency page still supplies ordinary
+ * rows and the result is de-duplicated by chat id.
  */
 export function mobileRowsFromList(data: ListMeChatsResponse | undefined): MeChatRow[] {
   if (!data) return [];
   const seen = new Set<string>();
-  return [...data.priorityRows.attention, ...data.priorityRows.pinned, ...data.rows].filter((row) => {
+  return [...data.priorityRows.attention, ...data.rows].filter((row) => {
     if (seen.has(row.chatId)) return false;
     seen.add(row.chatId);
     return true;
@@ -112,22 +127,10 @@ export function sortMobileChats(rows: readonly MeChatRow[]): MeChatRow[] {
   return [...rows].sort((a, b) => {
     const signalA = mobileChatSignal(a);
     const signalB = mobileChatSignal(b);
-    const priorityDelta = mobilePriorityRank(a, signalA) - mobilePriorityRank(b, signalB);
-    if (priorityDelta !== 0) return priorityDelta;
-    if (a.pinnedAt && b.pinnedAt && !signalA.attention && !signalB.attention) {
-      return timestampValue(b.pinnedAt) - timestampValue(a.pinnedAt);
-    }
     const signalDelta = signalA.rank - signalB.rank;
     if (signalDelta !== 0) return signalDelta;
     return timestampValue(b.activityAt ?? b.lastMessageAt) - timestampValue(a.activityAt ?? a.lastMessageAt);
   });
-}
-
-function mobilePriorityRank(row: MeChatRow, signal: MobileChatSignal): number {
-  // Failed/request attention always wins, even when the chat is also pinned.
-  if (signal.attention) return 0;
-  if (row.pinnedAt) return 1;
-  return 2;
 }
 
 /**

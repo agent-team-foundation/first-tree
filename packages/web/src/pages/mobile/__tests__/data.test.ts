@@ -5,6 +5,7 @@ import {
   countUnreadRows,
   formatMobileAge,
   isNowFeedRow,
+  mobileChatListSignal,
   mobileChatPreview,
   mobileChatSignal,
   mobileRowsFromList,
@@ -74,7 +75,7 @@ describe("mobile chat projection", () => {
     ]);
   });
 
-  it("includes priority-only pinned chats, de-duplicates additive rows, and keeps priority order", () => {
+  it("includes complete attention, ignores priority-only pins, and de-duplicates additive rows", () => {
     const failed = chatRow({ chatId: "failed", failedAgentIds: ["agent-1"] });
     const pinnedOnly = chatRow({
       chatId: "pinned-only",
@@ -95,8 +96,34 @@ describe("mobile chat projection", () => {
     };
 
     const rows = sortMobileChats(mobileRowsFromList(response));
-    expect(rows.map((row) => row.chatId)).toEqual(["failed", "pinned-only", "older-pin", "newer"]);
-    expect(rows.find((row) => row.chatId === "pinned-only")?.title).toBe(pinnedOnly.title);
+    expect(rows.map((row) => row.chatId)).toEqual(["failed", "newer", "pinned-only"]);
+    expect(rows.find((row) => row.chatId === "pinned-only")?.title).toBe("Wrong additive copy");
+    expect(rows.some((row) => row.chatId === olderPin.chatId)).toBe(false);
+  });
+
+  it("keeps Chat's quiet labels while real-work activity advances recency", () => {
+    const messageUpdate = chatRow({ chatId: "message-update", lastMessageAt: "2026-07-09T11:00:00.000Z" });
+    const descriptionUpdate = chatRow({
+      chatId: "description-update",
+      lastMessageAt: "2026-07-09T08:00:00.000Z",
+      activityAt: "2026-07-09T12:00:00.000Z",
+    });
+    const olderWorking = chatRow({
+      chatId: "working",
+      busyAgentIds: ["agent-1"],
+      lastMessageAt: "2026-07-09T09:00:00.000Z",
+    });
+    const question = chatRow({
+      chatId: "question",
+      openRequestCount: 1,
+      lastMessageAt: "2026-07-09T08:00:00.000Z",
+    });
+
+    expect(
+      sortMobileChats([messageUpdate, descriptionUpdate, olderWorking, question]).map((row) => row.chatId),
+    ).toEqual(["question", "description-update", "message-update", "working"]);
+    expect(mobileChatListSignal(question).label).toBe("Needs answer");
+    expect(mobileChatListSignal(olderWorking).label).toBe("Working");
   });
 
   it("counts attention and unread rows separately for mobile tab badges", () => {
