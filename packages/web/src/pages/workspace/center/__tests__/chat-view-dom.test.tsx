@@ -803,6 +803,8 @@ describe("ChatView", () => {
     await waitForText(container, "Launch planning");
     await waitForText(container, "Example recoverable runtime error");
     await waitForText(container, "Preview image for");
+    expect(container.querySelector<HTMLElement>("[data-error-header]")?.style.overflowWrap).toBe("anywhere");
+    expect(container.querySelector<HTMLElement>("[data-error-message]")?.style.overflowWrap).toBe("anywhere");
     expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
     expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
     expect(container.textContent).toContain("GitHub");
@@ -1967,7 +1969,12 @@ describe("ChatView", () => {
     await waitForText(container, "Send a message to start the conversation");
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
-    if (!textarea || !send) throw new Error("Mobile composer missing");
+    const timeline = container.querySelector<HTMLElement>("[data-chat-timeline-scroll]");
+    const footer = container.querySelector<HTMLElement>("[data-chat-composer-footer]");
+    if (!textarea || !send || !timeline || !footer) throw new Error("Mobile composer or timeline missing");
+
+    expect(timeline.style.padding).toContain("var(--sp-4)");
+    expect(footer.style.paddingInline).toBe("var(--sp-4)");
 
     // Resting height is one row: the auto-resize hook measures the `rows`-sized
     // empty box, so `rows` (not just the min-height floor) must drop to 1.
@@ -2008,7 +2015,12 @@ describe("ChatView", () => {
     await waitForText(container, "Send a message to start the conversation");
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
-    if (!textarea || !send) throw new Error("Desktop composer missing");
+    const timeline = container.querySelector<HTMLElement>("[data-chat-timeline-scroll]");
+    const footer = container.querySelector<HTMLElement>("[data-chat-composer-footer]");
+    if (!textarea || !send || !timeline || !footer) throw new Error("Desktop composer or timeline missing");
+
+    expect(timeline.style.padding).toContain("var(--sp-6)");
+    expect(footer.style.paddingInline).toBe("var(--sp-6)");
 
     expect(Number(textarea.rows)).toBe(2);
     expect(Number.parseInt(send.style.width, 10)).toBe(28);

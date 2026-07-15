@@ -491,16 +491,18 @@ function ErrorRow({
         borderRadius: "0 var(--radius-input) var(--radius-input) 0",
       }}
     >
-      <div className="mono uppercase text-caption" style={{ color }}>
+      <div data-error-header className="mono uppercase text-caption" style={{ color, overflowWrap: "anywhere" }}>
         {label}
         {agentName ? ` · ${agentName}` : ""} · {payload?.source ?? "unknown"} · {ts}
       </div>
       <div
+        data-error-message
         className="text-label"
         style={{
           marginTop: 2,
           color: "var(--fg-2)",
           whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
         }}
       >
         {message}
@@ -864,9 +866,12 @@ const MessageRow = memo(function MessageRow({
         </AgentHovercard>
       )}
       <div className="min-w-0">
-        <div className="flex items-baseline" style={{ gap: 8 }}>
+        <div className="flex flex-wrap items-baseline" style={{ gap: 8 }}>
           {isSystem || isTrial ? (
-            <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+            <span
+              className="mono text-body font-semibold"
+              style={{ color: isSelf ? "var(--fg)" : "var(--primary)", minWidth: 0, overflowWrap: "anywhere" }}
+            >
               {senderName}
             </span>
           ) : (
@@ -875,9 +880,12 @@ const MessageRow = memo(function MessageRow({
               chatId={msg.chatId}
               name={senderName}
               placement="bottom"
-              triggerClassName="cursor-pointer hover:underline"
+              triggerClassName="min-w-0 max-w-full cursor-pointer text-left hover:underline"
             >
-              <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+              <span
+                className="mono text-body font-semibold"
+                style={{ color: isSelf ? "var(--fg)" : "var(--primary)", minWidth: 0, overflowWrap: "anywhere" }}
+              >
                 {senderName}
               </span>
             </AgentHovercard>
@@ -1219,6 +1227,7 @@ type TimelineItem =
   | { kind: "workgroup"; at: string; key: string; events: SessionEventRow[] };
 
 type ChatTimelineProps = {
+  mobile: boolean;
   itemCount: number;
   visibleItems: readonly TimelineItem[];
   hiddenByBlock: number;
@@ -1253,6 +1262,7 @@ type ChatTimelineProps = {
 };
 
 const ChatTimeline = memo(function ChatTimeline({
+  mobile,
   itemCount,
   visibleItems,
   hiddenByBlock,
@@ -1289,7 +1299,12 @@ const ChatTimeline = memo(function ChatTimeline({
   );
   return (
     <div ref={overlayContainerRef} className="relative flex-1 flex flex-col min-h-0">
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto"
+        data-chat-timeline-scroll
+        style={{ padding: `var(--sp-2_5) ${mobile ? "var(--sp-4)" : "var(--sp-6)"}` }}
+      >
         <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
           {itemCount === 0 && (
             <div
@@ -3991,9 +4006,10 @@ export function ChatView({
           Scroll viewport stays full-width so the scrollbar hugs the panel's
           right edge — pushing it inward would float the column. Reading column
           inside is capped via `maxWidth` and centered to align with the
-          composer below into one vertical thread. Side padding (sp-6) prevents
-          content from kissing the panel border on narrow viewports. */}
+          composer below into one vertical thread. Side padding is sp-4 on the
+          phone surface and sp-6 elsewhere. */}
           <ChatTimeline
+            mobile={presentation === "mobile"}
             itemCount={itemCount}
             visibleItems={visibleItems}
             hiddenByBlock={hiddenByBlock}
@@ -4032,8 +4048,11 @@ export function ChatView({
             <div
               ref={composerFooterRef}
               className="shrink-0"
+              data-chat-composer-footer
               style={{
-                padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
+                paddingTop: "var(--sp-2_5)",
+                paddingInline: presentation === "mobile" ? "var(--sp-4)" : "var(--sp-6)",
+                paddingBottom: "calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
               }}
             >
               <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>

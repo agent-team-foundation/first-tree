@@ -243,10 +243,13 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
 
   const entityChip = (
     <span
+      data-github-card-entity
       className="mono text-label"
       style={{
         display: "inline-flex",
         alignItems: "center",
+        minWidth: 0,
+        maxWidth: "100%",
         gap: "var(--sp-1)",
         padding: "var(--sp-px) var(--sp-1_5)",
         borderRadius: "var(--radius-chip)",
@@ -256,10 +259,16 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
         lineHeight: 1.4,
       }}
     >
-      <span className="font-semibold" style={{ color: "var(--primary)" }}>
+      <span className="font-semibold" style={{ color: "var(--primary)", flexShrink: 0 }}>
         {tagLabel}
       </span>
-      <span style={{ color: "var(--fg-3)" }}>{entityNumber}</span>
+      <span
+        data-github-card-entity-number
+        title={entityNumber}
+        style={{ color: "var(--fg-3)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+      >
+        {entityNumber}
+      </span>
     </span>
   );
 
@@ -282,30 +291,57 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
               href={link}
               target="_blank"
               rel="noopener noreferrer"
+              data-github-card-title
               className="font-medium no-underline hover:underline"
-              style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", textDecoration: "none" }}
+              style={{
+                color: "var(--fg)",
+                minWidth: 0,
+                flex: "1 1 auto",
+                overflowWrap: "anywhere",
+                textDecoration: "none",
+              }}
             >
               {titleText}
             </a>
           ) : (
-            <span className="font-medium" style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto" }}>
+            <span
+              data-github-card-title
+              className="font-medium"
+              style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", overflowWrap: "anywhere" }}
+            >
               {titleText}
             </span>
           )
         ) : null}
-        <span className="mono text-caption" style={{ color: "var(--fg-4)", marginLeft: "auto", flexShrink: 0 }}>
+        <span
+          data-github-card-repository
+          className="mono text-caption"
+          style={{
+            color: "var(--fg-4)",
+            marginLeft: "auto",
+            minWidth: 0,
+            maxWidth: "100%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
           {repoShort}
         </span>
       </div>
 
       {/* L2 — action sentence: @actor verb */}
-      <div className="text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+      <div
+        className="text-caption"
+        style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)", overflowWrap: "anywhere" }}
+      >
         <span className="mono">@{content.sender}</span> {verb}
       </div>
 
       {/* L3 — quoted body preview */}
       {previewBody ? (
         <div
+          data-github-card-body
           className="text-body"
           style={{
             marginTop: "var(--sp-1)",
@@ -313,6 +349,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
             borderLeft: "var(--hairline-bold) solid var(--border)",
             paddingLeft: "var(--sp-2)",
             whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
             display: "-webkit-box",
             WebkitLineClamp: 3,
             WebkitBoxOrient: "vertical",

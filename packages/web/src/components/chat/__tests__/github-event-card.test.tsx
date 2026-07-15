@@ -114,4 +114,35 @@ describe("GitHub event card", () => {
       expect(html).toContain("@alice");
     }
   });
+
+  it("contains long GitHub tokens without clipping the mobile timeline", () => {
+    const commitSha = "abcdef0123456789".repeat(3).slice(0, 40);
+    const longRepository = `organization-${"long".repeat(20)}/repository-${"wide".repeat(20)}`;
+    const html = renderToStaticMarkup(
+      <GithubEventCardMessage
+        content={card({
+          event: "commit_comment",
+          kind: "commit_commented",
+          title: `release-${"unbroken".repeat(20)}`,
+          repository: longRepository,
+          body: `check-${"unbroken".repeat(40)}`,
+          entity: {
+            type: "commit",
+            key: `${longRepository}@${commitSha}`,
+            url: `https://github.com/acme/web/commit/${commitSha}`,
+          },
+        })}
+      />,
+    );
+
+    expect(html).toContain("data-github-card-entity");
+    expect(html).toContain("data-github-card-entity-number");
+    expect(html).toContain("data-github-card-title");
+    expect(html).toContain("data-github-card-repository");
+    expect(html).toContain("data-github-card-body");
+    expect(html).toContain(`title="@${commitSha}"`);
+    expect(html).toContain("max-width:100%");
+    expect(html).toContain("overflow-wrap:anywhere");
+    expect(html).toContain("text-overflow:ellipsis");
+  });
 });
