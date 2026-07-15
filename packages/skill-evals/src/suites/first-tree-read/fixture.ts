@@ -18,7 +18,6 @@ const RUNTIME_SKILL_NAMES = [
   "first-tree-seed",
   "first-tree-write",
   "first-tree-file-bug",
-  "first-tree-gitlab",
 ] as const;
 
 type DomainNode = {

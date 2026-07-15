@@ -1,4 +1,0 @@
-interface:
-  display_name: "First Tree GitLab"
-  short_description: "Operate GitLab safely with glab"
-  default_prompt: "Use $first-tree-gitlab to complete this GitLab issue or merge request task with safe native notification handling."

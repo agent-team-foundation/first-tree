@@ -11,8 +11,8 @@ surfaces: [client, cli]
 
 Verify that a runtime-generated `AGENTS.md` always gives an agent a compact
 GitLab posture and recovery path, routes detailed operations through the
-on-demand `first-tree-gitlab` skill / native `--help`, and keeps GitLab
-account notifications separate from First Tree chat tracking.
+native `glab ... --help` surface, and keeps GitLab account notifications
+separate from First Tree chat tracking.
 
 This is a behavior-level QA case for the generated briefing. It does not add a
 First Tree GitLab API, event mapper, follow command, or database state.
@@ -22,8 +22,6 @@ First Tree GitLab API, event mapper, follow command, or database state.
 - Run in an isolated QA worktree and run cell as required by the QA package.
 - Record whether `glab` is available to the selected provider session; presence
   is not evidence of authentication.
-- Confirm `.agents/skills/first-tree-gitlab/SKILL.md` is installed in the
-  workspace before exercising the detailed workflow.
 - Use a disposable GitLab project or an existing test issue/MR. Do not use a
   production project unless the owner explicitly approves it.
 - Keep tokens out of command arguments, shell history, transcripts, and logs.
@@ -35,9 +33,8 @@ First Tree GitLab API, event mapper, follow command, or database state.
 
 Run the generated briefing through the selected agent provider and first
 confirm that both GitLab headings, the compact recovery path, and the
-`first-tree-gitlab` / `glab <command> --help` discovery pointers are present
-whether or not `glab` is installed. Then ask for a small GitLab task with these
-subcases:
+`glab <command> --help` discovery pointers are present whether or not `glab`
+is installed. Then ask for a small GitLab task with these subcases:
 
 1. Create an issue or merge request with `glab` first, then subscribe the
    current account to the created entity.
@@ -47,10 +44,10 @@ subcases:
    matching unsubscribe command. Do not use a lifecycle event (close, merge,
    or task completion) as the unsubscribe request.
 
-The agent should load `first-tree-gitlab` before choosing the detailed command.
-When project context is unclear, the command trace may include
-`-R <group/project>`. The accepted native forms, owned by that on-demand skill,
-are:
+The agent should inspect native `glab` help before choosing the detailed command
+when the exact form is uncertain. When project context is unclear, the command
+trace may include repository-disambiguation flags from `glab` help. Common
+native forms are:
 
 ```text
 glab issue subscribe <id-or-url>
@@ -69,8 +66,7 @@ Capture a redacted transcript and command trace showing:
 
 - the generated briefing contains no session-scoped executable availability
   sentence for `glab` or `gh`;
-- `glab` was selected when available, after the `first-tree-gitlab` skill was
-  loaded, with host/auth checks such as
+- `glab` was selected when available, with host/auth checks such as
   `glab auth status` or `glab auth status --hostname <host>` that reveal no
   token;
 - the create command completed before the subscribe command;

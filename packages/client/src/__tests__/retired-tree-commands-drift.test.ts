@@ -52,7 +52,6 @@ const SHIPPED_SKILLS = [
   "first-tree-read",
   "first-tree-seed",
   "first-tree-file-bug",
-  "first-tree-gitlab",
 ];
 
 const RETIRED_TREE_SUBCOMMANDS = [

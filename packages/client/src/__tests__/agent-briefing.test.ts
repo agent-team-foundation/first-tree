@@ -343,7 +343,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toContain("first-tree-welcome");
     expect(treelessFamily).toContain("first-tree-seed");
     expect(treelessFamily).toContain("first-tree-file-bug");
-    expect(treelessFamily).toContain("first-tree-gitlab");
+    expect(treelessFamily).not.toContain("first-tree-gitlab");
     expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(treelessFamily).toContain("These First Tree skills are installed in every workspace");
@@ -596,7 +596,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("only when a human explicitly asks");
     expect(gitlab).toContain("never automatically when an issue closes");
     expect(gitlab).toContain("an MR merges, or the task finishes");
-    expect(gitlab).toContain("Load `first-tree-gitlab`");
+    expect(gitlab).not.toContain("first-tree-gitlab");
     expect(gitlab).toContain("glab issue --help");
     expect(gitlab).toContain("glab mr --help");
 
@@ -619,22 +619,6 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(briefing).not.toContain("did not detect `glab`");
     expect(briefing).not.toContain("final provider `PATH`");
     expect(briefing).toContain("## Asking Humans");
-  });
-
-  it("keeps the detailed GitLab command catalog in the on-demand skill", () => {
-    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
-    const skillSource = readFileSync(join(repoRoot, "skills", "first-tree-gitlab", "SKILL.md"), "utf8");
-
-    expect(skillSource).toContain("glab issue subscribe <id-or-url>");
-    expect(skillSource).toContain("glab mr subscribe <iid-or-branch>");
-    expect(skillSource).toContain("glab issue unsubscribe <id-or-url>");
-    expect(skillSource).toContain("glab mr unsubscribe <iid-or-branch>");
-    expect(skillSource).toContain("-R <group/project>");
-    expect(skillSource).toContain("do not claim URL support");
-    expect(skillSource).toContain("does not invalidate\nan issue or merge request that was already created");
-    expect(skillSource).toContain("only when a human explicitly asks");
-    expect(skillSource).toContain("do not bind GitLab events to a First Tree\nchat");
-    expect(skillSource).toContain("Do not invent or run `first-tree gitlab follow`");
   });
 
   it("keeps chat metadata rules compact but actionable", () => {

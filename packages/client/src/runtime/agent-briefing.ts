@@ -234,5 +234,4 @@ export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree-read",
   "first-tree-seed",
   "first-tree-file-bug",
-  "first-tree-gitlab",
 ] as const;

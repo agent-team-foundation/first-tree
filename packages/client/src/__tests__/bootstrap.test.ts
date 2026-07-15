@@ -357,7 +357,6 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
     "first-tree-welcome",
     "first-tree-seed",
     "first-tree-file-bug",
-    "first-tree-gitlab",
     "first-tree-read",
     "first-tree-write",
   ];
@@ -450,7 +449,6 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
       { name: "first-tree-welcome", version: "1.0.0" },
       { name: "first-tree-seed", version: "2.0.0" },
       { name: "first-tree-file-bug", version: "1.0.0" },
-      { name: "first-tree-gitlab", version: "1.0.0" },
       { name: "first-tree-read", version: "1.0.0" },
       { name: "first-tree-write", version: "1.0.0" },
     ]);
@@ -497,10 +495,9 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
     expectSkillInstalled(workspace, "first-tree-seed");
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-welcome"))).toBe(false);
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-file-bug"))).toBe(false);
-    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-gitlab"))).toBe(false);
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-read"))).toBe(false);
     expect(logs.join("\n")).toContain(
-      "failed first-tree-welcome, first-tree-file-bug, first-tree-gitlab, first-tree-read, first-tree-write",
+      "failed first-tree-welcome, first-tree-file-bug, first-tree-read, first-tree-write",
     );
     expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-welcome)");
   });
@@ -617,7 +614,6 @@ describe("installCoreSkills", () => {
     "first-tree-welcome",
     "first-tree-seed",
     "first-tree-file-bug",
-    "first-tree-gitlab",
     "first-tree-read",
     "first-tree-write",
   ];

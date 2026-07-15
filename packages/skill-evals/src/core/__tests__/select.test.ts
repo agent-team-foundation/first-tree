@@ -176,10 +176,7 @@ describe("skill eval selection", () => {
     expect(summary.notes).toEqual(["No skill-eval-related changes were detected."]);
   });
 
-  it.each([
-    "first-tree-file-bug",
-    "first-tree-gitlab",
-  ])("emits an explicit note (not silence) for unevaluated shipped skill %s", (skill) => {
+  it.each(["first-tree-file-bug"])("emits an explicit note (not silence) for unevaluated shipped skill %s", (skill) => {
     const path = `skills/${skill}/SKILL.md`;
     const summary = selectSkillEvalRecommendations([path]);
 

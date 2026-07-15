@@ -54,7 +54,6 @@ export const FIRST_TREE_READ_EVAL_CASES: readonly SkillEvalCase[] = [
           "first-tree-seed",
           "first-tree-write",
           "first-tree-file-bug",
-          "first-tree-gitlab",
         ],
         workspaceKind: evalCase.workspaceKind,
       },

@@ -31,7 +31,8 @@ describe("agent briefing template assets", () => {
       expect(copiedSource).toContain("# Working in First Tree (First Tree Managed)");
       expect(copiedSource).toContain("## GitLab Working Posture");
       expect(copiedSource).toContain("## GitLab Entity Attention");
-      expect(copiedSource).toContain("Load `first-tree-gitlab`");
+      expect(copiedSource).toContain("glab mr --help");
+      expect(copiedSource).not.toContain("first-tree-gitlab");
       expect(copiedSource).not.toContain("glab mr subscribe <iid-or-branch>");
       expect(copiedSource).toContain("## Context Tree Policy");
       expect(copiedSource).toContain("# Skills (First Tree Managed)");
