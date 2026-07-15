@@ -1,6 +1,6 @@
 ---
 id: gitlab-webhook-basic-card
-description: Verify GitLab Settings, inbound cards, exact identity routing, reviewer capability, and wake behavior without Cloud egress or source-review claims.
+description: Verify GitLab Settings, inbound cards, exact identity routing, reviewer capability, and silent delivery without Cloud egress or source-review claims.
 areas: [cross-surface]
 surfaces: [web, server, gitlab, client]
 ---
@@ -12,7 +12,7 @@ surfaces: [web, server, gitlab, client]
 Verify the assembled GitLab Settings and personnel-routing vertical slice: one-time URL bearer management, inbound-only
 authentication, pending follows and basic cards, admin-managed exact username links, explicit Team-wide automatic-action
 risk acceptance, capability-driven reviewer/legacy-assignee behavior, Note mentions, target-chat reuse/creation, and
-delegate wake. The case must also prove the Stage 4 boundary: a routed review request is not reported as running or
+silent delegate delivery. The case must also prove the Stage 4 boundary: a routed review request is not reported as running or
 completed until a customer-side source mapping exists in a later phase.
 
 ## Preconditions
@@ -45,16 +45,17 @@ completed until a customer-side source mapping exists in a later phase.
   cards are delivered and every personnel target is skipped without a pending intent.
 - Review and accept the Team-wide URL bearer forgery disclosure, enable automatic actions, and confirm the audit records the
   current administrator and time. Deliver a standard MR reviewer payload: the exact active link must resolve through the
-  current membership to its eligible delegate, create or reuse one entity chat, write one card, and wake after the card is
-  durable. The card may say the review request was routed/source unavailable; it must not claim review running/completed.
-- Deliver ordinary assignee and explicit Note `@mention` targets and confirm they route/wake without being labelled as code
+  current membership to its eligible delegate, create or reuse one entity chat, and write one silent card without creating
+  a notify-worthy inbox row or waking an agent. The card may say the review request was routed/source unavailable; it must
+  not claim review running/completed.
+- Deliver ordinary assignee and explicit Note `@mention` targets and confirm they route silently without being labelled as code
   review. Verify exact case-insensitive usernames only; display-name, email, similar-name, inactive link, inactive member,
   missing delegate, and ineligible delegate cases must skip independently and remain visible for seven days.
 - Verify reviewer mode starts unknown. A valid top-level `reviewers: []` latches reviewers capability without a target.
   A modern update uses only the added `changes.reviewers` delta. Once reviewer capability is observed, missing/wrong-type
   reviewers or a custom template missing the delta produces a schema anomaly and never falls back to assignee. In an
   isolated legacy connection, admin confirmation may make assignee the review target until reviewers are observed.
-- Suspend/revoke a username and remove/restore a member. Confirm identity-owned routing/wake stops atomically, independent
+- Suspend/revoke a username and remove/restore a member. Confirm identity-owned routing stops atomically, independent
   explicit follows continue receiving basic cards, membership restoration does not reactivate the link, and revoked links
   cannot be reconfirmed. Confirm the append-only identity audit retains create, suspend/leave, reconfirm, revoke, and
   connection-removal actor/time/reason snapshots across multiple transitions. A later admin reconfirmation requires a new
@@ -78,11 +79,11 @@ completed until a customer-side source mapping exists in a later phase.
 `PASS`: endpoint identity alone selects the Team and authority, secrets remain redacted, Cloud performs no GitLab egress,
 the Team has at most one GitLab connection, supported entity events reach only existing followed chats as basic cards,
 stable ids are connection-scoped, admin risk acceptance gates every personnel action, exact active identities route to the
-current eligible delegate with one card per chat and post-commit wake, anomalies fail closed, and no Stage 4 source-review
+current eligible delegate with one silent card per chat and no wake, anomalies fail closed, and no Stage 4 source-review
 state is claimed.
 
 `FAIL`: cross-Team resolution, secret exposure, any outbound request to GitLab, incorrect pending binding, duplicate cards
-for one chat within one pass, an ungated/fuzzy/stale personnel action, pre-commit wake, reviewer downgrade, or a claim that
+for one chat within one pass, an ungated/fuzzy/stale personnel action, any GitLab-triggered wake, reviewer downgrade, or a claim that
 source review is running/completed.
 
 `BLOCKED`: the isolated run cell cannot receive a disposable GitLab webhook or cannot create a disposable Team/chat/follow.
@@ -93,5 +94,5 @@ tested deployment.
 ## Evidence
 
 Keep redacted connection summaries, one-time-secret disappearance evidence, Test/event response classes, basic and routed
-cards, wake/skipped/audit evidence, lifecycle outcomes, regeneration/replacement outcomes, and an egress observation. Never
+cards, silent-inbox/skipped/audit evidence, lifecycle outcomes, regeneration/replacement outcomes, and an egress observation. Never
 retain a complete webhook URL, bearer, raw private payload, username list beyond disposable fixtures, or customer credential.

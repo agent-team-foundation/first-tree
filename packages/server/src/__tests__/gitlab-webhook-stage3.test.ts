@@ -8,6 +8,7 @@ import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappin
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
 import { gitlabIdentityTransitionAudit } from "../db/schema/gitlab-identity-transition-audit.js";
 import { gitlabSkippedTargetAudit } from "../db/schema/gitlab-skipped-target-audit.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { processedEvents } from "../db/schema/processed-events.js";
@@ -29,6 +30,7 @@ import {
   suspendGitlabIdentityLink,
 } from "../services/gitlab-identities.js";
 import { applyGitlabPersonnelEvidence, normalizeGitlabWebhook } from "../services/gitlab-webhook.js";
+import { pollInbox } from "../services/inbox.js";
 import { deleteMember } from "../services/member.js";
 import { deactivateMembership, MEMBER_STATUSES, reactivateMembership } from "../services/membership.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -397,7 +399,7 @@ describe("GitLab Stage 3 personnel routing", () => {
     expect(identityAudit.statusCode).toBe(403);
   });
 
-  it("requires Team risk acceptance, routes a reviewer once per chat, wakes after commit, and keeps review source pending", async () => {
+  it("requires Team risk acceptance, routes a reviewer once per chat without wake, and keeps review source pending", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
     await expect(
@@ -463,6 +465,27 @@ describe("GitLab Stage 3 personnel routing", () => {
       reviewRoutingStatus: "routed_source_not_ready",
     });
     expect(cards[0]?.metadata).toMatchObject({ mentions: [setup.delegate.uuid] });
+    const card = cards[0];
+    if (!card) throw new Error("GitLab card missing");
+    const delegateInbox = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, setup.delegate.uuid))
+      .limit(1);
+    const inboxId = delegateInbox[0]?.inboxId;
+    if (!inboxId) throw new Error("delegate inbox missing");
+    expect(
+      await app.db
+        .select({ notify: inboxEntries.notify, status: inboxEntries.status })
+        .from(inboxEntries)
+        .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.messageId, card.id))),
+    ).toEqual([{ notify: false, status: "pending" }]);
+    await revokeGitlabIdentityLink(app.db, {
+      organizationId: setup.admin.organizationId,
+      linkId: setup.link.id,
+      actorMemberId: setup.admin.memberId,
+    });
+    expect((await pollInbox(app.db, inboxId, 20)).some((row) => row.messageId === card.id)).toBe(false);
     expect((await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).reviewerCapability.mode).toBe(
       "reviewers",
     );

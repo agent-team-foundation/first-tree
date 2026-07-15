@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Database } from "../db/connection.js";
-import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
@@ -12,7 +11,6 @@ import { createAgent, suspendAgent, updateAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import {
   createGitlabConnection,
-  deleteGitlabConnection,
   findActiveGitlabEndpoint,
   setGitlabAutomaticActions,
   withGitlabIngressFence,
@@ -25,7 +23,6 @@ import {
   suspendGitlabIdentityLink,
   suspendGitlabLinksForMembership,
 } from "../services/gitlab-identities.js";
-import { runDeferredGitlabCardPostCommitEffects } from "../services/gitlab-post-commit.js";
 import {
   applyGitlabPersonnelEvidence,
   deliverGitlabCards,
@@ -143,7 +140,6 @@ async function holdIngressAfterDurableCard(
       audience,
       organizationId: fixture.admin.organizationId,
       connectionId: fixture.connection.connectionId,
-      expectedTokenHash: endpoint.connection.tokenHash,
       database: tx,
     });
     entered();
@@ -154,61 +150,6 @@ async function holdIngressAfterDurableCard(
 
 describe("GitLab identity authority fencing", () => {
   const getApp = useTestApp();
-
-  it.each([
-    "revoke",
-    "member_leave",
-  ] as const)("holds the second authority fence until realtime effects settle during %s", async (transition) => {
-    const app = getApp();
-    const fixture = await setup(app);
-    if (transition === "member_leave") {
-      await createTestAdmin(app, { username: `post-commit-notify-fallback-${randomUUID().slice(0, 8)}` });
-    }
-    const effects = await holdIngressAfterDurableCard(
-      app,
-      fixture,
-      [{ username: "Reviewer.One" }],
-      () => undefined,
-      Promise.resolve(),
-    );
-    const effect = effects[0];
-    if (!effect) throw new Error("deferred GitLab effects missing");
-    expect(effect.effects.recipients.length).toBeGreaterThan(0);
-
-    const realtimeEntered = deferredSignal();
-    const releaseRealtime = deferredSignal();
-    const kickSpy = vi.spyOn(app.notifier, "notifyChatMessage").mockImplementation(async () => {
-      realtimeEntered.resolve();
-      await releaseRealtime.promise;
-    });
-    const inboxSpy = vi.spyOn(app.notifier, "notify").mockImplementation(async () => {
-      await releaseRealtime.promise;
-    });
-    const runner = runDeferredGitlabCardPostCommitEffects(app, effect);
-    await realtimeEntered.promise;
-    expect(kickSpy).toHaveBeenCalledTimes(1);
-    expect(inboxSpy).toHaveBeenCalled();
-
-    let transitionSettled = false;
-    const transitionPromise = (
-      transition === "revoke"
-        ? revokeGitlabIdentityLink(app.db, {
-            organizationId: fixture.admin.organizationId,
-            linkId: fixture.link.id,
-            actorMemberId: fixture.admin.memberId,
-          })
-        : deactivateMembership(app.db, fixture.admin.memberId, MEMBER_STATUSES.LEFT)
-    ).then(() => {
-      transitionSettled = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(transitionSettled).toBe(false);
-
-    releaseRealtime.resolve();
-    expect(await runner).toBe(true);
-    await transitionPromise;
-    expect(transitionSettled).toBe(true);
-  }, 20_000);
 
   it.each([
     { boundVia: "human_declared" as const, transition: "revoke" as const },
@@ -273,7 +214,6 @@ describe("GitLab identity authority fencing", () => {
           audience,
           organizationId: fixture.admin.organizationId,
           connectionId: fixture.connection.connectionId,
-          expectedTokenHash: endpoint.connection.tokenHash,
           database: tx,
         });
       },
@@ -319,90 +259,6 @@ describe("GitLab identity authority fencing", () => {
         .where(and(eq(messages.chatId, chat.id), eq(messages.source, "gitlab"))),
     ).toHaveLength(1);
   }, 20_000);
-
-  it.each([
-    "revoke",
-    "member_leave",
-    "delegate_change",
-    "delegate_suspend",
-    "automation_withdrawal",
-    "connection_delete",
-  ] as const)("suppresses deferred wake effects when %s commits after card commit", async (transition) => {
-    const app = getApp();
-    const fixture = await setup(app);
-    const replacementDelegate =
-      transition === "delegate_change"
-        ? await createAgent(app.db, {
-            name: `post-commit-replacement-${randomUUID().slice(0, 8)}`,
-            type: "agent",
-            displayName: "Post-commit Replacement Agent",
-            managerId: fixture.admin.memberId,
-            organizationId: fixture.admin.organizationId,
-          })
-        : null;
-    if (transition === "member_leave") {
-      await createTestAdmin(app, { username: `post-commit-fallback-${randomUUID().slice(0, 8)}` });
-    }
-    const kickSpy = vi.spyOn(app.notifier, "notifyChatMessage").mockResolvedValue();
-    const inboxSpy = vi.spyOn(app.notifier, "notify").mockResolvedValue();
-    const effects = await holdIngressAfterDurableCard(
-      app,
-      fixture,
-      [{ username: "Reviewer.One" }],
-      () => undefined,
-      Promise.resolve(),
-    );
-    expect(effects).toHaveLength(1);
-    expect(kickSpy).not.toHaveBeenCalled();
-    expect(inboxSpy).not.toHaveBeenCalled();
-
-    switch (transition) {
-      case "revoke":
-        await revokeGitlabIdentityLink(app.db, {
-          organizationId: fixture.admin.organizationId,
-          linkId: fixture.link.id,
-          actorMemberId: fixture.admin.memberId,
-        });
-        break;
-      case "member_leave":
-        await deactivateMembership(app.db, fixture.admin.memberId, MEMBER_STATUSES.LEFT);
-        break;
-      case "delegate_change":
-        if (!replacementDelegate) throw new Error("replacement delegate missing");
-        await updateAgent(app.db, fixture.admin.humanAgentUuid, { delegateMention: replacementDelegate.uuid });
-        break;
-      case "delegate_suspend":
-        await suspendAgent(app.db, fixture.delegate.uuid);
-        break;
-      case "automation_withdrawal":
-        await setGitlabAutomaticActions(app.db, {
-          connectionId: fixture.connection.connectionId,
-          organizationId: fixture.admin.organizationId,
-          actorMemberId: fixture.admin.memberId,
-          enabled: false,
-        });
-        break;
-      case "connection_delete":
-        await deleteGitlabConnection(app.db, fixture.connection.connectionId, fixture.admin.memberId);
-        break;
-    }
-    const effect = effects[0];
-    if (!effect) throw new Error("deferred GitLab effects missing");
-    expect(await runDeferredGitlabCardPostCommitEffects(app, effect)).toBe(false);
-    expect(kickSpy).not.toHaveBeenCalled();
-    expect(inboxSpy).not.toHaveBeenCalled();
-    expect(
-      await app.db
-        .select()
-        .from(agentChatSessions)
-        .where(
-          and(
-            eq(agentChatSessions.agentId, fixture.delegate.uuid),
-            eq(agentChatSessions.chatId, effect.effects.messageEffects.chatId),
-          ),
-        ),
-    ).toHaveLength(0);
-  });
 
   it.each([
     { transition: "suspend" as const, existing: true },

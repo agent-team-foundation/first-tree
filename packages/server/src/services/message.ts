@@ -960,23 +960,6 @@ export async function runDeferredSendMessagePostCommitEffects(
   db: Database,
   effects: DeferredSendMessagePostCommitEffects,
 ): Promise<void> {
-  await runDeferredSendMessageSessionEffects(db, effects);
-
-  // Best-effort chat-first workspace kick — speakers also get the existing
-  // inbox NOTIFY; this reaches watcher rows with no inbox entry. Failure is
-  // dropped; web reconnect refetches.
-  fireChatMessageKick(effects.chatId, effects.messageId);
-}
-
-/**
- * Persist predictive recipient session state without dispatching realtime
- * effects. Authority-fenced callers use this before awaiting their own
- * provider-specific NOTIFY operations under the same lock scope.
- */
-export async function runDeferredSendMessageSessionEffects(
-  db: Database,
-  effects: DeferredSendMessagePostCommitEffects,
-): Promise<void> {
   // Predictive session-state activation: best-effort upsert an `active`
   // agent_chat_sessions row for every notify=true recipient so the First Tree
   // UI list refreshes immediately on send. Failure is logged but never thrown:
@@ -997,6 +980,11 @@ export async function runDeferredSendMessageSessionEffects(
       );
     }
   }
+
+  // Best-effort chat-first workspace kick — speakers also get the existing
+  // inbox NOTIFY; this reaches watcher rows with no inbox entry. Failure is
+  // dropped; web reconnect refetches.
+  fireChatMessageKick(effects.chatId, effects.messageId);
 }
 
 /**

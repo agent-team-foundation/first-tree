@@ -30,7 +30,6 @@ import {
   normalizeGitlabUsername,
   resolveActiveGitlabIdentity,
 } from "./gitlab-identities.js";
-import type { DeferredGitlabCardPostCommitEffects, GitlabIdentityAuthorityProof } from "./gitlab-post-commit.js";
 import { recordGitlabSkippedTarget } from "./gitlab-target-audit.js";
 import { type DeferredScmCardPostCommitEffects, sendScmSystemCard } from "./scm-card-delivery.js";
 import {
@@ -640,7 +639,6 @@ export async function resolveGitlabAudience(
         senderAgentId: row.humanAgentId,
         humanAgentId: row.humanAgentId,
         wakeAgentId: row.delegateAgentId,
-        authorityKey: row.identityLinkId,
         kind: "existing",
         chatId: row.chatId,
         involveReason: null,
@@ -732,7 +730,6 @@ export async function resolveGitlabAudience(
       senderAgentId: resolved.identity.humanAgentId,
       humanAgentId: resolved.identity.humanAgentId,
       wakeAgentId: resolved.identity.delegateAgentId,
-      authorityKey: resolved.identity.linkId,
       kind: "new",
       chatId: null,
       involveReason: target.reason,
@@ -889,7 +886,6 @@ export async function deliverGitlabCards(
     audience: GitlabAudienceResolution;
     organizationId: string;
     connectionId: string;
-    expectedTokenHash: string;
     database: Database;
   },
 ) {
@@ -897,7 +893,7 @@ export async function deliverGitlabCards(
     delivered: number;
     newChats: number;
     failed: number;
-    postCommitEffects: DeferredGitlabCardPostCommitEffects[];
+    postCommitEffects: DeferredScmCardPostCommitEffects[];
   } = { delivered: 0, newChats: 0, failed: 0, postCommitEffects: [] };
   const planned = await planScmChatDeliveries({
     targets: input.audience.targets,
@@ -954,27 +950,6 @@ export async function deliverGitlabCards(
         ...(reason === "review_requested" ? { reviewRoutingStatus: "routed_source_not_ready" as const } : {}),
       };
       const mentions = scmWakeAgentIds(entries);
-      const identityAuthorities = new Map<string, GitlabIdentityAuthorityProof>();
-      for (const entry of entries) {
-        for (const identityLinkId of entry.authorityKeys) {
-          if (!entry.humanAgentId || !entry.wakeAgentId) {
-            throw new Error("GitLab identity authority requires a human and delegate agent");
-          }
-          const proof = {
-            identityLinkId,
-            humanAgentId: entry.humanAgentId,
-            delegateAgentId: entry.wakeAgentId,
-          };
-          const existing = identityAuthorities.get(identityLinkId);
-          if (
-            existing &&
-            (existing.humanAgentId !== proof.humanAgentId || existing.delegateAgentId !== proof.delegateAgentId)
-          ) {
-            throw new Error("GitLab identity authority changed within one delivery plan");
-          }
-          identityAuthorities.set(identityLinkId, proof);
-        }
-      }
       const sent = await sendScmSystemCard(app, {
         chatId: delivery.chatId,
         senderId,
@@ -991,17 +966,13 @@ export async function deliverGitlabCards(
         },
         database: input.database,
         deferPostCommitEffects: true,
+        // GitLab personnel routing is intentionally card-only for now. Keep
+        // addressed agents as silent context so bind/backlog repair can never
+        // turn a stale webhook authority into a later runtime wake.
+        suppressNotifyAgentIds: mentions,
       });
       if (!sent.deferredPostCommitEffects) throw new Error("GitLab card delivery did not defer post-commit effects");
-      stats.postCommitEffects.push({
-        effects: sent.deferredPostCommitEffects,
-        authority: {
-          organizationId: input.organizationId,
-          connectionId: input.connectionId,
-          tokenHash: input.expectedTokenHash,
-          identities: [...identityAuthorities.values()],
-        },
-      });
+      stats.postCommitEffects.push(sent.deferredPostCommitEffects);
       stats.delivered += 1;
       if (delivery.created) stats.newChats += 1;
     } catch (err) {

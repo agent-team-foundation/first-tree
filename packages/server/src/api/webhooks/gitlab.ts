@@ -9,7 +9,6 @@ import {
   observeGitlabReviewersCapability,
   withGitlabIngressFence,
 } from "../../services/gitlab-connections.js";
-import { runDeferredGitlabCardPostCommitEffects } from "../../services/gitlab-post-commit.js";
 import {
   applyGitlabPersonnelEvidence,
   deliverGitlabCards,
@@ -18,6 +17,7 @@ import {
   normalizeGitlabWebhook,
   resolveGitlabAudience,
 } from "../../services/gitlab-webhook.js";
+import { runDeferredScmCardPostCommitEffects } from "../../services/scm-card-delivery.js";
 import { processScmWebhookDelivery } from "../../services/scm-webhook-processing.js";
 
 const MAX_GITLAB_WEBHOOK_BYTES = 512 * 1024;
@@ -139,7 +139,6 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                   audience,
                   organizationId: fencedConnection.organizationId,
                   connectionId: fencedConnection.id,
-                  expectedTokenHash: fencedConnection.tokenHash,
                   database: tx,
                 });
               },
@@ -157,7 +156,7 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
         );
         if (result.outcome === "delivered") {
           for (const effects of result.deliveryStats.postCommitEffects) {
-            await runDeferredGitlabCardPostCommitEffects(app, effects);
+            await runDeferredScmCardPostCommitEffects(app, effects);
           }
         }
         return { ok: true, outcome: result.outcome };

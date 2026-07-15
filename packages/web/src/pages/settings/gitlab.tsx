@@ -584,7 +584,7 @@ function IdentityPanel(props: {
             <DialogDescription>
               {lifecycleConfirmation?.action === "revoke"
                 ? "Revocation is terminal. The old link cannot be reactivated; binding the username again creates a new audited link."
-                : "Personnel routing and wake for this username stop immediately. An administrator may reconfirm the link later."}
+                : "Personnel routing for this username stops immediately. GitLab cards are silent and do not wake agents. An administrator may reconfirm the link later."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -825,13 +825,14 @@ const CONFIRM_CONTENT: Record<
   "enable-automation": {
     title: "Accept Team-wide URL bearer risk?",
     description:
-      "Anyone who learns the URL can forge personnel fields and route or wake members and agents across this Team. Enable only if the whole Team accepts that boundary.",
+      "Anyone who learns the URL can forge personnel fields, create or reuse personnel chats, and write cards across this Team. GitLab cards are currently silent and do not wake agents. Enable only if the whole Team accepts that boundary.",
     confirm: "Accept risk and enable",
     destructive: true,
   },
   "disable-automation": {
     title: "Disable automatic actions?",
-    description: "Personnel routing and wake stop immediately. Basic cards to explicitly followed chats continue.",
+    description:
+      "Personnel routing stops immediately. Basic cards to explicitly followed chats continue; GitLab cards do not wake agents.",
     confirm: "Disable",
   },
   "assignee-mode": {
