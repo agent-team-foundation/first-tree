@@ -119,10 +119,12 @@ function rulesetPayloadOk(argv) {
   const pullRequest = pullRequestRules[0];
   const parameters = pullRequest && typeof pullRequest === "object" ? pullRequest.parameters || {} : {};
   const refName = payload.conditions?.ref_name;
+  const bypassActors = payload.bypass_actors;
   return (
     payload.name === "First Tree Context Repo branch rules" &&
     payload.target === "branch" &&
     payload.enforcement === "active" &&
+    (bypassActors === undefined || (Array.isArray(bypassActors) && bypassActors.length === 0)) &&
     Array.isArray(refName?.include) &&
     refName.include.length === 1 &&
     refName.include[0] === "~DEFAULT_BRANCH" &&

@@ -256,6 +256,29 @@ describe("gh eval shim", () => {
           },
         ],
         [
+          "non-empty-bypass-actors.json",
+          {
+            bypass_actors: [{ actor_id: 1, actor_type: "RepositoryRole", bypass_mode: "always" }],
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
           "additional-rule.json",
           {
             conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
