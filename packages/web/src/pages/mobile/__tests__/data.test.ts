@@ -1,12 +1,13 @@
-import type { MeChatRow } from "@first-tree/shared";
-import { describe, expect, it } from "vitest";
+import type { ListMeChatsResponse, MeChatRow } from "@first-tree/shared";
+import { describe, expect, it, vi } from "vitest";
 import {
   countAttentionRows,
   countUnreadRows,
+  formatMobileAge,
   isNowFeedRow,
   mobileChatPreview,
   mobileChatSignal,
-  mobileFeedReasonLabel,
+  mobileRowsFromList,
   sortMobileChats,
 } from "../data.js";
 
@@ -43,8 +44,8 @@ function chatRow(overrides: Partial<MeChatRow> = {}): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
-    pinnedAt: null,
-    activityAt: null,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -73,6 +74,31 @@ describe("mobile chat projection", () => {
     ]);
   });
 
+  it("includes priority-only pinned chats, de-duplicates additive rows, and keeps priority order", () => {
+    const failed = chatRow({ chatId: "failed", failedAgentIds: ["agent-1"] });
+    const pinnedOnly = chatRow({
+      chatId: "pinned-only",
+      pinnedAt: "2026-07-09T09:00:00.000Z",
+      lastMessageAt: "2026-06-01T09:00:00.000Z",
+    });
+    const olderPin = chatRow({
+      chatId: "older-pin",
+      pinnedAt: "2026-07-08T09:00:00.000Z",
+      lastMessageAt: "2026-07-09T12:00:00.000Z",
+    });
+    const newer = chatRow({ chatId: "newer", lastMessageAt: "2026-07-09T11:00:00.000Z" });
+    const duplicatePinned = { ...pinnedOnly, title: "Wrong additive copy" };
+    const response: ListMeChatsResponse = {
+      priorityRows: { attention: [failed], pinned: [pinnedOnly, olderPin] },
+      rows: [newer, duplicatePinned, failed],
+      nextCursor: null,
+    };
+
+    const rows = sortMobileChats(mobileRowsFromList(response));
+    expect(rows.map((row) => row.chatId)).toEqual(["failed", "pinned-only", "older-pin", "newer"]);
+    expect(rows.find((row) => row.chatId === "pinned-only")?.title).toBe(pinnedOnly.title);
+  });
+
   it("counts attention and unread rows separately for mobile tab badges", () => {
     const explicitMention = chatRow({ chatId: "explicit", chatHasExplicitMentionToMe: true });
     const rows = [
@@ -87,32 +113,6 @@ describe("mobile chat projection", () => {
     expect(countUnreadRows(rows)).toBe(1);
     expect(mobileChatSignal(explicitMention).label).toBe("Unread");
     expect(mobileChatSignal(explicitMention).attention).toBe(false);
-  });
-
-  it("does not infer the requester from chat participants", () => {
-    expect(
-      mobileFeedReasonLabel(
-        chatRow({
-          openRequestCount: 1,
-          participants: [
-            {
-              agentId: "human-agent-self",
-              displayName: "Gandy",
-              type: "human",
-              avatarColorToken: null,
-              avatarImageUrl: null,
-            },
-            {
-              agentId: "unrelated-agent",
-              displayName: "Unrelated agent",
-              type: "agent",
-              avatarColorToken: null,
-              avatarImageUrl: null,
-            },
-          ],
-        }),
-      ),
-    ).toBe("Question waiting");
   });
 });
 
@@ -171,5 +171,33 @@ describe("mobileChatPreview", () => {
     expect(mobileChatPreview(chatRow({ description: null, lastMessagePreview: "![](https://x/y.png)" }))).toBe(
       "No messages yet.",
     );
+  });
+});
+
+describe("formatMobileAge", () => {
+  it("keeps waiting time relative and never rounds into the next unit early", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
+    try {
+      expect(formatMobileAge("2026-07-14T11:59:30.000Z")).toBe("now");
+      expect(formatMobileAge("2026-07-14T11:00:01.000Z")).toBe("59m");
+      expect(formatMobileAge("2026-07-13T12:00:01.000Z")).toBe("23h");
+      expect(formatMobileAge("2026-07-10T12:00:00.000Z")).toBe("4d");
+      expect(formatMobileAge("2026-06-30T12:00:00.000Z")).toBe("2w");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits invalid values and treats clock-skewed future timestamps as now", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
+    try {
+      expect(formatMobileAge(null)).toBe("");
+      expect(formatMobileAge("not-a-date")).toBe("");
+      expect(formatMobileAge("2026-07-14T12:05:00.000Z")).toBe("now");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

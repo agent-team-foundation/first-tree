@@ -1,25 +1,31 @@
 import {
   Activity,
+  Archive,
   ArrowLeft,
   ArrowRight,
   CircleUserRound,
   type LucideIcon,
+  Mail,
   MessageSquareText,
   MonitorCog,
   Palette,
+  Pin,
   Plus,
   Search,
   UsersRound,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
+import { AskTakeover } from "../components/chat/ask-takeover.js";
 import { Button } from "../components/ui/button.js";
 import { cn } from "../lib/utils.js";
+import { MobileCardActionsMenu, type MobileChatAction, MobileSwipeCard } from "./mobile/chat-card-actions.js";
 import {
   MobilePage,
   MobileSection,
   MobileSegmentedControl,
   MobileSignalChip,
+  mobileAccentColor,
   mobileCardStyle,
 } from "./mobile/components.js";
 import type { MobileChatSignal } from "./mobile/data.js";
@@ -60,7 +66,7 @@ const MOCK_CHATS: MockChat[] = [
     title: "Release readiness",
     time: "2m",
     owner: "gandy-coder",
-    signal: { tone: "needs-you", label: "Needs answer", rank: 0, attention: true },
+    signal: { tone: "needs-you", label: "Needs your answer", rank: 0, attention: true },
     preview: "Review the mobile Phase 1 PR and decide whether to keep the mock preview in the branch.",
     summary:
       "The mobile shell is ready for review. The remaining decision is whether the no-login mock preview stays as a dev-only reviewer surface.",
@@ -110,7 +116,7 @@ const MOCK_CHATS: MockChat[] = [
     title: "Context docs pass",
     time: "44m",
     owner: "docs",
-    signal: { tone: "working", label: "Working", rank: 3, attention: false },
+    signal: { tone: "working", label: "Working now", rank: 3, attention: false },
     preview: "Tighten the handoff notes so the next agent does not mistake foundation work for launch-ready mobile.",
     summary:
       "The handoff now calls out that the mobile branch is a foundation layer and intentionally avoids server schema or API changes.",
@@ -161,6 +167,7 @@ export function MobilePreviewPage() {
   const [tab, setTab] = useState<PreviewTab>("now");
   const [filter, setFilter] = useState<ChatFilter>("all");
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [answeringChatId, setAnsweringChatId] = useState<string | null>(null);
   const selectedChat = selectedChatId ? MOCK_CHATS.find((chat) => chat.id === selectedChatId) : null;
   const attentionCount = MOCK_CHATS.filter((chat) => chat.signal.attention).length;
   const unreadCount = MOCK_CHATS.filter((chat) => chat.signal.tone === "unread").length;
@@ -174,6 +181,7 @@ export function MobilePreviewPage() {
 
   const openTab = (next: PreviewTab) => {
     setSelectedChatId(null);
+    setAnsweringChatId(null);
     setTab(next);
   };
 
@@ -199,26 +207,51 @@ export function MobilePreviewPage() {
     );
   }
 
+  const answeringChat = answeringChatId ? MOCK_CHATS.find((chat) => chat.id === answeringChatId) : null;
+
   return (
-    <PreviewFrame
-      title={title}
-      right={
-        tab === "now" ? (
-          <Button type="button" variant="cta" size="sm" onClick={() => openTab("chat")}>
-            <Plus className="h-3.5 w-3.5" />
-            New
-          </Button>
-        ) : null
-      }
-      bottom={<PreviewTabs active={tab} attentionCount={attentionCount} unreadCount={unreadCount} onChange={openTab} />}
-    >
-      {tab === "now" ? <NowPreview onOpenChat={setSelectedChatId} /> : null}
-      {tab === "chat" ? (
-        <ChatPreview filter={filter} onFilter={setFilter} rows={chatRows} onOpenChat={setSelectedChatId} />
+    <>
+      <PreviewFrame
+        title={title}
+        right={
+          tab === "now" ? (
+            <Button type="button" variant="cta" size="sm" onClick={() => openTab("chat")}>
+              <Plus className="h-3.5 w-3.5" />
+              New
+            </Button>
+          ) : null
+        }
+        bottom={
+          <PreviewTabs active={tab} attentionCount={attentionCount} unreadCount={unreadCount} onChange={openTab} />
+        }
+      >
+        {tab === "now" ? <NowPreview onOpenChat={setSelectedChatId} onOpenAnswer={setAnsweringChatId} /> : null}
+        {tab === "chat" ? (
+          <ChatPreview filter={filter} onFilter={setFilter} rows={chatRows} onOpenChat={setSelectedChatId} />
+        ) : null}
+        {tab === "team" ? <TeamPreview /> : null}
+        {tab === "me" ? <MePreview /> : null}
+      </PreviewFrame>
+      {answeringChat ? (
+        <div className="fixed inset-0" style={{ zIndex: 70 }} data-mobile-ask-sheet>
+          <AskTakeover
+            body={`## Release decision\n\n${answeringChat.preview}`}
+            payload={{
+              multiSelect: false,
+              options: [
+                { label: "Ship now", description: "Start the production rollout." },
+                { label: "Hold", description: "Keep the release on staging." },
+              ],
+            }}
+            askerName={answeringChat.owner}
+            mobile
+            onDismiss={() => setAnsweringChatId(null)}
+            onReply={() => setAnsweringChatId(null)}
+            onSkip={() => setAnsweringChatId(null)}
+          />
+        </div>
       ) : null}
-      {tab === "team" ? <TeamPreview /> : null}
-      {tab === "me" ? <MePreview /> : null}
-    </PreviewFrame>
+    </>
   );
 }
 
@@ -289,13 +322,19 @@ function PreviewMark() {
   );
 }
 
-function NowPreview({ onOpenChat }: { onOpenChat: (chatId: string) => void }) {
+function NowPreview({
+  onOpenChat,
+  onOpenAnswer,
+}: {
+  onOpenChat: (chatId: string) => void;
+  onOpenAnswer: (chatId: string) => void;
+}) {
   return (
     <MobilePage className="flex flex-col" padded>
       <div className="flex items-start" style={{ gap: "var(--sp-3)", marginBottom: "var(--sp-4)" }}>
         <div className="min-w-0" style={{ flex: 1 }}>
           <h1 className="text-mobile-title" style={{ color: "var(--fg)", margin: 0 }}>
-            Work feed
+            Now
           </h1>
         </div>
         <span
@@ -313,7 +352,13 @@ function NowPreview({ onOpenChat }: { onOpenChat: (chatId: string) => void }) {
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }} data-mobile-feed>
         {MOCK_CHATS.map((chat) => (
-          <MockChatRow key={chat.id} chat={chat} onOpen={onOpenChat} showPrimaryAction={chat.signal.attention} />
+          <MockChatRow
+            key={chat.id}
+            chat={chat}
+            onOpen={onOpenChat}
+            onAnswer={onOpenAnswer}
+            showPrimaryAction={chat.signal.attention}
+          />
         ))}
       </div>
     </MobilePage>
@@ -491,29 +536,57 @@ function ChatDetail({ chat }: { chat: MockChat }) {
 function MockChatRow({
   chat,
   onOpen,
+  onAnswer,
   compact = false,
   tier,
   showPrimaryAction = false,
 }: {
   chat: MockChat;
   onOpen: (chatId: string) => void;
+  onAnswer?: (chatId: string) => void;
   compact?: boolean;
   tier?: "feed" | "list";
   showPrimaryAction?: boolean;
 }) {
   const cardTier = tier ?? (compact ? "list" : "feed");
   const actionLabel = showPrimaryAction ? primaryActionLabel(chat.signal.tone) : null;
-  const reasonLabel = cardTier === "feed" ? mockFeedReasonLabel(chat) : chat.signal.label;
-  const cardStyle = mobileCardStyle(actionLabel ? "priorityFeed" : cardTier);
+  const accent = cardTier === "feed" ? mobileAccentColor(chat.signal.tone) : null;
+  const cardStyle = {
+    ...mobileCardStyle(actionLabel ? "priorityFeed" : cardTier),
+    ...(accent ? { boxShadow: `inset var(--hairline-bold) 0 0 0 ${accent}` } : {}),
+    position: "relative" as const,
+  };
+  const actions: MobileChatAction[] = [
+    { key: "pin", label: "Pin chat", shortLabel: "Pin", icon: Pin, disabled: false, onSelect: () => undefined },
+    {
+      key: "mark-unread",
+      label: "Mark as unread",
+      shortLabel: "Unread",
+      icon: Mail,
+      disabled: false,
+      onSelect: () => undefined,
+    },
+    {
+      key: "archive",
+      label: "Archive chat",
+      shortLabel: "Archive",
+      icon: Archive,
+      disabled: false,
+      onSelect: () => undefined,
+    },
+  ];
   const content = (
-    <div className="flex h-full flex-col" style={{ gap: "var(--sp-3)" }}>
+    <div className="relative flex h-full flex-col" style={{ gap: "var(--sp-3)", zIndex: 1, pointerEvents: "none" }}>
       <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
         <AvatarBubble label={chat.title} />
         <div className="min-w-0" style={{ flex: 1 }}>
-          <MobileSignalChip signal={chat.signal} label={reasonLabel} />
+          <MobileSignalChip signal={chat.signal} />
         </div>
         <span className="mono text-mobile-caption shrink-0" style={{ color: "var(--fg-4)" }}>
           {chat.time}
+        </span>
+        <span style={{ pointerEvents: "auto" }}>
+          <MobileCardActionsMenu actions={actions} title={chat.title} />
         </span>
       </div>
       <p
@@ -537,7 +610,7 @@ function MockChatRow({
             color: "var(--fg-3)",
             margin: 0,
             display: "-webkit-box",
-            WebkitLineClamp: cardTier === "feed" ? 3 : 2,
+            WebkitLineClamp: 2,
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
           }}
@@ -547,8 +620,17 @@ function MockChatRow({
         </p>
       ) : null}
       {actionLabel ? (
-        <div className="flex items-center" style={{ marginTop: "auto" }}>
-          <Button type="button" variant="cta" size="sm" onClick={() => onOpen(chat.id)} data-mobile-primary-action>
+        <div className="flex items-center" style={{ marginTop: "auto", pointerEvents: "auto" }}>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={() => {
+              if (chat.signal.tone === "needs-you" && onAnswer) onAnswer(chat.id);
+              else onOpen(chat.id);
+            }}
+            data-mobile-primary-action
+          >
             {actionLabel}
             <ArrowRight aria-hidden className="h-3.5 w-3.5" />
           </Button>
@@ -557,27 +639,19 @@ function MockChatRow({
     </div>
   );
 
-  if (actionLabel) {
-    return (
+  return (
+    <MobileSwipeCard actions={actions}>
       <article style={cardStyle} data-mobile-card={cardTier}>
+        <button
+          type="button"
+          aria-label={`Open ${chat.title}`}
+          onClick={() => onOpen(chat.id)}
+          className="absolute inset-0 cursor-pointer border-0 bg-transparent"
+          style={{ zIndex: 0 }}
+        />
         {content}
       </article>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(chat.id)}
-      className="block w-full text-left transition-colors hover:bg-[var(--bg-hover)]"
-      style={{
-        ...cardStyle,
-        cursor: "pointer",
-      }}
-      data-mobile-card={cardTier}
-    >
-      {content}
-    </button>
+    </MobileSwipeCard>
   );
 }
 
@@ -591,21 +665,6 @@ function previewTabTitle(tab: PreviewTab): string {
       return "Team";
     case "me":
       return "Me";
-  }
-}
-
-function mockFeedReasonLabel(chat: MockChat): string {
-  switch (chat.signal.tone) {
-    case "needs-you":
-      return "Question waiting";
-    case "error":
-      return "Failed run";
-    case "unread":
-      return "Unread mention";
-    case "working":
-      return "Working now";
-    case "idle":
-      return chat.watching ? "Watching" : "Recent update";
   }
 }
 

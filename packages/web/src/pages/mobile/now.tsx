@@ -1,17 +1,28 @@
 import type { MeChatRow } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Plus } from "lucide-react";
-import { Link } from "react-router";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { listMeChats } from "../../api/me-chats.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
-import { formatRowTime } from "../../lib/utils.js";
-import { MobilePage, MobileSignalChip, MobileSystemState, mobileCardStyle } from "./components.js";
-import { isNowFeedRow, mobileChatPreview, mobileChatSignal, mobileFeedReasonLabel, sortMobileChats } from "./data.js";
+import { MobileAskSheet } from "./ask-sheet.js";
+import { MobileCardActionsMenu, MobileSwipeCard, useMobileChatActions } from "./chat-card-actions.js";
+import { MobilePage, MobileSignalChip, MobileSystemState, mobileAccentColor, mobileCardStyle } from "./components.js";
+import {
+  formatMobileAge,
+  isNowFeedRow,
+  mobileChatPreview,
+  mobileChatSignal,
+  mobileRowsFromList,
+  sortMobileChats,
+} from "./data.js";
 
 export function MobileNowPage() {
   const { agentId } = useAuth();
+  const navigate = useNavigate();
+  const [answeringChatId, setAnsweringChatId] = useState<string | null>(null);
   const chatsQuery = useQuery({
     // Nested under ["me", "chats"] so the shared realtime invalidation
     // (useAdminWs WS events + chat send / ask-answer / new-chat mutations)
@@ -25,55 +36,79 @@ export function MobileNowPage() {
   // with an AUTHORITATIVE active signal (see isNowFeedRow — failed agent, open
   // request, explicit @me, or an in-flight turn), then keep the canonical
   // attention order. Quiet / watching-only chats live in the Chat tab.
-  const sortedRows = sortMobileChats(chatsQuery.data?.rows ?? []).filter(isNowFeedRow);
+  const sortedRows = sortMobileChats(mobileRowsFromList(chatsQuery.data)).filter(isNowFeedRow);
 
   return (
-    <MobilePage className="flex flex-col" padded>
-      <div className="flex items-center" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}>
-        <div className="min-w-0" style={{ flex: 1 }}>
-          <h1 className="text-mobile-title" style={{ color: "var(--fg)", margin: 0 }}>
-            Work feed
-          </h1>
+    <>
+      <MobilePage className="flex flex-col" padded>
+        <div className="flex items-center" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}>
+          <div className="min-w-0" style={{ flex: 1 }}>
+            <h1 className="text-mobile-title" style={{ color: "var(--fg)", margin: 0 }}>
+              Now
+            </h1>
+          </div>
+          <Button asChild variant="cta" size="sm">
+            <Link to="/m/chat?c=draft">
+              <Plus className="h-3.5 w-3.5" />
+              New
+            </Link>
+          </Button>
         </div>
-        <Button asChild variant="cta" size="sm">
-          <Link to="/m/chat?c=draft">
-            <Plus className="h-3.5 w-3.5" />
-            New
-          </Link>
-        </Button>
-      </div>
 
-      {chatsQuery.isLoading && sortedRows.length === 0 ? (
-        <MobileSystemState title="Loading work" />
-      ) : chatsQuery.error ? (
-        <MobileSystemState title="Failed to load work" detail={formatError(chatsQuery.error)} tone="error" />
-      ) : sortedRows.length === 0 ? (
-        <MobileSystemState
-          title="You're all caught up"
-          detail="Asks, failures, and updates show up here. Find every chat in Chat."
-        />
-      ) : (
-        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }} data-mobile-feed>
-          {sortedRows.map((row) => (
-            <MobileAttentionCard key={row.chatId} row={row} selfAgentId={agentId ?? ""} />
-          ))}
-        </div>
-      )}
-    </MobilePage>
+        {chatsQuery.isLoading && sortedRows.length === 0 ? (
+          <MobileSystemState title="Loading work" />
+        ) : chatsQuery.error ? (
+          <MobileSystemState title="Failed to load work" detail={formatError(chatsQuery.error)} tone="error" />
+        ) : sortedRows.length === 0 ? (
+          <MobileSystemState
+            title="You're all caught up"
+            detail="Asks, failures, and updates show up here. Find every chat in Chat."
+          />
+        ) : (
+          <div className="flex flex-col" style={{ gap: "var(--sp-2)" }} data-mobile-feed>
+            {sortedRows.map((row) => (
+              <MobileAttentionCard
+                key={row.chatId}
+                row={row}
+                selfAgentId={agentId ?? ""}
+                onOpenChat={(chatId) => navigate(`/m/chat?c=${encodeURIComponent(chatId)}`)}
+                onOpenAnswer={setAnsweringChatId}
+              />
+            ))}
+          </div>
+        )}
+      </MobilePage>
+      {answeringChatId ? <MobileAskSheet chatId={answeringChatId} onClose={() => setAnsweringChatId(null)} /> : null}
+    </>
   );
 }
 
-function MobileAttentionCard({ row, selfAgentId }: { row: MeChatRow; selfAgentId: string }) {
+function MobileAttentionCard({
+  row,
+  selfAgentId,
+  onOpenChat,
+  onOpenAnswer,
+}: {
+  row: MeChatRow;
+  selfAgentId: string;
+  onOpenChat: (chatId: string) => void;
+  onOpenAnswer: (chatId: string) => void;
+}) {
   const signal = mobileChatSignal(row);
   const preview = mobileChatPreview(row);
   const actionLabel = primaryActionLabel(signal.tone);
-  const reasonLabel = mobileFeedReasonLabel(row);
+  const accent = mobileAccentColor(signal.tone);
+  const actions = useMobileChatActions(row);
   const cardStyle = {
     ...mobileCardStyle(actionLabel ? "priorityFeed" : "feed"),
     textDecoration: "none",
+    position: "relative" as const,
+    // One pre-attentive priority cue: a left-edge accent in the state hue,
+    // replacing the avatar red mark + chip + colored button triple-encoding.
+    ...(accent ? { boxShadow: `inset var(--hairline-bold) 0 0 0 ${accent}` } : {}),
   };
   const content = (
-    <div className="flex h-full flex-col" style={{ gap: "var(--sp-3)" }}>
+    <div className="relative flex h-full flex-col" style={{ gap: "var(--sp-3)", zIndex: 1, pointerEvents: "none" }}>
       <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
         <ChatRowAvatar
           title={row.title}
@@ -81,21 +116,24 @@ function MobileAttentionCard({ row, selfAgentId }: { row: MeChatRow; selfAgentId
           participants={row.participants}
           selfAgentId={selfAgentId}
           unreadCount={row.unreadMentionCount}
-          failed={row.failedAgentIds.length > 0}
-          needsYou={row.openRequestCount > 0}
+          failed={false}
+          needsYou={false}
           size={36}
           muted
           badge={false}
           statusDot
         />
         <div className="min-w-0" style={{ flex: 1 }}>
-          <MobileSignalChip signal={signal} label={reasonLabel} />
+          <MobileSignalChip signal={signal} />
         </div>
         {row.lastMessageAt ? (
           <span className="mono text-mobile-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-            {formatRowTime(row.lastMessageAt)}
+            {formatMobileAge(row.lastMessageAt)}
           </span>
         ) : null}
+        <span style={{ pointerEvents: "auto" }}>
+          <MobileCardActionsMenu actions={actions} title={row.title} />
+        </span>
       </div>
       <p
         className="text-mobile-title"
@@ -117,7 +155,7 @@ function MobileAttentionCard({ row, selfAgentId }: { row: MeChatRow; selfAgentId
           color: "var(--fg-3)",
           margin: 0,
           display: "-webkit-box",
-          WebkitLineClamp: 3,
+          WebkitLineClamp: 2,
           WebkitBoxOrient: "vertical",
           overflow: "hidden",
         }}
@@ -126,35 +164,38 @@ function MobileAttentionCard({ row, selfAgentId }: { row: MeChatRow; selfAgentId
         {preview}
       </p>
       {actionLabel ? (
-        <div className="flex items-center" style={{ marginTop: "auto" }}>
-          <Button asChild variant="cta" size="sm" data-mobile-primary-action>
-            <Link to={`/m/chat?c=${encodeURIComponent(row.chatId)}`}>
-              {actionLabel}
-              <ArrowRight aria-hidden className="h-3.5 w-3.5" />
-            </Link>
+        <div className="flex items-center" style={{ marginTop: "auto", pointerEvents: "auto" }}>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            data-mobile-primary-action
+            onClick={() => {
+              if (signal.tone === "needs-you") onOpenAnswer(row.chatId);
+              else onOpenChat(row.chatId);
+            }}
+          >
+            {actionLabel}
+            <ArrowRight aria-hidden className="h-3.5 w-3.5" />
           </Button>
         </div>
       ) : null}
     </div>
   );
 
-  if (actionLabel) {
-    return (
+  return (
+    <MobileSwipeCard actions={actions}>
       <article style={cardStyle} data-mobile-card="feed">
+        <button
+          type="button"
+          aria-label={`Open ${row.title}`}
+          onClick={() => onOpenChat(row.chatId)}
+          className="absolute inset-0 cursor-pointer border-0 bg-transparent"
+          style={{ zIndex: 0 }}
+        />
         {content}
       </article>
-    );
-  }
-
-  return (
-    <Link
-      to={`/m/chat?c=${encodeURIComponent(row.chatId)}`}
-      className="block transition-colors hover:bg-[var(--bg-hover)]"
-      style={cardStyle}
-      data-mobile-card="feed"
-    >
-      {content}
-    </Link>
+    </MobileSwipeCard>
   );
 }
 

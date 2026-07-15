@@ -314,10 +314,10 @@ describe("extra preview pages", () => {
     const rendered = await renderPreview(<MobilePreviewPage />, "/preview/mobile");
 
     expect(text(rendered.container)).toContain("Now");
-    expect(text(rendered.container)).toContain("Work feed");
+    expect(rendered.container.querySelector("h1")?.textContent).toBe("Now");
     expect(text(rendered.container)).not.toContain("2 need attention");
     expect(text(rendered.container)).toContain("Release readiness");
-    expect(text(rendered.container)).toContain("Question waiting");
+    expect(text(rendered.container)).toContain("Needs your answer");
     expect(text(rendered.container)).not.toContain("Needs attention");
     expect(text(rendered.container)).not.toContain("In progress");
     expect(rendered.container.querySelector("[data-mobile-feed]")).not.toBeNull();
@@ -329,7 +329,7 @@ describe("extra preview pages", () => {
     expect(text(rendered.container)).toContain("Visual QA");
     expect(rendered.container.querySelector('[data-mobile-card="list"]')).not.toBeNull();
 
-    await click(buttonByText(rendered.container, "Release readiness"));
+    await click(buttonByLabel(rendered.container, /^Open Release readiness$/));
     expect(text(rendered.container)).toContain("Summary");
     expect(text(rendered.container)).toContain("The mobile shell is ready for review");
 

@@ -1,6 +1,7 @@
 import { Activity, CircleUserRound, MessageSquareText, UsersRound } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { NavLink } from "react-router";
+import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { cn } from "../../lib/utils.js";
 import type { MobileChatSignal, MobileChatSignalTone } from "./data.js";
 
@@ -20,15 +21,21 @@ const BASE_CARD_STYLE = {
 export function mobileCardStyle(tier: MobileCardTier): CSSProperties {
   switch (tier) {
     case "priorityFeed":
-      return {
-        ...BASE_CARD_STYLE,
-        minHeight: "var(--sp-45)",
-        padding: "var(--sp-4)",
-      };
-    case "feed":
+      // Priority cards earn a floor (so an action always has room) but a shorter
+      // one than before — the old taller floor left dead space and slowed the
+      // scan. Content sizes above it; the 2-line preview + action land near here.
       return {
         ...BASE_CARD_STYLE,
         minHeight: "var(--sp-35)",
+        padding: "var(--sp-4)",
+      };
+    case "feed":
+      // Non-priority cards keep a short floor (so a sparse card holds tap weight)
+      // and otherwise size to content — a tighter, scannable rhythm than the old
+      // uniform tall cards, which left dead space under a 2-line preview.
+      return {
+        ...BASE_CARD_STYLE,
+        minHeight: "var(--sp-20)",
         padding: "var(--sp-4)",
       };
     case "list":
@@ -132,27 +139,40 @@ export function MobileSystemState({
   );
 }
 
+// State pill: a `-soft` fill + `-strong` text capsule (the design system's
+// blessed open-question REQUEST-chip form), replacing the old bare mono dot +
+// label. Reads as an intentional status tag rather than a technical readout,
+// and — with the left-edge accent on the card — lets a single glance sort the
+// feed by priority before any word is read. `working` carries the canonical
+// pulsing liveness dot so it is told apart from a static state by form, not hue.
 export function MobileSignalChip({ signal, label = signal.label }: { signal: MobileChatSignal; label?: string }) {
-  const color = toneColor(signal.tone);
+  const chip = toneChipStyle(signal.tone);
   return (
     <span
-      className="mono inline-flex min-w-0 max-w-full items-center text-mobile-caption"
+      className="text-mobile-label inline-flex min-w-0 max-w-full items-center"
       style={{
         gap: "var(--sp-1)",
-        color,
+        padding: "var(--sp-0_5) var(--sp-2)",
+        borderRadius: "var(--radius-full)",
+        background: chip.soft,
+        color: chip.fg,
         whiteSpace: "nowrap",
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          width: "var(--sp-1_5)",
-          height: "var(--sp-1_5)",
-          borderRadius: "var(--radius-full)",
-          background: color,
-          flexShrink: 0,
-        }}
-      />
+      {signal.tone === "working" ? (
+        <StatusGlyph colorVar="var(--state-working)" shape="dot" pulse="working" size={6} />
+      ) : (
+        <span
+          aria-hidden
+          style={{
+            width: "var(--sp-1_5)",
+            height: "var(--sp-1_5)",
+            borderRadius: "var(--radius-full)",
+            background: chip.dot,
+            flexShrink: 0,
+          }}
+        />
+      )}
       <span className="truncate" data-mobile-signal-label>
         {label}
       </span>
@@ -282,5 +302,40 @@ function toneColor(tone: MobileChatSignalTone): string {
       return "var(--state-working)";
     case "idle":
       return "var(--fg-3)";
+  }
+}
+
+type ChipStyle = { fg: string; soft: string; dot: string };
+
+// Pill fill / text / dot per tone. `-soft` fill + `-strong` text is the AA
+// callout pairing from the design system; `idle` stays a quiet neutral (no
+// fill) since it is an at-rest awareness cue, not attention.
+function toneChipStyle(tone: MobileChatSignalTone): ChipStyle {
+  switch (tone) {
+    case "needs-you":
+      return { fg: "var(--fg-needs-you-strong)", soft: "var(--state-needs-you-soft)", dot: "var(--state-needs-you)" };
+    case "error":
+      return { fg: "var(--fg-error-strong)", soft: "var(--state-error-soft)", dot: "var(--state-error)" };
+    case "unread":
+      return { fg: "var(--fg-error-strong)", soft: "var(--state-error-soft)", dot: "var(--state-unread)" };
+    case "working":
+      return { fg: "var(--fg-success-strong)", soft: "var(--state-working-soft)", dot: "var(--state-working)" };
+    case "idle":
+      return { fg: "var(--fg-3)", soft: "transparent", dot: "var(--fg-4)" };
+  }
+}
+
+// Left-edge accent color for a priority card (failed / needs-you). One
+// pre-attentive signal that sorts the feed by weight before any text is read —
+// replacing the old triple-encoding (avatar red mark + chip + colored button).
+// Returns null for non-priority tones, which carry no accent.
+export function mobileAccentColor(tone: MobileChatSignalTone): string | null {
+  switch (tone) {
+    case "error":
+      return "var(--state-error)";
+    case "needs-you":
+      return "var(--state-needs-you)";
+    default:
+      return null;
   }
 }

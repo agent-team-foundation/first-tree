@@ -677,6 +677,7 @@ describe("AskTakeover", () => {
     expect(Number.parseInt(reply.style.height, 10)).toBe(44);
     expect(Number.parseInt(atBtn.style.width, 10)).toBe(44);
     expect(Number.parseInt(attachBtn.style.width, 10)).toBe(44);
+    expect(c.querySelector<HTMLElement>("[data-ask-takeover-footer]")?.className).toContain("pb-safe-bottom");
 
     // Enter inserts a newline (does not resolve); the Reply button submits.
     const ta = freeTextBox(c);

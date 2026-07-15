@@ -83,6 +83,7 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
+import { sendAskAnswer } from "../../../components/chat/ask-answer-transport.js";
 import { type AskAnswer, AskTakeover } from "../../../components/chat/ask-takeover.js";
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
@@ -2346,49 +2347,8 @@ export function ChatView({
     if (askBusy) return;
     setAskError(null);
     setAskBusy(true);
-    // Route to the asker PLUS anyone the free text @mentioned (deduped).
-    const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
-    const resolves: RequestResolution = { request: request.id, kind: "answered" };
-    const docs = answer.attachments ?? [];
     try {
-      const docRefs: AttachmentRef[] = [];
-      for (const doc of docs) {
-        const uploaded = await uploadAttachment(doc.file);
-        docRefs.push({
-          attachmentId: uploaded.id,
-          kind: doc.kind,
-          mimeType: uploadMimeFor(doc.file),
-          filename: doc.file.name,
-          size: doc.file.size,
-        });
-      }
-
-      if (answer.images.length > 0) {
-        const refs: ImageRefContent[] = [];
-        for (const file of answer.images) {
-          const uploaded = await uploadAttachment(file);
-          // Warm the per-browser cache so the sender renders its own image
-          // instantly. Best-effort — the render path re-fetches on a miss.
-          try {
-            await putImage({ imageId: uploaded.id, base64: await readFileAsBase64(file), mimeType: file.type });
-          } catch {
-            // IndexedDB quota / availability — ignore, fall back to server fetch.
-          }
-          refs.push({ imageId: uploaded.id, mimeType: file.type, filename: file.name, size: file.size });
-        }
-        await sendFileMessageBatch(
-          chatId,
-          { ...(answer.content ? { caption: answer.content } : {}), attachments: refs },
-          { mentions: routedMentions, ...(docRefs.length > 0 ? { attachments: docRefs } : {}) },
-          { inReplyTo: request.id, resolves },
-        );
-      } else {
-        await sendChatMessage(chatId, answer.content, routedMentions, {
-          inReplyTo: request.id,
-          resolves,
-          ...(docRefs.length > 0 ? { attachments: docRefs } : {}),
-        });
-      }
+      await sendAskAnswer({ chatId, request, answer });
       queryClient.invalidateQueries({ queryKey: messagesQueryKey });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       scrollToBottom("smooth");

@@ -9,8 +9,8 @@ import { ActivityDots } from "../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { Button } from "../../components/ui/button.js";
-import { formatRowTime } from "../../lib/utils.js";
 import { CenterPanel } from "../workspace/center/index.js";
+import { MobileCardActionsMenu, MobileSwipeCard, useMobileChatActions } from "./chat-card-actions.js";
 import {
   MobilePage,
   MobileSegmentedControl,
@@ -18,7 +18,7 @@ import {
   MobileSystemState,
   mobileCardStyle,
 } from "./components.js";
-import { mobileChatPreview, mobileChatSignal, sortMobileChats } from "./data.js";
+import { formatMobileAge, mobileChatPreview, mobileChatSignal, mobileRowsFromList, sortMobileChats } from "./data.js";
 
 type MobileChatView = "all" | "unread" | "watching";
 
@@ -87,7 +87,7 @@ function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
       }),
     refetchInterval: 30_000,
   });
-  const rows = sortMobileChats(chatsQuery.data?.rows ?? []);
+  const rows = sortMobileChats(mobileRowsFromList(chatsQuery.data));
 
   return (
     <MobilePage className="flex flex-col" padded>
@@ -137,67 +137,76 @@ function MobileChatRow({
   onSelect: (chatId: string) => void;
 }) {
   const signal = mobileChatSignal(row);
+  const actions = useMobileChatActions(row);
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(row.chatId)}
-      className="w-full text-left transition-colors hover:bg-[var(--bg-hover)]"
-      style={{
-        ...mobileCardStyle("list"),
-      }}
-      data-mobile-card="list"
-    >
-      <div className="flex items-start" style={{ gap: "var(--sp-3)" }}>
-        <ChatRowAvatar
-          title={row.title}
-          type={row.type}
-          participants={row.participants}
-          selfAgentId={selfAgentId}
-          unreadCount={row.unreadMentionCount}
-          failed={row.failedAgentIds.length > 0}
-          needsYou={row.openRequestCount > 0}
-          size={34}
-          muted
-          badge={false}
-          statusDot
-        />
-        <div className="min-w-0" style={{ flex: 1 }}>
-          <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-            <span
-              className="text-mobile-subtitle truncate"
-              style={{ color: "var(--fg)", flex: 1 }}
-              data-mobile-card-title
-            >
-              {row.title}
-            </span>
-            {row.busyAgentIds.length > 0 ? (
-              <ActivityDots />
-            ) : row.lastMessageAt ? (
-              <span className="mono text-mobile-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                {formatRowTime(row.lastMessageAt)}
-              </span>
-            ) : null}
+    <MobileSwipeCard actions={actions}>
+      <article
+        className="relative transition-colors hover:bg-[var(--bg-hover)]"
+        style={mobileCardStyle("list")}
+        data-mobile-card="list"
+      >
+        <button
+          type="button"
+          onClick={() => onSelect(row.chatId)}
+          aria-label={`Open ${row.title}`}
+          className="w-full border-0 bg-transparent p-0 text-left"
+        >
+          <div className="flex items-start" style={{ gap: "var(--sp-3)" }}>
+            <ChatRowAvatar
+              title={row.title}
+              type={row.type}
+              participants={row.participants}
+              selfAgentId={selfAgentId}
+              unreadCount={row.unreadMentionCount}
+              failed={false}
+              needsYou={false}
+              size={34}
+              muted
+              badge={false}
+              statusDot
+            />
+            <div className="min-w-0" style={{ flex: 1, paddingRight: "var(--sp-8)" }}>
+              <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+                <span
+                  className="text-mobile-subtitle truncate"
+                  style={{ color: "var(--fg)", flex: 1 }}
+                  data-mobile-card-title
+                >
+                  {row.title}
+                </span>
+                {row.busyAgentIds.length > 0 ? (
+                  <ActivityDots />
+                ) : row.lastMessageAt ? (
+                  <span className="mono text-mobile-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                    {formatMobileAge(row.lastMessageAt)}
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex items-center" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-1)" }}>
+                <MobileSignalChip signal={signal} />
+              </div>
+              <p
+                className="text-mobile-body"
+                style={{
+                  color: "var(--fg-3)",
+                  margin: "var(--sp-2) 0 0",
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
+                data-mobile-card-preview
+              >
+                {mobileChatPreview(row)}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-1)" }}>
-            <MobileSignalChip signal={signal} />
-          </div>
-          <p
-            className="text-mobile-body"
-            style={{
-              color: "var(--fg-3)",
-              margin: "var(--sp-2) 0 0",
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            }}
-            data-mobile-card-preview
-          >
-            {mobileChatPreview(row)}
-          </p>
-        </div>
-      </div>
-    </button>
+        </button>
+        <span className="absolute" style={{ top: "var(--sp-2)", right: "var(--sp-2)" }}>
+          <MobileCardActionsMenu actions={actions} title={row.title} />
+        </span>
+      </article>
+    </MobileSwipeCard>
   );
 }
 
