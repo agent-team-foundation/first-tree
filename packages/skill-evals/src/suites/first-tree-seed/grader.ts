@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
 import type { RunPaths } from "../../core/types.js";
-import { approvedPhase1ChatHistoryMarkdown } from "./fixture.js";
+import { approvedPhase1ChatHistoryMarkdown, sourceRemoteRef } from "./fixture.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
@@ -391,6 +391,10 @@ function collectCommandExecutions(value: unknown): CommandExecution[] {
   return executions;
 }
 
+function commandExitFailed(value: unknown): boolean {
+  return collectCommandExecutions(value).some((execution) => execution.exitCode !== null && execution.exitCode !== 0);
+}
+
 function normalizeForMatch(value: string): string {
   return value
     .toLowerCase()
@@ -528,7 +532,7 @@ function sourceRepoChanged(paths: RunPaths, baselineHead: string | null, evalCas
   if (baselineHead === null) return existsSync(sourceRepoPath);
   if (!existsSync(sourceRepoPath)) return true;
 
-  const currentHead = gitHead(sourceRepoPath, chatLocal ? "HEAD" : "refs/remotes/origin/main");
+  const currentHead = gitHead(sourceRepoPath, chatLocal ? "HEAD" : sourceRemoteRef(evalCase));
   if (currentHead !== baselineHead) return true;
 
   if (chatLocal) {
@@ -567,6 +571,190 @@ function ghArgvIsForbidden(argv: readonly string[]): boolean {
   ].includes(subcommand);
 }
 
+function commandTrace(events: readonly unknown[]): string[] {
+  const commands: string[] = [];
+  for (const event of events) {
+    if (isRecord(event) && (eventType(event) === "gh_call" || eventType(event) === "first_tree_call")) {
+      const argv = isStringArray(event.argv) ? event.argv : [];
+      const prefix = eventType(event) === "gh_call" ? "gh" : "first-tree";
+      commands.push(`${prefix} ${argv.join(" ")}`.trim());
+    }
+    if (isRecord(event) && eventType(event) === "codex_event") {
+      commands.push(...collectCommandStrings(event.event));
+    }
+  }
+  return commands;
+}
+
+function findCommandIndexAfter(commands: readonly string[], startIndex: number, pattern: RegExp): number {
+  return commands.findIndex((command, index) => index > startIndex && pattern.test(command));
+}
+
+function githubGovernanceOwnerResolutionObserved(trace: string): boolean {
+  const repoPath = String.raw`(?:\$repo|agent-team-foundation/context-tree)`;
+  const ownerPath = String.raw`(?:\$repo_owner|agent-team-foundation)`;
+  const teamPath = String.raw`(?:\$candidate_team_slug|context-maintainers)`;
+  const ownerTypeObserved = new RegExp(String.raw`repos/${repoPath}["']?\s+--jq \.owner\.type`, "u").test(trace);
+  const orgTeamObserved =
+    /repo_owner_type.{0,120}Organization/su.test(trace) &&
+    new RegExp(String.raw`repos/${repoPath}/teams\?per_page=100`, "u").test(trace) &&
+    /\.privacy != "secret"/u.test(trace) &&
+    new RegExp(String.raw`orgs/${ownerPath}/teams/${teamPath}/members\?per_page=100`, "u").test(trace) &&
+    /\.login != \$author/u.test(trace) &&
+    /non_author_member/u.test(trace);
+  const collaboratorFallbackObserved =
+    new RegExp(String.raw`repos/${repoPath}/collaborators\?affiliation=direct&permission=push&per_page=100`, "u").test(
+      trace,
+    ) &&
+    /\.login != \$author/u.test(trace) &&
+    /code_owner_login/u.test(trace);
+
+  return ownerTypeObserved && (orgTeamObserved || collaboratorFallbackObserved);
+}
+
+function commandHasGithubRulesetMutation(command: string): boolean {
+  return unwrapShellCommand(command)
+    .split(/&&|\|\||[;\n]/u)
+    .some((segment) => {
+      if (!/\bgh\s+api\b/u.test(segment)) return false;
+      if (!/(?:^|\s)(?:-X|--method)(?:\s+|=)(?:POST|PUT)\b/iu.test(segment)) return false;
+      return /"?repos\/(?:\$repo|agent-team-foundation\/context-tree)\/rulesets(?:\/(?:\$ruleset_id|42))?(?:"|\s|$)/u.test(
+        segment,
+      );
+    });
+}
+
+function githubGovernanceFailureObserved(events: readonly unknown[]): boolean {
+  return events.some((event) => {
+    if (isRecord(event) && eventType(event) === "gh_result" && isModelPhase(event)) {
+      const exitCode = event.exitCode;
+      return typeof exitCode === "number" && exitCode !== 0;
+    }
+    if (isRecord(event) && eventType(event) === "codex_event") {
+      return (
+        collectCommandStrings(event.event).some((command) =>
+          /\b(git\s+-C\s+"?[^"]*"?\s+push|gh\s+api)\b/u.test(command),
+        ) && commandExitFailed(event.event)
+      );
+    }
+    return false;
+  });
+}
+
+function githubRulesetPayloadObserved(events: readonly unknown[], trace: string): boolean {
+  if (
+    events.some(
+      (event) => isRecord(event) && eventType(event) === "gh_result" && event.rulesetPayloadValidated === true,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /"~DEFAULT_BRANCH"/u.test(trace) &&
+    /"non_fast_forward"/u.test(trace) &&
+    /"pull_request"/u.test(trace) &&
+    /"required_approving_review_count"\s*:\s*1/u.test(trace) &&
+    /"require_code_owner_review"\s*:\s*true/u.test(trace) &&
+    /"dismiss_stale_reviews_on_push"\s*:\s*false/u.test(trace)
+  );
+}
+
+function githubGovernanceBootstrapObserved(events: readonly unknown[]): boolean {
+  const commands = commandTrace(events);
+  const trace = commands.join("\n");
+  const treeInitIndex = commands.findIndex((command) => /\bfirst-tree\s+tree\s+init\b|\btree\s+init\b/u.test(command));
+  const codeownersWriteIndex = findCommandIndexAfter(
+    commands,
+    treeInitIndex,
+    /printf\s+['"]\* %s\\n['"]\s+"\$code_owner_ref"\s+>\s+"?[^"]*\.github\/CODEOWNERS"?/u,
+  );
+  const codeownersAddIndex = findCommandIndexAfter(
+    commands,
+    codeownersWriteIndex,
+    /\bgit\s+-C\s+"?<tree>"?\s+add\s+\.github\/CODEOWNERS\b|\bgit\s+-C\s+"?[^"]*"?\s+add\s+\.github\/CODEOWNERS\b/u,
+  );
+  const codeownersCommitIndex = findCommandIndexAfter(
+    commands,
+    codeownersAddIndex,
+    /\bgit\s+-C\s+"?[^"]*"?\s+commit\s+-m\s+"chore: add context tree code owner mapping"/u,
+  );
+  const codeownersPushIndex = findCommandIndexAfter(
+    commands,
+    codeownersCommitIndex,
+    /\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:(?:\$default_branch|main)"?/u,
+  );
+  const codeownersContentValidationIndex = findCommandIndexAfter(
+    commands,
+    codeownersPushIndex,
+    /contents\/\.github\/CODEOWNERS\?ref=(?:\$default_branch|main)/u,
+  );
+  const codeownersErrorValidationIndex = findCommandIndexAfter(
+    commands,
+    codeownersContentValidationIndex,
+    /codeowners\/errors\?ref=(?:\$default_branch|main)/u,
+  );
+  const rulesetMutationIndex = commands.findIndex(
+    (command, index) => index > codeownersErrorValidationIndex && commandHasGithubRulesetMutation(command),
+  );
+
+  return (
+    treeInitIndex >= 0 &&
+    codeownersWriteIndex > treeInitIndex &&
+    codeownersAddIndex > codeownersWriteIndex &&
+    codeownersCommitIndex > codeownersAddIndex &&
+    codeownersPushIndex > codeownersCommitIndex &&
+    codeownersContentValidationIndex > codeownersPushIndex &&
+    codeownersErrorValidationIndex > codeownersContentValidationIndex &&
+    rulesetMutationIndex > codeownersErrorValidationIndex &&
+    !githubGovernanceFailureObserved(events) &&
+    githubRulesetPayloadObserved(events, trace) &&
+    githubGovernanceOwnerResolutionObserved(trace) &&
+    /rulesets\?includes_parents=false&per_page=100/u.test(trace) &&
+    /code_owner_ref/u.test(trace) &&
+    !/printf\s+['"]\* @%s\\n['"]\s+"\$code_owner_login"/u.test(trace) &&
+    !/gh api [^\n|]+\|\s*head/u.test(trace)
+  );
+}
+
+function githubGovernanceRecoveryObserved(events: readonly unknown[], text: string): boolean {
+  return (
+    githubGovernanceFailureObserved(events) &&
+    /automatic GitHub governance setup failed|automatic governance setup failed/iu.test(text) &&
+    /CODEOWNERS/iu.test(text) &&
+    /non-author|org team|team with write|branch rules|ruleset/iu.test(text) &&
+    /do not enable|do not POST|do not PUT|fail(?:s|ed)? closed|before enabling/iu.test(text)
+  );
+}
+
+function githubGovernanceReadSideEffectAllowed(command: string): boolean {
+  if (/(?:^|\s)(?:-X|--method)(?:\s+|=)(?!GET\b)[a-z]+\b/iu.test(command)) return false;
+  if (/\bgh\s+repo\s+view\b/u.test(command)) return true;
+  if (commandHasGithubRulesetMutation(command)) return false;
+  const repoPath = String.raw`(?:\$repo|agent-team-foundation/context-tree)`;
+  const ownerPath = String.raw`(?:\$repo_owner|agent-team-foundation)`;
+  const teamPath = String.raw`(?:\$candidate_team_slug|context-maintainers)`;
+  const readPattern = new RegExp(
+    String.raw`\bgh\s+api\s+(user\b|"?repos/${repoPath}(?:"|\s|$)|"?repos/${repoPath}/teams\?|"?orgs/${ownerPath}/teams/${teamPath}/members\?|"?repos/${repoPath}/collaborators\?|"?repos/${repoPath}/contents/\.github/CODEOWNERS\?|"?repos/${repoPath}/codeowners/errors\?|"?repos/${repoPath}/rulesets\?includes_parents=false&per_page=100)`,
+    "u",
+  );
+  return readPattern.test(command);
+}
+
+function githubGovernanceBootstrapSideEffectAllowed(command: string): boolean {
+  if (githubGovernanceReadSideEffectAllowed(command)) return true;
+  if (commandHasGithubRulesetMutation(command)) return true;
+  if (/\bgit\s+-C\s+"?[^"]*"?\s+add\s+\.github\/CODEOWNERS\b/u.test(command)) return true;
+  if (/\bgit\s+-C\s+"?[^"]*"?\s+commit\s+-m\s+"chore: add context tree code owner mapping"/u.test(command)) return true;
+  if (/\bgit\s+-C\s+"?[^"]*"?\s+push\s+origin\s+"?HEAD:(?:\$default_branch|main)"?/u.test(command)) return true;
+  return false;
+}
+
+function githubGovernanceSideEffectAllowed(command: string, evalCase: FirstTreeSeedEvalCase): boolean {
+  if (evalCase.expected.requireGithubGovernanceBootstrap) return githubGovernanceBootstrapSideEffectAllowed(command);
+  if (evalCase.expected.requireGithubGovernanceRecovery) return githubGovernanceReadSideEffectAllowed(command);
+  return false;
+}
+
 function forbiddenSideEffectHits(
   events: readonly unknown[],
   firstTreeArgv: readonly (readonly string[])[],
@@ -579,6 +767,9 @@ function forbiddenSideEffectHits(
   // `gh repo create` / `git push` / `git commit` below. Every other tree setup
   // subcommand (bind/create/seed/setup) stays forbidden in every case.
   const initExpected = evalCase.expected.action === "create_tree_via_init";
+  const githubGovernanceExpected = Boolean(
+    evalCase.expected.requireGithubGovernanceBootstrap || evalCase.expected.requireGithubGovernanceRecovery,
+  );
   const forbiddenTreeSubcommands = initExpected
     ? ["bind", "create", "seed", "setup"]
     : ["bind", "create", "init", "seed", "setup"];
@@ -596,18 +787,26 @@ function forbiddenSideEffectHits(
   for (const event of events) {
     if (isRecord(event) && eventType(event) === "gh_call" && isModelPhase(event)) {
       const argv = isStringArray(event.argv) ? event.argv : [];
-      if (ghArgvIsForbidden(argv)) {
-        hits.push(`gh ${argv.join(" ")}`.trim());
+      const command = `gh ${argv.join(" ")}`.trim();
+      if (
+        ghArgvIsForbidden(argv) &&
+        !(githubGovernanceExpected && githubGovernanceSideEffectAllowed(command, evalCase))
+      ) {
+        hits.push(command);
       }
     }
     if (!isRecord(event) || eventType(event) !== "codex_event") continue;
     for (const command of collectCommandStrings(event.event)) {
-      if (/\bgh\s+(auth|pr|api)\b/u.test(command)) hits.push(command);
-      if (/\bgh\s+repo\s+(archive|clone|create|delete|deploy-key|edit|fork|rename|set-default|sync)\b/u.test(command)) {
+      const governanceAllowed = githubGovernanceExpected && githubGovernanceSideEffectAllowed(command, evalCase);
+      if (/\bgh\s+(auth|pr|api)\b/u.test(command) && !governanceAllowed) hits.push(command);
+      if (
+        /\bgh\s+repo\s+(archive|clone|create|delete|deploy-key|edit|fork|rename|set-default|sync)\b/u.test(command) &&
+        !governanceAllowed
+      ) {
         hits.push(command);
       }
-      if (/\bgit\s+push\b/u.test(command)) hits.push(command);
-      if (/\bgit\s+commit\b/u.test(command)) hits.push(command);
+      if (/\bgit\s+push\b/u.test(command) && !governanceAllowed) hits.push(command);
+      if (/\bgit\s+commit\b/u.test(command) && !governanceAllowed) hits.push(command);
       if (/\bfirst-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
       if (forbiddenTreeCommandPattern.test(command)) hits.push(command);
     }
@@ -1290,6 +1489,8 @@ export function deriveMetrics(
     firstTreeArgv,
     forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv, evalCase),
     fixtureValidationOk: fixtureValidation.ok,
+    githubGovernanceBootstrapObserved: githubGovernanceBootstrapObserved(events),
+    githubGovernanceRecoveryObserved: githubGovernanceRecoveryObserved(events, finalResponse),
     githubAppRequirementObserved: githubAppRequirementObserved(finalResponse),
     phase2ContinuationObserved: phase2ContinuationObserved(finalResponse),
     phase2LeafContentObserved: phase2LeafContentObserved(finalResponse),
@@ -1324,7 +1525,13 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (!metrics.seedSkillFileReadObserved) return false;
   if (!metrics.workspaceManifestReadObserved) return false;
   if (evalCase.expected.requireChatHistoryRead && !metrics.chatHistoryReadObserved) return false;
-  if (metrics.contextTreeChanged) return false;
+  if (evalCase.expected.requireGithubGovernanceBootstrap && !metrics.githubGovernanceBootstrapObserved) return false;
+  if (evalCase.expected.requireGithubGovernanceRecovery && !metrics.githubGovernanceRecoveryObserved) return false;
+  const expectedContextTreeCreation = Boolean(
+    evalCase.expected.action === "create_tree_via_init" &&
+      (evalCase.expected.requireGithubGovernanceBootstrap || evalCase.expected.requireGithubGovernanceRecovery),
+  );
+  if (metrics.contextTreeChanged && !expectedContextTreeCreation) return false;
   if (metrics.sourceRepoChanged) return false;
   if (metrics.forbiddenActionHits.length > 0) return false;
   if (metrics.forbiddenSideEffectHits.length > 0) return false;
@@ -1372,6 +1579,9 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   }
 
   if (evalCase.expected.action === "create_tree_via_init") {
+    const githubGovernancePass =
+      (!evalCase.expected.requireGithubGovernanceBootstrap || metrics.githubGovernanceBootstrapObserved) &&
+      (!evalCase.expected.requireGithubGovernanceRecovery || metrics.githubGovernanceRecoveryObserved);
     // PASS only when the state check routes to `tree init` WITH a `--dir` resolving to
     // the workspace `context-tree`. `tree init` without that `--dir` (or with a
     // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
@@ -1393,6 +1603,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     // source read is off-contract).
     return (
       metrics.treeInitWithContextTreeDirObserved &&
+      githubGovernancePass &&
       !metrics.directBareSourceContentReadObserved &&
       !metrics.sourceWorktreeCreated &&
       !metrics.sourceWorktreeAccessObserved
@@ -1434,6 +1645,12 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (metrics.directBareSourceContentReadObserved) {
     notes.push("Model attempted to read source files directly from the bare source repo path.");
+  }
+  if (evalCase.expected.requireGithubGovernanceBootstrap && !metrics.githubGovernanceBootstrapObserved) {
+    notes.push("Required GitHub governance bootstrap was not observed in the event trace.");
+  }
+  if (evalCase.expected.requireGithubGovernanceRecovery && !metrics.githubGovernanceRecoveryObserved) {
+    notes.push("Required GitHub governance recovery guidance was not observed.");
   }
   if (metrics.contextTreeChanged) {
     notes.push("Context Tree fixture changed; seed gate cases must stop before writing or deleting tree content.");

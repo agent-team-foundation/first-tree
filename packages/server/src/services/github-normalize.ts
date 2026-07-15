@@ -1,4 +1,4 @@
-import type { InvolveReason, NormalizedEvent, NormalizedEventKind, WebhookSource } from "@first-tree/shared";
+import type { InvolveReason, NormalizedEventKind, NormalizedScmEvent, ScmIngressContext } from "@first-tree/shared";
 import { extractEventEntity, type GithubEntity, isRecord, parseFixesRefs } from "../api/webhooks/github-entity.js";
 
 const MENTION_REGEX = /(?<!\w)@([a-zA-Z0-9][\w-]*)(\/)?/g;
@@ -38,7 +38,7 @@ function readStringArray(value: unknown): string[] {
   return out;
 }
 
-type InvolveItem = { githubLogin: string; reason: InvolveReason };
+type InvolveItem = { externalUsername: string; reason: InvolveReason };
 
 function buildInvolves(items: ReadonlyArray<{ logins: string[]; reason: InvolveReason }>): InvolveItem[] {
   // First-occurrence wins per (lowercased) login. Callers should list
@@ -52,7 +52,7 @@ function buildInvolves(items: ReadonlyArray<{ logins: string[]; reason: InvolveR
       const key = login.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ githubLogin: key, reason: group.reason });
+      out.push({ externalUsername: key, reason: group.reason });
     }
   }
   return out;
@@ -97,9 +97,8 @@ type RuleOutcome = {
 export function normalizeGithubEvent(
   eventType: string,
   payload: unknown,
-  source: WebhookSource,
-  deliveryId: string | null,
-): NormalizedEvent | null {
+  ingress: ScmIngressContext,
+): NormalizedScmEvent | null {
   if (!isRecord(payload)) return null;
 
   const senderRec = isRecord(payload.sender) ? payload.sender : null;
@@ -116,20 +115,19 @@ export function normalizeGithubEvent(
   if (!rule) return null;
 
   return {
-    source,
-    deliveryId,
-    rawEventType: eventType,
-    rawAction: action,
+    ...ingress,
+    eventType,
+    action,
     entity: {
       type: rule.entity.type,
-      repo,
+      projectKey: repo,
       key: rule.entity.key,
       title: rule.entity.title,
       url: rule.entity.url,
     },
-    actor: { githubLogin: senderLogin, isBot: senderIsBot },
+    actor: { externalUsername: senderLogin, isBot: senderIsBot },
     kind: rule.kind,
-    involves: rule.involves,
+    targets: rule.involves,
     surface: rule.surface,
     relatedRefs: rule.relatedRefs,
   };

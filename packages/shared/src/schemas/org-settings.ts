@@ -53,7 +53,7 @@ import { z } from "zod";
 //     forbids `:` and `@` (already consumed by the earlier captures), and
 //     can't start with `/` (legal scp paths start with the first repo path
 //     segment, e.g. `owner/repo.git`)
-const SCP_LIKE_SSH_RE = /^(?:[A-Za-z0-9_.-]+@)?[A-Za-z0-9.-]+:(?!\d+(?:\/|$))[^/:@\s][^:@\s]*$/;
+const SCP_LIKE_SSH_RE = /^(?:[A-Za-z0-9_.-]+@)?[A-Za-z0-9_.-]+:(?!\d+(?:\/|$))[^/:@\s][^:@\s]*$/;
 
 function isScpLikeSshUrl(value: string): boolean {
   // Belt-and-braces guard: anything containing `://` is a URL form, not
@@ -112,17 +112,225 @@ export const repoUrlSchema = z
 
 // -- context_tree --
 
+const LINE_BREAK_RE = /[\r\n\u2028\u2029]/;
+const CONTEXT_TREE_URL_FORM_RE = /^(?:https|ssh):\/\/[^/\\\s]/i;
+const MALFORMED_HTTP_URL_PREFIX_RE = /^https?:/i;
+const WINDOWS_DRIVE_PATH_RE = /^[A-Za-z]:/;
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f));
+  });
+}
+
+function hasUnpairedUtf16Surrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || nextCodeUnit < 0xdc00 || nextCodeUnit > 0xdfff) return true;
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return true;
+  }
+  return false;
+}
+
+function isValidGitBranchName(value: string): boolean {
+  if (
+    value.length === 0 ||
+    hasUnpairedUtf16Surrogate(value) ||
+    value === "HEAD" ||
+    value.startsWith("-") ||
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.endsWith(".") ||
+    value.includes("//") ||
+    value.includes("..") ||
+    value.includes("@{")
+  ) {
+    return false;
+  }
+
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined || codePoint <= 0x20 || codePoint === 0x7f || "~^:?*[\\".includes(character)) {
+      return false;
+    }
+  }
+
+  return value.split("/").every((component) => !component.startsWith(".") && !component.endsWith(".lock"));
+}
+
+/**
+ * Context Tree bindings are consumed directly by the local git client, so the
+ * write boundary is intentionally stricter than the historical storage shape.
+ * The generic `repoUrlSchema` remains wider for existing rows and other repo
+ * settings, while new Context Tree values must include a host and repo path and
+ * must not rely on URL parser whitespace/control-character normalization.
+ */
+export const contextTreeRepoSchema = repoUrlSchema.superRefine((value, ctx) => {
+  if (value.trim() !== value) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not have leading or trailing whitespace.",
+    });
+  }
+  if (hasControlCharacter(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not contain control characters.",
+    });
+  }
+  if (hasUnpairedUtf16Surrogate(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not contain unpaired UTF-16 surrogates.",
+    });
+  }
+  if (LINE_BREAK_RE.test(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not contain line separators.",
+    });
+  }
+  if (value.includes("\\")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must use URL or SSH path separators.",
+    });
+  }
+  if (value.includes("?") || value.includes("#")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must not include a query or fragment.",
+    });
+  }
+
+  if (
+    isScpLikeSshUrl(value) &&
+    !MALFORMED_HTTP_URL_PREFIX_RE.test(value) &&
+    !WINDOWS_DRIVE_PATH_RE.test(value) &&
+    !value.includes("\\")
+  ) {
+    return;
+  }
+
+  // WHATWG URL parsing repairs malformed authority delimiters and converts
+  // backslashes to slashes for special schemes. Require the transport form
+  // in the raw input so validation matches what `git clone` will execute.
+  if (!CONTEXT_TREE_URL_FORM_RE.test(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must use https://, ssh://, or scp-like SSH syntax.",
+    });
+    return;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return;
+  }
+  if (!url.hostname || !url.pathname.split("/").some((segment) => segment.length > 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Tree repo must include a host and repository path.",
+    });
+  }
+});
+
+export const contextTreeBranchSchema = z
+  .string()
+  .min(1)
+  .superRefine((value, ctx) => {
+    if (value.trim() !== value) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must not have leading or trailing whitespace.",
+      });
+    }
+    if (LINE_BREAK_RE.test(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must be a single line.",
+      });
+    }
+    if (hasControlCharacter(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must not contain control characters.",
+      });
+    }
+    if (!isValidGitBranchName(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Tree branch must be a valid Git branch name.",
+      });
+    }
+  });
+
+export const contextTreeActiveBindingSchema = z
+  .object({
+    repo: contextTreeRepoSchema,
+    branch: contextTreeBranchSchema.nullish().transform((branch) => branch ?? "main"),
+  })
+  .strict();
+
 export const orgContextTreeStorageSchema = z.object({
-  repo: repoUrlSchema.optional(),
+  // Historical rows predate the strict write boundary. Keep storage loose so
+  // an administrator can read and replace an invalid legacy binding.
+  repo: z.string().optional(),
   branch: z.string().default("main"),
 });
 
-export const orgContextTreeInputSchema = z.object({
-  /** Set / replace (HTTPS, ssh://, or scp-like — no embedded credentials). `null` clears. `undefined` leaves unchanged. */
-  repo: repoUrlSchema.nullish(),
-  /** Set / replace (non-empty). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
-  branch: z.string().min(1).nullish(),
-});
+export type ContextTreeSettingState =
+  | { kind: "bound"; binding: ContextTreeActiveBinding }
+  | { kind: "unbound"; branch: string }
+  | { kind: "invalid" };
+
+/**
+ * Classify a raw Context Tree setting without exposing invalid historical
+ * values. This mirrors a future repo-only update: storage must first satisfy
+ * the historical shape, then the retained branch and any active binding must
+ * satisfy the strict runtime contract.
+ */
+export function classifyContextTreeSetting(value: unknown): ContextTreeSettingState {
+  const storage = orgContextTreeStorageSchema.safeParse(value);
+  if (!storage.success) return { kind: "invalid" };
+
+  if (storage.data.repo === undefined) {
+    const branch = contextTreeBranchSchema.safeParse(storage.data.branch);
+    return branch.success ? { kind: "unbound", branch: branch.data } : { kind: "invalid" };
+  }
+
+  const binding = contextTreeActiveBindingSchema.safeParse(storage.data);
+  return binding.success ? { kind: "bound", binding: binding.data } : { kind: "invalid" };
+}
+
+export const orgContextTreeInputSchema = z
+  .object({
+    /** Set / replace (HTTPS, ssh://, or scp-like — no embedded credentials). `null` clears. `undefined` leaves unchanged. */
+    repo: contextTreeRepoSchema.nullish(),
+    /** Set / replace (valid Git branch name). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
+    branch: contextTreeBranchSchema.nullish(),
+  })
+  .strict();
+
+/**
+ * Conflict-safe finalization used by `tree init`. It is served from a dedicated
+ * endpoint so older servers return 404 without reaching a generic write path.
+ */
+export const orgContextTreeFinalizeInputSchema = z
+  .object({
+    repo: contextTreeRepoSchema,
+    branch: contextTreeBranchSchema,
+    expectedUnboundBranch: contextTreeBranchSchema,
+  })
+  .strict();
 
 export const orgContextTreeOutputSchema = z.object({
   repo: z.string().optional(),
@@ -287,6 +495,7 @@ export type OrgSettingOutput<K extends OrgSettingNamespace> = z.infer<(typeof OR
 export type OrgContextTreeStorage = OrgSettingStorage<"context_tree">;
 export type OrgContextTreeInput = OrgSettingInput<"context_tree">;
 export type OrgContextTreeOutput = OrgSettingOutput<"context_tree">;
+export type ContextTreeActiveBinding = z.infer<typeof contextTreeActiveBindingSchema>;
 
 export type OrgSourceReposStorage = OrgSettingStorage<"source_repos">;
 export type OrgSourceReposInput = OrgSettingInput<"source_repos">;

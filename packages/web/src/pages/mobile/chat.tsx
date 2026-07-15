@@ -18,7 +18,7 @@ import {
   MobileSystemState,
   mobileCardStyle,
 } from "./components.js";
-import { mobileChatPreview, mobileChatSignal, sortMobileChats } from "./data.js";
+import { mobileChatListSignal, mobileChatPreview, mobileRowsFromList, sortMobileChats } from "./data.js";
 
 type MobileChatView = "all" | "unread" | "watching";
 
@@ -87,7 +87,7 @@ function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
       }),
     refetchInterval: 30_000,
   });
-  const rows = sortMobileChats(chatsQuery.data?.rows ?? []);
+  const rows = sortMobileChats(mobileRowsFromList(chatsQuery.data));
 
   return (
     <MobilePage className="flex flex-col" padded>
@@ -136,15 +136,13 @@ function MobileChatRow({
   selfAgentId: string;
   onSelect: (chatId: string) => void;
 }) {
-  const signal = mobileChatSignal(row);
+  const signal = mobileChatListSignal(row);
   return (
     <button
       type="button"
       onClick={() => onSelect(row.chatId)}
       className="w-full text-left transition-colors hover:bg-[var(--bg-hover)]"
-      style={{
-        ...mobileCardStyle("list"),
-      }}
+      style={mobileCardStyle("list")}
       data-mobile-card="list"
     >
       <div className="flex items-start" style={{ gap: "var(--sp-3)" }}>

@@ -631,6 +631,40 @@ describe("POST /webhooks/github-app", () => {
     expect(res.json()).toMatchObject({ ok: true, event: "star", handled: false });
   });
 
+  it("does not claim a supported event when x-github-delivery is absent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100023;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const claimSpy = vi.spyOn(eventDedupService, "claimEvent");
+    const payload = {
+      action: "opened",
+      issue: {
+        number: 923,
+        title: "No delivery id",
+        html_url: "https://github.com/owner/repo/issues/923",
+        body: "",
+        assignees: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    };
+
+    try {
+      const first = await postWebhook(app, "issues", payload, { skipDelivery: true });
+      const second = await postWebhook(app, "issues", payload, { skipDelivery: true });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toMatchObject({ event: "issues", audience: 0 });
+      expect(second.statusCode).toBe(200);
+      expect(second.json()).toMatchObject({ event: "issues", audience: 0 });
+      expect(claimSpy).not.toHaveBeenCalled();
+    } finally {
+      claimSpy.mockRestore();
+    }
+  });
+
   it("derives PR state seeds from issue comment payload fallbacks", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -745,7 +779,7 @@ describe("POST /webhooks/github-app", () => {
     const deliveryId = randomUUID();
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const audienceSpy = vi
-      .spyOn(githubAudienceService, "resolveAudience")
+      .spyOn(githubAudienceService, "resolveGithubAudience")
       .mockRejectedValueOnce(new Error("audience down"));
     const unclaimSpy = vi.spyOn(eventDedupService, "unclaimEvent").mockRejectedValueOnce(new Error("unclaim down"));
 

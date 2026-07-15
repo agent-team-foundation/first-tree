@@ -17,6 +17,7 @@ import type {
   ContextTreeUsageSummary,
   ContextTreeWriteEvent,
 } from "@first-tree/shared";
+import { contextTreeBranchSchema } from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
 import matter from "gray-matter";
 import { type TimingSink, timeSyncWithSink, timeWithSink } from "../observability/timing.js";
@@ -269,7 +270,7 @@ async function resolveContextTreeRoot(
 
   if (isRemoteRepo(repo)) {
     const resolvedBranch = branch ?? "main";
-    if (!isSafeBranchName(resolvedBranch)) {
+    if (!contextTreeBranchSchema.safeParse(resolvedBranch).success) {
       return {
         root: null,
         reason: `Configured Context Tree branch "${resolvedBranch}" is invalid.`,
@@ -547,12 +548,6 @@ function emptyIoSummary(window: ContextTreeSnapshotWindow): ContextTreeIoSummary
     writesTotal: 0,
     skipped: { windowDays: WINDOW_DAYS[window], totalEventCount: 0, reasons: [] },
   };
-}
-
-function isSafeBranchName(branch: string): boolean {
-  if (branch.startsWith("-")) return false;
-  if (branch.includes("..") || branch.includes("@{") || branch.includes("\\")) return false;
-  return /^[A-Za-z0-9._/-]+$/.test(branch);
 }
 
 function errorMessage(error: unknown): string {

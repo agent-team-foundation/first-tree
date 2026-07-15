@@ -16,6 +16,10 @@ export function getContextTreeSetting(orgId: string): Promise<OrgContextTreeOutp
   return api.get<OrgContextTreeOutput>(path(orgId, "context_tree"));
 }
 
+export function getRawContextTreeSetting(orgId: string): Promise<OrgContextTreeOutput> {
+  return api.get<OrgContextTreeOutput>(`${path(orgId, "context_tree")}/raw`);
+}
+
 export function putContextTreeSetting(orgId: string, body: OrgContextTreeInput): Promise<OrgContextTreeOutput> {
   return api.put<OrgContextTreeOutput>(path(orgId, "context_tree"), body);
 }

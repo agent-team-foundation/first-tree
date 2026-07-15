@@ -6,6 +6,7 @@ import { listAllAgents, type ManagedAgent } from "../api/agents.js";
 import {
   getContextTreeFeaturesSetting,
   getContextTreeSetting,
+  getRawContextTreeSetting,
   putContextTreeFeaturesSetting,
   putContextTreeSetting,
 } from "../api/org-settings.js";
@@ -38,8 +39,13 @@ export function ContextTreeSettingsPanel() {
   const navigate = useNavigate();
 
   const settingQuery = useQuery({
-    queryKey: ["org-setting", organizationId, "context_tree"],
-    queryFn: () => (organizationId ? getContextTreeSetting(organizationId) : Promise.reject(new Error("no org"))),
+    queryKey: ["org-setting", organizationId, "context_tree", isAdmin ? "raw" : "safe"],
+    queryFn: () =>
+      organizationId
+        ? isAdmin
+          ? getRawContextTreeSetting(organizationId)
+          : getContextTreeSetting(organizationId)
+        : Promise.reject(new Error("no org")),
     enabled: !!organizationId,
   });
 
@@ -64,7 +70,8 @@ export function ContextTreeSettingsPanel() {
       });
     },
     onSuccess: (next) => {
-      queryClient.setQueryData(["org-setting", organizationId, "context_tree"], next);
+      queryClient.setQueryData(["org-setting", organizationId, "context_tree", "raw"], next);
+      queryClient.setQueryData(["org-setting", organizationId, "context_tree", "safe"], next);
       setSaved(true);
       setEditing(false);
       setTimeout(() => setSaved(false), 2000);

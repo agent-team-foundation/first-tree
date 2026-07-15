@@ -129,7 +129,7 @@ const STARTUP_FETCH_TIMEOUT_MS = 5_000;
  * `sendMessage` / `listMessages` paths); startup-critical GETs override
  * with `STARTUP_FETCH_TIMEOUT_MS`.
  */
-type SdkCallOptions = { timeoutMs?: number; retry?: boolean };
+type SdkCallOptions = { timeoutMs?: number; retry?: boolean; logRetries?: boolean };
 
 /**
  * Node-level error codes (undici / DNS / TCP) treated as transient by the
@@ -496,6 +496,47 @@ export class FirstTreeHubSDK {
     return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
   }
 
+  /** Bind Context Tree configuration for this SDK's authenticated agent organization. */
+  public async setAgentContextTreeConfig(input: { repo: string; branch?: string }): Promise<ContextTreeConfig> {
+    this.logger.debug(
+      { agentId: this._agentId, stage: "resolve_agent_organization" },
+      "context tree binding update started",
+    );
+    const agent = await this.requestJson<unknown>("/api/v1/agent/me", { redirect: "manual" }, { logRetries: false });
+    const organizationId =
+      typeof agent === "object" &&
+      agent !== null &&
+      "organizationId" in agent &&
+      typeof agent.organizationId === "string"
+        ? agent.organizationId
+        : undefined;
+    if (!organizationId || organizationId.trim() !== organizationId) {
+      throw new SyntaxError(
+        "Invalid response from GET /api/v1/agent/me: organizationId must be a non-empty, unpadded string",
+      );
+    }
+
+    this.logger.debug(
+      { agentId: this._agentId, organizationId, stage: "update_org_setting" },
+      "context tree binding organization resolved",
+    );
+    const body = input.branch === undefined ? { repo: input.repo } : { repo: input.repo, branch: input.branch };
+    const config = await this.requestJson<ContextTreeConfig>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/settings/context_tree`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+        redirect: "manual",
+      },
+      { retry: false },
+    );
+    this.logger.debug(
+      { agentId: this._agentId, organizationId, stage: "complete" },
+      "context tree binding update completed",
+    );
+    return config;
+  }
+
   /**
    * Upload bytes to the server's object-storage primitive. Returns the
    * stored attachment's metadata; the `id` is what upstream consumers
@@ -684,7 +725,9 @@ export class FirstTreeHubSDK {
         const response = await this.doFetchOnce(path, init, opts);
         const isLastAttempt = attempt === delays.length - 1;
         if (response.status >= 500 && !isLastAttempt) {
-          this.logger.warn(`retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
+          if (opts?.logRetries !== false) {
+            this.logger.warn(`retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
+          }
           lastErr = new Error(`HTTP ${response.status}`);
           continue;
         }
@@ -693,7 +736,7 @@ export class FirstTreeHubSDK {
         lastErr = err;
         if (!isTransientNetworkError(err)) throw err;
         const isLastAttempt = attempt === delays.length - 1;
-        if (!isLastAttempt) {
+        if (!isLastAttempt && opts?.logRetries !== false) {
           this.logger.warn(`retry attempt=${attempt + 1} reason=${classifyRetryReason(err)} path=${path}`);
         }
       }

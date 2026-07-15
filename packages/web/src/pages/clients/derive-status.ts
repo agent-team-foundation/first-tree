@@ -90,3 +90,109 @@ export function compareByPillPriority(a: HubClient, b: HubClient): number {
 
   return a.id.localeCompare(b.id);
 }
+
+/**
+ * A version parsed into a same-channel comparable form. Only the two shapes
+ * First Tree's durable channel contract accepts are supported (mirrors
+ * `inferChannelFromVersion` in `@first-tree/shared`'s channel module):
+ *   - prod:    `X.Y.Z`             → { channel: "prod",    parts: ["X","Y","Z"] }
+ *   - staging: `X.Y.Z-staging.N.M` → { channel: "staging", parts: ["X".."M"] }
+ * Each component is a SemVer-valid numeric identifier — no leading zeros, so
+ * `01.4.0` / `…staging.049.1` are rejected the same way `semver.valid` does.
+ * Parts stay as strings and are compared digit-wise (below) so ordering is
+ * exact past `Number.MAX_SAFE_INTEGER`. Anything else — dev, alpha/beta/rc,
+ * partial (`1.4`), leading-zero, or otherwise malformed — returns null so
+ * callers fail closed.
+ */
+type ParsedVersion = { channel: "prod" | "staging"; parts: string[] };
+
+// SemVer numeric identifier: 0, or a non-zero digit followed by any digits.
+const PROD_VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const STAGING_VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+function parseSupportedVersion(version: string | null | undefined): ParsedVersion | null {
+  if (!version) return null;
+  const staging = STAGING_VERSION_RE.exec(version);
+  if (staging) return { channel: "staging", parts: staging.slice(1) };
+  const prod = PROD_VERSION_RE.exec(version);
+  if (prod) return { channel: "prod", parts: prod.slice(1) };
+  return null;
+}
+
+/**
+ * Compare two SemVer-valid numeric identifiers (digit strings, no leading
+ * zeros) without `Number` precision loss: more digits ⇒ larger, otherwise
+ * lexicographic.
+ */
+function compareNumericIdentifier(a: string, b: string): number {
+  if (a.length !== b.length) return a.length - b.length;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function comparePartsAscending(a: string[], b: string[]): number {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const cmp = compareNumericIdentifier(a[i] ?? "0", b[i] ?? "0");
+    if (cmp !== 0) return cmp;
+  }
+  return 0;
+}
+
+/**
+ * Has a recorded failed/blocked update since been resolved? Only a **valid,
+ * same-channel** current version at or beyond a **valid** target clears the
+ * historical failure. Malformed, unknown/mismatched-channel, or missing
+ * versions fail closed (return false) so a genuine failure is never hidden by
+ * an unparseable version — e.g. a staging build never counts as having reached
+ * a stable prod target (prerelease < stable), and `garbage999` never outranks
+ * `1.4.0`.
+ */
+function updateResolved(current: string | null | undefined, target: string): boolean {
+  const c = parseSupportedVersion(current);
+  const t = parseSupportedVersion(target);
+  if (!c || !t || c.channel !== t.channel) return false;
+  return comparePartsAscending(c.parts, t.parts) >= 0;
+}
+
+/**
+ * A `failed` / `blocked` self-update leaves the machine stuck on an old
+ * version. The server exposes it (`lastUpdateAttempt`) precisely so the admin
+ * dashboard can flag it — it needs attention even while the client is
+ * otherwise connected with an OK runtime (so the 4-state pill reads `Ready`).
+ *
+ * The record is the *last* attempt, not a live "still stuck" flag, and the
+ * manual recovery paths (`first-tree upgrade` / manual reinstall) don't write
+ * an `ok` attempt or clear it. So a machine that has since reached the target
+ * carries a stale failure — treat it as a problem unless we can prove, within
+ * one accepted channel, that the reported version reached/passed the target.
+ */
+export function hasUpdateProblem(client: HubClient): boolean {
+  const attempt = client.lastUpdateAttempt;
+  if (attempt?.result !== "failed" && attempt?.result !== "blocked") return false;
+  return !updateResolved(client.sdkVersion, attempt.target);
+}
+
+/**
+ * Whether a computer belongs in the Team-list "Needs attention" group: any
+ * non-`ready` runtime pill (auth-expired / setup-incomplete / offline) OR a
+ * failed/blocked self-update on an otherwise-ready machine. This is the audit
+ * view's health predicate — broader than the pill alone so a stuck update is
+ * never hidden under `Ready`.
+ */
+export function teamNeedsAttention(client: HubClient): boolean {
+  return deriveComputerStatus(client).pill !== "ready" || hasUpdateProblem(client);
+}
+
+/**
+ * Split a team-computer list into the "Needs attention" and "Ready" groups,
+ * each pill-priority sorted (problems first; a Ready-but-update-stuck machine
+ * sorts after the true pill problems since its pill is still `ready`).
+ */
+export function partitionTeamComputers(clients: HubClient[]): { attention: HubClient[]; ready: HubClient[] } {
+  const attention: HubClient[] = [];
+  const ready: HubClient[] = [];
+  for (const client of [...clients].sort(compareByPillPriority)) {
+    (teamNeedsAttention(client) ? attention : ready).push(client);
+  }
+  return { attention, ready };
+}

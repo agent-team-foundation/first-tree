@@ -25,7 +25,11 @@ describe("MobileChatPage document-evidence surface", () => {
   beforeEach(() => {
     harness = createDomHarness();
     meChatMocks.listMeChats.mockReset();
-    meChatMocks.listMeChats.mockResolvedValue({ rows: [] });
+    meChatMocks.listMeChats.mockResolvedValue({
+      priorityRows: { attention: [], pinned: [] },
+      rows: [],
+      nextCursor: null,
+    });
   });
 
   it("mounts the document preview drawer so captured doc links are not a no-op", async () => {
@@ -43,5 +47,6 @@ describe("MobileChatPage document-evidence surface", () => {
     await harness.waitFor(() =>
       expect(harness.container.querySelector('[data-testid="mobile-doc-drawer"]')).not.toBeNull(),
     );
+    await harness.waitFor(() => expect(harness.container.textContent).toContain("No chats"));
   });
 });

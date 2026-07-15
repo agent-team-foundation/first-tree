@@ -36,6 +36,7 @@ import {
   X as XIcon,
 } from "lucide-react";
 import {
+  type CSSProperties,
   memo,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -52,12 +53,7 @@ import { useSearchParams } from "react-router";
 import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
-import {
-  downloadAttachment,
-  fetchAttachmentBase64,
-  uploadAttachment,
-  uploadMimeFor,
-} from "../../../api/attachments.js";
+import { downloadAttachment, uploadAttachment, uploadMimeFor } from "../../../api/attachments.js";
 import {
   type FileMessageContent,
   getChat,
@@ -74,7 +70,7 @@ import {
   sendChatMessage,
   sendFileMessageBatch,
 } from "../../../api/chats.js";
-import { getImage, putImage } from "../../../api/image-store.js";
+import { putImage } from "../../../api/image-store.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
@@ -87,6 +83,7 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
+import { sendAskAnswer } from "../../../components/chat/ask-answer-transport.js";
 import { type AskAnswer, AskTakeover } from "../../../components/chat/ask-takeover.js";
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
@@ -122,6 +119,7 @@ import {
 } from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
+import { ImageLightbox, type LightboxImage } from "../../../components/ui/image-lightbox.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
@@ -137,6 +135,7 @@ import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-nam
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
+import { useImageSrc } from "../../../lib/use-image-src.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
@@ -492,16 +491,18 @@ function ErrorRow({
         borderRadius: "0 var(--radius-input) var(--radius-input) 0",
       }}
     >
-      <div className="mono uppercase text-caption" style={{ color }}>
+      <div data-error-header className="mono uppercase text-caption" style={{ color, overflowWrap: "anywhere" }}>
         {label}
         {agentName ? ` · ${agentName}` : ""} · {payload?.source ?? "unknown"} · {ts}
       </div>
       <div
+        data-error-message
         className="text-label"
         style={{
           marginTop: 2,
           color: "var(--fg-2)",
           whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
         }}
       >
         {message}
@@ -757,13 +758,9 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           rehypePlugins={messageRehypePlugins}
         />
       ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
-        <img
-          src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
-          alt={msg.content.filename ?? "image"}
-          style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-        />
+        <InlineImage content={msg.content} />
       ) : msg.format === "file" && isImageRefContent(msg.content) ? (
-        <ImageFromRef content={msg.content} />
+        <StandaloneImageRef content={msg.content} />
       ) : msg.format === "text" || msg.format === "markdown" || msg.format === "request" ? (
         // A `request` ("ask") renders as a normal message — just its markdown
         // body. The answering surface is the AskTakeover overlay; the timeline
@@ -869,9 +866,12 @@ const MessageRow = memo(function MessageRow({
         </AgentHovercard>
       )}
       <div className="min-w-0">
-        <div className="flex items-baseline" style={{ gap: 8 }}>
+        <div className="flex flex-wrap items-baseline" style={{ gap: 8 }}>
           {isSystem || isTrial ? (
-            <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+            <span
+              className="mono text-body font-semibold"
+              style={{ color: isSelf ? "var(--fg)" : "var(--primary)", minWidth: 0, overflowWrap: "anywhere" }}
+            >
               {senderName}
             </span>
           ) : (
@@ -880,9 +880,12 @@ const MessageRow = memo(function MessageRow({
               chatId={msg.chatId}
               name={senderName}
               placement="bottom"
-              triggerClassName="cursor-pointer hover:underline"
+              triggerClassName="min-w-0 max-w-full cursor-pointer text-left hover:underline"
             >
-              <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
+              <span
+                className="mono text-body font-semibold"
+                style={{ color: isSelf ? "var(--fg)" : "var(--primary)", minWidth: 0, overflowWrap: "anywhere" }}
+              >
                 {senderName}
               </span>
             </AgentHovercard>
@@ -1049,48 +1052,75 @@ function isInlineImageContent(content: unknown): content is FileMessageContent {
 }
 
 /**
- * Render an image referenced by `{imageId}`. The per-browser IndexedDB cache
- * is consulted first (sender's own sends warm it on send); on a miss the bytes
- * are fetched from the org attachment store and the cache is warmed for next
- * time. Only a failed fetch (deleted attachment / network) falls through to
- * the placeholder.
+ * Chat-image thumbnail styling.
+ *
+ * - `standalone` (a single-image message): shown at its natural aspect within
+ *   a width AND height cap, so a tall image no longer runs the full column.
+ * - `gallery` (a multi-image batch): aligned to one common row height so mixed
+ *   aspect ratios read as one tidy row — the fix for the old `flex` default
+ *   `align-items: stretch`, which stretched every sibling to the tallest one.
+ *
+ * The width caps are `min(<desktop cap>, 100%)` so they never exceed the
+ * (narrow, on mobile) message column — an inline `maxWidth` would otherwise
+ * override the responsive `img { max-width: 100% }` preflight and overflow the
+ * shared mobile chat surface. Neither variant upscales past the source; both
+ * open the lightbox on click. The wrapping button carries `minWidth: 0` so a
+ * gallery flex item can shrink below its intrinsic width on a narrow column.
  */
-function ImageFromRef({ content }: { content: ImageRefContent }) {
-  const [state, setState] = useState<{ kind: "loading" } | { kind: "hit"; src: string } | { kind: "miss" }>({
-    kind: "loading",
-  });
+const STANDALONE_IMG_STYLE = {
+  maxWidth: "min(25rem, 100%)",
+  maxHeight: 360,
+  borderRadius: "var(--radius-panel)",
+  cursor: "zoom-in",
+  display: "block",
+} satisfies CSSProperties;
+const GALLERY_IMG_STYLE = {
+  height: 172,
+  width: "auto",
+  maxWidth: "min(28.75rem, 100%)",
+  objectFit: "cover",
+  borderRadius: "var(--radius-panel)",
+  cursor: "zoom-in",
+  display: "block",
+} satisfies CSSProperties;
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const hit = await getImage(content.imageId);
-      if (cancelled) return;
-      if (hit) {
-        setState({ kind: "hit", src: `data:${hit.mimeType};base64,${hit.base64}` });
-        return;
-      }
-      try {
-        const fetched = await fetchAttachmentBase64(content.imageId);
-        if (cancelled) return;
-        // Warm the cache for subsequent renders; best-effort.
-        putImage({ imageId: content.imageId, base64: fetched.base64, mimeType: fetched.mimeType }).catch(() => {});
-        setState({ kind: "hit", src: `data:${fetched.mimeType};base64,${fetched.base64}` });
-      } catch {
-        if (!cancelled) setState({ kind: "miss" });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [content.imageId]);
+/**
+ * Clickable thumbnail for an image referenced by `{imageId}`. Bytes resolve
+ * via {@link useImageSrc} (IndexedDB cache first, then the org attachment
+ * store, warming the cache) — the sender's own sends and any already-rendered
+ * thumbnail keep it warm, so the click-through to the lightbox is instant. A
+ * failed fetch (deleted attachment / network) falls through to a placeholder.
+ * The owning wrapper (standalone or batch) holds the lightbox and is notified
+ * via `onOpen`.
+ */
+function ImageFromRef({
+  content,
+  variant,
+  onOpen,
+}: {
+  content: ImageRefContent;
+  variant: "standalone" | "gallery";
+  onOpen: () => void;
+}) {
+  const state = useImageSrc(content.imageId);
 
   if (state.kind === "hit") {
     return (
-      <img
-        src={state.src}
-        alt={content.filename}
-        style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-      />
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open image ${content.filename}`}
+        className="block border-none bg-transparent p-0"
+        // `minWidth: 0` lets a gallery flex item shrink below the image's
+        // intrinsic width on a narrow column instead of overflowing.
+        style={{ marginTop: variant === "standalone" ? 4 : 0, maxWidth: "100%", minWidth: 0 }}
+      >
+        <img
+          src={state.src}
+          alt={content.filename}
+          style={variant === "standalone" ? STANDALONE_IMG_STYLE : GALLERY_IMG_STYLE}
+        />
+      </button>
     );
   }
   if (state.kind === "miss") {
@@ -1108,10 +1138,49 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
 }
 
 /**
+ * A single-image `{imageId}` message: the thumbnail plus its own lightbox.
+ */
+function StandaloneImageRef({ content }: { content: ImageRefContent }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const images: LightboxImage[] = [{ imageId: content.imageId, filename: content.filename }];
+  return (
+    <>
+      <ImageFromRef content={content} variant="standalone" onOpen={() => setOpenIndex(0)} />
+      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
+    </>
+  );
+}
+
+/**
+ * A single inline base64 image message (no attachment row): the thumbnail plus
+ * its own lightbox. Download in the lightbox saves the `data:` URL directly.
+ */
+function InlineImage({ content }: { content: FileMessageContent }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const filename = content.filename ?? "image";
+  const dataSrc = `data:${content.mimeType};base64,${content.data}`;
+  const images: LightboxImage[] = [{ dataSrc, filename }];
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpenIndex(0)}
+        aria-label={`Open image ${filename}`}
+        className="block border-none bg-transparent p-0"
+        style={{ marginTop: 4, maxWidth: "100%", minWidth: 0 }}
+      >
+        <img src={dataSrc} alt={filename} style={STANDALONE_IMG_STYLE} />
+      </button>
+      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
+    </>
+  );
+}
+
+/**
  * Render a batched image message: optional caption rendered as markdown
  * (matching the regular text path so mention chips and links look the
- * same), followed by each attachment via {@link ImageFromRef}. One bubble
- * per send, regardless of how many images the user attached.
+ * same), then the images as a tidy equal-height gallery. One bubble per send,
+ * one shared lightbox that pages through the batch.
  */
 function ImageBatchFromRef({
   content,
@@ -1123,6 +1192,14 @@ function ImageBatchFromRef({
   rehypePlugins: MarkdownProps["rehypePlugins"];
 }) {
   const caption = content.caption?.trim() ?? "";
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const images: LightboxImage[] = content.attachments.map((att) => ({
+    imageId: att.imageId,
+    filename: att.filename,
+  }));
+  // A batch of one (the composer sends even a single image this way) reads as a
+  // single image, not a lone gallery tile: show it at the larger standalone size.
+  const only = content.attachments.length === 1 ? content.attachments[0] : undefined;
   return (
     <div className="flex flex-col" style={{ gap: 4 }}>
       {caption.length > 0 ? (
@@ -1130,11 +1207,16 @@ function ImageBatchFromRef({
           {caption}
         </Markdown>
       ) : null}
-      <div className="flex flex-wrap" style={{ gap: 6, marginTop: caption.length > 0 ? 2 : 0 }}>
-        {content.attachments.map((att) => (
-          <ImageFromRef key={att.imageId} content={att} />
-        ))}
-      </div>
+      {only ? (
+        <ImageFromRef content={only} variant="standalone" onOpen={() => setOpenIndex(0)} />
+      ) : (
+        <div className="flex flex-wrap items-start" style={{ gap: 6, marginTop: caption.length > 0 ? 2 : 0 }}>
+          {content.attachments.map((att, i) => (
+            <ImageFromRef key={att.imageId} content={att} variant="gallery" onOpen={() => setOpenIndex(i)} />
+          ))}
+        </div>
+      )}
+      <ImageLightbox images={images} index={openIndex} onIndexChange={setOpenIndex} />
     </div>
   );
 }
@@ -1145,6 +1227,7 @@ type TimelineItem =
   | { kind: "workgroup"; at: string; key: string; events: SessionEventRow[] };
 
 type ChatTimelineProps = {
+  mobile: boolean;
   itemCount: number;
   visibleItems: readonly TimelineItem[];
   hiddenByBlock: number;
@@ -1179,6 +1262,7 @@ type ChatTimelineProps = {
 };
 
 const ChatTimeline = memo(function ChatTimeline({
+  mobile,
   itemCount,
   visibleItems,
   hiddenByBlock,
@@ -1215,7 +1299,12 @@ const ChatTimeline = memo(function ChatTimeline({
   );
   return (
     <div ref={overlayContainerRef} className="relative flex-1 flex flex-col min-h-0">
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto"
+        data-chat-timeline-scroll
+        style={{ padding: `var(--sp-2_5) ${mobile ? "var(--sp-4)" : "var(--sp-6)"}` }}
+      >
         <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
           {itemCount === 0 && (
             <div
@@ -2273,49 +2362,8 @@ export function ChatView({
     if (askBusy) return;
     setAskError(null);
     setAskBusy(true);
-    // Route to the asker PLUS anyone the free text @mentioned (deduped).
-    const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
-    const resolves: RequestResolution = { request: request.id, kind: "answered" };
-    const docs = answer.attachments ?? [];
     try {
-      const docRefs: AttachmentRef[] = [];
-      for (const doc of docs) {
-        const uploaded = await uploadAttachment(doc.file);
-        docRefs.push({
-          attachmentId: uploaded.id,
-          kind: doc.kind,
-          mimeType: uploadMimeFor(doc.file),
-          filename: doc.file.name,
-          size: doc.file.size,
-        });
-      }
-
-      if (answer.images.length > 0) {
-        const refs: ImageRefContent[] = [];
-        for (const file of answer.images) {
-          const uploaded = await uploadAttachment(file);
-          // Warm the per-browser cache so the sender renders its own image
-          // instantly. Best-effort — the render path re-fetches on a miss.
-          try {
-            await putImage({ imageId: uploaded.id, base64: await readFileAsBase64(file), mimeType: file.type });
-          } catch {
-            // IndexedDB quota / availability — ignore, fall back to server fetch.
-          }
-          refs.push({ imageId: uploaded.id, mimeType: file.type, filename: file.name, size: file.size });
-        }
-        await sendFileMessageBatch(
-          chatId,
-          { ...(answer.content ? { caption: answer.content } : {}), attachments: refs },
-          { mentions: routedMentions, ...(docRefs.length > 0 ? { attachments: docRefs } : {}) },
-          { inReplyTo: request.id, resolves },
-        );
-      } else {
-        await sendChatMessage(chatId, answer.content, routedMentions, {
-          inReplyTo: request.id,
-          resolves,
-          ...(docRefs.length > 0 ? { attachments: docRefs } : {}),
-        });
-      }
+      await sendAskAnswer({ chatId, request, answer });
       queryClient.invalidateQueries({ queryKey: messagesQueryKey });
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       scrollToBottom("smooth");
@@ -3958,9 +4006,10 @@ export function ChatView({
           Scroll viewport stays full-width so the scrollbar hugs the panel's
           right edge — pushing it inward would float the column. Reading column
           inside is capped via `maxWidth` and centered to align with the
-          composer below into one vertical thread. Side padding (sp-6) prevents
-          content from kissing the panel border on narrow viewports. */}
+          composer below into one vertical thread. Side padding is sp-4 on the
+          phone surface and sp-6 elsewhere. */}
           <ChatTimeline
+            mobile={presentation === "mobile"}
             itemCount={itemCount}
             visibleItems={visibleItems}
             hiddenByBlock={hiddenByBlock}
@@ -3999,8 +4048,11 @@ export function ChatView({
             <div
               ref={composerFooterRef}
               className="shrink-0"
+              data-chat-composer-footer
               style={{
-                padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
+                paddingTop: "var(--sp-2_5)",
+                paddingInline: presentation === "mobile" ? "var(--sp-4)" : "var(--sp-6)",
+                paddingBottom: "calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
               }}
             >
               <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>

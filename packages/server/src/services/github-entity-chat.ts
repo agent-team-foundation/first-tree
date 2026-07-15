@@ -70,7 +70,7 @@ export function isCreationEvent(eventType: string, action: string): boolean {
  * already has a **single** bound chat where BOTH the human and the delegate
  * are already speakers, the event routes into that chat instead of minting a
  * sibling one — and **no mapping row is written**. The pair sees the entity's
- * events through chat membership, and `deliverNormalizedEvent` dedups so the
+ * events through chat membership, and `deliverGithubEvent` dedups so the
  * chat receives one card whose wake-set includes this delegate.
  *
  * Returns the chat id when exactly one such chat exists; null when there is

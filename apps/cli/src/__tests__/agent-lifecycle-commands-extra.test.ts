@@ -809,6 +809,50 @@ describe("logout and upgrade commands", () => {
     expect(output).toContain("first-tree-dev daemon stop");
   });
 
+  it("refuses plain logout and purge while root systemd migration is required", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValue({
+      state: "unknown",
+      platform: "systemd",
+      detail:
+        "legacy root systemd user unit requires out-of-service migration: /root/.config/systemd/user/first-tree.service",
+      migrationRequired: "root-systemd-user-to-system",
+    });
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout"])).rejects.toMatchObject({
+      code: "DAEMON_MIGRATION_REQUIRED",
+      exitCode: 1,
+    });
+
+    let output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Refusing to remove credentials");
+    expect(output).toContain("first-tree-dev login <code>");
+    expect(coreMocks.stopClientService).not.toHaveBeenCalled();
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+
+    printLineMock.mockClear();
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "DAEMON_MIGRATION_REQUIRED",
+      exitCode: 1,
+    });
+
+    output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Refusing to remove credentials");
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+  });
+
   it("refuses purge before server retire or local deletion when service state is unknown", async () => {
     const credentials = join(tempDir, "credentials.json");
     const clientYaml = join(tempDir, "client.yaml");

@@ -3,7 +3,7 @@ name: first-tree-write
 version: 0.9.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Source-driven Context Tree write workflow. Use when a concrete source artifact such as a PR, issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. If no source artifact is available, there is no write task; ask the user for one.
+description: Source-driven Context Tree write workflow. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. If no source artifact is available, there is no write task; ask the user for one.
 ---
 
 # First Tree Write
@@ -20,13 +20,15 @@ only for source artifact -> tree edit work.
 
 Writing is source-driven. Acceptable sources include:
 
-- a PR, issue, commit discussion, or review thread;
+- a PR/MR, forge Issue, commit discussion, or review thread;
 - a design doc, meeting note, decision note, or pasted source material;
 - a source repo change you just completed, when its design decision now needs
   durable tree context.
 
 If no concrete source artifact exists, stop and ask for one. Do not invent
 ad-hoc tree edits from memory or from a broad request like "update the tree".
+When the source repo or issue lives on GitHub or GitLab, choose the matching
+forge CLI (`gh` or `glab`) and use PR/MR language accordingly.
 
 Implementation-only material usually produces no tree write. Refactors,
 function signatures, API shapes, request/response examples, build config,
@@ -38,12 +40,12 @@ relationship.
 
 1. **Read the source artifact.** If you authored the source in this chat and
    still have it in working context, you may rely on that context. Otherwise
-   read the artifact end to end: PR diff plus linked issue/review comments, or
-   the document/note in full.
+   read the artifact end to end: PR/MR diff plus linked Issue/review comments,
+   or the document/note in full.
 2. **Apply the Double Test.** A candidate belongs only when it both establishes
    or changes a decision future agents must respect and remains durable if the
-   triggering commit or PR is rewritten. If nothing passes, write nothing and
-   explain why.
+   triggering commit or PR/MR is rewritten. If nothing passes, write nothing
+   and explain why.
 3. **Select the smallest target.** Prefer editing an existing node. Add a leaf
    only for a distinct decision with its own rationale/constraints. Add a
    directory only when the domain shape justifies it; new top-level domains
@@ -57,10 +59,10 @@ relationship.
    canonical content in one place and use normal-to-normal `soft_links` when a
    cross-domain reader needs navigation.
 6. **Verify.** Run `first-tree tree verify --tree-path <tree>` before commit.
-   Non-zero exit blocks the PR.
-7. **Prepare the PR.** One source artifact maps to one tree PR. Keep the PR
-   description focused on the source and the tree nodes changed; do not put PR
-   IDs, source links, or audit trails into node bodies.
+   Non-zero exit blocks the PR/MR.
+7. **Prepare the PR/MR.** One source artifact maps to one tree PR/MR. Keep the
+   description focused on the source and the tree nodes changed; do not put
+   PR/MR IDs, source links, or audit trails into node bodies.
 
 ## Write Rules
 
@@ -70,7 +72,7 @@ relationship.
   not the implementation.
 - **No history.** Nodes state what is true now and why. Past states live in
   `git log` and non-normal archive/supporting material, not normal nodes.
-- **No Source section.** Do not add `## Source`, `Shipped in #123`, inline PR
+- **No Source section.** Do not add `## Source`, `Shipped in #123`, inline PR/MR
   citations, or delivery-history prose to node bodies.
 - **No actionable future work in normal nodes.** Put follow-up work in an
   issue, source artifact, or human decision.
@@ -122,7 +124,7 @@ that mirrors source detail.
 ### Worked Examples
 
 In the examples below, **"Trigger: …"** labels what prompted the
-tree-write (a PR, a meeting note, a report). The labels are
+tree-write (a PR/MR, a meeting note, a report). The labels are
 meta-narration in this skill — they are not a body section template;
 no `## Trigger` / `## Source` heading goes into the actual node.
 
@@ -133,7 +135,7 @@ load-bearing. Both forms describe the same underlying boundary —
 what survives in the node vs what stays in the source repo. The
 split is teaching emphasis, not a separate convention.
 
-**Trigger: PR adding a new caching layer.**
+**Trigger: PR/MR adding a new caching layer.**
 Belongs: "Service X owns the cache; other services read through Service
 X's SDK"; "we chose Redis over Memcached because of pubsub support".
 Does not belong: the cache key format, the eviction policy class, the
@@ -142,7 +144,7 @@ retry constants.
 **Trigger: meeting note "we are moving billing to a new repo".**
 Belongs: workspace map gets a new repo; ownership for billing shifts;
 the `billing/` ↔ `platform/` boundary is updated.
-Does not belong: migration timeline, release-day playbook, per-PR
+Does not belong: migration timeline, release-day playbook, per-PR/MR
 checklist.
 
 **Trigger: a reviewer's nit about variable naming.**
@@ -197,7 +199,7 @@ Does not belong: "option A was considered and rejected because…" as
 historical narration. Phrase the surviving constraint, not the
 past-tense rejection.
 
-**Trigger: PR that flips a policy default — e.g. "approvals required"
+**Trigger: PR/MR that flips a policy default — e.g. "approvals required"
 goes from 1 to 0.**
 Belongs: the *current* rule stated as fact ("approvals required = 0");
 the *current* rationale (why 0 is the right number now), present-tense.
@@ -208,21 +210,21 @@ the new current state. The old state stays only in `git log` (and
 any raw-archive domain your tree may have).
 
 **Trigger: an existing tree node already carries a `## Source`
-section that lists the PRs which delivered the decision.**
+section that lists the PRs/MRs which delivered the decision.**
 Pattern: the `## Source` body section is forbidden, but the section often
 hides *substantive* content — open
 follow-ups, known gaps, deferred items, surviving rationale — that
-was tacked onto the bottom of the PR audit trail. Do not just
+was tacked onto the bottom of the PR/MR audit trail. Do not just
 delete the section.
-- *Delete*: the PR-id list, the "Shipped in #X" / "Landed in #Y"
-  annotations, the "PR-by-PR audit trail" framing.
-- *Move to a GitHub Issue*: any actionable work item the section
+- *Delete*: the PR/MR-id list, the "Shipped in #X" / "Landed in #Y"
+  annotations, the review-request audit-trail framing.
+- *Move to a forge Issue*: any actionable work item the section
   carried (a pending fix, a deferred migration, an unresolved
   question, a known gap) — open a present-tense Issue in the
-  relevant repo, dropping the PR id. Active tree nodes do not
-  carry `## Work` or `## Future Work` sections; actionable work
-  lives in Issues (see the team-practice node for the team's own
-  rule on this).
+  relevant repo with its matching CLI (`gh` for GitHub, `glab` for GitLab),
+  dropping the PR/MR id. Active tree nodes do not carry `## Work` or
+  `## Future Work` sections; actionable work lives in Issues (see the
+  team-practice node for the team's own rule on this).
 - *Fold into body sections*: any current-state architectural fact
   (e.g. "the rollback path lives at X") or surviving rationale
   (e.g. "we chose Postgres because the team was familiar with it")
@@ -248,6 +250,6 @@ writing is small. Today only one command is operationally required:
 A simplified CLI surface (a structural `list`, a `verify`, and an
 `upgrade`) is the design target; until that lands, map the tree with
 standard tooling (`ls`, `Read`, `Grep`) and rely on `tree verify` as
-the write gate. Everything else (opening PRs, fetching code, reading
+the write gate. Everything else (opening PRs/MRs, fetching code, reading
 the workspace binding) goes through standard tools (`git`, `gh`,
-`Read`, etc.).
+`glab`, `Read`, etc.).

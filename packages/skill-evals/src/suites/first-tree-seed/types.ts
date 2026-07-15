@@ -5,6 +5,8 @@ import type { CommandResult } from "../../core/types.js";
 export type SeedTreeState = "empty" | "nonempty" | "phase1-approved" | "unbound";
 export type SeedSourceRepoState = "bare-readable" | "chat-local-readable" | "missing" | "real-first-tree-bare-readable";
 export type SeedChatHistoryState = "absent" | "approved-phase1";
+export type SeedSourceForge = "github" | "gitlab";
+export type SeedSourceLocalBranchState = "fresh" | "stale";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
@@ -15,6 +17,10 @@ export type SeedExpectedAction =
 
 export type FirstTreeSeedFixture = {
   chatHistoryState?: SeedChatHistoryState;
+  sourceDeclaredRef?: string;
+  sourceDefaultBranch?: string;
+  sourceForge?: SeedSourceForge;
+  sourceLocalBranchState?: SeedSourceLocalBranchState;
   sourceRepoState: SeedSourceRepoState;
   treeState: SeedTreeState;
 };
@@ -23,6 +29,8 @@ export type FirstTreeSeedExpected = {
   action: SeedExpectedAction;
   approvalHints?: readonly string[];
   requireChatHistoryRead?: boolean;
+  requireGithubGovernanceBootstrap?: boolean;
+  requireGithubGovernanceRecovery?: boolean;
   requireSourceRead: boolean;
   requireWorktree: boolean;
   responseHints: readonly string[];
@@ -79,6 +87,8 @@ export type EvalMetrics = {
   forbiddenActionHits: readonly string[];
   forbiddenSideEffectHits: readonly string[];
   fixtureValidationOk: boolean;
+  githubGovernanceBootstrapObserved: boolean;
+  githubGovernanceRecoveryObserved: boolean;
   githubAppRequirementObserved: boolean;
   phase2ContinuationObserved: boolean;
   phase2LeafContentObserved: boolean;

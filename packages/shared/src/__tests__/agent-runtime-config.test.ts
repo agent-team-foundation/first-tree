@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AgentRuntimeConfigPayload } from "../schemas/agent-runtime-config.js";
 import {
   agentRuntimeConfigDryRunResultSchema,
   agentRuntimeConfigPayloadSchema,
@@ -6,6 +7,7 @@ import {
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
   deriveRepoShortLabel,
@@ -18,6 +20,15 @@ import {
   normalizeRepoLocalPath,
   updateAgentRuntimeConfigSchema,
 } from "../schemas/agent-runtime-config.js";
+
+/**
+ * `reasoningEffort` no longer exists on every union member (the cursor variant
+ * has no effort channel), so tests that assert effort behavior read it through
+ * this narrowing helper instead of indexing the union.
+ */
+function effortOf(payload: AgentRuntimeConfigPayload): string | undefined {
+  return "reasoningEffort" in payload ? payload.reasoningEffort : undefined;
+}
 
 /**
  * Lock the server-side default model. This default backs two separate paths:
@@ -126,29 +137,65 @@ describe("agent runtime config — codex defaults", () => {
   });
 });
 
+/**
+ * Cursor is a free-form-model, no-effort-channel provider: `model` is an exact
+ * provider-native id passed through verbatim (empty = omit `--model`, Cursor
+ * picks `auto` locally), and the payload deliberately has NO `reasoningEffort`
+ * field — effort/fast variants live inside the model id.
+ */
+describe("agent runtime config — cursor variant", () => {
+  it("DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD is kind=cursor with an empty model and no reasoningEffort", () => {
+    expect(DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD.kind).toBe("cursor");
+    expect(DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD.model).toBe("");
+    expect("reasoningEffort" in DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD).toBe(false);
+  });
+
+  it("defaultRuntimeConfigPayload('cursor') selects the cursor variant", () => {
+    expect(defaultRuntimeConfigPayload("cursor")).toMatchObject({ kind: "cursor", model: "" });
+  });
+
+  it("schema accepts an explicit cursor payload and any free-form exact model id", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "cursor",
+      model: "gpt-5.3-codex-high",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+    });
+    expect(parsed.kind).toBe("cursor");
+    expect(parsed.model).toBe("gpt-5.3-codex-high");
+    expect("reasoningEffort" in parsed).toBe(false);
+  });
+
+  it("a cursor payload carrying a stray reasoningEffort is stripped, not rejected", () => {
+    // Zod object schemas drop unknown keys — a stale writer cannot smuggle an
+    // effort field into a provider that has no effort channel.
+    const parsed = agentRuntimeConfigPayloadSchema.parse({ kind: "cursor", reasoningEffort: "high" });
+    expect("reasoningEffort" in parsed).toBe(false);
+  });
+});
+
 describe("agent runtime config — reasoning effort", () => {
   it("claude default is '' (inherit local effortLevel); codex default is 'high'", () => {
-    expect(DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD.reasoningEffort).toBe("");
-    expect(DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD.reasoningEffort).toBe("high");
+    expect(effortOf(DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD)).toBe("");
+    expect(effortOf(DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD)).toBe("high");
   });
 
   it("schema backfills the per-provider default when reasoningEffort is absent", () => {
     // Mirrors how legacy rows (written before this field existed) parse.
-    expect(agentRuntimeConfigPayloadSchema.parse({ kind: "claude-code" }).reasoningEffort).toBe("");
-    expect(agentRuntimeConfigPayloadSchema.parse({ kind: "codex" }).reasoningEffort).toBe("high");
+    expect(effortOf(agentRuntimeConfigPayloadSchema.parse({ kind: "claude-code" }))).toBe("");
+    expect(effortOf(agentRuntimeConfigPayloadSchema.parse({ kind: "codex" }))).toBe("high");
   });
 
   it("a legacy row with neither kind nor reasoningEffort parses as claude-code with ''", () => {
     const parsed = agentRuntimeConfigPayloadSchema.parse({ model: "opus" });
     expect(parsed.kind).toBe("claude-code");
-    expect(parsed.reasoningEffort).toBe("");
+    expect(effortOf(parsed)).toBe("");
   });
 
   it("claude accepts low/medium/high/max and the '' inherit sentinel", () => {
     for (const v of ["", "low", "medium", "high", "max"]) {
-      expect(agentRuntimeConfigPayloadSchema.parse({ kind: "claude-code", reasoningEffort: v }).reasoningEffort).toBe(
-        v,
-      );
+      expect(effortOf(agentRuntimeConfigPayloadSchema.parse({ kind: "claude-code", reasoningEffort: v }))).toBe(v);
     }
   });
 
@@ -163,7 +210,7 @@ describe("agent runtime config — reasoning effort", () => {
 
   it("codex accepts low/medium/high/xhigh/max/ultra", () => {
     for (const v of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
-      expect(agentRuntimeConfigPayloadSchema.parse({ kind: "codex", reasoningEffort: v }).reasoningEffort).toBe(v);
+      expect(effortOf(agentRuntimeConfigPayloadSchema.parse({ kind: "codex", reasoningEffort: v }))).toBe(v);
     }
   });
 

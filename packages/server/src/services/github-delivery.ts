@@ -1,4 +1,4 @@
-import type { GithubEventCard, InvolveReason, NormalizedEvent } from "@first-tree/shared";
+import type { GithubEventCard, InvolveReason, NormalizedScmEvent } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";
@@ -65,9 +65,9 @@ type ChatDelivery = {
  * Each chat is delivered independently so a single failure doesn't poison the
  * rest — the loop logs and continues.
  */
-export async function deliverNormalizedEvent(
+export async function deliverGithubEvent(
   app: FastifyInstance,
-  event: NormalizedEvent,
+  event: NormalizedScmEvent,
   audience: AudienceTarget[],
   options: DeliveryOptions = {},
 ): Promise<DeliveryStats> {
@@ -84,7 +84,7 @@ export async function deliverNormalizedEvent(
     // involve — any non-null `involveReason` (`assigned` / `mentioned`;
     // `review_requested` can't name the actor themselves on GitHub, so it's
     // inert here). `kind: "new"` is target-human-scoped: it means THIS involved
-    // human has no existing entity line (`resolveAudience` found no
+    // human has no existing entity line (`resolveGithubAudience` found no
     // `subscribedByHuman` row for them) — NOT that the entity has no chat
     // anywhere; other humans may already track it. Pruning such a target
     // wouldn't just drop an echo card — it would prevent this human's tracking
@@ -98,8 +98,8 @@ export async function deliverNormalizedEvent(
     // true self-echo. See #1536.
     //
     // The `involveReason !== null` clause is defensive, not load-bearing:
-    // `resolveAudience` only ever mints `kind: "new"` alongside a non-null
-    // reason, but `deliverNormalizedEvent` is exported and takes an arbitrary
+    // `resolveGithubAudience` only ever mints `kind: "new"` alongside a non-null
+    // reason, but `deliverGithubEvent` is exported and takes an arbitrary
     // target list, so a future producer that mints `kind: "new"` with no reason
     // fail-closes to pruning rather than inventing a chat.
     const isFreshDirectedSelfInvolve = target.kind === "new" && target.involveReason !== null;
@@ -124,8 +124,8 @@ export async function deliverNormalizedEvent(
           delegateAgent: target.delegateAgentId,
           entityType: event.entity.type,
           entityKey: event.entity.key,
-          eventType: event.rawEventType,
-          action: event.rawAction,
+          eventType: event.eventType,
+          action: event.action,
         },
         "failed to resolve chat for normalized github target",
       );
@@ -141,8 +141,8 @@ export async function deliverNormalizedEvent(
           delegateAgent: target.delegateAgentId,
           entityType: event.entity.type,
           entityKey: event.entity.key,
-          eventType: event.rawEventType,
-          action: event.rawAction,
+          eventType: event.eventType,
+          action: event.action,
           reason: "creation_event_no_mapping_no_mention",
         },
         "webhook_dropped_creation",
@@ -226,8 +226,8 @@ export async function deliverNormalizedEvent(
           source: "github",
           metadata: {
             source: "github",
-            event: event.rawEventType,
-            action: event.rawAction,
+            event: event.eventType,
+            action: event.action,
             entityType: event.entity.type,
             entityKey: event.entity.key,
             reason: card.reason,
@@ -274,8 +274,8 @@ export async function deliverNormalizedEvent(
           delegateAgents: [...delivery.entries.values()].map((entry) => entry.wakeAgentId),
           entityType: event.entity.type,
           entityKey: event.entity.key,
-          eventType: event.rawEventType,
-          action: event.rawAction,
+          eventType: event.eventType,
+          action: event.action,
         },
         "failed to deliver normalized github event to chat",
       );
@@ -293,7 +293,7 @@ function existingMappedChatIdsForProjection(audience: AudienceTarget[]): string[
   ].sort();
 }
 
-function entityFromEvent(event: NormalizedEvent): GithubEntity {
+function entityFromEvent(event: NormalizedScmEvent): GithubEntity {
   return {
     type: event.entity.type,
     key: event.entity.key,
@@ -367,7 +367,7 @@ type ResolvedChat = { chatId: string; created: boolean };
 
 async function resolveChatFor(
   app: FastifyInstance,
-  event: NormalizedEvent,
+  event: NormalizedScmEvent,
   target: AudienceTarget,
   options: DeliveryOptions,
 ): Promise<ResolvedChat | null> {
@@ -412,8 +412,8 @@ async function resolveChatFor(
     delegateAgentId: target.delegateAgentId,
     entity,
     relatedEntities,
-    eventType: event.rawEventType,
-    action: event.rawAction ?? "",
+    eventType: event.eventType,
+    action: event.action ?? "",
     entityStateSeed: options.entityStateSeed ?? null,
     // `kind: "new"` audience targets come from explicit mentions / involves in
     // the event payload — the only path allowed to mint a fresh chat for an
@@ -432,7 +432,7 @@ async function resolveChatFor(
  * `subscribed`.
  */
 function buildCard(
-  event: NormalizedEvent,
+  event: NormalizedScmEvent,
   involveReason: InvolveReason | null,
   involveLogin: string | null,
 ): GithubEventCard {
@@ -440,11 +440,11 @@ function buildCard(
   const card: GithubEventCard = {
     type: "github_event",
     reason,
-    event: event.rawEventType,
-    action: event.rawAction,
+    event: event.eventType,
+    action: event.action,
     kind: event.kind,
-    repository: event.entity.repo,
-    sender: event.actor.githubLogin,
+    repository: event.entity.projectKey,
+    sender: event.actor.externalUsername,
     title: event.surface.title,
     body: event.surface.body,
     url: event.surface.url,

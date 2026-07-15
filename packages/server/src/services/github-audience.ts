@@ -3,7 +3,7 @@ import {
   AGENT_TYPES,
   type InvolveReason,
   isDeclaredBoundVia,
-  type NormalizedEvent,
+  type NormalizedScmEvent,
 } from "@first-tree/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -46,10 +46,10 @@ export function evaluateDelegateTarget(
  * users, and bot/app senders return null and are delivered without self
  * pruning.
  */
-export async function resolveActorHumanId(
+export async function resolveGithubActorHumanId(
   db: Database,
   organizationId: string,
-  actor: { githubLogin: string },
+  actor: { externalUsername: string },
 ): Promise<string | null> {
   const [agentRow] = await db
     .select({ uuid: agents.uuid })
@@ -58,7 +58,7 @@ export async function resolveActorHumanId(
       and(
         eq(agents.organizationId, organizationId),
         eq(agents.type, AGENT_TYPES.HUMAN),
-        eq(sql`lower(${agents.name})`, actor.githubLogin.toLowerCase()),
+        eq(sql`lower(${agents.name})`, actor.externalUsername.toLowerCase()),
       ),
     )
     .limit(1);
@@ -95,17 +95,17 @@ export type AudienceResolution = {
  *
  * `subscribed` reads every `(human, delegate)` row already bound to
  * `(org, entity)` in `github_entity_chat_mappings`. `involved` walks
- * `event.involves` as target-human candidates. A target human first reuses
+ * `event.targets` as target-human candidates. A target human first reuses
  * their existing mapping(s) on the entity; only humans without a mapping fall
  * back to their default delegate and produce a `kind: "new"` row.
  *
  * Echo pruning happens in delivery, before fresh-chat resolution, so self-only
  * events do not write cards and mixed events keep the other humans' entries.
  */
-export async function resolveAudience(db: Database, event: NormalizedEvent): Promise<AudienceResolution> {
+export async function resolveGithubAudience(db: Database, event: NormalizedScmEvent): Promise<AudienceResolution> {
   const organizationId = event.source.organizationId;
   const entityKeys = githubEntityKeyCandidates(event.entity.type, event.entity.key);
-  const actorHumanId = await resolveActorHumanId(db, organizationId, event.actor);
+  const actorHumanId = await resolveGithubActorHumanId(db, organizationId, event.actor);
 
   const subscribedRows = await db
     .select({
@@ -130,7 +130,7 @@ export async function resolveAudience(db: Database, event: NormalizedEvent): Pro
   // `bound_at`). A single `(human, entity)` pair can carry multiple mapping
   // rows pointing at the *same* chat (one per delegate that ever drove an
   // event for this entity under this human); collapsing those to one row is
-  // loss-free and stops `deliverNormalizedEvent` posting N identical cards
+  // loss-free and stops `deliverGithubEvent` posting N identical cards
   // to that chat.
   //
   // The key MUST include `chatId`. Deduping by `humanAgentId` alone assumed
@@ -169,8 +169,8 @@ export async function resolveAudience(db: Database, event: NormalizedEvent): Pro
   // Scope is intentionally narrow: `pull_request` + `opened` only. `issues`
   // has no `review_requested`, and every other event (synchronize, review,
   // comment, …) is a legitimately distinct subscribed signal.
-  const isPullRequestOpened = event.rawEventType === "pull_request" && event.rawAction === "opened";
-  const involvedLogins = new Set(event.involves.map((i) => i.githubLogin.toLowerCase()));
+  const isPullRequestOpened = event.eventType === "pull_request" && event.action === "opened";
+  const involvedLogins = new Set(event.targets.map((target) => target.externalUsername.toLowerCase()));
   const keepSubscribedOpened = (row: (typeof subscribedRows)[number]): boolean => {
     if (!isPullRequestOpened) return true;
     if (isDeclaredBoundVia(row.boundVia)) return true;
@@ -194,10 +194,10 @@ export async function resolveAudience(db: Database, event: NormalizedEvent): Pro
   }
 
   const involved: AudienceTarget[] = [];
-  if (event.involves.length > 0) {
-    const candidateLogins = event.involves.map((i) => i.githubLogin.toLowerCase());
+  if (event.targets.length > 0) {
+    const candidateLogins = event.targets.map((target) => target.externalUsername.toLowerCase());
     const reasonByLogin = new Map<string, InvolveReason>();
-    for (const i of event.involves) reasonByLogin.set(i.githubLogin.toLowerCase(), i.reason);
+    for (const target of event.targets) reasonByLogin.set(target.externalUsername.toLowerCase(), target.reason);
 
     const candidates = await db
       .select({

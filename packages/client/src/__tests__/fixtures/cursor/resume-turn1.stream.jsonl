@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","apiKeySource":"env","cwd":"/private/tmp/cursor-cli-resume-3qSQXm","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","model":"Composer 2.5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Remember this exact nonce for the next turn: FT_RESUME_NONCE_7D2A91. Do not write it to disk or use tools. Reply exactly FT_MEMORY_STORED."}]},"session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4"}
+{"type":"thinking","subtype":"delta","text":"I will store the nonce","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675601857}
+{"type":"thinking","subtype":"delta","text":" FT_RESUME_NONCE_7D2A91","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675601857}
+{"type":"thinking","subtype":"delta","text":" in memory for the next","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675601857}
+{"type":"thinking","subtype":"delta","text":" turn.","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675601858}
+{"type":"thinking","subtype":"completed","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","timestamp_ms":1783675601858}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"FT_MEMORY_STORED"}]},"session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4"}
+{"type":"result","subtype":"success","duration_ms":5750,"duration_api_ms":5750,"is_error":false,"result":"FT_MEMORY_STORED","session_id":"19b60fd8-1bb7-4b8a-acb2-3210997369a4","request_id":"a294d99c-c669-4962-afbe-cc41568a5188","usage":{"inputTokens":3837,"outputTokens":54,"cacheReadTokens":8256,"cacheWriteTokens":0}}

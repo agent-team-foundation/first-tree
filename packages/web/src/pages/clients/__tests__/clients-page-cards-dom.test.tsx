@@ -113,6 +113,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
     binName: overrides.binName ?? "first-tree-dev",
     sdkVersion: overrides.sdkVersion ?? "0.5.0",
     ...(overrides.serverCommandVersion !== undefined ? { serverCommandVersion: overrides.serverCommandVersion } : {}),
+    ...(overrides.lastUpdateAttempt !== undefined ? { lastUpdateAttempt: overrides.lastUpdateAttempt } : {}),
     hostname: overrides.hostname ?? "gandy-macbook",
     os: overrides.os ?? "darwin",
     agentCount: overrides.agentCount ?? 1,
@@ -166,6 +167,37 @@ const TEAM = client({
   hostname: "alice-linux",
   os: "linux",
   agentCount: 1,
+});
+// Connected + OK runtime (pill = Ready) but its self-update failed — must
+// surface under "Needs attention" as "Update failed", never hidden as Ready.
+const TEAM_UPDATE_FAILED = client({
+  id: "client-team-stuck",
+  userId: "user-alice",
+  hostname: "erin-stuck",
+  os: "linux",
+  agentCount: 2,
+  lastUpdateAttempt: {
+    result: "failed",
+    target: "0.6.0",
+    currentBefore: "0.5.0",
+    installedVersion: null,
+    reason: "npm E404",
+    at: NOW,
+  },
+});
+// Long *resolved* owner name — the truncating owner cell must expose it in full
+// via its title.
+const LONG_OWNER_NAME = "Diana Alexandra Wintersmith-Longname";
+const TEAM_LONG_OWNER = client({ id: "client-team-long", userId: "user-diana", hostname: "diana-box", os: "darwin" });
+// Unresolved owner (userId absent from the members map) — the cell shows the
+// short-id but the full UUID must survive in the title (desktop) and the
+// compact meta title (narrow).
+const UNRESOLVED_OWNER_ID = "user-ghost-1234567890abcdef";
+const TEAM_UNRESOLVED_OWNER = client({
+  id: "client-team-ghost",
+  userId: UNRESOLVED_OWNER_ID,
+  hostname: "ghost-box",
+  os: "linux",
 });
 
 const AGENTS: RuntimeAgent[] = [
@@ -318,7 +350,16 @@ function copyButtonForCommand(container: ParentNode, command: string): HTMLButto
 }
 
 function seedDefaultMocks(): void {
-  activityMocks.listOrgClients.mockResolvedValue([READY, AUTH_EXPIRED, SETUP_INCOMPLETE, OFFLINE, TEAM]);
+  activityMocks.listOrgClients.mockResolvedValue([
+    READY,
+    AUTH_EXPIRED,
+    SETUP_INCOMPLETE,
+    OFFLINE,
+    TEAM,
+    TEAM_UPDATE_FAILED,
+    TEAM_LONG_OWNER,
+    TEAM_UNRESOLVED_OWNER,
+  ]);
   activityMocks.listClients.mockResolvedValue([READY, AUTH_EXPIRED, SETUP_INCOMPLETE, OFFLINE]);
   activityMocks.getActivityOverview.mockResolvedValue({
     clients: 5,
@@ -340,6 +381,7 @@ function seedDefaultMocks(): void {
   memberMocks.listMembers.mockResolvedValue([
     { userId: "user-self", displayName: "Gandy" },
     { userId: "user-alice", displayName: "Alice" },
+    { userId: "user-diana", displayName: LONG_OWNER_NAME },
   ]);
 }
 
@@ -389,7 +431,7 @@ describe("ClientsPage computer cards", () => {
     await act(async () => root.unmount());
   });
 
-  it("renders admin cards, team table, action dialogs, runtime commands, and connect dialog", async () => {
+  it("renders admin cards, team list, action dialogs, runtime commands, and connect dialog", async () => {
     const { ClientsPage } = await import("../../clients.js");
     const { container, root } = await renderDom(<ClientsPage />);
 
@@ -416,8 +458,43 @@ describe("ClientsPage computer cards", () => {
 
     await click(exactButton(container, "Show"));
     await waitForText(container, "Team computers");
-    await waitForText(container, "alice-linux");
+    // Distributed audit columns render as a semantic <table>: a 6-column header
+    // (Hostname … Status), each data row a <tr> whose hostname is a
+    // <th scope="row">, owner/os/version <td> cells. Assert the accessible
+    // structure, not just header strings.
+    await waitForText(container, "Hostname");
+    await waitForText(container, "First Tree");
+    const teamTable = container.querySelector<HTMLTableElement>('table[aria-label="Team computers"]');
+    expect(teamTable).not.toBeNull();
+    expect(teamTable?.querySelectorAll("thead th").length).toBe(6);
+    const rowHeaders = [...(teamTable?.querySelectorAll('th[scope="row"]') ?? [])];
+    expect(rowHeaders.some((el) => el.textContent?.includes("alice-linux"))).toBe(true);
     await waitForText(container, "Alice");
+    // A connected + Ready-runtime team machine whose self-update failed must
+    // surface under "Needs attention" as "Update failed", not hidden as Ready.
+    await waitForText(container, "Needs attention");
+    await waitForText(container, "Update failed");
+    // Health splits are <tbody> row-groups headed by a scope="rowgroup" cell.
+    const rowGroupHeaders = [...(teamTable?.querySelectorAll('th[scope="rowgroup"]') ?? [])];
+    expect(rowGroupHeaders.some((el) => el.textContent?.includes("Needs attention"))).toBe(true);
+    // The compact meta line labels each collapsed field for assistive tech.
+    const metaLabels = [...(teamTable?.querySelectorAll(".team-computer-row__meta .sr-only") ?? [])].map(
+      (el) => el.textContent,
+    );
+    expect(metaLabels).toEqual(expect.arrayContaining(["Owner: ", "OS: ", "First Tree: "]));
+    // Owner recovery: a long *resolved* name survives in full via the cell
+    // title, and an *unresolved* owner keeps its full UUID in both the cell and
+    // the compact meta title even though only the short-id is visible.
+    const findRow = (hostname: string) =>
+      [...(teamTable?.querySelectorAll("tr.team-computer-row") ?? [])].find((tr) =>
+        tr.querySelector('th[scope="row"]')?.textContent?.includes(hostname),
+      );
+    expect(findRow("diana-box")?.querySelector(".team-computer-row__col-owner")?.getAttribute("title")).toBe(
+      LONG_OWNER_NAME,
+    );
+    const ghostRow = findRow("ghost-box");
+    expect(ghostRow?.querySelector(".team-computer-row__col-owner")?.getAttribute("title")).toBe(UNRESOLVED_OWNER_ID);
+    expect(ghostRow?.querySelector(".team-computer-row__meta")?.getAttribute("title")).toContain(UNRESOLVED_OWNER_ID);
     await click(exactButton(container, "Hide"));
 
     await click(container.querySelector('button[aria-label="Computer actions"]'));
@@ -454,7 +531,7 @@ describe("ClientsPage computer cards", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(STAGING_BOOTSTRAP_COMMAND);
     await click(exactButton(document.body, "Cancel"));
 
-    await click(exactButton(container, "Connect"));
+    await click(exactButton(container, "Add computer"));
     await waitForText(document.body, "Connect computer");
     await click(exactButton(document.body, "Cancel"));
 

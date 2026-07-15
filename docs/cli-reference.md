@@ -226,7 +226,7 @@ first-tree agent list --remote --org <id>  # cross-org view (multi-org operators
 ### agent create
 
 ```
-first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|codex]
+first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|codex|cursor]
 ```
 
 Creates the agent row on the server and binds it to the given client
@@ -609,13 +609,178 @@ GitHub App installation to cover the repo (`422` otherwise).
 
 ```
 first-tree org
-└── bind-tree <url>                                  # record this org's Context Tree repo URL
+├── bind-tree <url> [--org <orgId>] [--branch <branch>] # legacy caller-org binding write
+└── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
+    └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
 
 `bind-tree` records the team's Context Tree URL in
 `organization_settings(context_tree)`. Used by the onboarding flow's
 "create new tree" path, where the agent calls back into the server
-after scaffolding the tree.
+after scaffolding the tree. It is retained for compatibility with existing
+scripts: without `--org`, it resolves the caller's default organization through
+`GET /api/v1/me`; with `--org`, it targets the explicitly supplied organization
+ID. `--branch` is optional and sends an explicit branch when a recovery path must
+reproduce an exact repo/branch binding; when omitted, the server preserves the
+existing branch or defaults to `main`. It is not agent-scoped and is separate
+from `context-tree set` below.
+
+The Class B settings read `GET /api/v1/orgs/:orgId/settings/context_tree`
+returns the same runtime-safe binding representation for admins and members. If
+a row has no repo and a valid retained branch, this safe read returns the
+unbound branch-only representation. If a loose historical repo or branch is not
+valid under the active binding contract, the safe read fails without returning
+the raw value. Loose historical rows that are visible for repair are exposed
+only through the admin-only raw read
+`GET /api/v1/orgs/:orgId/settings/context_tree/raw`.
+
+### org context-tree
+
+```bash
+first-tree org context-tree [--agent <name>]
+```
+
+`context-tree` is a read-only view of the Cloud `context_tree` setting for the
+selected agent's organization. It does not accept `--org`: the CLI sends the
+selected agent as `X-Agent-Id`, and the server derives that agent's
+organization. The command reads only `GET /api/v1/agent/context-tree/info`.
+It never falls back to the user's default organization from `/me`, the legacy
+`/api/v1/context-tree/info` endpoint, the web app's current organization, or a
+local workspace manifest or checkout.
+
+The selected agent is resolved in this order:
+
+1. `--agent <name>` selects that named local agent.
+2. `FIRST_TREE_AGENT_ID` selects the local agent whose configured UUID matches
+   the environment value.
+3. When exactly one local agent is configured, that agent is selected.
+
+Selection fails before any network request with exit code `2` when there is no
+local agent (`MISSING_AGENT`), more than one candidate (`AMBIGUOUS_AGENT`), an
+environment UUID that is not local (`ENV_AGENT_NOT_LOCAL`), or an unknown
+explicit name (`UNKNOWN_AGENT`). An explicit `--agent` takes precedence over
+`FIRST_TREE_AGENT_ID`.
+
+Human output reports one of three states. `Bound` includes the repository and
+branch. `Unbound` advises the user to ask an administrator for that agent's
+organization to bind an existing tree or initialize a new one. `Unreadable`
+means the agent-scoped request failed or its response could not be validated; a
+failed read is never reported as `Unbound`. A loose invalid historical setting
+is projected as inactive by the agent/runtime endpoint, while the safe settings
+GET returns a non-secret conflict and the admin raw endpoint preserves the
+value for repair.
+
+With `--json` or `FIRST_TREE_JSON=1`, successful output is exactly one of:
+
+```json
+{"ok":true,"data":{"status":"bound","repo":"git@github.com:acme/context-tree.git","branch":"main"}}
+{"ok":true,"data":{"status":"unbound","repo":null,"branch":null}}
+```
+
+`repo` alone determines binding state. An unbound response is normalized to
+`branch: null` even if the server supplies its default branch. A bound response
+with a null branch is normalized to `"main"`.
+
+Authentication, connection, timeout, remote, response-validation, and
+unexpected read failures use the following JSON error shape and a non-zero exit
+code:
+
+```json
+{"ok":false,"error":{"code":"CONTEXT_TREE_UNREADABLE","message":"...","status":"unreadable"}}
+```
+
+Authentication failures exit `3`; connection and timeout failures exit `6`;
+other remote or invalid-response failures exit `1`. Agent-selection failures
+retain exit code `2` and their existing error envelopes.
+
+### org context-tree set
+
+```bash
+first-tree org context-tree set <repo> [--branch <branch>] [--agent <name>]
+```
+
+`context-tree set` directly sets or replaces the Cloud `context_tree` binding
+for the selected local agent's organization. It does not accept `--org` or
+`--rebind`, and it provides no unset/clear operation. Agent selection uses the
+same precedence and exit-code-`2` failures as the read command above:
+explicit `--agent`, then `FIRST_TREE_AGENT_ID`, then the only configured local
+agent. Selection failures retain their existing `MISSING_AGENT`,
+`AMBIGUOUS_AGENT`, `ENV_AGENT_NOT_LOCAL`, or `UNKNOWN_AGENT` envelopes; they
+are not wrapped as `CONTEXT_TREE_UPDATE_FAILED`. Selection is completed before
+the SDK is created or any credentials or network are accessed.
+
+The command performs a two-step, agent-scoped write. It first sends
+`GET /api/v1/agent/me` with the selected agent to obtain a non-empty
+`organizationId`, then sends the existing admin-only Class B request
+`PUT /api/v1/orgs/:orgId/settings/context_tree`, URL-encoding `orgId`. The
+selected agent identity, current user JWT, and current runtime-session token are
+used for both requests. This write flow does not call either Class B settings
+GET and never falls back to `/api/v1/me`, the legacy
+`/api/v1/context-tree/*` endpoints, the web app's current organization, a local
+workspace manifest, or a local checkout. The agent-profile GET may use the
+client's normal read retry behavior. The PUT is never retried automatically, so
+one invocation cannot repeat a settings-version increment after an ambiguous
+transport failure.
+
+`<repo>` accepts HTTPS, `ssh://`, and scp-like SSH repository coordinates. The
+value must have a host and repository path, contain no embedded credentials,
+have no surrounding whitespace, and contain no control characters. URL forms
+must use literal `https://` or `ssh://` syntax; queries, fragments, backslashes,
+and local drive paths are rejected. HTTP and `git://` URLs are rejected.
+`--branch` must be a valid Git branch name. In addition to being non-empty,
+single-line, and free of surrounding whitespace and control characters, it
+must satisfy Git ref-format rules such as rejecting `..`, `@{`, components
+that start with `.` or end with `.lock`, a branch name that starts with `-`,
+and forbidden ref characters. Invalid repo and branch values fail locally with
+`INVALID_CONTEXT_TREE_REPO` and
+`INVALID_CONTEXT_TREE_BRANCH`, respectively, exit `2`, and make no SDK,
+credential, or HTTP request.
+
+For example, these repository forms are accepted:
+
+```text
+https://github.com/acme/context-tree.git
+ssh://git@github.com/acme/context-tree.git
+git@github.com:acme/context-tree.git
+```
+
+When `--branch` is omitted, the request body contains only `{ "repo": "..." }`
+and an existing valid branch is preserved. On a first binding, the server's
+default branch is `main`. Supplying `--branch` replaces the branch. If a loose
+historical row contains an invalid branch, a repo-only update is rejected
+without a partial write; repair it by supplying both the repository and a
+valid `--branch`. A successful response must explicitly contain a valid repo
+and branch, must echo the requested repository, and must echo a provided
+branch; missing fields, unknown fields, mismatches, and otherwise invalid
+responses are update failures.
+
+Human output reports `Bound` and shows the repository and final branch. With
+`--json` or `FIRST_TREE_JSON=1`, successful output is exactly:
+
+```json
+{"ok":true,"data":{"status":"bound","repo":"git@github.com:acme/context-tree.git","branch":"main"}}
+```
+
+After local agent selection and input validation, all authentication,
+connection, timeout, HTTP, response-validation, and unexpected failures use
+this exact error envelope:
+
+```json
+{"ok":false,"error":{"code":"CONTEXT_TREE_UPDATE_FAILED","message":"..."}}
+```
+
+Authentication failures exit `3`; connection and timeout failures exit `6`;
+403, other HTTP failures, and invalid or inconsistent responses exit `1`.
+When a network or server failure leaves the PUT result uncertain, the message
+directs the operator to rerun `first-tree org context-tree` with the same agent
+selection before retrying. Failure output never prints raw response bodies,
+tokens, credentials, or a full private repository coordinate; successful
+output includes the requested repository as documented above.
+
+For this write command, debug logs may identify the selected agent, request
+phase, derived organization, and final status. Warning logs contain only the
+sanitized failure category, exit code, and HTTP status; they do not contain
+secrets or raw response data.
 
 ---
 
@@ -623,8 +788,12 @@ after scaffolding the tree.
 
 The background service that holds the client WebSocket and runs every
 configured agent on this machine. Installed automatically by `first-tree
-login` on supported desktop platforms: launchd on macOS, `systemd --user`
-on Linux, and a per-user Task Scheduler logon task on Windows.
+login` on supported desktop platforms: launchd on macOS, systemd on
+Linux, and a per-user Task Scheduler logon task on Windows. Linux installs
+use a `systemd --user` unit for normal users; when the CLI is run as root,
+First Tree installs the same channel's unit in system scope instead
+(`/etc/systemd/system/<channel>.service`) so daemon setup does not depend
+on a root user D-Bus session.
 
 On Windows, Task Scheduler only owns per-user logon/start triggering. A hidden
 First Tree supervisor loop owns the daemon child process, exit-code restart
@@ -722,10 +891,75 @@ org's `context_tree` setting and surfaces guidance for adding the repo to the
 team's GitHub App installation. It does not seed `.github/workflows/validate-tree.yml`
 by default (that needs the interactive `workflow` gh scope); pass `--with-workflow`
 to include it. In the bound path the repo is created under the team's GitHub App
-installation account (so the installation can cover it), and `tree init` refuses
-to replace an existing team binding unless `--rebind` is passed. Key options:
-`--owner`, `--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
+installation account (so the installation can cover it), and any explicit `--owner`
+is canonicalized before the remote create so case-variant input does not fail after
+GitHub has already accepted the repository. If create succeeds but binding or
+finalization fails, the CLI says the repo was created but not bound, includes the
+repo URL, and tells you to delete it manually if it is empty; it does not auto-delete
+created repositories by default. `tree init` refuses to replace an existing team
+binding unless `--rebind` is passed. Non-rebind finalization is conflict-safe: if
+another writer binds the org after preflight but before the local GitHub side
+effects finish, the server preserves that competing binding and `tree init`
+reports the conflict rather than overwriting it. A non-`--rebind` invocation
+requires a Server with the raw repair/finalize surface during preflight; older
+Servers fail before any GitHub repository is created. Key options: `--owner`,
+`--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
 `--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
+
+Before any GitHub repository write, the bound path reads the admin-only raw
+Context Tree setting. An HTTP 404 from that endpoint identifies an older Server
+without conditional-finalization support, so the command uses the legacy safe
+settings GET to classify the current state. A valid active binding still gets
+the normal existing-binding refusal; if the fallback confirms an unbound state,
+a non-`--rebind` invocation fails before looking up the GitHub App installation
+or creating a repository and requires a Server upgrade. With `--rebind`, the
+caller has explicitly authorized replacement and may continue through the
+compatible legacy write. Invalid fallback data and every other raw-read failure
+remain fail-stop.
+
+A valid branch-only setting remains unbound. Its branch is retained exactly and
+used for `git init`, the generated validation workflow filter, the final
+repo-and-branch binding, and the success summary; an absent setting uses
+`main`. Any invalid historical repo or branch fails closed before repository
+creation so an administrator can repair it without leaving remote side
+effects.
+
+Without `--rebind`, final binding uses the dedicated admin-only endpoint:
+
+```http
+POST /api/v1/orgs/:orgId/settings/context_tree/initialize
+Content-Type: application/json
+
+{"repo":"https://github.com/acme/tree.git","branch":"trunk","expectedUnboundBranch":"trunk"}
+```
+
+The Server acquires the organization settings parent lock and commits only if
+the setting is still unbound at exactly `expectedUnboundBranch`, the branch read
+during preflight. A competing full binding or branch-only change returns 409
+and is left unchanged. This dedicated endpoint also prevents an older Server
+from interpreting conditional finalization as an ordinary unconditional
+settings write. `--rebind` intentionally bypasses this compare-and-set path and
+uses the generic `PUT /api/v1/orgs/:orgId/settings/context_tree` with only
+`repo` and `branch` to replace the binding directly. The CLI strictly validates
+the final response before reporting success.
+
+Repository creation and push happen before final binding, so a finalization
+failure can leave the new repository unbound. When that happens, the CLI says
+the repository was created but not bound, includes the repo URL, and tells you
+to delete an empty repo manually instead of relying on the command to clean it
+up. A 409 from the non-rebind finalization POST has a known conflict outcome:
+the competing setting was preserved, and the CLI requires reading the
+organization's current Context Tree setting first without suggesting a retry or
+overwrite command. A finalization 404 during a rolling Server change reports
+that no binding was written and requires an upgrade plus read-back, also
+without an overwrite command. Other HTTP failures require read-back before
+retrying. A network failure, timeout, or invalid/unconfirmed response has an
+unknown write outcome and likewise requires read-back first.
+The error identifies the exact organization, repository, and retained branch.
+For an unknown outcome it also shows the exact recovery form `first-tree org
+bind-tree <repo> --org <orgId> --branch <branch>`, but explicitly makes running
+it conditional on read-back first confirming that the setting is still
+unbound.
 
 `first-tree tree verify` applies the current strict structural policy. Normal
 content requires parseable YAML frontmatter with non-empty `title` and `owners`;

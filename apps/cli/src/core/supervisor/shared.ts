@@ -15,11 +15,12 @@ export type ShellOutResult = { ok: true; stdout: string } | { ok: false; stderr:
  * instead of Node's opaque "Command failed". Used for launchctl/systemctl —
  * anywhere the stderr message is diagnostically crucial.
  */
-export function runCapture(program: string, args: string[], timeoutMs: number): ShellResult {
+export function runCapture(program: string, args: string[], timeoutMs: number, env?: NodeJS.ProcessEnv): ShellResult {
   const res = spawnSync(program, args, {
     encoding: "utf-8",
     timeout: timeoutMs,
     stdio: ["ignore", "pipe", "pipe"],
+    ...(env ? { env } : {}),
   });
   if (res.status === 0) return { ok: true };
   // spawnSync returns status === null + signal === 'SIGTERM' on timeout.

@@ -783,6 +783,33 @@ describe("GET /me/onboarding/tree-setup-status", () => {
     });
   });
 
+  it("offers recovery when the stored Context Tree binding is not runtime-safe", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await stampCompleted(app, admin, new Date("2026-06-23T10:00:00Z"));
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo: "http://legacy.example/context-tree.git", branch: "bad..branch" },
+      version: 1,
+      updatedBy: admin.userId,
+      updatedAt: new Date("2026-06-23T10:01:00Z"),
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${admin.organizationId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      needsTreeSetup: true,
+      hasTreeBinding: false,
+      hasTreeSetupKickoff: false,
+    });
+  });
+
   it("recovers a post-completion tree binding until a tree kickoff message exists", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

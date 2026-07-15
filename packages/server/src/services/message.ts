@@ -267,7 +267,7 @@ export type SendMessageOptions = {
    * This option is the **only** other escape hatch, reserved for trusted
    * server-internal delivery paths whose addressing is owned and validated by
    * the caller and **can legitimately resolve to no live speaker for some
-   * events** — today only `github-delivery.deliverNormalizedEvent`, whose card
+   * events** — today only `github-delivery.deliverGithubEvent`, whose card
    * addressing (`addressedToAgentIds` derived from the audience row) may name a
    * delegate that is not a speaker of the bound chat. Such a send writes a
    * silent history/context row for human observers rather than reaching an
@@ -320,7 +320,7 @@ export type SendMessageOptions = {
    * an arbitrary agent post a phishing message that renders as if from
    * GitHub — the service unconditionally strips the key from
    * `data.metadata` when this option is not set. Only
-   * `github-delivery.deliverNormalizedEvent` is expected to set this to
+   * `github-delivery.deliverGithubEvent` is expected to set this to
    * `true`. Defense-in-depth alongside the conjunctive UI trust gate in
    * `github-event-card.tsx#isTrustedGithubDispatcherMessage`.
    */

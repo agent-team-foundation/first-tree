@@ -9,7 +9,8 @@ export function createGhShim(paths: RunPaths, options: { reviewFixturePath?: str
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
@@ -31,11 +32,6 @@ function commandLine(argv) {
   return argv.map(formatArg).join(" ");
 }
 
-function optionValue(argv, name) {
-  const index = argv.indexOf(name);
-  return index >= 0 ? argv[index + 1] || null : null;
-}
-
 function trace(message) {
   if (process.env.FIRST_TREE_EVAL_VERBOSE === "1") {
     const caseId = process.env.FIRST_TREE_EVAL_CASE_ID || "unknown";
@@ -43,11 +39,7 @@ function trace(message) {
   }
 }
 
-const argv = process.argv.slice(2);
-const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
-append({ type: "gh_call", phase, argv, cwd: process.cwd() });
-
-function finish(exitCode, stdout, stderr, extra = {}) {
+function finish(argv, phase, exitCode, stdout, stderr, extra = {}) {
   if (stdout) process.stdout.write(stdout);
   if (stderr) process.stderr.write(stderr);
   append({
@@ -61,148 +53,193 @@ function finish(exitCode, stdout, stderr, extra = {}) {
     stderrPreview: preview(stderr),
     ...extra,
   });
+  trace("gh result: exit=" + exitCode + " " + commandLine(argv));
   process.exit(exitCode);
 }
 
-if (REVIEW_FIXTURE_PATH) {
+function argAfter(argv, name) {
+  const index = argv.indexOf(name);
+  return index >= 0 ? argv[index + 1] || "" : "";
+}
+
+function ghMethod(argv) {
+  const separate = argAfter(argv, "-X") || argAfter(argv, "--method");
+  if (separate) return separate.toUpperCase();
+  const equals = argv.find((arg) => arg.startsWith("-X=") || arg.startsWith("--method="));
+  if (equals) return equals.slice(equals.indexOf("=") + 1).toUpperCase();
+  return "GET";
+}
+
+function endpointArg(argv) {
+  if (argv[0] !== "api") return "";
+  return argv.find((arg, index) => index > 0 && !arg.startsWith("-") && argv[index - 1] !== "--jq" && argv[index - 1] !== "--input" && argv[index - 1] !== "-X" && argv[index - 1] !== "--method") || "";
+}
+
+function normalizeEndpoint(endpoint) {
+  return endpoint
+    .replaceAll("agent-team-foundation/context-tree", "$repo")
+    .replaceAll("agent-team-foundation", "$repo_owner")
+    .replaceAll("context-maintainers", "$candidate_team_slug")
+    .replaceAll("ref=main", "ref=$default_branch")
+    .replace(/\\/rulesets\\/42$/u, "/rulesets/$ruleset_id");
+}
+
+function isGovernanceBootstrapCase() {
+  return (process.env.FIRST_TREE_EVAL_CASE_ID || "") === "unbound-github-tree-governance-bootstrap";
+}
+
+function isGovernanceRecoveryCase() {
+  return (process.env.FIRST_TREE_EVAL_CASE_ID || "") === "unbound-github-governance-fail-closed";
+}
+
+function encodedCodeownersFromOrigin() {
+  for (const repo of [process.cwd(), join(process.cwd(), "context-tree")]) {
+    if (!existsSync(join(repo, ".git"))) continue;
+    const remote = spawnSync("git", ["-C", repo, "remote", "get-url", "origin"], { encoding: "utf8" });
+    if (remote.status !== 0) continue;
+    const result = spawnSync("git", ["--git-dir", remote.stdout.trim(), "show", "main:.github/CODEOWNERS"], {
+      encoding: "utf8",
+    });
+    if (result.status === 0) return Buffer.from(result.stdout, "utf8").toString("base64") + "\\n";
+  }
+  return null;
+}
+
+function rulesetPayloadOk(argv) {
+  const input = argAfter(argv, "--input");
+  if (!input || !existsSync(input)) return false;
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(input, "utf8"));
+  } catch {
+    return false;
+  }
+  const rules = Array.isArray(payload.rules) ? payload.rules : [];
+  const nonFastForwardRules = rules.filter((rule) => rule && rule.type === "non_fast_forward");
+  const pullRequestRules = rules.filter((rule) => rule && rule.type === "pull_request");
+  const pullRequest = pullRequestRules[0];
+  const parameters = pullRequest && typeof pullRequest === "object" ? pullRequest.parameters || {} : {};
+  const refName = payload.conditions?.ref_name;
+  const bypassActors = payload.bypass_actors;
+  return (
+    payload.name === "First Tree Context Repo branch rules" &&
+    payload.target === "branch" &&
+    payload.enforcement === "active" &&
+    (bypassActors === undefined || (Array.isArray(bypassActors) && bypassActors.length === 0)) &&
+    Array.isArray(refName?.include) &&
+    refName.include.length === 1 &&
+    refName.include[0] === "~DEFAULT_BRANCH" &&
+    Array.isArray(refName?.exclude) &&
+    refName.exclude.length === 0 &&
+    rules.length === 2 &&
+    nonFastForwardRules.length === 1 &&
+    pullRequestRules.length === 1 &&
+    parameters.required_approving_review_count === 1 &&
+    parameters.require_code_owner_review === true &&
+    parameters.dismiss_stale_reviews_on_push === false &&
+    parameters.require_last_push_approval === false &&
+    parameters.required_review_thread_resolution === false
+  );
+}
+
+function bootstrapResponse(argv) {
+  const endpoint = normalizeEndpoint(endpointArg(argv));
+  const method = ghMethod(argv);
+  if (argv[0] === "repo" && argv[1] === "view") {
+    const jq = argAfter(argv, "--jq");
+    if (jq === ".nameWithOwner") return { stdout: "agent-team-foundation/context-tree\\n" };
+    if (jq === ".defaultBranchRef.name") return { stdout: "main\\n" };
+    return { stdout: '{"nameWithOwner":"agent-team-foundation/context-tree","defaultBranchRef":{"name":"main"}}\\n' };
+  }
+  if (argv[0] !== "api") return null;
+  const rulesetMutation = (endpoint === "repos/$repo/rulesets" || endpoint === "repos/$repo/rulesets/$ruleset_id") && (method === "POST" || method === "PUT");
+  if (method !== "GET" && !rulesetMutation) return null;
+  if (endpoint === "user") return { stdout: "seed-author\\n" };
+  if (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree") return { stdout: "Organization\\n" };
+  if (endpoint === "repos/$repo/teams?per_page=100") return { stdout: "context-maintainers\\n" };
+  if (endpoint === "orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100") return { stdout: "tree-reviewer\\n" };
+  if (endpoint === "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100") return { stdout: "tree-reviewer\\n" };
+  if (endpoint === "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch") {
+    const content = encodedCodeownersFromOrigin();
+    return content === null ? { exitCode: 1, stderr: "No pushed CODEOWNERS found in eval origin.\\n" } : { stdout: content };
+  }
+  if (endpoint === "repos/$repo/codeowners/errors?ref=$default_branch") return { stdout: "0\\n" };
+  if (endpoint === "repos/$repo/rulesets?includes_parents=false&per_page=100") return { stdout: "\\n" };
+  if (rulesetMutation) {
+    if (!rulesetPayloadOk(argv)) return { exitCode: 1, stderr: "Invalid ruleset payload in eval fixture.\\n" };
+    return { stdout: '{"id":42,"name":"First Tree Context Repo branch rules"}\\n', rulesetPayloadValidated: true };
+  }
+  return null;
+}
+
+function recoveryResponse(argv) {
+  const endpoint = normalizeEndpoint(endpointArg(argv));
+  if (argv[0] === "repo" && argv[1] === "view") {
+    const jq = argAfter(argv, "--jq");
+    if (jq === ".nameWithOwner") return { exitCode: 0, stdout: "agent-team-foundation/context-tree\\n" };
+    if (jq === ".defaultBranchRef.name") return { exitCode: 0, stdout: "main\\n" };
+  }
+  if (argv[0] === "api" && ghMethod(argv) !== "GET") return null;
+  if (argv[0] === "api" && endpoint === "user") return { exitCode: 0, stdout: "seed-author\\n" };
+  if (argv[0] === "api" && (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree")) {
+    return { exitCode: 0, stdout: "Organization\\n" };
+  }
+  if (argv[0] === "api" && endpoint === "repos/$repo/teams?per_page=100") {
+    return { exitCode: 1, stderr: "No qualifying visible non-author team in eval fixture.\\n" };
+  }
+  if (argv[0] === "api" && endpoint === "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100") {
+    return { exitCode: 1, stderr: "No qualifying non-author collaborator in eval fixture.\\n" };
+  }
+  return null;
+}
+
+const argv = process.argv.slice(2);
+const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
+append({ type: "gh_call", phase, argv, cwd: process.cwd() });
+trace("gh call: " + commandLine(argv));
+
+if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const statePath = REVIEW_FIXTURE_PATH + ".state";
   let state = { views: 0 };
   try {
     state = JSON.parse(readFileSync(statePath, "utf8"));
   } catch {}
-
-  function targetMatches() {
-    return argv[2] === String(fixture.prNumber) && optionValue(argv, "--repo") === fixture.repo;
-  }
-
-  function apiEndpoint() {
-    for (let index = 1; index < argv.length; index += 1) {
-      if (["--method", "--input"].includes(argv[index])) {
-        index += 1;
-        continue;
-      }
-      if (!argv[index].startsWith("-")) return argv[index];
-    }
-    return null;
-  }
-
-  function reviewEndpointMatches() {
-    return apiEndpoint() === "repos/" + fixture.repo + "/pulls/" + fixture.prNumber + "/reviews";
-  }
-
-  function rejectFixtureCall(message) {
-    finish(2, "", message + "\\n", { reviewFixture: true, reviewFixtureViolation: true });
-  }
-
-  if (argv[0] === "api" && argv[1] === "user") {
-    if (argv.length !== 4 || argv[2] !== "--jq" || argv[3] !== ".login") {
-      rejectFixtureCall("Review fixture requires exact 'gh api user --jq .login'.");
-    }
-    const stdout = argv.includes("--jq") ? fixture.reviewerLogin + "\\n" : JSON.stringify({ login: fixture.reviewerLogin }) + "\\n";
-    append({ type: "github_identity_read", phase, login: fixture.reviewerLogin, argv, cwd: process.cwd() });
-    finish(0, stdout, "", { reviewFixture: true });
-  }
-
-  if (argv[0] === "pr" && argv[1] === "view") {
-    if (!targetMatches()) rejectFixtureCall("Review fixture requires the configured repository and pull request.");
-    const views = fixture.views;
-    const view = views[Math.min(state.views, views.length - 1)];
-    const viewIndex = state.views;
-    state.views += 1;
-    writeFileSync(statePath, JSON.stringify(state), "utf8");
-    append({
-      type: "github_pr_viewed",
-      phase,
-      argv,
-      cwd: process.cwd(),
-      headRefOid: view.headRefOid,
-      isDraft: view.isDraft,
-      prNumber: fixture.prNumber,
-      repo: fixture.repo,
-      state: view.state,
-      viewIndex,
+  if (argv[2] !== String(fixture.prNumber) || argAfter(argv, "--repo") !== fixture.repo) {
+    finish(argv, phase, 2, "", "Review fixture requires the configured repository and pull request.\\n", {
+      reviewFixture: true,
+      reviewFixtureViolation: true,
     });
-    finish(0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
   }
-
-  if (argv[0] === "api" && reviewEndpointMatches()) {
-    const method = optionValue(argv, "--method");
-    const inputPath = optionValue(argv, "--input");
-    if (method !== "POST" || !inputPath) {
-      rejectFixtureCall("Review fixture requires the commit-bound create-review API with POST and --input.");
-    }
-    let payload;
-    try {
-      payload = JSON.parse(readFileSync(inputPath, "utf8"));
-    } catch {
-      rejectFixtureCall("Review fixture requires a readable JSON review payload.");
-    }
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      typeof payload.body !== "string" ||
-      typeof payload.commit_id !== "string" ||
-      !["APPROVE", "REQUEST_CHANGES", "COMMENT"].includes(payload.event)
-    ) {
-      rejectFixtureCall("Review fixture requires body, commit_id, and one supported review event.");
-    }
-    if (payload.commit_id !== fixture.reviewHeadOid) {
-      rejectFixtureCall("Review fixture requires the inspected review-head commit_id.");
-    }
-    const head = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: fixture.reviewWorktreePath,
-      encoding: "utf8",
-    });
-    const symbolicHead = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
-      cwd: fixture.reviewWorktreePath,
-      encoding: "utf8",
-    });
-    const status = spawnSync("git", ["status", "--porcelain"], {
-      cwd: fixture.reviewWorktreePath,
-      encoding: "utf8",
-    });
-    if (
-      head.status !== 0 ||
-      head.stdout.trim() !== fixture.reviewHeadOid ||
-      symbolicHead.status === 0 ||
-      status.status !== 0 ||
-      status.stdout.trim() !== ""
-    ) {
-      rejectFixtureCall("Review fixture requires the registered clean detached PR-head worktree at submission time.");
-    }
-    const action = {
-      APPROVE: "approve",
-      COMMENT: "comment",
-      REQUEST_CHANGES: "request-changes",
-    }[payload.event];
-    append({
-      type: "github_review_submitted",
-      phase,
-      action,
-      body: payload.body,
-      bodyFileUsed: true,
-      commitOid: payload.commit_id,
-      currentHeadOid: fixture.submissionHeadOid,
-      prNumber: fixture.prNumber,
-      repo: fixture.repo,
-      argv,
-      cwd: process.cwd(),
-    });
-    finish(
-      0,
-      JSON.stringify({ body: payload.body, commit_id: payload.commit_id, state: payload.event }) + "\\n",
-      "",
-      { reviewFixture: true },
-    );
-  }
+  const view = fixture.views[Math.min(state.views, fixture.views.length - 1)];
+  const viewIndex = state.views;
+  state.views += 1;
+  writeFileSync(statePath, JSON.stringify(state), "utf8");
+  append({
+    type: "github_pr_viewed",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    headRefOid: view.headRefOid,
+    isDraft: view.isDraft,
+    prNumber: fixture.prNumber,
+    repo: fixture.repo,
+    state: view.state,
+    viewIndex,
+  });
+  finish(argv, phase, 0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
 }
 
-trace("gh call blocked: " + commandLine(argv));
+const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;
+if (simulated !== null) {
+  finish(argv, phase, simulated.exitCode ?? 0, simulated.stdout || "", simulated.stderr || "", {
+    shimmedByEval: true,
+    rulesetPayloadValidated: Boolean(simulated.rulesetPayloadValidated),
+  });
+}
 
 const stderr = "Blocked gh command in skill eval. No real GitHub side effect was attempted.\\n";
-process.stderr.write(stderr);
-finish(1, "", stderr, { blockedByEval: true });
+finish(argv, phase, 1, "", stderr, { blockedByEval: true });
 `;
 
   writeText(shimPath, script);

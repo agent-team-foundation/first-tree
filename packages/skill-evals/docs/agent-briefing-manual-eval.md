@@ -2,7 +2,8 @@
 
 This checklist is for manual validation after changing the generated
 workspace `AGENTS.md` briefing. It focuses on agent behavior that is hard to
-fully automate: chat channel choice and First Tree skill routing.
+fully automate: chat channel choice, provider CLI routing, and First Tree
+skill routing.
 
 ## Run Record
 
@@ -28,6 +29,9 @@ skill-evals workspace with the `first-tree-staging` shim, attach
 | `chat-update-progress` | A long task asks the agent to record progress or has a substantial intermediate milestone. | The agent uses `chat update --description -` for progress/status and does not stream repeated plain sends to the human. | Shim event and rendered description. |
 | `agent-handoff` | The task requires another agent to implement or review. | The agent invites/sends the target agent with `chat send <agent>`. The handoff body is self-contained and keeps the work in the current chat unless a separate task boundary is needed. | Shim event and handoff body. |
 | `agent-noop-no-courtesy-send` | The agent wakes from an agent FYI or duplicate message with nothing new to do. | The agent does not send a courtesy acknowledgement to another agent. | No `chat send` event, plus final trace explains no action if needed. |
+| `gitlab-create-subscribe` | A task asks the agent to create a GitLab issue or merge request and keep the current account notified. | When `glab` is available, the agent uses it first, confirms the target host/auth state without exposing credentials, creates the entity, and then runs the matching native subscribe command. The trace distinguishes entity creation from notification subscription and does not invent a `first-tree gitlab` command. | Transcript plus redacted command trace showing `glab issue/mr create` and `glab issue/mr subscribe`; include host/auth status and the resulting entity reference. |
+| `gitlab-subscribe-failure` | GitLab entity creation succeeds but the native subscribe command fails because of auth, host, or permission. | The agent reports the notification gap separately and keeps the created issue/MR valid. It does not retry with a token in shell history, claim First Tree chat binding, or undo the entity. | Transcript plus exit status/stderr classification with tokens and private URLs redacted; show the created entity and the failed subscribe command. |
+| `gitlab-explicit-unsubscribe` | A human explicitly asks the agent to stop GitLab notifications for an existing issue or merge request. | The agent runs the matching `glab issue/mr unsubscribe` form only after the explicit request. Closing, merging, or finishing a task alone must not trigger unsubscribe. | Transcript plus command trace showing the human request and one matching unsubscribe command; include a negative trace for an automatic lifecycle event when available. |
 | `first-tree-read-trigger` | A concrete software task includes a repo, path, feature, owner, domain, bug, or error signal. | The agent loads `first-tree-read`, inspects `first-tree tree tree --help` (or the channel-resolved binary), uses `tree tree` selectors, reads focused nodes, and carries tree facts into the answer. | Skill load / file read, command trace, selected node paths, final answer facts. |
 | `first-tree-read-non-trigger` | A clearly non-software request has no repo/tree/domain signal. | The agent does not call `first-tree tree tree` or load `first-tree-read` just because a tree exists. | No tree command events; natural answer. |
 | `first-tree-write-source-gates` | Run three subcases: no source artifact, durable source artifact, and implementation-only source. | No source: no tree diff; ask/refuse and request a PR/doc/note/pasted source. Durable source: load `first-tree-write`, read related nodes, write the smallest correct tree diff, and run `first-tree tree verify`. Implementation-only: no tree diff, with a short explanation. | Shim events, tree diff or lack of diff, verify output. |

@@ -20,7 +20,22 @@ describe("agent briefing template assets", () => {
 
       const copiedTemplate = join(tempRoot, "dist", "templates", "agent-briefing.ejs");
       expect(existsSync(copiedTemplate)).toBe(true);
-      expect(readFileSync(copiedTemplate, "utf8")).toContain("generatedBannerBlock");
+
+      const copiedSource = readFileSync(copiedTemplate, "utf8");
+      const sourceTemplate = readFileSync(
+        join(repoRoot, "packages", "client", "src", "runtime", "templates", "agent-briefing.ejs"),
+        "utf8",
+      );
+
+      expect(copiedSource).toBe(sourceTemplate);
+      expect(copiedSource).toContain("# Working in First Tree (First Tree Managed)");
+      expect(copiedSource).toContain("## GitLab Working Posture");
+      expect(copiedSource).toContain("## GitLab Entity Attention");
+      expect(copiedSource).toContain("glab mr --help");
+      expect(copiedSource).not.toContain("first-tree-gitlab");
+      expect(copiedSource).not.toContain("glab mr subscribe <iid-or-branch>");
+      expect(copiedSource).toContain("## Context Tree Policy");
+      expect(copiedSource).toContain("# Skills (First Tree Managed)");
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

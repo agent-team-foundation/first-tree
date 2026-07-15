@@ -35,12 +35,14 @@ const allOk = (): ClientCapabilities => ({
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: ok(),
+  cursor: ok(),
 });
 
 const codexMissing = (): ClientCapabilities => ({
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: missing(),
+  cursor: ok(),
 });
 
 // Detection is install-only, so a provider mid-login is one whose binary is not
@@ -67,6 +69,7 @@ const codexPendingSnapshot = (): ClientCapabilities => ({
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: codexPending(),
+  cursor: ok(),
 });
 
 /** What a re-probe sees while the login is still in flight: still not installed. */
@@ -74,6 +77,7 @@ const codexUnauthSnapshot = (): ClientCapabilities => ({
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: codexUnauth(),
+  cursor: ok(),
 });
 
 const BASE = 100;

@@ -1,6 +1,6 @@
 ---
 name: first-tree-file-bug
-description: File a GitHub issue for a bug the user hit while using First Tree itself — the CLI, agent runtime, chat, web app, or Context Tree tooling. Use when the user reports that something in First Tree is broken, errored, crashed, or is not behaving as expected and wants it reported / filed / logged as a bug (e.g. "First Tree has a bug", "report this bug", "chat send keeps failing", "the CLI crashed", "开个 issue 反馈这个 bug"). The skill gathers reproduction steps, the First Tree client/CLI version, the chat ID, the reporting user's ID, OS, and error output, then opens an issue on the first-tree repo with the user's `gh` CLI. Not for bugs in the user's own project code or third-party tools — only First Tree platform defects.
+description: File a GitHub issue about a defect in First Tree itself — the CLI, agent runtime, chat, web app, GitHub integration, or Context Tree tooling — onto First Tree's own GitHub-hosted public tracker (agent-team-foundation/first-tree). Use only when the user reports that First Tree the platform is broken, errored, crashed, or misbehaving and wants it reported (e.g. "First Tree has a bug", "chat send keeps failing", "the CLI crashed", "给 First Tree 开个 issue 反馈这个 bug"). The skill gathers reproduction steps, the First Tree client/CLI version, the chat ID, the reporting user's ID, OS, and error output, then opens the issue with the user's `gh` CLI. NOT for filing an issue into the user's own or bound source repo — that is an ordinary source-repo issue using the target forge CLI (`gh` for GitHub, `glab` for GitLab), not this skill — and not for bugs in the user's project code or third-party tools.
 ---
 
 # First Tree File Bug
@@ -42,7 +42,13 @@ secrets (see **Guardrails**).
 State briefly what you understand the bug to be and that it looks like a
 First Tree defect worth filing. If it is ambiguous whether the fault is in
 First Tree or the user's own setup, resolve that first — do not file an
-issue against First Tree for something outside it.
+issue against First Tree for something outside it. If the report is really
+about the user's own project or their bound source repo, this is not the
+skill: file it into that repo with the target repository's forge CLI
+(`gh issue create --repo <their repo>` for GitHub, or `glab issue create
+--repo <their repo>` for GitLab) instead of here. If that CLI is not
+authenticated, recover with `gh auth login` for GitHub or `glab auth login`
+for GitLab.
 
 ### 2. Gather the bug context
 
@@ -126,7 +132,9 @@ identifiers, not credentials.
 ### 5. Confirm before filing
 
 Filing is outward-facing and publishes to a public tracker, so show the
-user the drafted title and body and get an explicit go-ahead before
+user the drafted title and body **and state the destination explicitly —
+this files into `agent-team-foundation/first-tree` (First Tree's own public
+tracker), not the user's own repo** — then get an explicit go-ahead before
 creating the issue. Incorporate any correction they make.
 
 ### 6. File the issue
@@ -142,7 +150,8 @@ gh issue create \
 ```
 
 `gh` uses the user's own authentication on this host — that is the intended
-"file with the user's gh CLI" path.
+"file with the user's gh CLI" path. This is GitHub-only because First Tree's
+public issue tracker is GitHub-hosted.
 
 ### 7. Open a tracking chat and follow the issue
 
@@ -220,7 +229,8 @@ the fallback) this chat.
 - **If `gh` is missing or unauthenticated**, do not treat it as a First
   Tree platform gap. Present the fully drafted issue (title + body) to the
   user so they can file it manually, and offer the `gh` install / `gh auth
-  login` path.
+  login` path; this recovery is GitHub-specific because the First Tree
+  tracker is on GitHub.
 
 ## CLI binary
 

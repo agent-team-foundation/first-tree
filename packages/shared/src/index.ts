@@ -99,6 +99,7 @@ export {
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD,
   type DryRunAgentRuntimeConfig,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -669,10 +670,10 @@ export {
   type InvolveReason,
   involveReasonSchema,
   NORMALIZED_EVENT_KINDS,
-  type NormalizedEvent,
   type NormalizedEventKind,
+  type NormalizedScmEvent,
   normalizedEventKindSchema,
-  normalizedEventSchema,
+  normalizedScmEventSchema,
 } from "./schemas/normalized-event.js";
 export {
   NOTIFICATION_SEVERITIES,
@@ -691,6 +692,12 @@ export {
   githubStartQuerySchema,
 } from "./schemas/oauth.js";
 export {
+  type ContextTreeActiveBinding,
+  type ContextTreeSettingState,
+  classifyContextTreeSetting,
+  contextTreeActiveBindingSchema,
+  contextTreeBranchSchema,
+  contextTreeRepoSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACE_KEYS,
   ORG_SETTINGS_NAMESPACES,
@@ -711,6 +718,7 @@ export {
   orgContextTreeFeaturesInputSchema,
   orgContextTreeFeaturesOutputSchema,
   orgContextTreeFeaturesStorageSchema,
+  orgContextTreeFinalizeInputSchema,
   orgContextTreeInputSchema,
   orgContextTreeOutputSchema,
   orgContextTreeStorageSchema,
@@ -876,6 +884,18 @@ export {
   runtimeProviderSchema,
 } from "./schemas/runtime-provider.js";
 export {
+  SCM_INGRESS_AUTHORITIES,
+  SCM_PROVIDERS,
+  type ScmIngressAuthority,
+  type ScmIngressContext,
+  type ScmProvider,
+  type ScmSource,
+  scmIngressAuthoritySchema,
+  scmIngressContextSchema,
+  scmProviderSchema,
+  scmSourceSchema,
+} from "./schemas/scm-source.js";
+export {
   type AssistantTextEventPayload,
   assistantTextEventPayload,
   type ChatTokenUsage,
@@ -966,7 +986,6 @@ export {
   userSchema,
   userStatusSchema,
 } from "./schemas/user.js";
-export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
 export {
   SOURCE_REPOS_DIRNAME,
   WORKSPACE_MANIFEST_FILENAME,

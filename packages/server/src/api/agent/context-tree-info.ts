@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
-import { getOrgContextTree } from "../../services/org-settings.js";
+import { getOrgContextTreeBinding } from "../../services/org-settings.js";
 
 export async function agentContextTreeInfoRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -9,7 +9,7 @@ export async function agentContextTreeInfoRoutes(app: FastifyInstance): Promise<
    */
   app.get("/context-tree/info", async (request) => {
     const identity = requireAgent(request);
-    const tree = await getOrgContextTree(app.db, identity.organizationId);
-    return { repo: tree.repo ?? null, branch: tree.branch ?? null };
+    const tree = await getOrgContextTreeBinding(app.db, identity.organizationId);
+    return { repo: tree?.repo ?? null, branch: tree?.branch ?? null };
   });
 }

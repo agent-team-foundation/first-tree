@@ -18,6 +18,10 @@ export function registerAgentConfigSetReasoningEffortCommand(config: Command): v
       // against the agent's runtime provider and rejects out-of-range values
       // with a 400.
       const updated = await patchConfig(serverUrl, adminToken, uuid, current.version, { reasoningEffort: level });
-      success({ agentId: updated.agentId, version: updated.version, reasoningEffort: updated.payload.reasoningEffort });
+      success({
+        agentId: updated.agentId,
+        version: updated.version,
+        reasoningEffort: "reasoningEffort" in updated.payload ? updated.payload.reasoningEffort : undefined,
+      });
     });
 }

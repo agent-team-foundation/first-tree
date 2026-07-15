@@ -53,7 +53,11 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
     return !metrics.skeletonObserved;
   }
   if (evalCase.expected.action === "create_tree_via_init") {
-    return metrics.treeInitWithContextTreeDirObserved;
+    return (
+      metrics.treeInitWithContextTreeDirObserved &&
+      (!evalCase.expected.requireGithubGovernanceBootstrap || metrics.githubGovernanceBootstrapObserved) &&
+      (!evalCase.expected.requireGithubGovernanceRecovery || metrics.githubGovernanceRecoveryObserved)
+    );
   }
   if (evalCase.expected.action === "continue_phase2") {
     return metrics.phase2ContinuationObserved && !metrics.phase2RefusalObserved;
@@ -62,6 +66,10 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
 }
 
 export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics, passed: boolean): SkillCaseGrading {
+  const expectedContextTreeCreation = Boolean(
+    evalCase.expected.action === "create_tree_via_init" &&
+      (evalCase.expected.requireGithubGovernanceBootstrap || evalCase.expected.requireGithubGovernanceRecovery),
+  );
   const routingPass = metrics.seedSkillFileReadObserved;
   const processPass =
     metrics.fixtureValidationOk &&
@@ -69,7 +77,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
     metrics.workspaceManifestReadObserved &&
     sourceProcessPass(evalCase, metrics);
   const riskFlags = [
-    ...(metrics.contextTreeChanged
+    ...(metrics.contextTreeChanged && !expectedContextTreeCreation
       ? [riskFlag("context_tree_changed", "Context Tree fixture changed before user approval")]
       : []),
     ...(metrics.sourceRepoChanged ? [riskFlag("source_repo_changed", "source repo fixture changed")] : []),
@@ -80,7 +88,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
     ...metrics.forbiddenSideEffectHits.map((hit) => riskFlag("forbidden_side_effect", hit)),
   ];
   const riskPass =
-    !metrics.contextTreeChanged &&
+    (!metrics.contextTreeChanged || expectedContextTreeCreation) &&
     !metrics.sourceRepoChanged &&
     (!metrics.phase2LeafContentObserved || evalCase.expected.action === "continue_phase2") &&
     metrics.forbiddenActionHits.length === 0 &&
@@ -99,7 +107,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}; require github governance bootstrap=${Boolean(evalCase.expected.requireGithubGovernanceBootstrap)}; github governance bootstrap observed=${metrics.githubGovernanceBootstrapObserved}; require github governance recovery=${Boolean(evalCase.expected.requireGithubGovernanceRecovery)}; github governance recovery observed=${metrics.githubGovernanceRecoveryObserved}`,
       ),
       evidence(
         "risk_pass",
@@ -157,6 +165,8 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - approvalRequestObserved: ${markdownBool(summary.metrics.approvalRequestObserved)}
 - treeInitObserved: ${markdownBool(summary.metrics.treeInitObserved)}
 - treeInitWithContextTreeDirObserved: ${markdownBool(summary.metrics.treeInitWithContextTreeDirObserved)}
+- githubGovernanceBootstrapObserved: ${markdownBool(summary.metrics.githubGovernanceBootstrapObserved)}
+- githubGovernanceRecoveryObserved: ${markdownBool(summary.metrics.githubGovernanceRecoveryObserved)}
 - phase2LeafContentObserved: ${markdownBool(summary.metrics.phase2LeafContentObserved)}
 - sourceRepoChanged: ${markdownBool(summary.metrics.sourceRepoChanged)}
 - contextTreeChanged: ${markdownBool(summary.metrics.contextTreeChanged)}

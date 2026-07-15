@@ -27,7 +27,7 @@ import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createLogger } from "../observability/index.js";
 import { type TimingSink, timeSyncWithSink, timeWithSink } from "../observability/timing.js";
-import { getOrgContextTree } from "./org-settings.js";
+import { getOrgContextTreeBinding } from "./org-settings.js";
 
 const CONTEXT_TREE_IO_FEED_LIMIT = 50;
 // Grep/Glob count as reads at the granularity their refs carry: the client
@@ -35,6 +35,11 @@ const CONTEXT_TREE_IO_FEED_LIMIT = 50;
 // per matched file (see the client's TREE_SEARCH_TOOL_NAMES).
 const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead", "Grep", "Glob"]);
 const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+// Cursor's handler-emitted tool names. Interpreted ONLY when
+// `runtimeProvider === "cursor"` — the lowercase names deliberately do not
+// collide with claude's capitalized tools or codex's `command`/`file_change`.
+const CURSOR_READ_TOOLS = new Set(["read"]);
+const CURSOR_WRITE_TOOLS = new Set(["edit", "write"]);
 const CONTEXT_TREE_IO_TOOL_NAMES = [
   "Bash",
   "Edit",
@@ -46,7 +51,11 @@ const CONTEXT_TREE_IO_TOOL_NAMES = [
   "Read",
   "Write",
   "command",
+  "edit",
   "file_change",
+  "read",
+  "shell",
+  "write",
 ];
 const log = createLogger("ContextTreeIo");
 const GIT_STATUS_DELTA_REF_ORIGIN = "git_status_delta";
@@ -184,7 +193,9 @@ function shellToolCanRead(event: SessionEvent): boolean {
 
 function isShellTool(runtimeProvider: string, toolName: string): boolean {
   return (
-    (runtimeProvider === "codex" && toolName === "command") || (isClaudeRuntime(runtimeProvider) && toolName === "Bash")
+    (runtimeProvider === "codex" && toolName === "command") ||
+    (runtimeProvider === "cursor" && toolName === "shell") ||
+    (isClaudeRuntime(runtimeProvider) && toolName === "Bash")
   );
 }
 
@@ -216,6 +227,9 @@ function skippedDecisionFastPathForNoRefs(
   if (runtimeProvider === "codex" && toolName === "file_change") {
     return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
   }
+  if (runtimeProvider === "cursor" && (CURSOR_READ_TOOLS.has(toolName) || CURSOR_WRITE_TOOLS.has(toolName))) {
+    return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
+  }
   if (isClaudeRuntime(runtimeProvider) && (CLAUDE_READ_TOOLS.has(toolName) || CLAUDE_WRITE_TOOLS.has(toolName))) {
     return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
   }
@@ -239,6 +253,12 @@ function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDer
   const toolName = event.payload.name;
   if (runtimeProvider === "codex" && toolName === "file_change") {
     return { action: "write", source: "codex_file_change" };
+  }
+  if (runtimeProvider === "cursor" && CURSOR_READ_TOOLS.has(toolName)) {
+    return { action: "read", source: "cursor_read_tool" };
+  }
+  if (runtimeProvider === "cursor" && CURSOR_WRITE_TOOLS.has(toolName)) {
+    return { action: "write", source: "cursor_write_tool" };
   }
   if (isClaudeRuntime(runtimeProvider) && CLAUDE_READ_TOOLS.has(toolName)) {
     return { action: "read", source: "claude_read_tool" };
@@ -422,9 +442,10 @@ export async function summarizeContextTreeIoSkippedEvents(
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const binding =
     options.contextTreeBinding ??
-    (await timeWithSink(options.timing, "io_skipped_binding", () => getOrgContextTree(db, organizationId), {
+    (await timeWithSink(options.timing, "io_skipped_binding", () => getOrgContextTreeBinding(db, organizationId), {
       organizationId,
-    }));
+    })) ??
+    {};
   const bindingBranch = binding.branch ?? "main";
   const candidateAgents = await listContextTreeIoCandidateAgents(db, organizationId, options.timing, "io_skipped");
   const runtimeProviderByAgent = new Map(candidateAgents.map((agent) => [agent.agentId, agent.runtimeProvider]));
@@ -566,7 +587,7 @@ export async function summarizeContextTreeIoSkippedEvents(
 }
 
 export async function recordFromSessionEvent(db: Database, input: RecordContextTreeIoInput): Promise<void> {
-  const binding = await getOrgContextTree(db, input.organizationId);
+  const binding: ContextTreeIoBinding = (await getOrgContextTreeBinding(db, input.organizationId)) ?? {};
   const bindingBranch = binding.branch ?? "main";
 
   const event = sessionEventSchema.parse({ kind: input.sessionEvent.kind, payload: input.sessionEvent.payload });

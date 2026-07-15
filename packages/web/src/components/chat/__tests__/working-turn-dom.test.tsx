@@ -207,4 +207,26 @@ describe("WorkingTurn", () => {
 
     await act(async () => root.unmount());
   });
+
+  it("wraps long agent names and assistant updates inside a narrow timeline", async () => {
+    const { WorkingTurn } = await import("../working-turn.js");
+    const longName = `agent-${"unbroken".repeat(20)}`;
+    const longBody = `progress-${"unbroken".repeat(40)}`;
+    const { container, root } = await renderDom(
+      <WorkingTurn
+        {...props}
+        agentNameFn={() => longName}
+        defaultOpen={false}
+        events={[event({ id: "assistant-long", seq: 1, kind: "assistant_text", payload: { text: longBody } })]}
+      />,
+    );
+
+    expect(container.querySelector<HTMLElement>("[data-working-turn-header]")?.className).toContain("flex-wrap");
+    expect(container.querySelector<HTMLElement>("[data-working-turn-name]")?.style.overflowWrap).toBe("anywhere");
+    expect(container.querySelector<HTMLElement>("[data-working-turn-body]")?.style.overflowWrap).toBe("anywhere");
+    expect(container.textContent).toContain(longName);
+    expect(container.textContent).toContain(longBody);
+
+    await act(async () => root.unmount());
+  });
 });

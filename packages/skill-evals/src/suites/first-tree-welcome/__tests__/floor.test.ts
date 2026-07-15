@@ -109,8 +109,15 @@ describe("first-tree-welcome floor invariants", () => {
     expect(description).not.toContain("local project folder path");
     expect(skillMarkdown).toContain("Treat the opening message as the user's onboarding request.");
     expect(skillMarkdown).toContain("local project folder path");
-    expect(skillMarkdown).toContain("GitHub repo URL");
+    expect(skillMarkdown).toContain("GitHub/GitLab repo URL");
+    expect(skillMarkdown).toContain("`gh auth login` or `glab auth login`");
     expect(skillMarkdown).not.toContain("First Tree sent it");
+  });
+
+  it("keeps GitHub-only follow guidance out of the GitLab MR path", () => {
+    expect(skillMarkdown).toContain("This section is GitHub-only");
+    expect(skillMarkdown).toContain("For a GitLab MR, do not call `first-tree github");
+    expect(skillMarkdown).toContain("A GitLab MR has no documented equivalent here");
   });
 
   it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {
@@ -148,23 +155,46 @@ describe("first-tree-welcome floor invariants", () => {
 
     expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
     expect(yamlDescription, "openai.yaml description must match SKILL.md description").toBe(skillDescription);
+    expect(skillDescription).toContain("PR/MR reviews");
+    expect(yamlDescription).toContain("PR/MR reviews");
+    expect(skillDescription).not.toContain("PR reviews");
+    expect(yamlDescription).not.toContain("PR reviews");
     // Guard the specific retired trigger the drift-guard exists to catch.
     expect(yamlDescription).not.toContain("explicitly names first-tree-welcome");
     expect(yamlDescription).toContain("repo scans");
   });
 
   it("hardens both agent-briefing welcome skill-map rows with the scan / tree-setup exclusion", () => {
-    // agent-briefing.ts ships TWO `first-tree-welcome` "Load when" rows (the
+    // agent-briefing.ejs ships TWO `first-tree-welcome` "Load when" rows (the
     // tree-less and tree-bound briefing variants) — routing hints the agent
     // reads. If either omits the scan / tree-setup exclusion it can misroute a
     // scan-first chat into the welcome launcher. Bind both so neither drifts back
     // to an un-hardened hint.
-    const briefing = readFileSync(join(process.cwd(), "../client/src/runtime/agent-briefing.ts"), "utf8");
-    const hardenedRows = briefing.match(/first-tree-welcome.*not a repo scan or tree setup chat/g) ?? [];
-    expect(hardenedRows.length, "both welcome skill-map rows must carry the scan/tree-setup exclusion").toBe(2);
+    const briefingTemplate = readFileSync(
+      join(process.cwd(), "../client/src/runtime/templates/agent-briefing.ejs"),
+      "utf8",
+    );
+    const welcomeRows = briefingTemplate.match(/^\|[ \t]*`first-tree-welcome`[ \t]*\|[^\n]*$/gm) ?? [];
+    expect(welcomeRows, "template must contain both tree-bound and tree-less welcome rows").toHaveLength(2);
+    for (const row of welcomeRows) {
+      expect(row, "both welcome rows must carry the scan/tree-setup exclusion").toContain(
+        "not a repo scan or tree setup chat",
+      );
+    }
     // The retired un-hardened hints must be gone.
-    expect(briefing).not.toContain("onboarding welcome / intro / value-first first chat");
-    expect(briefing).not.toContain("onboarding system messages ask for welcome");
+    expect(briefingTemplate).not.toContain("onboarding welcome / intro / value-first first chat");
+    expect(briefingTemplate).not.toContain("onboarding system messages ask for welcome");
+  });
+
+  it("hands GitHub Context Repo governance to the seed workflow without duplicating its ruleset contract", () => {
+    expect(skillMarkdown).toMatch(/when it creates a new\s+Context Repo on GitHub/);
+    expect(skillMarkdown).toContain("apply the seed workflow's GitHub governance setup with\n  host `gh`");
+    expect(skillMarkdown).toContain("including a working Code Owner mapping and default-branch rules");
+    expect(skillMarkdown).toMatch(/automatic GitHub governance setup\s+fails/);
+    expect(skillMarkdown).not.toContain("required_approving_review_count");
+    expect(skillMarkdown).not.toContain("dismiss_stale_reviews_on_push");
+    expect(skillMarkdown).not.toContain("require_last_push_approval");
+    expect(skillMarkdown).not.toContain("required_review_thread_resolution");
   });
 
   it("keeps production-scan fix fan-out aligned with the scan's 3-5 blocker contract", () => {

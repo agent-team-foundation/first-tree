@@ -11,6 +11,16 @@ import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
+vi.mock("../runtime/agent-briefing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime/agent-briefing.js")>();
+  return {
+    ...actual,
+    buildAgentBriefing: vi.fn((options: Parameters<typeof actual.buildAgentBriefing>[0]) =>
+      actual.buildAgentBriefing(options),
+    ),
+  };
+});
+
 vi.mock("../runtime/bootstrap.js", () => ({
   FIRST_TREE_RUNTIME_DIR: ".first-tree-workspace",
   FIRST_TREE_WORKSPACE_MARKER: ".first-tree-workspace",

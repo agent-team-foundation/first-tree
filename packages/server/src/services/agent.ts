@@ -371,7 +371,7 @@ async function validateDelegateMentionTarget(db: Database, targetUuid: string, s
  * delegate-mention selector when `agent.type === "human"`. Without this
  * server-side check, CLI / Admin API / internal scripts could write
  * delegateMention onto non-human rows, silently re-enabling the
- * autonomous-agent-self-mention path that resolveAudience would then fan
+ * autonomous-agent-self-mention path that resolveGithubAudience would then fan
  * out. Called from `createAgent` / `updateAgent` before
  * `validateDelegateMentionTarget` so a wrong source type fails fast without
  * the target lookup round-trip.

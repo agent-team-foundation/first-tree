@@ -1,158 +1,434 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
-
-import { writeText } from "../commands.js";
 import { readEvents } from "../events.js";
 import { createRunPaths } from "../paths.js";
 import { createGhShim } from "../shims/gh.js";
 
+function createShim(caseId: string): { repoRoot: string; ghPath: string; eventsPath: string; workspacePath: string } {
+  const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-gh-shim-test-"));
+  const packageRoot = join(repoRoot, "packages", "skill-evals");
+  mkdirSync(packageRoot, { recursive: true });
+  const paths = createRunPaths({ caseId, packageRoot, startedAt: "2026-06-30T00:00:00.000Z" });
+  createGhShim(paths);
+  return {
+    repoRoot,
+    ghPath: join(paths.binDir, "gh"),
+    eventsPath: paths.eventsPath,
+    workspacePath: paths.workspacePath,
+  };
+}
+
 describe("gh eval shim", () => {
-  it("allows only deterministic review reads and one commit-bound API review", () => {
-    const root = mkdtempSync(join(tmpdir(), "skill-evals-gh-shim-"));
+  it("simulates successful GitHub governance bootstrap calls", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
     try {
-      const packageRoot = join(root, "packages", "skill-evals");
-      const paths = createRunPaths({ caseId: "gh-review", packageRoot, startedAt: "2026-07-14T00:00:00.000Z" });
-      const fixturePath = join(paths.runRoot, "fixture.json");
-      const reviewWorktreePath = join(paths.workspacePath, ".review-worktrees", "42");
-      mkdirSync(reviewWorktreePath, { recursive: true });
-      writeText(join(reviewWorktreePath, "NODE.md"), "review fixture\n");
-      for (const args of [
-        ["init"],
-        ["config", "user.email", "eval@example.invalid"],
-        ["config", "user.name", "First Tree Eval"],
-        ["add", "."],
-        ["commit", "-m", "test: seed review worktree"],
-      ]) {
-        expect(spawnSync("git", args, { cwd: reviewWorktreePath }).status).toBe(0);
-      }
-      const reviewHeadOid = spawnSync("git", ["rev-parse", "HEAD"], {
-        cwd: reviewWorktreePath,
-        encoding: "utf8",
-      }).stdout.trim();
-      expect(spawnSync("git", ["checkout", "--detach", reviewHeadOid], { cwd: reviewWorktreePath }).status).toBe(0);
-      writeText(
-        fixturePath,
-        `${JSON.stringify({ prNumber: 42, repo: "owner/context-tree", reviewHeadOid, reviewerLogin: "reviewer", reviewWorktreePath, submissionHeadOid: reviewHeadOid, views: [{ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" }] })}\n`,
+      writeFileSync(
+        join(shim.workspacePath, "ruleset.json"),
+        JSON.stringify({
+          conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+          enforcement: "active",
+          name: "First Tree Context Repo branch rules",
+          rules: [
+            { type: "non_fast_forward" },
+            {
+              parameters: {
+                dismiss_stale_reviews_on_push: false,
+                require_code_owner_review: true,
+                require_last_push_approval: false,
+                required_approving_review_count: 1,
+                required_review_thread_resolution: false,
+              },
+              type: "pull_request",
+            },
+          ],
+          target: "branch",
+        }),
+        "utf8",
       );
-      createGhShim(paths, { reviewFixturePath: fixturePath });
-      const env = { ...process.env, FIRST_TREE_EVAL_EVENTS: paths.eventsPath, FIRST_TREE_EVAL_PHASE: "model" };
-      const gh = join(paths.binDir, "gh");
-
-      const view = spawnSync(gh, ["pr", "view", "42", "--repo", "owner/context-tree", "--json", "headRefOid,state"], {
-        cwd: paths.workspacePath,
-        encoding: "utf8",
-        env,
-      });
-      expect(view.status).toBe(0);
-      expect(JSON.parse(view.stdout)).toEqual({ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" });
-
-      const identity = spawnSync(gh, ["api", "user", "--jq", ".login"], {
-        cwd: paths.workspacePath,
-        encoding: "utf8",
-        env,
-      });
-      expect(identity.status).toBe(0);
-
-      const bodyPath = join(paths.runRoot, "review.md");
-      writeText(bodyPath, "## Approved\n");
-      const payloadPath = join(paths.runRoot, "review.json");
-      writeText(
-        payloadPath,
-        `${JSON.stringify({ body: readFileSync(bodyPath, "utf8"), commit_id: reviewHeadOid, event: "APPROVE" })}\n`,
-      );
-      const review = spawnSync(
-        gh,
-        ["api", "repos/owner/context-tree/pulls/42/reviews", "--method", "POST", "--input", payloadPath],
-        { cwd: paths.workspacePath, encoding: "utf8", env },
-      );
-      expect(review.status).toBe(0);
-      expect(readFileSync(bodyPath, "utf8")).toBe("## Approved\n");
-
-      writeText(
-        fixturePath,
-        `${JSON.stringify({ prNumber: 42, repo: "owner/context-tree", reviewHeadOid, reviewerLogin: "reviewer", reviewWorktreePath, submissionHeadOid: "new-head", views: [{ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" }] })}\n`,
-      );
-      const staleReview = spawnSync(
-        gh,
-        ["api", "repos/owner/context-tree/pulls/42/reviews", "--method", "POST", "--input", payloadPath],
-        { cwd: paths.workspacePath, encoding: "utf8", env },
-      );
-      expect(staleReview.status).toBe(0);
-      expect(JSON.parse(staleReview.stdout)).toMatchObject({ commit_id: reviewHeadOid, state: "APPROVE" });
-      writeText(
-        fixturePath,
-        `${JSON.stringify({ prNumber: 42, repo: "owner/context-tree", reviewHeadOid, reviewerLogin: "reviewer", reviewWorktreePath, submissionHeadOid: reviewHeadOid, views: [{ headRefOid: reviewHeadOid, isDraft: false, state: "OPEN" }] })}\n`,
+      const result = spawnSync(
+        shim.ghPath,
+        ["api", "repos/agent-team-foundation/context-tree/rulesets", "--method", "POST", "--input", "ruleset.json"],
+        {
+          cwd: shim.workspacePath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+            FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+            FIRST_TREE_EVAL_PHASE: "model",
+          },
+        },
       );
 
-      writeText(join(reviewWorktreePath, "NODE.md"), "dirty review fixture\n");
-      const dirtyReview = spawnSync(
-        gh,
-        ["api", "repos/owner/context-tree/pulls/42/reviews", "--method", "POST", "--input", payloadPath],
-        { cwd: paths.workspacePath, encoding: "utf8", env },
-      );
-      expect(dirtyReview.status).toBe(2);
-      expect(dirtyReview.stderr).toContain("clean detached PR-head worktree");
-
-      const blocked = spawnSync(gh, ["pr", "merge", "42"], { cwd: paths.workspacePath, encoding: "utf8", env });
-      expect(blocked.status).toBe(1);
-      const ambiguousReview = spawnSync(
-        gh,
-        ["pr", "review", "42", "--repo", "owner/context-tree", "--approve", "--comment", "--body-file", bodyPath],
-        { cwd: paths.workspacePath, encoding: "utf8", env },
-      );
-      expect(ambiguousReview.status).toBe(1);
-      const wrongTarget = spawnSync(
-        gh,
-        ["api", "repos/owner/context-tree/pulls/43/reviews", "--method", "POST", "--input", payloadPath],
-        { cwd: paths.workspacePath, encoding: "utf8", env },
-      );
-      expect(wrongTarget.status).toBe(1);
-      expect(readEvents(paths.eventsPath)).toEqual(
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("First Tree Context Repo branch rules");
+      expect(readEvents(shim.eventsPath)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            action: "approve",
-            bodyFileUsed: true,
-            commitOid: reviewHeadOid,
-            currentHeadOid: reviewHeadOid,
-            prNumber: 42,
-            repo: "owner/context-tree",
-            type: "github_review_submitted",
+            argv: [
+              "api",
+              "repos/agent-team-foundation/context-tree/rulesets",
+              "--method",
+              "POST",
+              "--input",
+              "ruleset.json",
+            ],
+            exitCode: 0,
+            rulesetPayloadValidated: true,
+            shimmedByEval: true,
+            type: "gh_result",
           }),
-          expect.objectContaining({ headRefOid: reviewHeadOid, prNumber: 42, type: "github_pr_viewed" }),
-          expect.objectContaining({
-            commitOid: reviewHeadOid,
-            currentHeadOid: "new-head",
-            type: "github_review_submitted",
-          }),
-          expect.objectContaining({ login: "reviewer", type: "github_identity_read" }),
-          expect.objectContaining({ argv: ["pr", "merge", "42"], blockedByEval: true, type: "gh_result" }),
-          expect.objectContaining({ reviewFixtureViolation: true, type: "gh_result" }),
         ]),
       );
     } finally {
-      rmSync(root, { force: true, recursive: true });
+      rmSync(shim.repoRoot, { force: true, recursive: true });
     }
   });
 
-  it("keeps every gh command blocked without an explicit review fixture", () => {
-    const root = mkdtempSync(join(tmpdir(), "skill-evals-gh-shim-"));
+  it("serves CODEOWNERS contents from the pushed local origin", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
     try {
-      const packageRoot = join(root, "packages", "skill-evals");
-      const paths = createRunPaths({ caseId: "gh-blocked", packageRoot, startedAt: "2026-07-14T00:00:00.000Z" });
-      createGhShim(paths);
-      const result = spawnSync(join(paths.binDir, "gh"), ["pr", "view", "42"], {
-        cwd: paths.workspacePath,
+      const treePath = join(shim.workspacePath, "context-tree");
+      const originPath = join(shim.workspacePath, "context-tree-origin.git");
+      mkdirSync(join(treePath, ".github"), { recursive: true });
+      writeFileSync(join(treePath, ".github", "CODEOWNERS"), "* @agent-team-foundation/context-maintainers\n", "utf8");
+      for (const args of [
+        ["init", "--initial-branch=main"],
+        ["config", "user.email", "eval@example.invalid"],
+        ["config", "user.name", "First Tree Eval"],
+        ["config", "commit.gpgsign", "false"],
+        ["add", "."],
+        ["commit", "-m", "chore: add codeowners"],
+      ]) {
+        expect(spawnSync("git", args, { cwd: treePath, encoding: "utf8" }).status).toBe(0);
+      }
+      expect(
+        spawnSync("git", ["clone", "--bare", treePath, originPath], { cwd: shim.workspacePath, encoding: "utf8" })
+          .status,
+      ).toBe(0);
+      expect(
+        spawnSync("git", ["remote", "add", "origin", originPath], { cwd: treePath, encoding: "utf8" }).status,
+      ).toBe(0);
+
+      const result = spawnSync(
+        shim.ghPath,
+        ["api", "repos/agent-team-foundation/context-tree/contents/.github/CODEOWNERS?ref=main"],
+        {
+          cwd: shim.workspacePath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+            FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+            FIRST_TREE_EVAL_PHASE: "model",
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(Buffer.from(result.stdout.trim(), "base64").toString("utf8")).toBe(
+        "* @agent-team-foundation/context-maintainers\n",
+      );
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects ruleset payloads with wrong governance values", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
+    try {
+      writeFileSync(
+        join(shim.workspacePath, "bad-ruleset.json"),
+        JSON.stringify({
+          conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+          enforcement: "active",
+          name: "First Tree Context Repo branch rules",
+          rules: [
+            { type: "non_fast_forward" },
+            {
+              parameters: {
+                dismiss_stale_reviews_on_push: true,
+                require_code_owner_review: false,
+                require_last_push_approval: true,
+                required_approving_review_count: 0,
+                required_review_thread_resolution: true,
+              },
+              type: "pull_request",
+            },
+          ],
+          target: "branch",
+        }),
+        "utf8",
+      );
+      const result = spawnSync(
+        shim.ghPath,
+        ["api", "repos/agent-team-foundation/context-tree/rulesets", "--method=POST", "--input", "bad-ruleset.json"],
+        {
+          cwd: shim.workspacePath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+            FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+            FIRST_TREE_EVAL_PHASE: "model",
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Invalid ruleset payload");
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects ruleset payloads missing create-only semantics", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
+    try {
+      for (const [filename, payload] of [
+        [
+          "missing-name.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "wrong-name.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "Different ruleset",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "missing-exclude.json",
+          {
+            conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "non-empty-bypass-actors.json",
+          {
+            bypass_actors: [{ actor_id: 1, actor_type: "RepositoryRole", bypass_mode: "always" }],
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "additional-rule.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+              { type: "required_signatures" },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "duplicate-rule.json",
+          {
+            conditions: { ref_name: { exclude: [], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: true,
+                  require_code_owner_review: false,
+                  require_last_push_approval: true,
+                  required_approving_review_count: 0,
+                  required_review_thread_resolution: true,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+        [
+          "malformed-conditions.json",
+          {
+            conditions: { ref_name: { exclude: ["refs/heads/release"], include: ["~DEFAULT_BRANCH"] } },
+            enforcement: "active",
+            name: "First Tree Context Repo branch rules",
+            rules: [
+              { type: "non_fast_forward" },
+              {
+                parameters: {
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: true,
+                  require_last_push_approval: false,
+                  required_approving_review_count: 1,
+                  required_review_thread_resolution: false,
+                },
+                type: "pull_request",
+              },
+            ],
+            target: "branch",
+          },
+        ],
+      ] as const) {
+        writeFileSync(join(shim.workspacePath, filename), JSON.stringify(payload), "utf8");
+        const result = spawnSync(
+          shim.ghPath,
+          ["api", "repos/agent-team-foundation/context-tree/rulesets", "--method=POST", "--input", filename],
+          {
+            cwd: shim.workspacePath,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+              FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+              FIRST_TREE_EVAL_PHASE: "model",
+            },
+          },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Invalid ruleset payload");
+      }
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("blocks destructive methods on governance read endpoints", () => {
+    const shim = createShim("unbound-github-tree-governance-bootstrap");
+    try {
+      const result = spawnSync(shim.ghPath, ["api", "repos/agent-team-foundation/context-tree", "--method=delete"], {
+        cwd: shim.workspacePath,
         encoding: "utf8",
-        env: { ...process.env, FIRST_TREE_EVAL_EVENTS: paths.eventsPath },
+        env: {
+          ...process.env,
+          FIRST_TREE_EVAL_CASE_ID: "unbound-github-tree-governance-bootstrap",
+          FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+          FIRST_TREE_EVAL_PHASE: "model",
+        },
       });
+
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Blocked gh command");
     } finally {
-      rmSync(root, { force: true, recursive: true });
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("simulates fail-closed owner resolution for recovery governance calls", () => {
+    const shim = createShim("unbound-github-governance-fail-closed");
+    try {
+      const result = spawnSync(shim.ghPath, ["api", "repos/$repo/teams?per_page=100"], {
+        cwd: shim.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIRST_TREE_EVAL_CASE_ID: "unbound-github-governance-fail-closed",
+          FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+          FIRST_TREE_EVAL_PHASE: "model",
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("No qualifying visible non-author team");
+      expect(readEvents(shim.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            argv: ["api", "repos/$repo/teams?per_page=100"],
+            exitCode: 1,
+            shimmedByEval: true,
+            type: "gh_result",
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
     }
   });
 });

@@ -273,22 +273,25 @@ describe("App routes", () => {
     expect(await renderAppAt("/preview/command-palette")).toContain("command palette preview");
   });
 
-  it("keeps the mobile experience disabled on prod", async () => {
+  it("opens the mobile experience on prod", async () => {
     setViewportWidth(390);
-    expect(await renderAppAt("/")).toContain("workspace page");
-    expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+    expect(await renderAppAt("/")).toContain("mobile now");
+    expect(document.head.querySelector('link[rel="manifest"]')?.getAttribute("href")).toBe("/manifest.webmanifest");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
-    expect(await renderAppAt("/m")).toContain("workspace page");
+    setViewportWidth(390);
+    expect(await renderAppAt("/m")).toContain("mobile now");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
-    expect(await renderAppAt("/m/now")).toContain("workspace page");
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/now")).toContain("mobile now");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 
-    expect(await renderAppAt("/m/chat")).toContain("workspace page");
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/chat")).toContain("mobile chat");
   });
 
   it("waits for the server channel before choosing the mobile or desktop shell", async () => {
@@ -299,6 +302,25 @@ describe("App routes", () => {
     expect(await renderAppAt("/")).not.toContain("workspace page");
     expect(document.body.textContent ?? "").not.toContain("mobile now");
     expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+  });
+
+  it("recovers a settled unusable channel to the desktop root", async () => {
+    serverChannelStateMock.channel = null;
+    serverChannelStateMock.settled = true;
+    setViewportWidth(390);
+
+    expect(await renderAppAt("/")).toContain("workspace page");
+    expect(document.head.querySelector('link[rel="manifest"]')).toBeNull();
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/now")).toContain("workspace page");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    setViewportWidth(390);
+    expect(await renderAppAt("/m/chat")).toContain("workspace page");
   });
 
   it("opens mobile routes, phone root, and PWA metadata on staging", async () => {

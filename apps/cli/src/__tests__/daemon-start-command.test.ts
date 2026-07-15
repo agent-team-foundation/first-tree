@@ -329,6 +329,31 @@ describe("daemon start command", () => {
     expect(output()).toContain("Supervisor fallback: `journalctl --user -u first-tree`");
   });
 
+  it("prints system journal hints for root systemd services", async () => {
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({
+        platform: "systemd",
+        state: "inactive",
+        label: "first-tree.service",
+        logDir: "/logs",
+        managerScope: "system",
+      })
+      .mockReturnValueOnce({
+        platform: "systemd",
+        state: "active",
+        label: "first-tree.service",
+        detail: "pid 123",
+        logDir: "/logs",
+        managerScope: "system",
+      });
+
+    await expect(runStart()).resolves.toBeTruthy();
+    expect(coreMocks.startClientService).toHaveBeenCalled();
+    expect(output()).toContain("Supervisor fallback: `journalctl -u first-tree`");
+    expect(output()).not.toContain("journalctl --user -u first-tree");
+  });
+
   it("starts an inactive launchd service and prints stdout/stderr fallback logs", async () => {
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus
@@ -415,6 +440,42 @@ describe("daemon start command", () => {
 
     await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
     expect(output()).toContain("Service state could not be determined (launchd).");
+
+    stderrSpy.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({
+      platform: "systemd",
+      state: "unknown",
+      label: "first-tree.service",
+      detail:
+        "legacy root systemd user unit requires out-of-service migration: /root/.config/systemd/user/first-tree.service",
+      logDir: "/logs",
+      managerScope: "user",
+      migrationRequired: "root-systemd-user-to-system",
+    });
+
+    await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
+    expect(output()).toContain("legacy root systemd user unit requires out-of-service migration");
+    expect(output()).toContain("Complete the root systemd migration out-of-service with `first-tree-dev login <code>`");
+    expect(output()).not.toContain("--foreground");
+    expect(coreMocks.startClientService).not.toHaveBeenCalled();
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
+
+    stderrSpy.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({
+      platform: "systemd",
+      state: "unknown",
+      label: "first-tree.service",
+      detail:
+        "legacy root systemd user unit requires out-of-service migration: /root/.config/systemd/user/first-tree.service",
+      logDir: "/logs",
+      managerScope: "user",
+      migrationRequired: "root-systemd-user-to-system",
+    });
+
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+    expect(output()).toContain("Service migration is required before foreground start");
+    expect(output()).toContain("Complete the root systemd migration out-of-service with `first-tree-dev login <code>`");
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
   });
 
   it("runs inline, reconciles local state, uploads capabilities and skills", async () => {

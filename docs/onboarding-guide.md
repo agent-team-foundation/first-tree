@@ -58,7 +58,7 @@ first-tree-dev login <connect-code>
 
 ```bash
 # 1. Run the channel-aware install/login command above. It persists credentials
-#    and installs the background daemon on macOS / Linux.
+#    and installs the background daemon on supported platforms.
 FT_BIN="$HOME/.local/bin/first-tree" # Use first-tree-staging for staging.
 
 # 2. Create the agent record on the server and bind it to this client.
@@ -82,10 +82,13 @@ because an agent is permanently bound to exactly one client machine.
   accepted during rollout.
 - `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
-- On macOS / Linux / Windows, the background daemon is installed as a
-  per-user service so the machine stays online after login across reboots.
-  Windows uses a per-user Task Scheduler logon task, not a machine-wide
-  Windows Service. Pass `--no-start` to skip the daemon launch.
+- On macOS / Linux / Windows, the background daemon is installed so the
+  machine stays online after login across reboots. macOS uses launchd,
+  Windows uses a per-user Task Scheduler logon task, and Linux uses a
+  `systemd --user` unit for normal users. When the Linux CLI is run as
+  root, First Tree installs the channel's systemd unit in system scope
+  instead of relying on a root user D-Bus session. Windows does not use a
+  machine-wide Windows Service. Pass `--no-start` to skip the daemon launch.
 
 Every agent on this machine authenticates as the signed-in member —
 there are no per-agent bearer tokens.

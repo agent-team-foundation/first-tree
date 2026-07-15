@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { repoUrlSchema } from "./org-settings.js";
+import { contextTreeRepoSchema } from "./org-settings.js";
 
 export const CONTEXT_TREE_SNAPSHOT_STATUSES = {
   ACTIVE: "active",
@@ -185,6 +185,8 @@ export const contextTreeIoSourceSchema = z.enum([
   "claude_read_tool",
   "claude_write_tool",
   "codex_file_change",
+  "cursor_read_tool",
+  "cursor_write_tool",
   "shell_command",
   "git_status_delta",
 ]);
@@ -352,12 +354,70 @@ export type ContextTreeSnapshot = z.infer<typeof contextTreeSnapshotSchema>;
 export const initializeContextTreeRequestSchema = z.object({}).strict();
 export type InitializeContextTreeRequest = z.infer<typeof initializeContextTreeRequestSchema>;
 
-export const initializeContextTreeResponseSchema = z.object({
-  repo: repoUrlSchema,
-  htmlUrl: z.string().url(),
-  branch: z.literal("main"),
-  nodePath: z.literal("NODE.md"),
+const GITHUB_REPOSITORY_HTML_URL_PREFIX = "https://github.com/";
+const GITHUB_REPOSITORY_HTML_URL_RE =
+  /^https:\/\/github\.com\/[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
+
+const githubRepositoryHtmlUrlSchema = z.string().superRefine((value, ctx) => {
+  const hasControlCharacter = Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f));
+  });
+  const hasWhitespace = Array.from(value).some((character) => /\s/u.test(character));
+  if (value.trim() !== value || hasWhitespace || hasControlCharacter || value.includes("\\")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "GitHub repository URL contains unsafe whitespace." });
+    return;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "GitHub repository URL must be a valid URL." });
+    return;
+  }
+  const rawPath = value.startsWith(GITHUB_REPOSITORY_HTML_URL_PREFIX)
+    ? value.slice(GITHUB_REPOSITORY_HTML_URL_PREFIX.length)
+    : "";
+  const hasDotPathSegment = rawPath.split("/").some((segment) => segment === "." || segment === "..");
+  if (hasDotPathSegment || url.href !== value) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "GitHub repository URL must use a canonical path without dot segments.",
+    });
+    return;
+  }
+  if (
+    url.origin !== "https://github.com" ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.search.length > 0 ||
+    url.hash.length > 0 ||
+    !GITHUB_REPOSITORY_HTML_URL_RE.test(value)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "GitHub repository URL must be a credential-free HTTPS repository URL.",
+    });
+  }
 });
+
+export const initializeContextTreeResponseSchema = z
+  .object({
+    repo: contextTreeRepoSchema,
+    htmlUrl: githubRepositoryHtmlUrlSchema,
+    branch: z.literal("main"),
+    nodePath: z.literal("NODE.md"),
+  })
+  .superRefine((value, ctx) => {
+    if (value.repo !== `${value.htmlUrl}.git`) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["repo"],
+        message: "GitHub clone and HTML URLs must identify the same repository.",
+      });
+    }
+  });
 export type InitializeContextTreeResponse = z.infer<typeof initializeContextTreeResponseSchema>;
 
 // Read-only view of the team's bound GitHub App installation, exposed so a

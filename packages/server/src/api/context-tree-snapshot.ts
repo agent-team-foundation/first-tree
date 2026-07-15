@@ -17,7 +17,7 @@ import {
   mintContextTreeInstallationToken,
   resolveContextTreeRecoveryAction,
 } from "../services/github-app-token.js";
-import { getOrgContextTree, resolveUserPrimaryOrgId } from "../services/org-settings.js";
+import { getOrgContextTreeBinding, resolveUserPrimaryOrgId } from "../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../services/session-event.js";
 
 const querySchema = z
@@ -33,7 +33,7 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
     const { userId } = timing.timeSync("auth", () => requireUser(request));
     const orgId = await timing.time("resolve_primary_org", () => resolveUserPrimaryOrgId(app.db, userId));
     const binding: ContextTreeBinding = orgId
-      ? await timing.time("binding", () => getOrgContextTree(app.db, orgId))
+      ? ((await timing.time("binding", () => getOrgContextTreeBinding(app.db, orgId))) ?? {})
       : {};
     let mintResult: ContextTreeInstallationTokenResult | null = null;
     if (orgId && isGithubRemoteBinding(binding)) {

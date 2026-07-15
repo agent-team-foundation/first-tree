@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { NormalizedEvent } from "@first-tree/shared";
+import type { NormalizedScmEvent } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -10,8 +10,8 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
-import { type AudienceTarget, resolveAudience } from "../services/github-audience.js";
-import { deliverNormalizedEvent } from "../services/github-delivery.js";
+import { type AudienceTarget, resolveGithubAudience } from "../services/github-audience.js";
+import { deliverGithubEvent } from "../services/github-delivery.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -83,29 +83,31 @@ function makeEvent(opts: {
   orgId: string;
   entityType: "issue" | "pull_request";
   entityKey: string;
-  involves?: NormalizedEvent["involves"];
+  targets?: NormalizedScmEvent["targets"];
   body?: string;
-  rawEventType?: string;
-  rawAction?: string;
-  kind?: NormalizedEvent["kind"];
+  eventType?: string;
+  action?: string;
+  kind?: NormalizedScmEvent["kind"];
   title?: string;
   actorLogin?: string;
-}): NormalizedEvent {
+}): NormalizedScmEvent {
   return {
-    source: { kind: "github-app-installation", installationId: 1, organizationId: opts.orgId },
-    deliveryId: "delivery-1",
-    rawEventType: opts.rawEventType ?? "pull_request",
-    rawAction: opts.rawAction ?? "opened",
+    provider: "github",
+    source: { externalId: "installation:1", organizationId: opts.orgId },
+    stableDeliveryId: "delivery-1",
+    ingressAuthority: "verified_signature",
+    eventType: opts.eventType ?? "pull_request",
+    action: opts.action ?? "opened",
     entity: {
       type: opts.entityType,
-      repo: "owner/repo",
+      projectKey: "owner/repo",
       key: opts.entityKey,
       title: opts.title ?? "Refactor inbox",
       url: `https://github.com/owner/repo/pull/1`,
     },
-    actor: { githubLogin: opts.actorLogin ?? "alice", isBot: false },
+    actor: { externalUsername: opts.actorLogin ?? "alice", isBot: false },
     kind: opts.kind ?? "opened",
-    involves: opts.involves ?? [],
+    targets: opts.targets ?? [],
     surface: {
       title: "PR #1: Refactor inbox",
       body: opts.body ?? "",
@@ -134,7 +136,7 @@ async function notifyCount(app: App, chatId: string, agentId: string): Promise<n
   return rows.length;
 }
 
-describe("deliverNormalizedEvent", () => {
+describe("deliverGithubEvent", () => {
   const getApp = useTestApp();
 
   it("delivers to an existing target without creating a new chat", async () => {
@@ -179,7 +181,7 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#200",
     });
-    const stats = await deliverNormalizedEvent(app, event, [target]);
+    const stats = await deliverGithubEvent(app, event, [target]);
 
     expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
     const sent = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
@@ -251,7 +253,7 @@ describe("deliverNormalizedEvent", () => {
       entityKey: "owner/repo#201",
     });
 
-    const stats = await deliverNormalizedEvent(app, event, [target]);
+    const stats = await deliverGithubEvent(app, event, [target]);
 
     // Delivery succeeds (no throw despite recipientless addressing).
     expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
@@ -315,13 +317,13 @@ describe("deliverNormalizedEvent", () => {
       entityKey: "owner/repo#205",
     });
 
-    const echoStats = await deliverNormalizedEvent(app, event, [baseTarget], { actorHumanId: human });
+    const echoStats = await deliverGithubEvent(app, event, [baseTarget], { actorHumanId: human });
     expect(echoStats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
     await expect(app.db.select().from(messages).where(eq(messages.chatId, chatId))).resolves.toHaveLength(0);
     await expect(app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId))).resolves.toHaveLength(0);
 
     // Unknown actor: no self pruning, so the speaker-delegate IS woken.
-    const okStats = await deliverNormalizedEvent(app, event, [baseTarget], { actorHumanId: null });
+    const okStats = await deliverGithubEvent(app, event, [baseTarget], { actorHumanId: null });
     expect(okStats.delivered).toBe(1);
     const afterOk = await app.db
       .select()
@@ -364,16 +366,16 @@ describe("deliverNormalizedEvent", () => {
       orgId: admin.organizationId,
       entityType: "issue",
       entityKey,
-      rawEventType: "issues",
-      rawAction: "opened",
+      eventType: "issues",
+      action: "opened",
       kind: "opened",
       actorLogin: humanName,
-      involves: [{ githubLogin: humanName.toLowerCase(), reason: "assigned" }],
+      targets: [{ externalUsername: humanName.toLowerCase(), reason: "assigned" }],
     });
 
     // Actor resolves to the same human that self-assigned — the exact echo
     // condition — yet the fresh directed involve survives and mints a chat.
-    const stats = await deliverNormalizedEvent(app, event, [target], { actorHumanId: human });
+    const stats = await deliverGithubEvent(app, event, [target], { actorHumanId: human });
     expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
 
     const mapping = await app.db
@@ -402,7 +404,7 @@ describe("deliverNormalizedEvent", () => {
     // `resolveAudience` on a fresh `issues.opened` whose actor == assignee, so
     // the self target is produced by the resolver (not hand-shaped), then let
     // delivery mint the chat. This is the exact interaction #1536 broke —
-    // `resolveActorHumanId` resolving the actor to the same human the involve
+    // `resolveGithubActorHumanId` resolving the actor to the same human the involve
     // names, which the old blanket prune then dropped.
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -424,21 +426,21 @@ describe("deliverNormalizedEvent", () => {
       orgId: admin.organizationId,
       entityType: "issue",
       entityKey,
-      rawEventType: "issues",
-      rawAction: "opened",
+      eventType: "issues",
+      action: "opened",
       kind: "opened",
       actorLogin: humanName,
-      involves: [{ githubLogin: humanName.toLowerCase(), reason: "assigned" }],
+      targets: [{ externalUsername: humanName.toLowerCase(), reason: "assigned" }],
     });
 
-    const resolution = await resolveAudience(app.db, event);
+    const resolution = await resolveGithubAudience(app.db, event);
     // The actor resolves to the self human, and the sole target is the fresh
     // self-directed involve.
     expect(resolution.actorHumanId).toBe(human);
     expect(resolution.targets).toHaveLength(1);
     expect(resolution.targets[0]).toMatchObject({ humanAgentId: human, kind: "new", involveReason: "assigned" });
 
-    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+    const stats = await deliverGithubEvent(app, event, resolution.targets, {
       actorHumanId: resolution.actorHumanId,
     });
     expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
@@ -509,13 +511,13 @@ describe("deliverNormalizedEvent", () => {
       orgId: admin.organizationId,
       entityType: "issue",
       entityKey: "owner/repo#207",
-      rawEventType: "issues",
-      rawAction: "assigned",
+      eventType: "issues",
+      action: "assigned",
       actorLogin: humanName,
-      involves: [{ githubLogin: humanName.toLowerCase(), reason: "assigned" }],
+      targets: [{ externalUsername: humanName.toLowerCase(), reason: "assigned" }],
     });
 
-    const stats = await deliverNormalizedEvent(app, event, [target], { actorHumanId: human });
+    const stats = await deliverGithubEvent(app, event, [target], { actorHumanId: human });
     expect(stats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
     await expect(app.db.select().from(messages).where(eq(messages.chatId, chatId))).resolves.toHaveLength(0);
     await expect(app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId))).resolves.toHaveLength(0);
@@ -572,14 +574,14 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#206",
       actorLogin: humanAName,
-      involves: [{ githubLogin: humanBName, reason: "review_requested" }],
+      targets: [{ externalUsername: humanBName, reason: "review_requested" }],
       kind: "review_requested",
-      rawAction: "review_requested",
+      action: "review_requested",
     });
-    const resolution = await resolveAudience(app.db, event);
+    const resolution = await resolveGithubAudience(app.db, event);
     expect(resolution.actorHumanId).toBe(humanA);
 
-    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+    const stats = await deliverGithubEvent(app, event, resolution.targets, {
       actorHumanId: resolution.actorHumanId,
     });
     expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
@@ -670,13 +672,13 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#207",
       actorLogin: humanBName,
-      rawEventType: "issue_comment",
-      rawAction: "created",
+      eventType: "issue_comment",
+      action: "created",
       kind: "commented",
     });
-    const resolution = await resolveAudience(app.db, event);
+    const resolution = await resolveGithubAudience(app.db, event);
     expect(resolution.actorHumanId).toBe(humanB);
-    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+    const stats = await deliverGithubEvent(app, event, resolution.targets, {
       actorHumanId: resolution.actorHumanId,
     });
 
@@ -754,15 +756,15 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#208",
       actorLogin: humanAName,
-      involves: [{ githubLogin: humanBName, reason: "mentioned" }],
-      rawEventType: "issue_comment",
-      rawAction: "created",
+      targets: [{ externalUsername: humanBName, reason: "mentioned" }],
+      eventType: "issue_comment",
+      action: "created",
       kind: "commented",
     });
-    const resolution = await resolveAudience(app.db, event);
+    const resolution = await resolveGithubAudience(app.db, event);
     expect(resolution.actorHumanId).toBe(humanA);
 
-    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+    const stats = await deliverGithubEvent(app, event, resolution.targets, {
       actorHumanId: resolution.actorHumanId,
     });
     expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
@@ -823,7 +825,7 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#200",
     });
-    await deliverNormalizedEvent(app, event, [target]);
+    await deliverGithubEvent(app, event, [target]);
 
     const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(row?.topic).toBe("PR repo#200: Refactor inbox");
@@ -877,11 +879,11 @@ describe("deliverNormalizedEvent", () => {
       orgId: admin.organizationId,
       entityType: "pull_request",
       entityKey: "owner/repo#200",
-      rawEventType: "pull_request_review",
-      rawAction: "submitted",
+      eventType: "pull_request_review",
+      action: "submitted",
       title: "Renamed title",
     });
-    await deliverNormalizedEvent(app, event, [target]);
+    await deliverGithubEvent(app, event, [target]);
 
     const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(row?.topic).toBe("PR repo#200: Renamed title");
@@ -937,15 +939,15 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#209",
       actorLogin: humanName,
-      rawEventType: "pull_request",
-      rawAction: "edited",
+      eventType: "pull_request",
+      action: "edited",
       kind: "edited",
       title: "New title",
     });
-    const resolution = await resolveAudience(app.db, event);
+    const resolution = await resolveGithubAudience(app.db, event);
     expect(resolution.actorHumanId).toBe(human);
 
-    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+    const stats = await deliverGithubEvent(app, event, resolution.targets, {
       actorHumanId: resolution.actorHumanId,
     });
     expect(stats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
@@ -1023,7 +1025,7 @@ describe("deliverNormalizedEvent", () => {
       entityKey: "owner/repo#99",
       title: "Fix the login bug",
     });
-    await deliverNormalizedEvent(app, event, [target]);
+    await deliverGithubEvent(app, event, [target]);
 
     const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(row?.topic).toBe("Issue repo#42: Login bug");
@@ -1067,7 +1069,7 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#999",
     });
-    await deliverNormalizedEvent(app, event, [target]);
+    await deliverGithubEvent(app, event, [target]);
 
     const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(row?.topic).toBe("agent-chosen label");
@@ -1102,9 +1104,9 @@ describe("deliverNormalizedEvent", () => {
       orgId: admin.organizationId,
       entityType: "pull_request",
       entityKey: "owner/repo#201",
-      involves: [{ githubLogin: humanName, reason: "review_requested" }],
+      targets: [{ externalUsername: humanName, reason: "review_requested" }],
     });
-    const stats = await deliverNormalizedEvent(app, event, [target]);
+    const stats = await deliverGithubEvent(app, event, [target]);
 
     expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
 
@@ -1187,7 +1189,7 @@ describe("deliverNormalizedEvent", () => {
       entityKey: "owner/repo#202",
     });
 
-    const stats = await deliverNormalizedEvent(app, event, [broken, ok]);
+    const stats = await deliverGithubEvent(app, event, [broken, ok]);
     expect(stats.delivered).toBe(1);
     // M1 (#507): the broken target's exception must be counted, not
     // silently swallowed by the per-target catch — operators dashboard
@@ -1265,7 +1267,7 @@ describe("deliverNormalizedEvent", () => {
       involveLogin: "humanr",
     };
 
-    const stats = await deliverNormalizedEvent(app, event, [subscribed, involved]);
+    const stats = await deliverGithubEvent(app, event, [subscribed, involved]);
 
     // No new chat minted; exactly one card delivered to the single chat.
     expect(stats.newChats).toBe(0);
@@ -1367,7 +1369,7 @@ describe("deliverNormalizedEvent", () => {
       involveLogin: "humanm",
     };
 
-    const stats = await deliverNormalizedEvent(app, event, [involvedMention]);
+    const stats = await deliverGithubEvent(app, event, [involvedMention]);
 
     // A fresh chat was minted for the mention (NOT reused into the bound chat).
     expect(stats.newChats).toBe(1);
@@ -1441,7 +1443,7 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#900",
     });
-    const stats = await deliverNormalizedEvent(app, event, [target]);
+    const stats = await deliverGithubEvent(app, event, [target]);
     expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
 
     const [delegateAgent] = await app.db
@@ -1533,17 +1535,17 @@ describe("deliverNormalizedEvent", () => {
       entityType: "pull_request",
       entityKey: "owner/repo#777",
       actorLogin: humanName,
-      rawAction: "synchronize",
+      action: "synchronize",
     });
 
     // Stage 2: both chats survive. M2 keeps the (human, chat) pairs distinct.
-    const resolution = await resolveAudience(app.db, event);
+    const resolution = await resolveGithubAudience(app.db, event);
     const audience = resolution.targets;
     expect(audience).toHaveLength(2);
     expect(new Set(audience.map((a) => a.chatId))).toEqual(new Set([chatA, chatB]));
     expect(resolution.actorHumanId).toBe(human);
 
-    const stats = await deliverNormalizedEvent(app, event, audience, { actorHumanId: resolution.actorHumanId });
+    const stats = await deliverGithubEvent(app, event, audience, { actorHumanId: resolution.actorHumanId });
     expect(stats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
     expect(await app.db.select().from(messages).where(eq(messages.chatId, chatA))).toHaveLength(0);
     expect(await app.db.select().from(messages).where(eq(messages.chatId, chatB))).toHaveLength(0);
