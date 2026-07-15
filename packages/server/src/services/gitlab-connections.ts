@@ -1,11 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { GitlabConnectionSummary } from "@first-tree/shared";
-import { and, eq, sql } from "drizzle-orm";
+import type { GitlabAutomaticActionsAudit, GitlabConnectionSummary, GitlabReviewerMode } from "@first-tree/shared";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { gitlabAutomaticActionsAudit } from "../db/schema/gitlab-automatic-actions-audit.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { organizations } from "../db/schema/organizations.js";
-import { ConflictError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+import { suspendGitlabLinksForConnection } from "./gitlab-identities.js";
 
 export function mintGitlabUrlBearer(): string {
   return randomBytes(32).toString("base64url");
@@ -35,6 +37,30 @@ type GitlabConnectionInput = {
   displayName: string;
   instanceOrigin: string;
 };
+
+type AutomaticActionsAuditSnapshot = {
+  id: string;
+  organizationId: string;
+  instanceOrigin: string;
+  automaticActionsEnabled: boolean;
+};
+
+async function appendAutomaticActionsAudit(
+  db: Database,
+  connection: AutomaticActionsAuditSnapshot,
+  input: { enabled: boolean; actorMemberId: string | null; reason: string; createdAt?: Date },
+): Promise<void> {
+  await db.insert(gitlabAutomaticActionsAudit).values({
+    id: uuidv7(),
+    organizationId: connection.organizationId,
+    connectionId: connection.id,
+    instanceOrigin: connection.instanceOrigin,
+    enabled: input.enabled,
+    actorMemberId: input.actorMemberId,
+    reason: input.reason,
+    createdAt: input.createdAt ?? new Date(),
+  });
+}
 
 async function lockOrganization(db: Database, organizationId: string): Promise<void> {
   const [organization] = await db
@@ -92,13 +118,26 @@ export async function replaceGitlabConnection(
     const tx = rawTx as unknown as Database;
     await lockOrganization(tx, input.organizationId);
     const [current] = await tx
-      .select({ id: gitlabConnections.id })
+      .select({
+        id: gitlabConnections.id,
+        organizationId: gitlabConnections.organizationId,
+        instanceOrigin: gitlabConnections.instanceOrigin,
+        automaticActionsEnabled: gitlabConnections.automaticActionsEnabled,
+      })
       .from(gitlabConnections)
       .where(eq(gitlabConnections.organizationId, input.organizationId))
       .for("update")
       .limit(1);
     if (!current || current.id !== input.expectedConnectionId) {
       throw new ConflictError("GitLab connection changed or was removed; refresh before replacing it");
+    }
+    await suspendGitlabLinksForConnection(tx, current.id, input.memberId);
+    if (current.automaticActionsEnabled) {
+      await appendAutomaticActionsAudit(tx, current, {
+        enabled: false,
+        actorMemberId: input.memberId,
+        reason: "connection_replaced",
+      });
     }
     const [deleted] = await tx
       .delete(gitlabConnections)
@@ -143,7 +182,11 @@ export async function regenerateGitlabConnectionBearer(
   return { bearer };
 }
 
-export async function deleteGitlabConnection(db: Database, connectionId: string): Promise<void> {
+export async function deleteGitlabConnection(
+  db: Database,
+  connectionId: string,
+  actorMemberId: string | null = null,
+): Promise<void> {
   await db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as Database;
     const [candidate] = await tx
@@ -155,7 +198,12 @@ export async function deleteGitlabConnection(db: Database, connectionId: string)
 
     await lockOrganization(tx, candidate.organizationId);
     const [connection] = await tx
-      .select({ id: gitlabConnections.id })
+      .select({
+        id: gitlabConnections.id,
+        organizationId: gitlabConnections.organizationId,
+        instanceOrigin: gitlabConnections.instanceOrigin,
+        automaticActionsEnabled: gitlabConnections.automaticActionsEnabled,
+      })
       .from(gitlabConnections)
       .where(
         and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.organizationId, candidate.organizationId)),
@@ -163,6 +211,14 @@ export async function deleteGitlabConnection(db: Database, connectionId: string)
       .for("update")
       .limit(1);
     if (!connection) throw new NotFoundError("GitLab connection not found");
+    await suspendGitlabLinksForConnection(tx, connection.id, actorMemberId);
+    if (connection.automaticActionsEnabled) {
+      await appendAutomaticActionsAudit(tx, connection, {
+        enabled: false,
+        actorMemberId,
+        reason: "connection_deleted",
+      });
+    }
     const [deleted] = await tx
       .delete(gitlabConnections)
       .where(eq(gitlabConnections.id, connectionId))
@@ -214,6 +270,140 @@ export async function markGitlabInboundSeen(db: Database, connectionId: string, 
     .where(and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.tokenHash, tokenHash)));
 }
 
+export async function markGitlabStableDeliveryObserved(db: Database, connectionId: string): Promise<void> {
+  await db
+    .update(gitlabConnections)
+    .set({
+      stableDeliveryObservedAt: sql`coalesce(${gitlabConnections.stableDeliveryObservedAt}, now())`,
+      updatedAt: new Date(),
+    })
+    .where(eq(gitlabConnections.id, connectionId));
+}
+
+export async function setGitlabAutomaticActions(
+  db: Database,
+  input: {
+    connectionId: string;
+    organizationId: string;
+    actorMemberId: string;
+    enabled: boolean;
+    acceptTeamWideForgeryRisk?: boolean;
+    reason?: string;
+  },
+): Promise<GitlabConnectionSummary> {
+  if (input.enabled && input.acceptTeamWideForgeryRisk !== true) {
+    throw new BadRequestError("Enabling automatic actions requires accepting the Team-wide URL bearer forgery risk");
+  }
+  await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    const [connection] = await tx
+      .select()
+      .from(gitlabConnections)
+      .where(
+        and(eq(gitlabConnections.id, input.connectionId), eq(gitlabConnections.organizationId, input.organizationId)),
+      )
+      .for("update")
+      .limit(1);
+    if (!connection) throw new NotFoundError("GitLab connection not found");
+    if (connection.automaticActionsEnabled === input.enabled) return;
+    const now = new Date();
+    await tx
+      .update(gitlabConnections)
+      .set({
+        automaticActionsEnabled: input.enabled,
+        automaticActionsAcceptedAt: input.enabled ? now : null,
+        automaticActionsAcceptedByMemberId: input.enabled ? input.actorMemberId : null,
+        updatedByMemberId: input.actorMemberId,
+        updatedAt: now,
+      })
+      .where(eq(gitlabConnections.id, connection.id));
+    await appendAutomaticActionsAudit(tx, connection, {
+      enabled: input.enabled,
+      actorMemberId: input.actorMemberId,
+      reason: input.reason ?? (input.enabled ? "team_risk_accepted" : "team_risk_withdrawn"),
+      createdAt: now,
+    });
+  });
+  return getGitlabConnectionSummary(db, input.connectionId);
+}
+
+export async function confirmGitlabAssigneeMode(
+  db: Database,
+  input: { connectionId: string; organizationId: string; actorMemberId: string },
+): Promise<GitlabConnectionSummary> {
+  await db.transaction(async (tx) => {
+    const [connection] = await tx
+      .select({ mode: gitlabConnections.reviewerMode })
+      .from(gitlabConnections)
+      .where(
+        and(eq(gitlabConnections.id, input.connectionId), eq(gitlabConnections.organizationId, input.organizationId)),
+      )
+      .for("update")
+      .limit(1);
+    if (!connection) throw new NotFoundError("GitLab connection not found");
+    if (connection.mode === "reviewers") {
+      throw new ConflictError("Reviewer capability has already been observed and cannot downgrade to assignee mode");
+    }
+    if (connection.mode === "assignee") return;
+    const now = new Date();
+    await tx
+      .update(gitlabConnections)
+      .set({
+        reviewerMode: "assignee",
+        assigneeModeConfirmedAt: now,
+        assigneeModeConfirmedByMemberId: input.actorMemberId,
+        updatedByMemberId: input.actorMemberId,
+        updatedAt: now,
+      })
+      .where(eq(gitlabConnections.id, input.connectionId));
+  });
+  return getGitlabConnectionSummary(db, input.connectionId);
+}
+
+/** One-way capability latch. Must run under the connection ingress fence. */
+export async function observeGitlabReviewersCapability(db: Database, connectionId: string): Promise<void> {
+  await db
+    .update(gitlabConnections)
+    .set({
+      reviewerMode: "reviewers",
+      lastReviewerSchemaAnomalyAt: null,
+      lastReviewerSchemaAnomalyCode: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(gitlabConnections.id, connectionId));
+}
+
+/** Actionable Settings signal; malformed payload never changes the reviewer mode. */
+export async function markGitlabReviewerSchemaAnomaly(db: Database, connectionId: string, code: string): Promise<void> {
+  await db
+    .update(gitlabConnections)
+    .set({ lastReviewerSchemaAnomalyAt: new Date(), lastReviewerSchemaAnomalyCode: code, updatedAt: new Date() })
+    .where(eq(gitlabConnections.id, connectionId));
+}
+
+export async function listGitlabAutomaticActionsAudit(
+  db: Database,
+  organizationId: string,
+  limit = 50,
+): Promise<GitlabAutomaticActionsAudit[]> {
+  const rows = await db
+    .select()
+    .from(gitlabAutomaticActionsAudit)
+    .where(eq(gitlabAutomaticActionsAudit.organizationId, organizationId))
+    .orderBy(desc(gitlabAutomaticActionsAudit.createdAt))
+    .limit(Math.min(Math.max(limit, 1), 100));
+  return rows.map((row) => ({
+    id: row.id,
+    organizationId: row.organizationId,
+    connectionId: row.connectionId,
+    instanceOrigin: row.instanceOrigin,
+    enabled: row.enabled,
+    actorMemberId: row.actorMemberId,
+    reason: row.reason,
+    createdAt: row.createdAt.toISOString(),
+  }));
+}
+
 export async function markGitlabProcessingFailure(
   db: Database,
   connectionId: string,
@@ -235,6 +425,19 @@ export async function getGitlabConnectionSummary(db: Database, connectionId: str
     displayName: connection.displayName,
     instanceOrigin: connection.instanceOrigin,
     endpointSeen: connection.endpointFirstSeenAt != null,
+    stableDeliveryObserved: connection.stableDeliveryObservedAt != null,
+    automaticActions: {
+      enabled: connection.automaticActionsEnabled,
+      acceptedAt: connection.automaticActionsAcceptedAt?.toISOString() ?? null,
+      acceptedByMemberId: connection.automaticActionsAcceptedByMemberId,
+    },
+    reviewerCapability: {
+      mode: connection.reviewerMode as GitlabReviewerMode,
+      assigneeConfirmedAt: connection.assigneeModeConfirmedAt?.toISOString() ?? null,
+      assigneeConfirmedByMemberId: connection.assigneeModeConfirmedByMemberId,
+      lastSchemaAnomalyAt: connection.lastReviewerSchemaAnomalyAt?.toISOString() ?? null,
+      lastSchemaAnomalyCode: connection.lastReviewerSchemaAnomalyCode,
+    },
     health: {
       lastValidInboundAt: connection.lastValidInboundAt?.toISOString() ?? null,
       lastProcessingFailureAt: connection.lastProcessingFailureAt?.toISOString() ?? null,

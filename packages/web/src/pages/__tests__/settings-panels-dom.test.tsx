@@ -146,7 +146,7 @@ async function renderDom(
           <Routes>
             <Route path="/settings/*" element={element}>
               <Route path="context" element={<div>Settings child</div>} />
-              <Route path="github" element={<div>GitHub child</div>} />
+              <Route path="integrations/*" element={<div>Integrations child</div>} />
             </Route>
           </Routes>
         </QueryClientProvider>
@@ -304,13 +304,13 @@ describe("settings panels", () => {
   it("renders settings layout variants and filters admin/onboarding nav entries", async () => {
     const { SettingsLayout } = await import("../settings.js");
 
-    const desktop = await renderDom(<SettingsLayout />, "/settings/github");
+    const desktop = await renderDom(<SettingsLayout />, "/settings/integrations/github");
     expect(desktop.container.textContent).toContain("Computers");
-    expect(desktop.container.textContent).toContain("GitHub");
+    expect(desktop.container.textContent).toContain("Integrations");
     // The onboarding nav entry is labelled "Setup" (renamed from "Onboarding"
     // so the sidebar label and the page heading no longer drift).
     expect(desktop.container.textContent).toContain("Setup");
-    expect(desktop.container.textContent).toContain("GitHub child");
+    expect(desktop.container.textContent).toContain("Integrations child");
     await act(async () => desktop.root.unmount());
 
     authMock.value = { ...authMock.value, role: "member", onboardingCompletedAt: NOW };
@@ -318,7 +318,7 @@ describe("settings panels", () => {
     const narrow = await renderDom(<SettingsLayout />);
     expect(narrow.container.querySelector("aside")).toBeNull();
     expect(narrow.container.textContent).toContain("Computers");
-    expect(narrow.container.textContent).toContain("GitHub");
+    expect(narrow.container.textContent).toContain("Integrations");
     expect(narrow.container.textContent).not.toContain("Setup");
     await act(async () => narrow.root.unmount());
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildClaimReadyGitlabDeliveryId } from "../services/gitlab-connections.js";
-import { extractStableGitlabDeliveryId, normalizeGitlabWebhook } from "../services/gitlab-webhook.js";
+import {
+  extractStableGitlabDeliveryId,
+  MAX_GITLAB_PERSONNEL_TARGETS,
+  normalizeGitlabWebhook,
+} from "../services/gitlab-webhook.js";
 
 const base = {
   organizationId: "org-1",
@@ -39,7 +43,7 @@ describe("GitLab webhook normalization", () => {
       targets: [],
       entity: { type: "pull_request", projectKey: "99", key: "99:pull_request:7" },
     });
-    expect(mr.reviewerCapability).toBe("reviewers");
+    expect(mr.personnel).toMatchObject({ reviewerField: "valid", reviewerAdded: [] });
     expect(mr.event).not.toHaveProperty("object_attributes");
 
     const issue = normalizeGitlabWebhook({
@@ -66,7 +70,7 @@ describe("GitLab webhook normalization", () => {
         object_kind: "note",
         project: project(),
         user: { username: "carol" },
-        object_attributes: { noteable_type: "Issue", note: "hello", action: "create" },
+        object_attributes: { noteable_type: "Issue", note: "hello @Reviewer.One", action: "create" },
         issue: {
           iid: 8,
           title: "Bug",
@@ -75,7 +79,12 @@ describe("GitLab webhook normalization", () => {
         },
       },
     });
-    expect(note.event).toMatchObject({ kind: "commented", surface: { body: "hello" }, entity: { type: "issue" } });
+    expect(note.event).toMatchObject({
+      kind: "commented",
+      surface: { body: "hello @Reviewer.One" },
+      entity: { type: "issue" },
+    });
+    expect(note.personnel.mentions).toEqual(["Reviewer.One"]);
 
     const editedNote = normalizeGitlabWebhook({
       ...base,
@@ -96,16 +105,8 @@ describe("GitLab webhook normalization", () => {
     expect(editedNote.event).toMatchObject({ kind: "edited", surface: { body: "edited comment" } });
   });
 
-  it("returns an authenticated no-op for unsupported event kinds", () => {
-    const result = normalizeGitlabWebhook({ ...base, eventHeader: "Push Hook", body: { object_kind: "push" } });
-    expect(result.event).toBeNull();
-  });
-
-  it("fails closed on event/body mismatch and malformed reviewers", () => {
-    expect(() =>
-      normalizeGitlabWebhook({ ...base, eventHeader: "Issue Hook", body: { object_kind: "merge_request" } }),
-    ).toThrow("does not match");
-    expect(() =>
+  it("extracts personnel targets only from open and update actions", () => {
+    const mr = (action: string | undefined, reviewerCount = 1) =>
       normalizeGitlabWebhook({
         ...base,
         eventHeader: "Merge Request Hook",
@@ -113,11 +114,88 @@ describe("GitLab webhook normalization", () => {
           object_kind: "merge_request",
           project: project(),
           user: { username: "alice" },
-          reviewers: null,
-          object_attributes: { iid: 1 },
+          reviewers: Array.from({ length: reviewerCount }, (_, index) => ({ username: `reviewer${index}` })),
+          assignees: [{ username: "assignee" }],
+          object_attributes: {
+            iid: 17,
+            ...(action === undefined ? {} : { action }),
+            title: "Action semantics",
+          },
+        },
+      });
+    for (const action of ["close", "reopen", "merge"] as const) {
+      expect(mr(action).personnel).toMatchObject({
+        reviewerField: "valid",
+        reviewerAdded: [],
+        assigneeAdded: [],
+      });
+    }
+    expect(mr(undefined).personnel).toMatchObject({
+      reviewerField: "valid",
+      reviewerAdded: [],
+      assigneeAdded: [],
+    });
+    expect(mr("close", MAX_GITLAB_PERSONNEL_TARGETS + 1).personnel).toMatchObject({
+      reviewerField: "valid",
+      reviewerAdded: [],
+    });
+
+    for (const action of ["close", "reopen", undefined] as const) {
+      const issue = normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Issue Hook",
+        body: {
+          object_kind: "issue",
+          project: project(),
+          user: { username: "alice" },
+          assignees: [{ username: "assignee" }],
+          object_attributes: {
+            iid: 18,
+            ...(action === undefined ? {} : { action }),
+            title: "Issue action semantics",
+          },
+        },
+      });
+      expect(issue.personnel.assigneeAdded).toEqual([]);
+    }
+  });
+
+  it("returns an authenticated no-op for unsupported event kinds", () => {
+    const result = normalizeGitlabWebhook({ ...base, eventHeader: "Push Hook", body: { object_kind: "push" } });
+    expect(result.event).toBeNull();
+  });
+
+  it("fails closed on event/body mismatch and records malformed reviewer evidence for safe-card handling", () => {
+    expect(() =>
+      normalizeGitlabWebhook({ ...base, eventHeader: "Issue Hook", body: { object_kind: "merge_request" } }),
+    ).toThrow("does not match");
+    const malformedReviewers = normalizeGitlabWebhook({
+      ...base,
+      eventHeader: "Merge Request Hook",
+      body: {
+        object_kind: "merge_request",
+        project: project(),
+        user: { username: "alice" },
+        reviewers: null,
+        object_attributes: { iid: 1 },
+      },
+    });
+    expect(malformedReviewers.personnel).toMatchObject({
+      reviewerField: "invalid",
+      anomalyCode: "reviewers_wrong_type",
+    });
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Issue Hook",
+        body: {
+          object_kind: "issue",
+          project: project(),
+          user: { name: "Alice Display Name" },
+          object_attributes: { iid: 1, title: "Issue" },
         },
       }),
-    ).toThrow("reviewers must be an array");
+    ).toThrow("user.username");
     expect(() =>
       normalizeGitlabWebhook({
         ...base,
@@ -130,6 +208,74 @@ describe("GitLab webhook normalization", () => {
         },
       }),
     ).toThrow("connection's GitLab origin");
+  });
+
+  it("caps reviewer, assignee, mention, and deduplicated total personnel targets before processing", () => {
+    const users = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, index) => ({ username: `${prefix}${index}` }));
+    const mr = (reviewers: unknown, assignees: unknown = []) => ({
+      object_kind: "merge_request",
+      project: project(),
+      user: { username: "alice" },
+      reviewers,
+      assignees,
+      object_attributes: { iid: 11, action: "open", title: "Bounded targets" },
+    });
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Merge Request Hook",
+        body: mr(users("reviewer", MAX_GITLAB_PERSONNEL_TARGETS + 1)),
+      }),
+    ).toThrow("must not exceed");
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Merge Request Hook",
+        body: mr(users("reviewer", 30), users("assignee", 21)),
+      }),
+    ).toThrow("must not exceed");
+    expect(
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Merge Request Hook",
+        body: mr(users("reviewer", MAX_GITLAB_PERSONNEL_TARGETS)),
+      }).personnel.reviewerAdded,
+    ).toHaveLength(MAX_GITLAB_PERSONNEL_TARGETS);
+
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Issue Hook",
+        body: {
+          object_kind: "issue",
+          project: project(),
+          user: { username: "alice" },
+          assignees: users("assignee", MAX_GITLAB_PERSONNEL_TARGETS + 1),
+          object_attributes: { iid: 12, action: "open", title: "Bounded assignees" },
+        },
+      }),
+    ).toThrow("must not exceed");
+
+    expect(() =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Note Hook",
+        body: {
+          object_kind: "note",
+          project: project(),
+          user: { username: "alice" },
+          object_attributes: {
+            noteable_type: "Issue",
+            note: users("mentioned", MAX_GITLAB_PERSONNEL_TARGETS + 1)
+              .map((user) => `@${user.username}`)
+              .join(" "),
+            action: "create",
+          },
+          issue: { iid: 13, title: "Bounded mentions" },
+        },
+      }),
+    ).toThrow("must not exceed");
   });
 
   it("scopes stable upstream ids by connection", () => {

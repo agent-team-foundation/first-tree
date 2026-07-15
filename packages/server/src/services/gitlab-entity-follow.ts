@@ -58,7 +58,14 @@ export function parseGitlabEntityUrl(
 
 export async function declareGitlabEntityFollow(
   db: Database,
-  input: { organizationId: string; connectionId: string; chatId: string; declaredByAgentId: string; entityUrl: string },
+  input: {
+    organizationId: string;
+    connectionId: string;
+    chatId: string;
+    declaredByAgentId: string;
+    boundVia?: "agent_declared" | "human_declared";
+    entityUrl: string;
+  },
 ) {
   return db.transaction(async (rawTx) => {
     const [connection] = await rawTx
@@ -71,6 +78,7 @@ export async function declareGitlabEntityFollow(
       .limit(1);
     if (!connection) throw new NotFoundError("GitLab connection not found");
     const parsed = parseGitlabEntityUrl(connection.instanceOrigin, input.entityUrl);
+    const boundVia = input.boundVia ?? "agent_declared";
     const normalizedPath = normalizeGitlabProjectPath(parsed.projectPath);
     const baseMatch = and(
       eq(gitlabEntityChatMappings.connectionId, input.connectionId),
@@ -78,6 +86,11 @@ export async function declareGitlabEntityFollow(
       eq(gitlabEntityChatMappings.projectPathNormalized, normalizedPath),
       eq(gitlabEntityChatMappings.entityType, parsed.entityType),
       eq(gitlabEntityChatMappings.entityIid, parsed.entityIid),
+      eq(gitlabEntityChatMappings.active, true),
+      or(
+        eq(gitlabEntityChatMappings.boundVia, "agent_declared"),
+        eq(gitlabEntityChatMappings.boundVia, "human_declared"),
+      ),
     );
     const [existing] = await rawTx.select().from(gitlabEntityChatMappings).where(baseMatch).limit(1);
     if (existing) return existing;
@@ -89,6 +102,7 @@ export async function declareGitlabEntityFollow(
         connectionId: input.connectionId,
         chatId: input.chatId,
         declaredByAgentId: input.declaredByAgentId,
+        boundVia,
         entityType: parsed.entityType,
         entityIid: parsed.entityIid,
         projectId: null,
@@ -107,13 +121,35 @@ export async function declareGitlabEntityFollow(
 }
 
 export async function listChatGitlabEntities(db: Database, chatId: string) {
-  return db.select().from(gitlabEntityChatMappings).where(eq(gitlabEntityChatMappings.chatId, chatId));
+  return db
+    .select()
+    .from(gitlabEntityChatMappings)
+    .where(
+      and(
+        eq(gitlabEntityChatMappings.chatId, chatId),
+        eq(gitlabEntityChatMappings.active, true),
+        or(
+          eq(gitlabEntityChatMappings.boundVia, "agent_declared"),
+          eq(gitlabEntityChatMappings.boundVia, "human_declared"),
+        ),
+      ),
+    );
 }
 
 export async function removeGitlabEntityFollow(db: Database, chatId: string, mappingId: string): Promise<number> {
   const removed = await db
     .delete(gitlabEntityChatMappings)
-    .where(and(eq(gitlabEntityChatMappings.id, mappingId), eq(gitlabEntityChatMappings.chatId, chatId)))
+    .where(
+      and(
+        eq(gitlabEntityChatMappings.id, mappingId),
+        eq(gitlabEntityChatMappings.chatId, chatId),
+        eq(gitlabEntityChatMappings.active, true),
+        or(
+          eq(gitlabEntityChatMappings.boundVia, "agent_declared"),
+          eq(gitlabEntityChatMappings.boundVia, "human_declared"),
+        ),
+      ),
+    )
     .returning({ id: gitlabEntityChatMappings.id });
   return removed.length;
 }
@@ -134,6 +170,7 @@ export async function observeGitlabEntityAndResolveFollowers(
           eq(gitlabEntityChatMappings.connectionId, connectionId),
           eq(gitlabEntityChatMappings.entityType, entity.entityType),
           eq(gitlabEntityChatMappings.entityIid, entity.entityIid),
+          eq(gitlabEntityChatMappings.active, true),
           or(
             eq(gitlabEntityChatMappings.projectId, entity.projectId),
             and(
@@ -151,28 +188,47 @@ export async function observeGitlabEntityAndResolveFollowers(
       else byChat.set(row.chatId, [row]);
     }
     for (const rows of byChat.values()) {
-      const observed = rows.find((row) => row.projectId === entity.projectId);
-      const winner = observed ?? rows.find((row) => row.projectId === null);
-      if (!winner) continue;
-      for (const duplicate of rows) {
-        if (duplicate.id !== winner.id && duplicate.projectId === null) {
-          await tx.delete(gitlabEntityChatMappings).where(eq(gitlabEntityChatMappings.id, duplicate.id));
+      const explicitRows = rows.filter((row) => row.boundVia !== "identity_target");
+      if (explicitRows.length > 0) {
+        const observed = explicitRows.find((row) => row.projectId === entity.projectId);
+        const winner = observed ?? explicitRows.find((row) => row.projectId === null);
+        if (winner) {
+          for (const duplicate of explicitRows) {
+            if (duplicate.id !== winner.id && duplicate.projectId === null) {
+              await tx.delete(gitlabEntityChatMappings).where(eq(gitlabEntityChatMappings.id, duplicate.id));
+            }
+          }
+          const [updated] = await tx
+            .update(gitlabEntityChatMappings)
+            .set({
+              projectId: entity.projectId,
+              projectPath: entity.projectPath,
+              projectPathNormalized: normalizedPath,
+              entityUrl: entity.entityUrl,
+              title: entity.title,
+              entityState: entity.entityState,
+              updatedAt: new Date(),
+            })
+            .where(eq(gitlabEntityChatMappings.id, winner.id))
+            .returning();
+          if (updated) resolved.push(updated);
         }
       }
-      const [updated] = await tx
-        .update(gitlabEntityChatMappings)
-        .set({
-          projectId: entity.projectId,
-          projectPath: entity.projectPath,
-          projectPathNormalized: normalizedPath,
-          entityUrl: entity.entityUrl,
-          title: entity.title,
-          entityState: entity.entityState,
-          updatedAt: new Date(),
-        })
-        .where(eq(gitlabEntityChatMappings.id, winner.id))
-        .returning();
-      if (updated) resolved.push(updated);
+      for (const identityRow of rows.filter((row) => row.boundVia === "identity_target")) {
+        const [updated] = await tx
+          .update(gitlabEntityChatMappings)
+          .set({
+            projectPath: entity.projectPath,
+            projectPathNormalized: normalizedPath,
+            entityUrl: entity.entityUrl,
+            title: entity.title,
+            entityState: entity.entityState,
+            updatedAt: new Date(),
+          })
+          .where(eq(gitlabEntityChatMappings.id, identityRow.id))
+          .returning();
+        if (updated) resolved.push(updated);
+      }
     }
     return resolved;
   });

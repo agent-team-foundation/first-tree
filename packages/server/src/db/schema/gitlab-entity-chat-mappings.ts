@@ -1,8 +1,9 @@
 import { sql } from "drizzle-orm";
-import { bigint, check, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { chats } from "./chats.js";
 import { gitlabConnections } from "./gitlab-connections.js";
+import { gitlabIdentityLinks } from "./gitlab-identity-links.js";
 import { organizations } from "./organizations.js";
 
 export const gitlabEntityChatMappings = pgTable(
@@ -21,6 +22,11 @@ export const gitlabEntityChatMappings = pgTable(
     declaredByAgentId: text("declared_by_agent_id")
       .notNull()
       .references(() => agents.uuid, { onDelete: "cascade" }),
+    boundVia: text("bound_via").notNull().default("agent_declared"),
+    identityLinkId: text("identity_link_id").references(() => gitlabIdentityLinks.id, { onDelete: "cascade" }),
+    humanAgentId: text("human_agent_id").references(() => agents.uuid, { onDelete: "cascade" }),
+    delegateAgentId: text("delegate_agent_id").references(() => agents.uuid, { onDelete: "cascade" }),
+    active: boolean("active").notNull().default(true),
     entityType: text("entity_type").notNull(),
     entityIid: integer("entity_iid").notNull(),
     projectId: bigint("project_id", { mode: "number" }),
@@ -35,10 +41,13 @@ export const gitlabEntityChatMappings = pgTable(
   (table) => [
     uniqueIndex("uq_gitlab_entity_pending_chat")
       .on(table.connectionId, table.chatId, table.projectPathNormalized, table.entityType, table.entityIid)
-      .where(sql`${table.projectId} IS NULL`),
+      .where(sql`${table.projectId} IS NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target'`),
     uniqueIndex("uq_gitlab_entity_observed_chat")
       .on(table.connectionId, table.chatId, table.projectId, table.entityType, table.entityIid)
-      .where(sql`${table.projectId} IS NOT NULL`),
+      .where(sql`${table.projectId} IS NOT NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target'`),
+    uniqueIndex("uq_gitlab_entity_identity_target")
+      .on(table.connectionId, table.identityLinkId, table.projectId, table.entityType, table.entityIid)
+      .where(sql`${table.projectId} IS NOT NULL AND ${table.active} AND ${table.boundVia} = 'identity_target'`),
     index("idx_gitlab_entity_observed_lookup").on(
       table.connectionId,
       table.projectId,
@@ -50,5 +59,13 @@ export const gitlabEntityChatMappings = pgTable(
       .where(sql`${table.projectId} IS NULL`),
     index("idx_gitlab_entity_chat").on(table.chatId),
     check("ck_gitlab_entity_type", sql`${table.entityType} IN ('issue', 'pull_request')`),
+    check(
+      "ck_gitlab_entity_bound_via",
+      sql`${table.boundVia} IN ('agent_declared', 'human_declared', 'identity_target')`,
+    ),
+    check(
+      "ck_gitlab_entity_identity_owner",
+      sql`${table.boundVia} <> 'identity_target' OR (${table.identityLinkId} IS NOT NULL AND ${table.humanAgentId} IS NOT NULL AND ${table.delegateAgentId} IS NOT NULL AND ${table.projectId} IS NOT NULL)`,
+    ),
   ],
 );

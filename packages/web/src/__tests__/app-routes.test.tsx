@@ -86,6 +86,18 @@ vi.mock("../pages/settings.js", async () => {
 vi.mock("../pages/settings/computers.js", () => ({ SettingsComputersPage: () => <div>settings computers</div> }));
 vi.mock("../pages/settings/context-tree.js", () => ({ SettingsContextTreePage: () => <div>settings context</div> }));
 vi.mock("../pages/settings/github.js", () => ({ SettingsGithubPage: () => <div>settings github</div> }));
+vi.mock("../pages/settings/gitlab.js", () => ({ SettingsGitlabPage: () => <div>settings gitlab</div> }));
+vi.mock("../pages/settings/integrations.js", async () => {
+  const { Outlet } = await import("react-router");
+  return {
+    SettingsIntegrationsLayout: () => (
+      <div>
+        integrations layout
+        <Outlet />
+      </div>
+    ),
+  };
+});
 vi.mock("../pages/settings/onboarding.js", () => ({ SettingsOnboardingPage: () => <div>settings onboarding</div> }));
 vi.mock("../pages/settings/resources.js", () => ({ SettingsResourcesPage: () => <div>settings resources</div> }));
 vi.mock("../pages/agent-detail.js", async () => {
@@ -222,6 +234,15 @@ describe("App routes", () => {
     await resetRenderedApp();
 
     expect(await renderAppAt("/settings/github")).toContain("settings github");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/integrations/github")).toContain("settings github");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/integrations/gitlab")).toContain("settings gitlab");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/integrations")).toContain("settings github");
     await resetRenderedApp();
 
     expect(await renderAppAt("/settings/setup")).toContain("settings onboarding");

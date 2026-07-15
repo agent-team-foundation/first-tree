@@ -4,13 +4,18 @@ import {
   findActiveGitlabEndpoint,
   markGitlabInboundSeen,
   markGitlabProcessingFailure,
+  markGitlabReviewerSchemaAnomaly,
+  markGitlabStableDeliveryObserved,
+  observeGitlabReviewersCapability,
   withGitlabIngressFence,
 } from "../../services/gitlab-connections.js";
 import {
-  deliverGitlabBasicCards,
+  applyGitlabPersonnelEvidence,
+  deliverGitlabCards,
   extractStableGitlabDeliveryId,
+  GitlabPersonnelTargetLimitError,
   normalizeGitlabWebhook,
-  resolveGitlabBasicAudience,
+  resolveGitlabAudience,
 } from "../../services/gitlab-webhook.js";
 import { runDeferredScmCardPostCommitEffects } from "../../services/scm-card-delivery.js";
 import { processScmWebhookDelivery } from "../../services/scm-webhook-processing.js";
@@ -92,23 +97,50 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
           endpoint.connection.id,
           endpoint.connection.tokenHash,
           async (tx, fencedConnection) => {
+            const applied = applyGitlabPersonnelEvidence(
+              normalized,
+              fencedConnection.reviewerMode as "unknown" | "assignee" | "reviewers",
+            );
             const processed = await processScmWebhookDelivery({
               db: tx,
               ingress: normalized.ingress,
-              event: normalized.event,
+              event: applied.event,
               runProviderWork: async () => {
                 await markGitlabInboundSeen(tx, endpoint.connection.id, endpoint.connection.tokenHash);
+                if (normalized.ingress.stableDeliveryId) {
+                  await markGitlabStableDeliveryObserved(tx, fencedConnection.id);
+                }
+                if (applied.observeReviewers) {
+                  await observeGitlabReviewersCapability(tx, fencedConnection.id);
+                }
+                if (applied.schemaAnomalyCode) {
+                  await markGitlabReviewerSchemaAnomaly(tx, fencedConnection.id, applied.schemaAnomalyCode);
+                }
                 return { endpointSeen: true };
               },
-              resolveAudience: async () => {
-                if (!normalized.entityIdentity) {
+              resolveAudience: async (event) => {
+                if (!normalized.entityIdentity || !applied.event) {
                   return { targets: [], actorHumanId: null };
                 }
-                return resolveGitlabBasicAudience(tx, fencedConnection.id, normalized.entityIdentity);
+                return resolveGitlabAudience(tx, {
+                  organizationId: fencedConnection.organizationId,
+                  connectionId: fencedConnection.id,
+                  automaticActionsEnabled: fencedConnection.automaticActionsEnabled,
+                  event,
+                  entityIdentity: normalized.entityIdentity,
+                  skippedBeforeIdentity: applied.skippedBeforeIdentity,
+                });
               },
               deliver: async (event, audience) => {
                 if (!normalized.entityIdentity) return { delivered: 0, failed: 0, postCommitEffects: [] };
-                return deliverGitlabBasicCards(app, event, normalized.entityIdentity, audience, tx);
+                return deliverGitlabCards(app, {
+                  event,
+                  identity: normalized.entityIdentity,
+                  audience,
+                  organizationId: fencedConnection.organizationId,
+                  connectionId: fencedConnection.id,
+                  database: tx,
+                });
               },
             });
             if (processed.outcome === "delivered" && processed.deliveryStats.failed > 0) {
@@ -129,6 +161,10 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
         }
         return { ok: true, outcome: result.outcome };
       } catch (err) {
+        if (err instanceof GitlabPersonnelTargetLimitError) {
+          failureMarked.add(request);
+          throw err;
+        }
         await markGitlabProcessingFailure(
           app.db,
           endpoint.connection.id,

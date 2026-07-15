@@ -38,6 +38,17 @@ export const githubChatMetadataSchema = z.object({
 });
 export type GithubChatMetadata = z.infer<typeof githubChatMetadataSchema>;
 
+export const gitlabChatMetadataSchema = z.object({
+  source: z.literal("gitlab"),
+  entityType: z.enum(["issue", "pull_request"]),
+  /** Stable numeric project/type/iid key emitted by the GitLab adapter. */
+  entityKey: z.string().min(1),
+  entityUrl: z.string().url().optional(),
+  /** Stage 3 routes review requests; Stage 4 owns source-read execution state. */
+  reviewRequestRouted: z.literal(true).optional(),
+});
+export type GitlabChatMetadata = z.infer<typeof gitlabChatMetadataSchema>;
+
 export const agentChatMetadataSchema = z.object({
   source: z.literal("agent"),
   initiatedByAgentId: z.string().min(1).optional(),
@@ -50,7 +61,11 @@ export type AgentChatMetadata = z.infer<typeof agentChatMetadataSchema>;
  * joined by agent-created task chats; future writers should add new `source`
  * branches here instead of inventing untyped metadata keys.
  */
-export const chatMetadataSchema = z.discriminatedUnion("source", [githubChatMetadataSchema, agentChatMetadataSchema]);
+export const chatMetadataSchema = z.discriminatedUnion("source", [
+  githubChatMetadataSchema,
+  gitlabChatMetadataSchema,
+  agentChatMetadataSchema,
+]);
 export type ChatMetadata = z.infer<typeof chatMetadataSchema>;
 
 /**
@@ -87,6 +102,6 @@ export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
  * then extend this enum, then both the SQL CASE and the
  * `sourceFilterSql` switch.
  */
-export const CHAT_SOURCES = ["manual", "github", "agent"] as const;
+export const CHAT_SOURCES = ["manual", "github", "gitlab", "agent"] as const;
 export const chatSourceSchema = z.enum(CHAT_SOURCES);
 export type ChatSource = z.infer<typeof chatSourceSchema>;

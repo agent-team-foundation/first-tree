@@ -34,6 +34,7 @@ import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
 import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
 import { gitlabConnectionRoutes } from "./api/gitlab-connections.js";
+import { gitlabIdentityLinkRoutes } from "./api/gitlab-identity-links.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { scanCampaignExportRoutes } from "./api/internal/scan-campaign-exports.js";
@@ -51,6 +52,7 @@ import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.j
 import { orgDocumentRoutes } from "./api/orgs/documents.js";
 import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgGitlabConnectionRoutes } from "./api/orgs/gitlab-connections.js";
+import { orgGitlabIdentityLinkRoutes } from "./api/orgs/gitlab-identity-links.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
@@ -555,6 +557,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgResourceRoutes, { prefix: "/resources" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgGitlabConnectionRoutes, { prefix: "/gitlab-connections" });
+          await scope.register(orgGitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
@@ -581,6 +584,7 @@ export async function buildApp(config: Config) {
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
           await scope.register(gitlabConnectionRoutes, { prefix: "/gitlab-connections" });
+          await scope.register(gitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
           if (config.docs.enabled) {
             await scope.register(documentRoutes, { prefix: "/documents" });
             await scope.register(documentCommentRoutes, { prefix: "/document-comments" });

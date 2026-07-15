@@ -314,6 +314,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
         connectionId: body.connectionId,
         chatId: request.params.chatId,
         declaredByAgentId: identity.uuid,
+        boundVia: "agent_declared",
         entityUrl: body.entityUrl,
       });
       return reply.status(201).send({ entity });
