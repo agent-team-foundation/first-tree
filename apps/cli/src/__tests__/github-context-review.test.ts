@@ -81,9 +81,7 @@ describe("github context-review submit", () => {
       event: "APPROVE",
       body: "## Context approved\n",
     });
-    expect(outputMocks.success).toHaveBeenCalledWith(
-      expect.objectContaining({ appActor: "first-tree-staging[bot]" }),
-    );
+    expect(outputMocks.success).toHaveBeenCalledWith(expect.objectContaining({ appActor: "first-tree-staging[bot]" }));
   });
 
   it("fails before SDK creation without chat or runtime-session proof", async () => {
