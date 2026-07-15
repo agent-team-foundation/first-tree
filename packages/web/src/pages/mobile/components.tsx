@@ -139,13 +139,42 @@ export function MobileSystemState({
   );
 }
 
-// State pill: a `-soft` fill + `-strong` text capsule (the design system's
-// blessed open-question REQUEST-chip form), replacing the old bare mono dot +
-// label. Reads as an intentional status tag rather than a technical readout,
-// and — with the left-edge accent on the card — lets a single glance sort the
-// feed by priority before any word is read. `working` carries the canonical
-// pulsing liveness dot so it is told apart from a static state by form, not hue.
-export function MobileSignalChip({ signal, label = signal.label }: { signal: MobileChatSignal; label?: string }) {
+// Now's feed uses an emphasized state pill, while the complete Chat list keeps
+// its original quiet mono signal. This prevents a Now-specific attention
+// treatment from changing the density and hierarchy of every conversation row.
+export function MobileSignalChip({
+  signal,
+  label = signal.label,
+  variant = "plain",
+}: {
+  signal: MobileChatSignal;
+  label?: string;
+  variant?: "plain" | "pill";
+}) {
+  if (variant === "plain") {
+    const color = toneColor(signal.tone);
+    return (
+      <span
+        className="mono inline-flex min-w-0 max-w-full items-center text-mobile-caption"
+        style={{ gap: "var(--sp-1)", color, whiteSpace: "nowrap" }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: "var(--sp-1_5)",
+            height: "var(--sp-1_5)",
+            borderRadius: "var(--radius-full)",
+            background: color,
+            flexShrink: 0,
+          }}
+        />
+        <span className="truncate" data-mobile-signal-label>
+          {label}
+        </span>
+      </span>
+    );
+  }
+
   const chip = toneChipStyle(signal.tone);
   return (
     <span

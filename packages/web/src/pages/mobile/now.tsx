@@ -8,7 +8,6 @@ import { useAuth } from "../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { MobileAskSheet } from "./ask-sheet.js";
-import { MobileCardActionsMenu, MobileSwipeCard, useMobileChatActions } from "./chat-card-actions.js";
 import { MobilePage, MobileSignalChip, MobileSystemState, mobileAccentColor, mobileCardStyle } from "./components.js";
 import {
   formatMobileAge,
@@ -98,7 +97,6 @@ function MobileAttentionCard({
   const preview = mobileChatPreview(row);
   const actionLabel = primaryActionLabel(signal.tone);
   const accent = mobileAccentColor(signal.tone);
-  const actions = useMobileChatActions(row);
   const cardStyle = {
     ...mobileCardStyle(actionLabel ? "priorityFeed" : "feed"),
     textDecoration: "none",
@@ -124,16 +122,13 @@ function MobileAttentionCard({
           statusDot
         />
         <div className="min-w-0" style={{ flex: 1 }}>
-          <MobileSignalChip signal={signal} />
+          <MobileSignalChip signal={signal} variant="pill" />
         </div>
         {row.lastMessageAt ? (
           <span className="mono text-mobile-caption shrink-0" style={{ color: "var(--fg-4)" }}>
             {formatMobileAge(row.lastMessageAt)}
           </span>
         ) : null}
-        <span style={{ pointerEvents: "auto" }}>
-          <MobileCardActionsMenu actions={actions} title={row.title} />
-        </span>
       </div>
       <p
         className="text-mobile-title"
@@ -184,18 +179,16 @@ function MobileAttentionCard({
   );
 
   return (
-    <MobileSwipeCard actions={actions}>
-      <article style={cardStyle} data-mobile-card="feed">
-        <button
-          type="button"
-          aria-label={`Open ${row.title}`}
-          onClick={() => onOpenChat(row.chatId)}
-          className="absolute inset-0 cursor-pointer border-0 bg-transparent"
-          style={{ zIndex: 0 }}
-        />
-        {content}
-      </article>
-    </MobileSwipeCard>
+    <article style={cardStyle} data-mobile-card="feed">
+      <button
+        type="button"
+        aria-label={`Open ${row.title}`}
+        onClick={() => onOpenChat(row.chatId)}
+        className="absolute inset-0 cursor-pointer border-0 bg-transparent"
+        style={{ zIndex: 0 }}
+      />
+      {content}
+    </article>
   );
 }
 

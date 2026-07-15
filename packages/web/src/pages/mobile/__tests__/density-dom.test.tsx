@@ -173,6 +173,9 @@ describe("mobile density tiers", () => {
     const labels = [...feed.querySelectorAll("[data-mobile-signal-label]")].map((label) => label.textContent);
     expect(labels).toEqual(["Needs your answer", "Working now"]);
     expect(feedCards[0]?.querySelector("[data-mobile-signal-label]")?.className).toContain("truncate");
+    expect(feedCards[0]?.querySelector("[data-mobile-signal-label]")?.parentElement?.className).toContain(
+      "text-mobile-label",
+    );
     expect(feedCards[0]?.querySelector("[data-mobile-primary-action]")?.textContent).toContain("Answer");
     expect(feedCards[1]?.querySelector("[data-mobile-primary-action]")).toBeNull();
     expect(feed.querySelector('[data-mobile-card="list"]')).toBeNull();
@@ -187,6 +190,9 @@ describe("mobile density tiers", () => {
     if (!listCard) throw new Error("Missing Chat list card");
     expect(listCard.getAttribute("style")).toContain("min-height: calc(var(--sp-16) + var(--sp-6))");
     expect(listCard.querySelector("[data-mobile-card-title]")?.className).toContain("text-mobile-subtitle");
+    expect(listCard.querySelector("[data-mobile-signal-label]")?.parentElement?.className).toContain("mono");
+    expect(listCard.querySelector("[data-mobile-card-menu]")).toBeNull();
+    expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
     expect(harness.container.querySelector('[data-mobile-card="feed"]')).toBeNull();
   });
 
