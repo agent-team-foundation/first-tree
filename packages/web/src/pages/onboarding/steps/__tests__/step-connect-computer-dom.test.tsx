@@ -64,6 +64,7 @@ function flow(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue
     treeAutoDetectDone: false,
     markTreeAutoDetectDone: vi.fn(),
     completeAndEnterChat: vi.fn(),
+    skipAndEnterChat: vi.fn(),
     finishLater: vi.fn(),
     ...overrides,
   };

@@ -500,6 +500,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     treeAutoDetectDone: true,
     markTreeAutoDetectDone: vi.fn(),
     completeAndEnterChat: vi.fn(async () => undefined),
+    skipAndEnterChat: vi.fn(async () => undefined),
     finishLater: vi.fn(async () => undefined),
   };
   return {

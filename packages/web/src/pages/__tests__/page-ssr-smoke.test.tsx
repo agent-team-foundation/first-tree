@@ -784,6 +784,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     treeAutoDetectDone: true,
     markTreeAutoDetectDone: () => undefined,
     completeAndEnterChat: async () => undefined,
+    skipAndEnterChat: async () => undefined,
     finishLater: async () => undefined,
   };
   return {

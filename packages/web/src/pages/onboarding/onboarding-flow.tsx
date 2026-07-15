@@ -94,6 +94,15 @@ export type OnboardingFlowValue = {
 
   /** Mark setup finished and drop the user into their first chat. */
   completeAndEnterChat: (chatId: string) => Promise<void>;
+  /**
+   * Enter the team-agent quick-start chat WITHOUT stamping completion. The
+   * kickoff call already wrote the membership's `invitee_skip` suppressor
+   * server-side; this only refreshes `/me` (so the workspace gate sees the
+   * suppressor instead of bouncing straight back here) and navigates. The
+   * member's own connect-computer → create-agent journey stays pending and
+   * resumable from Settings → Setup.
+   */
+  skipAndEnterChat: (chatId: string) => Promise<void>;
   /** Hide setup and go to the normal workspace (resumable via Settings). */
   finishLater: () => Promise<void>;
 };
@@ -319,6 +328,24 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     [path, organizationId, markOnboardingCompleted, navigate],
   );
 
+  const skipAndEnterChat = useCallback(
+    async (chatId: string) => {
+      clearPersistedStep(path, organizationId);
+      // Same per-tab hygiene as completion: the stash was never consumed on
+      // this path (the quick-start chat uses a teammate's agent), but clearing
+      // it keeps a later same-tab onboarding in another org from reading a
+      // stale value.
+      writeOnboardingAgentUuid(null);
+      // The kickoff already stamped `invitee_skip` server-side. Refresh /me so
+      // the auth context carries the suppressor BEFORE navigating — the
+      // workspace gate reads it, and navigating with stale state would bounce
+      // the user straight back into onboarding.
+      await refreshMe();
+      navigate(`/?c=${encodeURIComponent(chatId)}`);
+    },
+    [path, organizationId, refreshMe, navigate],
+  );
+
   const finishLater = useCallback(async () => {
     await dismissOnboarding();
     navigate("/");
@@ -359,6 +386,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       treeAutoDetectDone,
       markTreeAutoDetectDone,
       completeAndEnterChat,
+      skipAndEnterChat,
       finishLater,
     }),
     [
@@ -391,6 +419,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       treeAutoDetectDone,
       markTreeAutoDetectDone,
       completeAndEnterChat,
+      skipAndEnterChat,
       finishLater,
     ],
   );

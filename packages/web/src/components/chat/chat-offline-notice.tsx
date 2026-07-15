@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
+import { useAuth } from "../../auth/auth-context.js";
+import { useOrgAgents } from "../../lib/use-org-agents.js";
 
 // Hold the hopeful "coming online" framing this long before escalating to the
 // reconnect action. A just-created agent (onboarding's first chat) or a
@@ -40,10 +42,18 @@ export function OfflineNotice({
   phase,
   agentName,
   onReconnect,
+  teammateComputer = false,
 }: {
   phase: OfflineNoticePhase;
   agentName: string;
   onReconnect: () => void;
+  /**
+   * True when the offline agent runs on ANOTHER member's computer (a teammate's
+   * org-visible agent). The viewer can't reconnect a machine they don't own, so
+   * the notice names where the agent runs instead of offering a dead
+   * "Reconnect" action.
+   */
+  teammateComputer?: boolean;
 }) {
   return (
     <div className="flex justify-center" style={{ margin: "var(--sp-2) 0 var(--sp-1)" }}>
@@ -59,17 +69,21 @@ export function OfflineNotice({
         }}
       >
         {phase === "offline" ? (
-          <>
-            <span>{`${agentName} is offline — anything you send will start once its computer reconnects.`}</span>
-            <button
-              type="button"
-              className="font-medium underline underline-offset-2 shrink-0"
-              style={{ color: "var(--primary)" }}
-              onClick={onReconnect}
-            >
-              Reconnect
-            </button>
-          </>
+          teammateComputer ? (
+            <span>{`${agentName} is offline — it runs on a teammate's computer and will pick this up when that computer reconnects.`}</span>
+          ) : (
+            <>
+              <span>{`${agentName} is offline — anything you send will start once its computer reconnects.`}</span>
+              <button
+                type="button"
+                className="font-medium underline underline-offset-2 shrink-0"
+                style={{ color: "var(--primary)" }}
+                onClick={onReconnect}
+              >
+                Reconnect
+              </button>
+            </>
+          )
         ) : (
           <span>{`${agentName} is coming online…`}</span>
         )}
@@ -127,6 +141,17 @@ export function ChatOfflineNotice({
     return () => window.clearTimeout(timer);
   }, [offlineAgentId]);
 
+  // A teammate's org-visible agent runs on ITS OWNER's computer — the viewer
+  // can't reconnect a machine they don't own, so the notice swaps the dead
+  // "Reconnect" action for a where-it-runs explanation. Resolved from the
+  // shared org roster cache; an agent we can't find there (e.g. beyond the
+  // first roster page) keeps the reconnect action rather than hiding a
+  // possibly-valid fix.
+  const { memberId } = useAuth();
+  const roster = useOrgAgents({ enabled: !!offlineAgentId });
+  const rosterAgent = offlineAgentId ? (roster.data?.items ?? []).find((a) => a.uuid === offlineAgentId) : undefined;
+  const teammateComputer = !!rosterAgent?.managerId && !!memberId && rosterAgent.managerId !== memberId;
+
   if (!offlineAgent) return null;
 
   return (
@@ -134,6 +159,7 @@ export function ChatOfflineNotice({
       phase={graceElapsed ? "offline" : "starting"}
       agentName={offlineAgent.displayName}
       onReconnect={() => navigate("/settings/computers")}
+      teammateComputer={teammateComputer}
     />
   );
 }

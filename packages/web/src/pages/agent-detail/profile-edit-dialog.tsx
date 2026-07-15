@@ -339,7 +339,7 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   const hasImage = !!agent.avatarImageUrl;
   const visibilityHelp = canChangeVisibility
     ? visibility === AGENT_VISIBILITY.ORGANIZATION
-      ? "Anyone on your team can @mention and chat with it."
+      ? "Anyone on your team can @mention it and start work with it — it runs on your computer and uses your plan."
       : "Only this agent's owner can see and chat with it."
     : "Only the owner or an admin can change this agent's visibility.";
 

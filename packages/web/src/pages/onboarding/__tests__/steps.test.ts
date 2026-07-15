@@ -36,6 +36,10 @@ describe("resolveStepProgress", () => {
     expect(resolveStepProgress("invitee", "create-agent")).toEqual({ index: 2, total: 3 });
     expect(resolveStepProgress("invitee", "start-chat")).toBeNull();
   });
+  it("get-started is a decision screen, not a progress milestone", () => {
+    // The fork must not change the three-milestone journey contract.
+    expect(resolveStepProgress("invitee", "get-started")).toBeNull();
+  });
 });
 
 describe("getStepSequence", () => {
@@ -43,9 +47,13 @@ describe("getStepSequence", () => {
     expect(getStepSequence("admin")).toEqual(ADMIN_STEPS);
     expect(ADMIN_STEPS).toEqual(["create-team", "connect-computer", "create-agent", "start-chat"]);
   });
-  it("invitee sequence shows the full join-team to start-chat path", () => {
+  it("invitee sequence shows the full join-team to start-chat path with the get-started fork", () => {
     expect(getStepSequence("invitee")).toEqual(INVITEE_STEPS);
-    expect(INVITEE_STEPS).toEqual(["join-team", "connect-computer", "create-agent", "start-chat"]);
+    expect(INVITEE_STEPS).toEqual(["join-team", "get-started", "connect-computer", "create-agent", "start-chat"]);
+  });
+  it("the get-started fork is invitee-only (admins never see it)", () => {
+    expect(ADMIN_STEPS).not.toContain("get-started" as never);
+    expect(INVITEE_STEPS.indexOf("get-started")).toBe(INVITEE_STEPS.indexOf("join-team") + 1);
   });
   it("connect-computer precedes create-agent in both paths (agent needs a computer)", () => {
     for (const seq of [ADMIN_STEPS, INVITEE_STEPS]) {
@@ -151,20 +159,12 @@ describe("shouldEnterOnboarding", () => {
 
 describe("canOfferTeamAgentStart", () => {
   it("offers the install-free start only while the org has a usable agent and no personal one", () => {
-    expect(
-      canOfferTeamAgentStart({ currentOrgHasUsableAgent: true, currentOrgHasPersonalAgent: false }),
-    ).toBe(true);
+    expect(canOfferTeamAgentStart({ currentOrgHasUsableAgent: true, currentOrgHasPersonalAgent: false })).toBe(true);
   });
   it("never offers it on a fresh team or once the member has their own agent", () => {
-    expect(
-      canOfferTeamAgentStart({ currentOrgHasUsableAgent: false, currentOrgHasPersonalAgent: false }),
-    ).toBe(false);
-    expect(
-      canOfferTeamAgentStart({ currentOrgHasUsableAgent: true, currentOrgHasPersonalAgent: true }),
-    ).toBe(false);
-    expect(
-      canOfferTeamAgentStart({ currentOrgHasUsableAgent: false, currentOrgHasPersonalAgent: true }),
-    ).toBe(false);
+    expect(canOfferTeamAgentStart({ currentOrgHasUsableAgent: false, currentOrgHasPersonalAgent: false })).toBe(false);
+    expect(canOfferTeamAgentStart({ currentOrgHasUsableAgent: true, currentOrgHasPersonalAgent: true })).toBe(false);
+    expect(canOfferTeamAgentStart({ currentOrgHasUsableAgent: false, currentOrgHasPersonalAgent: true })).toBe(false);
   });
 });
 

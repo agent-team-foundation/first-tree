@@ -816,6 +816,7 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
     treeAutoDetectDone: false,
     markTreeAutoDetectDone: NOOP,
     completeAndEnterChat: ASYNC_NOOP,
+    skipAndEnterChat: ASYNC_NOOP,
     finishLater: ASYNC_NOOP,
   };
 }
