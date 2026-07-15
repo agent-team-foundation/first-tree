@@ -4,6 +4,8 @@ export type ScmAudienceTarget = {
   senderAgentId: string;
   humanAgentId: string | null;
   wakeAgentId: string | null;
+  /** Provider-owned opaque authority carried through planning for post-commit revalidation. */
+  authorityKey?: string | null;
   kind: "existing" | "new";
   chatId: string | null;
   involveReason: InvolveReason | null;
@@ -14,6 +16,7 @@ export type ScmDeliveryEntry = {
   senderAgentId: string;
   humanAgentId: string | null;
   wakeAgentId: string | null;
+  authorityKeys: Set<string>;
   reasons: Set<"follow" | InvolveReason>;
   involveReason: InvolveReason | null;
   involveLogin: string | null;
@@ -81,6 +84,7 @@ function addScmDeliveryEntry(delivery: ScmPlannedChatDelivery, target: ScmAudien
   if (target.involveReason) reasons.add(target.involveReason);
   const existing = delivery.entries.get(key);
   if (existing) {
+    if (target.authorityKey) existing.authorityKeys.add(target.authorityKey);
     for (const reason of reasons) existing.reasons.add(reason);
     if (
       target.involveReason &&
@@ -95,6 +99,7 @@ function addScmDeliveryEntry(delivery: ScmPlannedChatDelivery, target: ScmAudien
     senderAgentId: target.senderAgentId,
     humanAgentId: target.humanAgentId,
     wakeAgentId: target.wakeAgentId,
+    authorityKeys: new Set(target.authorityKey ? [target.authorityKey] : []),
     reasons,
     involveReason: target.involveReason,
     involveLogin: target.involveLogin,

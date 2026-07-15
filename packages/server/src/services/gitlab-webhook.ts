@@ -10,9 +10,11 @@ import { chatMetadataSchema } from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
+import { members } from "../db/schema/members.js";
 import { BadRequestError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
@@ -28,6 +30,7 @@ import {
   normalizeGitlabUsername,
   resolveActiveGitlabIdentity,
 } from "./gitlab-identities.js";
+import type { DeferredGitlabCardPostCommitEffects, GitlabIdentityAuthorityProof } from "./gitlab-post-commit.js";
 import { recordGitlabSkippedTarget } from "./gitlab-target-audit.js";
 import { type DeferredScmCardPostCommitEffects, sendScmSystemCard } from "./scm-card-delivery.js";
 import {
@@ -463,27 +466,24 @@ export function applyGitlabPersonnelEvidence(
   } else if (normalized.event.eventType === "issue") {
     for (const username of normalized.personnel.assigneeAdded) add(username, "assignee");
   } else if (normalized.event.eventType === "merge_request") {
-    if (normalized.personnel.reviewerField === "valid" && !normalized.personnel.anomalyCode) {
+    const reviewerEvidenceIsUsable =
+      normalized.personnel.reviewerField === "valid" && !normalized.personnel.anomalyCode;
+    const legacyAssigneeIsReviewer = normalized.personnel.reviewerField === "missing" && reviewerMode === "assignee";
+    if (reviewerEvidenceIsUsable) {
       for (const username of normalized.personnel.reviewerAdded) add(username, "reviewer");
       for (const username of normalized.personnel.assigneeAdded) add(username, "assignee");
-    } else if (normalized.personnel.reviewerField === "missing" && reviewerMode === "assignee") {
+    } else if (legacyAssigneeIsReviewer) {
       for (const username of normalized.personnel.assigneeAdded) add(username, "reviewer");
-    } else if (normalized.personnel.reviewerField === "missing" && reviewerMode === "unknown") {
-      for (const username of normalized.personnel.assigneeAdded) {
-        add(username, "assignee");
-        skippedBeforeIdentity.push({
-          externalUsername: username,
-          targetClass: "reviewer",
-          reason: "reviewer_mode_unconfirmed",
-        });
-      }
     } else {
-      for (const username of normalized.personnel.assigneeAdded) {
-        skippedBeforeIdentity.push({
-          externalUsername: username,
-          targetClass: "assignee",
-          reason: "review_target_schema_anomaly",
-        });
+      for (const username of normalized.personnel.assigneeAdded) add(username, "assignee");
+      if (normalized.personnel.reviewerField === "missing" && reviewerMode === "unknown") {
+        for (const username of normalized.personnel.assigneeAdded) {
+          skippedBeforeIdentity.push({
+            externalUsername: username,
+            targetClass: "reviewer",
+            reason: "reviewer_mode_unconfirmed",
+          });
+        }
       }
     }
   }
@@ -554,6 +554,8 @@ export async function resolveGitlabAudience(
     skippedBeforeIdentity: AppliedGitlabPersonnel["skippedBeforeIdentity"];
   },
 ): Promise<GitlabAudienceResolution> {
+  const actorNormalizedUsername = normalizeGitlabUsername(input.event.actor.externalUsername).normalized;
+  let actorHumanId: string | null = null;
   if (input.automaticActionsEnabled) {
     const identityRows = await db
       .select({ identityLinkId: gitlabEntityChatMappings.identityLinkId })
@@ -571,13 +573,39 @@ export async function resolveGitlabAudience(
     await lockGitlabIdentityAuthoritySet(db, {
       organizationId: input.organizationId,
       connectionId: input.connectionId,
-      normalizedUsernames: input.event.targets.map(
-        (target) => normalizeGitlabUsername(target.externalUsername).normalized,
-      ),
+      normalizedUsernames: input.event.targets
+        .map((target) => normalizeGitlabUsername(target.externalUsername).normalized)
+        .concat(actorNormalizedUsername),
       identityLinkIds: identityRows.flatMap((row) => (row.identityLinkId ? [row.identityLinkId] : [])),
     });
+    const actor = await resolveActiveGitlabIdentity(db, {
+      organizationId: input.organizationId,
+      connectionId: input.connectionId,
+      normalizedUsername: actorNormalizedUsername,
+      lockForUpdate: true,
+    });
+    actorHumanId = actor.outcome === "ok" ? actor.identity.humanAgentId : null;
   }
   const rows = await observeGitlabEntityAndResolveFollowers(db, input.connectionId, input.entityIdentity);
+  const explicitDeclaredByIds = [
+    ...new Set(rows.filter((row) => row.boundVia !== "identity_target").map((row) => row.declaredByAgentId)),
+  ];
+  const explicitOwnerRows =
+    explicitDeclaredByIds.length === 0
+      ? []
+      : await db
+          .select({ declaredByAgentId: agents.uuid, humanAgentId: members.agentId })
+          .from(agents)
+          .innerJoin(
+            members,
+            and(
+              eq(agents.managerId, members.id),
+              eq(members.organizationId, input.organizationId),
+              eq(members.status, "active"),
+            ),
+          )
+          .where(and(eq(agents.organizationId, input.organizationId), inArray(agents.uuid, explicitDeclaredByIds)));
+  const explicitOwnerHumanByAgent = new Map(explicitOwnerRows.map((row) => [row.declaredByAgentId, row.humanAgentId]));
   const targets: ScmAudienceTarget[] = [];
   for (const row of rows) {
     if (row.boundVia === "identity_target") {
@@ -612,6 +640,7 @@ export async function resolveGitlabAudience(
         senderAgentId: row.humanAgentId,
         humanAgentId: row.humanAgentId,
         wakeAgentId: row.delegateAgentId,
+        authorityKey: row.identityLinkId,
         kind: "existing",
         chatId: row.chatId,
         involveReason: null,
@@ -620,7 +649,7 @@ export async function resolveGitlabAudience(
     } else {
       targets.push({
         senderAgentId: row.declaredByAgentId,
-        humanAgentId: null,
+        humanAgentId: explicitOwnerHumanByAgent.get(row.declaredByAgentId) ?? null,
         wakeAgentId: null,
         kind: "existing",
         chatId: row.chatId,
@@ -703,6 +732,7 @@ export async function resolveGitlabAudience(
       senderAgentId: resolved.identity.humanAgentId,
       humanAgentId: resolved.identity.humanAgentId,
       wakeAgentId: resolved.identity.delegateAgentId,
+      authorityKey: resolved.identity.linkId,
       kind: "new",
       chatId: null,
       involveReason: target.reason,
@@ -710,12 +740,7 @@ export async function resolveGitlabAudience(
     });
   }
 
-  const actor = await resolveActiveGitlabIdentity(db, {
-    organizationId: input.organizationId,
-    connectionId: input.connectionId,
-    normalizedUsername: normalizeGitlabUsername(input.event.actor.externalUsername).normalized,
-  });
-  return { targets, actorHumanId: actor.outcome === "ok" ? actor.identity.humanAgentId : null };
+  return { targets, actorHumanId };
 }
 
 async function resolveGitlabTargetChat(
@@ -864,6 +889,7 @@ export async function deliverGitlabCards(
     audience: GitlabAudienceResolution;
     organizationId: string;
     connectionId: string;
+    expectedTokenHash: string;
     database: Database;
   },
 ) {
@@ -871,7 +897,7 @@ export async function deliverGitlabCards(
     delivered: number;
     newChats: number;
     failed: number;
-    postCommitEffects: DeferredScmCardPostCommitEffects[];
+    postCommitEffects: DeferredGitlabCardPostCommitEffects[];
   } = { delivered: 0, newChats: 0, failed: 0, postCommitEffects: [] };
   const planned = await planScmChatDeliveries({
     targets: input.audience.targets,
@@ -928,6 +954,27 @@ export async function deliverGitlabCards(
         ...(reason === "review_requested" ? { reviewRoutingStatus: "routed_source_not_ready" as const } : {}),
       };
       const mentions = scmWakeAgentIds(entries);
+      const identityAuthorities = new Map<string, GitlabIdentityAuthorityProof>();
+      for (const entry of entries) {
+        for (const identityLinkId of entry.authorityKeys) {
+          if (!entry.humanAgentId || !entry.wakeAgentId) {
+            throw new Error("GitLab identity authority requires a human and delegate agent");
+          }
+          const proof = {
+            identityLinkId,
+            humanAgentId: entry.humanAgentId,
+            delegateAgentId: entry.wakeAgentId,
+          };
+          const existing = identityAuthorities.get(identityLinkId);
+          if (
+            existing &&
+            (existing.humanAgentId !== proof.humanAgentId || existing.delegateAgentId !== proof.delegateAgentId)
+          ) {
+            throw new Error("GitLab identity authority changed within one delivery plan");
+          }
+          identityAuthorities.set(identityLinkId, proof);
+        }
+      }
       const sent = await sendScmSystemCard(app, {
         chatId: delivery.chatId,
         senderId,
@@ -946,7 +993,15 @@ export async function deliverGitlabCards(
         deferPostCommitEffects: true,
       });
       if (!sent.deferredPostCommitEffects) throw new Error("GitLab card delivery did not defer post-commit effects");
-      stats.postCommitEffects.push(sent.deferredPostCommitEffects);
+      stats.postCommitEffects.push({
+        effects: sent.deferredPostCommitEffects,
+        authority: {
+          organizationId: input.organizationId,
+          connectionId: input.connectionId,
+          tokenHash: input.expectedTokenHash,
+          identities: [...identityAuthorities.values()],
+        },
+      });
       stats.delivered += 1;
       if (delivery.created) stats.newChats += 1;
     } catch (err) {

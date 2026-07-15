@@ -12,6 +12,7 @@ import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { processedEvents } from "../db/schema/processed-events.js";
 import { createAgent } from "../services/agent.js";
+import { createChat } from "../services/chat.js";
 import {
   confirmGitlabAssigneeMode,
   createGitlabConnection,
@@ -20,6 +21,7 @@ import {
   replaceGitlabConnection,
   setGitlabAutomaticActions,
 } from "../services/gitlab-connections.js";
+import { declareGitlabEntityFollow } from "../services/gitlab-entity-follow.js";
 import {
   createGitlabIdentityLink,
   reconfirmGitlabIdentityLink,
@@ -146,7 +148,7 @@ describe("GitLab Stage 3 personnel routing", () => {
       candidates: [{ externalUsername: "Reviewer.One", targetClass: "reviewer" }],
     });
     expect(applyGitlabPersonnelEvidence(legacy, "reviewers")).toMatchObject({
-      candidates: [],
+      candidates: [{ externalUsername: "Reviewer.One", targetClass: "assignee" }],
       schemaAnomalyCode: "reviewers_missing_after_capability",
     });
 
@@ -167,11 +169,18 @@ describe("GitLab Stage 3 personnel routing", () => {
     ]);
 
     const customTemplate = normalize(
-      mergeRequestPayload({ action: "update", reviewers: [{ username: "Reviewer.One" }] }),
+      mergeRequestPayload({
+        action: "update",
+        reviewers: [{ username: "Reviewer.One" }],
+        assignees: [{ username: "Owner.Two" }],
+        changes: {
+          assignees: { previous: [{ username: "Owner.One" }], current: [{ username: "Owner.Two" }] },
+        },
+      }),
     );
     expect(applyGitlabPersonnelEvidence(customTemplate, "reviewers")).toMatchObject({
       observeReviewers: true,
-      candidates: [],
+      candidates: [{ externalUsername: "Owner.Two", targetClass: "assignee" }],
       schemaAnomalyCode: "reviewers_delta_missing",
     });
 
@@ -508,6 +517,50 @@ describe("GitLab Stage 3 personnel routing", () => {
       reason: "review_requested",
       reviewRoutingStatus: "routed_source_not_ready",
     });
+  });
+
+  it.each([
+    { boundVia: "human_declared" as const, declaredBy: "human" as const },
+    { boundVia: "agent_declared" as const, declaredBy: "agent" as const },
+  ])("prunes actor echo from an explicit $boundVia follow", async ({ boundVia, declaredBy }) => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    await setGitlabAutomaticActions(app.db, {
+      connectionId: setup.connection.connectionId,
+      organizationId: setup.admin.organizationId,
+      actorMemberId: setup.admin.memberId,
+      enabled: true,
+      acceptTeamWideForgeryRisk: true,
+    });
+    const iid = declaredBy === "human" ? 61 : 62;
+    const chat = await createChat(app.db, setup.admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [setup.delegate.uuid],
+      topic: `Explicit GitLab follow ${iid}`,
+      metadata: {},
+    });
+    await declareGitlabEntityFollow(app.db, {
+      organizationId: setup.admin.organizationId,
+      connectionId: setup.connection.connectionId,
+      chatId: chat.id,
+      declaredByAgentId: declaredBy === "human" ? setup.admin.humanAgentUuid : setup.delegate.uuid,
+      boundVia,
+      entityUrl: `https://gitlab.internal/Acme/Reviews/-/merge_requests/${iid}`,
+    });
+
+    const response = await postMr(
+      app,
+      setup.connection.bearer,
+      mergeRequestPayload({ iid, actor: "reviewer.one", reviewers: [] }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ outcome: "delivered" });
+    expect(
+      await app.db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.chatId, chat.id), eq(messages.source, "gitlab"))),
+    ).toHaveLength(0);
   });
 
   it("rejects oversized personnel payloads before claim or connection health mutation", async () => {
