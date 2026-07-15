@@ -936,15 +936,17 @@ uses the generic `PUT /api/v1/orgs/:orgId/settings/context_tree` with only
 the final response before reporting success.
 
 Repository creation and push happen before final binding, so a finalization
-failure can leave the new repository unbound. A 409 from the non-rebind
-finalization POST has a known conflict outcome: the competing setting was
-preserved, and the CLI requires reading the organization's current Context Tree
-setting first without suggesting a retry or overwrite command. A finalization
-404 during a rolling Server change reports that no binding was written and
-requires an upgrade plus read-back, also without an overwrite command. Other
-HTTP failures require read-back before retrying. A network failure, timeout, or
-invalid/unconfirmed response has an unknown write outcome and likewise requires
-read-back first.
+failure can leave the new repository unbound. When that happens, the CLI says
+the repository was created but not bound, includes the repo URL, and tells you
+to delete an empty repo manually instead of relying on the command to clean it
+up. A 409 from the non-rebind finalization POST has a known conflict outcome:
+the competing setting was preserved, and the CLI requires reading the
+organization's current Context Tree setting first without suggesting a retry or
+overwrite command. A finalization 404 during a rolling Server change reports
+that no binding was written and requires an upgrade plus read-back, also
+without an overwrite command. Other HTTP failures require read-back before
+retrying. A network failure, timeout, or invalid/unconfirmed response has an
+unknown write outcome and likewise requires read-back first.
 The error identifies the exact organization, repository, and retained branch.
 For an unknown outcome it also shows the exact recovery form `first-tree org
 bind-tree <repo> --org <orgId> --branch <branch>`, but explicitly makes running

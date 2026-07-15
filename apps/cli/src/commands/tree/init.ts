@@ -132,6 +132,18 @@ function ghApiJson(endpoint: string): Record<string, unknown> {
   return parsed;
 }
 
+function canonicalizeGithubOwnerLogin(owner: string): string {
+  try {
+    const login = ghApiText([`users/${encodeURIComponent(owner)}`, "--jq", ".login"]).trim();
+    if (!login) {
+      throw new Error("empty login");
+    }
+    return login;
+  } catch {
+    throw new Error(`Could not resolve the canonical GitHub login for ${owner}.`);
+  }
+}
+
 type BindContext = { orgId: string; isAdmin: boolean };
 
 // Resolve the org to bind AND whether the caller administers it, from a single
@@ -350,6 +362,10 @@ function explicitBindCommand(repoUrl: string, orgId: string, branch: string): st
   return `${channelConfig.binName} org bind-tree ${shellQuote(repoUrl)} --org ${shellQuote(orgId)} --branch ${shellQuote(branch)}`;
 }
 
+function createdButNotBoundGuidance(repoUrl: string): string {
+  return `The repo was created but not bound: ${repoUrl}. If it is empty and you want to abandon this attempt, delete it manually; the CLI does not auto-delete created repositories by default.`;
+}
+
 async function bindOrgToTree(args: {
   serverUrl: string;
   accessToken: string;
@@ -363,6 +379,7 @@ async function bindOrgToTree(args: {
   const requestBody = args.rebind
     ? { repo: args.repoUrl, branch: args.branch }
     : { repo: args.repoUrl, branch: args.branch, expectedUnboundBranch: args.branch };
+  const createdButNotBound = createdButNotBoundGuidance(args.repoUrl);
   let res: Response;
   try {
     res = await fetch(endpoint, {
@@ -374,23 +391,23 @@ async function bindOrgToTree(args: {
   } catch {
     const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but the binding outcome is unknown for organization ${args.orgId} after a network or timeout failure. Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
+      `Repo created and pushed, but the binding outcome is unknown for organization ${args.orgId} after a network or timeout failure. ${createdButNotBound} Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
   if (!res.ok) {
     if (!args.rebind && res.status === 409) {
       throw new Error(
-        `Repo created and pushed, but organization ${args.orgId}'s Context Tree setting changed before finalization (server returned 409). The competing setting was preserved; do not retry or overwrite it. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree first. The newly created repo is ${args.repoUrl} at branch ${args.branch}.`,
+        `Repo created and pushed, but organization ${args.orgId}'s Context Tree setting changed before finalization (server returned 409). The competing setting was preserved; do not retry or overwrite it. ${createdButNotBound} at branch ${args.branch}. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree first.`,
       );
     }
     if (!args.rebind && res.status === 404) {
       throw new Error(
-        `Repo created and pushed, but this server does not support conflict-safe tree init finalization for organization ${args.orgId}. No binding was written. Upgrade the server, then read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before deciding how to bind repo ${args.repoUrl} at branch ${args.branch}.`,
+        `Repo created and pushed, but this server does not support conflict-safe tree init finalization for organization ${args.orgId}. No binding was written. ${createdButNotBound} Upgrade the server, then read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before deciding how to bind repo ${args.repoUrl} at branch ${args.branch}.`,
       );
     }
     const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but binding failed (server returned ${res.status}) for organization ${args.orgId}. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before any retry. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
+      `Repo created and pushed, but binding failed (server returned ${res.status}) for organization ${args.orgId}. ${createdButNotBound} Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before any retry. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
   let body: unknown;
@@ -415,7 +432,7 @@ async function bindOrgToTree(args: {
   ) {
     const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but the binding outcome is unknown because the server did not confirm the requested Context Tree binding for organization ${args.orgId}. Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
+      `Repo created and pushed, but the binding outcome is unknown because the server did not confirm the requested Context Tree binding for organization ${args.orgId}. ${createdButNotBound} Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
 }
@@ -512,7 +529,8 @@ async function runInitCommand(context: CommandContext): Promise<void> {
       bindContext = { serverUrl, accessToken, orgId };
     }
 
-    const repoOwner = resolveRepoOwner({ optionOwner: options.owner, creatorLogin, installationAccount });
+    const resolvedRepoOwner = resolveRepoOwner({ optionOwner: options.owner, creatorLogin, installationAccount });
+    const repoOwner = options.owner?.trim() ? canonicalizeGithubOwnerLogin(resolvedRepoOwner) : resolvedRepoOwner;
     const title = options.title?.trim() || repoOwner;
     const repoName = options.name?.trim() || defaultRepoName(title);
     const repoFullName = `${repoOwner}/${repoName}`;
