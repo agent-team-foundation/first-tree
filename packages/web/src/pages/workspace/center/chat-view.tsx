@@ -94,6 +94,13 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
+import {
+  GITLAB_SYSTEM_SENDER_NAME,
+  GitlabEventCardMessage,
+  GitlabSystemAvatar,
+  isGitlabEventCardContent,
+  isTrustedGitlabDispatcherMessage,
+} from "../../../components/chat/gitlab-event-card.js";
 import { LiveTurnAgentsContext } from "../../../components/chat/live-turn-context.js";
 import {
   findBlockingRequest,
@@ -770,6 +777,8 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
         </MessageMarkdown>
       ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
         <GithubEventCardMessage content={msg.content} />
+      ) : msg.format === "card" && isGitlabEventCardContent(msg.content) ? (
+        <GitlabEventCardMessage content={msg.content} />
       ) : (
         <pre
           className="mono text-label"
@@ -824,8 +833,13 @@ const MessageRow = memo(function MessageRow({
   // so the recipient does not see their own name color treatment on a
   // card the dispatcher wrote on their row.
   const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
-  const isSystem = isGithubSystem;
-  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
+  const isGitlabSystem = isTrustedGitlabDispatcherMessage(msg);
+  const isSystem = isGithubSystem || isGitlabSystem;
+  const senderName = isGithubSystem
+    ? GITHUB_SYSTEM_SENDER_NAME
+    : isGitlabSystem
+      ? GITLAB_SYSTEM_SENDER_NAME
+      : agentNameFn(msg.senderId);
   const isSelf = !isSystem && myAgentId === msg.senderId;
 
   return (
@@ -840,6 +854,8 @@ const MessageRow = memo(function MessageRow({
     >
       {isGithubSystem ? (
         <GithubSystemAvatar size={20} />
+      ) : isGitlabSystem ? (
+        <GitlabSystemAvatar size={20} />
       ) : isTrial ? (
         <span className="block self-start rounded-full">
           <Avatar

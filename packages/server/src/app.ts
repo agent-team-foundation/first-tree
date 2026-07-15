@@ -34,8 +34,10 @@ import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
 import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
+import { gitlabConnectionRoutes } from "./api/gitlab-connections.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
+import { scanCampaignExportRoutes } from "./api/internal/scan-campaign-exports.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { landingCampaignRoutes } from "./api/landing-campaigns.js";
 import { meRoutes } from "./api/me.js";
@@ -49,6 +51,7 @@ import { orgContextTreeRoutes } from "./api/orgs/context-tree.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
 import { orgDocumentRoutes } from "./api/orgs/documents.js";
 import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
+import { orgGitlabConnectionRoutes } from "./api/orgs/gitlab-connections.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
@@ -63,6 +66,7 @@ import { resourceRoutes } from "./api/resources.js";
 import { sessionRoutes } from "./api/sessions.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
+import { gitlabWebhookRoutes } from "./api/webhooks/gitlab.js";
 import { assertBootConfigValid } from "./boot-guards.js";
 import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
@@ -219,17 +223,11 @@ export async function buildApp(config: Config) {
   const captureClientIp = config.observability.tracing?.captureClientIp ?? false;
   await app.register(fastifyOpenTelemetry, {
     wrapRoutes: true,
-    formatSpanName: (request) => {
-      const route = request.routeOptions?.url;
-      const method = request.method ?? "GET";
-      if (route) return `${method} ${route}`;
-      const pathOnly = request.url.split("?")[0] ?? request.url;
-      return `${method} ${pathOnly}`;
-    },
+    formatSpanName: formatHttpSpanName,
     formatSpanAttributes: {
       request: (request) => {
         const route = request.routeOptions?.url;
-        const target = request.url.split("?")[0] ?? request.url;
+        const target = redactUrl(request.url.split("?")[0] ?? request.url);
         // `http.url` retains the query string for debugability but is run
         // through `redactUrl` so JWTs in `?token=…` (admin WS upgrade) never
         // reach the trace exporter — same vocabulary as the fastify logger's
@@ -495,6 +493,7 @@ export async function buildApp(config: Config) {
       // ── Public routes ────────────────────────────────────────────────────
       await api.register(healthRoutes);
       await api.register(githubAppWebhookRoutes, { prefix: "/webhooks" });
+      await api.register(gitlabWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
@@ -533,6 +532,13 @@ export async function buildApp(config: Config) {
         { prefix: "/attachments" },
       );
 
+      await api.register(
+        userScope("internalAnalyticsScope", async (scope) => {
+          await scope.register(scanCampaignExportRoutes, { prefix: "/analytics/scan-campaign-exports" });
+        }),
+        { prefix: "/internal" },
+      );
+
       // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────
       await api.register(
         userScope("orgsScope", async (scope) => {
@@ -549,6 +555,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgSettingsRoutes, { prefix: "/settings" });
           await scope.register(orgResourceRoutes, { prefix: "/resources" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
+          await scope.register(orgGitlabConnectionRoutes, { prefix: "/gitlab-connections" });
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
@@ -574,6 +581,7 @@ export async function buildApp(config: Config) {
           await scope.register(chatRoutes, { prefix: "/chats" });
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
+          await scope.register(gitlabConnectionRoutes, { prefix: "/gitlab-connections" });
           if (config.docs.enabled) {
             await scope.register(documentRoutes, { prefix: "/documents" });
             await scope.register(documentCommentRoutes, { prefix: "/document-comments" });
@@ -694,4 +702,12 @@ export async function buildApp(config: Config) {
   });
 
   return app;
+}
+
+export function formatHttpSpanName(request: { method?: string; url: string; routeOptions?: { url?: string } }): string {
+  const route = request.routeOptions?.url;
+  const method = request.method ?? "GET";
+  if (route) return `${method} ${route}`;
+  const pathOnly = request.url.split("?")[0] ?? request.url;
+  return `${method} ${redactUrl(pathOnly)}`;
 }

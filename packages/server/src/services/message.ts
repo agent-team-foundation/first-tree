@@ -275,9 +275,9 @@ export type SendMessageOptions = {
    * This option is the **only** other escape hatch, reserved for trusted
    * server-internal delivery paths whose addressing is owned and validated by
    * the caller and **can legitimately resolve to no live speaker for some
-   * events** — today only `github-delivery.deliverGithubEvent`, whose card
-   * addressing (`addressedToAgentIds` derived from the audience row) may name a
-   * delegate that is not a speaker of the bound chat. Such a send writes a
+   * events** — currently the trusted GitHub/GitLab SCM card dispatchers. Their
+   * provider-owned audience may resolve to a card with no live speaker wake
+   * target in the bound chat. Such a send writes a
    * silent history/context row for human observers rather than reaching an
    * inbox. Set it only on a path you have audited; never thread it through an
    * HTTP boundary.
@@ -321,16 +321,15 @@ export type SendMessageOptions = {
   suppressNotifyAgentIds?: readonly string[];
   /**
    * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
-   * uses that key to re-attribute a row to a synthetic "GitHub" sender
+   * uses that key to re-attribute a row to a synthetic SCM provider sender
    * (avatar + name override) instead of the row's actual `senderId`. To
    * prevent a non-dispatcher caller (HTTP POST from web / agent SDK) from
    * smuggling the same marker into an ordinary message — which would let
-   * an arbitrary agent post a phishing message that renders as if from
-   * GitHub — the service unconditionally strips the key from
-   * `data.metadata` when this option is not set. Only
-   * `github-delivery.deliverGithubEvent` is expected to set this to
-   * `true`. Defense-in-depth alongside the conjunctive UI trust gate in
-   * `github-event-card.tsx#isTrustedGithubDispatcherMessage`.
+   * an arbitrary agent post a phishing message that renders as if from a
+   * provider — the service unconditionally strips the key from
+   * `data.metadata` when this option is not set. Only the trusted GitHub/GitLab
+   * card dispatchers are expected to set this to `true`. Defense-in-depth
+   * alongside each provider card's conjunctive UI trust gate.
    */
   allowSystemSender?: boolean;
   /**

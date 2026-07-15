@@ -7,6 +7,14 @@ describe("redactUrl", () => {
     expect(redactUrl("/")).toBe("/");
   });
 
+  it("redacts the GitLab URL bearer path segment", () => {
+    expect(redactUrl("/api/v1/webhooks/gitlab/secret-bearer")).toBe("/api/v1/webhooks/gitlab/***");
+    expect(redactUrl("https://first-tree.test/api/v1/webhooks/gitlab/secret-bearer?x=1")).toBe(
+      "https://first-tree.test/api/v1/webhooks/gitlab/***?x=1",
+    );
+    expect(redactUrl("/api/v1/webhooks/gitlab/secret-bearer/extra")).toBe("/api/v1/webhooks/gitlab/***/extra");
+  });
+
   it("returns the URL unchanged when the query string is empty", () => {
     // Path ends with `?` but no params — keep the trailing `?` to preserve
     // the original shape, since we only redact values, never structure.

@@ -36,11 +36,12 @@ const REDACTED = "***";
  * value happens to look.
  */
 export function redactUrl(url: string): string {
-  const qIdx = url.indexOf("?");
-  if (qIdx === -1) return url;
-  const path = url.slice(0, qIdx);
-  const query = url.slice(qIdx + 1);
-  if (query.length === 0) return url;
+  const pathRedacted = url.replace(/(\/api\/v1\/webhooks\/gitlab\/)[^/?#]+/g, `$1${REDACTED}`);
+  const qIdx = pathRedacted.indexOf("?");
+  if (qIdx === -1) return pathRedacted;
+  const path = pathRedacted.slice(0, qIdx);
+  const query = pathRedacted.slice(qIdx + 1);
+  if (query.length === 0) return pathRedacted;
   const redacted = query
     .split("&")
     .map((pair) => {

@@ -13,7 +13,6 @@ import type { Database } from "../../db/connection.js";
 import { agentChatSessions } from "../../db/schema/agent-chat-sessions.js";
 import { agents } from "../../db/schema/agents.js";
 import { chats } from "../../db/schema/chats.js";
-import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { messages } from "../../db/schema/messages.js";
 import { sessionEvents } from "../../db/schema/session-events.js";
@@ -34,7 +33,7 @@ import { sendToClient } from "../connection-manager.js";
 import { MEMBER_STATUSES, reactivateMembership } from "../membership.js";
 import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
-import { assertTrialQuota, isLandingCampaignServiceOrg } from "./guards.js";
+import { assertOfficialLandingCampaignClient, assertTrialQuota, isLandingCampaignServiceOrg } from "./guards.js";
 import {
   buildLandingCampaignAgentMetadata,
   buildLandingCampaignChatMetadata,
@@ -220,22 +219,6 @@ async function ensureServiceMember(
     .returning();
   if (!created) throw new Error("Unexpected: INSERT RETURNING produced no service member row");
   return created;
-}
-
-async function assertOfficialClient(
-  db: Database,
-  clientId: string,
-  serviceUserId: string,
-  serviceOrgId: string,
-): Promise<void> {
-  const [client] = await db
-    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
-    .from(clients)
-    .where(eq(clients.id, clientId))
-    .limit(1);
-  if (!client || client.userId !== serviceUserId || client.organizationId !== serviceOrgId) {
-    throw new ServiceUnavailableError("Landing campaign official client is not configured in the service organization");
-  }
 }
 
 async function createCampaignAgentWithFallbackName(
@@ -544,7 +527,7 @@ export async function startLandingCampaignTrial(
     throw new ForbiddenError("Landing campaign trials cannot be started in the First Tree service organization.");
   }
 
-  await assertOfficialClient(app.db, config.clientId, config.serviceUserId, config.serviceOrgId);
+  await assertOfficialLandingCampaignClient(app.db, config.clientId, config.serviceUserId, config.serviceOrgId);
   const { serviceMember, trialAgent } = await provisionTrialAgent(app, {
     organizationId: caller.organizationId,
     serviceUserId: config.serviceUserId,
