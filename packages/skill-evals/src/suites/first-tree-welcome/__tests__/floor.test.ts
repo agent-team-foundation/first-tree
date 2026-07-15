@@ -109,8 +109,15 @@ describe("first-tree-welcome floor invariants", () => {
     expect(description).not.toContain("local project folder path");
     expect(skillMarkdown).toContain("Treat the opening message as the user's onboarding request.");
     expect(skillMarkdown).toContain("local project folder path");
-    expect(skillMarkdown).toContain("GitHub repo URL");
+    expect(skillMarkdown).toContain("GitHub/GitLab repo URL");
+    expect(skillMarkdown).toContain("`gh auth login` or `glab auth login`");
     expect(skillMarkdown).not.toContain("First Tree sent it");
+  });
+
+  it("keeps GitHub-only follow guidance out of the GitLab MR path", () => {
+    expect(skillMarkdown).toContain("This section is GitHub-only");
+    expect(skillMarkdown).toContain("For a GitLab MR, do not call `first-tree github");
+    expect(skillMarkdown).toContain("A GitLab MR has no documented equivalent here");
   });
 
   it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {
@@ -148,6 +155,10 @@ describe("first-tree-welcome floor invariants", () => {
 
     expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
     expect(yamlDescription, "openai.yaml description must match SKILL.md description").toBe(skillDescription);
+    expect(skillDescription).toContain("PR/MR reviews");
+    expect(yamlDescription).toContain("PR/MR reviews");
+    expect(skillDescription).not.toContain("PR reviews");
+    expect(yamlDescription).not.toContain("PR reviews");
     // Guard the specific retired trigger the drift-guard exists to catch.
     expect(yamlDescription).not.toContain("explicitly names first-tree-welcome");
     expect(yamlDescription).toContain("repo scans");

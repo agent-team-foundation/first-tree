@@ -33,7 +33,7 @@ describe("MobileChatPage back navigation", () => {
   beforeEach(() => {
     harness = createDomHarness();
     meChatMocks.listMeChats.mockReset();
-    meChatMocks.listMeChats.mockResolvedValue({ rows: [] });
+    meChatMocks.listMeChats.mockResolvedValue({ priorityRows: { attention: [], pinned: [] }, rows: [] });
     lastNavType = "";
   });
 

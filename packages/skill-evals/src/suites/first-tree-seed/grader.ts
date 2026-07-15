@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
 import type { RunPaths } from "../../core/types.js";
-import { approvedPhase1ChatHistoryMarkdown } from "./fixture.js";
+import { approvedPhase1ChatHistoryMarkdown, sourceRemoteRef } from "./fixture.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
@@ -532,7 +532,7 @@ function sourceRepoChanged(paths: RunPaths, baselineHead: string | null, evalCas
   if (baselineHead === null) return existsSync(sourceRepoPath);
   if (!existsSync(sourceRepoPath)) return true;
 
-  const currentHead = gitHead(sourceRepoPath, chatLocal ? "HEAD" : "refs/remotes/origin/main");
+  const currentHead = gitHead(sourceRepoPath, chatLocal ? "HEAD" : sourceRemoteRef(evalCase));
   if (currentHead !== baselineHead) return true;
 
   if (chatLocal) {

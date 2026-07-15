@@ -190,6 +190,37 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
   {
     briefingMode: "generated-fixture",
     expected: {
+      action: "materialize_bare_worktree",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["worktree", "Phase 1", "skeleton"],
+      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+    },
+    fixture: {
+      sourceDeclaredRef: "trunk",
+      sourceDefaultBranch: "trunk",
+      sourceForge: "gitlab",
+      sourceLocalBranchState: "stale",
+      sourceRepoState: "bare-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["direct_bare_source_read", "phase2_leaf_content_before_approval", "skip_user_confirmation"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "gitlab-non-main-source-worktree-protocol",
+    prompt:
+      "Use first-tree-seed to inspect the bound GitLab source repo. The source under source-repos/source-repo is a bare clone whose runtime declaration pins ref=trunk. The local trunk branch is intentionally stale while origin/trunk is current, so follow the Worktrees protocol without hard-coding origin/main or using the stale local branch. Leave that managed worktree in place for final eval provenance, and stop after proposing the Phase 1 skeleton for approval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["gitlab", "bare-source", "declared-ref", "non-main-default", "stale-local", "worktree-protocol"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
       action: "propose_phase1_skeleton",
       approvalHints: ["approve", "reply", "confirm", "ON"],
       requireSourceRead: true,
@@ -323,8 +354,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
 function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly string[] {
   const errors: string[] = [];
   const gateCases = cases.filter((evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "gate");
-  if (gateCases.length !== 10) {
-    errors.push(`seed suite must declare 10 gate cases, found ${gateCases.length}.`);
+  if (gateCases.length !== 11) {
+    errors.push(`seed suite must declare 11 gate cases, found ${gateCases.length}.`);
   }
   const periodicCases = cases.filter(
     (evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "periodic",

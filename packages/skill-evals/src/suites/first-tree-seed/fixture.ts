@@ -10,6 +10,18 @@ import type { FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const SEED_SKILL_NAME = "first-tree-seed";
 
+export function sourceDefaultBranch(evalCase: FirstTreeSeedEvalCase): string {
+  return evalCase.fixture.sourceDefaultBranch ?? "main";
+}
+
+export function sourceRemoteRef(evalCase: FirstTreeSeedEvalCase): string {
+  return `refs/remotes/origin/${sourceDefaultBranch(evalCase)}`;
+}
+
+function sourceWorktreeRef(evalCase: FirstTreeSeedEvalCase): string {
+  return `origin/${evalCase.fixture.sourceDeclaredRef ?? sourceDefaultBranch(evalCase)}`;
+}
+
 function workspaceAgentsMarkdown(
   workspacePath: string,
   seedDescription: string,
@@ -18,6 +30,16 @@ function workspaceAgentsMarkdown(
   const sourceRepoPath = join(workspacePath, "source-repos", "source-repo");
   const sourceWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
   const chatSourcePath = join(workspacePath, "provided-source");
+  const sourceBranch = sourceDefaultBranch(evalCase);
+  const sourceDeclaredRef = evalCase.fixture.sourceDeclaredRef;
+  const sourceForge = evalCase.fixture.sourceForge ?? "github";
+  const sourceLocalBranchState = evalCase.fixture.sourceLocalBranchState ?? "fresh";
+  const declaredSourceWorktreeProtocol = sourceDeclaredRef
+    ? `git -C ${sourceRepoPath} fetch origin
+# Runtime declaration: ref=${sourceDeclaredRef}
+# Resolve this raw declaration with the installed first-tree-seed protocol before materializing ${sourceWorktreePath}.
+# Do not pass the local branch name directly when the fetched remote-tracking branch exists.`
+    : null;
   const sourceLine =
     evalCase.fixture.sourceRepoState === "missing"
       ? `The manifest source \`source-repo\` is intentionally missing from \`${sourceRepoPath}\`.`
@@ -25,7 +47,7 @@ function workspaceAgentsMarkdown(
         ? `The workspace manifest intentionally declares no sources. The user supplied the readable local Git checkout \`${chatSourcePath}\` in this setup chat; use it directly without requiring GitHub App installation or team-resource registration.`
         : evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
           ? `The manifest source \`source-repo\` exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
-          : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`;
+          : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`. Its forge is ${sourceForge}, its default branch is \`${sourceBranch}\`${sourceDeclaredRef ? `, and the runtime declaration pins \`ref=${sourceDeclaredRef}\`` : ""}.${sourceLocalBranchState === "stale" ? ` The local branch \`${sourceDeclaredRef ?? sourceBranch}\` is intentionally stale; the freshly fetched remote-tracking ref is current.` : ""}`;
   const treeLine =
     evalCase.fixture.treeState === "unbound"
       ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
@@ -79,6 +101,10 @@ ${chatHistoryLine ?? ""}
 - Declared source: \`source-repo\`
 - Tree state: ${evalCase.fixture.treeState}
 - Source state: ${evalCase.fixture.sourceRepoState}
+- Source forge: ${sourceForge}
+- Source default branch: \`${sourceBranch}\`
+${sourceDeclaredRef ? `- Declared source ref: \`ref=${sourceDeclaredRef}\`` : ""}
+${sourceLocalBranchState === "stale" ? `- Local source branch state: \`${sourceLocalBranchState}\`` : ""}
 
 ${treeLine}
 ${sourceLine}
@@ -97,8 +123,11 @@ directly from \`${sourceRepoPath}\`; it is a git object store, not a
 checkout. To read source, materialize a read worktree:
 
 \`\`\`bash
-git -C ${sourceRepoPath} fetch origin
-git -C ${sourceRepoPath} worktree add ${sourceWorktreePath} origin/main
+${
+  declaredSourceWorktreeProtocol ??
+  `git -C ${sourceRepoPath} fetch origin
+git -C ${sourceRepoPath} worktree add ${sourceWorktreePath} ${sourceWorktreeRef(evalCase)}`
+}
 \`\`\`
 
 Then read files under \`${sourceWorktreePath}\`.`
@@ -266,8 +295,8 @@ function contextTreeMetadata(): string {
   )}\n`;
 }
 
-function initGitRepo(repoPath: string, message: string): void {
-  assertCommandOk(runCommand("git", ["init", "--initial-branch=main"], repoPath));
+function initGitRepo(repoPath: string, message: string, initialBranch = "main"): void {
+  assertCommandOk(runCommand("git", ["init", `--initial-branch=${initialBranch}`], repoPath));
   assertCommandOk(runCommand("git", ["config", "user.email", "eval@example.invalid"], repoPath));
   assertCommandOk(runCommand("git", ["config", "user.name", "First Tree Eval"], repoPath));
   assertCommandOk(runCommand("git", ["config", "commit.gpgsign", "false"], repoPath));
@@ -365,7 +394,7 @@ durable context separate from implementation details.
 `;
 }
 
-function writeSourceOriginFixture(paths: RunPaths): string {
+function writeSourceOriginFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): string {
   const sourceOriginPath = join(paths.runRoot, "source-origin");
   mkdirSync(sourceOriginPath, { recursive: true });
   writeText(join(sourceOriginPath, "README.md"), sourceReadmeMarkdown());
@@ -377,8 +406,18 @@ function writeSourceOriginFixture(paths: RunPaths): string {
     join(sourceOriginPath, "package.json"),
     `${JSON.stringify({ name: "apollo-console", workspaces: ["apps/*", "packages/*"] }, null, 2)}\n`,
   );
-  initGitRepo(sourceOriginPath, "chore: seed source fixture");
+  initGitRepo(sourceOriginPath, "chore: seed source fixture", sourceDefaultBranch(evalCase));
   return sourceOriginPath;
+}
+
+function advanceSourceOriginFixture(sourceOriginPath: string, evalCase: FirstTreeSeedEvalCase): void {
+  if (evalCase.fixture.sourceLocalBranchState !== "stale") return;
+  writeText(
+    join(sourceOriginPath, "docs", "current-remote.md"),
+    "# Current Remote\n\nThis file exists only on the current remote-tracking ref.\n",
+  );
+  assertCommandOk(runCommand("git", ["add", "docs/current-remote.md"], sourceOriginPath));
+  assertCommandOk(runCommand("git", ["commit", "-m", "docs: advance remote source fixture"], sourceOriginPath));
 }
 
 function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): string | null {
@@ -390,7 +429,7 @@ function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
     return writeRealFirstTreeBareSourceFixture(paths);
   }
 
-  const sourceOriginPath = writeSourceOriginFixture(paths);
+  const sourceOriginPath = writeSourceOriginFixture(paths, evalCase);
   if (evalCase.fixture.sourceRepoState === "chat-local-readable") {
     const chatSourcePath = join(paths.workspacePath, "provided-source");
     assertCommandOk(runCommand("git", ["clone", sourceOriginPath, chatSourcePath], paths.workspacePath));
@@ -400,10 +439,13 @@ function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   mkdirSync(join(paths.workspacePath, "source-repos"), { recursive: true });
   assertCommandOk(runCommand("git", ["clone", "--bare", sourceOriginPath, sourceRepoPath], paths.workspacePath));
+  advanceSourceOriginFixture(sourceOriginPath, evalCase);
   assertCommandOk(
     runCommand("git", ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath),
   );
   assertCommandOk(runCommand("git", ["fetch", "origin"], sourceRepoPath));
+  assertCommandOk(runCommand("git", ["remote", "set-head", "origin", sourceDefaultBranch(evalCase)], sourceRepoPath));
+  assertCommandOk(runCommand("git", ["rev-parse", sourceRemoteRef(evalCase)], sourceRepoPath));
   return sourceRepoPath;
 }
 
@@ -478,7 +520,7 @@ export function setupFixture(evalCase: FirstTreeSeedEvalCase, paths: RunPaths, r
         ? null
         : gitHead(
             sourceRepoPath,
-            evalCase.fixture.sourceRepoState === "chat-local-readable" ? "HEAD" : "refs/remotes/origin/main",
+            evalCase.fixture.sourceRepoState === "chat-local-readable" ? "HEAD" : sourceRemoteRef(evalCase),
           ),
     sourceRepoPath,
     type: "fixture_setup_finished",
@@ -523,9 +565,9 @@ function validateSourceRepo(paths: RunPaths, evalCase: FirstTreeSeedEvalCase, er
     errors.push(`source repo is not bare: ${sourceRepoPath}`);
     return false;
   }
-  const remoteMain = runCommand("git", ["rev-parse", "refs/remotes/origin/main"], sourceRepoPath);
-  if (remoteMain.exitCode !== 0) {
-    errors.push(`source repo is missing refs/remotes/origin/main: ${previewText(remoteMain.stderr)}`);
+  const remoteDefault = runCommand("git", ["rev-parse", sourceRemoteRef(evalCase)], sourceRepoPath);
+  if (remoteDefault.exitCode !== 0) {
+    errors.push(`source repo is missing ${sourceRemoteRef(evalCase)}: ${previewText(remoteDefault.stderr)}`);
     return false;
   }
   return true;
