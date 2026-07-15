@@ -39,11 +39,20 @@ only touches the webhook where an `installation.created` delivery records the ro
 
 ### Permission split (member-readable vs admin-only)
 
-- As a **member**: `GET /orgs/:org/github-app-installation` and `/exists` are readable (200, or 404 when nothing is bound —
-  never 403). Every mutation / catalog endpoint — `connect-panel`, `connect`, `disconnect`, `install-url`,
-  `repositories` — returns **403**.
-- As an **admin**: those same endpoints succeed, or degrade to **503** when the App is unconfigured (never 403 for an
-  admin). Flipping only the role bit must flip the admin endpoints 200 ↔ 403 while the member-readable reads stay readable.
+- As a **member**, the two member-readable endpoints have distinct unbound contracts: `GET /orgs/:org/github-app-installation`
+  returns 200 with the installation when one is bound and **404** when none is (never 403); `GET /exists` is a redacted
+  presence bit that **always returns 200** with `{ exists: boolean }` (never 404 — that invariant is what lets invitee
+  onboarding distinguish "no install" from "not permitted"). Every mutation / catalog endpoint — `connect-panel`,
+  `connect`, `disconnect`, `install-url`, `repositories` — returns **403** for a member.
+- As an **admin** (org-role satisfied), the role-based 403 is lifted: the admin-only endpoints no longer deny **on org-role
+  grounds**. Each then returns its own endpoint-specific outcome — 200 on success; 503 when the App is unconfigured; and,
+  for the stateful routes, their own authorization/state errors (`connect` still 403 when the caller is not the
+  installation's installer/requester, and 404/409 for an unknown or already-connected installation; `disconnect` 404 when
+  nothing is bound). Do not assert an absolute "admin never 403" — the ownership gate below is a legitimate admin 403.
+- The **org-role gate is the isolated variable**: with each endpoint's own happy-path preconditions satisfied, demoting
+  only the caller's org role turns the admin-only routes' admitted result into a role 403, while the member-readable reads
+  stay readable; promoting the caller back removes that role-based 403 but does not bypass the `connect` ownership gate or
+  the state errors.
 
 ### Connect / disconnect lifecycle
 
@@ -58,7 +67,8 @@ only touches the webhook where an `installation.created` delivery records the ro
 ### install-url and repositories (need App config or mock)
 
 - `install-url` (admin, slug configured): 200 with an `installations/new` URL carrying a signed `state` JWT, plus a
-  `Set-Cookie` for `oauth_state` (CSRF double-submit). Without a slug: 503 with an operator hint. A caller-supplied `next`
+  `Set-Cookie` for the `oauth_state_nonce` cookie (the CSRF double-submit nonce paired with the signed state; the server
+  exports this exact name as `OAUTH_STATE_COOKIE`). Without a slug: 503 with an operator hint. A caller-supplied `next`
   must never be reflected verbatim (open-redirect guard — only an allowlisted path or the Settings default rides the signed
   state).
 - `repositories` (admin, App key + reachable GitHub API/mock): 200 with the installation's repository catalog. Failure
@@ -81,9 +91,10 @@ only touches the webhook where an `installation.created` delivery records the ro
 installer/requester ownership gate behave as described, install-url/repositories succeed with an App/mock or degrade
 gracefully without one, and the UI renders connected / not-connected / read-only states with no console errors.
 
-`FAIL`: a reproducible defect — a member can mutate, an admin is denied read/connect, `connect` ignores the
-installer/requester gate, `disconnect` leaves a stale binding, `install-url` reflects an arbitrary `next`, a distinct
-failure code is wrong, or the panel throws a console error.
+`FAIL`: a reproducible defect — a member can mutate, an admin is denied a member-readable read, an admin-only route denies
+purely on org-role grounds once its own preconditions are met, `connect` ignores the installer/requester gate, `disconnect`
+leaves a stale binding, `install-url` reflects an arbitrary `next`, a distinct failure code is wrong, or the panel throws a
+console error.
 
 `BLOCKED`: the run cell cannot bootstrap login / web, or an App-dependent sub-path (real github.com install dialog, real
 webhook secret) can be neither provisioned nor mocked.
@@ -93,7 +104,7 @@ webhook secret) can be neither provisioned nor mocked.
 ## Evidence
 
 Keep the admin/member status matrix, the connect/disconnect/reconnect responses plus the DB installation row
-(bound org, installer id), the `install-url` URL (redact the state JWT) and the `oauth_state` cookie presence, the
+(bound org, installer id), the `install-url` URL (redact the state JWT) and the `oauth_state_nonce` cookie presence, the
 `repositories` payload, and UI snapshots or DOM text for the connected / not-connected / read-only states. Redact bearer
 tokens, connect codes, the App private key, and the webhook secret.
 
