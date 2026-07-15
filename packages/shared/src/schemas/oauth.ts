@@ -13,11 +13,15 @@ export const oauthStartQuerySchema = z.object({
 });
 export type OAuthStartQuery = z.infer<typeof oauthStartQuerySchema>;
 
-export const googleCallbackQuerySchema = z.object({
-  code: z.string().min(1).optional(),
-  state: z.string().min(1).optional(),
-  error: z.string().min(1).optional(),
-});
+export const googleCallbackQuerySchema = z
+  .object({
+    code: z.string().min(1).optional(),
+    state: z.string().min(1).optional(),
+    error: z.string().min(1).optional(),
+  })
+  .refine(({ code, state, error }) => Boolean(error || (code && state)), {
+    message: "Google callback must include an error or both code and state",
+  });
 export type GoogleCallbackQuery = z.infer<typeof googleCallbackQuerySchema>;
 
 export const authProviderConnectionSchema = z.object({
