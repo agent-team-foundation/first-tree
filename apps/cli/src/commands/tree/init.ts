@@ -529,8 +529,9 @@ async function runInitCommand(context: CommandContext): Promise<void> {
       bindContext = { serverUrl, accessToken, orgId };
     }
 
-    const resolvedRepoOwner = resolveRepoOwner({ optionOwner: options.owner, creatorLogin, installationAccount });
-    const repoOwner = options.owner?.trim() ? canonicalizeGithubOwnerLogin(resolvedRepoOwner) : resolvedRepoOwner;
+    const explicitOwner = options.owner?.trim();
+    const resolvedRepoOwner = resolveRepoOwner({ optionOwner: explicitOwner, creatorLogin, installationAccount });
+    const repoOwner = explicitOwner ? canonicalizeGithubOwnerLogin(explicitOwner) : resolvedRepoOwner;
     const title = options.title?.trim() || repoOwner;
     const repoName = options.name?.trim() || defaultRepoName(title);
     const repoFullName = `${repoOwner}/${repoName}`;

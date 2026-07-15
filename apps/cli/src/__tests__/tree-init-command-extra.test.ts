@@ -195,6 +195,74 @@ describe("tree init command action", () => {
     });
   });
 
+  it("canonicalizes a case-variant owner before binding and remote create", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/me")) {
+        return response({ defaultOrganizationId: "org_1", memberships: [{ organizationId: "org_1", role: "admin" }] });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+        return response({ branch: "main" });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+        return response({
+          accountLogin: "acme-org",
+          accountType: "Organization",
+          installationId: 123,
+          suspended: false,
+        });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+        expect(init.body).toBe(
+          JSON.stringify({
+            repo: "https://github.com/acme-org/case-owner-context-tree",
+            branch: "main",
+            expectedUnboundBranch: "main",
+          }),
+        );
+        return bindingResponse(init);
+      }
+      return response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(context(commandWithOptions({ bind: true, owner: "ACME-Org", title: "Case Owner" }), true));
+
+    expect(process.exitCode).toBeUndefined();
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
+      "gh",
+      [
+        "repo",
+        "create",
+        "acme-org/case-owner-context-tree",
+        "--private",
+        "--source",
+        expect.any(String),
+        "--remote",
+        "origin",
+        "--push",
+      ],
+      expect.any(String),
+    );
+    const ownerLookupIndex = treeSharedMocks.runCommand.mock.calls.findIndex(
+      ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "api" && args[1] === "users/ACME-Org",
+    );
+    const repoCreateIndex = treeSharedMocks.runCommand.mock.calls.findIndex(
+      ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "repo" && args[1] === "create",
+    );
+    expect(ownerLookupIndex).toBeGreaterThanOrEqual(0);
+    expect(ownerLookupIndex).toBeLessThan(repoCreateIndex);
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({
+      bound: true,
+      owner: "acme-org",
+      htmlUrl: "https://github.com/acme-org/case-owner-context-tree",
+    });
+  });
+
   it("reports a binding failure with the canonical owner and manual deletion guidance", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const base = makeTempDir();
