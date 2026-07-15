@@ -1,14 +1,12 @@
-import { gitlabAutomaticActionsUpdateSchema, gitlabConnectionDisableSchema } from "@first-tree/shared";
+import { gitlabConnectionCreateSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
+import { BadRequestError } from "../errors.js";
 import { requireGitlabConnectionAccess } from "../scope/require-resource.js";
 import {
-  completeGitlabConnectionRecovery,
-  completeGitlabConnectionRotation,
-  disableGitlabConnection,
+  deleteGitlabConnection,
   getGitlabConnectionSummary,
-  rearmGitlabConnection,
-  rotateGitlabConnection,
-  setGitlabAutomaticActions,
+  regenerateGitlabConnectionBearer,
+  replaceGitlabConnection,
 } from "../services/gitlab-connections.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 
@@ -18,55 +16,46 @@ export async function gitlabConnectionRoutes(app: FastifyInstance): Promise<void
     return getGitlabConnectionSummary(app.db, connection.id);
   });
 
-  app.post<{ Params: { connectionId: string } }>("/:connectionId/rotate", async (request) => {
+  app.post<{ Params: { connectionId: string } }>("/:connectionId/regenerate", async (request) => {
     const { connection, scope } = await requireGitlabConnectionAccess(request, app.db, "admin");
-    const { bearer } = await rotateGitlabConnection(app.db, connection.id, scope.memberId);
+    const { bearer } = await regenerateGitlabConnectionBearer(app.db, connection.id, scope.memberId);
     return {
       connection: await getGitlabConnectionSummary(app.db, connection.id),
       webhookUrl: `${resolvePublicUrl(app, request)}/api/v1/webhooks/gitlab/${bearer}`,
     };
-  });
-
-  app.post<{ Params: { connectionId: string } }>("/:connectionId/complete-rotation", async (request) => {
-    const { connection, scope } = await requireGitlabConnectionAccess(request, app.db, "admin");
-    await completeGitlabConnectionRotation(app.db, connection.id, scope.memberId);
-    return getGitlabConnectionSummary(app.db, connection.id);
   });
 
   app.post<{ Params: { connectionId: string } }>(
-    "/:connectionId/disable",
+    "/:connectionId/replace",
     { config: { otelRecordBody: true } },
     async (request) => {
       const { connection, scope } = await requireGitlabConnectionAccess(request, app.db, "admin");
-      const body = gitlabConnectionDisableSchema.parse(request.body);
-      await disableGitlabConnection(app.db, connection.id, body.mode, scope.memberId);
-      return getGitlabConnectionSummary(app.db, connection.id);
+      const body = gitlabConnectionCreateSchema.parse(request.body);
+      let replaced: Awaited<ReturnType<typeof replaceGitlabConnection>>;
+      try {
+        replaced = await replaceGitlabConnection(app.db, {
+          expectedConnectionId: connection.id,
+          organizationId: connection.organizationId,
+          memberId: scope.memberId,
+          displayName: body.displayName,
+          instanceOrigin: body.instanceOrigin,
+        });
+      } catch (err) {
+        if (err instanceof TypeError || (err instanceof Error && err.message.startsWith("GitLab origin"))) {
+          throw new BadRequestError(err.message);
+        }
+        throw err;
+      }
+      return {
+        connection: await getGitlabConnectionSummary(app.db, replaced.connectionId),
+        webhookUrl: `${resolvePublicUrl(app, request)}/api/v1/webhooks/gitlab/${replaced.bearer}`,
+      };
     },
   );
 
-  app.post<{ Params: { connectionId: string } }>("/:connectionId/rearm", async (request) => {
-    const { connection, scope } = await requireGitlabConnectionAccess(request, app.db, "admin");
-    const { bearer } = await rearmGitlabConnection(app.db, connection.id, scope.memberId);
-    return {
-      connection: await getGitlabConnectionSummary(app.db, connection.id),
-      webhookUrl: `${resolvePublicUrl(app, request)}/api/v1/webhooks/gitlab/${bearer}`,
-    };
+  app.delete<{ Params: { connectionId: string } }>("/:connectionId", async (request, reply) => {
+    const { connection } = await requireGitlabConnectionAccess(request, app.db, "admin");
+    await deleteGitlabConnection(app.db, connection.id);
+    return reply.status(204).send();
   });
-
-  app.post<{ Params: { connectionId: string } }>("/:connectionId/complete-recovery", async (request) => {
-    const { connection, scope } = await requireGitlabConnectionAccess(request, app.db, "admin");
-    await completeGitlabConnectionRecovery(app.db, connection.id, scope.memberId);
-    return getGitlabConnectionSummary(app.db, connection.id);
-  });
-
-  app.put<{ Params: { connectionId: string } }>(
-    "/:connectionId/automatic-actions",
-    { config: { otelRecordBody: true } },
-    async (request) => {
-      const { connection, scope } = await requireGitlabConnectionAccess(request, app.db, "admin");
-      const body = gitlabAutomaticActionsUpdateSchema.parse(request.body);
-      await setGitlabAutomaticActions(app.db, connection.id, scope.memberId, body.enabled);
-      return getGitlabConnectionSummary(app.db, connection.id);
-    },
-  );
 }

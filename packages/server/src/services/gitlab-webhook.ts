@@ -1,8 +1,6 @@
 import type { GitlabEventCard, NormalizedScmEvent, ScmIngressContext } from "@first-tree/shared";
-import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../db/connection.js";
-import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { BadRequestError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { buildClaimReadyGitlabDeliveryId } from "./gitlab-connections.js";
@@ -210,31 +208,8 @@ export function normalizeGitlabWebhook(input: {
   return { ingress, event, entityIdentity, reviewerCapability };
 }
 
-export async function observeGitlabReviewerCapability(
-  db: Database,
-  connectionId: string,
-  capability: NormalizedGitlabWebhook["reviewerCapability"],
-): Promise<void> {
-  if (capability === "reviewers") {
-    await db
-      .update(gitlabConnections)
-      .set({ reviewerMode: "reviewers", updatedAt: new Date() })
-      .where(and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.active, true)));
-  } else if (capability === "missing") {
-    log.info(
-      { connectionId, capability: "reviewers_missing" },
-      "GitLab MR payload did not declare reviewer capability",
-    );
-  }
-}
-
-export async function resolveGitlabBasicAudience(
-  db: Database,
-  organizationId: string,
-  connectionId: string,
-  identity: GitlabEntityIdentity,
-) {
-  const rows = await observeGitlabEntityAndResolveFollowers(db, organizationId, connectionId, identity);
+export async function resolveGitlabBasicAudience(db: Database, connectionId: string, identity: GitlabEntityIdentity) {
+  const rows = await observeGitlabEntityAndResolveFollowers(db, connectionId, identity);
   const byChat = new Map<string, (typeof rows)[number]>();
   for (const row of rows) if (!byChat.has(row.chatId)) byChat.set(row.chatId, row);
   return { targets: [...byChat.values()], actorHumanId: null };

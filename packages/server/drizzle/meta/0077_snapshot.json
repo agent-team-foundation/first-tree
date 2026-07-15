@@ -1,5 +1,5 @@
 {
-  "id": "3f277f01-9af6-4fd5-9e42-0c52ec94f4aa",
+  "id": "3084c87e-6675-4eb3-9095-e6ee666029a3",
   "prevId": "fc5689ec-740f-4747-9101-23254feee77a",
   "version": "7",
   "dialect": "postgresql",
@@ -2880,86 +2880,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.gitlab_connection_audit_events": {
-      "name": "gitlab_connection_audit_events",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "actor_member_id": {
-          "name": "actor_member_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "event": {
-          "name": "event",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "idx_gitlab_connection_audit_connection": {
-          "name": "idx_gitlab_connection_audit_connection",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "gitlab_connection_audit_events_connection_id_gitlab_connections_id_fk": {
-          "name": "gitlab_connection_audit_events_connection_id_gitlab_connections_id_fk",
-          "tableFrom": "gitlab_connection_audit_events",
-          "tableTo": "gitlab_connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.gitlab_connections": {
       "name": "gitlab_connections",
       "schema": "",
@@ -2988,45 +2908,17 @@
           "primaryKey": false,
           "notNull": true
         },
-        "active": {
-          "name": "active",
-          "type": "boolean",
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": true
+          "notNull": true
         },
-        "recovery_pending": {
-          "name": "recovery_pending",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "automatic_actions_enabled": {
-          "name": "automatic_actions_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "automatic_actions_accepted_at": {
-          "name": "automatic_actions_accepted_at",
+        "endpoint_first_seen_at": {
+          "name": "endpoint_first_seen_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "automatic_actions_accepted_by_member_id": {
-          "name": "automatic_actions_accepted_by_member_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "reviewer_mode": {
-          "name": "reviewer_mode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'unknown'"
         },
         "last_valid_inbound_at": {
           "name": "last_valid_inbound_at",
@@ -3052,14 +2944,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "disabled_at": {
-          "name": "disabled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "disabled_mode": {
-          "name": "disabled_mode",
+        "updated_by_member_id": {
+          "name": "updated_by_member_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -3080,8 +2966,8 @@
         }
       },
       "indexes": {
-        "idx_gitlab_connections_org": {
-          "name": "idx_gitlab_connections_org",
+        "uq_gitlab_connections_org": {
+          "name": "uq_gitlab_connections_org",
           "columns": [
             {
               "expression": "organization_id",
@@ -3090,7 +2976,22 @@
               "nulls": "last"
             }
           ],
-          "isUnique": false,
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "uq_gitlab_connections_token_hash": {
+          "name": "uq_gitlab_connections_token_hash",
+          "columns": [
+            {
+              "expression": "token_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3110,19 +3011,6 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "gitlab_connections_automatic_actions_accepted_by_member_id_members_id_fk": {
-          "name": "gitlab_connections_automatic_actions_accepted_by_member_id_members_id_fk",
-          "tableFrom": "gitlab_connections",
-          "tableTo": "members",
-          "columnsFrom": [
-            "automatic_actions_accepted_by_member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
         "gitlab_connections_created_by_member_id_members_id_fk": {
           "name": "gitlab_connections_created_by_member_id_members_id_fk",
           "tableFrom": "gitlab_connections",
@@ -3135,406 +3023,25 @@
           ],
           "onDelete": "set null",
           "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ck_gitlab_connections_reviewer_mode": {
-          "name": "ck_gitlab_connections_reviewer_mode",
-          "value": "\"gitlab_connections\".\"reviewer_mode\" IN ('unknown', 'assignee', 'reviewers')"
         },
-        "ck_gitlab_connections_disabled_mode": {
-          "name": "ck_gitlab_connections_disabled_mode",
-          "value": "\"gitlab_connections\".\"disabled_mode\" IS NULL OR \"gitlab_connections\".\"disabled_mode\" IN ('normal', 'incident')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.gitlab_endpoint_generations": {
-      "name": "gitlab_endpoint_generations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "generation": {
-          "name": "generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "token_hash": {
-          "name": "token_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "first_seen_at": {
-          "name": "first_seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_seen_at": {
-          "name": "last_seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revoked_at": {
-          "name": "revoked_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revoked_reason": {
-          "name": "revoked_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "uq_gitlab_endpoint_token_hash": {
-          "name": "uq_gitlab_endpoint_token_hash",
-          "columns": [
-            {
-              "expression": "token_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "uq_gitlab_endpoint_generation": {
-          "name": "uq_gitlab_endpoint_generation",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "generation",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "uq_gitlab_endpoint_current": {
-          "name": "uq_gitlab_endpoint_current",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"gitlab_endpoint_generations\".\"status\" = 'current'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "uq_gitlab_endpoint_previous": {
-          "name": "uq_gitlab_endpoint_previous",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"gitlab_endpoint_generations\".\"status\" = 'previous'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_gitlab_endpoint_connection": {
-          "name": "idx_gitlab_endpoint_connection",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "gitlab_endpoint_generations_connection_id_gitlab_connections_id_fk": {
-          "name": "gitlab_endpoint_generations_connection_id_gitlab_connections_id_fk",
-          "tableFrom": "gitlab_endpoint_generations",
-          "tableTo": "gitlab_connections",
+        "gitlab_connections_updated_by_member_id_members_id_fk": {
+          "name": "gitlab_connections_updated_by_member_id_members_id_fk",
+          "tableFrom": "gitlab_connections",
+          "tableTo": "members",
           "columnsFrom": [
-            "connection_id"
+            "updated_by_member_id"
           ],
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "ck_gitlab_endpoint_status": {
-          "name": "ck_gitlab_endpoint_status",
-          "value": "\"gitlab_endpoint_generations\".\"status\" IN ('current', 'previous', 'revoked')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.gitlab_entities": {
-      "name": "gitlab_entities",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "entity_type": {
-          "name": "entity_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "entity_iid": {
-          "name": "entity_iid",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_path": {
-          "name": "project_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_path_normalized": {
-          "name": "project_path_normalized",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "entity_url": {
-          "name": "entity_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "entity_state": {
-          "name": "entity_state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'open'"
-        },
-        "observed_at": {
-          "name": "observed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "uq_gitlab_entity_numeric_identity": {
-          "name": "uq_gitlab_entity_numeric_identity",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "entity_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "entity_iid",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "uq_gitlab_entity_current_path": {
-          "name": "uq_gitlab_entity_current_path",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "project_path_normalized",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "entity_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "entity_iid",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_gitlab_entity_connection": {
-          "name": "idx_gitlab_entity_connection",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "gitlab_entities_organization_id_organizations_id_fk": {
-          "name": "gitlab_entities_organization_id_organizations_id_fk",
-          "tableFrom": "gitlab_entities",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "gitlab_entities_connection_id_gitlab_connections_id_fk": {
-          "name": "gitlab_entities_connection_id_gitlab_connections_id_fk",
-          "tableFrom": "gitlab_entities",
-          "tableTo": "gitlab_connections",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ck_gitlab_entities_type": {
-          "name": "ck_gitlab_entities_type",
-          "value": "\"gitlab_entities\".\"entity_type\" IN ('issue', 'pull_request')"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.gitlab_entity_chat_mappings": {
@@ -3583,12 +3090,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "entity_id": {
-          "name": "entity_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "project_id": {
           "name": "project_id",
           "type": "bigint",
@@ -3625,25 +3126,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'open'"
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "last_conflict_at": {
-          "name": "last_conflict_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_conflict_reason": {
-          "name": "last_conflict_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -3717,14 +3199,26 @@
               "nulls": "last"
             },
             {
-              "expression": "entity_id",
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_iid",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
-          "where": "\"gitlab_entity_chat_mappings\".\"entity_id\" IS NOT NULL",
+          "where": "\"gitlab_entity_chat_mappings\".\"project_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3758,6 +3252,40 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_gitlab_entity_pending_lookup": {
+          "name": "idx_gitlab_entity_pending_lookup",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_path_normalized",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_iid",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"gitlab_entity_chat_mappings\".\"project_id\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3830,19 +3358,6 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
-        },
-        "gitlab_entity_chat_mappings_entity_id_gitlab_entities_id_fk": {
-          "name": "gitlab_entity_chat_mappings_entity_id_gitlab_entities_id_fk",
-          "tableFrom": "gitlab_entity_chat_mappings",
-          "tableTo": "gitlab_entities",
-          "columnsFrom": [
-            "entity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3852,10 +3367,6 @@
         "ck_gitlab_entity_type": {
           "name": "ck_gitlab_entity_type",
           "value": "\"gitlab_entity_chat_mappings\".\"entity_type\" IN ('issue', 'pull_request')"
-        },
-        "ck_gitlab_entity_status": {
-          "name": "ck_gitlab_entity_status",
-          "value": "\"gitlab_entity_chat_mappings\".\"status\" IN ('pending', 'observed')"
         }
       },
       "isRLSEnabled": false

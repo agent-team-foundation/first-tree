@@ -10,7 +10,6 @@ import {
   deliverGitlabBasicCards,
   extractStableGitlabDeliveryId,
   normalizeGitlabWebhook,
-  observeGitlabReviewerCapability,
   resolveGitlabBasicAudience,
 } from "../../services/gitlab-webhook.js";
 import { runDeferredScmCardPostCommitEffects } from "../../services/scm-card-delivery.js";
@@ -48,7 +47,12 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
         if (!endpoint) throw new NotFoundError("GitLab webhook endpoint not found");
         const eventHeader = request.headers["x-gitlab-event"];
         if (typeof eventHeader !== "string" || eventHeader.length === 0 || eventHeader.length > 100) {
-          await markGitlabProcessingFailure(app.db, endpoint.connection.id, "missing_or_invalid_event_header");
+          await markGitlabProcessingFailure(
+            app.db,
+            endpoint.connection.id,
+            endpoint.connection.tokenHash,
+            "missing_or_invalid_event_header",
+          );
           failureMarked.add(request);
           throw new BadRequestError("X-Gitlab-Event is required");
         }
@@ -59,7 +63,12 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
         if (error.statusCode === 429) return;
         const endpoint = endpointByRequest.get(request);
         if (endpoint && !failureMarked.has(request)) {
-          await markGitlabProcessingFailure(app.db, endpoint.connection.id, "request_rejected").catch(() => undefined);
+          await markGitlabProcessingFailure(
+            app.db,
+            endpoint.connection.id,
+            endpoint.connection.tokenHash,
+            "request_rejected",
+          ).catch(() => undefined);
         }
       },
     },
@@ -81,27 +90,21 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
         const result = await withGitlabIngressFence(
           app.db,
           endpoint.connection.id,
-          endpoint.endpoint.id,
+          endpoint.connection.tokenHash,
           async (tx, fencedConnection) => {
             const processed = await processScmWebhookDelivery({
               db: tx,
               ingress: normalized.ingress,
               event: normalized.event,
               runProviderWork: async () => {
-                await markGitlabInboundSeen(tx, endpoint.connection.id, endpoint.endpoint.id);
-                await observeGitlabReviewerCapability(tx, endpoint.connection.id, normalized.reviewerCapability);
-                return { endpointGeneration: endpoint.endpoint.generation };
+                await markGitlabInboundSeen(tx, endpoint.connection.id, endpoint.connection.tokenHash);
+                return { endpointSeen: true };
               },
               resolveAudience: async () => {
-                if (!normalized.entityIdentity || fencedConnection.recoveryPending) {
+                if (!normalized.entityIdentity) {
                   return { targets: [], actorHumanId: null };
                 }
-                return resolveGitlabBasicAudience(
-                  tx,
-                  endpoint.connection.organizationId,
-                  endpoint.connection.id,
-                  normalized.entityIdentity,
-                );
+                return resolveGitlabBasicAudience(tx, fencedConnection.id, normalized.entityIdentity);
               },
               deliver: async (event, audience) => {
                 if (!normalized.entityIdentity) return { delivered: 0, failed: 0, postCommitEffects: [] };
@@ -109,7 +112,12 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
               },
             });
             if (processed.outcome === "delivered" && processed.deliveryStats.failed > 0) {
-              await markGitlabProcessingFailure(tx, endpoint.connection.id, "partial_card_delivery_failure");
+              await markGitlabProcessingFailure(
+                tx,
+                endpoint.connection.id,
+                endpoint.connection.tokenHash,
+                "partial_card_delivery_failure",
+              );
             }
             return processed;
           },
@@ -124,6 +132,7 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
         await markGitlabProcessingFailure(
           app.db,
           endpoint.connection.id,
+          endpoint.connection.tokenHash,
           err instanceof BadRequestError ? "malformed_payload" : "processing_failed",
         ).catch(() => undefined);
         failureMarked.add(request);

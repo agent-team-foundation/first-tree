@@ -440,18 +440,12 @@ export {
 export {
   type FollowGitlabEntity,
   followGitlabEntitySchema,
-  type GitlabAutomaticActionsUpdate,
   type GitlabConnectionCreate,
-  type GitlabConnectionDisable,
   type GitlabConnectionSecretResponse,
   type GitlabConnectionSummary,
-  type GitlabReviewerMode,
-  gitlabAutomaticActionsUpdateSchema,
   gitlabConnectionCreateSchema,
-  gitlabConnectionDisableSchema,
   gitlabConnectionSecretResponseSchema,
   gitlabConnectionSummarySchema,
-  gitlabReviewerModeSchema,
 } from "./schemas/gitlab.js";
 export {
   extractCaption,
