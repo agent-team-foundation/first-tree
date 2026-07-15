@@ -730,16 +730,6 @@ function TeamGroupRow({ label, count, attention = false }: { label: string; coun
 }
 
 /**
- * Trim the build/channel suffix ("0.5.14-staging.841.1" → "0.5.14"). The
- * major.minor.patch is the version signal an admin scans for; the build
- * number is noise on an audit line. The full string stays in the `title`.
- */
-function shortVersion(version: string): string {
-  const dash = version.indexOf("-");
-  return dash === -1 ? version : version.slice(0, dash);
-}
-
-/**
  * Row-status view for a stuck self-update, shown *in place of* the `Ready`
  * pill when the machine is otherwise ready but its last update failed/blocked
  * — so a stuck machine never reads as plain `Ready`. The reason (npm error,
@@ -786,7 +776,7 @@ function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel
   const metaParts: { label: string; value: string }[] = [
     { label: "Owner", value: ownerLabel.text },
     ...(client.os ? [{ label: "OS", value: client.os }] : []),
-    ...(version ? [{ label: "First Tree", value: shortVersion(version) }] : []),
+    ...(version ? [{ label: "First Tree", value: version }] : []),
   ];
   const metaTitle = [ownerFull, client.os, version].filter(Boolean).join(" · ");
   return (
@@ -820,7 +810,7 @@ function TeamComputerRow({ client, ownerLabel }: { client: HubClient; ownerLabel
         style={{ color: "var(--fg-3)" }}
         title={version ?? undefined}
       >
-        {version ? shortVersion(version) : "—"}
+        {version ?? "—"}
       </td>
       <td
         className="team-cell--num text-caption tnum"
