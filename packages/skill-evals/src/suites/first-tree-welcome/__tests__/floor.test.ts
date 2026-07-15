@@ -167,6 +167,17 @@ describe("first-tree-welcome floor invariants", () => {
     expect(briefing).not.toContain("onboarding system messages ask for welcome");
   });
 
+  it("hands GitHub Context Repo governance to the seed workflow without duplicating its ruleset contract", () => {
+    expect(skillMarkdown).toMatch(/when it creates a new\s+Context Repo on GitHub/);
+    expect(skillMarkdown).toContain("apply the seed workflow's GitHub governance setup with\n  host `gh`");
+    expect(skillMarkdown).toContain("including a working Code Owner mapping and default-branch rules");
+    expect(skillMarkdown).toMatch(/automatic GitHub governance setup\s+fails/);
+    expect(skillMarkdown).not.toContain("required_approving_review_count");
+    expect(skillMarkdown).not.toContain("dismiss_stale_reviews_on_push");
+    expect(skillMarkdown).not.toContain("require_last_push_approval");
+    expect(skillMarkdown).not.toContain("required_review_thread_resolution");
+  });
+
   it("keeps production-scan fix fan-out aligned with the scan's 3-5 blocker contract", () => {
     expect(skillMarkdown).toContain("up to 5 eligible blockers");
     expect(skillMarkdown).toMatch(/Production-scan normally\s+reports 3-5 blockers/);

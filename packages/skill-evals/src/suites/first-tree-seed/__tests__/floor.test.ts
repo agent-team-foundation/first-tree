@@ -35,6 +35,45 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toContain("not a leftover checkout");
   });
 
+  it("configures GitHub governance only after creating a GitHub Context Repo", () => {
+    expect(skillMarkdown).toContain("only after `tree init` succeeds");
+    expect(skillMarkdown).toMatch(/only when the\s+new Context Repo is a GitHub repository/);
+    expect(skillMarkdown).toContain("Do not run it for an already-bound tree");
+    expect(skillMarkdown).toContain("First make the Code Owner gate real and satisfiable");
+    expect(skillMarkdown).toContain('repo_owner_type=$(gh api "repos/$repo" --jq .owner.type)');
+    expect(skillMarkdown).toContain("pr_author_login=$(gh api user --jq .login)");
+    expect(skillMarkdown).toContain('if [ "$repo_owner_type" = "Organization" ]; then');
+    expect(skillMarkdown).toContain("repos/$repo/teams?per_page=100");
+    expect(skillMarkdown).toContain('.privacy != "secret"');
+    expect(skillMarkdown).toContain("orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100");
+    expect(skillMarkdown).toContain("non_author_member");
+    expect(skillMarkdown).toContain(".login != $author");
+    expect(skillMarkdown).toContain("Personal repositories\nskip the teams lookup");
+    expect(skillMarkdown).toContain("Do **not** make the\nactive `gh` user the only Code Owner");
+    expect(skillMarkdown).toContain('printf \'* %s\\n\' "$code_owner_ref" > "<tree>/.github/CODEOWNERS"');
+    expect(skillMarkdown).toContain('git -C "<tree>" push origin "HEAD:$default_branch"');
+    expect(skillMarkdown).toContain("contents/.github/CODEOWNERS?ref=$default_branch");
+    expect(skillMarkdown).toContain("codeowners/errors?ref=$default_branch");
+    expect(skillMarkdown).toContain("covers every path (`*`)");
+    expect(skillMarkdown).toContain("do not\nenable `require_code_owner_review`, do not `POST` or `PUT` the ruleset");
+    expect(skillMarkdown).toContain("includes_parents=false&per_page=100");
+    expect(skillMarkdown).toContain('(.source_type == null or .source_type == "Repository")');
+    expect(skillMarkdown).toContain("Do not\nlook up inherited organization rulesets");
+    expect(skillMarkdown).toContain("do not use a pipeline such as\n`gh api ... | head`");
+    expect(skillMarkdown).toContain('"include": ["~DEFAULT_BRANCH"]');
+    expect(skillMarkdown).toContain('"type": "non_fast_forward"');
+    expect(skillMarkdown).toContain('"type": "pull_request"');
+    expect(skillMarkdown).toContain('"required_approving_review_count": 1');
+    expect(skillMarkdown).toContain('"require_code_owner_review": true');
+    expect(skillMarkdown).toContain('"dismiss_stale_reviews_on_push": false');
+    expect(skillMarkdown).toContain('"require_last_push_approval": false');
+    expect(skillMarkdown).toContain('"required_review_thread_resolution": false');
+    expect(skillMarkdown).toMatch(/automatic GitHub governance\s+setup failed/);
+    expect(skillMarkdown).toContain("root `CODEOWNERS` mapping and branch rules");
+    expect(skillMarkdown).toContain("bootstrap root `CODEOWNERS` mapping and\n  default-branch ruleset");
+    expect(skillMarkdown).not.toMatch(/rulesets,\s+CODEOWNERS\) — out of scope/);
+  });
+
   it("delays App coverage guidance until a reviewable milestone", () => {
     expect(skillMarkdown).toContain("After the Phase 1 PR is open");
     expect(skillMarkdown).toContain("do not interrupt source resolution, structure");

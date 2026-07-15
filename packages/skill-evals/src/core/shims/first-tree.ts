@@ -12,7 +12,7 @@ export function createFirstTreeShim(paths: RunPaths): void {
   const shimPath = join(paths.binDir, "first-tree");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
@@ -65,6 +65,50 @@ function finish(argv, phase, exitCode, stdout, stderr, extra) {
 function optionValue(argv, name) {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] || null : null;
+}
+
+function optionValueWithEquals(argv, name) {
+  const exact = optionValue(argv, name);
+  if (exact !== null) return exact;
+  const prefix = name + "=";
+  const value = argv.find((arg) => arg.startsWith(prefix));
+  return value ? value.slice(prefix.length) : null;
+}
+
+function governanceEvalCaseId() {
+  const caseId = process.env.FIRST_TREE_EVAL_CASE_ID || "";
+  return caseId === "unbound-github-tree-governance-bootstrap" || caseId === "unbound-github-governance-fail-closed";
+}
+
+function runGovernanceTreeInit(argv, phase) {
+  const target = resolve(process.cwd(), optionValueWithEquals(argv, "--dir") || "context-tree");
+  mkdirSync(join(target, ".first-tree"), { recursive: true });
+  writeFileSync(join(target, ".first-tree", "VERSION"), "0.7.0\\n", "utf8");
+  writeFileSync(
+    join(target, ".first-tree", "tree.json"),
+    JSON.stringify({ schemaVersion: 1, treeId: "first-tree-seed-eval", treeMode: "dedicated", treeRepoName: "context-tree" }, null, 2) + "\\n",
+    "utf8",
+  );
+  if (!existsSync(join(target, ".git"))) {
+    spawnSync("git", ["init", "--initial-branch=main"], { cwd: target, encoding: "utf8" });
+    spawnSync("git", ["config", "user.email", "eval@example.invalid"], { cwd: target, encoding: "utf8" });
+    spawnSync("git", ["config", "user.name", "First Tree Eval"], { cwd: target, encoding: "utf8" });
+    spawnSync("git", ["config", "commit.gpgsign", "false"], { cwd: target, encoding: "utf8" });
+    spawnSync("git", ["add", "."], { cwd: target, encoding: "utf8" });
+    spawnSync("git", ["commit", "-m", "chore: initialize context tree"], { cwd: target, encoding: "utf8" });
+    const origin = target + "-origin.git";
+    spawnSync("git", ["clone", "--bare", target, origin], { cwd: process.cwd(), encoding: "utf8" });
+    spawnSync("git", ["remote", "add", "origin", origin], { cwd: target, encoding: "utf8" });
+    spawnSync("git", ["remote", "set-head", "origin", "main"], { cwd: target, encoding: "utf8" });
+  }
+  finish(
+    argv,
+    phase,
+    0,
+    "Created and bound Context Tree at " + target + "\\nGitHub governance recovery URL: https://github.com/settings/installations/eval\\n",
+    "",
+    { shimmedByEval: true, governanceTreeInit: true, contextTreePath: target },
+  );
 }
 
 function treeTreePathArg(argv) {
@@ -217,6 +261,10 @@ if (argv[0] === "github") {
   });
   trace("first-tree result: exit=1 blocked github command");
   process.exit(exitCode);
+}
+
+if (argv[0] === "tree" && argv[1] === "init" && governanceEvalCaseId()) {
+  runGovernanceTreeInit(argv, phase);
 }
 
 if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(argv[1] || "")) {

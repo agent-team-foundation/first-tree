@@ -23,6 +23,8 @@ export type FirstTreeSeedExpected = {
   action: SeedExpectedAction;
   approvalHints?: readonly string[];
   requireChatHistoryRead?: boolean;
+  requireGithubGovernanceBootstrap?: boolean;
+  requireGithubGovernanceRecovery?: boolean;
   requireSourceRead: boolean;
   requireWorktree: boolean;
   responseHints: readonly string[];
@@ -79,6 +81,8 @@ export type EvalMetrics = {
   forbiddenActionHits: readonly string[];
   forbiddenSideEffectHits: readonly string[];
   fixtureValidationOk: boolean;
+  githubGovernanceBootstrapObserved: boolean;
+  githubGovernanceRecoveryObserved: boolean;
   githubAppRequirementObserved: boolean;
   phase2ContinuationObserved: boolean;
   phase2LeafContentObserved: boolean;
