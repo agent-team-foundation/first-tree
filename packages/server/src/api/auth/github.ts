@@ -1,15 +1,21 @@
 import {
   githubCallbackQuerySchema,
   githubDevCallbackQuerySchema,
+  githubExternalProfile,
   githubStartQuerySchema,
   safeRedirectPath,
 } from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { signTokensForUser } from "../../services/auth.js";
 import {
-  findOrCreateUserFromGithub,
+  findOrCreateGithubAccount,
   type GithubProfile,
   type GithubTokenBundle,
+  IdentityConflictError,
+  IdentityMismatchError,
+  LastIdentityError,
+  linkExternalIdentity,
+  unlinkExternalIdentity,
 } from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
 import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
@@ -128,11 +134,15 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     let next: string;
     let targetOrganizationId: string | null = null;
     let kickoffUserId: string | null = null;
+    let intent: "sign-in" | "link" | "unlink" = "sign-in";
+    let stateUserId: string | null = null;
     try {
       const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
       next = verified.next;
       targetOrganizationId = verified.targetOrganizationId ?? null;
       kickoffUserId = verified.kickoffUserId ?? null;
+      intent = verified.intent ?? "sign-in";
+      stateUserId = verified.userId ?? null;
     } catch (err) {
       // Browser-facing: the user just navigated here from github.com. A raw
       // JSON body would strand them on the API URL — most commonly after
@@ -203,6 +213,40 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // (`devBindInstallation`); it rides along here purely for log context.
     const callbackInstallationId =
       installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
+
+    if (intent === "link" || intent === "unlink") {
+      if (!stateUserId) return redirectCallbackError(reply, "state-expired", "/user-settings");
+      const external = githubExternalProfile({
+        id: profile.githubId,
+        login: profile.login,
+        name: profile.displayName,
+        email: profile.email,
+        avatarUrl: profile.avatarUrl,
+        metadata: {
+          ...(tokens.encryptedAccessToken ? { accessToken: tokens.encryptedAccessToken } : {}),
+          ...(tokens.accessTokenExpiresAt ? { accessTokenExpiresAt: tokens.accessTokenExpiresAt } : {}),
+          ...(tokens.encryptedRefreshToken ? { refreshToken: tokens.encryptedRefreshToken } : {}),
+          ...(tokens.refreshTokenExpiresAt ? { refreshTokenExpiresAt: tokens.refreshTokenExpiresAt } : {}),
+        },
+      });
+      try {
+        if (intent === "link") {
+          await linkExternalIdentity(app.db, stateUserId, external);
+          app.log.info({ event: "identity.linked", provider: "github", userId: stateUserId }, "Identity linked");
+          return reply.redirect("/user-settings?connection=github-linked", 302);
+        }
+        await unlinkExternalIdentity(app.db, stateUserId, "github", profile.githubId);
+        app.log.info({ event: "identity.unlinked", provider: "github", userId: stateUserId }, "Identity unlinked");
+        return reply.redirect("/user-settings?connection=github-unlinked", 302);
+      } catch (error) {
+        if (error instanceof IdentityConflictError)
+          return reply.redirect("/user-settings?error=identity-conflict", 302);
+        if (error instanceof IdentityMismatchError)
+          return reply.redirect("/user-settings?error=identity-mismatch", 302);
+        if (error instanceof LastIdentityError) return reply.redirect("/user-settings?error=last-provider", 302);
+        throw error;
+      }
+    }
 
     return completeOauthFlow(app, request, reply, profile, next, tokens, callbackInstallationId, targetOrganizationId, {
       kickoffUserId,
@@ -319,6 +363,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
  */
 type CallbackErrorCode =
   | "state-expired"
+  | "provider-not-configured"
+  | "provider-exchange-failed"
+  | "identity-conflict"
+  | "identity-mismatch"
+  | "last-provider"
   | "github-exchange-failed"
   | "install-not-admin"
   | "install-not-verified"
@@ -402,7 +451,8 @@ async function completeOauthFlow(
   } = {},
 ) {
   const { kickoffUserId = null, browserFacing = false, devBindInstallation = false } = opts;
-  const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
+  const account = await findOrCreateGithubAccount(app.db, profile, oauthTokens);
+  const { userId } = account;
   const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
 
   // Track which signup path the user took. Surfaced to the SPA via the
@@ -440,8 +490,8 @@ async function completeOauthFlow(
       userId,
       organizationId: inv.organizationId,
       role: inv.role === "admin" ? "admin" : "member",
-      displayName: profile.displayName?.trim() || profile.login,
-      username: profile.login,
+      displayName: account.displayName,
+      username: account.username,
     });
     await recordRedemption(app.db, {
       invitationId: inv.id,
@@ -534,12 +584,11 @@ async function completeOauthFlow(
       }
       const personal = await createPersonalTeam(app.db, {
         userId,
-        loginSeed: profile.login,
-        // Per first-tree-context:agent-hub/onboarding.md (was §5.5 in source design), default team name is
-        // `${login}'s team` — reads as a collective space, matches Linear's
-        // convention. The user can rename in Step 1 of onboarding.
-        teamDisplayName: `${profile.login}'s team`,
-        userDisplayName: profile.displayName?.trim() || profile.login,
+        loginSeed: account.username,
+        // The default team name is based on the normalized provider display
+        // name and can be renamed in Step 1 of onboarding.
+        teamDisplayName: personalTeamDisplayName(account.displayName),
+        userDisplayName: account.displayName,
       });
       joinPath = "solo";
       resolved = true;
@@ -615,4 +664,8 @@ async function completeOauthFlow(
 function shouldPreserveSoloSignupNext(next: string): boolean {
   const parsed = new URL(next, "http://first-tree.local");
   return parsed.pathname === "/quickstart" && parsed.searchParams.get("campaign") === "production-scan";
+}
+
+function personalTeamDisplayName(displayName: string): string {
+  return `${displayName.slice(0, 193)}'s team`;
 }

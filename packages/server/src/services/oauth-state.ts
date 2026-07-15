@@ -47,6 +47,11 @@ type StatePayload = {
    * browser). Absent on the plain `/auth/github/start` sign-in flow.
    */
   kickoffUserId?: string;
+  intent?: "sign-in" | "link" | "unlink";
+  userId?: string;
+  provider?: "google" | "github";
+  expectedSubject?: string;
+  oidcNonce?: string;
 };
 
 export type SignOAuthStateOptions = {
@@ -54,6 +59,11 @@ export type SignOAuthStateOptions = {
   targetOrganizationId?: string;
   /** See `StatePayload.kickoffUserId`. */
   kickoffUserId?: string;
+  intent?: "sign-in" | "link" | "unlink";
+  userId?: string;
+  provider?: "google" | "github";
+  expectedSubject?: string;
+  oidcNonce?: string;
 };
 
 /**
@@ -74,6 +84,11 @@ export async function signOAuthState(
   if (opts.kickoffUserId) {
     claims.kickoffUserId = opts.kickoffUserId;
   }
+  if (opts.intent) claims.intent = opts.intent;
+  if (opts.userId) claims.userId = opts.userId;
+  if (opts.provider) claims.provider = opts.provider;
+  if (opts.expectedSubject) claims.expectedSubject = opts.expectedSubject;
+  if (opts.oidcNonce) claims.oidcNonce = opts.oidcNonce;
   const token = await new SignJWT({ ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
@@ -96,7 +111,16 @@ export async function verifyOAuthState(
   jwtSecret: string,
   token: string,
   cookieNonce: string | null,
-): Promise<{ next: string; targetOrganizationId?: string; kickoffUserId?: string }> {
+): Promise<{
+  next: string;
+  targetOrganizationId?: string;
+  kickoffUserId?: string;
+  intent?: "sign-in" | "link" | "unlink";
+  userId?: string;
+  provider?: "google" | "github";
+  expectedSubject?: string;
+  oidcNonce?: string;
+}> {
   const secret = new TextEncoder().encode(jwtSecret);
   let payload: StatePayload;
   try {
@@ -115,6 +139,15 @@ export async function verifyOAuthState(
   if (payload.kickoffUserId !== undefined && typeof payload.kickoffUserId !== "string") {
     throw new Error("OAuth state payload malformed");
   }
+  if (payload.intent !== undefined && !["sign-in", "link", "unlink"].includes(payload.intent)) {
+    throw new Error("OAuth state payload malformed");
+  }
+  if (payload.provider !== undefined && payload.provider !== "google" && payload.provider !== "github") {
+    throw new Error("OAuth state payload malformed");
+  }
+  for (const value of [payload.userId, payload.expectedSubject, payload.oidcNonce]) {
+    if (value !== undefined && typeof value !== "string") throw new Error("OAuth state payload malformed");
+  }
 
   if (!cookieNonce || cookieNonce !== payload.nonce) {
     throw new Error("OAuth state nonce / cookie mismatch");
@@ -124,5 +157,10 @@ export async function verifyOAuthState(
     next: payload.next,
     ...(payload.targetOrganizationId ? { targetOrganizationId: payload.targetOrganizationId } : {}),
     ...(payload.kickoffUserId ? { kickoffUserId: payload.kickoffUserId } : {}),
+    ...(payload.intent ? { intent: payload.intent } : {}),
+    ...(payload.userId ? { userId: payload.userId } : {}),
+    ...(payload.provider ? { provider: payload.provider } : {}),
+    ...(payload.expectedSubject ? { expectedSubject: payload.expectedSubject } : {}),
+    ...(payload.oidcNonce ? { oidcNonce: payload.oidcNonce } : {}),
   };
 }

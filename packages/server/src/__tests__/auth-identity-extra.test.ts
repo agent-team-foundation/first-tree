@@ -38,7 +38,7 @@ describe("auth identity extra coverage", () => {
 
     const [user] = await app.db.select().from(users).where(eq(users.id, created.userId)).limit(1);
     expect(user?.username).toMatch(/^octocat-[0-9a-f]{4}$/);
-    expect(user?.displayName).toBe("Octocat");
+    expect(user?.displayName).toBe("octocat");
     expect(user?.avatarUrl).toBe("https://avatars.example/octo.png");
     await expect(getStoredGithubAccessToken(app.db, created.userId, ENCRYPTION_KEY)).resolves.toBeNull();
 

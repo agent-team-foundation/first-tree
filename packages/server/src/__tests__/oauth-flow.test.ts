@@ -114,10 +114,10 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(orgs).toHaveLength(1);
     const orgRow = orgs[0];
     if (!orgRow) throw new Error("expected default org row");
-    // Default team display name is `${login}'s team` — collective-space
+    // Default team display name is `${displayName}'s team` — collective-space
     // reading per first-tree-context:agent-hub/onboarding.md (was §5.5 in source design); user can rename
     // in onboarding Step 1.
-    expect(orgRow.displayName).toBe("octocat's team");
+    expect(orgRow.displayName).toBe("Octo Cat's team");
 
     // The callback carries the resolved org back so the web selects it
     // (overriding any stale localStorage org) — here the freshly-minted team.
