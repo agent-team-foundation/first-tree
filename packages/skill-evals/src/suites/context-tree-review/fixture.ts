@@ -157,14 +157,15 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
   };
   const secondView = evalCase.fixture.scenario === "stale-head" ? { ...view, headRefOid: baseOid } : view;
   const submissionHeadOid = evalCase.fixture.scenario === "submission-race" ? baseOid : secondView.headRefOid;
-  const reviewerLogin = evalCase.fixture.scenario === "self-approval" ? "contributor" : "independent-reviewer";
+  const reviewerLogin = "read-only-reviewer";
+  const runId = "01900000-0000-7000-8000-000000000042";
   const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
   const repo = "owner/context-tree";
   const prNumber = 42;
   const reviewWorktreePath = join(paths.workspacePath, ".review-worktrees", "42");
   writeText(
     fixturePath,
-    `${JSON.stringify({ prNumber, repo, reviewHeadOid: headOid, reviewerLogin, reviewWorktreePath, submissionHeadOid, views: [view, secondView] }, null, 2)}\n`,
+    `${JSON.stringify({ prNumber, repo, reviewHeadOid: headOid, reviewerLogin, reviewWorktreePath, runId, submissionHeadOid, views: [view, secondView] }, null, 2)}\n`,
   );
   const originRefs = runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], originPath).stdout;
   const treeConfig = runCommand("git", ["config", "--local", "--list"], treePath).stdout;
@@ -180,6 +181,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       headOid,
       prNumber,
       repo,
+      runId,
       submissionHeadOid,
       workspacePath: paths.workspacePath,
     },

@@ -17,6 +17,7 @@ import {
   normalizeGithubRepo,
   renderContextReviewerPrPrompt,
 } from "../services/context-reviewer-pr.js";
+import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -98,6 +99,7 @@ async function createReviewer(
 }
 
 async function enableReviewer(app: App, admin: Awaited<ReturnType<typeof createAdminContext>>, reviewerUuid: string) {
+  await seedReviewerInstallation(app, admin.organizationId);
   await putOrgSetting(
     app.db,
     admin.organizationId,
@@ -112,6 +114,22 @@ async function enableReviewer(app: App, admin: Awaited<ReturnType<typeof createA
     { contextReviewer: { enabled: true, agentUuid: reviewerUuid } },
     { updatedBy: admin.userId, memberId: admin.memberId },
   );
+}
+
+async function seedReviewerInstallation(app: App, organizationId: string): Promise<void> {
+  const numericId = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
+  await upsertInstallationFromMetadata(app.db, {
+    installation: {
+      id: numericId,
+      accountType: "Organization",
+      accountLogin: "owner",
+      accountGithubId: numericId + 1,
+      permissions: { metadata: "read", pull_requests: "write" },
+      events: ["pull_request"],
+      suspendedAt: null,
+    },
+    hubOrganizationId: organizationId,
+  });
 }
 
 async function seedGithubIdentity(app: App, userId: string, login: string) {
@@ -142,8 +160,8 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000001",
       reviewerManagerGithubLogin: "reviewer-manager",
-      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Context Tree pull request event");
@@ -154,7 +172,8 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("PR author: writer");
     expect(prompt).toContain("Event sender: writer");
     expect(prompt).toContain("Reviewer manager GitHub login: reviewer-manager");
-    expect(prompt).toContain("Known self-approval blocker: not known from First Tree metadata");
+    expect(prompt).toContain("Context review run: 01900000-0000-7000-8000-000000000001");
+    expect(prompt).not.toContain("Known self-approval blocker");
     expect(prompt).toContain("Draft status from webhook: ready for review");
     expect(prompt).not.toContain("Review goals:");
     expect(prompt).not.toContain("Required workflow:");
@@ -178,8 +197,8 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000002",
       reviewerManagerGithubLogin: null,
-      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Base ref: unknown");
@@ -204,8 +223,8 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000003",
       reviewerManagerGithubLogin: null,
-      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Draft status from webhook: draft");
@@ -228,8 +247,8 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: "https://github.com/owner/context-tree/pull/125#issuecomment-1",
       commentAuthorLogin: "commenter",
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000004",
       reviewerManagerGithubLogin: null,
-      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Trigger event: issue_comment.created");
@@ -237,7 +256,7 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("Comment URL: https://github.com/owner/context-tree/pull/125#issuecomment-1");
   });
 
-  it("renders a known self-approval event fact without duplicating the outcome workflow", async () => {
+  it("renders the server-authored App publication run without a host self-approval branch", async () => {
     const prompt = await renderContextReviewerPrPrompt({
       repoFullName: "owner/context-tree",
       prNumber: 127,
@@ -252,11 +271,12 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000005",
       reviewerManagerGithubLogin: "Writer",
-      reviewerManagerIsPrAuthor: true,
     });
 
-    expect(prompt).toContain("Known self-approval blocker: yes");
+    expect(prompt).toContain("Context review run: 01900000-0000-7000-8000-000000000005");
+    expect(prompt).not.toContain("Known self-approval blocker");
     expect(prompt).not.toContain("Independent approval required");
     expect(prompt).not.toContain("gh pr review");
   });
@@ -345,6 +365,7 @@ describe("handleContextReviewerPrEvent", () => {
       }),
     ).resolves.toEqual({ handled: false, reason: "feature_disabled" });
 
+    await seedReviewerInstallation(app, admin.organizationId);
     await putOrgSetting(
       app.db,
       admin.organizationId,
@@ -474,7 +495,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(entry?.notify).toBe(true);
   });
 
-  it("marks approval as blocked when the reviewer manager GitHub login is the PR author", async () => {
+  it("records host-manager identity for audit without creating a self-author outcome", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     await seedGithubIdentity(app, admin.userId, "Writer");
@@ -492,13 +513,15 @@ describe("handleContextReviewerPrEvent", () => {
 
     const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
     expect(message?.content).toContain("Reviewer manager GitHub login: Writer");
-    expect(message?.content).toContain("Known self-approval blocker: yes");
+    expect(message?.content).toContain("Context review run:");
+    expect(message?.content).not.toContain("Known self-approval blocker");
     expect(message?.content).not.toContain("Independent approval required");
     expect(message?.metadata).toMatchObject({
       contextTreeReviewer: true,
       pullRequestAuthorLogin: "writer",
       reviewerManagerGithubLogin: "Writer",
-      reviewerManagerIsPrAuthor: true,
+      contextReviewReviewerAgentUuid: reviewer.uuid,
+      contextReviewSubmission: { state: "pending" },
     });
   });
 

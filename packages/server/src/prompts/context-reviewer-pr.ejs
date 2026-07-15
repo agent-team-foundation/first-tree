@@ -11,7 +11,6 @@ Head ref: <%= headRef || "unknown" %>
 PR author: <%= authorLogin %>
 Event sender: <%= senderLogin %>
 Reviewer manager GitHub login: <%= reviewerManagerGithubLogin || "unknown" %>
-Known self-approval blocker: <%= reviewerManagerIsPrAuthor ? "yes — the configured reviewer's manager GitHub login is the PR author" : "not known from First Tree metadata" %>
 Trigger event: <%= triggerEvent %>
 Draft status from webhook: <%= isDraft === true ? "draft" : isDraft === false ? "ready for review" : "unknown" %>
 <% if (commentAuthorLogin) { -%>
@@ -21,3 +20,6 @@ Comment author: <%= commentAuthorLogin %>
 Comment URL: <%= commentUrl %>
 <% } -%>
 First Tree organization: <%= organizationId %>
+Context review run: <%= contextReviewRunId %>
+
+Use this server-authored run id only through the submission command defined by the loaded skill. GitHub App credentials remain in Cloud.

@@ -39,7 +39,6 @@ export function buildGrading(
       process_pass:
         metrics.runnerExitCode === 0 &&
         metrics.initialViewObserved &&
-        metrics.identityReadObserved &&
         metrics.verifyFirst &&
         metrics.verifyHeadBound &&
         !metrics.semanticReadBeforeVerify &&

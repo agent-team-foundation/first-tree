@@ -1,14 +1,16 @@
 import { generateKeyPairSync } from "node:crypto";
 import { decodeJwt, decodeProtectedHeader, importPKCS8, jwtVerify } from "jose";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildAppAuthorizeUrl,
   createAppJwt,
   createOrganizationRepo,
+  createPullRequestReview,
   createRepoFileWithToken,
   exchangeCodeForAppUserProfile,
   fetchInstallation,
   GithubAppApiError,
+  getPullRequestForReview,
   getRepoFileWithToken,
   getRepository,
   listInstallationRepos,
@@ -149,6 +151,86 @@ describe("services/github-app", () => {
       await expect(mintInstallationToken("jwt", 1, { fetcher: fakeFetch })).rejects.toMatchObject({
         name: "GithubAppApiError",
         status: 401,
+      });
+    });
+
+    it("scopes a token request to one repository and the requested permissions", async () => {
+      const fakeFetch = vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: "scoped-token",
+              expires_at: "2026-05-11T18:00:00Z",
+              permissions: { metadata: "read", pull_requests: "write" },
+              repository_selection: "selected",
+            }),
+            { status: 201, headers: { "content-type": "application/json" } },
+          ),
+      );
+      await mintInstallationToken("jwt", 7, {
+        fetcher: fakeFetch,
+        repositories: ["context-tree"],
+        permissions: { metadata: "read", pull_requests: "write" },
+      });
+      expect(JSON.parse(String(fakeFetch.mock.calls[0]?.[1]?.body))).toEqual({
+        repositories: ["context-tree"],
+        permissions: { metadata: "read", pull_requests: "write" },
+      });
+    });
+  });
+
+  describe("Context Reviewer pull request API", () => {
+    it("reads current PR state and creates a commit-bound App review", async () => {
+      const fakeFetch = vi.fn<typeof fetch>(async (_url, init) => {
+        if (!init?.method) {
+          return new Response(
+            JSON.stringify({
+              number: 42,
+              state: "open",
+              draft: false,
+              merged: false,
+              head: { sha: "a".repeat(40) },
+              html_url: "https://github.com/owner/repo/pull/42",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            id: 9,
+            html_url: "https://github.com/owner/repo/pull/42#pullrequestreview-9",
+            user: { login: "first-tree[bot]" },
+            commit_id: "a".repeat(40),
+            body: "Approved",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+
+      await expect(
+        getPullRequestForReview("token", "owner", "repo", 42, { fetcher: fakeFetch }),
+      ).resolves.toMatchObject({
+        state: "open",
+        headSha: "a".repeat(40),
+      });
+      await expect(
+        createPullRequestReview(
+          "token",
+          {
+            owner: "owner",
+            repo: "repo",
+            prNumber: 42,
+            commitId: "a".repeat(40),
+            event: "APPROVE",
+            body: "Approved",
+          },
+          { fetcher: fakeFetch },
+        ),
+      ).resolves.toMatchObject({ id: 9, actor: "first-tree[bot]" });
+      expect(JSON.parse(String(fakeFetch.mock.calls[1]?.[1]?.body))).toEqual({
+        commit_id: "a".repeat(40),
+        event: "APPROVE",
+        body: "Approved",
       });
     });
   });

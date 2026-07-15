@@ -12,6 +12,8 @@ import {
   type ChatGithubEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type ContextReviewSubmitRequest,
+  type ContextReviewSubmitResponse,
   type CreateDocCommentRequest,
   type CreateTaskChat,
   type DocComment,
@@ -445,6 +447,21 @@ export class FirstTreeHubSDK {
     return this.requestJson<ChatGithubEntityListResponse>(`/api/v1/agent/chats/${chatId}/github-entities`);
   }
 
+  /** Submit one server-authored Context Reviewer run for App publication. */
+  async submitContextReview(
+    chatId: string,
+    runId: string,
+    body: ContextReviewSubmitRequest,
+  ): Promise<ContextReviewSubmitResponse> {
+    return this.requestJson<ContextReviewSubmitResponse>(
+      `/api/v1/agent/chats/${encodeURIComponent(chatId)}/context-review-runs/${encodeURIComponent(runId)}/submit`,
+      { method: "POST", body: JSON.stringify(body) },
+      // The server reconciles an unknown GitHub mutation. The client must not
+      // replay a possibly committed submission after a transient response.
+      { retry: false },
+    );
+  }
+
   /**
    * Update chat metadata. Mutable fields are `topic` and/or `description`
    * (pass at least one):
@@ -779,14 +796,17 @@ export class FirstTreeHubSDK {
   private async toSdkError(response: Response): Promise<SdkError> {
     const body = await response.text();
     let message: string;
+    let code: string | undefined;
     try {
-      const json = JSON.parse(body) as { error?: string };
+      const json = JSON.parse(body) as { error?: string; code?: string };
       message = json.error ?? body;
+      code = json.code;
     } catch {
       message = body;
     }
     const retryAfter = response.headers.get("retry-after") ?? undefined;
     return new SdkError(response.status, message, {
+      code,
       retryAfter,
       retryAfterMs: parseRetryAfterMs(retryAfter),
     });
@@ -797,16 +817,18 @@ export class SdkError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
-    opts: { retryAfter?: string; retryAfterMs?: number } = {},
+    opts: { code?: string; retryAfter?: string; retryAfterMs?: number } = {},
   ) {
     super(message);
     this.name = "SdkError";
+    this.code = opts.code;
     this.retryAfter = opts.retryAfter;
     this.retryAfterMs = opts.retryAfterMs;
   }
 
   public readonly retryAfter?: string;
   public readonly retryAfterMs?: number;
+  public readonly code?: string;
 }
 
 function parseRetryAfterMs(value: string | undefined): number | undefined {

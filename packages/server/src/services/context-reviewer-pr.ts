@@ -13,6 +13,7 @@ import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createLogger } from "../observability/index.js";
+import { uuidv7 } from "../uuid.js";
 import { createChat } from "./chat.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
@@ -48,8 +49,8 @@ export type ContextReviewerPrTemplateInput = {
   commentUrl: string | null;
   commentAuthorLogin: string | null;
   organizationId: string;
+  contextReviewRunId: string;
   reviewerManagerGithubLogin: string | null;
-  reviewerManagerIsPrAuthor: boolean;
 };
 
 export type ContextReviewerPrResult =
@@ -67,13 +68,14 @@ export type ContextReviewerPrSkipReason =
 
 type ContextReviewerPrPayloadInput = Omit<
   ContextReviewerPrTemplateInput,
-  "reviewerManagerGithubLogin" | "reviewerManagerIsPrAuthor"
+  "contextReviewRunId" | "reviewerManagerGithubLogin"
 >;
 
 type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
   action: "opened" | "synchronize" | "ready_for_review" | "created" | "edited";
   entityKey: string;
+  headSha: string | null;
   senderType: string | null;
   commentAuthorType: string | null;
 };
@@ -288,7 +290,8 @@ export async function handleContextReviewerPrEvent(
       };
     }
 
-    const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer));
+    const contextReviewRunId = uuidv7();
+    const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer, contextReviewRunId));
     const { message, recipients } = await sendMessage(
       app.db,
       existingChatId,
@@ -297,9 +300,9 @@ export async function handleContextReviewerPrEvent(
         source: "github",
         format: "markdown",
         content: prompt,
-        metadata: contextReviewerMessageMetadata(info, reviewer),
+        metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
       },
-      { normalizeMentionsInContent: false },
+      { normalizeMentionsInContent: false, allowContextReviewRun: true },
     );
     notifyRecipients(app.notifier, recipients, message.id);
     log.info(
@@ -315,7 +318,8 @@ export async function handleContextReviewerPrEvent(
     return { handled: true, chatId: existingChatId, messageId: message.id, reused: true };
   }
 
-  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer));
+  const contextReviewRunId = uuidv7();
+  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer, contextReviewRunId));
   const created = await createChat(app.db, {
     mode: "task",
     initiatorAgentId: reviewer.managerHumanAgentId,
@@ -327,8 +331,9 @@ export async function handleContextReviewerPrEvent(
       source: "github",
       format: "markdown",
       content: prompt,
-      metadata: contextReviewerMessageMetadata(info, reviewer),
+      metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
     },
+    allowContextReviewRun: true,
     source: "manual",
   });
   await app.db.update(chats).set({ metadata }).where(eq(chats.id, created.chat.id));
@@ -416,6 +421,7 @@ function extractPullRequestPayloadInfo(
       authorLogin: readUserLogin(pr) ?? senderLogin,
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
+      headSha: normalizeCommitOid(readString(isRecord(pr?.head) ? pr.head.sha : null)),
       isDraft: readDraftStatus(pr),
       commentUrl: null,
       commentAuthorLogin: null,
@@ -441,6 +447,7 @@ function extractPullRequestPayloadInfo(
       authorLogin: readUserLogin(issue) ?? senderLogin,
       baseRef: null,
       headRef: null,
+      headSha: null,
       isDraft: null,
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
@@ -465,6 +472,7 @@ function extractPullRequestPayloadInfo(
       authorLogin: readUserLogin(pr) ?? senderLogin,
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
+      headSha: normalizeCommitOid(readString(isRecord(pr?.head) ? pr.head.sha : null)),
       isDraft: readDraftStatus(pr),
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
@@ -481,6 +489,10 @@ function readDraftStatus(pr: Record<string, unknown> | null): boolean | null {
   return pr.draft;
 }
 
+function normalizeCommitOid(value: string | null): string | null {
+  return value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+}
+
 function readUserLogin(record: Record<string, unknown> | null): string | null {
   const user = isRecord(record?.user) ? record.user : null;
   return readString(user?.login);
@@ -491,17 +503,22 @@ function readCommentAuthor(comment: Record<string, unknown> | null): { login: st
   return { login: readString(user?.login), type: readString(user?.type) };
 }
 
-function buildTemplateInput(info: PullRequestPayloadInfo, reviewer: ReviewerAgent): ContextReviewerPrTemplateInput {
+function buildTemplateInput(
+  info: PullRequestPayloadInfo,
+  reviewer: ReviewerAgent,
+  contextReviewRunId: string,
+): ContextReviewerPrTemplateInput {
   return {
     ...info,
+    contextReviewRunId,
     reviewerManagerGithubLogin: reviewer.managerGithubLogin,
-    reviewerManagerIsPrAuthor: sameGithubLogin(reviewer.managerGithubLogin, info.authorLogin),
   };
 }
 
 function contextReviewerMessageMetadata(
   info: PullRequestPayloadInfo,
   reviewer: ReviewerAgent,
+  contextReviewRunId: string,
 ): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
     source: "github",
@@ -511,12 +528,18 @@ function contextReviewerMessageMetadata(
     entityType: "pull_request",
     entityKey: info.entityKey,
     contextTreeReviewer: true,
+    contextReviewRunId,
+    contextReviewRepository: normalizeGithubRepo(info.repoFullName),
+    contextReviewPrNumber: info.prNumber,
+    contextReviewOrganizationId: info.organizationId,
+    contextReviewReviewerAgentUuid: reviewer.uuid,
+    contextReviewReviewerManagerHumanAgentId: reviewer.managerHumanAgentId,
+    contextReviewSubmission: { state: "pending" },
     mentions: [reviewer.uuid],
     pullRequestAuthorLogin: info.authorLogin,
   };
   if (reviewer.managerGithubLogin) {
     metadata.reviewerManagerGithubLogin = reviewer.managerGithubLogin;
-    metadata.reviewerManagerIsPrAuthor = sameGithubLogin(reviewer.managerGithubLogin, info.authorLogin);
   }
   if (info.commentAuthorLogin) {
     metadata.commentAuthorLogin = info.commentAuthorLogin;
@@ -526,6 +549,9 @@ function contextReviewerMessageMetadata(
   }
   if (info.isDraft !== null) {
     metadata.pullRequestDraft = info.isDraft;
+  }
+  if (info.headSha) {
+    metadata.contextReviewHeadSha = info.headSha;
   }
   return metadata;
 }
@@ -555,17 +581,6 @@ async function loadValidReviewerAgent(
     )
     .limit(1);
   return agent ?? null;
-}
-
-function sameGithubLogin(left: string | null, right: string | null): boolean {
-  const normalizedLeft = normalizeGithubLogin(left);
-  const normalizedRight = normalizeGithubLogin(right);
-  return normalizedLeft !== null && normalizedRight !== null && normalizedLeft === normalizedRight;
-}
-
-function normalizeGithubLogin(value: string | null): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed.toLowerCase() : null;
 }
 
 async function findExistingReviewerChat(

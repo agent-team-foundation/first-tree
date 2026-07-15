@@ -13,6 +13,7 @@ const expectation: ReviewFixtureExpectation = {
   headOid: "head",
   prNumber: 42,
   repo: "owner/context-tree",
+  runId: "019review-run",
   submissionHeadOid: "head",
   workspacePath: "/workspace",
 };
@@ -89,7 +90,8 @@ function passingEvents(): unknown[] {
       currentHeadOid: "head",
       prNumber: 42,
       repo: "owner/context-tree",
-      type: "github_review_submitted",
+      runId: expectation.runId,
+      type: "context_review_submitted",
     },
   ];
 }

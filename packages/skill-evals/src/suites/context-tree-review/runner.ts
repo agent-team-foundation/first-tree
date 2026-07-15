@@ -32,6 +32,7 @@ export async function runContextTreeReviewCase(
     recordedModelVerifyCwd: fixture.reviewWorktreePath,
     recordedModelVerifyHead: fixture.expectation.headOid,
     recordedModelVerifyPath: fixture.verifyResultPath,
+    reviewFixturePath: fixture.fixturePath,
   });
   createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
   const runner = await runAgentProvider(

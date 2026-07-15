@@ -18,7 +18,6 @@ describe("context-tree-review floor", () => {
       "draft",
       "archive-only",
       "authority",
-      "self-approval",
       "stale-head",
       "submission-race",
     ]);
@@ -39,9 +38,9 @@ describe("context-tree-review floor", () => {
 
     expect(skill).toContain("generated `AGENTS.md` / `CLAUDE.md` Context Tree Policy");
     expect(skillHasPolicyDuplication(repoRoot)).toBe(false);
-    expect(skill).toContain("repos/$REPO/pulls/$PR_NUMBER/reviews");
-    expect(skill).toContain('--arg commit_id "$REVIEWED_HEAD"');
-    expect(skill).toContain("never through\n`gh pr review`");
+    expect(skill).toContain("first-tree github context-review submit");
+    expect(skill).toContain('--run "$CONTEXT_REVIEW_RUN_ID"');
+    expect(skill).toContain("Never call local `gh api .../reviews`");
     expect(cloud).toContain("context-tree-review");
     expect(cloud).not.toContain("gh pr review");
     expect(cloud).not.toContain("tree verify");

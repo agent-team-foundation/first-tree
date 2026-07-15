@@ -778,7 +778,7 @@ export function deriveMetrics(
       }
       if (typeof event.exitCode === "number") verifyExitCodes.push(event.exitCode);
     }
-    if (event.type === "github_review_submitted") {
+    if (event.type === "context_review_submitted") {
       if (firstReviewIndex < 0) firstReviewIndex = index;
       if (
         (event.action === "approve" || event.action === "comment" || event.action === "request-changes") &&
@@ -786,7 +786,8 @@ export function deriveMetrics(
         typeof event.commitOid === "string" &&
         typeof event.currentHeadOid === "string" &&
         typeof event.prNumber === "number" &&
-        typeof event.repo === "string"
+        typeof event.repo === "string" &&
+        typeof event.runId === "string"
       ) {
         reviewEvents.push({
           action: event.action,
@@ -797,6 +798,7 @@ export function deriveMetrics(
           eventIndex: index,
           prNumber: event.prNumber,
           repo: event.repo,
+          runId: event.runId,
         });
       }
     }
@@ -814,7 +816,10 @@ export function deriveMetrics(
   const targetMatches =
     viewEvents.length > 0 &&
     viewEvents.every((view) => view.repo === expectation.repo && view.prNumber === expectation.prNumber) &&
-    reviewEvents.every((item) => item.repo === expectation.repo && item.prNumber === expectation.prNumber);
+    reviewEvents.every(
+      (item) =>
+        item.repo === expectation.repo && item.prNumber === expectation.prNumber && item.runId === expectation.runId,
+    );
   const initialViewObserved =
     firstView !== undefined && firstView.headRefOid === expectation.headOid && firstView.eventIndex < firstVerifyIndex;
   const finalViewFresh =
@@ -848,8 +853,7 @@ export function deriveMetrics(
     firstTreeVerifyCalls: verifyExitCodes.length,
     fixtureIntegrity,
     ghReviewCalls: reviewEvents.length,
-    identityReadObserved:
-      firstView !== undefined && identityIndex > firstView.eventIndex && identityIndex < firstVerifyIndex,
+    identityReadObserved: identityIndex >= 0,
     initialViewObserved,
     mainTreeReadAttempted: mainTreeReadObserved,
     mutationAttempted: mutationObserved,
@@ -895,7 +899,6 @@ export function casePassed(evalCase: ContextTreeReviewEvalCase, metrics: EvalMet
     !metrics.firstTreeReadLoaded &&
     !metrics.mainTreeReadAttempted &&
     metrics.initialViewObserved &&
-    metrics.identityReadObserved &&
     metrics.verifyFirst &&
     metrics.verifyHeadBound &&
     !metrics.semanticReadBeforeVerify &&

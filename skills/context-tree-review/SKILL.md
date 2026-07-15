@@ -24,15 +24,16 @@ review snapshot workflow below owns all Context Tree reads for this task.
 
 ## Read-Only Boundary
 
-The only permitted external write is exactly one commit-bound GitHub pull
-request review after a final pre-submission check observes an unchanged current
-head. Do not edit tree files, commit, push, open a repair
+The only permitted external write is exactly one logical, commit-bound GitHub
+pull request review published by First Tree Cloud through the configured GitHub
+App after a final pre-submission check observes an unchanged current head. Do
+not edit tree files, commit, push, open a repair
 pull request, merge, change review settings, or post a top-level pull request
-comment. Do not approve a pull request authored by the active GitHub identity.
+comment. Never use the local GitHub user credential to publish the verdict.
 
 ## Workflow
 
-### 1. Resolve the live pull request and reviewer identity
+### 1. Resolve the live pull request and publication run
 
 1. Read `.first-tree/workspace.json` and the generated Tree Location section.
    Resolve the bound tree checkout and normalize its `origin` repository
@@ -42,9 +43,12 @@ comment. Do not approve a pull request authored by the active GitHub identity.
    event payload values as hints; GitHub current state controls the verdict.
 3. Confirm that the pull request repository is the workspace's bound Context
    Tree repository. Stop for ordinary code repositories or another team's tree.
-4. Run `gh api user --jq .login` and record whether the active login is the pull
-   request author. Continue the content review even when self-approval is
-   blocked so the review can still report a complete safe-or-blocked outcome.
+4. For a Cloud Context Reviewer wake-up, record the server-authored Context
+   review run id from the event facts. It is the only authority for App
+   publication. Never invent, recover from another message, or reuse a run id.
+   For an explicit human review request without a valid run id, perform only
+   read-only analysis, submit zero App reviews, and explain that a supported PR
+   event must create the publication run.
 5. If the pull request is closed or merged, submit no review and report its
    current state.
 
@@ -115,8 +119,8 @@ do not impose normal-node body requirements on them.
 
 ### 5. Choose one outcome
 
-Write the complete review body and a temporary JSON request payload outside the
-detached tree worktree. Before submitting, run `gh pr view` again and re-read
+Write the complete review body outside the detached tree worktree. Before
+submitting, run `gh pr view` again and re-read
 `state`, `isDraft`, and `headRefOid`.
 
 - If the head changed, or the pull request closed/merged, submit zero reviews.
@@ -128,41 +132,44 @@ detached tree worktree. Before submitting, run `gh pr view` again and re-read
   required`.
 - No blocker, but the pull request is draft: submit exactly one comment review
   whose first heading says approval is deferred until ready.
-- No blocker, but the active GitHub identity is the author: submit exactly one
-  comment review whose first heading is `## Independent approval required`.
 - Archive/supporting-only or repository-infrastructure-only: submit exactly one
   comment review explaining that semantic governance is out of scope.
-- No blocker, ready pull request, head unchanged at the final pre-submission
-  check, and independent active identity: submit exactly one commit-bound
-  `APPROVE` review. A comment
+- No blocker, ready pull request, and head unchanged at the final
+  pre-submission check: submit exactly one commit-bound `APPROVE` review. The
+  configured organization reviewer may do this when its host user authored the
+  PR because the GitHub actor is the App bot. A comment
   review, top-level comment, or chat statement is not a successful substitute
   for approval.
 
-Submit every allowed outcome through GitHub's create-review API, never through
-`gh pr review`, because the latter does not include the reviewed commit in its
-mutation. Build the payload from the external body file and recorded head:
+Submit every allowed outcome only through the agent-session First Tree command.
+It carries the server-authored run and reviewed head to Cloud; Cloud performs
+the authoritative state/head/permission checks and the GitHub App mutation:
 
 ```bash
-jq -n \
-  --arg commit_id "$REVIEWED_HEAD" \
-  --arg event "$REVIEW_EVENT" \
-  --rawfile body "$REVIEW_BODY" \
-  '{commit_id: $commit_id, event: $event, body: $body}' > "$REVIEW_PAYLOAD"
-gh api --method POST \
-  "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-  --input "$REVIEW_PAYLOAD"
+first-tree github context-review submit \
+  --run "$CONTEXT_REVIEW_RUN_ID" \
+  --head "$REVIEWED_HEAD" \
+  --event "$REVIEW_EVENT" \
+  --body-file "$REVIEW_BODY"
 ```
 
 `REVIEW_EVENT` is exactly one of `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`.
-The `commit_id` must equal the fetched, validated, and finally rechecked
-`headRefOid`. GitHub does not provide a current-head compare-and-set for this
-mutation. If a new push lands after the final view, GitHub may accept a review
-bound to the inspected old commit; that is an old-head verdict, not a claim
-that the new head was reviewed. Report the reviewed commit accurately and let
-the synchronize event trigger a fresh run. Repository rulesets or branch
-protection decide whether old approvals satisfy a later head's merge gate; this
-skill does not configure or guarantee that policy. Never retry against an
-unreviewed head.
+`REVIEWED_HEAD` must equal the fetched, validated, and finally rechecked
+`headRefOid`. The command does not accept repository, pull request, chat, or
+GitHub credential arguments. Never call local `gh api .../reviews`, `gh pr
+review`, or another GitHub write as a fallback.
+
+GitHub does not provide a current-head compare-and-set for review creation. If
+a new push lands after the final view, Cloud may accept a review bound only to
+the inspected old commit; report that exact reviewed commit and let the
+synchronize event create a fresh run. Repository governance must dismiss stale
+approvals (or provide an equivalent current-head rule); this skill neither
+changes nor guarantees that policy.
+
+Permission upgrade, missing installation/repository access, stale head,
+invalid run/session, and unknown GitHub delivery all fail closed. Never retry
+an unknown delivery or switch to the local user credential. Cloud reconciles
+the hidden run marker before it can report a submitted review.
 
 Blocking findings may request changes on a draft. Never call `gh pr comment`
 or `gh pr review` for the same outcome and never submit more than one review in
@@ -170,7 +177,8 @@ a run.
 
 ### 6. Report completion
 
-In the reviewer chat, report the reviewed head SHA, the GitHub review action
-actually submitted, and any human or independent-review follow-up. If no review
+In the reviewer chat, report the reviewed head SHA, the App actor, review id,
+and GitHub review action actually returned by the submit command, plus any human
+follow-up. If no review
 was submitted because the head was stale or execution failed, say so plainly;
 do not claim that the pull request passed.

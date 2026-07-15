@@ -13,6 +13,7 @@ import postgres from "postgres";
 import { ZodError } from "zod";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
+import { agentContextReviewRunRoutes } from "./api/agent/context-review-runs.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
 import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
@@ -586,6 +587,7 @@ export async function buildApp(config: Config) {
         agentScope("agentRuntimeScope", async (scope) => {
           await scope.register(agentMeRoutes);
           await scope.register(agentChatRoutes, { prefix: "/chats" });
+          await scope.register(agentContextReviewRunRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);

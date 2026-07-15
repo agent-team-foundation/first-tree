@@ -131,7 +131,7 @@ async function seedInstallation(
     accountLogin: "owner",
     accountGithubId: 1000 + opts.installationId,
     hubOrganizationId: opts.orgId,
-    permissions: { contents: "read" },
+    permissions: { contents: "read", pull_requests: "write" },
     events: ["pull_request", "issues"],
     suspendedAt: opts.suspended ? new Date() : null,
   });

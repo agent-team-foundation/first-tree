@@ -51,6 +51,8 @@ export type CreateTaskChatInput = {
   onboardingKickoffKey?: string;
   beforeInitialMessage?: () => Promise<void>;
   initialMessage: SendMessage;
+  /** Trusted internal capability forwarded only for Context Reviewer bootstrap. */
+  allowContextReviewRun?: boolean;
   source: "agent" | "manual";
 } & LandingCampaignTrialCreateOptions;
 
@@ -383,7 +385,10 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     senderId: effectiveSenderId,
     senderType: effectiveSender.type,
     data: initialMessage,
-    options: { normalizeMentionsInContent: input.source === "agent" },
+    options: {
+      normalizeMentionsInContent: input.source === "agent",
+      allowContextReviewRun: input.allowContextReviewRun,
+    },
     participants: allSpeakerRows.map(toSendIntentParticipant),
   });
 
@@ -460,6 +465,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
       const sent = await sendMessage(tx as unknown as Database, activeChat.id, effectiveSenderId, initialMessage, {
         deferPostCommitEffects: true,
         normalizeMentionsInContent: input.source === "agent",
+        allowContextReviewRun: input.allowContextReviewRun,
       });
       if (!sent.deferredPostCommitEffects) {
         throw new Error("Keyed task-chat bootstrap did not return deferred post-commit effects");
@@ -518,6 +524,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
 
   const { message, recipients } = await sendMessage(db, chatId, effectiveSenderId, initialMessage, {
     normalizeMentionsInContent: input.source === "agent",
+    allowContextReviewRun: input.allowContextReviewRun,
   });
   const participants = await db
     .select()

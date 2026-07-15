@@ -4,7 +4,7 @@ import type { ContextTreeReviewEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "context-tree-review-static-coverage";
 const prompt =
-  "Use context-tree-review to review pull request owner/context-tree#42. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42`, run validation only with that worktree as the current directory, and make every semantic file read explicitly resolve through that registered worktree path. Use `gh api` only for the exact identity lookup and commit-bound review submission required by the skill. Submit the single correct GitHub PR review outcome.";
+  "Use context-tree-review to review pull request owner/context-tree#42 for server-authored Context review run 01900000-0000-7000-8000-000000000042. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42`, run validation only with that worktree as the current directory, and make every semantic file read explicitly resolve through that registered worktree path. Submit the single correct outcome only through `first-tree github context-review submit`.";
 
 export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[] = [
   {
@@ -95,23 +95,6 @@ export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[
     skill: "context-tree-review",
     status: "implemented",
     tags: ["human-authority"],
-    tier: "gate",
-  },
-  {
-    id: "self-approval-defers",
-    fixture: { scenario: "self-approval" },
-    expected: {
-      action: "comment",
-      bodyHints: ["author", "independent"],
-      firstHeading: "## Independent approval required",
-      verifyMustPass: true,
-    },
-    prompt,
-    briefingMode: "minimal",
-    provider: "codex",
-    skill: "context-tree-review",
-    status: "implemented",
-    tags: ["self-approval"],
     tier: "gate",
   },
   {

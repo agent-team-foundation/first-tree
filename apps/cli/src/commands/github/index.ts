@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { registerGithubContextReviewCommand } from "./context-review.js";
 import { registerGithubFollowCommand } from "./follow.js";
 import { registerGithubFollowingCommand } from "./following.js";
 import { registerGithubUnfollowCommand } from "./unfollow.js";
@@ -11,6 +12,7 @@ export function registerGithubCommands(program: Command): void {
         "into the current chat; unfollow explicitly stops this chat from tracking the entity. One line, one room: a " +
         "(human, delegate) line lives in exactly one chat (409 → --rebind moves it, never duplicates).",
     );
+  registerGithubContextReviewCommand(github);
   registerGithubFollowCommand(github);
   registerGithubUnfollowCommand(github);
   registerGithubFollowingCommand(github);

@@ -8,7 +8,6 @@ export type ReviewScenario =
   | "authority"
   | "draft"
   | "passing"
-  | "self-approval"
   | "semantic-failure"
   | "stale-head"
   | "submission-race"
@@ -46,6 +45,7 @@ export type ReviewEvent = {
   eventIndex: number;
   prNumber: number;
   repo: string;
+  runId: string;
 };
 
 export type ReviewFixtureExpectation = {
@@ -57,6 +57,7 @@ export type ReviewFixtureExpectation = {
   headOid: string;
   prNumber: number;
   repo: string;
+  runId: string;
   submissionHeadOid: string;
   workspacePath: string;
 };
