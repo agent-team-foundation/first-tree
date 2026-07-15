@@ -35,6 +35,7 @@ import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
 import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
+import { scanCampaignExportRoutes } from "./api/internal/scan-campaign-exports.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { landingCampaignRoutes } from "./api/landing-campaigns.js";
 import { meRoutes } from "./api/me.js";
@@ -530,6 +531,13 @@ export async function buildApp(config: Config) {
           await scope.register(attachmentRoutes);
         }),
         { prefix: "/attachments" },
+      );
+
+      await api.register(
+        userScope("internalAnalyticsScope", async (scope) => {
+          await scope.register(scanCampaignExportRoutes, { prefix: "/analytics/scan-campaign-exports" });
+        }),
+        { prefix: "/internal" },
       );
 
       // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────
