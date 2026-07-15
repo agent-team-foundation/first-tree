@@ -4,11 +4,12 @@ import {
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
 } from "@first-tree/shared";
+import { redactCredentialText } from "@first-tree/shared/observability";
 import { and, asc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agents, chatMembership, chats, members, messages } from "../../db/schema/index.js";
-import { NotFoundError } from "../../errors.js";
+import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireUser } from "../../scope/require-user.js";
 
 const scanCampaignExportRequestSchema = z
@@ -32,70 +33,61 @@ type ExportFileName = "manifest.json" | "trials.ndjson" | "summaries.ndjson" | "
 
 type ExportRecord = {
   exportId: string;
-  createdByUserId: string;
   createdAt: string;
   status: "completed";
   manifest: Record<string, unknown>;
   files: Partial<Record<ExportFileName, string>>;
 };
 
-const MAX_STORED_EXPORTS = 50;
-const exportStore = new Map<string, ExportRecord>();
+const MAX_AGENT_ROWS = 5_000;
+const MAX_CHAT_ROWS = 10_000;
+const MAX_MESSAGE_ROWS = 50_000;
+const MAX_EXPORT_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Internal landing-campaign analytics authorization class.
+ *
+ * `/internal` is only a route namespace; it is not an authorization boundary.
+ * This export is cross-tenant because trial agents live in customer
+ * organizations, so each request must prove current active membership in the
+ * configured landing-campaign service organization. Any role in that trusted
+ * service org is intentionally sufficient, and the query remains constrained
+ * to the configured official client plus valid landing-campaign trial metadata.
+ */
 export async function scanCampaignExportRoutes(app: FastifyInstance): Promise<void> {
   app.post("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const { userId } = requireUser(request);
     const body = scanCampaignExportRequestSchema.parse(request.body);
-    const record = await buildScanCampaignExport(app, userId, body);
-    rememberExport(record);
-    return reply.status(201).send(serializeExport(record, false));
-  });
-
-  app.get<{ Params: { exportId: string } }>("/:exportId", async (request) => {
-    const { userId } = requireUser(request);
-    const record = requireOwnedExport(request.params.exportId, userId);
-    return serializeExport(record, false);
-  });
-
-  app.get<{ Params: { exportId: string } }>("/:exportId/download", async (request) => {
-    const { userId } = requireUser(request);
-    const record = requireOwnedExport(request.params.exportId, userId);
-    return serializeExport(record, true);
+    const officialClientId = await requireInternalAnalyticsAccess(app, userId);
+    if (body.clientId !== officialClientId) {
+      throw new ForbiddenError("Scan campaign exports are restricted to the configured landing campaign client.");
+    }
+    const record = await buildScanCampaignExport(app, body);
+    return reply.status(200).send(record);
   });
 }
 
-function requireOwnedExport(exportId: string, userId: string): ExportRecord {
-  const record = exportStore.get(exportId);
-  if (!record || record.createdByUserId !== userId) {
-    throw new NotFoundError("Scan campaign export not found");
+async function requireInternalAnalyticsAccess(app: FastifyInstance, userId: string): Promise<string> {
+  const serviceConfig = app.config.growth.landingCampaigns;
+  const serviceOrgId = serviceConfig?.serviceOrgId;
+  const officialClientId = serviceConfig?.clientId;
+  if (!serviceOrgId || !officialClientId) {
+    throw new ForbiddenError("Landing campaign internal analytics is not configured.");
   }
-  return record;
-}
 
-function rememberExport(record: ExportRecord): void {
-  exportStore.set(record.exportId, record);
-  while (exportStore.size > MAX_STORED_EXPORTS) {
-    const oldest = exportStore.keys().next().value;
-    if (!oldest) return;
-    exportStore.delete(oldest);
+  const [membership] = await app.db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.userId, userId), eq(members.organizationId, serviceOrgId), eq(members.status, "active")))
+    .limit(1);
+  if (!membership) {
+    throw new ForbiddenError("Landing campaign internal analytics requires active service organization membership.");
   }
+
+  return officialClientId;
 }
 
-function serializeExport(record: ExportRecord, includeFiles: boolean) {
-  return {
-    exportId: record.exportId,
-    status: record.status,
-    createdAt: record.createdAt,
-    manifest: record.manifest,
-    ...(includeFiles ? { files: record.files } : {}),
-  };
-}
-
-async function buildScanCampaignExport(
-  app: FastifyInstance,
-  userId: string,
-  input: ScanCampaignExportRequest,
-): Promise<ExportRecord> {
+async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaignExportRequest): Promise<ExportRecord> {
   const exportId = randomUUID();
   const createdAt = new Date().toISOString();
 
@@ -122,29 +114,13 @@ async function buildScanCampaignExport(
         sql`${agents.metadata}->>'campaign' = ${input.campaign}`,
       ),
     )
-    .orderBy(asc(agents.createdAt), asc(agents.uuid));
+    .orderBy(asc(agents.createdAt), asc(agents.uuid))
+    .limit(MAX_AGENT_ROWS + 1);
 
-  const orgIds = [...new Set(candidateAgents.map((agent) => agent.organizationId))];
-  const adminOrgIds =
-    orgIds.length === 0
-      ? new Set<string>()
-      : new Set(
-          (
-            await app.db
-              .select({ organizationId: members.organizationId })
-              .from(members)
-              .where(
-                and(
-                  eq(members.userId, userId),
-                  eq(members.role, "admin"),
-                  eq(members.status, "active"),
-                  inArray(members.organizationId, orgIds),
-                ),
-              )
-          ).map((member) => member.organizationId),
-        );
-
-  const visibleAgents = candidateAgents.filter((agent) => adminOrgIds.has(agent.organizationId));
+  assertRowLimit(candidateAgents, MAX_AGENT_ROWS, "trial agents");
+  const visibleAgents = candidateAgents
+    .slice(0, MAX_AGENT_ROWS)
+    .filter((agent) => parseLandingCampaignTrialAgentMetadata(agent.metadata)?.campaign === input.campaign);
   const visibleAgentIds = visibleAgents.map((agent) => agent.uuid);
   const agentById = new Map(visibleAgents.map((agent) => [agent.uuid, agent]));
   const agentIds = new Set(visibleAgentIds);
@@ -168,12 +144,17 @@ async function buildScanCampaignExport(
           .where(
             and(
               inArray(chatMembership.agentId, visibleAgentIds),
+              eq(chatMembership.accessMode, "speaker"),
               sql`${chats.metadata}->'landingCampaignTrial'->>'campaign' = ${input.campaign}`,
+              sql`${chats.metadata}->'landingCampaignTrial'->>'agentId' = ${chatMembership.agentId}`,
               input.from ? gte(chats.createdAt, input.from) : undefined,
               input.to ? lte(chats.createdAt, input.to) : undefined,
             ),
           )
-          .orderBy(asc(chats.createdAt), asc(chats.id));
+          .orderBy(asc(chats.createdAt), asc(chats.id))
+          .limit(MAX_CHAT_ROWS + 1);
+
+  assertRowLimit(chatRows, MAX_CHAT_ROWS, "trial chats");
 
   const chatById = new Map<string, (typeof chatRows)[number]>();
   for (const row of chatRows) {
@@ -183,7 +164,7 @@ async function buildScanCampaignExport(
   const chatIds = visibleChats.map((chat) => chat.chatId);
 
   const messageRows =
-    input.includeMessages && chatIds.length > 0
+    chatIds.length > 0
       ? await app.db
           .select({
             id: messages.id,
@@ -198,8 +179,10 @@ async function buildScanCampaignExport(
           .from(messages)
           .where(inArray(messages.chatId, chatIds))
           .orderBy(asc(messages.chatId), asc(messages.createdAt), asc(messages.id))
+          .limit(MAX_MESSAGE_ROWS + 1)
       : [];
 
+  assertRowLimit(messageRows, MAX_MESSAGE_ROWS, "trial messages");
   const messagesByChat = new Map<string, typeof messageRows>();
   for (const message of messageRows) {
     const existing = messagesByChat.get(message.chatId);
@@ -257,7 +240,11 @@ async function buildScanCampaignExport(
       totalMessageCount: rows.length,
       firstHumanMessageAt: counted.firstHumanMessageAt?.toISOString() ?? null,
       firstHumanResponseSeconds: counted.firstHumanResponseSeconds,
-      hasLikelyReportLink: rows.some((message) => contentToText(message.content).includes("http")),
+      hasLikelyReportLink: rows.some(
+        (message) =>
+          classifySender(message.senderId, message.source, message.metadata, agentIds) === "agent" &&
+          /https?:\/\/\S+/i.test(contentToText(message.content)),
+      ),
       createdAt: chat.createdAt.toISOString(),
       lastMessageAt: lastMessageAt?.toISOString() ?? null,
       durationSeconds: lastMessageAt ? secondsBetween(chat.createdAt, lastMessageAt) : null,
@@ -299,13 +286,13 @@ async function buildScanCampaignExport(
     },
     authorization: {
       model: "caller must be active admin in each exported agent organization",
-      requestedAgentCount: candidateAgents.length,
       exportedAgentCount: visibleAgents.length,
     },
     counts: {
       trials: trialRows.length,
       chats: summaryRows.length,
-      messages: messageExportRows.length,
+      messages: messageRows.length,
+      exportedMessages: messageExportRows.length,
     },
     files: [
       "manifest.json",
@@ -315,18 +302,20 @@ async function buildScanCampaignExport(
     ],
   };
 
+  const files = {
+    "manifest.json": `${JSON.stringify(manifest, null, 2)}\n`,
+    "trials.ndjson": toNdjson(trialRows),
+    "summaries.ndjson": toNdjson(summaryRows),
+    ...(input.includeMessages ? { "messages.ndjson": toNdjson(messageExportRows) } : {}),
+  };
+  assertExportByteLimit(files);
+
   return {
     exportId,
-    createdByUserId: userId,
     createdAt,
     status: "completed",
     manifest,
-    files: {
-      "manifest.json": `${JSON.stringify(manifest, null, 2)}\n`,
-      "trials.ndjson": toNdjson(trialRows),
-      "summaries.ndjson": toNdjson(summaryRows),
-      ...(input.includeMessages ? { "messages.ndjson": toNdjson(messageExportRows) } : {}),
-    },
+    files,
   };
 }
 
@@ -359,6 +348,19 @@ function summarizeMessages(
   };
 }
 
+function assertRowLimit(rows: unknown[], maxRows: number, label: string): void {
+  if (rows.length <= maxRows) return;
+  throw new BadRequestError(`Scan campaign export matched more than ${maxRows} ${label}; narrow the date range.`);
+}
+
+function assertExportByteLimit(files: Partial<Record<ExportFileName, string>>): void {
+  const totalBytes = Object.values(files).reduce((sum, content) => sum + Buffer.byteLength(content ?? "", "utf8"), 0);
+  if (totalBytes <= MAX_EXPORT_BYTES) return;
+  throw new BadRequestError(
+    `Scan campaign export is larger than ${MAX_EXPORT_BYTES} bytes; disable messages or narrow the date range.`,
+  );
+}
+
 function classifySender(
   senderId: string,
   source: string,
@@ -366,7 +368,7 @@ function classifySender(
   trialAgentIds: Set<string>,
 ): "agent" | "human_or_other" | "system" {
   if (trialAgentIds.has(senderId)) return "agent";
-  if (source === "system" || metadata.system === true) return "system";
+  if (source === "system" || metadata.system === true || typeof metadata.systemSender === "string") return "system";
   return "human_or_other";
 }
 
@@ -426,11 +428,5 @@ function isSensitiveKey(key: string): boolean {
 }
 
 function redactString(value: string): string {
-  return value
-    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED_OPENAI_KEY]")
-    .replace(
-      /((?:api[_-]?key|token|secret|password|authorization|credential)\s*[:=]\s*)("[^"]+"|'[^']+'|[^\s,}]+)/gi,
-      "$1[REDACTED]",
-    );
+  return redactCredentialText(value);
 }
