@@ -41,7 +41,7 @@ beforeEach(async () => {
     reviewedHead: "a".repeat(40),
     reviewId: 42,
     reviewUrl: "https://github.com/owner/repo/pull/42#pullrequestreview-42",
-    appActor: "first-tree-hub-staging[bot]",
+    appActor: "first-tree-staging[bot]",
   });
 });
 
@@ -82,7 +82,7 @@ describe("github context-review submit", () => {
       body: "## Context approved\n",
     });
     expect(outputMocks.success).toHaveBeenCalledWith(
-      expect.objectContaining({ appActor: "first-tree-hub-staging[bot]" }),
+      expect.objectContaining({ appActor: "first-tree-staging[bot]" }),
     );
   });
 
