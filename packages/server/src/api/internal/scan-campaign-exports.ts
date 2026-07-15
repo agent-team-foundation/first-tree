@@ -8,9 +8,11 @@ import { redactCredentialText } from "@first-tree/shared/observability";
 import { and, asc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import type { Database } from "../../db/connection.js";
 import { agents, chatMembership, chats, members, messages } from "../../db/schema/index.js";
 import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireUser } from "../../scope/require-user.js";
+import { assertOfficialLandingCampaignClient } from "../../services/landing-campaigns/guards.js";
 
 const scanCampaignExportRequestSchema = z
   .object({
@@ -70,11 +72,13 @@ export async function scanCampaignExportRoutes(app: FastifyInstance): Promise<vo
 
 async function requireInternalAnalyticsAccess(app: FastifyInstance, userId: string): Promise<string> {
   const serviceConfig = app.config.growth.landingCampaigns;
+  const serviceUserId = serviceConfig?.serviceUserId;
   const serviceOrgId = serviceConfig?.serviceOrgId;
   const officialClientId = serviceConfig?.clientId;
-  if (!serviceOrgId || !officialClientId) {
+  if (!serviceUserId || !serviceOrgId || !officialClientId) {
     throw new ForbiddenError("Landing campaign internal analytics is not configured.");
   }
+  await assertOfficialLandingCampaignClient(app.db, officialClientId, serviceUserId, serviceOrgId);
 
   const [membership] = await app.db
     .select({ id: members.id })
@@ -89,10 +93,17 @@ async function requireInternalAnalyticsAccess(app: FastifyInstance, userId: stri
 }
 
 async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaignExportRequest): Promise<ExportRecord> {
+  return app.db.transaction(async (tx) => {
+    await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`);
+    return buildScanCampaignExportFromDb(tx as unknown as Database, input);
+  });
+}
+
+async function buildScanCampaignExportFromDb(db: Database, input: ScanCampaignExportRequest): Promise<ExportRecord> {
   const exportId = randomUUID();
   const createdAt = new Date().toISOString();
 
-  const candidateAgents = await app.db
+  const candidateAgents = await db
     .select({
       uuid: agents.uuid,
       name: agents.name,
@@ -129,7 +140,7 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
   const chatRows =
     visibleAgentIds.length === 0
       ? []
-      : await app.db
+      : await db
           .select({
             chatId: chats.id,
             organizationId: chats.organizationId,
@@ -174,15 +185,15 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
 
   const messageMetadataRows =
     chatIds.length > 0
-      ? await app.db
+      ? await db
           .select({
             id: messages.id,
             chatId: messages.chatId,
             senderId: messages.senderId,
             format: messages.format,
-            metadata: messages.metadata,
             source: messages.source,
             createdAt: messages.createdAt,
+            metadataBytes: sql<number>`octet_length(${messages.metadata}::text)::int`,
             contentBytes: sql<number>`octet_length(${messages.content}::text)::int`,
           })
           .from(messages)
@@ -199,17 +210,18 @@ async function buildScanCampaignExport(app: FastifyInstance, input: ScanCampaign
     messageIds.length > 0
       ? new Map(
           (
-            await app.db
-              .select({ id: messages.id, content: messages.content })
+            await db
+              .select({ id: messages.id, metadata: messages.metadata, content: messages.content })
               .from(messages)
               .where(inArray(messages.id, messageIds))
-          ).map((message) => [message.id, message.content]),
+          ).map((message) => [message.id, { metadata: message.metadata, content: message.content }]),
         )
-      : new Map<string, unknown>();
+      : new Map<string, { metadata: Record<string, unknown>; content: unknown }>();
 
   const messageRows = messageMetadataRows.map((message) => ({
     ...message,
-    content: contentByMessageId.get(message.id) ?? null,
+    metadata: contentByMessageId.get(message.id)?.metadata ?? {},
+    content: contentByMessageId.get(message.id)?.content ?? null,
   }));
 
   const messagesByChat = new Map<string, typeof messageRows>();
@@ -379,11 +391,11 @@ function assertRowLimit(rows: unknown[], maxRows: number, label: string): void {
   throw new BadRequestError(`Scan campaign export matched more than ${maxRows} ${label}; narrow the date range.`);
 }
 
-function assertContentByteLimit(rows: Array<{ contentBytes: number }>): void {
-  const totalBytes = rows.reduce((sum, row) => sum + Number(row.contentBytes ?? 0), 0);
+function assertContentByteLimit(rows: Array<{ metadataBytes: number; contentBytes: number }>): void {
+  const totalBytes = rows.reduce((sum, row) => sum + Number(row.metadataBytes ?? 0) + Number(row.contentBytes ?? 0), 0);
   if (totalBytes <= MAX_MESSAGE_CONTENT_BYTES) return;
   throw new BadRequestError(
-    `Scan campaign export message content is larger than ${MAX_MESSAGE_CONTENT_BYTES} bytes; narrow the date range.`,
+    `Scan campaign export message content and metadata are larger than ${MAX_MESSAGE_CONTENT_BYTES} bytes; narrow the date range.`,
   );
 }
 
@@ -407,7 +419,11 @@ function hasLikelyReportLink(
 }
 
 function extractUrls(text: string): string[] {
-  return text.match(/https?:\/\/[^\s)"'<>]+/gi) ?? [];
+  return (text.match(/https?:\/\/[^\s)"'<>]+/gi) ?? []).map(stripTerminalUrlPunctuation);
+}
+
+function stripTerminalUrlPunctuation(url: string): string {
+  return url.replace(/[.,;:!?]+$/g, "");
 }
 
 function isTrialRepoUrl(url: string, repo: { url: string; canonicalKey: string } | null): boolean {

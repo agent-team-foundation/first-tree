@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
-import { agents, chatMembership, chats, clients, members, messages, organizations } from "../db/schema/index.js";
+import { agents, chatMembership, chats, clients, members, messages, organizations, users } from "../db/schema/index.js";
 import { createAgent } from "../services/agent.js";
 import {
   buildLandingCampaignAgentMetadata,
@@ -9,7 +9,7 @@ import {
 } from "../services/landing-campaigns/metadata.js";
 import { createMeChat } from "../services/me-chat.js";
 import { uuidv7 } from "../uuid.js";
-import { createAdminContext, createTestApp, useTestApp } from "./helpers.js";
+import { createAdminContext, createTestApp, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
 const EXPORT_URL = "/api/v1/internal/analytics/scan-campaign-exports";
 const SERVICE_ORG_ID = "scan-export-service-org";
@@ -24,6 +24,15 @@ describe("scan campaign export routes", () => {
   });
 
   async function ensureServiceOrg(app: FastifyInstance) {
+    await app.db
+      .insert(users)
+      .values({
+        id: SERVICE_USER_ID,
+        username: SERVICE_USER_ID,
+        passwordHash: INVALID_BCRYPT_PLACEHOLDER,
+        displayName: "Scan Export Service User",
+      })
+      .onConflictDoNothing();
     await app.db
       .insert(organizations)
       .values({ id: SERVICE_ORG_ID, name: SERVICE_ORG_ID, displayName: "Scan Export Service" })
@@ -58,13 +67,14 @@ describe("scan campaign export routes", () => {
     });
   }
 
-  async function ensureOfficialClient(app: FastifyInstance, owner: { userId: string; organizationId: string }) {
+  async function ensureOfficialClient(app: FastifyInstance) {
+    await ensureServiceOrg(app);
     await app.db
       .insert(clients)
       .values({
         id: OFFICIAL_CLIENT_ID,
-        userId: owner.userId,
-        organizationId: owner.organizationId,
+        userId: SERVICE_USER_ID,
+        organizationId: SERVICE_ORG_ID,
         status: "connected",
       })
       .onConflictDoNothing();
@@ -83,7 +93,7 @@ describe("scan campaign export routes", () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     await addServiceOrgMembership(app, admin.userId);
-    await ensureOfficialClient(app, admin);
+    await ensureOfficialClient(app);
     const agentName = opts.agentName ?? `production-scanner-${crypto.randomUUID().slice(0, 8)}`;
     const agent = await createAgent(app.db, {
       name: agentName,
@@ -334,7 +344,7 @@ describe("scan campaign export routes", () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     await addServiceOrgMembership(app, admin.userId, "member");
-    await ensureOfficialClient(app, admin);
+    await ensureOfficialClient(app);
     const { agentName } = await seedTrialHistory();
 
     const create = await app.inject({
@@ -396,7 +406,7 @@ describe("scan campaign export routes", () => {
 
   it("does not treat user repository URLs as agent report links", async () => {
     const { app, admin, agentName } = await seedTrialHistory({
-      agentContent: "I am scanning https://github.com/acme/api now.",
+      agentContent: "I am scanning https://github.com/acme/api, then checking https://github.com/acme/api.",
     });
 
     const create = await app.inject({
@@ -489,6 +499,128 @@ describe("scan campaign export configuration guard", () => {
         payload: { clientId: OFFICIAL_CLIENT_ID, agentName: "production-scanner", campaign: "production-scan" },
       });
       expect(denied.statusCode).toBe(403);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when the configured official client is owned by the wrong user", async () => {
+    const app = await createTestApp({
+      landingCampaignServiceUserId: SERVICE_USER_ID,
+      landingCampaignServiceOrgId: SERVICE_ORG_ID,
+      landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    });
+    try {
+      const admin = await createAdminContext(app);
+      await app.db
+        .insert(users)
+        .values({
+          id: SERVICE_USER_ID,
+          username: SERVICE_USER_ID,
+          passwordHash: INVALID_BCRYPT_PLACEHOLDER,
+          displayName: "Scan Export Service User",
+        })
+        .onConflictDoNothing();
+      await app.db
+        .insert(organizations)
+        .values({ id: SERVICE_ORG_ID, name: SERVICE_ORG_ID, displayName: "Scan Export Service" })
+        .onConflictDoNothing();
+      const memberId = uuidv7();
+      await app.db.transaction(async (tx) => {
+        const serviceHuman = await createAgent(tx as unknown as typeof app.db, {
+          name: `scan-export-wrong-client-owner-${crypto.randomUUID().slice(0, 8)}`,
+          type: "human",
+          displayName: "Wrong Client Owner Service Member",
+          source: "admin-api",
+          managerId: memberId,
+          organizationId: SERVICE_ORG_ID,
+        });
+        await tx.insert(members).values({
+          id: memberId,
+          userId: admin.userId,
+          organizationId: SERVICE_ORG_ID,
+          agentId: serviceHuman.uuid,
+          role: "admin",
+          status: "active",
+        });
+      });
+      await app.db.insert(clients).values({
+        id: OFFICIAL_CLIENT_ID,
+        userId: admin.userId,
+        organizationId: SERVICE_ORG_ID,
+        status: "connected",
+      });
+
+      const denied = await app.inject({
+        method: "POST",
+        url: EXPORT_URL,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { clientId: OFFICIAL_CLIENT_ID, agentName: "production-scanner", campaign: "production-scan" },
+      });
+      expect(denied.statusCode).toBe(503);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when the configured official client belongs to the wrong organization", async () => {
+    const app = await createTestApp({
+      landingCampaignServiceUserId: SERVICE_USER_ID,
+      landingCampaignServiceOrgId: SERVICE_ORG_ID,
+      landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    });
+    try {
+      const admin = await createAdminContext(app);
+      const wrongOrgId = `scan-export-wrong-client-org-${crypto.randomUUID().slice(0, 8)}`;
+      await app.db
+        .insert(users)
+        .values({
+          id: SERVICE_USER_ID,
+          username: SERVICE_USER_ID,
+          passwordHash: INVALID_BCRYPT_PLACEHOLDER,
+          displayName: "Scan Export Service User",
+        })
+        .onConflictDoNothing();
+      await app.db
+        .insert(organizations)
+        .values([
+          { id: SERVICE_ORG_ID, name: SERVICE_ORG_ID, displayName: "Scan Export Service" },
+          { id: wrongOrgId, name: wrongOrgId, displayName: "Wrong Client Org" },
+        ])
+        .onConflictDoNothing();
+      const memberId = uuidv7();
+      await app.db.transaction(async (tx) => {
+        const serviceHuman = await createAgent(tx as unknown as typeof app.db, {
+          name: `scan-export-wrong-client-org-${crypto.randomUUID().slice(0, 8)}`,
+          type: "human",
+          displayName: "Wrong Client Org Service Member",
+          source: "admin-api",
+          managerId: memberId,
+          organizationId: SERVICE_ORG_ID,
+        });
+        await tx.insert(members).values({
+          id: memberId,
+          userId: admin.userId,
+          organizationId: SERVICE_ORG_ID,
+          agentId: serviceHuman.uuid,
+          role: "admin",
+          status: "active",
+        });
+      });
+      await app.db.insert(clients).values({
+        id: OFFICIAL_CLIENT_ID,
+        userId: SERVICE_USER_ID,
+        organizationId: wrongOrgId,
+        status: "connected",
+      });
+
+      const denied = await app.inject({
+        method: "POST",
+        url: EXPORT_URL,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { clientId: OFFICIAL_CLIENT_ID, agentName: "production-scanner", campaign: "production-scan" },
+      });
+      expect(denied.statusCode).toBe(503);
     } finally {
       await app.close();
     }

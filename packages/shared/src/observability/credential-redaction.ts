@@ -5,7 +5,7 @@ const SENSITIVE_ASSIGNMENT_KEYS =
 const SENSITIVE_KEY = `"?(?:${SENSITIVE_ASSIGNMENT_KEYS})"?`;
 const ASSIGNMENT_VALUE = `"[^"]*"|'[^']*'|[^\\s,'"}&]+`;
 const AUTHORIZATION_KEY = `"?authorization"?`;
-const AUTHORIZATION_VALUE = `"[^"]*"|'[^']*'|[A-Za-z][A-Za-z0-9_-]*\\s+[^\\s,'"}]+|[^\\s,'"}]+`;
+const AUTHORIZATION_VALUE = `"[^"]*"|'[^']*'|[^\\r\\n]+`;
 
 const PRIVATE_KEY_BLOCK_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
 const AUTHORIZATION_ASSIGNMENT_RE = new RegExp(`(${AUTHORIZATION_KEY}\\s*[:=]\\s*)(${AUTHORIZATION_VALUE})`, "gi");
@@ -25,11 +25,11 @@ export function redactCredentialText(value: string): string {
     .replace(AUTHORIZATION_ASSIGNMENT_RE, (_match, prefix: string, assignedValue: string) => {
       return `${prefix}${redactedAssignmentValue(assignedValue)}`;
     })
-    .replace(SENSITIVE_ASSIGNMENT_RE, (_match, prefix: string, _key: string, assignedValue: string) => {
+    .replace(SENSITIVE_ASSIGNMENT_RE, (_match, prefix: string, assignedValue: string) => {
       return `${prefix}${redactedAssignmentValue(assignedValue)}`;
     })
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, "$1[REDACTED]@")
     .replace(
       /([?&](?:token|access_token|accessToken|refresh_token|refreshToken|jwt|password|secret|api_key|apiKey|credentials|authorization)=)[^&#\s]+/g,
       "$1[REDACTED]",
@@ -46,6 +46,10 @@ function redactedAssignmentValue(value: string): string {
   const quote = value[0];
   if ((quote === `"` || quote === `'`) && value.endsWith(quote)) {
     return `${quote}${REDACTED}${quote}`;
+  }
+  const trailing = value.at(-1);
+  if ((trailing === `"` || trailing === `'`) && !value.slice(0, -1).includes(trailing)) {
+    return `${REDACTED}${trailing}`;
   }
   return REDACTED;
 }

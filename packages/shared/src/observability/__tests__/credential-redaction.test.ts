@@ -5,6 +5,12 @@ describe("redactCredentialText", () => {
   it("redacts authorization headers and bare bearer tokens without truncation leaks", () => {
     expect(redactCredentialText("Authorization: Bearer abcdefghijkl")).toBe("Authorization: [REDACTED]");
     expect(redactCredentialText("Authorization: Basic YWxhZGRpbjpvcGVuc2VzYW1l")).toBe("Authorization: [REDACTED]");
+    expect(
+      redactCredentialText("Authorization: AWS4-HMAC-SHA256 Credential=abc, SignedHeaders=host, Signature=live-secret"),
+    ).toBe("Authorization: [REDACTED]");
+    expect(redactCredentialText('Authorization: Digest username="mufasa", realm="test", response="secret"')).toBe(
+      "Authorization: [REDACTED]",
+    );
     expect(redactCredentialText('"Authorization": "Basic YWxhZGRpbjpvcGVuc2VzYW1l"')).toBe(
       '"Authorization": "[REDACTED]"',
     );
@@ -18,6 +24,8 @@ describe("redactCredentialText", () => {
     expect(redactCredentialText("https://user:pass@example.com/repo.git")).toBe(
       "https://[REDACTED]@example.com/repo.git",
     );
+    expect(redactCredentialText("https://token@example.com/repo.git")).toBe("https://[REDACTED]@example.com/repo.git");
+    expect(redactCredentialText("https://:pass@example.com/repo.git")).toBe("https://[REDACTED]@example.com/repo.git");
     expect(redactCredentialText("https://example.com/callback?token=abc123&safe=1")).toBe(
       "https://example.com/callback?token=[REDACTED]&safe=1",
     );
