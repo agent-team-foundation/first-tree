@@ -52,6 +52,7 @@ vi.mock("../../../lib/visibility-interval.js", () => ({
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
+const STAGING_CLIENT_VERSION = "0.5.14-staging.841.1";
 const STAGING_INSTALLER_URL = "https://download.first-tree.ai/releases/staging/install.sh";
 const stagingBootstrapCommand = (token: string): string =>
   `curl -fsSL ${STAGING_INSTALLER_URL} | sh\n~/.local/bin/first-tree-staging login ${token}`;
@@ -166,6 +167,7 @@ const TEAM = client({
   userId: "user-alice",
   hostname: "alice-linux",
   os: "linux",
+  sdkVersion: STAGING_CLIENT_VERSION,
   agentCount: 1,
 });
 // Connected + OK runtime (pill = Ready) but its self-update failed — must
@@ -489,6 +491,9 @@ describe("ClientsPage computer cards", () => {
       [...(teamTable?.querySelectorAll("tr.team-computer-row") ?? [])].find((tr) =>
         tr.querySelector('th[scope="row"]')?.textContent?.includes(hostname),
       );
+    const stagingRow = findRow("alice-linux");
+    expect(stagingRow?.querySelector(".team-computer-row__col-ver")?.textContent).toBe(STAGING_CLIENT_VERSION);
+    expect(stagingRow?.querySelector(".team-computer-row__meta")?.textContent).toContain(STAGING_CLIENT_VERSION);
     expect(findRow("diana-box")?.querySelector(".team-computer-row__col-owner")?.getAttribute("title")).toBe(
       LONG_OWNER_NAME,
     );
