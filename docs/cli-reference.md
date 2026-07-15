@@ -889,16 +889,18 @@ by default (that needs the interactive `workflow` gh scope); pass `--with-workfl
 to include it. In the bound path the repo is created under the team's GitHub App
 installation account (so the installation can cover it), and any explicit `--owner`
 is canonicalized before the remote create so case-variant input does not fail after
-GitHub has already accepted the repository. `tree init` refuses to replace an
-existing team binding unless `--rebind` is passed. Non-rebind finalization is
-conflict-safe: if another writer binds the org after preflight but before the
-local GitHub side effects finish, the server preserves that competing binding and
-`tree init` reports the conflict rather than overwriting it. A non-`--rebind`
-invocation requires a Server with the raw repair/finalize surface during
-preflight; older Servers fail before any GitHub repository is created. Key
-options: `--owner`, `--name`, `--title`, `--public`, `--dir`, `--with-workflow`,
-`--no-bind`, `--rebind`, `--org`. Run `first-tree tree init --help` for the full
-list.
+GitHub has already accepted the repository. If create succeeds but binding or
+finalization fails, the CLI says the repo was created but not bound, includes the
+repo URL, and tells you to delete it manually if it is empty; it does not auto-delete
+created repositories by default. `tree init` refuses to replace an existing team
+binding unless `--rebind` is passed. Non-rebind finalization is conflict-safe: if
+another writer binds the org after preflight but before the local GitHub side
+effects finish, the server preserves that competing binding and `tree init`
+reports the conflict rather than overwriting it. A non-`--rebind` invocation
+requires a Server with the raw repair/finalize surface during preflight; older
+Servers fail before any GitHub repository is created. Key options: `--owner`,
+`--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
+`--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
 
 Before any GitHub repository write, the bound path reads the admin-only raw
 Context Tree setting. An HTTP 404 from that endpoint identifies an older Server

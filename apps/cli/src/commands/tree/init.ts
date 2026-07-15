@@ -391,23 +391,23 @@ async function bindOrgToTree(args: {
   } catch {
     const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but the binding outcome is unknown for organization ${args.orgId} after a network or timeout failure. ${createdButNotBound} Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
+      `${createdButNotBound} Repo created and pushed, but the binding outcome is unknown for organization ${args.orgId} after a network or timeout failure. Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
   if (!res.ok) {
     if (!args.rebind && res.status === 409) {
       throw new Error(
-        `Repo created and pushed, but organization ${args.orgId}'s Context Tree setting changed before finalization (server returned 409). The competing setting was preserved; do not retry or overwrite it. ${createdButNotBound} at branch ${args.branch}. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree first.`,
+        `${createdButNotBound} Repo created and pushed, but organization ${args.orgId}'s Context Tree setting changed before finalization (server returned 409). The competing setting was preserved; do not retry or overwrite it at branch ${args.branch}. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree first.`,
       );
     }
     if (!args.rebind && res.status === 404) {
       throw new Error(
-        `Repo created and pushed, but this server does not support conflict-safe tree init finalization for organization ${args.orgId}. No binding was written. ${createdButNotBound} Upgrade the server, then read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before deciding how to bind repo ${args.repoUrl} at branch ${args.branch}.`,
+        `${createdButNotBound} This server does not support conflict-safe tree init finalization for organization ${args.orgId}. Upgrade the server, then read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before deciding how to bind repo ${args.repoUrl} at branch ${args.branch}.`,
       );
     }
     const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but binding failed (server returned ${res.status}) for organization ${args.orgId}. ${createdButNotBound} Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before any retry. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
+      `${createdButNotBound} Repo created and pushed, but binding failed (server returned ${res.status}) for organization ${args.orgId}. Read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree before any retry. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
   let body: unknown;
@@ -432,7 +432,7 @@ async function bindOrgToTree(args: {
   ) {
     const retry = explicitBindCommand(args.repoUrl, args.orgId, args.branch);
     throw new Error(
-      `Repo created and pushed, but the binding outcome is unknown because the server did not confirm the requested Context Tree binding for organization ${args.orgId}. ${createdButNotBound} Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
+      `${createdButNotBound} Repo created and pushed, but the binding outcome is unknown because the server did not confirm the requested Context Tree binding for organization ${args.orgId}. Do not retry the write until you read back /api/v1/orgs/${encodeURIComponent(args.orgId)}/settings/context_tree. The intended binding is repo ${args.repoUrl} at branch ${args.branch}. If that setting is still unbound and you intentionally want to bind it, run \`${retry}\`.`,
     );
   }
 }
