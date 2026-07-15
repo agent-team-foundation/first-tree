@@ -22,7 +22,7 @@ const routeMocks = {
   assertNoRuntimeSwitchInProgress: vi.fn(),
   getMeDocPreview: vi.fn(),
   getOrganization: vi.fn(),
-  getOrgContextTree: vi.fn(),
+  getOrgContextTreeBinding: vi.fn(),
   generateConnectToken: vi.fn(),
   ensureMembership: vi.fn(),
   findActiveByToken: vi.fn(),
@@ -116,7 +116,7 @@ function mockRouteDependencies(): void {
     kickoffOnboarding: vi.fn(async () => ({ chatId: "chat_1", sent: null })),
   }));
   vi.doMock("../services/org-settings.js", () => ({
-    getOrgContextTree: routeMocks.getOrgContextTree,
+    getOrgContextTreeBinding: routeMocks.getOrgContextTreeBinding,
   }));
   vi.doMock("../services/organization.js", () => ({
     getOrganization: routeMocks.getOrganization,
@@ -349,14 +349,14 @@ describe("small API route handlers", () => {
       configService: { getDecrypted: vi.fn().mockResolvedValue({ env: { A: "1" } }) },
       resourcesService: { resolveRuntimeConfig: vi.fn().mockReturnValue({ env: { A: "1" }, resources: [] }) },
     });
-    routeMocks.getOrgContextTree.mockResolvedValue({ branch: undefined, repo: "owner/tree" });
+    routeMocks.getOrgContextTreeBinding.mockResolvedValue({ branch: "main", repo: "owner/tree" });
 
     await agentConfigRoutes(app as never);
     await agentContextTreeInfoRoutes(app as never);
 
     await expect(route(routes, "GET", "/config").handler({})).resolves.toEqual({ env: { A: "1" }, resources: [] });
     await expect(route(routes, "GET", "/context-tree/info").handler({})).resolves.toEqual({
-      branch: null,
+      branch: "main",
       repo: "owner/tree",
     });
   });

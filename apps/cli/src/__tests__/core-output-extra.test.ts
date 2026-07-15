@@ -28,6 +28,15 @@ describe("core output helpers", () => {
     expect(stderr).toHaveBeenCalledWith('{"ok":false,"error":{"code":"BAD","message":"broken"}}\n');
     expect(process.exit).toHaveBeenCalledWith(7);
 
+    stderr.mockClear();
+    expect(() => print.fail("CONTEXT_TREE_UNREADABLE", "cannot read", 6, { status: "unreadable" })).toThrow(
+      "process.exit",
+    );
+    expect(stderr).toHaveBeenCalledWith(
+      '{"ok":false,"error":{"code":"CONTEXT_TREE_UNREADABLE","message":"cannot read","status":"unreadable"}}\n',
+    );
+    expect(process.exit).toHaveBeenLastCalledWith(6);
+
     status("Label", "ready");
     print.status("State", "ok");
     print.check(true, "Passing", "done");

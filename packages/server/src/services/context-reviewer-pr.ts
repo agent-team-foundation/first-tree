@@ -16,7 +16,7 @@ import { createLogger } from "../observability/index.js";
 import { createChat } from "./chat.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
-import { getOrgContextTree, getOrgSetting } from "./org-settings.js";
+import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
 import { applyMembershipWrite } from "./participant-mode.js";
 
 const log = createLogger("ContextReviewerPr");
@@ -206,8 +206,8 @@ export async function handleContextReviewerPrEvent(
     return { handled: false, reason: "malformed_payload" };
   }
 
-  const contextTree = await getOrgContextTree(app.db, input.organizationId);
-  const boundRepo = normalizeGithubRepo(contextTree.repo);
+  const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
+  const boundRepo = normalizeGithubRepo(contextTree?.repo);
   if (!boundRepo) {
     log.debug({ organizationId: input.organizationId }, "context reviewer skipped: context tree repo unset");
     return { handled: false, reason: "context_tree_repo_unset" };

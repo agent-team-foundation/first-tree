@@ -36,7 +36,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
 
   const snapshot = input.snapshot ?? unavailableSnapshot("mock snapshot");
   const resolveUserPrimaryOrgId = vi.fn().mockResolvedValue(input.orgId);
-  const getOrgContextTree = vi.fn().mockResolvedValue({
+  const getOrgContextTreeBinding = vi.fn().mockResolvedValue({
     repo: "https://github.com/acme/context-tree.git",
     branch: "main",
   });
@@ -71,7 +71,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
   vi.doMock("../scope/require-user.js", () => ({
     requireUser: () => ({ userId: "user-1" }),
   }));
-  vi.doMock("../services/org-settings.js", () => ({ getOrgContextTree, resolveUserPrimaryOrgId }));
+  vi.doMock("../services/org-settings.js", () => ({ getOrgContextTreeBinding, resolveUserPrimaryOrgId }));
   vi.doMock("../services/context-tree-snapshot.js", () => ({
     contextTreeSnapshotWindowDays: () => 7,
     getContextTreeSnapshot,
@@ -100,7 +100,7 @@ async function setupRoute(input: { orgId: string | null; githubRemote?: boolean;
       buildContextTreeIoSummary,
       findInstallationByOrg,
       getContextTreeSnapshot,
-      getOrgContextTree,
+      getOrgContextTreeBinding,
       isGithubRemoteBinding,
       mintContextTreeInstallationToken,
       resolveContextTreeRecoveryAction,
@@ -123,7 +123,7 @@ describe("context tree snapshot user route with mocked dependencies", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ snapshotStatus: "unavailable", recoveryAction: null });
-    expect(ctx.mocks.getOrgContextTree).not.toHaveBeenCalled();
+    expect(ctx.mocks.getOrgContextTreeBinding).not.toHaveBeenCalled();
     expect(ctx.mocks.findInstallationByOrg).not.toHaveBeenCalled();
     expect(ctx.mocks.summarizeContextTreeUsage).not.toHaveBeenCalled();
     expect(ctx.mocks.buildContextTreeIoSummary).not.toHaveBeenCalled();

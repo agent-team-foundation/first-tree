@@ -1,6 +1,11 @@
-import { isOrgSettingNamespace, ORG_SETTINGS_NAMESPACES, type OrgSettingNamespace } from "@first-tree/shared";
+import {
+  isOrgSettingNamespace,
+  ORG_SETTINGS_NAMESPACES,
+  type OrgSettingNamespace,
+  orgContextTreeFinalizeInputSchema,
+} from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { BadRequestError, GoneError } from "../../errors.js";
+import { BadRequestError, ConflictError, GoneError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import * as orgSettingsService from "../../services/org-settings.js";
 
@@ -18,20 +23,61 @@ import * as orgSettingsService from "../../services/org-settings.js";
  * team is bound to before joining the chat. PUT and DELETE are always
  * admin-only regardless of namespace — non-admins must never mutate
  * org-wide config.
+ *
+ * `context_tree` has two read surfaces: the generic namespace URL is always
+ * runtime-safe, while `/context_tree/raw` is an admin-only repair view for
+ * loose historical rows.
  */
 export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { orgId: string } }>("/context_tree/raw", async (request, reply) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const value = await orgSettingsService.getRawOrgContextTreeSetting(app.db, scope.organizationId);
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw new Error("Context Tree raw setting could not be serialized as JSON");
+    }
+    return reply.type("application/json").send(serialized);
+  });
+
+  app.post<{ Params: { orgId: string }; Body: unknown }>(
+    "/context_tree/initialize",
+    { config: { otelRecordBody: false } },
+    async (request) => {
+      const scope = await requireOrgAdmin(request, app.db);
+      const input = orgContextTreeFinalizeInputSchema.parse(request.body);
+      return orgSettingsService.putInitializedOrgContextTreeBinding(
+        app.db,
+        scope.organizationId,
+        { repo: input.repo, branch: input.branch },
+        {
+          updatedBy: scope.userId,
+          expectedUnboundBranch: input.expectedUnboundBranch,
+        },
+      );
+    },
+  );
+
   app.get<{ Params: { orgId: string; namespace: string } }>("/:namespace", async (request) => {
     const namespace = parseNamespace(request.params.namespace);
     const scope =
       ORG_SETTINGS_NAMESPACES[namespace].readPolicy === "member"
         ? await requireOrgMembership(request, app.db)
         : await requireOrgAdmin(request, app.db);
+    if (namespace === "context_tree") {
+      const state = await orgSettingsService.getOrgContextTreeSettingState(app.db, scope.organizationId);
+      if (state.kind === "bound") return state.binding;
+      if (state.kind === "unbound") return { branch: state.branch };
+      throw new ConflictError("Context Tree setting contains invalid historical data and must be repaired by an admin");
+    }
     return orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);
   });
 
   app.put<{ Params: { orgId: string; namespace: string } }>(
     "/:namespace",
-    { config: { otelRecordBody: true } },
+    // Context Tree settings can contain private repository coordinates, and
+    // rejected legacy values can contain embedded credentials. Do not attach
+    // this generic settings body to failure spans.
+    { config: { otelRecordBody: false } },
     async (request) => {
       const scope = await requireOrgAdmin(request, app.db);
       const namespace = parseNamespace(request.params.namespace);

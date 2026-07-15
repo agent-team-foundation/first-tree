@@ -420,7 +420,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const tree = await getOrgContextTreeWithMeta(app.db, member.organizationId);
-    const hasTreeBinding = !!tree.repo;
+    const hasTreeBinding = tree.binding !== null;
     const hasTreeSetupKickoff = await hasTreeSetupKickoffMessage(app.db, member.organizationId);
     const [firstCompletedMembership] = await app.db
       .select({ onboardingCompletedAt: members.onboardingCompletedAt })

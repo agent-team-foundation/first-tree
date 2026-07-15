@@ -3,7 +3,7 @@ name: Validate Context Tree
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [<%- branchField %>]
   workflow_dispatch:
 
 jobs:

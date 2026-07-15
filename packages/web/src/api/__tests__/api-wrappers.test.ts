@@ -74,6 +74,7 @@ describe("api wrapper paths", () => {
     await contextTree.getContextTreeSnapshot("org/id", "7d");
     await contextTree.initializeContextTree("org/id");
     await orgSettings.getContextTreeSetting("org/id");
+    await orgSettings.getRawContextTreeSetting("org/id");
     await orgSettings.putContextTreeSetting("org/id", { repo: "https://github.com/acme/tree", branch: "main" });
     await orgSettings.deleteContextTreeSetting("org/id");
     await orgSettings.getContextTreeFeaturesSetting("org/id");
@@ -120,6 +121,8 @@ describe("api wrapper paths", () => {
     expect(apiMock.post).toHaveBeenCalledWith("/me/connect-tokens");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/context-tree/snapshot?window=7d");
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/org%2Fid/context-tree/initialize", {});
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree");
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree/raw");
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree", {
       repo: "https://github.com/acme/tree",
       branch: "main",

@@ -692,6 +692,12 @@ export {
   githubStartQuerySchema,
 } from "./schemas/oauth.js";
 export {
+  type ContextTreeActiveBinding,
+  type ContextTreeSettingState,
+  classifyContextTreeSetting,
+  contextTreeActiveBindingSchema,
+  contextTreeBranchSchema,
+  contextTreeRepoSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACE_KEYS,
   ORG_SETTINGS_NAMESPACES,
@@ -712,6 +718,7 @@ export {
   orgContextTreeFeaturesInputSchema,
   orgContextTreeFeaturesOutputSchema,
   orgContextTreeFeaturesStorageSchema,
+  orgContextTreeFinalizeInputSchema,
   orgContextTreeInputSchema,
   orgContextTreeOutputSchema,
   orgContextTreeStorageSchema,

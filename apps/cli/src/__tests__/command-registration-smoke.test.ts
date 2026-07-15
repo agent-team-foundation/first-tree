@@ -108,7 +108,7 @@ describe("CLI command registration", () => {
       "supervise",
     ]);
     expect(subcommands(root, "config")).toEqual(["get", "set", "show"]);
-    expect(subcommands(root, "org")).toEqual(["bind-tree"]);
+    expect(subcommands(root, "org")).toEqual(["bind-tree", "context-tree"]);
   });
 
   it("registers nested agent and tree command groups", () => {
@@ -128,11 +128,26 @@ describe("CLI command registration", () => {
     expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "tree", "verify"]);
   });
 
+  it("registers Context Tree set as a nested write without changing the parent read options", () => {
+    const root = new Command();
+    registerOrgCommands(root);
+
+    const contextTree = command(command(root, "org"), "context-tree");
+    const set = command(contextTree, "set");
+    const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
+
+    expect(contextTree.commands.map((entry) => entry.name())).toEqual(["set"]);
+    expect(optionNames(contextTree)).toEqual(["--agent"]);
+    expect(optionNames(set)).toEqual(["--agent", "--branch"]);
+    expect(set.registeredArguments.map((argument) => argument.name())).toEqual(["repo"]);
+  });
+
   it("keeps important options on high-risk commands", () => {
     const root = new Command();
     registerLoginCommand(root);
     registerAgentCommands(root);
     registerDaemonCommands(root);
+    registerOrgCommands(root);
     registerTreeCommands(root);
 
     const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
@@ -147,6 +162,8 @@ describe("CLI command registration", () => {
       "--type",
     ]);
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
+    expect(optionNames(command(command(root, "org"), "bind-tree"))).toEqual(["--branch", "--org"]);
+    expect(optionNames(command(command(root, "org"), "context-tree"))).toEqual(["--agent"]);
     expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--no-pull", "--pattern"]);
   });
 

@@ -21,6 +21,7 @@ const authMock = vi.hoisted(() => ({
 const settingsMocks = vi.hoisted(() => ({
   getContextTreeFeaturesSetting: vi.fn(),
   getContextTreeSetting: vi.fn(),
+  getRawContextTreeSetting: vi.fn(),
   putContextTreeFeaturesSetting: vi.fn(),
   getSourceReposSetting: vi.fn(),
   putContextTreeSetting: vi.fn(),
@@ -260,6 +261,7 @@ beforeEach(() => {
   authMock.value = { role: "admin", organizationId: "org-1", onboardingCompletedAt: null, meLoaded: true };
   viewportMock.value = "xl";
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
+  settingsMocks.getRawContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getContextTreeFeaturesSetting.mockResolvedValue(contextTreeFeatures());
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
     contextTree(body),
@@ -376,14 +378,14 @@ describe("settings panels", () => {
 
     await act(async () => root.unmount());
 
-    settingsMocks.getContextTreeSetting.mockRejectedValueOnce(new Error("context load failed"));
+    settingsMocks.getRawContextTreeSetting.mockRejectedValueOnce(new Error("context load failed"));
     const failed = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(failed.container, "context load failed");
     await act(async () => failed.root.unmount());
   });
 
   it("points a no-tree admin to the Context page and keeps manual binding as an escape hatch", async () => {
-    settingsMocks.getContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
+    settingsMocks.getRawContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
 
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);

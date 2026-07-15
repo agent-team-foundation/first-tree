@@ -1,4 +1,9 @@
 import {
+  type ContextTreeActiveBinding,
+  type ContextTreeSettingState,
+  classifyContextTreeSetting,
+  contextTreeActiveBindingSchema,
+  contextTreeBranchSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACES,
   type OrgContextTreeFeaturesInput,
@@ -14,7 +19,7 @@ import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
-import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
 
 /**
@@ -51,10 +56,35 @@ async function fetchStorageRow<K extends OrgSettingNamespace>(
   return schema.parse(row.value) as OrgSettingStorage<K>;
 }
 
+export async function getRawOrgContextTreeSetting(db: Database, orgId: string): Promise<unknown> {
+  const [row] = await db
+    .select({ value: organizationSettings.value })
+    .from(organizationSettings)
+    .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, "context_tree")))
+    .limit(1);
+  return row ? row.value : { branch: "main" };
+}
+
+async function lockOrganizationForSettingsMutation(db: Database, orgId: string): Promise<void> {
+  const [org] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .for("update")
+    .limit(1);
+  if (!org) {
+    throw new NotFoundError(`Organization "${orgId}" not found`);
+  }
+}
+
 function emptyStorage<K extends OrgSettingNamespace>(namespace: K): OrgSettingStorage<K> {
   // The storage schema's `.parse({})` fills in any defaults (e.g. context_tree.branch="main").
   const schema = ORG_SETTINGS_NAMESPACES[namespace].storage;
   return schema.parse({}) as OrgSettingStorage<K>;
+}
+
+function isCompleteContextTreeReplacement(input: OrgSettingInput<"context_tree">): boolean {
+  return input.repo !== undefined && input.branch !== undefined;
 }
 
 /**
@@ -157,12 +187,29 @@ export async function getOrgSetting<K extends OrgSettingNamespace>(
 }
 
 /**
- * Read the per-org Context Tree binding for server-internal consumers
- * (`/context-tree/info`, snapshot service). No secrets in this namespace,
- * so the storage shape is safe to expose directly. Missing row → defaults.
+ * Read a runtime-safe Context Tree binding for server-internal consumers.
+ *
+ * The admin-only `/context_tree/raw` settings read preserves loose historical
+ * values for repair. Runtime consumers must fail closed: an incomplete or
+ * invalid historical row is not an active binding.
  */
-export async function getOrgContextTree(db: Database, orgId: string): Promise<OrgContextTreeStorage> {
-  return (await fetchStorageRow(db, orgId, "context_tree")) ?? emptyStorage("context_tree");
+export async function getOrgContextTreeBinding(db: Database, orgId: string): Promise<ContextTreeActiveBinding | null> {
+  const state = await getOrgContextTreeSettingState(db, orgId);
+  return state.kind === "bound" ? state.binding : null;
+}
+
+/**
+ * Read the stable member-safe projection used by the settings API. Unlike the
+ * raw admin repair view, this never returns invalid historical repo or branch
+ * values to callers.
+ */
+export async function getOrgContextTreeSettingState(db: Database, orgId: string): Promise<ContextTreeSettingState> {
+  const [row] = await db
+    .select({ value: organizationSettings.value })
+    .from(organizationSettings)
+    .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, "context_tree")))
+    .limit(1);
+  return classifyContextTreeSetting(row ? row.value : {});
 }
 
 /**
@@ -173,25 +220,23 @@ export async function getOrgContextTree(db: Database, orgId: string): Promise<Or
 export async function getOrgContextTreeWithMeta(
   db: Database,
   orgId: string,
-): Promise<OrgContextTreeStorage & { updatedAt: Date | null }> {
+): Promise<{ binding: ContextTreeActiveBinding | null; updatedAt: Date | null }> {
   const [row] = await db
     .select({ value: organizationSettings.value, updatedAt: organizationSettings.updatedAt })
     .from(organizationSettings)
     .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, "context_tree")))
     .limit(1);
-  if (!row) return { ...emptyStorage("context_tree"), updatedAt: null };
-  const storage = ORG_SETTINGS_NAMESPACES.context_tree.storage.parse(row.value) as OrgContextTreeStorage;
-  return { ...storage, updatedAt: row.updatedAt };
+  if (!row) return { binding: null, updatedAt: null };
+  const state = classifyContextTreeSetting(row.value);
+  return { binding: state.kind === "bound" ? state.binding : null, updatedAt: row.updatedAt };
 }
 
 /**
  * Upsert a setting. Returns the masked output of the resulting row.
  *
- * The fetch + merge + upsert sequence runs inside a single transaction so
- * two concurrent admin writes can't both base their delta on the same
- * pre-image and silently lose each other's fields. Optimistic locking
- * (the `version` column) remains reserved for a future If-Match flip.
- * (#6)
+ * The transaction locks the stable organization parent row before reading the
+ * current JSON value. This also serializes writes when the namespace row does
+ * not exist yet, so partial updates cannot lose each other's fields.
  */
 export async function putOrgSetting<K extends OrgSettingNamespace>(
   db: Database,
@@ -207,16 +252,22 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
 
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
-    const [org] = await txDb
-      .select({ id: organizations.id })
-      .from(organizations)
-      .where(eq(organizations.id, orgId))
-      .limit(1);
-    if (!org) {
-      throw new NotFoundError(`Organization "${orgId}" not found`);
-    }
+    await lockOrganizationForSettingsMutation(txDb, orgId);
 
-    const current = (await fetchStorageRow(txDb, orgId, namespace)) ?? emptyStorage(namespace);
+    let current: OrgSettingStorage<K>;
+    if (namespace === "context_tree") {
+      const rawCurrent = await getRawOrgContextTreeSetting(txDb, orgId);
+      const parsedCurrent = ORG_SETTINGS_NAMESPACES.context_tree.storage.safeParse(rawCurrent);
+      const contextTreeInput = input as OrgSettingInput<"context_tree">;
+      if (!parsedCurrent.success && !isCompleteContextTreeReplacement(contextTreeInput)) {
+        // A partial update cannot safely preserve fields from malformed JSON.
+        // Re-throw the storage error without changing the historical row.
+        throw parsedCurrent.error;
+      }
+      current = (parsedCurrent.success ? parsedCurrent.data : emptyStorage("context_tree")) as OrgSettingStorage<K>;
+    } else {
+      current = (await fetchStorageRow(txDb, orgId, namespace)) ?? emptyStorage(namespace);
+    }
     const merged = applyInputDelta(namespace, current, input);
     if (namespace === "context_tree_features") {
       await assertContextReviewerAgentAllowed(txDb, orgId, input as OrgContextTreeFeaturesInput, options.memberId);
@@ -225,6 +276,14 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
     // Final shape check (defensive — should always pass after applyInputDelta).
     const storageSchema = ORG_SETTINGS_NAMESPACES[namespace].storage;
     const validated = storageSchema.parse(merged) as OrgSettingStorage<K>;
+    if (namespace === "context_tree") {
+      const contextTree = validated as OrgContextTreeStorage;
+      if (contextTree.repo === undefined) {
+        contextTreeBranchSchema.parse(contextTree.branch);
+      } else {
+        contextTreeActiveBindingSchema.parse(contextTree);
+      }
+    }
 
     await tx
       .insert(organizationSettings)
@@ -247,6 +306,78 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
       });
 
     return toOutput(txDb, orgId, namespace, validated);
+  });
+}
+
+/**
+ * Persist an initialized Context Tree binding only while the exact unbound
+ * branch observed by the caller is still current. Callers can perform external
+ * work between observation and finalization, so this conditional write is the
+ * authoritative concurrency guard.
+ *
+ * Every regular settings mutation takes the same organization-row lock. The
+ * `setWhere` predicate also protects against a writer that bypasses this
+ * service: PostgreSQL returns no row when a concurrent value gains a repo or
+ * changes the unbound branch observed by the early route check.
+ */
+export async function putInitializedOrgContextTreeBinding(
+  db: Database,
+  orgId: string,
+  rawInput: unknown,
+  options: { updatedBy: string; expectedUnboundBranch: string },
+): Promise<ContextTreeActiveBinding> {
+  const binding = contextTreeActiveBindingSchema.parse(rawInput);
+  const expectedUnboundBranch = contextTreeBranchSchema.parse(options.expectedUnboundBranch);
+  const value: Record<string, unknown> = { repo: binding.repo, branch: binding.branch };
+
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockOrganizationForSettingsMutation(txDb, orgId);
+    const current = await getOrgContextTreeSettingState(txDb, orgId);
+    if (current.kind !== "unbound" || current.branch !== expectedUnboundBranch) {
+      throw new ConflictError("Context Tree setting changed after tree initialization began");
+    }
+    const now = new Date();
+
+    const [row] = await tx
+      .insert(organizationSettings)
+      .values({
+        organizationId: orgId,
+        namespace: "context_tree",
+        value,
+        version: 1,
+        updatedBy: options.updatedBy,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [organizationSettings.organizationId, organizationSettings.namespace],
+        set: {
+          value,
+          version: sql`${organizationSettings.version} + 1`,
+          updatedBy: options.updatedBy,
+          updatedAt: now,
+        },
+        setWhere: sql`
+          jsonb_typeof(${organizationSettings.value}) = 'object'
+          AND NOT (${organizationSettings.value} ? 'repo')
+          AND (
+            (
+              jsonb_typeof(${organizationSettings.value} -> 'branch') = 'string'
+              AND ${organizationSettings.value} ->> 'branch' = ${expectedUnboundBranch}
+            )
+            OR (
+              NOT (${organizationSettings.value} ? 'branch')
+              AND ${expectedUnboundBranch} = 'main'
+            )
+          )
+        `,
+      })
+      .returning({ value: organizationSettings.value });
+
+    if (!row) {
+      throw new ConflictError("Context Tree setting changed after tree initialization began");
+    }
+    return contextTreeActiveBindingSchema.parse(row.value);
   });
 }
 
@@ -304,9 +435,13 @@ async function assertContextReviewerAgentAllowed(
  */
 export async function deleteOrgSetting(db: Database, orgId: string, namespace: string): Promise<void> {
   assertNamespace(namespace);
-  await db
-    .delete(organizationSettings)
-    .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, namespace)));
+  await db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockOrganizationForSettingsMutation(txDb, orgId);
+    await tx
+      .delete(organizationSettings)
+      .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, namespace)));
+  });
 }
 
 /**

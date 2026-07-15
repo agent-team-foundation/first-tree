@@ -1,3 +1,4 @@
+import { contextTreeBranchSchema } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
@@ -9,7 +10,8 @@ export function registerOrgBindTreeCommand(org: Command): void {
     .description("Bind the caller's organization to a context-tree GitHub URL")
     .argument("<url>", "GitHub URL of the context-tree repository (https://github.com/...)")
     .option("--org <orgId>", "Override the org to bind. Defaults to your selected/default org via /me.")
-    .action(async (rawUrl: string, options: { org?: string }) => {
+    .option("--branch <branch>", "Set the branch; omit to preserve the existing branch or default to main")
+    .action(async (rawUrl: string, options: { org?: string; branch?: string }) => {
       try {
         const url = rawUrl.trim();
         if (!url) {
@@ -22,6 +24,15 @@ export function registerOrgBindTreeCommand(org: Command): void {
           }
         } catch {
           fail("INVALID_URL", `"${url}" is not a valid URL`, 2);
+        }
+
+        let branch: string | undefined;
+        if (options.branch !== undefined) {
+          const parsed = contextTreeBranchSchema.safeParse(options.branch);
+          if (!parsed.success) {
+            fail("INVALID_BRANCH", "Branch must be a valid Git branch name", 2);
+          }
+          branch = parsed.data;
         }
 
         const serverUrl = resolveServerUrl();
@@ -38,7 +49,7 @@ export function registerOrgBindTreeCommand(org: Command): void {
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ repo: url }),
+          body: JSON.stringify(branch === undefined ? { repo: url } : { repo: url, branch }),
         });
         if (!res.ok) {
           const text = await res.text().catch(() => "");
@@ -50,7 +61,7 @@ export function registerOrgBindTreeCommand(org: Command): void {
         }
 
         print.status("•", `Bound organization to context-tree at ${url}`);
-        success({ orgId, repo: url });
+        success(branch === undefined ? { orgId, repo: url } : { orgId, repo: url, branch });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         fail("UNEXPECTED", msg, 1);
