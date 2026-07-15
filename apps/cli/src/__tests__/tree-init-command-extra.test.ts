@@ -195,6 +195,67 @@ describe("tree init command action", () => {
     });
   });
 
+  it("reports a binding failure with the canonical owner and manual deletion guidance", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/me")) {
+        return response({ memberships: [{ organizationId: "org_1", role: "admin" }] });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/raw")) {
+        return response({ branch: "main" });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/context-tree/installation")) {
+        return response({ code: "no_installation" }, { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/org_1/settings/context_tree/initialize") && init?.method === "POST") {
+        return response("private upstream detail: do-not-leak", { status: 500 });
+      }
+      return response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, owner: "ACME-Org", title: "Case Owner" }), false),
+    );
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("binding failed (server returned 500)");
+    expect(error).toContain("organization org_1");
+    expect(error).toContain("https://github.com/acme-org/case-owner-context-tree");
+    expect(error).toContain("repo was created but not bound");
+    expect(error).toContain("delete it manually");
+    expect(error).toContain("branch main");
+    expect(error).toContain("Read back");
+    expect(error).not.toContain("do-not-leak");
+    expect(treeSharedMocks.runCommand).toHaveBeenCalledWith(
+      "gh",
+      [
+        "repo",
+        "create",
+        "acme-org/case-owner-context-tree",
+        "--private",
+        "--source",
+        expect.any(String),
+        "--remote",
+        "origin",
+        "--push",
+      ],
+      expect.any(String),
+    );
+    const ownerLookupIndex = treeSharedMocks.runCommand.mock.calls.findIndex(
+      ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "api" && args[1] === "users/ACME-Org",
+    );
+    const repoCreateIndex = treeSharedMocks.runCommand.mock.calls.findIndex(
+      ([tool, args]) => tool === "gh" && Array.isArray(args) && args[0] === "repo" && args[1] === "create",
+    );
+    expect(ownerLookupIndex).toBeGreaterThanOrEqual(0);
+    expect(ownerLookupIndex).toBeLessThan(repoCreateIndex);
+  });
+
   it("binds under the GitHub App installation account and reports coverage guidance", async () => {
     const { initCommand } = await import("../commands/tree/init.js");
     const base = makeTempDir();
