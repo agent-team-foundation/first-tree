@@ -1,14 +1,71 @@
 import { z } from "zod";
 
+export const AUTH_PROVIDERS = ["google", "github"] as const;
+export const authProviderSchema = z.enum(AUTH_PROVIDERS);
+export type AuthProvider = z.infer<typeof authProviderSchema>;
+
+export const OAUTH_INTENTS = ["sign-in", "link", "unlink"] as const;
+export const oauthIntentSchema = z.enum(OAUTH_INTENTS);
+export type OAuthIntent = z.infer<typeof oauthIntentSchema>;
+
+export const oauthStartQuerySchema = z.object({
+  next: z.string().max(256).optional(),
+});
+export type OAuthStartQuery = z.infer<typeof oauthStartQuerySchema>;
+
+export const googleCallbackQuerySchema = z.object({
+  code: z.string().min(1),
+  state: z.string().min(1),
+});
+export type GoogleCallbackQuery = z.infer<typeof googleCallbackQuerySchema>;
+
+export const authProviderConnectionSchema = z.object({
+  provider: authProviderSchema,
+  available: z.boolean(),
+  connected: z.boolean(),
+  accountName: z.string().nullable(),
+  email: z.string().email().nullable(),
+  avatarUrl: z.string().url().nullable(),
+  connectedAt: z.string().datetime().nullable(),
+  canUnlink: z.boolean(),
+  unlinkBlockedReason: z.enum(["last-provider"]).nullable(),
+});
+export type AuthProviderConnection = z.infer<typeof authProviderConnectionSchema>;
+
+export const authProviderConnectionsResponseSchema = z.object({
+  providers: z.array(authProviderConnectionSchema),
+});
+export type AuthProviderConnectionsResponse = z.infer<typeof authProviderConnectionsResponseSchema>;
+
+export const authProviderActionResultSchema = z.object({
+  redirectUrl: z.string().min(1),
+});
+export type AuthProviderActionResult = z.infer<typeof authProviderActionResultSchema>;
+
+export const authProviderParamsSchema = z.object({ provider: authProviderSchema });
+
+export const OAUTH_ERROR_CODES = [
+  "state-expired",
+  "provider-not-configured",
+  "provider-exchange-failed",
+  "identity-conflict",
+  "identity-mismatch",
+  "last-provider",
+  "membership-unresolved",
+  "invite-invalid",
+  "invite-not-allowed",
+  "invite-required",
+] as const;
+export const oauthErrorCodeSchema = z.enum(OAUTH_ERROR_CODES);
+export type OAuthErrorCode = z.infer<typeof oauthErrorCodeSchema>;
+
 /**
  * `GET /api/v1/auth/github/start` query — `next` is the post-login landing
  * path. It is validated again before signing the state JWT (see
  * `safe-redirect.ts`); the schema only enforces the syntactic upper bound
  * so over-long paths bounce with a Zod error rather than silently truncate.
  */
-export const githubStartQuerySchema = z.object({
-  next: z.string().max(256).optional(),
-});
+export const githubStartQuerySchema = oauthStartQuerySchema;
 export type GithubStartQuery = z.infer<typeof githubStartQuerySchema>;
 
 export const githubCallbackQuerySchema = z.object({

@@ -15,6 +15,17 @@ export {
   locateDocAnchor,
   locateDocAnchors,
 } from "./doc-anchor.js";
+export {
+  DISPLAY_NAME_MAX_LENGTH,
+  type ExternalAccountProfile,
+  githubExternalProfile,
+  googleExternalProfile,
+  normalizeExternalProfile,
+  normalizeUsername,
+  USERNAME_BASE_MAX_LENGTH,
+  USERNAME_MAX_LENGTH,
+  USERNAME_SUFFIX_RESERVE,
+} from "./external-account.js";
 // -- Mention extraction (shared by the server fan-out resolver and other readers) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
@@ -696,12 +707,31 @@ export {
   notificationTypeSchema,
 } from "./schemas/notification.js";
 export {
+  AUTH_PROVIDERS,
+  type AuthProvider,
+  type AuthProviderActionResult,
+  type AuthProviderConnection,
+  type AuthProviderConnectionsResponse,
+  authProviderActionResultSchema,
+  authProviderConnectionSchema,
+  authProviderConnectionsResponseSchema,
+  authProviderParamsSchema,
   type GithubCallbackQuery,
   type GithubDevCallbackQuery,
   type GithubStartQuery,
+  type GoogleCallbackQuery,
   githubCallbackQuerySchema,
   githubDevCallbackQuerySchema,
   githubStartQuerySchema,
+  googleCallbackQuerySchema,
+  OAUTH_ERROR_CODES,
+  OAUTH_INTENTS,
+  type OAuthErrorCode,
+  type OAuthIntent,
+  type OAuthStartQuery,
+  oauthErrorCodeSchema,
+  oauthIntentSchema,
+  oauthStartQuerySchema,
 } from "./schemas/oauth.js";
 export {
   type ContextTreeActiveBinding,
