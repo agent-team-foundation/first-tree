@@ -100,6 +100,7 @@ export function InviteAcceptPage() {
   };
 
   const continueOauthHref = `/api/v1/auth/github/start?next=${encodeURIComponent(`/invite/${token}`)}`;
+  const continueGoogleOauthHref = `/api/v1/auth/google/start?next=${encodeURIComponent(`/invite/${token}`)}`;
 
   return (
     <InviteAcceptShell>
@@ -110,6 +111,7 @@ export function InviteAcceptPage() {
         busy={busy}
         onJoin={handleJoin}
         oauthHref={continueOauthHref}
+        googleOauthHref={continueGoogleOauthHref}
       />
     </InviteAcceptShell>
   );
@@ -141,6 +143,7 @@ export function InviteAcceptCard({
   busy,
   onJoin,
   oauthHref,
+  googleOauthHref,
 }: {
   preview: InvitationPreview;
   isAuthenticated: boolean;
@@ -148,6 +151,7 @@ export function InviteAcceptCard({
   busy: boolean;
   onJoin: () => void;
   oauthHref: string;
+  googleOauthHref?: string;
 }) {
   const switchingTeam = isAuthenticated && currentTeamName && currentTeamName !== preview.organizationDisplayName;
   const expiresHint = formatExpiresHint(preview.expiresAt);
@@ -185,12 +189,20 @@ export function InviteAcceptCard({
             {busy ? "Joining…" : `Join ${preview.organizationDisplayName}`}
           </Button>
         ) : (
-          <Button asChild className="w-full">
-            <a href={oauthHref}>
-              <Github className="h-4 w-4" />
-              Continue with GitHub to join
-            </a>
-          </Button>
+          <div className="space-y-2">
+            <Button asChild className="w-full">
+              <a href={googleOauthHref ?? oauthHref}>
+                <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
+                Continue with Google to join
+              </a>
+            </Button>
+            <Button asChild variant="outline" className="w-full">
+              <a href={oauthHref}>
+                <Github className="h-4 w-4" />
+                Continue with GitHub to join
+              </a>
+            </Button>
+          </div>
         )}
         {expiresHint && (
           <p

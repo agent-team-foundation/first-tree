@@ -45,6 +45,10 @@ export function LoginPage() {
     redirectTo === "/"
       ? "/api/v1/auth/github/start"
       : `/api/v1/auth/github/start?next=${encodeURIComponent(redirectTo)}`;
+  const googleHref =
+    redirectTo === "/"
+      ? "/api/v1/auth/google/start"
+      : `/api/v1/auth/google/start?next=${encodeURIComponent(redirectTo)}`;
 
   // Stable dev identity — same id every time so reloads land on the same
   // user, agents, and conversations. Using `1` (not the more obvious 42)
@@ -84,6 +88,13 @@ export function LoginPage() {
 
           <div className="mt-6 space-y-4">
             <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
+              <a href={googleHref}>
+                <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
+                Continue with Google
+              </a>
+            </Button>
+
+            <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
               <a href={githubHref}>
                 <Github className="h-4 w-4" />
                 Continue with GitHub
@@ -91,8 +102,8 @@ export function LoginPage() {
             </Button>
 
             <p className="text-center text-label text-fg-3">
-              <span className="font-medium text-fg-2">Sign in uses only your GitHub identity.</span> You authorize a
-              repo later, only when an agent needs to work in it.
+              <span className="font-medium text-fg-2">Sign in uses only your Google or GitHub identity.</span> You
+              authorize a repo later, only when an agent needs to work in it.
             </p>
 
             <div className="flex items-center justify-center gap-4 border-t border-border pt-4 text-caption text-fg-3">
