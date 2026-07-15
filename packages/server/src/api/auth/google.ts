@@ -50,7 +50,9 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/callback", async (request, reply) => {
     const config = app.config.oauth?.google;
     if (!config) return redirectError(reply, "provider-not-configured");
-    const { code, state } = googleCallbackQuerySchema.parse(request.query);
+    const { code, state, error: providerError } = googleCallbackQuerySchema.parse(request.query);
+    if (providerError) return redirectError(reply, "provider-exchange-failed");
+    if (!code || !state) return redirectError(reply, "provider-exchange-failed");
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
     let verified: Awaited<ReturnType<typeof verifyOAuthState>>;
     try {

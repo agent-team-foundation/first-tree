@@ -14,8 +14,9 @@ export const oauthStartQuerySchema = z.object({
 export type OAuthStartQuery = z.infer<typeof oauthStartQuerySchema>;
 
 export const googleCallbackQuerySchema = z.object({
-  code: z.string().min(1),
-  state: z.string().min(1),
+  code: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
 });
 export type GoogleCallbackQuery = z.infer<typeof googleCallbackQuerySchema>;
 

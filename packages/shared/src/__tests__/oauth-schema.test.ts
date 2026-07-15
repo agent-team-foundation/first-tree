@@ -11,7 +11,7 @@ describe("OAuth schemas", () => {
     expect(authProviderConnectionsResponseSchema.parse({ providers: [] })).toEqual({ providers: [] });
   });
 
-  it("requires a Google authorization code and state", () => {
+  it("accepts a Google authorization code and state", () => {
     expect(googleCallbackQuerySchema.safeParse({ code: "code", state: "state" }).success).toBe(true);
     expect(googleCallbackQuerySchema.safeParse({ code: "code" }).success).toBe(false);
   });
