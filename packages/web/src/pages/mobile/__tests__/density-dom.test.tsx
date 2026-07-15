@@ -111,6 +111,28 @@ function renderWithClient(harness: DomHarness, element: ReactElement, path: stri
   );
 }
 
+/**
+ * TanStack Query may notify observers on a timer, while the shared DOM
+ * harness only flushes microtasks. Keep the macrotask-aware polling local to
+ * this Query-backed test file.
+ */
+async function waitForSettled(harness: DomHarness, assertion: () => void): Promise<void> {
+  let lastErr: unknown;
+  for (let i = 0; i < 40; i++) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      lastErr = err;
+    }
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    await harness.flush();
+  }
+  throw lastErr;
+}
+
 describe("mobile density tiers", () => {
   let harness: DomHarness;
 
@@ -150,7 +172,7 @@ describe("mobile density tiers", () => {
 
   it("renders Now work as one priority feed without section grouping", async () => {
     renderWithClient(harness, <MobileNowPage />, "/m/now");
-    await harness.waitFor(() => expect(harness.container.textContent).toContain("Release readiness"));
+    await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Release readiness"));
     expect(harness.container.textContent).toContain("Now");
     expect(harness.container.textContent).not.toContain("need attention");
 
@@ -184,7 +206,7 @@ describe("mobile density tiers", () => {
 
   it("renders Chat rows as medium list cards, not full feed cards", async () => {
     renderWithClient(harness, <MobileChatPage />, "/m/chat");
-    await harness.waitFor(() => expect(harness.container.textContent).toContain("Release readiness"));
+    await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Release readiness"));
 
     const listCard = harness.container.querySelector<HTMLElement>('[data-mobile-card="list"]');
     if (!listCard) throw new Error("Missing Chat list card");
@@ -211,12 +233,7 @@ describe("mobile density tiers", () => {
       nextCursor: null,
     });
     renderWithClient(harness, <MobileNowPage />, "/m/now");
-    // React Query notifies observers on a timer; let that task settle inside
-    // act before the harness performs its microtask-only DOM polling.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    await harness.waitFor(() => expect(harness.container.textContent).toContain("Markdown preview"));
+    await waitForSettled(harness, () => expect(harness.container.textContent).toContain("Markdown preview"));
 
     const preview = harness.container.querySelector("[data-mobile-card-preview]");
     expect(preview?.textContent).toBe("Task: run the seed (first-tree-seed)");
