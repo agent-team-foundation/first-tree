@@ -95,11 +95,16 @@ export async function replaceGitlabConnection(
       .select({ id: gitlabConnections.id })
       .from(gitlabConnections)
       .where(eq(gitlabConnections.organizationId, input.organizationId))
+      .for("update")
       .limit(1);
     if (!current || current.id !== input.expectedConnectionId) {
       throw new ConflictError("GitLab connection changed or was removed; refresh before replacing it");
     }
-    await tx.delete(gitlabConnections).where(eq(gitlabConnections.id, input.expectedConnectionId));
+    const [deleted] = await tx
+      .delete(gitlabConnections)
+      .where(eq(gitlabConnections.id, input.expectedConnectionId))
+      .returning({ id: gitlabConnections.id });
+    if (!deleted) throw new ConflictError("GitLab connection changed or was removed; refresh before replacing it");
     return insertGitlabConnection(tx, input, bearer);
   });
   return { connectionId, bearer };
@@ -139,15 +144,30 @@ export async function regenerateGitlabConnectionBearer(
 }
 
 export async function deleteGitlabConnection(db: Database, connectionId: string): Promise<void> {
-  await db.transaction(async (tx) => {
+  await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    const [candidate] = await tx
+      .select({ organizationId: gitlabConnections.organizationId })
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.id, connectionId))
+      .limit(1);
+    if (!candidate) throw new NotFoundError("GitLab connection not found");
+
+    await lockOrganization(tx, candidate.organizationId);
     const [connection] = await tx
       .select({ id: gitlabConnections.id })
       .from(gitlabConnections)
-      .where(eq(gitlabConnections.id, connectionId))
+      .where(
+        and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.organizationId, candidate.organizationId)),
+      )
       .for("update")
       .limit(1);
     if (!connection) throw new NotFoundError("GitLab connection not found");
-    await tx.delete(gitlabConnections).where(eq(gitlabConnections.id, connectionId));
+    const [deleted] = await tx
+      .delete(gitlabConnections)
+      .where(eq(gitlabConnections.id, connectionId))
+      .returning({ id: gitlabConnections.id });
+    if (!deleted) throw new NotFoundError("GitLab connection not found");
   });
 }
 

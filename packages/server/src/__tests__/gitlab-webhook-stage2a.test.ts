@@ -488,6 +488,64 @@ describe("GitLab Stage 2A backend", () => {
     expect(remaining).toHaveLength(0);
   });
 
+  it("does not resurrect a connection when delete holds the row before replace", async () => {
+    const app = getApp();
+    const first = await connection(app, { isolatedOrg: true });
+    let enterDelete!: () => void;
+    let releaseDelete!: () => void;
+    const deleteEntered = new Promise<void>((resolve) => {
+      enterDelete = resolve;
+    });
+    const deleteRelease = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    const deleting = app.db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ id: gitlabConnections.id })
+        .from(gitlabConnections)
+        .where(eq(gitlabConnections.id, first.connectionId))
+        .for("update")
+        .limit(1);
+      if (!locked) throw new Error("GitLab connection missing before concurrent delete");
+      enterDelete();
+      await deleteRelease;
+      await tx.delete(gitlabConnections).where(eq(gitlabConnections.id, first.connectionId));
+    });
+    await deleteEntered;
+
+    let replaceSettled = false;
+    const replacing = replaceGitlabConnection(app.db, {
+      expectedConnectionId: first.connectionId,
+      organizationId: first.admin.organizationId,
+      memberId: first.admin.memberId,
+      displayName: "Must not resurrect",
+      instanceOrigin: "https://gitlab.resurrected",
+    }).then(
+      (value) => {
+        replaceSettled = true;
+        return { ok: true as const, value };
+      },
+      (error: unknown) => {
+        replaceSettled = true;
+        return { ok: false as const, error };
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(replaceSettled).toBe(false);
+
+    releaseDelete();
+    await deleting;
+    const result = await replacing;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Concurrent replace unexpectedly succeeded");
+    expect(result.error).toMatchObject({ message: expect.stringContaining("changed or was removed") });
+    const remaining = await app.db
+      .select({ id: gitlabConnections.id })
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.organizationId, first.admin.organizationId));
+    expect(remaining).toHaveLength(0);
+  });
+
   it("serializes replacement against in-flight ingress and queued follow declarations", async () => {
     const app = getApp();
     const first = await connection(app);
