@@ -2,15 +2,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ProviderRetryEventPayload, parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const BILLING_RESULT = "Failed to authenticate. API Error: 403 Insufficient account balance.";
 const TRANSIENT_RESULT =
   "API Error: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
 const mockState = vi.hoisted(() => ({
   nextMessages: [] as unknown[],
+  messagesByAttempt: [] as unknown[][],
   queryCalls: 0,
   observedInputMessages: [] as Array<{ attempt: number; content: string }>,
+  configVersion: 1,
+  promptAppend: "",
+  configModel: "",
+  setModelCalls: 0,
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => {
@@ -30,7 +35,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
     query: (args: { prompt: AsyncIterable<{ message?: { content?: unknown } }> }) => {
       mockState.queryCalls += 1;
       const attempt = mockState.queryCalls;
-      const messages = mockState.nextMessages.slice();
+      const messages = (mockState.messagesByAttempt[attempt - 1] ?? mockState.nextMessages).slice();
       void drainPrompt(args.prompt, attempt);
       return {
         [Symbol.asyncIterator]() {
@@ -47,7 +52,9 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
           };
         },
         close: () => {},
-        setModel: async () => {},
+        setModel: async () => {
+          mockState.setModelCalls += 1;
+        },
       };
     },
   };
@@ -71,12 +78,26 @@ afterAll(() => {
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
+beforeEach(() => {
+  mockState.messagesByAttempt.length = 0;
+  mockState.configVersion = 1;
+  mockState.promptAppend = "";
+  mockState.configModel = "";
+  mockState.setModelCalls = 0;
+});
+
 function buildCache() {
   const stubSdk = {
     fetchAgentConfig: async () => ({
       agentId: AGENT_ID,
-      version: 1,
-      payload: { prompt: { append: "" }, model: "", mcpServers: [], env: [], gitRepos: [] },
+      version: mockState.configVersion,
+      payload: {
+        prompt: { append: mockState.promptAppend },
+        model: mockState.configModel,
+        mcpServers: [],
+        env: [],
+        gitRepos: [],
+      },
       updatedAt: new Date().toISOString(),
       updatedBy: "test",
     }),
@@ -152,7 +173,7 @@ async function startSingleResultTurn() {
     ctx,
   );
 
-  return { handler, sendMessage, forwardResult, emitted, completed, logs };
+  return { handler, cache, sendMessage, forwardResult, emitted, completed, logs };
 }
 
 async function runSingleResultTurn() {
@@ -354,6 +375,112 @@ describe("claude-code handler — structured provider error result", () => {
       expect(mockState.queryCalls).toBe(1);
       expect(result.logs).toContain("Auto-resume cancelled during provider retry backoff");
       expect(result.completed).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retires a pending retry consumer before a config restart takes ownership", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    mockState.messagesByAttempt = [
+      [
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "I started working on this." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 503,
+          result: TRANSIENT_RESULT,
+        },
+      ],
+      [],
+    ];
+
+    try {
+      const result = await startSingleResultTurn();
+      await waitForCondition(() => providerRetryPayloads(result.emitted).length === 1, "scheduled retry");
+
+      mockState.configVersion = 2;
+      mockState.promptAppend = "updated prompt";
+      await result.cache.refresh(AGENT_ID);
+      result.handler.inject({
+        id: "m2",
+        chatId: "chat-claude-provider-error",
+        senderId: "user-1",
+        format: "text",
+        content: "continue with the updated config",
+        metadata: null,
+      });
+
+      await waitForCondition(() => mockState.queryCalls === 2, "config restart query");
+      await waitForCondition(
+        () => result.logs.includes("Auto-resume cancelled during provider retry backoff"),
+        "stale retry consumer cancellation",
+      );
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(mockState.queryCalls).toBe(2);
+      expect(result.completed).toHaveLength(0);
+      expect(result.logs.some((line) => line.includes("[configHotSwitch] path=restart"))).toBe(true);
+
+      await result.handler.suspend();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips an in-flight same-family model switch while retry backoff owns the turn", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    mockState.configModel = "claude-opus-4-5";
+    mockState.messagesByAttempt = [
+      [
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "I started working on this." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 503,
+          result: TRANSIENT_RESULT,
+        },
+      ],
+      [],
+    ];
+
+    try {
+      const result = await startSingleResultTurn();
+      await waitForCondition(() => providerRetryPayloads(result.emitted).length === 1, "scheduled retry");
+
+      mockState.configVersion = 2;
+      mockState.configModel = "claude-opus-4-6";
+      await result.cache.refresh(AGENT_ID);
+      result.handler.inject({
+        id: "m2",
+        chatId: "chat-claude-provider-error",
+        senderId: "user-1",
+        format: "text",
+        content: "continue with the new model",
+        metadata: null,
+      });
+
+      await waitForCondition(() => mockState.queryCalls === 2, "config restart query");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(mockState.setModelCalls).toBe(0);
+      expect(mockState.queryCalls).toBe(2);
+      expect(result.completed).toHaveLength(0);
+      expect(result.logs.some((line) => line.includes("[configHotSwitch] path=restart"))).toBe(true);
+
+      await result.handler.suspend();
     } finally {
       vi.useRealTimers();
     }

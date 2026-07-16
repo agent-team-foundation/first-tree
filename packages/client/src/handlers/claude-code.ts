@@ -841,6 +841,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     providerRetryBackoffAbort = null;
   }
 
+  function providerRetryBackoffPending(): boolean {
+    return providerRetryBackoffAbort !== null;
+  }
+
   /**
    * Honor the shared provider retry delay while allowing suspend/shutdown to
    * interrupt the foreground retry chain immediately.
@@ -1489,7 +1493,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       appliedPayload.model !== newPayload.model;
 
     // Path A: same-family model swap → in-flight setModel.
-    if (onlyModelChanged && isSameModelFamily(appliedModel, newPayload.model)) {
+    if (onlyModelChanged && isSameModelFamily(appliedModel, newPayload.model) && !providerRetryBackoffPending()) {
       try {
         await currentQuery.setModel(newPayload.model);
         sessionCtx.log(
@@ -1509,6 +1513,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // still iterating the OLD query and will exit once `oldQuery.close()`
     // drains it, so the new query would otherwise have no reader.
     sessionCtx.log(`[configHotSwitch] path=restart fromVersion=${appliedConfigVersion} toVersion=${cached.version}`);
+    // Path B takes ownership of the unsettled turn. Retire an old consumer
+    // that may be waiting in provider retry backoff before any async restart
+    // preparation can yield; otherwise its timer could later respawn another
+    // query alongside the config-switch consumer.
+    cancelProviderRetryBackoff();
     // Rewrite AGENTS.md (CLAUDE.md symlink) with the new payload so the
     // restarted SDK Query — which reads CLAUDE.md via `settingSources:
     // ["project"]` on construction — picks up the new prompt.append. The
