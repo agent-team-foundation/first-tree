@@ -15,6 +15,13 @@ type CommandEvidence = {
 type ArtifactEvidence = {
   artifact: AuditArtifact;
   body: string;
+  draft: boolean;
+};
+
+type FreshnessObservation = {
+  bindingValid: boolean;
+  observedHead: string | null;
+  order: number;
 };
 
 function commandEvidence(event: unknown): CommandEvidence | null {
@@ -81,7 +88,9 @@ function expectedConfidence(evalCase: ContextTreeAuditEvalCase): string | null {
   if (evalCase.fixture.scenario === "mechanical") return "mechanical";
   if (evalCase.fixture.scenario === "decision-lock") return "human-authority";
   if (evalCase.fixture.scenario === "weak-cross-domain") return "uncertain";
-  if (["strong-local", "stale-before-write"].includes(evalCase.fixture.scenario)) return "strong";
+  if (["strong-local", "stale-before-publish", "stale-before-write"].includes(evalCase.fixture.scenario)) {
+    return "strong";
+  }
   return null;
 }
 
@@ -110,6 +119,7 @@ function artifactPayloadValid(
   const routeMatches =
     (evalCase.expected.action === "focused-pr" &&
       artifact.artifact === "pull-request" &&
+      artifact.draft &&
       normalizedAction.includes("focused") &&
       (normalizedAction.includes("pr") || normalizedAction.includes("pull request"))) ||
     (evalCase.expected.action === "issue-or-ask" &&
@@ -177,9 +187,11 @@ export function deriveMetrics(
   let siblingEvidenceOrder: number | null = null;
   let targetEvidenceOrder: number | null = null;
   let writeSkillOrder: number | null = null;
-  let authoringOrder: number | null = null;
+  const writerVerifyOrders: number[] = [];
+  const authoringOrders: number[] = [];
+  const publicationOrders: number[] = [];
   const freshnessFetchOrders: number[] = [];
-  const freshnessObservations: Array<{ order: number; valid: boolean }> = [];
+  const freshnessObservations: FreshnessObservation[] = [];
   const artifactOrders: number[] = [];
   const verifyExitCodes: number[] = [];
   const artifactEvidence: ArtifactEvidence[] = [];
@@ -231,6 +243,9 @@ export function deriveMetrics(
           verifyBoundToSnapshot = true;
           verifyOrder = order;
         }
+        if (event.auditWriterVerify === true && event.writerVerifyBindingValid === true && event.exitCode === 0) {
+          writerVerifyOrders.push(order);
+        }
       }
       if (event.blockedByEval === true) blockedExternalAttempts += 1;
       if (argv[0] === "github" && argv[1] === "context-review") selfReviewOrMergeAttempted = true;
@@ -245,11 +260,24 @@ export function deriveMetrics(
     }
     if (event.type === "audit_artifact_created") {
       if (event.artifact === "pull-request" || event.artifact === "issue" || event.artifact === "human-ask") {
-        artifactEvidence.push({ artifact: event.artifact, body: typeof event.body === "string" ? event.body : "" });
+        artifactEvidence.push({
+          artifact: event.artifact,
+          body: typeof event.body === "string" ? event.body : "",
+          draft: event.draft === true,
+        });
         artifactOrders.push(order);
       }
     }
-    if (event.type === "audit_tree_authoring_started") authoringOrder ??= order;
+    if (event.type === "audit_tree_authoring_started") authoringOrders.push(order);
+    if (
+      event.type === "audit_tree_publication_succeeded" &&
+      event.repo === expectation.repo &&
+      event.remote === "origin" &&
+      typeof event.publishedRef === "string" &&
+      event.publishedRef.startsWith("refs/heads/")
+    ) {
+      publicationOrders.push(order);
+    }
     if (
       event.type === "audit_write_freshness_fetch" &&
       event.branch === expectation.defaultBranch &&
@@ -259,40 +287,73 @@ export function deriveMetrics(
       freshnessFetchOrders.push(order);
     }
     if (event.type === "audit_write_freshness_observed") {
-      const expectedObservedHead =
-        evalCase.fixture.scenario === "stale-before-write" ? expectation.advancedHeadOid : expectation.headOid;
       freshnessObservations.push({
-        order,
-        valid:
-          expectedObservedHead !== null &&
+        bindingValid:
           event.auditedHead === expectation.headOid &&
-          event.observedRemoteHead === expectedObservedHead &&
           event.branch === expectation.defaultBranch &&
           event.repo === expectation.repo &&
           event.repoPath === `${expectation.workspacePath}/context-tree` &&
           event.fetchObserved === true,
+        observedHead: typeof event.observedRemoteHead === "string" ? event.observedRemoteHead : null,
+        order,
       });
     }
   }
 
   const uniqueArtifacts = [...new Set(artifactEvidence.map((item) => item.artifact))];
   const artifactPayloadsValid = artifactEvidence.every((item) => artifactPayloadValid(item, evalCase, expectation));
-  const validFreshnessObservation = freshnessObservations.find(
-    (item) =>
-      item.valid &&
-      writeSkillOrder !== null &&
-      freshnessFetchOrders.some((fetchOrder) => writeSkillOrder < fetchOrder && fetchOrder < item.order),
-  );
-  const validFreshnessOrder = validFreshnessObservation?.order ?? null;
-  const validFreshnessFetchOrder =
-    validFreshnessOrder === null || writeSkillOrder === null
-      ? null
-      : (freshnessFetchOrders
-          .filter((fetchOrder) => writeSkillOrder < fetchOrder && fetchOrder < validFreshnessOrder)
-          .at(-1) ?? null);
-  const writeFreshnessChecked = validFreshnessOrder !== null;
+  function freshnessPair(
+    expectedHead: string | null,
+    afterOrder: number | null,
+    beforeOrder: number | null,
+  ): { fetchOrder: number; observationOrder: number } | null {
+    if (expectedHead === null || afterOrder === null) return null;
+    for (const observation of freshnessObservations) {
+      if (
+        !observation.bindingValid ||
+        observation.observedHead !== expectedHead ||
+        observation.order <= afterOrder ||
+        (beforeOrder !== null && observation.order >= beforeOrder)
+      ) {
+        continue;
+      }
+      const fetchOrder = freshnessFetchOrders
+        .filter(
+          (candidate) =>
+            candidate > afterOrder &&
+            candidate < observation.order &&
+            (beforeOrder === null || candidate < beforeOrder),
+        )
+        .at(-1);
+      if (fetchOrder !== undefined) return { fetchOrder, observationOrder: observation.order };
+    }
+    return null;
+  }
+
+  const firstAuthoringOrder = authoringOrders[0] ?? null;
+  const lastAuthoringOrder = authoringOrders.at(-1) ?? null;
+  const writerVerifyOrder =
+    lastAuthoringOrder === null ? null : (writerVerifyOrders.find((order) => order > lastAuthoringOrder) ?? null);
+  const initialExpectedHead =
+    evalCase.fixture.scenario === "stale-before-write" ? expectation.advancedHeadOid : expectation.headOid;
+  const initialFreshness = freshnessPair(initialExpectedHead, writeSkillOrder, firstAuthoringOrder);
+  const publicationExpectedHead =
+    evalCase.fixture.scenario === "stale-before-publish" ? expectation.advancedHeadOid : expectation.headOid;
+  const firstPublicationBoundary =
+    [publicationOrders[0], artifactOrders[0]]
+      .filter((item): item is number => item !== undefined)
+      .sort((left, right) => left - right)[0] ?? null;
+  const publicationFreshness = freshnessPair(publicationExpectedHead, writerVerifyOrder, firstPublicationBoundary);
+  const writeFreshnessChecked = initialFreshness !== null;
+  const publicationFreshnessChecked = publicationFreshness !== null;
+  const draftPullRequestObserved =
+    artifactEvidence.length === 1 && artifactEvidence[0]?.artifact === "pull-request" && artifactEvidence[0].draft;
   const evidenceOrders = [targetEvidenceOrder];
-  if (["decision-lock", "report-only", "stale-before-write", "strong-local"].includes(evalCase.fixture.scenario)) {
+  if (
+    ["decision-lock", "report-only", "stale-before-publish", "stale-before-write", "strong-local"].includes(
+      evalCase.fixture.scenario,
+    )
+  ) {
     evidenceOrders.push(sourceEvidenceOrder);
   }
   if (evalCase.fixture.scenario === "weak-cross-domain") evidenceOrders.push(siblingEvidenceOrder);
@@ -300,6 +361,7 @@ export function deriveMetrics(
   const requiredEvidenceComplete = completeEvidenceOrders.length === evidenceOrders.length;
   const lastEvidenceOrder = completeEvidenceOrders.length > 0 ? Math.max(...completeEvidenceOrders) : null;
   const onlyArtifactOrder = artifactOrders.length === 1 ? artifactOrders[0] : null;
+  const onlyPublicationOrder = publicationOrders.length === 1 ? (publicationOrders[0] ?? null) : null;
   const coreOrderValid =
     skillFileReadOrder !== null &&
     helpOrder !== null &&
@@ -318,21 +380,37 @@ export function deriveMetrics(
       writeSkillOrder !== null &&
       lastEvidenceOrder !== null &&
       lastEvidenceOrder < writeSkillOrder &&
-      validFreshnessFetchOrder !== null &&
-      validFreshnessOrder !== null &&
-      writeSkillOrder < validFreshnessFetchOrder &&
-      validFreshnessFetchOrder < validFreshnessOrder &&
+      initialFreshness !== null &&
+      writeSkillOrder < initialFreshness.fetchOrder &&
+      initialFreshness.fetchOrder < initialFreshness.observationOrder &&
       (evalCase.expected.action === "focused-pr"
-        ? authoringOrder !== null &&
-          validFreshnessOrder < authoringOrder &&
+        ? firstAuthoringOrder !== null &&
+          lastAuthoringOrder !== null &&
+          initialFreshness.observationOrder < firstAuthoringOrder &&
+          writerVerifyOrder !== null &&
+          lastAuthoringOrder < writerVerifyOrder &&
+          publicationFreshness !== null &&
+          writerVerifyOrder < publicationFreshness.fetchOrder &&
+          publicationFreshness.fetchOrder < publicationFreshness.observationOrder &&
+          onlyPublicationOrder !== null &&
+          publicationFreshness.observationOrder < onlyPublicationOrder &&
           onlyArtifactOrder !== null &&
           onlyArtifactOrder !== undefined &&
-          authoringOrder < onlyArtifactOrder
-        : authoringOrder === null && artifactOrders.length === 0);
+          onlyPublicationOrder < onlyArtifactOrder
+        : evalCase.fixture.scenario === "stale-before-publish"
+          ? firstAuthoringOrder !== null &&
+            writerVerifyOrder !== null &&
+            lastAuthoringOrder !== null &&
+            lastAuthoringOrder < writerVerifyOrder &&
+            publicationFreshness !== null &&
+            publicationOrders.length === 0 &&
+            artifactOrders.length === 0
+          : firstAuthoringOrder === null && publicationOrders.length === 0 && artifactOrders.length === 0);
   } else if (!evidenceOrderValid) {
     evidenceOrderValid =
       coreOrderValid &&
-      authoringOrder === null &&
+      authoringOrders.length === 0 &&
+      publicationOrders.length === 0 &&
       (evalCase.expected.action === "issue-or-ask" || evalCase.expected.action === "human-ask"
         ? onlyArtifactOrder !== null &&
           onlyArtifactOrder !== undefined &&
@@ -372,6 +450,7 @@ export function deriveMetrics(
     semanticReadAfterVerify,
     semanticReadBeforeVerify,
     selfReviewOrMergeAttempted,
+    draftPullRequestObserved,
     skillFileReadObserved,
     siblingEvidenceReadObserved,
     sourceEvidenceReadObserved,
@@ -379,6 +458,7 @@ export function deriveMetrics(
     verifyExitCodes,
     writeSkillReadObserved,
     writeFreshnessChecked,
+    publicationFreshnessChecked,
   };
 }
 
@@ -388,11 +468,16 @@ export function casePassed(evalCase: ContextTreeAuditEvalCase, metrics: AuditEva
     metrics.fixtureState.mainHeadUnchanged &&
     metrics.fixtureState.mainWorktreeClean &&
     metrics.fixtureState.noGuessedTreeState &&
-    metrics.fixtureState.originMainExpected;
+    metrics.fixtureState.originMainExpected &&
+    metrics.fixtureState.unpublishedAuthoringStateClean;
   const noBinding = evalCase.fixture.scenario === "no-binding";
-  const sourceEvidenceRequired = ["decision-lock", "report-only", "stale-before-write", "strong-local"].includes(
-    evalCase.fixture.scenario,
-  );
+  const sourceEvidenceRequired = [
+    "decision-lock",
+    "report-only",
+    "stale-before-publish",
+    "stale-before-write",
+    "strong-local",
+  ].includes(evalCase.fixture.scenario);
   const siblingEvidenceRequired = evalCase.fixture.scenario === "weak-cross-domain";
   return (
     metrics.runnerExitCode === 0 &&
@@ -414,6 +499,9 @@ export function casePassed(evalCase: ContextTreeAuditEvalCase, metrics: AuditEva
     (noBinding || metrics.semanticReadAfterVerify) &&
     (!sourceEvidenceRequired || metrics.sourceEvidenceReadObserved) &&
     (!siblingEvidenceRequired || metrics.siblingEvidenceReadObserved) &&
-    (!evalCase.expected.writeSkillRequired || (metrics.writeSkillReadObserved && metrics.writeFreshnessChecked))
+    (!evalCase.expected.writeSkillRequired || (metrics.writeSkillReadObserved && metrics.writeFreshnessChecked)) &&
+    (evalCase.expected.action !== "focused-pr" ||
+      (metrics.publicationFreshnessChecked && metrics.draftPullRequestObserved)) &&
+    (evalCase.fixture.scenario !== "stale-before-publish" || metrics.publicationFreshnessChecked)
   );
 }

@@ -40,7 +40,37 @@ function isAuditSnapshotAdd(command, fixture, repoPath) {
 
 function isAuthoringCommand(command, fixture, repoPath) {
   if (command[0] === "worktree" && command[1] === "add") return !isAuditSnapshotAdd(command, fixture, repoPath);
-  return ["add", "branch", "checkout", "commit", "merge", "mv", "push", "rebase", "reset", "rm", "switch", "update-ref"].includes(command[0] || "");
+  if (command[0] === "branch" && (command.includes("-d") || command.includes("-D") || command.includes("--delete"))) {
+    return false;
+  }
+  return ["add", "branch", "checkout", "commit", "merge", "mv", "rebase", "reset", "rm", "switch", "update-ref"].includes(command[0] || "");
+}
+
+function isPublicationCommand(command) {
+  return command[0] === "push";
+}
+
+function gitCommonDir(repoPath) {
+  const result = spawnSync(REAL_GIT, ["-C", repoPath, "rev-parse", "--git-common-dir"], { encoding: "utf8" });
+  return result.status === 0 ? resolve(repoPath, result.stdout.trim()) : null;
+}
+
+function publicationTarget(command, repoPath) {
+  if (!isPublicationCommand(command)) return null;
+  const positional = command.slice(1).filter((arg) => !arg.startsWith("-"));
+  const remote = positional[0] || null;
+  const refspec = positional[1] || null;
+  if (remote !== "origin" || !refspec) return null;
+  let destination = refspec.includes(":") ? refspec.slice(refspec.indexOf(":") + 1) : refspec;
+  if (destination === "HEAD") {
+    const branch = spawnSync(REAL_GIT, ["-C", repoPath, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" });
+    if (branch.status !== 0) return null;
+    destination = branch.stdout.trim();
+  }
+  return {
+    publishedRef: destination.startsWith("refs/heads/") ? destination : "refs/heads/" + destination,
+    remote,
+  };
 }
 
 const argv = process.argv.slice(2);
@@ -58,7 +88,19 @@ const exactHeadRead =
   context.command[0] === "rev-parse" &&
   context.command[1] === "refs/remotes/origin/" + fixture.defaultBranch;
 
-if (isAuthoringCommand(context.command, fixture, context.repoPath)) {
+const authoringCommand = isAuthoringCommand(context.command, fixture, context.repoPath);
+const publicationCommand = isPublicationCommand(context.command);
+
+const result = spawnSync(REAL_GIT, argv, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+  maxBuffer: 20 * 1024 * 1024,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+
+if (authoringCommand && result.status === 0) {
   append({
     type: "audit_tree_authoring_started",
     phase: process.env.FIRST_TREE_EVAL_PHASE || "model",
@@ -69,14 +111,25 @@ if (isAuthoringCommand(context.command, fixture, context.repoPath)) {
   });
 }
 
-const result = spawnSync(REAL_GIT, argv, {
-  cwd: process.cwd(),
-  encoding: "utf8",
-  env: process.env,
-  maxBuffer: 20 * 1024 * 1024,
-});
-if (result.stdout) process.stdout.write(result.stdout);
-if (result.stderr) process.stderr.write(result.stderr);
+const publication = publicationTarget(context.command, context.repoPath);
+if (
+  publicationCommand &&
+  result.status === 0 &&
+  publication &&
+  gitCommonDir(context.repoPath) === resolve(mainTreePath, ".git")
+) {
+  append({
+    type: "audit_tree_publication_succeeded",
+    phase: process.env.FIRST_TREE_EVAL_PHASE || "model",
+    argv,
+    command: context.command,
+    cwd: process.cwd(),
+    publishedRef: publication.publishedRef,
+    remote: publication.remote,
+    repo: fixture.repo,
+    repoPath: context.repoPath,
+  });
+}
 
 if (exactFetch && result.status === 0) {
   writeFileSync(FETCH_STATE_PATH, JSON.stringify({ fetchedAt: new Date().toISOString() }), "utf8");

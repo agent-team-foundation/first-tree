@@ -403,6 +403,95 @@ if (argv[0] === "tree" && argv[1] === "tree") {
   runTreeTree(argv, phase);
 }
 
+if (AUDIT_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] === "verify") {
+  const fixture = JSON.parse(readFileSync(AUDIT_FIXTURE_PATH, "utf8"));
+  const treePathIndex = argv.indexOf("--tree-path");
+  const explicitTreePath = treePathIndex >= 0 ? argv[treePathIndex + 1] || null : null;
+  const verifyTargetPath = explicitTreePath ? resolve(process.cwd(), explicitTreePath) : process.cwd();
+  const exactCommand =
+    (argv.length === 3 && argv[2] === "--json") ||
+    (argv.length === 4 && argv[2] === "--tree-path" && explicitTreePath !== null);
+  const mainTreePath = resolve(fixture.workspacePath, "context-tree");
+  let actualCwd = null;
+  let auditCwd = null;
+  let actualCommonDir = null;
+  let mainCommonDir = null;
+  try {
+    actualCwd = realpathSync(verifyTargetPath);
+    auditCwd = fixture.auditWorktreePath ? realpathSync(fixture.auditWorktreePath) : null;
+    const actualCommon = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: verifyTargetPath,
+      encoding: "utf8",
+    });
+    const mainCommon = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: mainTreePath,
+      encoding: "utf8",
+    });
+    actualCommonDir = actualCommon.status === 0 ? realpathSync(resolve(verifyTargetPath, actualCommon.stdout.trim())) : null;
+    mainCommonDir = mainCommon.status === 0 ? realpathSync(resolve(mainTreePath, mainCommon.stdout.trim())) : null;
+  } catch {}
+  const headResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: verifyTargetPath, encoding: "utf8" });
+  const statusResult = spawnSync("git", ["status", "--porcelain"], { cwd: verifyTargetPath, encoding: "utf8" });
+  const actualHead = headResult.status === 0 ? headResult.stdout.trim() : null;
+  const authoredState = actualHead !== fixture.headOid || (statusResult.status === 0 && statusResult.stdout.trim() !== "");
+  const writerVerifyBindingValid =
+    exactCommand &&
+    actualCwd !== null &&
+    actualCwd !== auditCwd &&
+    actualCommonDir !== null &&
+    actualCommonDir === mainCommonDir &&
+    authoredState;
+  if (writerVerifyBindingValid) {
+    const hasDistCli = existsSync(DIST_CLI_ENTRY);
+    const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || (hasDistCli ? process.execPath : TSX_BIN);
+    const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE
+      ? argv
+      : hasDistCli
+        ? [DIST_CLI_ENTRY, ...argv]
+        : [SOURCE_CLI_ENTRY, ...argv];
+    const result = spawnSync(realCommand, realArgs, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: process.env,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    let auditOriginAdvanced = false;
+    if (
+      result.status === 0 &&
+      fixture.scenario === "stale-before-publish" &&
+      fixture.originPath &&
+      fixture.advancedHeadOid
+    ) {
+      const advanced = spawnSync(
+        "git",
+        ["--git-dir", fixture.originPath, "update-ref", "refs/heads/main", fixture.advancedHeadOid, fixture.headOid],
+        { encoding: "utf8" },
+      );
+      auditOriginAdvanced = advanced.status === 0;
+      if (!auditOriginAdvanced) {
+        finish(argv, phase, 2, "", "Failed to advance the deterministic audit origin after writer verification.\\n", {
+          actualHead,
+          auditOriginAdvanced: false,
+          auditWriterVerify: true,
+          writerVerifyBindingValid: true,
+        });
+      }
+      append({
+        type: "audit_origin_advanced_after_writer_verify",
+        phase,
+        advancedHead: fixture.advancedHeadOid,
+      });
+    }
+    finish(argv, phase, result.status ?? 1, result.stdout || "", result.stderr || "", {
+      actualHead,
+      auditOriginAdvanced,
+      auditWriterVerify: true,
+      verifiedTreePath: actualCwd,
+      writerVerifyBindingValid: true,
+    });
+  }
+}
+
 if (RECORDED_MODEL_VERIFY_PATH && phase === "model" && argv[0] === "tree" && argv[1] === "verify") {
   const exactCommand = argv.length === 3 && argv[2] === "--json";
   let actualCwd = null;

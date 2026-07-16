@@ -33,6 +33,7 @@ const state: AuditFixtureState = {
   mainWorktreeClean: true,
   noGuessedTreeState: true,
   originMainExpected: true,
+  unpublishedAuthoringStateClean: true,
 };
 
 function strongCase(): ContextTreeAuditEvalCase {
@@ -110,9 +111,42 @@ function passingEvents(): unknown[] {
     },
     { phase: "model", type: "audit_tree_authoring_started" },
     {
+      argv: ["tree", "verify", "--json"],
+      auditWriterVerify: true,
+      exitCode: 0,
+      phase: "model",
+      type: "first_tree_result",
+      writerVerifyBindingValid: true,
+    },
+    {
+      branch: "main",
+      phase: "model",
+      repo: "owner/context-tree",
+      repoPath: "/workspace/context-tree",
+      type: "audit_write_freshness_fetch",
+    },
+    {
+      auditedHead: "abc123",
+      branch: "main",
+      fetchObserved: true,
+      observedRemoteHead: "abc123",
+      phase: "model",
+      repo: "owner/context-tree",
+      repoPath: "/workspace/context-tree",
+      type: "audit_write_freshness_observed",
+    },
+    {
+      phase: "model",
+      publishedRef: "refs/heads/audit-fix",
+      remote: "origin",
+      repo: "owner/context-tree",
+      type: "audit_tree_publication_succeeded",
+    },
+    {
       artifact: "pull-request",
       body: `Audited SHA: abc123\nPath: system/audit-contract.md\nPolicy: Code vs Tree Drift Authority\nClaim: Retention claim is 30 days and stale\nEvidence: source-repo/config/audit-retention.txt says 90\nConfidence: strong\nAction: focused tree PR`,
       phase: "model",
+      draft: true,
       type: "audit_artifact_created",
     },
   ];
@@ -197,9 +231,12 @@ describe("context-tree-audit grader", () => {
   });
 
   it("rejects focused authoring without a pre-action freshness observation", () => {
-    expect(
-      passes(passingEvents().filter((event) => (event as { type?: string }).type !== "audit_write_freshness_observed")),
-    ).toBe(false);
+    const events = passingEvents();
+    const firstObservation = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_write_freshness_observed",
+    );
+    events.splice(firstObservation, 1);
+    expect(passes(events)).toBe(false);
   });
 
   it("rejects a freshness fetch performed before the write handoff", () => {
@@ -217,6 +254,57 @@ describe("context-tree-audit grader", () => {
     );
     const freshness = events.splice(freshnessIndex, 1)[0];
     events.push(freshness);
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects focused publication without a second freshness check", () => {
+    const events = passingEvents();
+    const observations = events
+      .map((event, index) => ({ index, type: (event as { type?: string }).type }))
+      .filter((item) => item.type === "audit_write_freshness_observed");
+    const second = observations[1]?.index;
+    if (second === undefined) throw new Error("Missing publication freshness observation.");
+    events.splice(second - 1, 2);
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects focused publication without a successful writer verification", () => {
+    const events = passingEvents().filter(
+      (event) => (event as { auditWriterVerify?: boolean }).auditWriterVerify !== true,
+    );
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects publication freshness checked before writer verification", () => {
+    const events = passingEvents();
+    const writerVerifyIndex = events.findIndex(
+      (event) => (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    );
+    const writerVerify = events.splice(writerVerifyIndex, 1)[0];
+    const secondFetchIndex = events.findLastIndex(
+      (event) => (event as { type?: string }).type === "audit_write_freshness_fetch",
+    );
+    events.splice(secondFetchIndex + 2, 0, writerVerify);
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects failed or foreign publication evidence", () => {
+    const failed = passingEvents().filter(
+      (event) => (event as { type?: string }).type !== "audit_tree_publication_succeeded",
+    );
+    expect(passes(failed)).toBe(false);
+    const foreign = passingEvents();
+    const publication = foreign.find(
+      (event) => (event as { type?: string }).type === "audit_tree_publication_succeeded",
+    ) as Record<string, unknown> | undefined;
+    if (!publication) throw new Error("Missing publication event.");
+    publication.repo = "owner/foreign-repo";
+    expect(passes(foreign)).toBe(false);
+  });
+
+  it("rejects a ready Audit-originated pull request", () => {
+    const events = passingEvents();
+    (events.at(-1) as Record<string, unknown>).draft = false;
     expect(passes(events)).toBe(false);
   });
 
@@ -255,6 +343,7 @@ describe("context-tree-audit grader", () => {
         type !== "audit_write_freshness_fetch" &&
         type !== "audit_write_freshness_observed" &&
         type !== "audit_tree_authoring_started" &&
+        type !== "audit_tree_publication_succeeded" &&
         type !== "audit_artifact_created"
       );
     });
@@ -300,6 +389,7 @@ describe("context-tree-audit grader", () => {
         type !== "audit_write_freshness_fetch" &&
         type !== "audit_write_freshness_observed" &&
         type !== "audit_tree_authoring_started" &&
+        type !== "audit_tree_publication_succeeded" &&
         type !== "audit_artifact_created"
       );
     });
@@ -333,13 +423,8 @@ describe("context-tree-audit grader", () => {
       scenario: "stale-before-write",
     };
     const staleState: AuditFixtureState = { ...state, changedBranchCount: 0, diffPaths: [] };
-    const events = passingEvents().filter(
-      (event) => (event as { type?: string }).type !== "audit_tree_authoring_started",
-    );
-    events.pop();
-    const freshness = events.find((event) => (event as { type?: string }).type === "audit_write_freshness_observed") as
-      | Record<string, unknown>
-      | undefined;
+    const events = passingEvents().slice(0, 9);
+    const freshness = events.at(-1) as Record<string, unknown> | undefined;
     if (!freshness) throw new Error("Missing freshness observation.");
     freshness.observedRemoteHead = "def456";
     let metrics = deriveMetrics(events, evalCase, staleExpectation, staleState, 0);
@@ -349,11 +434,81 @@ describe("context-tree-audit grader", () => {
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 
-  it("rejects a report-only run that creates an artifact or branch", () => {
+  it("cleans unpublished authoring when main advances before publication", () => {
+    const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "stale-before-publish");
+    if (!evalCase) throw new Error("Missing stale-before-publish audit case.");
+    const staleExpectation: AuditFixtureExpectation = {
+      ...expectation,
+      advancedHeadOid: "def456",
+      expectedAction: "fail-closed",
+      scenario: "stale-before-publish",
+    };
+    const staleState: AuditFixtureState = {
+      ...state,
+      changedBranchCount: 0,
+      diffPaths: [],
+      unpublishedAuthoringStateClean: true,
+    };
+    const events = passingEvents().filter((event) => {
+      const type = (event as { type?: string }).type;
+      return type !== "audit_tree_publication_succeeded" && type !== "audit_artifact_created";
+    });
+    const observations = events.filter(
+      (event) => (event as { type?: string }).type === "audit_write_freshness_observed",
+    ) as Array<Record<string, unknown>>;
+    if (!observations[1]) throw new Error("Missing publication freshness observation.");
+    observations[1].observedRemoteHead = "def456";
+    let metrics = deriveMetrics(events, evalCase, staleExpectation, staleState, 0);
+    expect(casePassed(evalCase, metrics)).toBe(true);
+    events.push({
+      phase: "model",
+      publishedRef: "refs/heads/audit-fix",
+      remote: "origin",
+      repo: "owner/context-tree",
+      type: "audit_tree_publication_succeeded",
+    });
+    metrics = deriveMetrics(events, evalCase, staleExpectation, staleState, 0);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("defaults a plain audit to a non-mutating report", () => {
     const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "report-only");
     if (!evalCase) throw new Error("Missing report-only audit case.");
     const reportExpectation = { ...expectation, expectedAction: "report" as const, mode: "report-only" as const };
-    const metrics = deriveMetrics(passingEvents(), evalCase, reportExpectation, state, 0);
+    const reportState = { ...state, changedBranchCount: 0, diffPaths: [] };
+    const readOnlyEvents = passingEvents().slice(0, 6);
+    let metrics = deriveMetrics(readOnlyEvents, evalCase, reportExpectation, reportState, 0);
+    expect(casePassed(evalCase, metrics)).toBe(true);
+    readOnlyEvents.push(passingEvents().at(-1));
+    metrics = deriveMetrics(readOnlyEvents, evalCase, reportExpectation, reportState, 0);
+    expect(casePassed(evalCase, metrics)).toBe(false);
+  });
+
+  it("keeps a plain decision-lock audit report-only", () => {
+    const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.id === "audit-decision-lock-report-only");
+    if (!evalCase) throw new Error("Missing report-only decision-lock audit case.");
+    const lockedExpectation: AuditFixtureExpectation = {
+      ...expectation,
+      expectedAction: "report",
+      expectedFinding: {
+        claimTokens: ["30", "90"],
+        evidenceTokens: ["decisionlockscode", "audit-retention.txt", "90"],
+        policyTokens: ["code", "tree", "drift"],
+      },
+      mode: "report-only",
+      scenario: "decision-lock",
+    };
+    const reportState = { ...state, changedBranchCount: 0, diffPaths: [] };
+    const events = passingEvents().slice(0, 6);
+    let metrics = deriveMetrics(events, evalCase, lockedExpectation, reportState, 0);
+    expect(casePassed(evalCase, metrics)).toBe(true);
+    events.push({
+      artifact: "human-ask",
+      body: `Audited SHA: abc123\nPath: system/audit-contract.md\nPolicy: Code vs Tree Drift Authority\nClaim: Locked 30-day retention conflicts with source value 90\nEvidence: decisionLocksCode is true; audit-retention.txt says 90\nConfidence: human-authority\nAction: tracked human ask`,
+      phase: "model",
+      type: "audit_artifact_created",
+    });
+    metrics = deriveMetrics(events, evalCase, lockedExpectation, reportState, 0);
     expect(casePassed(evalCase, metrics)).toBe(false);
   });
 });

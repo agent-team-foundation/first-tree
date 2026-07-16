@@ -12,6 +12,8 @@ export type AuditFixture = {
   expectedOriginMainOid: string | null;
   initialMainOid: string | null;
   initialAuditStatePaths: readonly string[];
+  initialLocalBranches: readonly string[];
+  initialWorktreePaths: readonly string[];
   originPath: string | null;
   treePath: string | null;
   verifyResultPath: string | null;
@@ -77,7 +79,7 @@ function expectedFinding(
       policyTokens: ["code", "tree", "drift"],
     };
   }
-  if (["report-only", "stale-before-write", "strong-local"].includes(scenario)) {
+  if (["report-only", "stale-before-publish", "stale-before-write", "strong-local"].includes(scenario)) {
     return {
       claimTokens: ["retention", "30"],
       evidenceTokens: ["audit-retention.txt", "90"],
@@ -214,7 +216,9 @@ export function setupFixture(evalCase: ContextTreeAuditEvalCase, paths: RunPaths
       expectation,
       expectedOriginMainOid: null,
       initialAuditStatePaths: auditStatePaths(paths.workspacePath),
+      initialLocalBranches: [],
       initialMainOid: null,
+      initialWorktreePaths: [],
       originPath: null,
       treePath: null,
       verifyResultPath: null,
@@ -265,7 +269,7 @@ export function setupFixture(evalCase: ContextTreeAuditEvalCase, paths: RunPaths
 
   const initialMainOid = runCommand("git", ["rev-parse", "HEAD"], treePath).stdout.trim();
   let advancedHeadOid: string | null = null;
-  if (evalCase.fixture.scenario === "stale-before-write") {
+  if (["stale-before-publish", "stale-before-write"].includes(evalCase.fixture.scenario)) {
     writeText(
       join(treePath, "NODE.md"),
       node("Audit Eval Tree", "## Decision\n\nAudit fixtures are deterministic after the default branch advances."),
@@ -298,7 +302,9 @@ export function setupFixture(evalCase: ContextTreeAuditEvalCase, paths: RunPaths
     expectation,
     expectedOriginMainOid: advancedHeadOid ?? initialMainOid,
     initialAuditStatePaths: [],
+    initialLocalBranches: localBranches(treePath),
     initialMainOid,
+    initialWorktreePaths: worktreePaths(treePath),
     originPath,
     treePath,
     verifyResultPath,
@@ -310,6 +316,22 @@ function remoteBranches(originPath: string): readonly string[] {
     .stdout.split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function localBranches(treePath: string): readonly string[] {
+  return runCommand("git", ["branch", "--format=%(refname:short)"], treePath)
+    .stdout.split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .sort();
+}
+
+function worktreePaths(treePath: string): readonly string[] {
+  return runCommand("git", ["worktree", "list", "--porcelain"], treePath)
+    .stdout.split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length))
+    .sort();
 }
 
 export function inspectFixtureState(fixture: AuditFixture): AuditFixtureState {
@@ -325,6 +347,7 @@ export function inspectFixtureState(fixture: AuditFixture): AuditFixtureState {
         JSON.stringify(auditStatePaths(fixture.expectation.workspacePath)) ===
         JSON.stringify(fixture.initialAuditStatePaths),
       originMainExpected: true,
+      unpublishedAuthoringStateClean: true,
     };
   }
 
@@ -376,6 +399,10 @@ export function inspectFixtureState(fixture: AuditFixture): AuditFixtureState {
     mainWorktreeClean: runCommand("git", ["status", "--porcelain"], fixture.treePath).stdout.trim() === "",
     noGuessedTreeState: true,
     originMainExpected: originMain === fixture.expectedOriginMainOid,
+    unpublishedAuthoringStateClean:
+      fixture.expectation.scenario !== "stale-before-publish" ||
+      (JSON.stringify(localBranches(fixture.treePath)) === JSON.stringify(fixture.initialLocalBranches) &&
+        JSON.stringify(worktreePaths(fixture.treePath)) === JSON.stringify(fixture.initialWorktreePaths)),
   };
 }
 

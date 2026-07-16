@@ -28,7 +28,8 @@ Writing is source-driven. Acceptable sources include:
 - an evidence-backed `context-tree-audit` finding from the current session that
   records the exact audited tree HEAD and scope, path, generated-policy rule,
   current source evidence, confidence, intended replacement or canonical
-  placement, and risk.
+  placement, and risk, and comes from an Audit request that explicitly granted
+  Maintenance mutation authority.
 
 If no concrete source artifact exists, stop and ask for one. Do not invent
 ad-hoc tree edits from memory or from a broad request like "update the tree".
@@ -41,6 +42,12 @@ branch and require its exact remote HEAD to equal the finding's audited HEAD.
 If it advanced, do not apply the old finding. Re-run Audit validation, target
 and source-evidence reads on a new exact snapshot, or fail closed without a
 tree diff or pull request.
+
+For an Audit finding, repeat that fetch and exact remote-HEAD comparison after
+drafting and verification, immediately before any push or PR/MR creation. If
+the default branch advanced during authoring, do not publish. Safely remove the
+unpublished Audit-origin worktree and local branch, then re-run Audit on a new
+exact snapshot or stop with no remote branch and no PR/MR.
 
 Implementation-only material usually produces no tree write. Refactors,
 function signatures, API shapes, request/response examples, build config,
@@ -74,7 +81,9 @@ relationship.
    Non-zero exit blocks the PR/MR.
 7. **Prepare the PR/MR.** One source artifact maps to one tree PR/MR. Keep the
    description focused on the source and the tree nodes changed; do not put
-   PR/MR IDs, source links, or audit trails into node bodies.
+   PR/MR IDs, source links, or audit trails into node bodies. An Audit-originated
+   tree PR/MR must be created as draft and left draft for independent
+   `context-tree-review`; Writer does not mark it ready.
 
 ## Write Rules
 

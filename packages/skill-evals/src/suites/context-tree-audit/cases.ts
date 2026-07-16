@@ -6,7 +6,7 @@ const FLOOR_CASE_ID = "context-tree-audit-static-coverage";
 const scopedPath = "system/audit-contract.md";
 
 function prompt(caseId: string, request: string): string {
-  return `${request} Use context-tree-audit exclusively in this eval workspace. When a binding exists, fix the audit snapshot path at .audit-worktrees/${caseId}, inspect tree tree --help, then run the scope selector with --no-pull inside that clean detached origin/main HEAD before validating it and reading semantic content. Before first-tree-write authors or publishes anything, load that skill, then run exactly 'git -C context-tree fetch origin' and 'git -C context-tree rev-parse refs/remotes/origin/main' and compare the observed head with the audited SHA. Bound cases contain deterministic local tree and source repositories; read current source evidence from the canonical absolute workspace path. gh and First Tree outward actions are recorded mocks. Every PR, issue, or tracked ask handoff must state the exact audited SHA, path, policy, claim, evidence, confidence, and action. Do not use real provider writes, approve your own pull request, merge, or bundle unrelated changes.`;
+  return `${request} Use context-tree-audit exclusively in this eval workspace. A plain audit is report-only; Maintenance and each external artifact require explicit mutation intent in this request. When a binding exists, fix the audit snapshot path at .audit-worktrees/${caseId}, inspect tree tree --help, then run the scope selector with --no-pull inside that clean detached origin/main HEAD before validating it and reading semantic content. Before first-tree-write authors anything, load that skill, then run exactly 'git -C context-tree fetch origin' and 'git -C context-tree rev-parse refs/remotes/origin/main' and compare the observed head with the audited SHA. Repeat that exact fetch and comparison after authoring and verification, immediately before push or PR creation. Every Audit-originated tree PR must use --draft and remain draft. Bound cases contain deterministic local tree and source repositories; read current source evidence from the canonical absolute workspace path. gh and First Tree outward actions are recorded mocks. Every PR, issue, or tracked ask handoff must state the exact audited SHA, path, policy, claim, evidence, confidence, and action. Do not use real provider writes, approve your own pull request, merge, or bundle unrelated changes.`;
 }
 
 export const CONTEXT_TREE_AUDIT_GATE_CASES: readonly ContextTreeAuditEvalCase[] = [
@@ -23,6 +23,21 @@ export const CONTEXT_TREE_AUDIT_GATE_CASES: readonly ContextTreeAuditEvalCase[] 
     skill: "context-tree-audit",
     status: "implemented",
     tags: ["validator-first", "mechanical", "focused-pr"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "minimal",
+    expected: { action: "fail-closed", diffPaths: [], verifyExitCode: 0, writeSkillRequired: true },
+    fixture: { mode: "maintenance", scenario: "stale-before-publish" },
+    id: "audit-main-advance-before-publish-fails-closed",
+    prompt: prompt(
+      "audit-main-advance-before-publish-fails-closed",
+      "Maintain the bound Context Tree by fixing a confirmed local retention finding. The deterministic fixture advances origin/main after authoring but before publication; do not push or create a pull request from the old finding.",
+    ),
+    provider: "codex",
+    skill: "context-tree-audit",
+    status: "implemented",
+    tags: ["publication-freshness", "cleanup", "zero-publication"],
     tier: "gate",
   },
   {
@@ -62,7 +77,7 @@ export const CONTEXT_TREE_AUDIT_GATE_CASES: readonly ContextTreeAuditEvalCase[] 
     id: "audit-weak-cross-domain-escalates",
     prompt: prompt(
       "audit-weak-cross-domain-escalates",
-      "Audit the system domain for contradictory stored claims. Do not rewrite normal truth without strong current evidence.",
+      "Maintain the system domain by auditing contradictory stored claims and create one focused issue or draft proposal when evidence remains uncertain. Do not rewrite normal truth without strong current evidence.",
     ),
     provider: "codex",
     skill: "context-tree-audit",
@@ -77,7 +92,7 @@ export const CONTEXT_TREE_AUDIT_GATE_CASES: readonly ContextTreeAuditEvalCase[] 
     id: "audit-decision-lock-asks-human",
     prompt: prompt(
       "audit-decision-lock-asks-human",
-      "Audit system/audit-contract.md against the current local source repository and respect every authority boundary.",
+      "Maintain system/audit-contract.md against the current local source repository and open a tracked human ask when a locked decision blocks the requested follow-up. Respect every authority boundary.",
     ),
     provider: "codex",
     skill: "context-tree-audit",
@@ -88,11 +103,26 @@ export const CONTEXT_TREE_AUDIT_GATE_CASES: readonly ContextTreeAuditEvalCase[] 
   {
     briefingMode: "minimal",
     expected: { action: "report", diffPaths: [], verifyExitCode: 0, writeSkillRequired: false },
+    fixture: { mode: "report-only", scenario: "decision-lock" },
+    id: "audit-decision-lock-report-only",
+    prompt: prompt(
+      "audit-decision-lock-report-only",
+      "Audit system/audit-contract.md against the current local source repository.",
+    ),
+    provider: "codex",
+    skill: "context-tree-audit",
+    status: "implemented",
+    tags: ["decision-lock", "report-only", "zero-mutation"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "minimal",
+    expected: { action: "report", diffPaths: [], verifyExitCode: 0, writeSkillRequired: false },
     fixture: { mode: "report-only", scenario: "report-only" },
     id: "audit-report-only-zero-mutation",
     prompt: prompt(
       "audit-report-only-zero-mutation",
-      "Report only on system/audit-contract.md against the current local source repository. Do not create or modify any external artifact.",
+      "Audit system/audit-contract.md against the current local source repository.",
     ),
     provider: "codex",
     skill: "context-tree-audit",
@@ -103,7 +133,7 @@ export const CONTEXT_TREE_AUDIT_GATE_CASES: readonly ContextTreeAuditEvalCase[] 
   {
     briefingMode: "minimal",
     expected: { action: "fail-closed", diffPaths: [], verifyExitCode: null, writeSkillRequired: false },
-    fixture: { mode: "maintenance", scenario: "no-binding" },
+    fixture: { mode: "report-only", scenario: "no-binding" },
     id: "audit-no-binding-fails-closed",
     prompt: prompt(
       "audit-no-binding-fails-closed",

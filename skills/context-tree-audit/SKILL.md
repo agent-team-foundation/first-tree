@@ -28,9 +28,13 @@ empty-tree setup. Those remain owned by their dedicated skills.
 
 Choose the execution mode from the request:
 
-- **Report-only:** when the human says to inspect, report, or avoid changes,
-  perform no commit, push, pull request, issue, or other external mutation.
-- **Maintenance:** otherwise, high-confidence local findings may produce one
+- **Report-only (default):** a request to audit, inspect, or report grants
+  read-only authority. Perform no commit, push, pull request, issue, tracked
+  ask, or other external mutation; report findings and recommended routes in
+  the completion response.
+- **Maintenance:** select this only when the human explicitly asks to maintain,
+  fix, or create follow-up artifacts. Mutation authority extends only to the
+  requested artifact kinds. High-confidence local findings may produce one
   focused artifact per coherent finding group. Nothing is merged automatically.
 
 ## Stable Snapshot
@@ -86,17 +90,25 @@ an automatic normal-content rewrite.
 
 ## Finding Routing
 
+- In Report-only mode, record every finding and its recommended route in the
+  response, including authority conflicts. Do not create an issue, proposal,
+  tracked ask, branch, commit, or pull request.
 - A local mechanical or strong semantic finding may become one small tree PR
   in Maintenance mode only after it becomes a concrete audit source artifact.
   Include the audited SHA and scope, exact finding group, current evidence,
   canonical-placement judgment, and risk. Then load `first-tree-write`; that
   skill rechecks freshness and owns target selection, drafting, verification,
-  worktree, and PR discipline. Audit never edits the tree directly.
+  worktree, and PR discipline. Every Audit-originated tree PR is created as a
+  draft and remains draft when Audit and Writer finish. Audit never edits the
+  tree directly.
 - Weak, broad, or cross-domain evidence does not change normal truth. Report it
-  or create a focused issue or draft proposal that names the missing evidence.
-- Ownership, human-authority, or locked-decision conflicts require a tracked
-  human ask. Source implementation that conflicts with a locked decision is
-  escalated to the source side, not repaired by changing the tree.
+  or, when Maintenance explicitly authorizes it, create a focused issue or
+  draft proposal that names the missing evidence.
+- In Maintenance mode, ownership, human-authority, or locked-decision conflicts
+  use a tracked human ask only when the next step genuinely depends on that
+  decision and the request authorizes follow-up actions. Otherwise report the
+  blocker without mutation. Source implementation that conflicts with a locked
+  decision is escalated to the source side, not repaired by changing the tree.
 - No findings means report the exact audited SHA, scope, validator result, and
   evidence coverage. Do not claim correctness outside the inspected scope.
 

@@ -17,20 +17,26 @@ describe("context-tree-audit static contract", () => {
     expect(skill).not.toContain("members/");
     expect(skill).not.toContain("first-tree tree audit");
     expect(skill).toContain("mechanical or strong semantic finding");
+    expect(skill).toContain("**Report-only (default):**");
+    expect(skill).toContain("draft and remains draft");
     expect(skill).toContain("tree tree --no-pull");
     const writeSkill = readFileSync(join(repoRoot, "skills", "first-tree-write", "SKILL.md"), "utf8");
     expect(writeSkill).toContain("Before any target");
     expect(writeSkill).toContain("audited HEAD");
+    expect(writeSkill).toContain("immediately before any push");
+    expect(writeSkill).toContain("must be created as draft and left draft");
   });
 
   it("keeps the floor linked to every deterministic gate scenario", () => {
-    expect(CONTEXT_TREE_AUDIT_GATE_CASES).toHaveLength(7);
+    expect(CONTEXT_TREE_AUDIT_GATE_CASES).toHaveLength(9);
     expect(
       CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "mechanical")?.expected,
     ).toMatchObject({
       writeSkillRequired: true,
     });
     expect(CONTEXT_TREE_AUDIT_GATE_CASES.some((item) => item.fixture.scenario === "stale-before-write")).toBe(true);
+    expect(CONTEXT_TREE_AUDIT_GATE_CASES.some((item) => item.fixture.scenario === "stale-before-publish")).toBe(true);
+    expect(CONTEXT_TREE_AUDIT_GATE_CASES.some((item) => item.id === "audit-decision-lock-report-only")).toBe(true);
     expect(CONTEXT_TREE_AUDIT_SUITE.coverage.tiers.flatMap((tier) => tier.caseIds)).toEqual([
       "context-tree-audit-static-coverage",
       ...CONTEXT_TREE_AUDIT_GATE_CASES.map((item) => item.id),

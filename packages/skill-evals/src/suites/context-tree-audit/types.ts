@@ -7,6 +7,7 @@ export type AuditScenario =
   | "no-binding"
   | "report-only"
   | "stale-before-write"
+  | "stale-before-publish"
   | "strong-local"
   | "weak-cross-domain";
 
@@ -56,6 +57,7 @@ export type AuditFixtureIntegrity = {
   mainWorktreeClean: boolean;
   noGuessedTreeState: boolean;
   originMainExpected: boolean;
+  unpublishedAuthoringStateClean: boolean;
 };
 
 export type AuditFixtureState = AuditFixtureIntegrity & {
@@ -89,6 +91,8 @@ export type AuditEvalMetrics = {
   verifyExitCodes: readonly number[];
   writeSkillReadObserved: boolean;
   writeFreshnessChecked: boolean;
+  publicationFreshnessChecked: boolean;
+  draftPullRequestObserved: boolean;
 };
 
 export type CliOptions = {

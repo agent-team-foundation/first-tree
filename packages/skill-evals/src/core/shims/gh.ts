@@ -233,7 +233,8 @@ if (AUDIT_FIXTURE_PATH) {
     );
   }
   if (argv[0] === "pr" && argv[1] === "create") {
-    if (!repoMatches || fixture.mode === "report-only" || fixture.scenario === "no-binding") {
+    const draft = argv.includes("--draft");
+    if (!repoMatches || !draft || fixture.mode === "report-only" || fixture.scenario === "no-binding") {
       finish(argv, phase, 2, "", "Audit fixture rejected pull request creation.\\n", {
         auditFixture: true,
         auditFixtureViolation: true,
@@ -246,6 +247,7 @@ if (AUDIT_FIXTURE_PATH) {
       argv,
       body: artifactBody(argv),
       cwd: process.cwd(),
+      draft,
       repo: fixture.repo,
     });
     finish(argv, phase, 0, "https://github.com/owner/context-tree/pull/77\\n", "", {
