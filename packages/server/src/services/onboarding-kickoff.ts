@@ -223,13 +223,14 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
  *      onboarding key (race-safe via the unique index on
  *      `chats.onboarding_kickoff_key`);
  *   2. send the bootstrap message only if the chat has no messages yet;
- *   3. optionally stamp `onboarding_completed_at` (+ suppressed/reason) only
- *      after the chat exists, and only if not already stamped.
+ *   3. stamp membership onboarding state per `stamp` only after the chat
+ *      exists, and only if not already stamped.
  *
  * Re-running it — a reopened tab, a network retry, or the tree setup recovery
- * surface — converges on the same chat. Single-chat onboarding paths keep
- * `complete: true`; support/background paths use `complete: false` and stamp
- * completion only after all required chats exist.
+ * surface — converges on the same chat. Single-chat onboarding paths pass
+ * `stamp: "completed"`; the team-agent quick start passes `"invitee_skip"`
+ * (suppress auto-open without completion); support/background paths pass
+ * `"none"` and stamp completion only after all required chats exist.
  */
 export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArgs): Promise<KickoffOnboardingResult> {
   const initialMessage: SendMessage = {

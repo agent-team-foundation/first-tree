@@ -499,6 +499,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     setTreeUrl: vi.fn(),
     treeAutoDetectDone: true,
     markTreeAutoDetectDone: vi.fn(),
+    offerTeamAgentStart: false,
     completeAndEnterChat: vi.fn(async () => undefined),
     skipAndEnterChat: vi.fn(async () => undefined),
     finishLater: vi.fn(async () => undefined),

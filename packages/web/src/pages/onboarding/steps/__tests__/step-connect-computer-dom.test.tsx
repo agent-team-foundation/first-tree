@@ -63,6 +63,7 @@ function flow(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue
     setTreeUrl: vi.fn(),
     treeAutoDetectDone: false,
     markTreeAutoDetectDone: vi.fn(),
+    offerTeamAgentStart: false,
     completeAndEnterChat: vi.fn(),
     skipAndEnterChat: vi.fn(),
     finishLater: vi.fn(),

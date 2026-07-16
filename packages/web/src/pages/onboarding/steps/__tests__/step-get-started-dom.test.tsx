@@ -11,13 +11,11 @@ import { OnboardingFlowContext } from "../../onboarding-flow.js";
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const mocks = vi.hoisted(() => ({
-  useAuth: vi.fn(),
-  useOrgAgents: vi.fn(),
+  listAgents: vi.fn(),
   listMembers: vi.fn(),
   startOnboardingChat: vi.fn(),
 }));
-vi.mock("../../../../auth/auth-context.js", () => ({ useAuth: mocks.useAuth }));
-vi.mock("../../../../lib/use-org-agents.js", () => ({ useOrgAgents: mocks.useOrgAgents }));
+vi.mock("../../../../api/agents.js", () => ({ listAgents: mocks.listAgents }));
 vi.mock("../../../../api/members.js", () => ({ listMembers: mocks.listMembers }));
 vi.mock("../../tree-setup-chat.js", () => ({ startOnboardingChat: mocks.startOnboardingChat }));
 
@@ -61,6 +59,7 @@ function flow(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue
     retryAgent: vi.fn(),
     createdAgentUuid: null,
     hasAgent: false,
+    offerTeamAgentStart: true,
     selectedRepoUrls: [],
     setSelectedRepoUrls: vi.fn(),
     hasRepoDraft: false,
@@ -82,7 +81,7 @@ function teammateAgent(uuid: string, displayName: string, managerId: string) {
     uuid,
     name: displayName.toLowerCase().replace(/\s+/g, "-"),
     displayName,
-    type: "autonomous_agent",
+    type: "agent",
     managerId,
     avatarImageUrl: null,
     avatarColorToken: null,
@@ -130,10 +129,9 @@ beforeEach(() => {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
   });
-  mocks.useAuth.mockReset().mockReturnValue({ currentOrgHasUsableAgent: true, currentOrgHasPersonalAgent: false });
-  mocks.useOrgAgents.mockReset().mockReturnValue({
-    isLoading: false,
-    data: { items: [teammateAgent("agent-1", "Dev Assistant", "member-owner")] },
+  mocks.listAgents.mockReset().mockResolvedValue({
+    items: [teammateAgent("agent-1", "Dev Assistant", "member-owner")],
+    nextCursor: null,
   });
   mocks.listMembers
     .mockReset()
@@ -149,12 +147,14 @@ afterEach(() => {
 });
 
 describe("StepGetStarted", () => {
-  it("self-skips (advances) when the org offers no team-agent start", async () => {
-    mocks.useAuth.mockReturnValue({ currentOrgHasUsableAgent: false, currentOrgHasPersonalAgent: false });
-    const value = flow();
+  it("self-skips (advances exactly once) when the org offers no team-agent start", async () => {
+    const value = flow({ offerTeamAgentStart: false });
     const container = await renderStep(value);
+    // Idempotent even under a double-invoked mount effect (StrictMode): the
+    // one-shot ref guards the relative goNext.
     expect(value.goNext).toHaveBeenCalledTimes(1);
     expect(container.textContent).toBe("");
+    expect(mocks.listAgents).not.toHaveBeenCalled();
   });
 
   it("offers both choices; the primary continues the standard setup", async () => {
@@ -174,6 +174,9 @@ describe("StepGetStarted", () => {
     expect(container.textContent).toContain("Pick a team agent");
     expect(container.textContent).toContain("Dev Assistant");
     expect(container.textContent).toContain("Run by Zhang Wei");
+    // The picker asks the server for non-human agents only, so human mirrors
+    // can never crowd eligible agents off a page.
+    expect(mocks.listAgents).toHaveBeenCalledWith(expect.objectContaining({ type: "agent", addressableOnly: true }));
     // The footnote keeps expectations honest: quick start ≠ finished setup.
     expect(container.textContent).toContain("won't finish your setup");
 
@@ -188,34 +191,51 @@ describe("StepGetStarted", () => {
     expect(value.completeAndEnterChat).not.toHaveBeenCalled();
   });
 
-  it("excludes human mirrors and the member's own agents from the picker", async () => {
-    mocks.useOrgAgents.mockReturnValue({
-      isLoading: false,
-      data: {
-        items: [
-          { ...teammateAgent("h-1", "Zhang Wei", "member-owner"), type: "human" },
-          teammateAgent("mine-1", "My Agent", "member-me"),
-          teammateAgent("agent-1", "Dev Assistant", "member-owner"),
-        ],
-      },
+  it("pages through every roster page so a later-page agent still shows", async () => {
+    mocks.listAgents
+      .mockResolvedValueOnce({
+        items: [teammateAgent("agent-1", "Dev Assistant", "member-owner")],
+        nextCursor: "2026-01-01T00:00:00.000Z",
+      })
+      .mockResolvedValueOnce({
+        items: [teammateAgent("agent-2", "Docs Helper", "member-owner")],
+        nextCursor: null,
+      });
+    const value = flow();
+    const container = await renderStep(value);
+    await click(buttonByText(container, "Quick start"));
+    await flushQueries();
+    expect(mocks.listAgents).toHaveBeenCalledTimes(2);
+    expect(mocks.listAgents.mock.calls[1]?.[0]).toMatchObject({ cursor: "2026-01-01T00:00:00.000Z" });
+    expect(container.textContent).toContain("Dev Assistant");
+    expect(container.textContent).toContain("Docs Helper");
+  });
+
+  it("excludes the member's own agents from the picker", async () => {
+    mocks.listAgents.mockResolvedValue({
+      items: [
+        teammateAgent("mine-1", "My Agent", "member-me"),
+        teammateAgent("agent-1", "Dev Assistant", "member-owner"),
+      ],
+      nextCursor: null,
     });
     const value = flow();
     const container = await renderStep(value);
     await click(buttonByText(container, "Quick start"));
+    await flushQueries();
     expect(container.textContent).toContain("Dev Assistant");
     expect(container.textContent).not.toContain("My Agent");
-    // The human mirror row would render as a second "Zhang Wei" — assert only
-    // one Start chat row remains.
     expect(Array.from(container.querySelectorAll("button")).filter((b) => b.textContent === "Start chat")).toHaveLength(
       1,
     );
   });
 
   it("empty picker offers the standard setup instead", async () => {
-    mocks.useOrgAgents.mockReturnValue({ isLoading: false, data: { items: [] } });
+    mocks.listAgents.mockResolvedValue({ items: [], nextCursor: null });
     const value = flow();
     const container = await renderStep(value);
     await click(buttonByText(container, "Quick start"));
+    await flushQueries();
     expect(container.textContent).toContain("No team agent is available right now");
     await click(buttonByText(container, "Continue setup"));
     expect(value.goNext).toHaveBeenCalledTimes(1);

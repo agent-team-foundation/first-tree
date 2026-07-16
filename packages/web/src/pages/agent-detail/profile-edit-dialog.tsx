@@ -337,9 +337,18 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
 
   const previewAgent: Agent = { ...agent, avatarColorToken: picked };
   const hasImage = !!agent.avatarImageUrl;
+  // The "runs on your computer / uses your plan" consequence is only true for a
+  // non-human runtime agent the viewer OWNS. This dialog also edits another
+  // member's agent (admin) and renders human identities, where that ownership
+  // statement would be false or nonsensical — so disclose it only to the owner
+  // of a non-human agent, and otherwise state the plain visibility effect.
+  const ownsNonHumanAgent = !isHuman && agent.managerId === memberId;
+  const orgVisibleHelp = ownsNonHumanAgent
+    ? "Anyone on your team can @mention it and start work with it — it runs on your computer and uses your plan."
+    : "Anyone on your team can @mention it and work with it.";
   const visibilityHelp = canChangeVisibility
     ? visibility === AGENT_VISIBILITY.ORGANIZATION
-      ? "Anyone on your team can @mention it and start work with it — it runs on your computer and uses your plan."
+      ? orgVisibleHelp
       : "Only this agent's owner can see and chat with it."
     : "Only the owner or an admin can change this agent's visibility.";
 

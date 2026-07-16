@@ -12,6 +12,7 @@ import { OnboardingShell } from "./onboarding/onboarding-shell.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
+import { StepGetStarted } from "./onboarding/steps/step-get-started.js";
 import { StepJoinTeam } from "./onboarding/steps/step-join-team.js";
 import { StepStartChat } from "./onboarding/steps/step-start-chat.js";
 import { StepTeam } from "./onboarding/steps/step-team.js";
@@ -73,6 +74,22 @@ const HOST: HubClient = {
 };
 
 const REPO_WEB = "https://github.com/acme/web.git";
+
+// Roster for the get-started fork's team-agent picker scenarios.
+const TEAM_AGENTS = [
+  {
+    uuid: "01920000-0000-7000-8000-0000000000a1",
+    name: "dev-assistant",
+    displayName: "Dev Assistant",
+    managerId: "member-owner-1",
+  },
+  {
+    uuid: "01920000-0000-7000-8000-0000000000a2",
+    name: "docs-helper",
+    displayName: "Docs Helper",
+    managerId: "member-owner-1",
+  },
+];
 const REPO_API = "https://github.com/acme/api.git";
 const REPO_INFRA = "https://github.com/acme/infra.git";
 
@@ -260,6 +277,15 @@ type NetProfile = {
    * fetch), so only the error scenarios opt in.
    */
   installUrlError?: 403 | 503 | 500;
+  /**
+   * GET /orgs/:id/agents — the get-started fork's team-agent picker roster.
+   * Matched for ANY org id (the picker resolves the org through the app-level
+   * selected org, not the fixture org). Opt-in: scenarios that don't declare
+   * it fall through to the real fetch.
+   */
+  orgAgents?: "pending" | Array<{ uuid: string; name: string; displayName: string; managerId: string }>;
+  /** GET /orgs/:id/members — owner names for the picker's "Run by X" tag. */
+  orgMembers?: boolean;
 };
 
 // The active scenario's net profile, read by the shim. Set during render of the
@@ -289,6 +315,45 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
 
   if (p === "/me/organizations") {
     return jsonResponse([{ id: ORG_ID, name: "acme", displayName: TEAM_NAME, role: "admin" }]);
+  }
+  // Get-started fork picker: roster + owner names. Matched for ANY org id
+  // because these requests carry the app-level selected org, not the fixture
+  // org. Opt-in via the scenario's net profile; otherwise fall through.
+  if (activeNet.orgAgents !== undefined && /^\/orgs\/[^/]+\/agents$/.test(p ?? "")) {
+    if (activeNet.orgAgents === "pending") return new Promise<Response>(() => {});
+    return jsonResponse({
+      items: activeNet.orgAgents.map((a) => ({
+        ...a,
+        organizationId: ORG_ID,
+        type: "agent",
+        status: "active",
+        visibility: "organization",
+        inboxId: `inbox-${a.uuid}`,
+        delegateMention: null,
+        metadata: {},
+        clientId: null,
+        runtimeProvider: "claude-code",
+        avatarColorToken: null,
+        avatarImageUrl: null,
+      })),
+      nextCursor: null,
+    });
+  }
+  if (activeNet.orgMembers && /^\/orgs\/[^/]+\/members$/.test(p ?? "")) {
+    return jsonResponse([
+      {
+        id: "member-owner-1",
+        userId: "u1",
+        organizationId: ORG_ID,
+        agentId: "h1",
+        role: "member",
+        createdAt: "",
+        username: "zhangwei",
+        displayName: "Zhang Wei",
+        avatarUrl: null,
+        lastActiveAt: null,
+      },
+    ]);
   }
   // Invitee start-chat picker → /me/github/repos; admin connect-code picker →
   // the org-scoped installation repos. Both render from the same `repos`
@@ -751,6 +816,60 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   },
 
   {
+    id: "inv-fork-choose",
+    label: "Get started · fork",
+    group: "Invitee flow",
+    role: "invitee",
+    view: "flow",
+    // The fork renders only while the org offers a team-agent start; clicking
+    // "Quick start" advances into the live pick sub-state (the shim serves the
+    // roster below).
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: TEAM_AGENTS, orgMembers: true },
+    },
+  },
+  {
+    id: "inv-fork-pick",
+    label: "Pick a team agent",
+    group: "Get-started fork states",
+    role: "invitee",
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: TEAM_AGENTS, orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+  {
+    id: "inv-fork-pick-loading",
+    label: "Pick · loading",
+    group: "Get-started fork states",
+    role: "invitee",
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: "pending", orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+  {
+    id: "inv-fork-pick-empty",
+    label: "Pick · no team agent",
+    group: "Get-started fork states",
+    role: "invitee",
+    // A failed roster read collapses to the same empty state (continue setup),
+    // so this doubles as the picker's error variant.
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: [], orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+
+  {
     id: "inv-ko-not-ready",
     label: "Team not ready · missing setup",
     group: "Start-chat states",
@@ -815,6 +934,7 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
     setTreeUrl: NOOP,
     treeAutoDetectDone: false,
     markTreeAutoDetectDone: NOOP,
+    offerTeamAgentStart: false,
     completeAndEnterChat: ASYNC_NOOP,
     skipAndEnterChat: ASYNC_NOOP,
     finishLater: ASYNC_NOOP,
@@ -835,6 +955,8 @@ function StepBody({ step }: { step: PreviewStepId }): ReactNode {
       return <StepStartChat />;
     case "join-team":
       return <StepJoinTeam />;
+    case "get-started":
+      return <StepGetStarted />;
     default:
       return null;
   }

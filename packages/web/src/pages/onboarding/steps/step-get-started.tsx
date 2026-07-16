@@ -1,19 +1,41 @@
 import type { Agent } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { listAgents } from "../../../api/agents.js";
 import { listMembers } from "../../../api/members.js";
-import { useAuth } from "../../../auth/auth-context.js";
 import { Avatar } from "../../../components/avatar.js";
 import { Button } from "../../../components/ui/button.js";
-import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { buildTeamAgentStartBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
 import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 import { startChatErrorMessage } from "../provision-tree.js";
-import { canOfferTeamAgentStart } from "../steps.js";
 import { startOnboardingChat } from "../tree-setup-chat.js";
+
+// The server caps each agents page at 100 (paginationQuerySchema). Bound the
+// walk so a pathological org can never spin this into an unbounded loop; 10
+// pages = 1000 shareable team agents, far beyond any real team's picker.
+const MAX_PICKER_PAGES = 10;
+
+/**
+ * Every org-visible, addressable, non-human agent — paged through so the
+ * candidate set matches the org-wide readiness bit (`currentOrgHasUsableAgent`)
+ * rather than a single 100-row page. `type=agent` filters human mirrors out
+ * server-side so they never consume page slots and hide an eligible agent on a
+ * later page.
+ */
+async function listAllNonHumanAddressableAgents(): Promise<Agent[]> {
+  const out: Agent[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_PICKER_PAGES; page++) {
+    const res = await listAgents({ limit: 100, type: "agent", addressableOnly: true, cursor });
+    out.push(...res.items);
+    if (!res.nextCursor) break;
+    cursor = res.nextCursor;
+  }
+  return out;
+}
 
 /**
  * Invitee fork (`get-started`): after joining a team that already runs
@@ -34,14 +56,21 @@ import { startOnboardingChat } from "../tree-setup-chat.js";
  * so the standard invitee journey is unchanged and the admin path never
  * contains this step at all.
  */
-export function StepGetStarted() {
-  const { goNext } = useOnboardingFlow();
-  const { currentOrgHasUsableAgent, currentOrgHasPersonalAgent } = useAuth();
-  const offer = canOfferTeamAgentStart({ currentOrgHasUsableAgent, currentOrgHasPersonalAgent });
-  const [mode, setMode] = useState<"choose" | "pick">("choose");
+export function StepGetStarted({ defaultMode = "choose" }: { defaultMode?: "choose" | "pick" } = {}) {
+  const { goNext, offerTeamAgentStart: offer } = useOnboardingFlow();
+  // `defaultMode` exists for the DEV preview gallery only, so it can render
+  // the pick sub-state directly; the live flow always starts at the choice.
+  const [mode, setMode] = useState<"choose" | "pick">(defaultMode);
 
+  // Self-skip when the fork has nothing to offer. `goNext` is a RELATIVE
+  // increment, and React StrictMode double-invokes mount effects in dev — two
+  // increments would skip past connect-computer onto create-agent. A one-shot
+  // ref makes the advance idempotent so it fires exactly once regardless.
+  const skipped = useRef(false);
   useEffect(() => {
-    if (!offer) goNext();
+    if (offer || skipped.current) return;
+    skipped.current = true;
+    goNext();
   }, [offer, goNext]);
   if (!offer) return null;
 
@@ -127,20 +156,25 @@ function PickTeamAgent({ onBack, onContinueSetup }: { onBack: () => void; onCont
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
-  // Same visibility surface as the chat participant pickers: org-visible
-  // active agents. `addressableOnly` excludes suspended agents, landing-trial
-  // agents, and inactive human mirrors server-side.
-  const agentsQuery = useOrgAgents({ addressableOnly: true });
+  // The readiness bit (`currentOrgHasUsableAgent`) is org-wide, so the
+  // candidate set must be too — a single 100-row first page filtered for humans
+  // afterward can miss an eligible agent on a later page and render "none"
+  // while the fork is offered. Page through every org-visible non-human
+  // addressable agent so coverage matches readiness.
+  const agentsQuery = useQuery({
+    queryKey: ["agents", "team-agent-picker", organizationId],
+    queryFn: () => listAllNonHumanAddressableAgents(),
+    staleTime: 30_000,
+  });
   // Owner names for the "Run by X" tag. Member-readable route; cheap and
   // rarely-changing, so no polling.
   const membersQuery = useQuery({ queryKey: ["members"], queryFn: listMembers, staleTime: 60_000 });
 
   const ownerById = new Map((membersQuery.data ?? []).map((m) => [m.id, m.displayName]));
-  // Non-human teammates only; exclude anything the member manages themselves
-  // (defensive — the fork self-skips once they have a personal agent).
-  const candidates = (agentsQuery.data?.items ?? []).filter(
-    (a) => a.type !== "human" && !(memberId && a.managerId === memberId),
-  );
+  // Exclude anything the member manages themselves (defensive — the fork
+  // self-skips once they have a personal agent). Humans are already excluded
+  // server-side by the `type=agent` filter.
+  const candidates = (agentsQuery.data ?? []).filter((a) => !(memberId && a.managerId === memberId));
 
   const handleStart = async (agent: Agent): Promise<void> => {
     setError(null);
