@@ -460,16 +460,12 @@ function sanitizeOrgSlug(raw: string): string {
   );
 }
 
-/** Postgres `unique_violation` SQLSTATE — `organizations.name` UNIQUE tripping. */
-const PG_UNIQUE_VIOLATION = "23505";
-
 /**
  * Attempt INSERT into `organizations` with `base` slug, retrying with a
- * disambiguator on UNIQUE constraint violations. Two concurrent OAuth
- * sign-ins for the same GitHub `login` would race here without retry —
- * pre-check `SELECT` followed by `INSERT` has a TOCTOU window the unique
- * constraint catches but the catch path needs to exist. Returns the slug
- * actually used.
+ * disambiguator when the unique slug is already occupied. `ON CONFLICT DO
+ * NOTHING` is intentional: this helper is also called inside the user-row
+ * transaction used by OAuth bootstrap, where catching a 23505 would leave
+ * the transaction aborted before the retry can run.
  */
 async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string, displayName: string): Promise<string> {
   const [existing] = await db
@@ -480,20 +476,27 @@ async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string,
   let candidate = existing ? `${base}-${randomBytes(2).toString("hex")}` : base;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
-      return candidate;
-    } catch (err) {
-      const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
-      if (code !== PG_UNIQUE_VIOLATION) throw err;
-      candidate = `${base}-${randomBytes(2).toString("hex")}`;
-    }
+    const [inserted] = await db
+      .insert(organizations)
+      .values({ id: orgId, name: candidate, displayName })
+      .onConflictDoNothing({ target: organizations.name })
+      .returning({ name: organizations.name });
+    if (inserted) return inserted.name;
+    candidate = `${base}-${randomBytes(2).toString("hex")}`;
   }
 
   // Pathological collision storm — random suffix always wins.
   candidate = `${base}-${uuidv7().slice(0, 12)}`;
-  await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
-  return candidate;
+  const [inserted] = await db
+    .insert(organizations)
+    .values({ id: orgId, name: candidate, displayName })
+    .onConflictDoNothing({ target: organizations.name })
+    .returning({ name: organizations.name });
+  if (inserted) return inserted.name;
+
+  // UUID fragments make this practically unreachable; retain a clear error
+  // rather than silently returning a slug whose organization was not created.
+  throw new Error("Unable to allocate a unique organization slug");
 }
 
 /** List ACTIVE memberships (omit soft-deleted "left"/"removed") for a user. */
