@@ -41,3 +41,27 @@ operation requires `one-turn-ready`; a binary probe alone cannot prove real agen
 Discover host state first, bridge only the minimum required material, prefer read-only copies/mounts, and use a compatible
 runtime binary for the target platform. Never mount a full host provider home writable. Missing auth, entitlement,
 compatible binaries, or authorized turn capacity is `BLOCKED`, not product `FAIL`.
+
+## Mock GitHub App
+
+The GitHub App surface (install-url, installation-token minting, repository catalog, signed webhook ingest) needs a
+configured App. A real App/webhook secret is often unavailable in an isolated cell, so a run may report those sub-areas
+`BLOCKED`, or mock them to validate First Tree's own request/parse/verify logic. Reusable assets live in
+`fixtures/github-app/` (mock REST API + webhook payloads + full recipe).
+
+- The five core credentials — `FIRST_TREE_GITHUB_APP_ID`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY`,
+  `_WEBHOOK_SECRET` — are an atomic block: set them together or the server rejects the config at boot. `_SLUG` is separate
+  — optional at boot, required only for `install-url`. A clean boot omits the "GitHub App not configured" log line and the
+  webhook route stops returning its 501 stub.
+- Generate a throwaway PKCS#8 key at run time (`openssl genpkey -algorithm RSA`); never commit one. Pass the multi-line
+  PEM via a shell export, or a quoted `--env-file` value (Node 22.13+ supports quoted multi-line env values) — the export
+  just avoids the quoting/escaping fuss.
+- Redirect REST calls with `FIRST_TREE_GITHUB_API_BASE_URL` set to a URL the server can reach (`localhost` only if the
+  mock shares the server's container; otherwise the compose service name or `host.docker.internal`). The mock answers two
+  endpoints only (token + repos), so paths needing other GitHub REST — a real `follow`'s `/repos/:o/:r` +
+  `/repos/:o/:r/issues/:n`, OAuth, org repos — fall through and stay out of scope.
+- Sign webhooks with `x-hub-signature-256: sha256=<HMAC-SHA256(webhook_secret, raw_body)>` and set `x-github-event` /
+  `x-github-delivery`. This exercises signature verification, record-only install recording, and delivery-id dedup.
+
+A mock proves the deployment's request/parse/verify wiring, not github.com's live responses; the real install dialog and
+full followed-chat card delivery stay out of an isolated cell.
