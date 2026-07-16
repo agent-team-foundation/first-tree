@@ -95,6 +95,13 @@ export function shouldShowHandle(c: MentionCandidate, ambiguous: Set<string>): b
  * `@<handle>` rendering so the format only needs to change in one
  * place.
  *
+ * Overflow contract: both halves are single-line. The display name
+ * truncates with an ellipsis (it shrinks, never wraps — a wrapped or
+ * panel-stretching row is worse than a cut label); the `@<handle>` keeps
+ * its natural width up to 45% of the row, then truncates — it must never
+ * break mid-token. Hover discloses the full label via the row `title`
+ * (see {@link mentionOptionTitle}).
+ *
  * Caller is responsible for the surrounding `<button>` / wrapper
  * (click handlers, `title` attribute, hover/active state) — the label
  * intentionally stays presentational.
@@ -103,14 +110,33 @@ export function MentionLabel({ candidate, ambiguous }: { candidate: MentionCandi
   const fallback = candidate.name ? `@${candidate.name}` : "—";
   return (
     <>
-      <span className="font-medium">{candidate.displayName ?? fallback}</span>
+      <span className="min-w-0 truncate font-medium">{candidate.displayName ?? fallback}</span>
       {shouldShowHandle(candidate, ambiguous) && (
-        <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+        <span className="mono text-caption shrink-0 truncate" style={{ color: "var(--fg-3)", maxWidth: "45%" }}>
           @{candidate.name}
         </span>
       )}
     </>
   );
+}
+
+/**
+ * Hover `title` for a candidate row: the full untruncated identity. Rows
+ * truncate long labels (see {@link MentionLabel}), so the tooltip must
+ * carry whichever parts got cut — `displayName (@name)` when the two
+ * differ, `@name` alone when they're identical or the display name is
+ * missing. Same shape as `AgentChip`'s computed title, except the
+ * identical-name case collapses here (per `shouldShowHandle`'s "showing
+ * it twice is pure noise" rule) instead of rendering `x (@x)`.
+ */
+export function mentionOptionTitle(candidate: Pick<MentionCandidate, "name" | "displayName">): string | undefined {
+  const hasName = typeof candidate.name === "string" && candidate.name.length > 0;
+  const hasDisplay = typeof candidate.displayName === "string" && candidate.displayName.length > 0;
+  if (hasName && hasDisplay && candidate.displayName !== candidate.name) {
+    return `${candidate.displayName} (@${candidate.name})`;
+  }
+  if (hasName) return `@${candidate.name}`;
+  return hasDisplay ? (candidate.displayName ?? undefined) : undefined;
 }
 
 /**
@@ -164,18 +190,24 @@ export function AgentOption({
  * picked agent looks the same everywhere (the new-chat chip was a bare
  * `<span>` label with no avatar before this). Hover reveals the remove
  * `X`; omit `onRemove` for a read-only token.
+ *
+ * A long label truncates on one line (capped at `--sp-60` and at the
+ * host row's width) instead of stretching the chip across — or past —
+ * the composer; hover discloses the full identity via `title`.
  */
 export function AgentToken({ candidate, onRemove }: { candidate: MentionCandidate; onRemove?: () => void }) {
   const label = candidate.displayName ?? candidate.name ?? candidate.agentId.slice(0, 8);
   return (
     <span
       className="group inline-flex items-center text-label"
+      title={mentionOptionTitle(candidate) ?? label}
       style={{
         gap: "var(--sp-1)",
         padding: "var(--sp-0_5) var(--sp-1_5)",
         borderRadius: "var(--radius-chip)",
         background: "var(--bg-sunken)",
         color: "var(--fg)",
+        maxWidth: "min(var(--sp-60), 100%)",
       }}
     >
       <Avatar
@@ -185,7 +217,7 @@ export function AgentToken({ candidate, onRemove }: { candidate: MentionCandidat
         colorToken={candidate.avatarColorToken ?? null}
         size={16}
       />
-      <span>{label}</span>
+      <span className="min-w-0 truncate">{label}</span>
       {onRemove && (
         <button
           type="button"
@@ -742,7 +774,7 @@ export function MentionAutocompletePopover({
         role="option"
         aria-selected={active}
         data-mention-index={i}
-        title={c.name ? `@${c.name}` : undefined}
+        title={mentionOptionTitle(c)}
         onMouseDown={(e) => {
           // preventDefault keeps the textarea focused so `selectionStart`
           // can still be used to compute the insertion point.
@@ -755,7 +787,6 @@ export function MentionAutocompletePopover({
           color: "var(--fg)",
           border: "none",
           cursor: "pointer",
-          whiteSpace: "nowrap",
         }}
       >
         <AgentOption candidate={c} ambiguous={ambiguous} />

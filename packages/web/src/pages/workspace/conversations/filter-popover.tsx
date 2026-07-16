@@ -143,7 +143,10 @@ export function FilterPopover({
   return (
     <Popover
       align="end"
-      panelStyle={{ minWidth: 240, padding: "var(--sp-2)" }}
+      // maxWidth caps the shrink-to-fit panel (same cap as `.mention-popover`)
+      // so one long participant name in the People results ellipsizes instead
+      // of stretching the panel toward the viewport edge.
+      panelStyle={{ minWidth: 240, maxWidth: "var(--sp-90)", padding: "var(--sp-2)" }}
       trigger={({ open, toggle }) => (
         <button
           type="button"
@@ -312,7 +315,11 @@ function FilterCheckbox({
       >
         {checked && <Check size={10} strokeWidth={3} />}
       </span>
-      <span>{label}</span>
+      {/* Truncate so a long participant display name can't wrap the row or
+          stretch the popover; hover discloses the full name. */}
+      <span className="min-w-0 truncate" title={label}>
+        {label}
+      </span>
       <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} className="sr-only" />
     </label>
   );

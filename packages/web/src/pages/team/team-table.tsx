@@ -2,6 +2,7 @@ import type { Agent, PresenceStatus, UsageByAgentRow } from "@first-tree/shared"
 import { Bot, ChevronDown, Link2, Lock, type LucideIcon, User } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Avatar } from "../../components/avatar.js";
+import { mentionOptionTitle } from "../../components/mention-autocomplete.js";
 import { Button } from "../../components/ui/button.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Popover } from "../../components/ui/popover.js";
@@ -763,7 +764,7 @@ function DelegateCell({
     return (
       <Popover
         align="start"
-        panelStyle={{ minWidth: "var(--sp-75)" }}
+        panelStyle={{ minWidth: "var(--sp-75)", maxWidth: "var(--sp-90)" }}
         trigger={({ open, toggle }) => (
           <button
             type="button"
@@ -881,8 +882,13 @@ function DelegateSelector({
             key={agent.uuid}
             active={current === agent.uuid}
             onClick={() => onPick(agent.uuid)}
+            title={mentionOptionTitle(agent)}
             primary={
-              <span className="inline-flex items-center" style={{ gap: "var(--sp-2)" }}>
+              // min-w-0 down the chain + truncate on both lines: a long
+              // display name / handle ellipsizes on its own line instead of
+              // stretching the popover panel past its maxWidth. Hover on the
+              // row shows the full identity (mentionOptionTitle).
+              <span className="inline-flex min-w-0 items-center" style={{ gap: "var(--sp-2)" }}>
                 <Avatar
                   name={agent.displayName}
                   seed={agent.uuid}
@@ -890,12 +896,12 @@ function DelegateSelector({
                   colorToken={agent.avatarColorToken}
                   src={agent.avatarImageUrl}
                 />
-                <span className="inline-flex flex-col leading-tight">
-                  <span className="text-body" style={{ color: "var(--fg)" }}>
+                <span className="inline-flex min-w-0 flex-col leading-tight">
+                  <span className="truncate text-body" style={{ color: "var(--fg)" }}>
                     {agent.displayName}
                   </span>
                   {agent.name && (
-                    <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+                    <span className="mono truncate text-caption" style={{ color: "var(--fg-3)" }}>
                       @{agent.name}
                     </span>
                   )}
@@ -909,11 +915,22 @@ function DelegateSelector({
   );
 }
 
-function DelegateOption({ active, onClick, primary }: { active: boolean; onClick: () => void; primary: ReactNode }) {
+function DelegateOption({
+  active,
+  onClick,
+  primary,
+  title,
+}: {
+  active: boolean;
+  onClick: () => void;
+  primary: ReactNode;
+  title?: string;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
+      title={title}
       className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
       style={{
         gap: "var(--sp-2)",

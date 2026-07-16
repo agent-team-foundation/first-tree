@@ -22,6 +22,7 @@ import {
   detectMentionTrigger,
   MentionAutocompletePopover,
   type MentionCandidate,
+  mentionOptionTitle,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
@@ -1070,6 +1071,11 @@ function ParticipantChips({
               top: "calc(100% + var(--sp-1))",
               left: 0,
               minWidth: 280,
+              // Cap the shrink-to-fit width (same cap as `.mention-popover`'s
+              // max-width) — without it one long candidate name stretches the
+              // panel arbitrarily wide, past the viewport edge. Rows truncate
+              // instead (see MentionLabel).
+              maxWidth: "var(--sp-90)",
               background: "var(--bg-raised)",
               borderColor: "var(--border)",
             }}
@@ -1126,18 +1132,18 @@ function ParticipantChips({
                       );
                     }
                     const isInChips = chipSet.has(item.agentId);
+                    const fullTitle = mentionOptionTitle(item);
                     if (isInChips) {
                       return (
                         <div
                           key={item.agentId}
                           role="presentation"
-                          title={item.name ? `@${item.name} — already in this draft` : "Already in this draft"}
+                          title={fullTitle ? `${fullTitle} — already in this draft` : "Already in this draft"}
                           className="flex w-full items-center px-3 py-1.5 text-left text-body"
                           style={{
                             background: "transparent",
                             color: "var(--fg-3)",
                             cursor: "default",
-                            whiteSpace: "nowrap",
                           }}
                         >
                           <AgentOption
@@ -1157,7 +1163,7 @@ function ParticipantChips({
                         type="button"
                         role="option"
                         aria-selected={active}
-                        title={item.name ? `@${item.name}` : undefined}
+                        title={fullTitle}
                         onClick={() => onAdd(item.agentId)}
                         onMouseEnter={() => setHighlight(myIdx)}
                         className="flex w-full items-center px-3 py-1.5 text-left text-body"
@@ -1166,7 +1172,6 @@ function ParticipantChips({
                           color: "var(--fg)",
                           border: "none",
                           cursor: "pointer",
-                          whiteSpace: "nowrap",
                         }}
                       >
                         <AgentOption candidate={item} ambiguous={ambiguous} />

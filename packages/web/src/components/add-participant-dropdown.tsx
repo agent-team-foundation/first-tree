@@ -10,6 +10,7 @@ import {
   ambiguousDisplayNames,
   buildPickerSections,
   type MentionCandidate,
+  mentionOptionTitle,
 } from "./mention-autocomplete.js";
 
 /**
@@ -286,9 +287,11 @@ export function AddParticipantDropdown({
           className="absolute z-20 flex flex-col border shadow-[var(--shadow-md)] outline-none"
           style={{
             top: "calc(100% + var(--sp-1))",
-            // Icon trigger sits at the panel's right edge → grow leftward;
+            // Icon trigger sits at the panel's right edge → grow leftward,
+            // capped (same cap as `.mention-popover`'s max-width) so one long
+            // candidate name can't stretch the panel — rows truncate instead;
             // the inline row spans the rail → match its full width.
-            ...(variant === "icon" ? { right: 0, minWidth: 280 } : { left: 0, right: 0 }),
+            ...(variant === "icon" ? { right: 0, minWidth: 280, maxWidth: "var(--sp-90)" } : { left: 0, right: 0 }),
             background: "var(--bg-raised)",
             borderColor: "var(--border)",
             borderRadius: "var(--radius-input)",
@@ -347,12 +350,13 @@ export function AddParticipantDropdown({
                     );
                   }
                   const isInChat = participantSet.has(it.agentId);
+                  const fullTitle = mentionOptionTitle(it);
                   if (isInChat) {
                     return (
                       <div
                         key={it.agentId}
                         role="presentation"
-                        title={it.name ? `@${it.name} — already in this chat` : "Already in this chat"}
+                        title={fullTitle ? `${fullTitle} — already in this chat` : "Already in this chat"}
                         className="flex w-full items-center text-left"
                         style={{
                           padding: "var(--sp-1_75) var(--sp-2)",
@@ -377,7 +381,7 @@ export function AddParticipantDropdown({
                       key={it.agentId}
                       type="button"
                       role="menuitem"
-                      title={it.name ? `@${it.name}` : undefined}
+                      title={fullTitle}
                       onClick={() => commit(it.agentId)}
                       onMouseEnter={() => setHighlight(myIdx)}
                       disabled={addMut.isPending}

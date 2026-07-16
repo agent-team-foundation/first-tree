@@ -760,8 +760,13 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
         background: "var(--bg-sunken)",
         color: "var(--fg-2)",
       }}
+      title={label}
     >
-      <span>{label}</span>
+      {/* Same cap as the popover's selected-people chips: a long participant
+          name ellipsizes instead of overflowing the narrow rail. */}
+      <span className="truncate" style={{ maxWidth: "var(--sp-35)" }}>
+        {label}
+      </span>
       <button
         type="button"
         onClick={onClear}
