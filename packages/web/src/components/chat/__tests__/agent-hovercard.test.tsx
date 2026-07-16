@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getChat: vi.fn(),
   fetchChatAgentStatuses: vi.fn(),
   getAgent: vi.fn(),
+  authAgentId: "self-human",
 }));
 
 vi.mock("../../../api/chats.js", () => ({ getChat: mocks.getChat }));
@@ -18,13 +19,8 @@ vi.mock("../../../api/agent-status.js", () => ({
   fetchChatAgentStatuses: mocks.fetchChatAgentStatuses,
 }));
 vi.mock("../../../api/agents.js", () => ({ getAgent: mocks.getAgent }));
-vi.mock("../../../lib/use-member-name-map.js", () => ({
-  useMemberNameMap: () => (id: string | null | undefined) => (id === "m1" ? "Gandy" : "—"),
-}));
-vi.mock("../../../lib/use-client-map.js", () => ({
-  useClientMap: () => ({
-    resolve: (id: string | null | undefined) => (id === "c1" ? { hostname: "gandy-mbp" } : null),
-  }),
+vi.mock("../../../auth/auth-context.js", () => ({
+  useAuth: () => ({ agentId: mocks.authAgentId }),
 }));
 
 // Imported after the mocks are registered.
@@ -71,6 +67,7 @@ beforeEach(() => {
   mocks.getChat.mockReset();
   mocks.fetchChatAgentStatuses.mockReset();
   mocks.getAgent.mockReset();
+  mocks.authAgentId = "self-human";
 });
 
 afterEach(() => {
@@ -139,7 +136,7 @@ describe("AgentHovercard", () => {
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("shows identity, Owner and Runs-on for an agent (Pass B)", async () => {
+  it("shows identity, one chat status, and a calm two-route footer without profile/runtime metadata", async () => {
     seedPassA(
       "chat-1",
       [AGENT_PARTICIPANT],
@@ -166,18 +163,21 @@ describe("AgentHovercard", () => {
     await waitFor(() => {
       expect(card.textContent).toContain("Aria");
       expect(card.textContent).toContain("@aria");
-      expect(card.textContent).toContain("Owner");
-      expect(card.textContent).toContain("Gandy");
-      expect(card.textContent).toContain("Runs on");
-      expect(card.textContent).toContain("claude-code");
-      expect(card.textContent).toContain("gandy-mbp");
-      expect(card.textContent).toContain("Open details");
-      expect(card.textContent).toContain("Chat");
+      expect(card.textContent).toContain("Idle");
+      expect(card.textContent).toContain("New chat");
+      expect(card.textContent).toContain("View profile");
     });
+    expect(card.textContent).not.toContain("Owner");
+    expect(card.textContent).not.toContain("Runs on");
+    expect(card.textContent).not.toContain("claude-code");
+    expect(card.textContent).not.toContain("gandy-mbp");
+    const actions = card.querySelector<HTMLElement>("[data-participant-actions]");
+    expect(actions?.style.gridTemplateColumns).toBe("repeat(2, minmax(0, 1fr))");
+    expect([...card.querySelectorAll("a")].map((a) => a.textContent)).toEqual(["New chat", "View profile"]);
     expect(mocks.getAgent).toHaveBeenCalledWith("a1");
   });
 
-  it("renders a LIVE pill and Working row when the agent is working", async () => {
+  it("renders one Working label without LIVE or activity detail", async () => {
     seedPassA(
       "chat-1",
       [AGENT_PARTICIPANT],
@@ -207,12 +207,14 @@ describe("AgentHovercard", () => {
     await flush();
     const card = await openCard();
     await waitFor(() => {
-      expect(card.textContent).toContain("LIVE");
       expect(card.textContent).toContain("Working");
     });
+    expect(card.textContent?.match(/Working/g)).toHaveLength(1);
+    expect(card.textContent).not.toContain("LIVE");
+    expect(card.textContent).not.toContain("Bash");
   });
 
-  it("navigates to agent details from the Open details action", async () => {
+  it("navigates to agent details from the View profile link", async () => {
     seedPassA("chat-1", [AGENT_PARTICIPANT], []);
     mocks.getAgent.mockResolvedValue(AGENT_DTO);
     render(
@@ -222,19 +224,33 @@ describe("AgentHovercard", () => {
     );
     await flush();
     const card = await openCard();
-    let openDetails: HTMLButtonElement | undefined;
+    let viewProfile: HTMLAnchorElement | undefined;
     await waitFor(() => {
-      openDetails = [...card.querySelectorAll("button")].find((b) => b.textContent?.includes("Open details"));
-      if (!openDetails) throw new Error("Open details not rendered yet");
+      viewProfile = [...card.querySelectorAll("a")].find((a) => a.textContent?.includes("View profile"));
+      if (!viewProfile) throw new Error("View profile not rendered yet");
     });
     await act(async () => {
-      openDetails?.click();
+      viewProfile?.click();
       await Promise.resolve();
     });
     expect(latestPath).toBe("/agents/a1/profile");
   });
 
-  it("renders the human variant with only a Message action (no Pass B)", async () => {
+  it("does not flash View profile while the lazy permission probe is pending", async () => {
+    seedPassA("chat-1", [AGENT_PARTICIPANT], []);
+    mocks.getAgent.mockReturnValue(new Promise(() => undefined));
+    render(
+      <AgentHovercard agentId="a1" chatId="chat-1" name="Aria">
+        <span>Aria</span>
+      </AgentHovercard>,
+    );
+    await flush();
+    const card = await openCard();
+    expect([...card.querySelectorAll("a")].map((a) => a.textContent)).toEqual(["New chat"]);
+    expect(card.textContent).not.toContain("View profile");
+  });
+
+  it("renders the human variant with a Human label and only New chat (no Pass B)", async () => {
     seedPassA("chat-1", [HUMAN_PARTICIPANT], []);
     render(
       <AgentHovercard agentId="h1" chatId="chat-1" name="Gandy">
@@ -246,14 +262,30 @@ describe("AgentHovercard", () => {
     await waitFor(() => {
       expect(card.textContent).toContain("Gandy");
       expect(card.textContent).toContain("@gandy");
-      expect(card.textContent).toContain("Message");
+      expect(card.textContent).toContain("Human");
+      expect(card.textContent).toContain("New chat");
     });
+    expect([...card.querySelectorAll("a")].map((a) => a.textContent)).toEqual(["New chat"]);
     expect(card.textContent).not.toContain("Owner");
     expect(card.textContent).not.toContain("Runs on");
     expect(mocks.getAgent).not.toHaveBeenCalled();
   });
 
-  it("degrades to identity + Chat when the agent is not readable (Pass B 404)", async () => {
+  it("removes the self-chat entry point for the current human", async () => {
+    mocks.authAgentId = "h1";
+    seedPassA("chat-1", [HUMAN_PARTICIPANT], []);
+    render(
+      <AgentHovercard agentId="h1" chatId="chat-1" name="Gandy">
+        <span>Gandy</span>
+      </AgentHovercard>,
+    );
+    await flush();
+    const card = await openCard();
+    expect(card.textContent).toContain("You");
+    expect(card.querySelector("[data-participant-actions]")).toBeNull();
+  });
+
+  it("degrades to identity + New chat when the agent is not readable (Pass B 404)", async () => {
     // A private agent visible via chat membership but not via GET /agents/:uuid.
     seedPassA(
       "chat-1",
@@ -278,16 +310,26 @@ describe("AgentHovercard", () => {
     );
     await flush();
     const card = await openCard();
-    // Wait for the degraded END state, not the loading state: while getAgent is
-    // still pending, detailsAccessible is true and Owner/Runs-on/Open details
-    // render (with skeletons). Fold the negatives + the Chat-only button set
-    // into the waited condition so the assertions run only after the 404 lands.
+    // A failed permission probe never exposes a route that would immediately
+    // land on a 404; the chat-scoped route remains valid.
     await waitFor(() => {
       expect(card.textContent).toContain("Aria");
-      expect([...card.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Chat"]);
+      expect([...card.querySelectorAll("a")].map((a) => a.textContent)).toEqual(["New chat"]);
       expect(card.textContent).not.toContain("Owner");
       expect(card.textContent).not.toContain("Runs on");
-      expect(card.textContent).not.toContain("Open details");
+      expect(card.textContent).not.toContain("View profile");
     });
+  });
+
+  it("does not invent an @handle from the participant id", async () => {
+    seedPassA("chat-1", [{ ...HUMAN_PARTICIPANT, name: null }], []);
+    render(
+      <AgentHovercard agentId="h1" chatId="chat-1" name="Gandy">
+        <span>Gandy</span>
+      </AgentHovercard>,
+    );
+    await flush();
+    const card = await openCard();
+    expect(card.textContent).not.toContain("@h1");
   });
 });

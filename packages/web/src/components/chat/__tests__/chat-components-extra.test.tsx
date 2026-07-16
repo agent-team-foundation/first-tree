@@ -285,6 +285,35 @@ describe("AgentStatusPanel extra DOM coverage", () => {
     await waitForSettled(h, () => expect(sessionApiMocks.suspendSession).toHaveBeenCalledWith("agent-nova", "chat-1"));
   });
 
+  it("keeps working and failed roster statuses static and omits activity detail", async () => {
+    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
+      status("agent-worker", {
+        working: true,
+        engagement: "active",
+        activity: activity("agent-worker", { label: "Bash" }),
+      }),
+      status("agent-failed", { errored: true }),
+    ]);
+
+    h.render(
+      withProviders(
+        <AgentStatusPanel
+          chatId="chat-1"
+          agents={[agent("agent-worker", "Worker Agent"), agent("agent-failed", "Failed Agent")]}
+          canManage={() => false}
+        />,
+        new Set(["agent-worker", "agent-failed"]),
+      ),
+    );
+
+    await waitForSettled(h, () => {
+      expect(h.container.textContent).toContain("Working");
+      expect(h.container.textContent).toContain("Failed");
+    });
+    expect(h.container.textContent).not.toContain("Bash");
+    expect(h.container.querySelector('button[aria-label^="Jump to this agent"]')).toBeNull();
+  });
+
   it("renders missing statuses as empty, and resumes suspended rows", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([status("agent-paused", { engagement: "suspended" })]);
 
