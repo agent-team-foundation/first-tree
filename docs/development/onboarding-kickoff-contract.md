@@ -16,6 +16,10 @@ chats and the adjacent campaign quickstart handoff.
   guardrail, and wakes the agent from visible task text. The campaign skill is
   not server-materialized: the kickoff message instructs the trial agent to
   clone the campaign's skill repo and run the named skill on the connected repo.
+- Campaign quickstart may carry an anonymous `{ attemptId, variant }`
+  attribution pair. The pair is stored only on the trial chat's JSON metadata
+  and included in the internal campaign export; it does not change trial
+  idempotency, quota, or runtime behavior and requires no schema migration.
 - A `/me/onboarding/kickoff` request carrying `campaign` is a stale quickstart
   request. It must not create an onboarding kickoff chat or campaign idempotency
   key; it returns `410 campaign_kickoff_moved` when landing campaigns are enabled
@@ -41,6 +45,10 @@ chats and the adjacent campaign quickstart handoff.
   legacy input that normalizes to `{ campaign: "production-scan", repoSlug }`;
   requests must not send both fields. An onboarding action still stamps
   completion like any onboarding kickoff.
+- A successfully created campaign action chat is best-effort recorded on the
+  caller's matching trial-chat metadata. This keeps conversion measurement
+  inside the existing trial-export authorization boundary; ordinary action
+  chat content is never added to the cross-tenant export.
 - Campaign action fields belong only to the signed-in Web DTO
   (`CreateWebTaskChat`). The agent SDK's `CreateTaskChat` type and
   `/api/v1/agent/chats` contract do not expose them; a raw agent request that

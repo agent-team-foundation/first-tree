@@ -371,6 +371,7 @@ async function ensureTrialChatAndBootstrap(
     campaign: string;
     repo: LandingCampaignRepoMetadata;
     skillSet: LandingCampaignSkillSet;
+    attribution?: LandingCampaignStartRequest["attribution"];
   },
 ): Promise<{ chatId: string; sent?: { recipients: string[]; messageId: string } }> {
   const kickoffKey = [
@@ -387,6 +388,7 @@ async function ensureTrialChatAndBootstrap(
     skillSetId: input.skillSet.id,
     skillSetVersion: input.skillSet.version,
     repo: input.repo,
+    ...(input.attribution ? { attribution: input.attribution } : {}),
     state: "running",
     inputLocked: false,
     maxAgentTurns: app.config.growth.landingCampaignMaxAgentTurns,
@@ -547,6 +549,7 @@ export async function startLandingCampaignTrial(
     campaign: body.campaign,
     repo,
     skillSet,
+    ...(body.attribution ? { attribution: body.attribution } : {}),
   });
   if (result.sent) notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
 

@@ -143,19 +143,20 @@ async function flush(): Promise<void> {
   });
 }
 
-function seedIntent(campaign: CampaignIntent["campaign"] = "production-scan"): void {
+function seedIntent(campaign: CampaignIntent["campaign"] = "production-scan", attributed = false): void {
   writeCampaignIntent({
     campaign,
     owner: "acme",
     repo: "backend",
     repoSlug: "acme/backend",
     url: "https://github.com/acme/backend",
+    ...(attributed ? { attribution: { attemptId: "018f5f17-7bb0-7d6d-8d86-91c901d5f2bf", variant: "control" } } : {}),
   });
 }
 
 describe("QuickstartPage — landing campaign trial flow", () => {
   it("starts the landing campaign trial from stored intent, refreshes /me, clears intent, and navigates", async () => {
-    seedIntent("production-scan");
+    seedIntent("production-scan", true);
     await renderPage();
 
     expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledTimes(1);
@@ -163,6 +164,7 @@ describe("QuickstartPage — landing campaign trial flow", () => {
       organizationId: "org-1",
       campaign: "production-scan",
       repoUrl: "https://github.com/acme/backend",
+      attribution: { attemptId: "018f5f17-7bb0-7d6d-8d86-91c901d5f2bf", variant: "control" },
     });
     expect(authMock.value.refreshMe).toHaveBeenCalled();
     expect(readCampaignIntent()).toBeNull();

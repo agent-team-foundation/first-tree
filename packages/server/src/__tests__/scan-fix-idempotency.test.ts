@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
+import { parseLandingCampaignTrialChatMetadata } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
+import { buildLandingCampaignChatMetadata } from "../services/landing-campaigns/metadata.js";
+import { createMeChat } from "../services/me-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
@@ -66,6 +69,35 @@ function directFixPayload(agentUuid: string) {
   };
 }
 
+async function seedAttributableTrial(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  agentUuid: string,
+): Promise<{ chatId: string; attemptId: string }> {
+  const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+    participantIds: [agentUuid],
+    topic: "Production scan trial",
+  });
+  const attemptId = crypto.randomUUID();
+  await app.db
+    .update(chats)
+    .set({
+      metadata: buildLandingCampaignChatMetadata({
+        campaign: "production-scan",
+        agentId: agentUuid,
+        skillSetId: "production-scan",
+        skillSetVersion: "test",
+        repo: { url: `https://github.com/${REPO_SLUG}`, canonicalKey: `github.com/${REPO_SLUG}` },
+        attribution: { attemptId, variant: "control" },
+        state: "completed",
+        inputLocked: true,
+        maxAgentTurns: 1,
+      }),
+    })
+    .where(eq(chats.id, chatId));
+  return { chatId, attemptId };
+}
+
 describe("production-scan fix conversion — cross-path idempotency", () => {
   const getApp = useTestApp({ growthLandingPagesEnabled: true });
 
@@ -73,6 +105,7 @@ describe("production-scan fix conversion — cross-path idempotency", () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
+    const trial = await seedAttributableTrial(app, admin, agent.uuid);
 
     // PATH 1 — not-yet-onboarded: onboarding kickoff creates the fix launcher,
     // keyed `<human>:scan-fix:<repoSlug>`.
@@ -107,12 +140,18 @@ describe("production-scan fix conversion — cross-path idempotency", () => {
     // appending a duplicate bootstrap message.
     const msgs = await app.db.select().from(messages).where(eq(messages.chatId, chat1));
     expect(msgs).toHaveLength(1);
+    const [trialRow] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, trial.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(trialRow?.metadata)).toMatchObject({
+      attribution: { attemptId: trial.attemptId, variant: "control" },
+      actionConversion: { chatId: chat1, recordedAt: expect.any(String) },
+    });
   });
 
   it("the direct path alone is idempotent on re-entry", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
+    const trial = await seedAttributableTrial(app, admin, agent.uuid);
     const url = `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/chats`;
     const headers = { authorization: `Bearer ${admin.accessToken}` };
 
@@ -121,6 +160,12 @@ describe("production-scan fix conversion — cross-path idempotency", () => {
     expect(a.json<{ chatId: string }>().chatId).toBe(b.json<{ chatId: string }>().chatId);
     const fixChats = await app.db.select().from(chats).where(eq(chats.topic, FIX_TOPIC));
     expect(fixChats).toHaveLength(1);
+    const actionChatId = a.json<{ chatId: string }>().chatId;
+    const [trialRow] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, trial.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(trialRow?.metadata)?.actionConversion).toMatchObject({
+      chatId: actionChatId,
+      recordedAt: expect.any(String),
+    });
   });
 
   it("the onboarding path alone is idempotent on re-entry", async () => {

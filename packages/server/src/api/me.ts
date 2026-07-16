@@ -43,6 +43,7 @@ import {
   campaignActionKickoffKey,
   hasTreeSetupKickoffMessage,
   kickoffOnboarding,
+  recordCampaignActionConversion,
   resolveCampaignActionContext,
 } from "../services/onboarding-kickoff.js";
 import { getOrgContextTreeWithMeta } from "../services/org-settings.js";
@@ -372,6 +373,21 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         : `${humanAgentId}:${body.agentUuid}:onboarding`,
       complete: body.complete ?? true,
     });
+    if (campaignAction) {
+      try {
+        await recordCampaignActionConversion(app.db, {
+          humanAgentId,
+          organizationId,
+          action: campaignAction,
+          actionChatId: result.chatId,
+        });
+      } catch (err) {
+        app.log.warn(
+          { err, campaign: campaignAction.campaign, actionChatId: result.chatId },
+          "landing campaign action conversion could not be recorded",
+        );
+      }
+    }
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
       app.log.info({ event: "onboarding.kickoff", userId, chatId: result.chatId }, "onboarding funnel: kickoff");

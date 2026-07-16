@@ -1,3 +1,4 @@
+import { type LandingCampaignAttribution, landingCampaignAttributionSchema } from "@first-tree/shared";
 import { type CampaignSlug, getCampaign, isKnownCampaign } from "./campaigns.js";
 
 /**
@@ -20,7 +21,7 @@ export type RepoIntent = {
 };
 
 /** A campaign handoff: a known campaign slug + the repo it targets. */
-export type CampaignIntent = RepoIntent & { campaign: CampaignSlug };
+export type CampaignIntent = RepoIntent & { campaign: CampaignSlug; attribution?: LandingCampaignAttribution };
 
 /** A campaign result CTA landing back on Cloud for work by the user's agent. */
 export type CampaignActionHandoff = CampaignIntent & {
@@ -89,6 +90,14 @@ function normalizeAction(params: URLSearchParams): string | null {
   return action || null;
 }
 
+function normalizeAttribution(params: URLSearchParams): LandingCampaignAttribution | undefined {
+  const parsed = landingCampaignAttributionSchema.safeParse({
+    attemptId: params.get("attempt"),
+    variant: params.get("variant"),
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
 /** Read a configured campaign action handoff (query first, then hash). */
 export function readCampaignActionHandoff(location: Pick<Location, "search" | "hash">): CampaignActionHandoff | null {
   for (const params of [new URLSearchParams(location.search ?? ""), paramsFromHash(location.hash ?? "")]) {
@@ -100,7 +109,16 @@ export function readCampaignActionHandoff(location: Pick<Location, "search" | "h
     const repoRaw = params.get("repo");
     if (!repoRaw) continue;
     const repo = normalizeGitHubRepoUrl(repoRaw);
-    if (repo) return { campaign, action, ...repo, reportKey: normalizeReportKey(params.get("report")) };
+    if (repo) {
+      const attribution = normalizeAttribution(params);
+      return {
+        campaign,
+        action,
+        ...repo,
+        reportKey: normalizeReportKey(params.get("report")),
+        ...(attribution ? { attribution } : {}),
+      };
+    }
   }
   return null;
 }
@@ -123,7 +141,10 @@ export function readCampaignHandoff(location: Pick<Location, "search" | "hash">)
     const repoRaw = params.get("repo");
     if (!repoRaw) continue;
     const repo = normalizeGitHubRepoUrl(repoRaw);
-    if (repo) return { campaign, ...repo };
+    if (repo) {
+      const attribution = normalizeAttribution(params);
+      return { campaign, ...repo, ...(attribution ? { attribution } : {}) };
+    }
   }
   return null;
 }
@@ -160,7 +181,18 @@ export function readCampaignIntent(): CampaignIntent | null {
     ) {
       throw new Error("invalid quickstart intent");
     }
-    return { campaign: o.campaign, owner: o.owner, repo: o.repo, repoSlug: o.repoSlug, url: o.url };
+    const parsedAttribution =
+      o.attribution === undefined ? null : landingCampaignAttributionSchema.safeParse(o.attribution);
+    if (parsedAttribution && !parsedAttribution.success) throw new Error("invalid quickstart attribution");
+    const attribution = parsedAttribution?.data;
+    return {
+      campaign: o.campaign,
+      owner: o.owner,
+      repo: o.repo,
+      repoSlug: o.repoSlug,
+      url: o.url,
+      ...(attribution ? { attribution } : {}),
+    };
   } catch {
     clearCampaignIntent();
     return null;

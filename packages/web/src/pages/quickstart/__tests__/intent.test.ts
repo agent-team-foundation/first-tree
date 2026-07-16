@@ -38,6 +38,7 @@ beforeEach(() => {
 });
 
 const REPO_ENC = encodeURIComponent("https://github.com/acme/backend");
+const ATTEMPT_ID = "018f5f17-7bb0-7d6d-8d86-91c901d5f2bf";
 const INTENT: CampaignIntent = {
   campaign: "production-scan",
   owner: "acme",
@@ -80,6 +81,27 @@ describe("readCampaignHandoff", () => {
     expect(readCampaignHandoff({ search: `?campaign=production-scan&repo=${REPO_ENC}`, hash: "" })).toEqual(INTENT);
   });
 
+  it("keeps valid anonymous attempt attribution and ignores incomplete or invalid values", () => {
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&attempt=${ATTEMPT_ID}&variant=control`,
+        hash: "",
+      }),
+    ).toEqual({ ...INTENT, attribution: { attemptId: ATTEMPT_ID, variant: "control" } });
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&attempt=not-a-uuid&variant=control`,
+        hash: "",
+      }),
+    ).toEqual(INTENT);
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&attempt=${ATTEMPT_ID}`,
+        hash: "",
+      }),
+    ).toEqual(INTENT);
+  });
+
   it("supports the legacy intent= alias for production scan", () => {
     expect(readCampaignHandoff({ search: `?intent=production-scan&repo=${REPO_ENC}`, hash: "" })?.campaign).toBe(
       "production-scan",
@@ -104,8 +126,9 @@ describe("readCampaignHandoff", () => {
 
 describe("campaign intent sessionStorage", () => {
   it("round-trips a valid intent in sessionStorage only (never localStorage)", () => {
-    writeCampaignIntent(INTENT);
-    expect(readCampaignIntent()).toEqual(INTENT);
+    const attributed = { ...INTENT, attribution: { attemptId: ATTEMPT_ID, variant: "control" } };
+    writeCampaignIntent(attributed);
+    expect(readCampaignIntent()).toEqual(attributed);
     expect(window.localStorage?.getItem?.("first-tree:quickstart:intent") ?? null).toBeNull();
   });
 
@@ -119,6 +142,14 @@ describe("campaign intent sessionStorage", () => {
     window.sessionStorage.setItem(
       "first-tree:quickstart:intent",
       JSON.stringify({ ...INTENT, campaign: "retired-campaign" }),
+    );
+    expect(readCampaignIntent()).toBeNull();
+  });
+
+  it("rejects a stored intent with malformed attribution", () => {
+    window.sessionStorage.setItem(
+      "first-tree:quickstart:intent",
+      JSON.stringify({ ...INTENT, attribution: { attemptId: "bad", variant: "control" } }),
     );
     expect(readCampaignIntent()).toBeNull();
   });
