@@ -569,7 +569,7 @@ type MessageRowProps = {
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
   /** Trial surface: render sender avatar/name as plain identity, without the
-   *  AgentHovercard whose actions ("Open details" → /agents/:id, "Chat" →
+   *  AgentHovercard whose actions ("View profile" → /agents/:id, "New chat" →
    *  /?c=draft) would navigate out of the controlled trial conversation. */
   isTrial: boolean;
 };
