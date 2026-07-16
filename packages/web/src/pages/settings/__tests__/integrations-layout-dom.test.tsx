@@ -103,6 +103,7 @@ describe("SettingsIntegrationsLayout", () => {
   it("positions and focuses the shared code section when the Agent shortcut supplies its hash", async () => {
     const { container, root } = await renderLayout("/settings/integrations/github#code-access");
     const target = container.querySelector<HTMLElement>("#code-access");
+    expect(target?.tagName).toBe("SECTION");
     expect(target?.getAttribute("aria-label")).toBe("Code available to agents");
     expect(target?.tabIndex).toBe(-1);
     expect(scrollIntoView).toHaveBeenCalledOnce();

@@ -16,7 +16,7 @@ const PROVIDERS = [
  */
 export function SettingsIntegrationsLayout() {
   const location = useLocation();
-  const codeAccessRef = useRef<HTMLDivElement>(null);
+  const codeAccessRef = useRef<HTMLElement>(null);
 
   // React Router updates the URL fragment but does not scroll the app's
   // persistent overflow container. Position and focus the shared section
@@ -32,7 +32,7 @@ export function SettingsIntegrationsLayout() {
 
   return (
     <div>
-      <div
+      <section
         ref={codeAccessRef}
         id="code-access"
         tabIndex={-1}
@@ -49,7 +49,7 @@ export function SettingsIntegrationsLayout() {
           emptyLabelFor={() => "No code repositories configured yet."}
           compactLimit={3}
         />
-      </div>
+      </section>
 
       <div style={{ padding: "var(--sp-7) var(--sp-5) 0" }}>
         <h2 className="text-title font-semibold m-0" style={{ color: "var(--fg)" }}>
