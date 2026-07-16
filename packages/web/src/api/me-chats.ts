@@ -2,7 +2,7 @@ import type {
   AddMeChatParticipants,
   ChatEngagementView,
   CreateMeChat,
-  CreateTaskChat,
+  CreateWebTaskChat,
   ListMeChatsQuery,
   ListMeChatsResponse,
   MeChatLeaveResponse,
@@ -67,7 +67,7 @@ export function createMeChat(body: CreateMeChat): Promise<{ chatId: string }> {
   return api.post<{ chatId: string }>(withOrg("/chats"), body);
 }
 
-export function createMeTaskChat(body: CreateTaskChat): Promise<{
+export function createMeTaskChat(body: CreateWebTaskChat): Promise<{
   chatId: string;
   messageId: string;
   topic: string | null;

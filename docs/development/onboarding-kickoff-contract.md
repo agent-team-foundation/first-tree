@@ -31,15 +31,21 @@ chats and the adjacent campaign quickstart handoff.
   its complete membership is exactly the initiating human and selected agent,
   preserving safe Phase 1 history. Any ownership mismatch leaves the legacy
   chat untouched and creates the caller's scoped chat instead.
-- A `/me/onboarding/kickoff` request carrying `scanFixRepoSlug` (`owner/repo`)
-  is a production-scan fix conversion arriving via onboarding. It keys the
-  kickoff chat `<humanAgent>:scan-fix:<repoSlug>` instead of the default
-  `<humanAgent>:<agent>:onboarding` key. This is the SAME key the
-  already-onboarded direct path composes (`POST /api/v1/orgs/:orgId/chats` task
-  mode, also from `scanFixRepoSlug`): both write `chats.onboarding_kickoff_key`,
-  so its unique constraint makes re-entering the fix link — through either path
-  — reuse the one fix launcher instead of creating a duplicate. It still stamps
-  onboarding completion like any onboarding kickoff.
+- A campaign result action carries `campaignAction: { campaign, repoSlug }`
+  through either `/me/onboarding/kickoff` or the already-onboarded direct task
+  path (`POST /api/v1/orgs/:orgId/chats`). Both endpoints compose the same
+  server-owned `chats.onboarding_kickoff_key`, so re-entering an action link
+  through either path reuses one launcher. Production Scan retains its deployed
+  `<humanAgent>:scan-fix:<repoSlug>` key; this keeps existing chats and stale web
+  bundles compatible without a data migration. `scanFixRepoSlug` remains a
+  legacy input that normalizes to `{ campaign: "production-scan", repoSlug }`;
+  requests must not send both fields. An onboarding action still stamps
+  completion like any onboarding kickoff.
+- Campaign action fields belong only to the signed-in Web DTO
+  (`CreateWebTaskChat`). The agent SDK's `CreateTaskChat` type and
+  `/api/v1/agent/chats` contract do not expose them; a raw agent request that
+  attempts either field is rejected rather than silently receiving Web-user
+  authority.
 
 ## Retired Contract Boundary
 

@@ -1,3 +1,4 @@
+import type { LandingCampaignActionContext } from "@first-tree/shared";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ManagedAgent } from "../../api/agents.js";
 import { postOnboardingStartChat, postTreeSetupStartChat, reportOnboardingEvent } from "../../api/onboarding-events.js";
@@ -31,8 +32,8 @@ export async function startOnboardingChat(args: {
   treeBindingPlan: TreeBindingPlan | "none";
   joinPath?: "invite";
   complete?: boolean;
-  /** Production-scan fix conversion `owner/repo` — keys the launcher for dedup. */
-  scanFixRepoSlug?: string;
+  /** Campaign + repo pair used by both action entry paths for dedup. */
+  campaignAction?: LandingCampaignActionContext;
 }): Promise<string> {
   // Create-or-reuse the start-chat target and send the bootstrap in one idempotent
   // server call. First-chat paths can let the server stamp completion after the
@@ -44,7 +45,7 @@ export async function startOnboardingChat(args: {
     bootstrap: args.bootstrap,
     topic: args.topic,
     complete: args.complete,
-    ...(args.scanFixRepoSlug ? { scanFixRepoSlug: args.scanFixRepoSlug } : {}),
+    ...(args.campaignAction ? { campaignAction: args.campaignAction } : {}),
   });
   void reportOnboardingEvent("kickoff_chat_started", {
     agentUuid: args.agent.uuid,

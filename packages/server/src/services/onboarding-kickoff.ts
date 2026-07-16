@@ -1,4 +1,4 @@
-import type { SendMessage } from "@first-tree/shared";
+import type { LandingCampaignActionContext, SendMessage } from "@first-tree/shared";
 import { and, desc, eq, isNull, like, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -8,19 +8,25 @@ import { messages } from "../db/schema/messages.js";
 import { createChat } from "./chat.js";
 import { runDeferredSendMessagePostCommitEffects, sendMessage } from "./message.js";
 
-/**
- * Idempotency key for a production-scan fix launcher, shared by BOTH entry
- * paths so re-entering the fix link cannot create a second launcher:
- * the not-yet-onboarded path (`POST /me/onboarding/kickoff`) and the
- * already-onboarded direct path (`POST /orgs/:orgId/chats` task mode) both
- * compose it from the same `members.agentId` and repo slug, so the shared
- * `chats.onboarding_kickoff_key` unique constraint dedups them.
- */
-export function scanFixKickoffKey(humanAgentId: string, repoSlug: string): string {
+/** Shared idempotency key for a landing-campaign action launcher. */
+export function campaignActionKickoffKey(humanAgentId: string, action: LandingCampaignActionContext): string {
   // GitHub owner/repo are case-insensitive, and the two paths derive the slug
-  // from separate parses of the fix link — lowercasing here (the single shared
+  // from separate parses of the handoff — lowercasing here (the single shared
   // composition point) keeps the key identical even if the URLs differ in case.
-  return `${humanAgentId}:scan-fix:${repoSlug.toLowerCase()}`;
+  const repoSlug = action.repoSlug.toLowerCase();
+  // Preserve the deployed production-scan key so existing launchers continue
+  // to dedupe across old and new web bundles without a data migration.
+  if (action.campaign === "production-scan") return `${humanAgentId}:scan-fix:${repoSlug}`;
+  return `${humanAgentId}:campaign-action:${action.campaign}:${repoSlug}`;
+}
+
+/** Normalize a current action context or the legacy production-scan field. */
+export function resolveCampaignActionContext(
+  action: LandingCampaignActionContext | undefined,
+  legacyScanFixRepoSlug: string | undefined,
+): LandingCampaignActionContext | null {
+  if (action) return action;
+  return legacyScanFixRepoSlug ? { campaign: "production-scan", repoSlug: legacyScanFixRepoSlug } : null;
 }
 
 export type KickoffOnboardingArgs = {

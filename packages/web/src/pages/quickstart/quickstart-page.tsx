@@ -7,19 +7,19 @@ import { createMeTaskChat } from "../../api/me-chats.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
-import { writeScanFixHandoffFlag } from "../../utils/onboarding-flags.js";
+import { writeCampaignActionHandoffFlag } from "../../utils/onboarding-flags.js";
 import { FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
 import { shouldLeaveOnboarding } from "../onboarding/steps.js";
-import { buildScanFixBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
+import { buildCampaignActionBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
 import { WorkspaceBody } from "../workspace/index.js";
 import { getCampaign } from "./campaigns.js";
 import {
   type CampaignIntent,
   clearCampaignIntent,
   hasCampaignHandoff,
+  readCampaignActionHandoff,
   readCampaignHandoff,
   readCampaignIntent,
-  readScanFixHandoff,
   writeCampaignIntent,
 } from "./intent.js";
 
@@ -53,17 +53,17 @@ export function QuickstartPage() {
   // instead of silently falling through to the no-chat state.
   const legacyChatId = useMemo(() => new URLSearchParams(location.search).get("chat"), [location.search]);
 
-  // A fix conversion (`action=fix`) is not a trial launch: store the handoff and
+  // A configured action is not a trial launch: store the handoff and
   // send the user to normal onboarding (their own agent does the fixing). The
   // trial-intent memo below must never see these params — readCampaignHandoff
   // skips action=fix, and this memo short-circuits it too.
-  const fixHandoff = useMemo(() => {
+  const actionHandoff = useMemo(() => {
     if (chatId || legacyChatId) return null;
-    return readScanFixHandoff(location);
+    return readCampaignActionHandoff(location);
   }, [chatId, legacyChatId, location]);
 
   const intent = useMemo<CampaignIntent | null>(() => {
-    if (fixHandoff) return null;
+    if (actionHandoff) return null;
     // A selected chat — `?c=` OR a legacy `?chat=` about to be canonicalized —
     // means "open this chat", not "launch a trial". Short-circuit both so a
     // stored campaign intent in sessionStorage can't hijack a legacy link into
@@ -79,8 +79,9 @@ export function QuickstartPage() {
       return null;
     }
     return readCampaignIntent();
-  }, [fixHandoff, chatId, legacyChatId, location]);
+  }, [actionHandoff, chatId, legacyChatId, location]);
   const campaign = intent ? getCampaign(intent.campaign) : null;
+  const actionCampaign = actionHandoff ? getCampaign(actionHandoff.campaign) : null;
 
   const startStartedRef = useRef(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -88,12 +89,12 @@ export function QuickstartPage() {
   const startTrial = useCallback(async () => {
     // `legacyChatId` guards alongside `chatId`: a legacy `?chat=` link is a
     // selected chat being canonicalized, never a launch trigger — even if a
-    // stale campaign intent lingers in sessionStorage. `fixHandoff` guards too
+    // stale campaign intent lingers in sessionStorage. `actionHandoff` guards too
     // so a fix link can never start a trial even transiently.
     if (
       chatId ||
       legacyChatId ||
-      fixHandoff ||
+      actionHandoff ||
       !intent ||
       !campaign ||
       startStartedRef.current ||
@@ -118,7 +119,7 @@ export function QuickstartPage() {
   }, [
     chatId,
     legacyChatId,
-    fixHandoff,
+    actionHandoff,
     intent,
     campaign,
     organizationId,
@@ -137,55 +138,55 @@ export function QuickstartPage() {
     if (settled && !growthLandingPagesEnabled) navigate("/", { replace: true });
   }, [chatId, settled, growthLandingPagesEnabled, navigate]);
 
-  const fixStartedRef = useRef(false);
-  const [fixError, setFixError] = useState<string | null>(null);
+  const actionStartedRef = useRef(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Already-onboarded users skip onboarding: hand the scan findings straight to
-  // their default agent as a task chat. The handoff flag is cleared only after
-  // the chat exists — on failure it stays, and re-clicking the fix link retries.
-  const startFixChat = useCallback(async () => {
-    if (!fixHandoff || fixStartedRef.current) return;
-    fixStartedRef.current = true;
-    setFixError(null);
+  // Already-onboarded users skip onboarding: hand the campaign result straight
+  // to their default agent as a task chat. The handoff flag is cleared only
+  // after the chat exists, so reopening the action link can retry a failure.
+  const startActionChat = useCallback(async () => {
+    if (!actionHandoff || !actionCampaign || actionStartedRef.current) return;
+    actionStartedRef.current = true;
+    setActionError(null);
     try {
       const { agent } = await getNewChatDefaultCandidates({});
       if (!agent) {
-        throw new Error("No connected agent yet. Connect your computer, then open the fix link again.");
+        throw new Error("No connected agent yet. Connect your computer, then open this campaign action link again.");
       }
       const created = await createMeTaskChat({
         mode: "task",
-        topic: "Fix production scan blockers",
-        // Key the launcher on the repo so re-entering the fix link reuses this
-        // chat (and dedups with the onboarding path) instead of duplicating it.
-        scanFixRepoSlug: fixHandoff.repoSlug,
+        topic: actionCampaign.action.topic,
+        campaignAction: { campaign: actionHandoff.campaign, repoSlug: actionHandoff.repoSlug },
         initialRecipientAgentIds: [agent.uuid],
         initialRecipientNames: [],
         contextParticipantAgentIds: [],
         contextParticipantNames: [],
         initialMessage: {
           format: "text",
-          content: buildScanFixBootstrap(
+          content: buildCampaignActionBootstrap(
             agent.displayName || "your agent",
-            { repoUrl: fixHandoff.url, reportKey: fixHandoff.reportKey },
+            actionCampaign.action,
+            { repoUrl: actionHandoff.url, reportKey: actionHandoff.reportKey },
             "direct",
           ),
           source: "web",
         },
       });
-      writeScanFixHandoffFlag(null);
+      writeCampaignActionHandoffFlag(null);
       navigate(`/?c=${encodeURIComponent(created.chatId)}`, { replace: true });
     } catch (err) {
-      fixStartedRef.current = false;
-      setFixError(err instanceof Error ? err.message : "Couldn't start the fix chat. Please try again.");
+      actionStartedRef.current = false;
+      setActionError(err instanceof Error ? err.message : "Couldn't start the campaign task. Please try again.");
     }
-  }, [fixHandoff, navigate]);
+  }, [actionHandoff, actionCampaign, navigate]);
 
   useEffect(() => {
-    if (!fixHandoff || !settled || !growthLandingPagesEnabled || !meLoaded) return;
-    writeScanFixHandoffFlag({
-      repoUrl: fixHandoff.url,
-      reportKey: fixHandoff.reportKey,
-      repoSlug: fixHandoff.repoSlug,
+    if (!actionHandoff || !actionCampaign || !settled || !growthLandingPagesEnabled || !meLoaded) return;
+    writeCampaignActionHandoffFlag({
+      campaign: actionHandoff.campaign,
+      repoUrl: actionHandoff.url,
+      reportKey: actionHandoff.reportKey,
+      repoSlug: actionHandoff.repoSlug,
     });
     // Direct-chat eligibility is `shouldLeaveOnboarding` — the membership is
     // terminally done (past connect, has a personal agent, AND carries the
@@ -203,12 +204,13 @@ export function QuickstartPage() {
         onboardingCompletedAt,
       })
     ) {
-      void startFixChat();
+      void startActionChat();
     } else {
       navigate("/onboarding", { replace: true });
     }
   }, [
-    fixHandoff,
+    actionHandoff,
+    actionCampaign,
     settled,
     growthLandingPagesEnabled,
     meLoaded,
@@ -217,7 +219,7 @@ export function QuickstartPage() {
     onboardingCompletedAt,
     currentOrgHasPersonalAgent,
     navigate,
-    startFixChat,
+    startActionChat,
   ]);
 
   // Canonicalize a legacy `?chat=<id>` trial link to `?c=<id>` (only when no
@@ -232,9 +234,9 @@ export function QuickstartPage() {
     void startTrial();
   }, [startTrial]);
 
-  const retryFixChat = useCallback(() => {
-    void startFixChat();
-  }, [startFixChat]);
+  const retryActionChat = useCallback(() => {
+    void startActionChat();
+  }, [startActionChat]);
 
   // Trial started: render the real workspace shell — as trial chrome, since
   // this is the `/quickstart` route (stripped header + no rail; see Layout /
@@ -266,27 +268,27 @@ export function QuickstartPage() {
   // A fix conversion in flight: hold the launcher shell while the effect above
   // routes to onboarding or opens the direct fix chat; surface failures with a
   // retry (the stored handoff survives, so retrying is safe).
-  if (fixHandoff) {
+  if (actionHandoff) {
     return (
-      <QuickstartShell repoSlug={fixHandoff.repoSlug}>
+      <QuickstartShell repoSlug={actionHandoff.repoSlug}>
         <h1 className="text-title" style={{ margin: 0 }}>
-          Starting your fix chat...
+          Starting your next step...
         </h1>
 
-        {fixError ? (
+        {actionError ? (
           <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
             <FlowHint tone="error" role="alert">
-              {fixError}
+              {actionError}
             </FlowHint>
             <div className="flex">
-              <Button type="button" onClick={retryFixChat}>
+              <Button type="button" onClick={retryActionChat}>
                 <span>Try again</span>
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
           </div>
         ) : (
-          <WorkingState label="Opening your fix chat..." hint="Handing the scan findings to your agent." />
+          <WorkingState label="Opening your task chat..." hint="Handing the campaign findings to your agent." />
         )}
       </QuickstartShell>
     );

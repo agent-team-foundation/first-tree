@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { addParticipantSchema, createTaskChatSchema, updateChatSchema } from "../schemas/chat.js";
+import {
+  addParticipantSchema,
+  createTaskChatSchema,
+  createWebTaskChatSchema,
+  updateChatSchema,
+} from "../schemas/chat.js";
 
 const initialMessage = {
   content: "Start the task.",
@@ -16,7 +21,7 @@ describe("chat write schemas", () => {
     ).toBe(false);
 
     expect(
-      createTaskChatSchema.parse({
+      createWebTaskChatSchema.parse({
         mode: "task",
         initialRecipientNames: ["alice"],
         initialMessage,
@@ -37,6 +42,27 @@ describe("chat write schemas", () => {
       initialRecipientAgentIds: ["agent-1"],
       initialRecipientNames: [],
     });
+  });
+
+  it("accepts one campaign action contract and rejects it alongside the legacy field", () => {
+    const base = {
+      mode: "task" as const,
+      initialRecipientAgentIds: ["agent-1"],
+      initialMessage,
+    };
+    expect(
+      createWebTaskChatSchema.parse({
+        ...base,
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/api" },
+      }).campaignAction,
+    ).toEqual({ campaign: "production-scan", repoSlug: "acme/api" });
+    expect(
+      createWebTaskChatSchema.safeParse({
+        ...base,
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/api" },
+        scanFixRepoSlug: "acme/api",
+      }).success,
+    ).toBe(false);
   });
 
   it("requires update chat requests to change at least one field", () => {

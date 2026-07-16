@@ -17,6 +17,21 @@ describe("Agent Messages API", () => {
     return { a1, a2, chatId: chat.id };
   }
 
+  it("rejects browser-only campaign action context on the agent task-chat endpoint", async () => {
+    const app = getApp();
+    const a1 = await createTestAgent(app, { name: `action-a1-${crypto.randomUUID().slice(0, 6)}` });
+    const a2 = await createTestAgent(app, { name: `action-a2-${crypto.randomUUID().slice(0, 6)}` });
+
+    const response = await a1.request("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [a2.agent.uuid],
+      campaignAction: { campaign: "production-scan", repoSlug: "acme/app" },
+      initialMessage: { format: "text", content: "Start the campaign action.", source: "agent" },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
   it("sends and retrieves messages", async () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);

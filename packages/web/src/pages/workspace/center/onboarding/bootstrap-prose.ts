@@ -12,6 +12,8 @@
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
 
+import { type CampaignActionConfig, getCampaign } from "../../../quickstart/campaigns.js";
+
 function formatSourceList(sourceUrls: readonly string[], heading: string): string[] {
   return [heading, ...sourceUrls.map((u) => `- ${u}`)];
 }
@@ -63,27 +65,33 @@ export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
  * admin and may get a Context Tree build offer after value; the greeting-free
  * direct path stays role-unclear and makes no admin-only offer.
  */
-export function buildScanFixBootstrap(
+export function buildCampaignActionBootstrap(
   agentDisplayName: string,
+  action: CampaignActionConfig,
   handoff: { repoUrl: string; reportKey: string | null },
   opening: "onboarding" | "direct" = "onboarding",
 ): string {
   const reportLines = handoff.reportKey
     ? [
-        `Hosted report: https://report.first-tree.ai/${handoff.reportKey}.html`,
-        `Machine-readable findings: https://report.first-tree.ai/${handoff.reportKey}.json`,
+        `Hosted report: ${action.reportBaseUrl}/${handoff.reportKey}.html`,
+        `Machine-readable findings: ${action.reportBaseUrl}/${handoff.reportKey}.json`,
       ]
     : [];
-  const closing = handoff.reportKey
-    ? "Start from the machine-readable findings and fix the blockers in severity order. If the findings link has expired, or the repository isn't accessible from here, say exactly what is needed — a re-run of the scan, the narrowest GitHub access, or a local path."
-    : "The scan report link didn't carry over, so start by checking access to the repository, then ask me to share the report or re-run the scan.";
+  const closing = handoff.reportKey ? action.withReportInstruction : action.withoutReportInstruction;
   const openingLines =
     opening === "direct"
-      ? [`${agentDisplayName}, please help me fix the launch blockers found by my production readiness scan.`]
-      : [
-          `${agentDisplayName}, welcome aboard.`,
-          "",
-          "Please help me fix the launch blockers found by my production readiness scan.",
-        ];
+      ? [`${agentDisplayName}, please help me ${action.request}.`]
+      : [`${agentDisplayName}, welcome aboard.`, "", `Please help me ${action.request}.`];
   return [...openingLines, "", `Repository: ${handoff.repoUrl}`, ...reportLines, "", closing].join("\n");
+}
+
+/** Compatibility wrapper for the deployed production-scan action. */
+export function buildScanFixBootstrap(
+  agentDisplayName: string,
+  handoff: { repoUrl: string; reportKey: string | null },
+  opening: "onboarding" | "direct" = "onboarding",
+): string {
+  const campaign = getCampaign("production-scan");
+  if (!campaign) throw new Error("production-scan campaign config is missing");
+  return buildCampaignActionBootstrap(agentDisplayName, campaign.action, handoff, opening);
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { optionalChatMetadataSchema } from "./chat-metadata.js";
+import { landingCampaignActionContextSchema, landingCampaignRepoSlugSchema } from "./landing-campaign.js";
 import { sendMessageSchema } from "./message.js";
 
 export const CHAT_TYPES = {
@@ -50,31 +51,46 @@ export const legacyCreateChatSchema = z.object({
 });
 export type LegacyCreateChat = z.infer<typeof legacyCreateChatSchema>;
 
-export const createTaskChatSchema = z
+const createTaskChatShape = {
+  mode: z.literal("task"),
+  topic: z.string().trim().max(500).nullable().optional(),
+  // Description cap matches `updateChatSchema` (1500) — see the rationale there.
+  description: z.string().trim().max(1500).nullable().optional(),
+  initialRecipientAgentIds: z.array(z.string().min(1)).default([]),
+  initialRecipientNames: z.array(z.string().min(1)).default([]),
+  contextParticipantAgentIds: z.array(z.string().min(1)).default([]),
+  contextParticipantNames: z.array(z.string().min(1)).default([]),
+  initialMessage: sendMessageSchema,
+} as const;
+
+const hasInitialRecipient = (value: { initialRecipientAgentIds: string[]; initialRecipientNames: string[] }) =>
+  value.initialRecipientAgentIds.length > 0 || value.initialRecipientNames.length > 0;
+
+/** Agent SDK task-chat request accepted by `/api/v1/agent/chats`. */
+export const createTaskChatSchema = z.object(createTaskChatShape).refine(hasInitialRecipient, {
+  message: "task chat creation requires at least one initial recipient",
+});
+export type CreateTaskChat = z.infer<typeof createTaskChatSchema>;
+
+/** Signed-in Web task-chat request accepted by `/api/v1/orgs/:orgId/chats`. */
+export const createWebTaskChatSchema = z
   .object({
-    mode: z.literal("task"),
-    topic: z.string().trim().max(500).nullable().optional(),
-    // Description cap matches `updateChatSchema` (1500) — see the rationale there.
-    description: z.string().trim().max(1500).nullable().optional(),
-    initialRecipientAgentIds: z.array(z.string().min(1)).default([]),
-    initialRecipientNames: z.array(z.string().min(1)).default([]),
-    contextParticipantAgentIds: z.array(z.string().min(1)).default([]),
-    contextParticipantNames: z.array(z.string().min(1)).default([]),
-    initialMessage: sendMessageSchema,
-    // Production-scan fix conversion (already-onboarded direct path). When set,
-    // this task chat is keyed `<humanAgent>:scan-fix:<repoSlug>` so re-entering
-    // the fix link reuses the same launcher instead of creating a duplicate,
-    // and it dedups with the onboarding-path kickoff that carries the same key.
-    scanFixRepoSlug: z
-      .string()
-      .max(200)
-      .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/)
-      .optional(),
+    ...createTaskChatShape,
+    // Trusted landing-campaign action context. The server derives the shared
+    // idempotency key from this pair; the browser never supplies the key.
+    campaignAction: landingCampaignActionContextSchema.optional(),
+    // Compatibility for already-deployed production-scan clients.
+    scanFixRepoSlug: landingCampaignRepoSlugSchema.optional(),
   })
-  .refine((v) => v.initialRecipientAgentIds.length > 0 || v.initialRecipientNames.length > 0, {
+  .superRefine((value, ctx) => {
+    if (value.campaignAction && value.scanFixRepoSlug) {
+      ctx.addIssue({ code: "custom", message: "Use campaignAction or scanFixRepoSlug, not both." });
+    }
+  })
+  .refine(hasInitialRecipient, {
     message: "task chat creation requires at least one initial recipient",
   });
-export type CreateTaskChat = z.infer<typeof createTaskChatSchema>;
+export type CreateWebTaskChat = z.infer<typeof createWebTaskChatSchema>;
 
 export const createChatSchema = z.union([createTaskChatSchema, legacyCreateChatSchema]);
 export type CreateChat = z.infer<typeof createChatSchema>;
