@@ -26,6 +26,7 @@ import { agentConfigRoutes } from "./api/agents-config.js";
 import { agentResourcesRoutes } from "./api/agents-resources.js";
 import { attachmentRoutes } from "./api/attachments.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
+import { googleOauthRoutes } from "./api/auth/google.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { chatRoutes } from "./api/chats.js";
@@ -41,6 +42,7 @@ import { scanCampaignExportRoutes } from "./api/internal/scan-campaign-exports.j
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { landingCampaignRoutes } from "./api/landing-campaigns.js";
 import { meRoutes } from "./api/me.js";
+import { meAuthProviderRoutes } from "./api/me-auth-providers.js";
 import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
@@ -497,6 +499,7 @@ export async function buildApp(config: Config) {
       await api.register(gitlabWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
+      await api.register(googleOauthRoutes, { prefix: "/auth/google" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
       // Public read for manager-uploaded agent avatars — `<img src>` cannot
@@ -516,6 +519,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
+          await scope.register(meAuthProviderRoutes);
           await scope.register(landingCampaignRoutes, { prefix: "/me/landing-campaigns" });
           await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),

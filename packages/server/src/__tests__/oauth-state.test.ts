@@ -20,6 +20,23 @@ describe("OAuth state JWT", () => {
     expect(result.targetOrganizationId).toBe("01961234-aaaa-7000-8000-000000000001");
   });
 
+  it("round-trips the identity row bound to an unlink reauthentication", async () => {
+    const targetIdentityId = "01961234-bbbb-7000-8000-000000000002";
+    const { token, nonce } = await signOAuthState(SECRET, "/user-settings", {
+      intent: "unlink",
+      userId: "01961234-cccc-7000-8000-000000000003",
+      provider: "google",
+      targetIdentityId,
+    });
+    const result = await verifyOAuthState(SECRET, token, nonce);
+    expect(result).toMatchObject({
+      next: "/user-settings",
+      intent: "unlink",
+      provider: "google",
+      targetIdentityId,
+    });
+  });
+
   it("rejects a tampered state token", async () => {
     const { token, nonce } = await signOAuthState(SECRET, "/welcome");
     // Flip the FIRST char of the signature segment, not the last.

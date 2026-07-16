@@ -27,15 +27,16 @@ describe("membership service edge coverage", () => {
         }),
       }),
       insert: () => ({
-        values: async (value: Record<string, unknown>) => {
-          organizationInsertAttempts += 1;
-          if (organizationInsertAttempts <= 4) {
-            const err = new Error("duplicate organization") as Error & { code: string };
-            err.code = "23505";
-            throw err;
-          }
-          if (typeof value.name === "string") insertedOrganizationNames.push(value.name);
-        },
+        values: (value: Record<string, unknown>) => ({
+          onConflictDoNothing: () => ({
+            returning: async () => {
+              organizationInsertAttempts += 1;
+              if (organizationInsertAttempts <= 4) return [];
+              if (typeof value.name === "string") insertedOrganizationNames.push(value.name);
+              return [{ name: value.name }];
+            },
+          }),
+        }),
       }),
       transaction: async (callback: (tx: unknown) => Promise<Record<string, unknown>>) => {
         return callback({
@@ -63,7 +64,7 @@ describe("membership service edge coverage", () => {
     await expect(
       createPersonalTeam(fakeDb as never, {
         userId: "user-1",
-        loginSeed: "Retry User",
+        username: "Retry User",
         teamDisplayName: "Retry User's team",
         userDisplayName: "Retry User",
       }),

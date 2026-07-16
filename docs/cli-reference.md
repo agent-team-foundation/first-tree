@@ -1132,7 +1132,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_DATABASE_URL` | PostgreSQL connection URL. | — (required) |
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
-| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used to stamp the issuer on short connect codes and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
+| `FIRST_TREE_PUBLIC_URL` | Public-facing server origin. Used to stamp the issuer on short connect codes and to build invite-link URLs plus Google and GitHub OAuth callbacks. **Required in production.** | — |
 | `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL` | Base URL for the prod/staging portable installer and artifact mirror. Do not include a channel suffix; the server appends the channel's `publicInstallerPath` (for example, `prod/install.sh`). | `https://download.first-tree.ai/releases` |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
@@ -1178,6 +1178,29 @@ server secrets even if `FIRST_TREE_CHANNEL` is omitted or defaults to `dev`.
 | `FIRST_TREE_GITHUB_APP_PRIVATE_KEY` | GitHub App signing key (PEM body). |
 | `FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET` | Webhook HMAC secret. |
 | `FIRST_TREE_GITHUB_APP_SLUG` | Optional explicit slug override. |
+
+**Google OAuth / OIDC:**
+
+| Variable | Purpose |
+|---|---|
+| `FIRST_TREE_GOOGLE_CLIENT_ID` | Google OAuth 2.0 Web application client id. |
+| `FIRST_TREE_GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 Web application client secret. |
+
+Set both Google variables to enable Google sign-in; omit both to leave the
+provider disabled. A partial configuration fails server startup. First Tree
+requests only the fixed identity scopes `openid email profile` and does not
+persist Google access or refresh tokens.
+
+Register this exact authorized redirect URI in Google Cloud Console:
+
+```text
+${FIRST_TREE_PUBLIC_URL}/api/v1/auth/google/callback
+```
+
+The scheme, host, port, path, and trailing-slash form must exactly match the
+deployed `FIRST_TREE_PUBLIC_URL`. See
+[Google OAuth operator setup](development/google-oauth.md) for the full setup
+and verification procedure.
 
 **Rate limits:**
 

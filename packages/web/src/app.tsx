@@ -38,6 +38,7 @@ import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsResourcesPage } from "./pages/settings/resources.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
+import { UserSettingsPage } from "./pages/user-settings.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -172,6 +173,7 @@ export function App() {
               {/* /signup retired — Continue with GitHub on /login covers signup. */}
               <Route path="/signup" element={<Navigate to="/login" replace />} />
               <Route path="/auth/github/complete" element={<OAuthCompletePage />} />
+              <Route path="/auth/complete" element={<OAuthCompletePage />} />
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
@@ -426,6 +428,7 @@ export function App() {
                       lives under /settings, not as a peer of the
                       people-and-agents view. */}
                   <Route path="team" element={<TeamPage />} />
+                  <Route path="user-settings" element={<UserSettingsPage />} />
 
                   {/* Settings master-detail. Team name editing lives in the
                       header-left TeamSwitcher, so settings only hosts setup
