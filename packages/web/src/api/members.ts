@@ -1,7 +1,7 @@
 import type { UpdateMember, UpdateMyProfile } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
-type MemberListItem = {
+export type MemberListItem = {
   id: string;
   userId: string;
   organizationId: string;

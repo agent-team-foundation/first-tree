@@ -140,12 +140,13 @@ describe("parseOriginList", () => {
   });
 
   it("normalizes the full valid set to unrestricted [] (legacy / shared URL)", () => {
-    // A `?origin=manual,github,agent` URL (e.g. from the pre-redesign checkbox UI)
+    // A URL that lists every supported source (for example, one produced by
+    // the checkbox UI) is semantically unrestricted, like no `?origin=`.
     // lists every source → semantically unrestricted, same as no `?origin=`. It
     // must NOT render a chip per source + a badge, so the parser collapses it to [].
-    expect(parseOriginList(paramsOf("origin=manual,github,agent"))).toEqual([]);
+    expect(parseOriginList(paramsOf("origin=manual,github,gitlab,agent"))).toEqual([]);
     // Order / dupes don't matter — a full set in any form collapses to [].
-    expect(parseOriginList(paramsOf("origin=agent,manual,github,manual"))).toEqual([]);
+    expect(parseOriginList(paramsOf("origin=agent,manual,gitlab,github,manual"))).toEqual([]);
   });
 });
 
@@ -177,7 +178,7 @@ describe("nextParamsForOrigin", () => {
   });
 
   it("drops the key when handed the full valid set (== unrestricted)", () => {
-    const result = nextParamsForOrigin(paramsOf(""), ["manual", "github", "agent"]);
+    const result = nextParamsForOrigin(paramsOf(""), ["manual", "github", "gitlab", "agent"]);
     expect(result.has("origin")).toBe(false);
   });
 

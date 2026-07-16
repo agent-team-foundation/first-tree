@@ -355,6 +355,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         connectionId: body.connectionId,
         chatId: chat.id,
         declaredByAgentId: scope.humanAgentId,
+        boundVia: "human_declared",
         entityUrl: body.entityUrl,
       });
       return reply.status(201).send({ entity });

@@ -6,6 +6,14 @@ import type { AudienceTarget } from "./github-audience.js";
 import { findReuseChatForInvolved, refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
 import { type EntityStateSeed, setEntityTitle } from "./github-entity-state.js";
 import { sendScmSystemCard } from "./scm-card-delivery.js";
+import {
+  compareScmDeliveryEntries,
+  planScmChatDeliveries,
+  type ScmAudienceTarget,
+  scmWakeAgentIds,
+  selectScmCardContext,
+  selectScmSenderId,
+} from "./scm-chat-delivery-plan.js";
 
 const log = createLogger("GithubDelivery");
 
@@ -35,22 +43,6 @@ type DeliveryOptions = {
  * collapse into a single card whose wake-set is the union of surviving
  * per-human entries.
  */
-type DeliveryReason = "follow" | InvolveReason;
-
-type DeliveryEntry = {
-  humanAgentId: string;
-  wakeAgentId: string;
-  reasons: Set<DeliveryReason>;
-  involveReason: InvolveReason | null;
-  involveLogin: string | null;
-};
-
-type ChatDelivery = {
-  chatId: string;
-  created: boolean;
-  entries: Map<string, DeliveryEntry>;
-};
-
 /**
  * Stage 3 — emit exactly one card per chat.
  *
@@ -75,52 +67,27 @@ export async function deliverGithubEvent(
   const existingMappedChatIds = existingMappedChatIdsForProjection(audience);
   const entity = entityFromEvent(event);
 
-  // Phase 1 — resolve each target to a chat and merge into per-chat deliveries.
-  const byChat = new Map<string, ChatDelivery>();
-  for (const target of audience) {
-    // Self-echo prune: suppress an actor's own action from echoing back to a
-    // chat they already sit in. The carve-out is a `kind: "new"` directed
-    // involve — any non-null `involveReason` (`assigned` / `mentioned`;
-    // `review_requested` can't name the actor themselves on GitHub, so it's
-    // inert here). `kind: "new"` is target-human-scoped: it means THIS involved
-    // human has no existing entity line (`resolveGithubAudience` found no
-    // `subscribedByHuman` row for them) — NOT that the entity has no chat
-    // anywhere; other humans may already track it. Pruning such a target
-    // wouldn't just drop an echo card — it would prevent this human's tracking
-    // chat from ever being created (the actor self-assigns / self-@s an entity
-    // — at creation or later — and it stays invisible to their delegate). A
-    // brand-new directed involve is an intentional "track this" signal, not a
-    // passive echo, so it must survive and mint (or reuse this human's) chat.
-    // Everything else that maps to the actor (subscribed echoes, and directed
-    // involves where this human already has an entity line → `kind: "existing"`)
-    // stays pruned: that human's chat already exists and the card would be a
-    // true self-echo. See #1536.
-    //
-    // The `involveReason !== null` clause is defensive, not load-bearing:
-    // `resolveGithubAudience` only ever mints `kind: "new"` alongside a non-null
-    // reason, but `deliverGithubEvent` is exported and takes an arbitrary
-    // target list, so a future producer that mints `kind: "new"` with no reason
-    // fail-closes to pruning rather than inventing a chat.
-    const isFreshDirectedSelfInvolve = target.kind === "new" && target.involveReason !== null;
-    if (actorHumanId && target.humanAgentId === actorHumanId && !isFreshDirectedSelfInvolve) {
-      continue;
-    }
-    let resolved: ResolvedChat | null;
-    try {
-      resolved = await resolveChatFor(app, event, target, options);
-    } catch (err) {
-      // A single target's chat resolution failing (e.g. cross-org rejection
-      // on mint, or a malformed audience row) must not abort the rest. Count
-      // it and move on — the webhook is already claimed, so GitHub won't
-      // retry; the metric makes the drop observable. See #507.
-      stats.failed += 1;
+  // Phase 1 — shared SCM planner owns echo pruning and one-delivery-per-chat.
+  const planned = await planScmChatDeliveries({
+    targets: audience.map((target) => ({
+      senderAgentId: target.humanAgentId,
+      humanAgentId: target.humanAgentId,
+      wakeAgentId: target.delegateAgentId,
+      kind: target.kind,
+      chatId: target.chatId,
+      involveReason: target.involveReason,
+      involveLogin: target.involveLogin,
+    })),
+    actorHumanId,
+    resolveChat: (target) => resolveChatFor(app, event, target, options),
+    onTargetError: (target, err) => {
       log.error(
         {
           err,
           metric: "github_delivery_failed_total",
           errorClass: err instanceof Error ? err.name : "Unknown",
           humanAgent: target.humanAgentId,
-          delegateAgent: target.delegateAgentId,
+          delegateAgent: target.wakeAgentId,
           entityType: event.entity.type,
           entityKey: event.entity.key,
           eventType: event.eventType,
@@ -128,16 +95,12 @@ export async function deliverGithubEvent(
         },
         "failed to resolve chat for normalized github target",
       );
-      continue;
-    }
-    if (!resolved) {
-      // Creation-event guard fired: opened webhook had no existing mapping
-      // and no explicit mention for this target, so we drop it rather than
-      // inventing a chat. Other targets may still resolve to a chat.
+    },
+    onTargetDropped: (target) => {
       log.info(
         {
           humanAgent: target.humanAgentId,
-          delegateAgent: target.delegateAgentId,
+          delegateAgent: target.wakeAgentId,
           entityType: event.entity.type,
           entityKey: event.entity.key,
           eventType: event.eventType,
@@ -146,21 +109,10 @@ export async function deliverGithubEvent(
         },
         "webhook_dropped_creation",
       );
-      continue;
-    }
-    let delivery = byChat.get(resolved.chatId);
-    if (!delivery) {
-      delivery = {
-        chatId: resolved.chatId,
-        created: resolved.created,
-        entries: new Map(),
-      };
-      byChat.set(resolved.chatId, delivery);
-    } else if (resolved.created) {
-      delivery.created = true;
-    }
-    addDeliveryEntry(delivery, target);
-  }
+    },
+  });
+  stats.failed += planned.failed;
+  const byChat = planned.deliveries;
 
   // Phase 1.5 — refresh the local projection for this entity independently
   // from card delivery. A self-only event can prune every delivery entry, but
@@ -203,9 +155,9 @@ export async function deliverGithubEvent(
         await refreshGithubChatTopic(app.db, delivery.chatId, entity);
       }
 
-      const entries = [...delivery.entries.values()].sort(compareEntries);
-      const senderId = selectSenderId(entries);
-      const cardContext = selectCardContext(entries);
+      const entries = [...delivery.entries.values()].sort(compareScmDeliveryEntries);
+      const senderId = selectScmSenderId(entries);
+      const cardContext = selectScmCardContext(entries);
       const card = buildCard(event, cardContext.involveReason, cardContext.involveLogin);
       const mentionedUser = card.mentionedUser ?? undefined;
       // Native wake-set (S8): the delegates are passed as `metadata.mentions`,
@@ -214,7 +166,7 @@ export async function deliverGithubEvent(
       // out by the message service (the card still lands as a silent row via
       // `allowRecipientlessSend`). The unread-mention red dot stays off because
       // delegates are non-human mention targets.
-      const mentions = [...new Set(entries.map((entry) => entry.wakeAgentId))].sort();
+      const mentions = scmWakeAgentIds(entries);
       await sendScmSystemCard(app, {
         chatId: delivery.chatId,
         senderId,
@@ -249,7 +201,9 @@ export async function deliverGithubEvent(
           metric: "github_delivery_failed_total",
           errorClass: err instanceof Error ? err.name : "Unknown",
           chatId: delivery.chatId,
-          delegateAgents: [...delivery.entries.values()].map((entry) => entry.wakeAgentId),
+          delegateAgents: [...delivery.entries.values()].flatMap((entry) =>
+            entry.wakeAgentId ? [entry.wakeAgentId] : [],
+          ),
           entityType: event.entity.type,
           entityKey: event.entity.key,
           eventType: event.eventType,
@@ -280,73 +234,12 @@ function entityFromEvent(event: NormalizedScmEvent): GithubEntity {
   };
 }
 
-function addDeliveryEntry(delivery: ChatDelivery, target: AudienceTarget): void {
-  const key = `${target.humanAgentId}:${target.delegateAgentId}`;
-  const existing = delivery.entries.get(key);
-  const reasons = reasonsForTarget(target);
-  if (existing) {
-    for (const reason of reasons) existing.reasons.add(reason);
-    if (!existing.involveReason && target.involveReason) {
-      existing.involveReason = target.involveReason;
-      existing.involveLogin = target.involveLogin;
-    }
-    return;
-  }
-  delivery.entries.set(key, {
-    humanAgentId: target.humanAgentId,
-    wakeAgentId: target.delegateAgentId,
-    reasons,
-    involveReason: target.involveReason,
-    involveLogin: target.involveLogin,
-  });
-}
-
-function reasonsForTarget(target: AudienceTarget): Set<DeliveryReason> {
-  const reasons = new Set<DeliveryReason>();
-  if (target.kind === "existing") reasons.add("follow");
-  if (target.involveReason) reasons.add(target.involveReason);
-  return reasons;
-}
-
-function compareEntries(a: DeliveryEntry, b: DeliveryEntry): number {
-  return a.humanAgentId.localeCompare(b.humanAgentId) || a.wakeAgentId.localeCompare(b.wakeAgentId);
-}
-
-function selectSenderId(entries: DeliveryEntry[]): string {
-  const first = entries[0];
-  if (!first) throw new Error("delivery plan must have at least one surviving entry");
-  return first.humanAgentId;
-}
-
-function selectCardContext(entries: DeliveryEntry[]): {
-  involveReason: InvolveReason | null;
-  involveLogin: string | null;
-} {
-  const involved = [...entries]
-    .filter((entry) => entry.involveReason)
-    .sort((a, b) => involveReasonRank(a.involveReason) - involveReasonRank(b.involveReason) || compareEntries(a, b))[0];
-  return { involveReason: involved?.involveReason ?? null, involveLogin: involved?.involveLogin ?? null };
-}
-
-function involveReasonRank(reason: InvolveReason | null): number {
-  switch (reason) {
-    case "review_requested":
-      return 0;
-    case "mentioned":
-      return 1;
-    case "assigned":
-      return 2;
-    default:
-      return 3;
-  }
-}
-
 type ResolvedChat = { chatId: string; created: boolean };
 
 async function resolveChatFor(
   app: FastifyInstance,
   event: NormalizedScmEvent,
-  target: AudienceTarget,
+  target: ScmAudienceTarget,
   options: DeliveryOptions,
 ): Promise<ResolvedChat | null> {
   if (target.kind === "existing") {
@@ -354,6 +247,9 @@ async function resolveChatFor(
       throw new Error("audience target kind=existing must carry chatId");
     }
     return { chatId: target.chatId, created: false };
+  }
+  if (!target.humanAgentId || !target.wakeAgentId) {
+    throw new Error("new GitHub audience target must carry human and delegate agents");
   }
   const entity: GithubEntity = {
     type: event.entity.type,
@@ -375,7 +271,7 @@ async function resolveChatFor(
       event.source.organizationId,
       entity,
       target.humanAgentId,
-      target.delegateAgentId,
+      target.wakeAgentId,
     );
     if (reuseChatId) return { chatId: reuseChatId, created: false };
   }
@@ -387,7 +283,7 @@ async function resolveChatFor(
   const resolved = await resolveTargetChat(app.db, {
     organizationId: event.source.organizationId,
     humanAgentId: target.humanAgentId,
-    delegateAgentId: target.delegateAgentId,
+    delegateAgentId: target.wakeAgentId,
     entity,
     relatedEntities,
     eventType: event.eventType,

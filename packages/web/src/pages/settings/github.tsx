@@ -9,7 +9,7 @@ import { GithubAppInstallationPanel } from "../github-app-installation-panel.js"
 import { ResourceTypeSections } from "./resource-sections.js";
 
 /**
- * Settings → GitHub. Members can read the team's GitHub connection and source
+ * Settings → Integrations → GitHub. Members can read the team's GitHub connection and source
  * repo catalog; admin-only actions stay hidden in the panel/resource sections.
  *
  * Two sections:

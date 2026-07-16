@@ -6,6 +6,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
+import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
 import { members } from "../db/schema/members.js";
 import { NotFoundError } from "../errors.js";
 import { stampAgentResource, stampChatResource, stampOrgScope } from "../observability/request-context.js";
@@ -268,6 +269,30 @@ export async function requireGitlabConnectionAccess(
   };
   stampOrgScope(request, scope);
   return { connection, scope };
+}
+
+export async function requireGitlabIdentityLinkAccess(
+  request: FastifyRequest<{ Params: { linkId: string } }>,
+  db: Database,
+): Promise<{ link: typeof gitlabIdentityLinks.$inferSelect; scope: OrgScope }> {
+  const { userId } = requireUser(request);
+  const [link] = await db
+    .select()
+    .from(gitlabIdentityLinks)
+    .where(eq(gitlabIdentityLinks.id, request.params.linkId))
+    .limit(1);
+  if (!link) throw new NotFoundError("GitLab identity link not found");
+  const caller = await resolveCallerInOrg(db, userId, link.organizationId);
+  if (caller.role !== "admin") throw new NotFoundError("GitLab identity link not found");
+  const scope: OrgScope = {
+    userId,
+    organizationId: link.organizationId,
+    memberId: caller.memberId,
+    role: caller.role,
+    humanAgentId: caller.humanAgentId,
+  };
+  stampOrgScope(request, scope);
+  return { link, scope };
 }
 
 /**

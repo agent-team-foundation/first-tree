@@ -10,6 +10,7 @@ import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { forceDisconnect } from "./connection-manager.js";
+import { suspendGitlabLinksForMembership } from "./gitlab-identities.js";
 import * as presenceService from "./presence.js";
 import { recomputeWatchersForAgent, recomputeWatchersForMember } from "./watcher.js";
 
@@ -326,6 +327,12 @@ export async function deactivateMembership(
     if (existing.status !== status) {
       await tx.update(members).set({ status }).where(eq(members.id, memberId));
     }
+    await suspendGitlabLinksForMembership(
+      tx as unknown as Database,
+      memberId,
+      status === MEMBER_STATUSES.LEFT ? "member_left" : "member_removed",
+      status === MEMBER_STATUSES.LEFT ? memberId : null,
+    );
     await tx
       .update(agents)
       .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })

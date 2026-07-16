@@ -228,7 +228,7 @@ function AddCapabilityMenu(props: {
   // Team repos are managed on Settings → GitHub (the "Source Repos" section
   // lives next to the GitHub connection); the other resource types stay on
   // Settings → Resources.
-  const settingsPath = props.type === "repo" ? "/settings/github" : "/settings/resources";
+  const settingsPath = props.type === "repo" ? "/settings/integrations/github" : "/settings/resources";
   const settingsLabel = props.type === "repo" ? "Manage in Settings → GitHub" : "Manage in Settings → Resources";
   const goToSettings = () => (props.onNavigateAway ?? navigate)(settingsPath);
   return (

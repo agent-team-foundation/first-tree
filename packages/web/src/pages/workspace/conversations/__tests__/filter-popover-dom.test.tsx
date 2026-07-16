@@ -120,7 +120,7 @@ function StatefulFilter({
   onResetAll: () => void;
   initialParticipants?: string[];
 }) {
-  const [origin, setOrigin] = useState<ChatSource[]>(["github", "agent"]);
+  const [origin, setOrigin] = useState<ChatSource[]>(["github", "gitlab", "agent"]);
   const [engagement, setEngagement] = useState<ChatEngagementView>("archived");
   const [participants, setParticipants] = useState<string[]>(initialParticipants);
   return (
@@ -169,6 +169,7 @@ afterEach(async () => {
 describe("FilterPopover", () => {
   it("labels unknown origins defensively", () => {
     expect(originLabel("github")).toBe("GitHub");
+    expect(originLabel("gitlab")).toBe("GitLab");
     expect(originLabel("agent")).toBe("Agent");
     expect(originLabel("future" as ChatSource)).toBe("future");
   });
@@ -199,8 +200,9 @@ describe("FilterPopover", () => {
     expect(radioByLabel("Archived").checked).toBe(true);
     expect(radioByLabel("Active").checked).toBe(false);
     expect(radioByLabel("All").checked).toBe(false);
-    // Source: the narrowed subset (github + agent) is checked, Human is not.
+    // Source: the narrowed provider subset is checked, Human is not.
     expect(checkboxByLabel("GitHub").checked).toBe(true);
+    expect(checkboxByLabel("GitLab").checked).toBe(true);
     expect(checkboxByLabel("Agent").checked).toBe(true);
     expect(checkboxByLabel("Human").checked).toBe(false);
 
@@ -219,8 +221,10 @@ describe("FilterPopover", () => {
 
     // Narrow again by unchecking down toward a single source.
     await click(checkboxByLabel("Human"));
-    expect(onOriginChange).toHaveBeenLastCalledWith(["github", "agent"]);
+    expect(onOriginChange).toHaveBeenLastCalledWith(["github", "gitlab", "agent"]);
     await click(checkboxByLabel("Agent"));
+    expect(onOriginChange).toHaveBeenLastCalledWith(["github", "gitlab"]);
+    await click(checkboxByLabel("GitLab"));
     expect(onOriginChange).toHaveBeenLastCalledWith(["github"]);
 
     // The last checked source CANNOT be removed — no zero-source state.
