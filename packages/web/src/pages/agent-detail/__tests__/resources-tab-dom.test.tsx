@@ -398,11 +398,11 @@ describe("ResourcesTab", () => {
     // The opt-in repo is not enableable, and there's no "Enable from team" list…
     expect(buttonByText(document.body, "Opt-in repo")).toBeNull();
     expect(document.body.textContent).not.toContain("Enable from team");
-    // …but the menu stays actionable: add a private repo or jump to Settings.
-    // Team repos manage on Settings → GitHub (Source Repos live there);
-    // skill/MCP/prompt menus keep the Resources destination.
+    // …but the menu stays actionable: add a private repo or jump to the
+    // provider-neutral Team code-access area in Settings. Skill/MCP/prompt
+    // menus keep the Resources destination.
     expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
-    expect(buttonByText(document.body, "Manage in Settings → GitHub")).toBeTruthy();
+    expect(buttonByText(document.body, "Manage Team code access")).toBeTruthy();
     expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeNull();
   });
 

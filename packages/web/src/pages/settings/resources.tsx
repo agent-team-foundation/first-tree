@@ -6,9 +6,9 @@ import { ResourceTypeSections } from "./resource-sections.js";
  * the team's agents consume. Lives under Settings (an org-admin config
  * surface), not on the Team roster — see the Settings IA in settings.tsx.
  *
- * The `repo` type is deliberately absent here: source repos render on
- * Settings → GitHub as the "Source Repos" section, next to the GitHub App
- * connection their code and events flow through.
+ * The `repo` type is deliberately absent here: Team code repositories render
+ * in the provider-neutral "Code available to agents" area on Settings →
+ * Integrations, above the GitHub/GitLab connection tabs.
  *
  * Visible to all members. Everyone can open the read-only preview; only
  * admins see add / edit / retire affordances (see ResourceTypeSections).

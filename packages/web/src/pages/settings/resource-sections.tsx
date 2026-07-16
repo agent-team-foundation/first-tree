@@ -29,9 +29,10 @@ import { ResourcePreviewDialog } from "./resource-preview-dialog.js";
 /**
  * Section list for a subset of the team's runtime resource types, extracted
  * from the Settings → Resources page so a type can live on a different
- * Settings page without duplicating the list/editor/retire machinery — the
- * `repo` type renders on Settings → GitHub as "Source Repos", next to the
- * GitHub App connection those repos flow through.
+ * Settings page without duplicating the list/editor/retire machinery. The
+ * `repo` type renders in the provider-neutral code-access area on Settings →
+ * Integrations; prompt, skill, and MCP resources remain on Settings →
+ * Resources.
  *
  * Behaviour matches the Resources page: everyone can open the read-only
  * preview (the eye icon); only admins see add / edit / retire affordances.
@@ -45,10 +46,22 @@ import { ResourcePreviewDialog } from "./resource-preview-dialog.js";
 export function ResourceTypeSections({
   types,
   titleFor,
+  descriptionFor,
+  addLabelFor,
+  emptyLabelFor,
+  compactLimit,
 }: {
   types: readonly ResourceType[];
   /** Override a section's heading; defaults to the type's plural label. */
   titleFor?: (type: ResourceType) => string;
+  /** Optional explanatory copy beneath a section heading. */
+  descriptionFor?: (type: ResourceType) => string;
+  /** Override the section-local add button's accessible label and tooltip. */
+  addLabelFor?: (type: ResourceType) => string;
+  /** Override the empty-state sentence. */
+  emptyLabelFor?: (type: ResourceType) => string;
+  /** Keep long sections compact until the user explicitly expands them. */
+  compactLimit?: number;
 }) {
   const { role } = useAuth();
   const isAdmin = role === "admin";
@@ -57,6 +70,7 @@ export function ResourceTypeSections({
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [preview, setPreview] = useState<ResourceRow | null>(null);
   const [retireTarget, setRetireTarget] = useState<ResourceRow | null>(null);
+  const [expandedTypes, setExpandedTypes] = useState<ResourceType[]>([]);
   const resourcesQuery = useQuery({ queryKey: ["team-resources"], queryFn: listTeamResources });
   const retireMut = useMutation({
     mutationFn: retireResource,
@@ -93,20 +107,25 @@ export function ResourceTypeSections({
         </p>
       ) : (
         types.map((type) => {
-          // When the host overrides a section's title (e.g. GitHub renders the
-          // `repo` type as "Source repos"), derive the empty-state and add-button
-          // nouns from that title so they read as one surface — instead of the
-          // per-type default ("repos" / "Repo") leaking through. Plural comes
-          // straight from the (already-plural) title; the add label strips a
-          // trailing "s" for a singular.
+          // When the host overrides a section's title, derive fallback copy from
+          // that title so the surface stays coherent. Hosts with sentence-like
+          // titles (for example "Code available to agents") can supply explicit
+          // add/empty labels rather than relying on this simple noun fallback.
           const overrideTitle = titleFor?.(type);
           const pluralNoun = overrideTitle ? overrideTitle.toLowerCase() : typeLabelPlural(type).toLowerCase();
-          const addLabel = overrideTitle ? `Add ${overrideTitle.toLowerCase().replace(/s$/, "")}` : undefined;
+          const addLabel =
+            addLabelFor?.(type) ?? (overrideTitle ? `Add ${overrideTitle.toLowerCase().replace(/s$/, "")}` : undefined);
+          const rows = grouped.get(type) ?? [];
+          const limit = compactLimit !== undefined && compactLimit > 0 ? compactLimit : null;
+          const isExpanded = expandedTypes.includes(type);
+          const isCompactable = limit !== null && rows.length > limit;
+          const visibleRows = isCompactable && !isExpanded ? rows.slice(0, limit) : rows;
           return (
             <Section
               key={type}
               title={overrideTitle ?? typeLabelPlural(type)}
-              count={grouped.get(type)?.length ?? 0}
+              count={rows.length}
+              description={descriptionFor?.(type)}
               action={
                 isAdmin ? (
                   <AddResourceButton type={type} label={addLabel} onClick={() => setEditor({ mode: "create", type })} />
@@ -114,12 +133,12 @@ export function ResourceTypeSections({
               }
             >
               <div>
-                {(grouped.get(type) ?? []).length === 0 ? (
+                {rows.length === 0 ? (
                   <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
-                    No {pluralNoun} configured yet.
+                    {emptyLabelFor?.(type) ?? `No ${pluralNoun} configured yet.`}
                   </p>
                 ) : (
-                  (grouped.get(type) ?? []).map((resource) => (
+                  visibleRows.map((resource) => (
                     <ResourceListRow
                       key={resource.id}
                       resource={resource}
@@ -130,6 +149,23 @@ export function ResourceTypeSections({
                     />
                   ))
                 )}
+                {isCompactable ? (
+                  <div className="flex justify-start" style={{ paddingTop: "var(--sp-2)" }}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-expanded={isExpanded}
+                      onClick={() =>
+                        setExpandedTypes((current) =>
+                          current.includes(type) ? current.filter((item) => item !== type) : [...current, type],
+                        )
+                      }
+                    >
+                      {isExpanded ? "Show less" : `View all (${rows.length})`}
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             </Section>
           );

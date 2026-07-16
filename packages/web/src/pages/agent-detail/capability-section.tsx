@@ -225,11 +225,12 @@ function AddCapabilityMenu(props: {
   onNavigateAway?: (to: string) => void;
 }) {
   const navigate = useNavigate();
-  // Team repos are managed on Settings → GitHub (the "Source Repos" section
-  // lives next to the GitHub connection); the other resource types stay on
-  // Settings → Resources.
-  const settingsPath = props.type === "repo" ? "/settings/integrations/github" : "/settings/resources";
-  const settingsLabel = props.type === "repo" ? "Manage in Settings → GitHub" : "Manage in Settings → Resources";
+  // Team repos are managed in the provider-neutral code-access area on
+  // Settings → Integrations; the other resource types stay on Settings →
+  // Resources. The anchor makes this exit land on the shared section rather
+  // than implying that Team code belongs to the active GitHub connection.
+  const settingsPath = props.type === "repo" ? "/settings/integrations/github#code-access" : "/settings/resources";
+  const settingsLabel = props.type === "repo" ? "Manage Team code access" : "Manage in Settings → Resources";
   const goToSettings = () => (props.onNavigateAway ?? navigate)(settingsPath);
   return (
     <Popover
@@ -408,9 +409,9 @@ function AgentRepoDialog(props: {
   const [error, setError] = useState<string | null>(null);
   function submit(e: FormEvent) {
     e.preventDefault();
-    // Normalize so common paste shapes (github.com/org/repo, org/repo) work
-    // without a scheme, then derive the name — matching the Settings → Resources
-    // repo editor. A repo has no user-meaningful name, so we don't ask for one.
+    // Normalize common paste shapes, then derive the name — matching the Team
+    // code-access editor. A repo has no user-meaningful name, so we don't ask
+    // for one.
     const normalized = normalizeRepoUrl(url);
     if (!normalized) {
       setError("URL is required.");
@@ -431,7 +432,14 @@ function AgentRepoDialog(props: {
           <DialogTitle>Add agent repository</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <Field id="agent-repo-url" label="URL" value={url} onChange={setUrl} placeholder="github.com/org/repo" mono />
+          <Field
+            id="agent-repo-url"
+            label="URL"
+            value={url}
+            onChange={setUrl}
+            placeholder="https://git.example.com/org/repo.git"
+            mono
+          />
           <Field id="agent-repo-branch" label="Default branch" value={branch} onChange={setBranch} placeholder="main" />
           {error ? (
             <p className="text-body" style={{ color: "var(--state-error)" }}>

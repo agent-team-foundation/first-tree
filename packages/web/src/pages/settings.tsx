@@ -44,10 +44,11 @@ import { cn } from "../lib/utils.js";
  *                   entry point — placed first)
  *   Context tree  — org-scoped Context Tree binding (repo / branch). Visible
  *                   to all members (read-only); only admins can edit.
- *   Resources     — org-scoped runtime resources (repo / prompt / skill / mcp).
+ *   Resources     — org-scoped runtime resources (prompt / skill / mcp).
  *                   Visible to all members (read-only); only admins can manage.
- *   Integrations  — provider-specific GitHub/GitLab connections. Visible to
- *                   all members (read-only); only admins can mutate them.
+ *   Integrations  — Team code access plus provider-specific GitHub/GitLab
+ *                   connections. Visible to all members (read-only); only
+ *                   admins can mutate them.
  *   Setup         — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
  */
@@ -79,7 +80,7 @@ const ITEMS: Item[] = [
   {
     to: "/settings/integrations",
     label: "Integrations",
-    description: "Connect source providers and control how their events reach your Team.",
+    description: "Choose the code agents can access and connect providers for events and identity.",
   },
   { to: "/settings/onboarding", label: "Setup" },
 ];
