@@ -27,6 +27,8 @@ import { formatContextTreeAuditGateSummary, runContextTreeAuditGate } from "./su
 import type { AuditBatchSummary } from "./suites/context-tree-audit/types.js";
 import { formatContextTreeReviewGateSummary, runContextTreeReviewGate } from "./suites/context-tree-review/index.js";
 import type { BatchSummary as ReviewBatchSummary } from "./suites/context-tree-review/types.js";
+import { formatFirstTreeQaGateSummary, runFirstTreeQaGate } from "./suites/first-tree-qa/index.js";
+import type { BatchSummary as QaBatchSummary } from "./suites/first-tree-qa/types.js";
 import {
   findFirstTreeReadPeriodicCase,
   formatFirstTreeReadGateSummary,
@@ -104,6 +106,7 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:floor -- --json
   pnpm --filter @first-tree/skill-evals eval:floor -- --suite <skill>
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
@@ -489,6 +492,7 @@ function floorResultEntries(
 
 type GateBatchSummary =
   | AuditBatchSummary
+  | QaBatchSummary
   | ReadBatchSummary
   | ReviewBatchSummary
   | SeedBatchSummary
@@ -789,6 +793,24 @@ async function runGate(options: CliOptions): Promise<void> {
     return;
   }
 
+  if (options.suite === "first-tree-qa") {
+    const batch = await runFirstTreeQaGate(packageRootPath, {
+      caseId: options.caseId,
+      claudeBin: options.claudeBin,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      provider: options.provider,
+      verbose: options.verbose,
+    });
+    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
+    printGateWithOptionalQuality(formatFirstTreeQaGateSummary(batch), batch, null, options.json);
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (options.suite === "context-tree-review") {
     const batch = await runContextTreeReviewGate(packageRootPath, {
       caseId: options.caseId,
@@ -927,7 +949,7 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   throw new Error(
-    "eval:gate currently requires --suite context-tree-audit, --suite context-tree-review, --suite first-tree-read, --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
+    "eval:gate currently requires --suite context-tree-audit, --suite context-tree-review, --suite first-tree-qa, --suite first-tree-read, --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
   );
 }
 

@@ -346,6 +346,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toContain("first-tree-seed");
     expect(treelessFamily).toContain("first-tree-file-bug");
     expect(treelessFamily).not.toContain("first-tree-gitlab");
+    expect(treelessFamily).toContain("first-tree-qa");
     expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(treelessFamily).toMatch(/\|\s*`context-tree-review`\s*\| a Cloud Context Reviewer wake-up/);

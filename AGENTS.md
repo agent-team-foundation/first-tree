@@ -46,6 +46,7 @@ Full CLI commands and env vars live in [docs/cli-reference.md](docs/cli-referenc
 - `skills/first-tree-write/SKILL.md` — source-driven Context Tree authorship
 - `skills/first-tree-read/SKILL.md` — task-scoped Context Tree reading
 - `skills/first-tree-seed/SKILL.md` — one-time bootstrap for an empty tree
+- `skills/first-tree-qa/SKILL.md` — complete-harness-first professional QA workflow
 
 Operator-only flows such as `login`, `daemon install`, and `agent create` belong in [docs/cli-reference.md](docs/cli-reference.md) and [docs/onboarding-guide.md](docs/onboarding-guide.md), not in skills.
 
@@ -97,7 +98,7 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 ## Testing & QA
 
 - Route each check to its layer, in the same PR as the behavior: deterministic behavior -> product tests (Vitest per package; `pnpm test` before a PR); agent-skill regression -> `@first-tree/skill-evals`; judgment / live / cross-surface validation -> `@first-tree/qa` cases (`packages/qa/cases/`, prose prompts, not executable specs). If a check can be made stable, it belongs in product tests.
-- Before a PR, self-check QA risk. If the change touches a cross-surface, runtime, provider/auth, WS/inbox, or boot/health path: find or add a matching case under `packages/qa/cases/` and flag in the PR that formal QA is warranted. Formal QA (isolated Docker + git-worktree run, result of record) is human-requested, not a CI gate or auto runner; follow `packages/qa/AGENTS.md` when asked to run it.
+- Before a PR, self-check QA risk. If the change touches a cross-surface, runtime, provider/auth, WS/inbox, or boot/health path: find or add a matching case under `packages/qa/cases/` and flag in the PR that formal QA is warranted. Formal QA is human-requested, not a CI gate or auto runner; load `skills/first-tree-qa/SKILL.md` and follow `packages/qa/AGENTS.md` when asked to run it.
 
 ## Git Conventions
 
