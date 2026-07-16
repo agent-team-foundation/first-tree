@@ -99,6 +99,14 @@ describe("agent context tree info route", () => {
     expect(agentScoped.json()).toEqual({
       repo: "git@github.com:example/updated-side-context.git",
       branch: "updated-side",
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+        reviewerAgent: null,
+      },
     });
 
     await app.db
@@ -113,7 +121,18 @@ describe("agent context tree info route", () => {
       headers: { authorization: `Bearer ${admin.accessToken}`, "x-agent-id": sideAgent.uuid },
     });
     expect(invalidAgentScoped.statusCode).toBe(200);
-    expect(invalidAgentScoped.json()).toEqual({ repo: null, branch: null });
+    expect(invalidAgentScoped.json()).toEqual({
+      repo: null,
+      branch: null,
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+        reviewerAgent: null,
+      },
+    });
 
     const legacyUserScoped = await app.inject({
       method: "GET",

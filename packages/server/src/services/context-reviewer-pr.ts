@@ -64,6 +64,7 @@ export type ContextReviewerPrSkipReason =
   | "context_tree_repo_unset"
   | "repo_mismatch"
   | "feature_disabled"
+  | "workflow_not_legacy_app"
   | "reviewer_agent_missing"
   | "reviewer_agent_invalid";
 
@@ -227,6 +228,9 @@ export async function handleContextReviewerPrEvent(
   const features = await getOrgSetting(app.db, input.organizationId, "context_tree_features");
   if (!features.contextReviewer.enabled) {
     return { handled: false, reason: "feature_disabled" };
+  }
+  if (features.contextReviewer.workflow !== "legacy_app") {
+    return { handled: false, reason: "workflow_not_legacy_app" };
   }
   const reviewerAgentUuid = features.contextReviewer.agentUuid;
   if (!reviewerAgentUuid) {

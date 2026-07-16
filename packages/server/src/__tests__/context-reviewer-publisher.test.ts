@@ -283,6 +283,27 @@ describe("Context Reviewer App publisher", () => {
       },
     },
     {
+      name: "workflow ownership switch",
+      code: "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      mutate: async (fixture: RunFixture) => {
+        await putOrgSetting(
+          fixture.app.db,
+          fixture.admin.organizationId,
+          "context_tree_features",
+          {
+            contextReviewer: {
+              enabled: true,
+              agentUuid: fixture.reviewer.uuid,
+              workflow: "agent_review",
+              governance: "human",
+              mergeMethod: "squash",
+            },
+          },
+          { updatedBy: fixture.admin.userId, memberId: fixture.admin.memberId },
+        );
+      },
+    },
+    {
       name: "manager membership removal",
       code: "CONTEXT_REVIEW_RUN_FORBIDDEN",
       mutate: async (fixture: RunFixture) => {

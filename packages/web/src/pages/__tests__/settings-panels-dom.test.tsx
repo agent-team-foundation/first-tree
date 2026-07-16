@@ -89,6 +89,9 @@ function contextTreeFeatures(overrides: Partial<OrgContextTreeFeaturesOutput["co
     contextReviewer: {
       enabled: overrides.enabled ?? false,
       agentUuid: overrides.agentUuid ?? null,
+      workflow: overrides.workflow ?? "legacy_app",
+      governance: overrides.governance ?? "human",
+      mergeMethod: overrides.mergeMethod ?? "squash",
       reviewerAgent: overrides.reviewerAgent ?? null,
     },
   } satisfies OrgContextTreeFeaturesOutput;
@@ -501,6 +504,38 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
+  it("preserves agent_review configuration without requiring a GitHub App", async () => {
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({
+        enabled: true,
+        agentUuid: "agent-alpha",
+        workflow: "agent_review",
+        governance: "autonomous",
+        mergeMethod: "rebase",
+      }),
+    );
+    githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce(null);
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+
+    await waitForText(container, "Alpha Reviewer");
+    expect(container.textContent).not.toContain("Action required");
+    expect(reviewerSwitch(container)?.disabled).toBe(false);
+
+    await click(reviewerSwitch(container));
+    expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "agent_review",
+        governance: "autonomous",
+        mergeMethod: "rebase",
+      },
+    });
+
+    await act(async () => root.unmount());
+  });
+
   it("turning the Context Reviewer Switch off saves disabled/null immediately", async () => {
     settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
       contextTreeFeatures({ enabled: true, agentUuid: "agent-alpha" }),
@@ -514,7 +549,13 @@ describe("settings panels", () => {
     await click(reviewerSwitch(container));
 
     expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
-      contextReviewer: { enabled: false, agentUuid: null },
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+      },
     });
 
     await act(async () => root.unmount());
@@ -552,7 +593,13 @@ describe("settings panels", () => {
 
     // The pick itself persists — there is no separate Save step.
     expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
-      contextReviewer: { enabled: true, agentUuid: "agent-alpha" },
+      contextReviewer: {
+        enabled: true,
+        agentUuid: "agent-alpha",
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+      },
     });
 
     await act(async () => root.unmount());

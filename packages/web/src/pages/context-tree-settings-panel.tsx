@@ -1,3 +1,4 @@
+import type { OrgContextTreeFeaturesInput } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
@@ -274,6 +275,9 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
 
   const serverEnabled = featuresQuery.data?.contextReviewer.enabled ?? false;
   const serverAgentUuid = featuresQuery.data?.contextReviewer.agentUuid ?? null;
+  const serverWorkflow = featuresQuery.data?.contextReviewer.workflow ?? "legacy_app";
+  const serverGovernance = featuresQuery.data?.contextReviewer.governance ?? "human";
+  const serverMergeMethod = featuresQuery.data?.contextReviewer.mergeMethod ?? "squash";
   const installationQuery = useQuery({
     queryKey: ["github-app-installation", organizationId],
     queryFn: () => (organizationId ? getGithubAppInstallation(organizationId) : Promise.reject(new Error("no org"))),
@@ -282,7 +286,9 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
   const installation = installationQuery.data ?? null;
   const appReviewReady =
     installation !== null && !installation.suspended && installation.permissions.pull_requests === "write";
-  const appReviewActionRequired = !installationQuery.isLoading && !appReviewReady;
+  const requiresGithubApp = serverWorkflow === "legacy_app";
+  const appReviewActionRequired = requiresGithubApp && !installationQuery.isLoading && !appReviewReady;
+  const workflowReady = !requiresGithubApp || appReviewReady;
 
   // Pre-persistence on-state: the Switch is flipped on but `enabled` is not yet
   // saved (no agent picked). Once enabled persists, `serverEnabled` carries the
@@ -316,7 +322,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
   const awaitingAgent = setupOpen && !serverEnabled && !agentsLoading && reviewerCandidates.length > 0;
 
   const featuresMutation = useMutation({
-    mutationFn: (next: { enabled: boolean; agentUuid: string | null }) => {
+    mutationFn: (next: OrgContextTreeFeaturesInput["contextReviewer"]) => {
       if (!organizationId) throw new Error("organization not loaded");
       return putContextTreeFeaturesSetting(organizationId, { contextReviewer: next });
     },
@@ -328,19 +334,27 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
   });
   const saving = featuresMutation.isPending;
 
+  const reviewerConfig = (enabled: boolean, agentUuid: string | null) => ({
+    enabled,
+    agentUuid,
+    workflow: serverWorkflow,
+    governance: serverGovernance,
+    mergeMethod: serverMergeMethod,
+  });
+
   const handleToggle = (next: boolean) => {
     if (next) {
-      if (!appReviewReady) return;
+      if (!workflowReady) return;
       setSetupOpen(true);
       return;
     }
     setSetupOpen(false);
-    if (serverEnabled) featuresMutation.mutate({ enabled: false, agentUuid: null });
+    if (serverEnabled) featuresMutation.mutate(reviewerConfig(false, null));
   };
 
   const handleSelectAgent = (uuid: string) => {
     if (!uuid) return;
-    featuresMutation.mutate({ enabled: true, agentUuid: uuid });
+    featuresMutation.mutate(reviewerConfig(true, uuid));
   };
 
   return (
@@ -371,7 +385,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
                 <Switch
                   checked={switchOn}
                   onCheckedChange={handleToggle}
-                  disabled={saving || (!serverEnabled && !appReviewReady)}
+                  disabled={saving || (!serverEnabled && !workflowReady)}
                   aria-labelledby={toggleLabelId}
                 />
               </div>

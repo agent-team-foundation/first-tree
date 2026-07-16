@@ -27,6 +27,7 @@ import {
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
+  type OrgContextTreeFeaturesOutput,
   type PublishDocRequest,
   type PublishDocResponse,
   type RuntimeProvider,
@@ -510,7 +511,16 @@ export class FirstTreeHubSDK {
 
   /** Fetch Context Tree configuration for this SDK's authenticated agent. */
   async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
-    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+    const info = await this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+    return { repo: info.repo, branch: info.branch };
+  }
+
+  /** Read the live Context Review assignment and mode for this agent's organization. */
+  async getAgentContextReviewConfig(): Promise<OrgContextTreeFeaturesOutput["contextReviewer"]> {
+    const info = await this.requestJson<{ contextReviewer: OrgContextTreeFeaturesOutput["contextReviewer"] }>(
+      "/api/v1/agent/context-tree/info",
+    );
+    return info.contextReviewer;
   }
 
   /** Bind Context Tree configuration for this SDK's authenticated agent organization. */

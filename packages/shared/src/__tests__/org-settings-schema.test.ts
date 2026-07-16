@@ -346,14 +346,26 @@ describe("org settings schemas", () => {
 
   it("validates context tree feature settings", () => {
     expect(orgContextTreeFeaturesStorageSchema.parse({})).toEqual({
-      contextReviewer: { enabled: false, agentUuid: null },
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+      },
     });
     expect(
       orgContextTreeFeaturesStorageSchema.parse({
         contextReviewer: { enabled: true, agentUuid: "agent-1" },
       }),
     ).toEqual({
-      contextReviewer: { enabled: true, agentUuid: "agent-1" },
+      contextReviewer: {
+        enabled: true,
+        agentUuid: "agent-1",
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+      },
     });
     expect(() =>
       orgContextTreeFeaturesStorageSchema.parse({
@@ -361,7 +373,14 @@ describe("org settings schemas", () => {
       }),
     ).toThrow("agentUuid is required");
     expect(orgContextTreeFeaturesOutputSchema.parse({})).toEqual({
-      contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null },
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+        reviewerAgent: null,
+      },
     });
     expect(
       orgContextTreeFeaturesOutputSchema.parse({
@@ -375,6 +394,9 @@ describe("org settings schemas", () => {
       contextReviewer: {
         enabled: true,
         agentUuid: "agent-1",
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
         reviewerAgent: { uuid: "agent-1", name: "reviewer", displayName: "Context Reviewer" },
       },
     });
@@ -385,6 +407,35 @@ describe("org settings schemas", () => {
     ).toEqual({
       contextReviewer: { enabled: true, agentUuid: "agent-1" },
     });
+    expect(
+      orgContextTreeFeaturesInputSchema.parse({
+        contextReviewer: {
+          enabled: true,
+          agentUuid: "agent-1",
+          workflow: "agent_review",
+          governance: "autonomous",
+          mergeMethod: "rebase",
+        },
+      }),
+    ).toEqual({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: "agent-1",
+        workflow: "agent_review",
+        governance: "autonomous",
+        mergeMethod: "rebase",
+      },
+    });
+    expect(() =>
+      orgContextTreeFeaturesInputSchema.parse({
+        contextReviewer: {
+          enabled: true,
+          agentUuid: "agent-1",
+          workflow: "legacy_app",
+          governance: "autonomous",
+        },
+      }),
+    ).toThrow("legacy_app Context Reviewer only supports human governance");
     expect(() =>
       orgContextTreeFeaturesInputSchema.parse({
         contextReviewer: { enabled: true, agentUuid: null },

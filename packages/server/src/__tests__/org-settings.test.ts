@@ -732,7 +732,16 @@ describe("org-settings service", () => {
     const admin = await createTestAdmin(app);
 
     const out = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree_features");
-    expect(out).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(out).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+        reviewerAgent: null,
+      },
+    });
   });
 
   it("context_tree_features stores an active non-human reviewer in the organization and round-trips", async () => {
@@ -753,6 +762,9 @@ describe("org-settings service", () => {
       contextReviewer: {
         enabled: true,
         agentUuid: reviewer.uuid,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
         reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
       },
     });
@@ -785,7 +797,97 @@ describe("org-settings service", () => {
       { updatedBy: admin.userId, memberId: admin.memberId },
     );
 
-    expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(disabled).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+        reviewerAgent: null,
+      },
+    });
+  });
+
+  it("context_tree_features enables agent_review without a GitHub App installation", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, {
+      clientId: admin.clientId,
+      managerId: admin.memberId,
+    });
+
+    const out = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      {
+        contextReviewer: {
+          enabled: true,
+          agentUuid: reviewer.uuid,
+          workflow: "agent_review",
+          governance: "autonomous",
+          mergeMethod: "rebase",
+        },
+      },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+
+    expect(out.contextReviewer).toMatchObject({
+      enabled: true,
+      agentUuid: reviewer.uuid,
+      workflow: "agent_review",
+      governance: "autonomous",
+      mergeMethod: "rebase",
+    });
+  });
+
+  it("context_tree_features preserves workflow fields from older two-field clients", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, {
+      clientId: admin.clientId,
+      managerId: admin.memberId,
+    });
+
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      {
+        contextReviewer: {
+          enabled: true,
+          agentUuid: reviewer.uuid,
+          workflow: "agent_review",
+          governance: "autonomous",
+          mergeMethod: "rebase",
+        },
+      },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: false, agentUuid: null } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+    const reenabled = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+
+    expect(reenabled.contextReviewer).toMatchObject({
+      enabled: true,
+      agentUuid: reviewer.uuid,
+      workflow: "agent_review",
+      governance: "autonomous",
+      mergeMethod: "rebase",
+    });
   });
 
   it("context_tree_features requires an active installation with Pull requests write before enabling", async () => {
@@ -2075,7 +2177,16 @@ describe("org-settings API (admin gating + masking)", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(get1.statusCode).toBe(200);
-    expect(get1.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(get1.json()).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+        reviewerAgent: null,
+      },
+    });
 
     const put = await app.inject({
       method: "PUT",
@@ -2088,6 +2199,9 @@ describe("org-settings API (admin gating + masking)", () => {
       contextReviewer: {
         enabled: true,
         agentUuid: reviewer.uuid,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
         reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
       },
     });
@@ -2099,7 +2213,16 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { contextReviewer: { enabled: false, agentUuid: reviewer.uuid } },
     });
     expect(disabled.statusCode).toBe(200);
-    expect(disabled.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+    expect(disabled.json()).toEqual({
+      contextReviewer: {
+        enabled: false,
+        agentUuid: null,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
+        reviewerAgent: null,
+      },
+    });
   });
 
   it("member can GET source_repos and context_tree (readPolicy: member) but cannot PUT / DELETE", async () => {
@@ -2162,6 +2285,9 @@ describe("org-settings API (admin gating + masking)", () => {
       contextReviewer: {
         enabled: true,
         agentUuid: reviewer.uuid,
+        workflow: "legacy_app",
+        governance: "human",
+        mergeMethod: "squash",
         reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: "Team Reviewer" },
       },
     });

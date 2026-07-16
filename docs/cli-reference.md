@@ -693,6 +693,30 @@ Authentication failures exit `3`; connection and timeout failures exit `6`;
 other remote or invalid-response failures exit `1`. Agent-selection failures
 retain exit code `2` and their existing error envelopes.
 
+### org context-tree review-config
+
+```bash
+first-tree org context-tree review-config [--agent <name>]
+```
+
+`review-config` reads the live Context Review assignment for the selected
+local agent. It reuses the agent-scoped `GET /api/v1/agent/context-tree/info`
+read; it does not call a separate Context Review endpoint or consult local
+workspace state. Human output reports whether Context Review is off, assigned
+to the selected agent, or assigned to another agent, followed by the configured
+workflow, governance mode, and merge method.
+
+Successful JSON output has this shape:
+
+```json
+{"ok":true,"data":{"enabled":true,"assigned":true,"agentUuid":"agent-uuid","workflow":"agent_review","governance":"autonomous","mergeMethod":"squash"}}
+```
+
+Stored configurations that predate workflow selection read as
+`legacy_app` / `human` / `squash`. The command is read-only; configuration
+continues to use the organization setting and its existing admin-only write
+boundary.
+
 ### org context-tree set
 
 ```bash

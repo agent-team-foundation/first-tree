@@ -1,4 +1,4 @@
 interface:
   display_name: "Context Tree Review"
-  short_description: "Review a Context Tree PR against generated policy"
-  default_prompt: "Use $context-tree-review to inspect this Context Tree pull request and submit the head-bound outcome through its server-authored First Tree App publication run."
+  short_description: "Review a Context Tree PR through the configured workflow"
+  default_prompt: "Use $context-tree-review to inspect this Context Tree pull request, select the live configured workflow, and complete its head-bound review contract."

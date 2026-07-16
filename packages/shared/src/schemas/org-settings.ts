@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  contextReviewGovernanceModeSchema,
+  contextReviewMergeMethodSchema,
+  contextReviewWorkflowSchema,
+} from "./context-review.js";
 
 /**
  * Per-organization settings — schemas, namespaces, and the registry that
@@ -387,7 +392,35 @@ export const orgSourceReposOutputSchema = z.object({
 const orgContextReviewerSchema = z.object({
   enabled: z.boolean().default(false),
   agentUuid: z.string().min(1).nullable().default(null),
+  workflow: contextReviewWorkflowSchema.default("legacy_app"),
+  governance: contextReviewGovernanceModeSchema.default("human"),
+  mergeMethod: contextReviewMergeMethodSchema.default("squash"),
 });
+
+const orgContextReviewerInputSchema = z.object({
+  enabled: z.boolean(),
+  agentUuid: z.string().min(1).nullable().default(null),
+  workflow: contextReviewWorkflowSchema.optional(),
+  governance: contextReviewGovernanceModeSchema.optional(),
+  mergeMethod: contextReviewMergeMethodSchema.optional(),
+});
+
+function refineContextReviewerMode(value: z.infer<typeof orgContextReviewerSchema>, ctx: z.RefinementCtx): void {
+  if (value.enabled && !value.agentUuid) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["agentUuid"],
+      message: "agentUuid is required when Context Reviewer is enabled.",
+    });
+  }
+  if (value.workflow === "legacy_app" && value.governance !== "human") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["governance"],
+      message: "legacy_app Context Reviewer only supports human governance.",
+    });
+  }
+}
 
 const orgContextReviewerAgentSummarySchema = z.object({
   uuid: z.string().min(1),
@@ -400,25 +433,27 @@ export const orgContextTreeFeaturesStorageSchema = z.object({
     .default({
       enabled: false,
       agentUuid: null,
+      workflow: "legacy_app",
+      governance: "human",
+      mergeMethod: "squash",
     })
-    .superRefine((value, ctx) => {
-      if (value.enabled && !value.agentUuid) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["agentUuid"],
-          message: "agentUuid is required when Context Reviewer is enabled.",
-        });
-      }
-    }),
+    .superRefine(refineContextReviewerMode),
 });
 
 export const orgContextTreeFeaturesInputSchema = z.object({
-  contextReviewer: orgContextReviewerSchema.superRefine((value, ctx) => {
+  contextReviewer: orgContextReviewerInputSchema.superRefine((value, ctx) => {
     if (value.enabled && !value.agentUuid) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["agentUuid"],
         message: "agentUuid is required when Context Reviewer is enabled.",
+      });
+    }
+    if (value.workflow === "legacy_app" && value.governance === "autonomous") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["governance"],
+        message: "legacy_app Context Reviewer only supports human governance.",
       });
     }
   }),
@@ -432,6 +467,9 @@ export const orgContextTreeFeaturesOutputSchema = z.object({
     .default({
       enabled: false,
       agentUuid: null,
+      workflow: "legacy_app",
+      governance: "human",
+      mergeMethod: "squash",
       reviewerAgent: null,
     }),
 });

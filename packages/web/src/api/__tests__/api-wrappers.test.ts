@@ -79,7 +79,13 @@ describe("api wrapper paths", () => {
     await orgSettings.deleteContextTreeSetting("org/id");
     await orgSettings.getContextTreeFeaturesSetting("org/id");
     await orgSettings.putContextTreeFeaturesSetting("org/id", {
-      contextReviewer: { enabled: true, agentUuid: "agent/id" },
+      contextReviewer: {
+        enabled: true,
+        agentUuid: "agent/id",
+        workflow: "agent_review",
+        governance: "autonomous",
+        mergeMethod: "squash",
+      },
     });
     await orgSettings.getSourceReposSetting("org/id");
     await orgSettings.putSourceReposSetting("org/id", { repos: [{ url: "https://github.com/acme/web.git" }] });
@@ -129,7 +135,13 @@ describe("api wrapper paths", () => {
     });
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree_features");
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree_features", {
-      contextReviewer: { enabled: true, agentUuid: "agent/id" },
+      contextReviewer: {
+        enabled: true,
+        agentUuid: "agent/id",
+        workflow: "agent_review",
+        governance: "autonomous",
+        mergeMethod: "squash",
+      },
     });
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/source_repos", {
       repos: [{ url: "https://github.com/acme/web.git" }],

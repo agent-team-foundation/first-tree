@@ -346,6 +346,43 @@ describe("handleContextReviewerPrEvent", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("does not create a second App-owned review when agent_review owns the workflow", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "https://github.com/owner/context-tree", branch: "main" },
+      { updatedBy: admin.userId },
+    );
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      {
+        contextReviewer: {
+          enabled: true,
+          agentUuid: reviewer.uuid,
+          workflow: "agent_review",
+          governance: "human",
+          mergeMethod: "squash",
+        },
+      },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: pullRequestPayload(),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "workflow_not_legacy_app" });
+    expect(await app.db.select({ id: chats.id }).from(chats)).toHaveLength(0);
+  });
+
   it("skips when the feature is disabled, context repo is missing, reviewer is missing, or action is unsupported", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);

@@ -43,6 +43,11 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("Never call local `gh api .../reviews`");
     expect(skill).toContain("The review workflow does not depend on");
     expect(skill).toContain("strict per-head merge gate");
+    expect(skill).toContain("workflow = agent_review");
+    expect(skill).toContain("first-tree org context-tree review-config --json");
+    expect(skill).toContain("never publishes `APPROVE`");
+    expect(skill).toContain("--match-head-commit");
+    expect(skill).toContain("NEEDS_HUMAN");
     expect(cloud).toContain("context-tree-review");
     expect(cloud).not.toContain("gh pr review");
     expect(cloud).not.toContain("tree verify");

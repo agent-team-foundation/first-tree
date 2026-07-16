@@ -6,7 +6,7 @@ import {
   contextTreeBranchSchema,
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACES,
-  type OrgContextTreeFeaturesInput,
+  type OrgContextTreeFeaturesStorage,
   type OrgContextTreeStorage,
   type OrgSettingInput,
   type OrgSettingNamespace,
@@ -119,11 +119,15 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     return next as OrgSettingStorage<K>;
   }
   if (namespace === "context_tree_features") {
+    const cur = current as OrgSettingStorage<"context_tree_features">;
     const inp = input as OrgSettingInput<"context_tree_features">;
     const next: OrgSettingStorage<"context_tree_features"> = {
       contextReviewer: {
         enabled: inp.contextReviewer.enabled,
         agentUuid: inp.contextReviewer.enabled ? inp.contextReviewer.agentUuid : null,
+        workflow: inp.contextReviewer.workflow ?? cur.contextReviewer.workflow,
+        governance: inp.contextReviewer.governance ?? cur.contextReviewer.governance,
+        mergeMethod: inp.contextReviewer.mergeMethod ?? cur.contextReviewer.mergeMethod,
       },
     };
     return next as OrgSettingStorage<K>;
@@ -164,6 +168,9 @@ async function toOutput<K extends OrgSettingNamespace>(
       contextReviewer: {
         enabled: s.contextReviewer.enabled,
         agentUuid: s.contextReviewer.agentUuid,
+        workflow: s.contextReviewer.workflow,
+        governance: s.contextReviewer.governance,
+        mergeMethod: s.contextReviewer.mergeMethod,
         reviewerAgent: await resolveContextReviewerAgentSummary(db, orgId, s.contextReviewer.agentUuid),
       },
     };
@@ -270,13 +277,18 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
       current = (await fetchStorageRow(txDb, orgId, namespace)) ?? emptyStorage(namespace);
     }
     const merged = applyInputDelta(namespace, current, input);
-    if (namespace === "context_tree_features") {
-      await assertContextReviewerAgentAllowed(txDb, orgId, input as OrgContextTreeFeaturesInput, options.memberId);
-    }
 
     // Final shape check (defensive — should always pass after applyInputDelta).
     const storageSchema = ORG_SETTINGS_NAMESPACES[namespace].storage;
     const validated = storageSchema.parse(merged) as OrgSettingStorage<K>;
+    if (namespace === "context_tree_features") {
+      await assertContextReviewerAgentAllowed(
+        txDb,
+        orgId,
+        validated as OrgContextTreeFeaturesStorage,
+        options.memberId,
+      );
+    }
     if (namespace === "context_tree") {
       const contextTree = validated as OrgContextTreeStorage;
       if (contextTree.repo === undefined) {
@@ -403,7 +415,7 @@ async function resolveContextReviewerAgentSummary(
 async function assertContextReviewerAgentAllowed(
   db: Database,
   orgId: string,
-  input: OrgContextTreeFeaturesInput,
+  input: OrgContextTreeFeaturesStorage,
   memberId: string | undefined,
 ): Promise<void> {
   if (!input.contextReviewer.enabled) return;
@@ -429,6 +441,8 @@ async function assertContextReviewerAgentAllowed(
   if (!agent || agent.organizationId !== orgId || agent.type === "human" || agent.status !== "active") {
     throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
   }
+
+  if (input.contextReviewer.workflow === "agent_review") return;
 
   const installation = await findInstallationByOrg(db, orgId);
   if (!installation) {

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
+import { readContextReviewConfig } from "../../core/context-review-config.js";
 import { ContextTreeUnreadableError, readAgentContextTreeBinding } from "../../core/context-tree-binding.js";
 import {
   type ContextTreeBindingInput,
@@ -90,5 +91,21 @@ export function registerOrgContextTreeCommand(org: Command): void {
         }
         throw error;
       }
+    });
+
+  const reviewConfig = contextTree
+    .command("review-config")
+    .description("Read the live Context Review assignment and governance mode for the current agent")
+    .option("--agent <name>", "Agent name on this client (default: environment or the only configured agent)")
+    .action(async () => {
+      const options = reviewConfig.optsWithGlobals<ContextTreeOptions>();
+      const sdk = createSdk(options.agent);
+      const config = await readContextReviewConfig(sdk);
+
+      print.status("Context Review", config.enabled ? (config.assigned ? "Assigned" : "Not assigned") : "Off");
+      print.status("Workflow", config.workflow);
+      print.status("Governance", config.governance);
+      print.status("Merge method", config.mergeMethod);
+      success(config);
     });
 }

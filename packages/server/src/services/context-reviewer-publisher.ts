@@ -427,7 +427,11 @@ async function assertCurrentAuthority(
   }
 
   const features = await getOrgSetting(db, run.organizationId, "context_tree_features");
-  if (!features.contextReviewer.enabled || features.contextReviewer.agentUuid !== input.callerAgentUuid) {
+  if (
+    !features.contextReviewer.enabled ||
+    features.contextReviewer.workflow !== "legacy_app" ||
+    features.contextReviewer.agentUuid !== input.callerAgentUuid
+  ) {
     throw new ContextReviewPublisherError(
       403,
       "CONTEXT_REVIEW_RUN_FORBIDDEN",

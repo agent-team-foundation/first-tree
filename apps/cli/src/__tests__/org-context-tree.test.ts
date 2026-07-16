@@ -69,6 +69,39 @@ afterEach(() => {
 });
 
 describe("org context-tree CLI", () => {
+  it("renders the assigned Agent Review workflow", async () => {
+    const sdk = {
+      agentId: "agent-1",
+      getAgentContextReviewConfig: vi.fn(async () => ({
+        enabled: true,
+        agentUuid: "agent-1",
+        workflow: "agent_review",
+        governance: "autonomous",
+        mergeMethod: "squash",
+        reviewerAgent: { uuid: "agent-1", name: "reviewer", displayName: "Reviewer" },
+      })),
+    };
+    localAgentMocks.createSdk.mockReturnValue(sdk);
+
+    await buildProgram().parseAsync(["context-tree", "review-config", "--agent", "reviewer"], { from: "user" });
+
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("reviewer");
+    expect(stderr).toContain("Context Review       Assigned");
+    expect(stderr).toContain("Workflow             agent_review");
+    expect(stderr).toContain("Governance           autonomous");
+    expect(successEnvelope()).toEqual({
+      ok: true,
+      data: {
+        enabled: true,
+        assigned: true,
+        agentUuid: "agent-1",
+        workflow: "agent_review",
+        governance: "autonomous",
+        mergeMethod: "squash",
+      },
+    });
+  });
+
   it("reads and renders a bound agent-scoped binding with the default branch", async () => {
     const sdk = {
       agentId: "agent-1",

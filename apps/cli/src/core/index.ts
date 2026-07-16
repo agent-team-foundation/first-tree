@@ -45,6 +45,8 @@ export {
   stopClientRuntimeProcess,
   switchLocalClientForLogin,
 } from "./client-switch.js";
+export type { ContextReviewConfigReader, ContextReviewConfigResult } from "./context-review-config.js";
+export { normalizeContextReviewConfig, readContextReviewConfig } from "./context-review-config.js";
 export type {
   ContextTreeBindingResult,
   ContextTreeConfigReader,
