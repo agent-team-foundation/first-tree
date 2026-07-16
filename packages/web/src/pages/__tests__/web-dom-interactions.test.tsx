@@ -938,11 +938,13 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Nova", second.container);
     expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: "agent-1" });
     await click(second.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Design Critique", second.container);
+    await waitForText("Design Critique");
+    const participantPicker = document.body.querySelector<HTMLElement>("[data-participant-picker]");
+    expect(participantPicker?.parentElement).toBe(document.body);
+    expect(participantPicker?.style.position).toBe("fixed");
     await click(
-      [...second.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Design Critique"),
-      ) ?? null,
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("Design Critique")) ??
+        null,
     );
     await waitForText("Design Critique", second.container);
     const groupTextarea = second.container.querySelector<HTMLTextAreaElement>("textarea");
@@ -1068,15 +1070,15 @@ describe("web DOM interaction coverage", () => {
     );
 
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Nova", rendered.container);
-    const search = rendered.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]');
+    await waitForText("Nova");
+    const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search agents"]');
     if (!search) throw new Error("Participant search missing");
     await setValue(search, "nobody");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
     });
     await flush();
-    await waitForText("No agents match", rendered.container);
+    await waitForText("No agents match");
     await setValue(search, "Nova");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1088,8 +1090,8 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Nova", rendered.container);
 
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Design Critique", rendered.container);
-    const designButton = [...rendered.container.querySelectorAll("button")].find((button) =>
+    await waitForText("Design Critique");
+    const designButton = [...document.body.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Design Critique"),
     );
     await act(async () => {
@@ -1098,10 +1100,10 @@ describe("web DOM interaction coverage", () => {
     await click(designButton ?? null);
     await waitForText("Design Critique", rendered.container);
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
-    expect(rendered.container.querySelector('[title*="already in this draft"]')).toBeTruthy();
-    expect(rendered.container.querySelector('[aria-label="Already in draft"]')).toBeTruthy();
+    expect(document.body.querySelector('[title*="already in this draft"]')).toBeTruthy();
+    expect(document.body.querySelector('[aria-label="Already in draft"]')).toBeTruthy();
     await keyDown(
-      rendered.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]') ?? search,
+      document.body.querySelector<HTMLInputElement>('input[aria-label="Search agents"]') ?? search,
       "Escape",
     );
 
