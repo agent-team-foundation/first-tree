@@ -54,6 +54,14 @@ async function waitForCondition(label: string, predicate: () => boolean): Promis
   }
 }
 
+function scheduledRetryCount(emitted: readonly SessionEvent[]): number {
+  return emitted.filter(
+    (event) =>
+      event.kind === "error" &&
+      parseProviderRetryEventMessage(event.payload.message)?.event === "provider_retry_scheduled",
+  ).length;
+}
+
 function makeFailingQuery(promptIterable: AsyncIterable<{ message: { content: unknown } }>, attempt: number) {
   void (async () => {
     const maxInputsToDrain = requiredInputsForAttempt(attempt);
@@ -124,6 +132,7 @@ function buildCache() {
 
 describe("claude-code handler — retry-exhausted surfacing", () => {
   it("emits error + turn_end:error and finishes the in-flight entry after MAX_RETRIES", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     resetSdkMockState();
 
     const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -155,12 +164,21 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       },
     };
 
-    await handler.start(
-      { id: "m1", chatId: "chat-retry", senderId: "u", format: "text", content: "hi", metadata: null },
-      ctx,
-    );
-    await handler.suspend();
-    await new Promise((r) => setImmediate(r));
+    try {
+      await handler.start(
+        { id: "m1", chatId: "chat-retry", senderId: "u", format: "text", content: "hi", metadata: null },
+        ctx,
+      );
+      await waitForCondition("first scheduled retry", () => scheduledRetryCount(emitted) === 1);
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitForCondition("second scheduled retry", () => scheduledRetryCount(emitted) === 2);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await waitForCondition("retry exhaustion settlement", () => finishTurnCalled.mock.calls.length === 1);
+      await handler.suspend();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      vi.useRealTimers();
+    }
 
     // Every iteration threw, so the turn never reached its completion hook;
     // the hook delivers nothing anyway (final-text mirror retired).
@@ -196,6 +214,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
   });
 
   it("retries an unentered tail after retry exhaustion settles the provider-entered prefix", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     resetSdkMockState();
     requiredInputsBeforeThrowByAttempt.set(1, 1);
     requiredInputsBeforeThrowByAttempt.set(2, 1);
@@ -268,30 +287,38 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       failSessionForRecovery,
     };
 
-    await handler.start(
-      { id: "m1", chatId: "chat-retry", senderId: "u", format: "text", content: "hi", metadata: null },
-      ctx,
-    );
-    await waitForObservedInputs(1, 1);
-    handler.inject(
-      {
-        id: "m2",
-        chatId: "chat-retry",
-        senderId: "u",
-        format: "text",
-        content: SECOND_PROMPT,
-        metadata: null,
-      },
-      m2Token,
-    );
-    await m2FormatStarted;
-    releaseAttempt1();
+    try {
+      await handler.start(
+        { id: "m1", chatId: "chat-retry", senderId: "u", format: "text", content: "hi", metadata: null },
+        ctx,
+      );
+      await waitForObservedInputs(1, 1);
+      handler.inject(
+        {
+          id: "m2",
+          chatId: "chat-retry",
+          senderId: "u",
+          format: "text",
+          content: SECOND_PROMPT,
+          metadata: null,
+        },
+        m2Token,
+      );
+      await m2FormatStarted;
+      releaseAttempt1();
 
-    await waitForObservedInputs(3, 1);
-    await waitForCondition("retry-exhausted tail recovery", () => m2Retries.length > 0);
-    releaseM2Format();
-    await handler.suspend();
-    await new Promise((r) => setImmediate(r));
+      await waitForCondition("first scheduled retry", () => scheduledRetryCount(emitted) === 1);
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitForCondition("second scheduled retry", () => scheduledRetryCount(emitted) === 2);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await waitForObservedInputs(3, 1);
+      await waitForCondition("retry-exhausted tail recovery", () => m2Retries.length > 0);
+      releaseM2Format();
+      await handler.suspend();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(logs.some((l) => l.includes("Attempting auto-resume (retry 1/"))).toBe(true);
 

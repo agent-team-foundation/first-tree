@@ -784,6 +784,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let activeProviderEnv: Record<string, string | undefined> | null = null;
   let inputController: InputController<PendingSdkInput> | null = null;
   let abortController: AbortController | null = null;
+  let providerRetryBackoffAbort: AbortController | null = null;
   let consumerDone: Promise<void> | null = null;
   let retryCount = 0;
   let ctx: SessionContext | null = null;
@@ -834,6 +835,42 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * tracked separately by `PendingAckMessage.providerEntered`.
    */
   const unclosedSdkInputs: PendingSdkInput[] = [];
+
+  function cancelProviderRetryBackoff(): void {
+    providerRetryBackoffAbort?.abort();
+    providerRetryBackoffAbort = null;
+  }
+
+  /**
+   * Honor the shared provider retry delay while allowing suspend/shutdown to
+   * interrupt the foreground retry chain immediately.
+   */
+  async function waitForProviderRetry(delayMs: number): Promise<boolean> {
+    if (delayMs <= 0) return true;
+
+    cancelProviderRetryBackoff();
+    const backoffAbort = new AbortController();
+    providerRetryBackoffAbort = backoffAbort;
+
+    try {
+      await new Promise<void>((resolveDelay) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          backoffAbort.signal.removeEventListener("abort", finish);
+          resolveDelay();
+        };
+        const timer = setTimeout(finish, delayMs);
+        backoffAbort.signal.addEventListener("abort", finish, { once: true });
+        if (backoffAbort.signal.aborted) finish();
+      });
+      return !backoffAbort.signal.aborted;
+    } finally {
+      if (providerRetryBackoffAbort === backoffAbort) providerRetryBackoffAbort = null;
+    }
+  }
 
   function emitProviderTurnRetryEvent(
     sessionCtx: SessionContext,
@@ -1611,6 +1648,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     emitProviderTurnSettlementEvent(sessionCtx, settlement);
                     sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
                     toolCallProcessor.flush();
+                    if (!(await waitForProviderRetry(settlement.decision.delayMs))) {
+                      sessionCtx.log("Auto-resume cancelled during provider retry backoff");
+                      return;
+                    }
                     try {
                       respawnQuery(claudeSessionId, sessionCtx);
                     } catch (resumeErr) {
@@ -1878,6 +1919,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           retryCount = decision.attempt;
           emitProviderTurnRetryEvent(sessionCtx, "provider_retry_scheduled", classification, decision, errMsg);
           sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
+
+          if (!(await waitForProviderRetry(decision.delayMs))) {
+            sessionCtx.log("Auto-resume cancelled during provider retry backoff");
+            return;
+          }
 
           try {
             respawnQuery(claudeSessionId, sessionCtx);
@@ -2272,6 +2318,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     async suspend(reason?: string) {
       ctx?.log("Suspending session");
+      cancelProviderRetryBackoff();
 
       if (inputController) {
         inputController.end();

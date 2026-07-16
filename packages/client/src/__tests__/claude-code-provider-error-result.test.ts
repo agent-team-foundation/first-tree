@@ -97,7 +97,15 @@ function firstProviderPayload(payloads: readonly ProviderRetryEventPayload[]): P
   return payload;
 }
 
-async function runSingleResultTurn() {
+async function waitForCondition(predicate: () => boolean, description: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`timed out waiting for ${description}`);
+}
+
+async function startSingleResultTurn() {
   mockState.queryCalls = 0;
   mockState.observedInputMessages.length = 0;
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -143,10 +151,16 @@ async function runSingleResultTurn() {
     },
     ctx,
   );
-  await handler.suspend();
+
+  return { handler, sendMessage, forwardResult, emitted, completed, logs };
+}
+
+async function runSingleResultTurn() {
+  const result = await startSingleResultTurn();
+  await result.handler.suspend();
   await new Promise((r) => setImmediate(r));
 
-  return { sendMessage, forwardResult, emitted, completed, logs };
+  return result;
 }
 
 describe("claude-code handler — structured provider error result", () => {
@@ -236,6 +250,7 @@ describe("claude-code handler — structured provider error result", () => {
   });
 
   it("retries a transient structured failure after assistant text was emitted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     mockState.nextMessages = [
       {
         type: "assistant",
@@ -251,43 +266,97 @@ describe("claude-code handler — structured provider error result", () => {
         result: TRANSIENT_RESULT,
       },
     ];
-    const { sendMessage, forwardResult, emitted, completed } = await runSingleResultTurn();
+    try {
+      const result = await startSingleResultTurn();
+      await waitForCondition(() => providerRetryPayloads(result.emitted).length === 1, "first scheduled retry");
 
-    expect(mockState.queryCalls).toBe(3);
-    expect(forwardResult).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(emitted.some((event) => event.kind === "assistant_text")).toBe(true);
+      expect(mockState.queryCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(mockState.queryCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForCondition(() => mockState.queryCalls === 2, "second provider attempt");
 
-    const providerPayloads = providerRetryPayloads(emitted);
-    expect(providerPayloads).toHaveLength(3);
-    expect(providerPayloads[0]).toMatchObject({
-      event: "provider_retry_scheduled",
-      provider: "claude-code",
-      scope: "provider_turn",
-      category: "transient_transport",
-      attempt: 1,
-      replaySafety: "user_visible",
-    });
-    expect(providerPayloads[1]).toMatchObject({
-      event: "provider_retry_scheduled",
-      category: "transient_transport",
-      attempt: 2,
-      replaySafety: "user_visible",
-    });
-    expect(providerPayloads[2]).toMatchObject({
-      event: "provider_retry_exhausted",
-      category: "transient_transport",
-      replaySafety: "user_visible",
-    });
-    expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain(
-      "provider API connection failed after retry handling",
-    );
-    expect(completed[0]?.outcome).toMatchObject({
-      status: "error",
-      terminal: true,
-      completion: "consumed",
-      reason: "provider_retry_exhausted",
-    });
+      await waitForCondition(() => providerRetryPayloads(result.emitted).length === 2, "second scheduled retry");
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(mockState.queryCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForCondition(() => mockState.queryCalls === 3, "third provider attempt");
+      await waitForCondition(() => result.completed.length === 1, "retry exhaustion settlement");
+
+      await result.handler.suspend();
+      const { sendMessage, forwardResult, emitted, completed } = result;
+
+      expect(mockState.queryCalls).toBe(3);
+      expect(forwardResult).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(emitted.some((event) => event.kind === "assistant_text")).toBe(true);
+
+      const providerPayloads = providerRetryPayloads(emitted);
+      expect(providerPayloads).toHaveLength(3);
+      expect(providerPayloads[0]).toMatchObject({
+        event: "provider_retry_scheduled",
+        provider: "claude-code",
+        scope: "provider_turn",
+        category: "transient_transport",
+        attempt: 1,
+        replaySafety: "user_visible",
+      });
+      expect(providerPayloads[1]).toMatchObject({
+        event: "provider_retry_scheduled",
+        category: "transient_transport",
+        attempt: 2,
+        replaySafety: "user_visible",
+      });
+      expect(providerPayloads[2]).toMatchObject({
+        event: "provider_retry_exhausted",
+        category: "transient_transport",
+        replaySafety: "user_visible",
+      });
+      expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain(
+        "provider API connection failed after retry handling",
+      );
+      expect(completed[0]?.outcome).toMatchObject({
+        status: "error",
+        terminal: true,
+        completion: "consumed",
+        reason: "provider_retry_exhausted",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending provider retry backoff when the session is suspended", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    mockState.nextMessages = [
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "I started working on this." }],
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 503,
+        result: TRANSIENT_RESULT,
+      },
+    ];
+
+    try {
+      const result = await startSingleResultTurn();
+      await waitForCondition(() => providerRetryPayloads(result.emitted).length === 1, "scheduled retry");
+
+      await result.handler.suspend();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(mockState.queryCalls).toBe(1);
+      expect(result.logs).toContain("Auto-resume cancelled during provider retry backoff");
+      expect(result.completed).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps assistant billing_error as the primary classification for a generic 403 result", async () => {
