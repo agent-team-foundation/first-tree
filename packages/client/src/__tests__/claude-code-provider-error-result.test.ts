@@ -16,6 +16,9 @@ const mockState = vi.hoisted(() => ({
   promptAppend: "",
   configModel: "",
   setModelCalls: 0,
+  throwQueryOnCall: 0,
+  closeCalls: [] as number[],
+  lifecycleEvents: [] as string[],
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => {
@@ -35,6 +38,9 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
     query: (args: { prompt: AsyncIterable<{ message?: { content?: unknown } }> }) => {
       mockState.queryCalls += 1;
       const attempt = mockState.queryCalls;
+      if (attempt === mockState.throwQueryOnCall) {
+        throw new Error("config restart query construction failed");
+      }
       const messages = (mockState.messagesByAttempt[attempt - 1] ?? mockState.nextMessages).slice();
       void drainPrompt(args.prompt, attempt);
       return {
@@ -51,7 +57,10 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
             },
           };
         },
-        close: () => {},
+        close: () => {
+          mockState.closeCalls.push(attempt);
+          mockState.lifecycleEvents.push(`close:${attempt}`);
+        },
         setModel: async () => {
           mockState.setModelCalls += 1;
         },
@@ -84,6 +93,9 @@ beforeEach(() => {
   mockState.promptAppend = "";
   mockState.configModel = "";
   mockState.setModelCalls = 0;
+  mockState.throwQueryOnCall = 0;
+  mockState.closeCalls.length = 0;
+  mockState.lifecycleEvents.length = 0;
 });
 
 function buildCache() {
@@ -134,6 +146,12 @@ async function startSingleResultTurn() {
   const emitted: SessionEvent[] = [];
   const completed: Array<{ count: number; outcome: TurnOutcome }> = [];
   const logs: string[] = [];
+  const retryTurn = vi.fn<SessionContext["retryTurn"]>(() => {
+    mockState.lifecycleEvents.push("retry:entered");
+  });
+  const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>(() => {
+    mockState.lifecycleEvents.push("fatal");
+  });
 
   const cache = buildCache();
   await cache.refresh(AGENT_ID);
@@ -156,6 +174,8 @@ async function startSingleResultTurn() {
     emitEvent: (e) => emitted.push(e),
     ...mockCtxPlumbing({ sendMessage }, "chat-claude-provider-error"),
     forwardResult,
+    retryTurn,
+    failSessionForRecovery,
     finishTurn: async (messages, outcome) => {
       completed.push({ count: Array.isArray(messages) ? messages.length : 1, outcome });
     },
@@ -173,7 +193,7 @@ async function startSingleResultTurn() {
     ctx,
   );
 
-  return { handler, cache, sendMessage, forwardResult, emitted, completed, logs };
+  return { handler, cache, sendMessage, forwardResult, emitted, completed, logs, retryTurn, failSessionForRecovery };
 }
 
 async function runSingleResultTurn() {
@@ -481,6 +501,88 @@ describe("claude-code handler — structured provider error result", () => {
       expect(result.logs.some((line) => line.includes("[configHotSwitch] path=restart"))).toBe(true);
 
       await result.handler.suspend();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns custody to session recovery when a config restart fails after cancelling backoff", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    mockState.messagesByAttempt = [
+      [
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "I started working on this." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 503,
+          result: TRANSIENT_RESULT,
+        },
+      ],
+    ];
+    mockState.throwQueryOnCall = 2;
+
+    try {
+      const result = await startSingleResultTurn();
+      await waitForCondition(() => providerRetryPayloads(result.emitted).length === 1, "scheduled retry");
+
+      mockState.configVersion = 2;
+      mockState.promptAppend = "updated prompt";
+      await result.cache.refresh(AGENT_ID);
+
+      const processingStarted = vi.fn();
+      const retry = vi.fn(() => {
+        mockState.lifecycleEvents.push("retry:tail");
+      });
+      result.handler.inject(
+        {
+          id: "m2",
+          chatId: "chat-claude-provider-error",
+          senderId: "user-1",
+          format: "text",
+          content: "continue with the updated config",
+          metadata: null,
+        },
+        {
+          processingStarted,
+          complete: vi.fn().mockResolvedValue(undefined),
+          retry,
+          terminalRejected: vi.fn().mockResolvedValue(undefined),
+        },
+      );
+
+      await waitForCondition(() => retry.mock.calls.length === 1, "tail recovery");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(mockState.queryCalls).toBe(2);
+      expect(mockState.closeCalls).toEqual([1]);
+      expect(processingStarted).not.toHaveBeenCalled();
+      expect(retry).toHaveBeenCalledOnce();
+      expect(retry).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "m2" }),
+        "claude_config_restart_failed_recovery",
+      );
+      expect(result.retryTurn).toHaveBeenCalledOnce();
+      expect(result.retryTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "m1" }),
+        "claude_config_restart_failed_recovery",
+      );
+      expect(result.completed).toHaveLength(0);
+      expect(result.failSessionForRecovery).toHaveBeenCalledOnce();
+      expect(result.failSessionForRecovery).toHaveBeenCalledWith("claude_config_restart_failed", expect.any(String));
+      expect(result.logs).toContain("Auto-resume cancelled during provider retry backoff");
+      expect(result.logs).toContain("maybeSwitchConfig errored: config restart query construction failed");
+      expect(mockState.lifecycleEvents).toEqual(["close:1", "retry:tail", "retry:entered", "fatal"]);
+
+      await result.handler.suspend();
+      expect(mockState.closeCalls).toEqual([1]);
+      expect(retry).toHaveBeenCalledOnce();
+      expect(result.retryTurn).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
