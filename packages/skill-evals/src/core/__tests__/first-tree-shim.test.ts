@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -191,6 +191,90 @@ describe("first-tree eval shim", () => {
       );
       const resultEvent = events.find((event) => (event as { type?: string }).type === "first_tree_result");
       expect(resultEvent).not.toHaveProperty("shimmedByEval");
+    } finally {
+      rmSync(repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("fails recorded validator replay outside the registered detached head", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-test-"));
+    try {
+      const packageRoot = join(repoRoot, "packages", "skill-evals");
+      mkdirSync(packageRoot, { recursive: true });
+      const paths = createRunPaths({
+        caseId: "first-tree-shim-bound-replay-test",
+        packageRoot,
+        startedAt: "2026-06-30T00:00:00.000Z",
+      });
+      const detachedPath = join(paths.workspacePath, ".review-worktrees", "42");
+      mkdirSync(detachedPath, { recursive: true });
+      for (const args of [
+        ["init", "--initial-branch=main"],
+        ["config", "user.email", "eval@example.invalid"],
+        ["config", "user.name", "First Tree Eval"],
+      ]) {
+        expect(spawnSync("git", args, { cwd: detachedPath }).status).toBe(0);
+      }
+      writeFileSync(join(detachedPath, "NODE.md"), "---\ntitle: Eval\nowners: [eval]\n---\n", "utf8");
+      expect(spawnSync("git", ["add", "."], { cwd: detachedPath }).status).toBe(0);
+      expect(spawnSync("git", ["commit", "-m", "seed"], { cwd: detachedPath }).status).toBe(0);
+      const expectedHead = spawnSync("git", ["rev-parse", "HEAD"], {
+        cwd: detachedPath,
+        encoding: "utf8",
+      }).stdout.trim();
+      const recordedPath = join(paths.workspacePath, ".first-tree-eval", "verify.json");
+      writeFileSync(recordedPath, `${JSON.stringify({ exitCode: 0, stderr: "", stdout: '{"ok":true}\n' })}\n`, "utf8");
+      createFirstTreeShim(paths, {
+        recordedModelVerifyCwd: detachedPath,
+        recordedModelVerifyHead: expectedHead,
+        recordedModelVerifyPath: recordedPath,
+      });
+      const env = {
+        ...process.env,
+        FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+        FIRST_TREE_EVAL_PHASE: "model",
+      };
+      const firstTree = join(paths.binDir, "first-tree");
+
+      const wrongCwd = spawnSync(firstTree, ["tree", "verify", "--json"], {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env,
+      });
+      expect(wrongCwd.status).toBe(2);
+
+      const attached = spawnSync(firstTree, ["tree", "verify", "--json"], {
+        cwd: detachedPath,
+        encoding: "utf8",
+        env,
+      });
+      expect(attached.status).toBe(2);
+
+      expect(spawnSync("git", ["checkout", "--detach", expectedHead], { cwd: detachedPath }).status).toBe(0);
+
+      const valid = spawnSync(firstTree, ["tree", "verify", "--json"], {
+        cwd: detachedPath,
+        encoding: "utf8",
+        env,
+      });
+      expect(valid.status).toBe(0);
+      expect(JSON.parse(valid.stdout)).toMatchObject({ ok: true, targetRoot: realpathSync(detachedPath) });
+
+      writeFileSync(join(detachedPath, "NODE.md"), "---\ntitle: Changed\nowners: [eval]\n---\n", "utf8");
+      expect(spawnSync("git", ["add", "."], { cwd: detachedPath }).status).toBe(0);
+      expect(spawnSync("git", ["commit", "-m", "change head"], { cwd: detachedPath }).status).toBe(0);
+      const wrongHead = spawnSync(firstTree, ["tree", "verify", "--json"], {
+        cwd: detachedPath,
+        encoding: "utf8",
+        env,
+      });
+      expect(wrongHead.status).toBe(2);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ recordedRealVerify: true, verifyBindingValid: true }),
+          expect.objectContaining({ recordedRealVerify: false, verifyBindingValid: false }),
+        ]),
+      );
     } finally {
       rmSync(repoRoot, { force: true, recursive: true });
     }

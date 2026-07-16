@@ -5,14 +5,15 @@ import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
 import type { RunPaths } from "../types.js";
 
-export function createGhShim(paths: RunPaths): void {
+export function createGhShim(paths: RunPaths, options: { reviewFixturePath?: string } = {}): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
+const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
 
 function preview(value) {
   if (!value) return "";
@@ -196,6 +197,38 @@ const argv = process.argv.slice(2);
 const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "gh_call", phase, argv, cwd: process.cwd() });
 trace("gh call: " + commandLine(argv));
+
+if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const statePath = REVIEW_FIXTURE_PATH + ".state";
+  let state = { views: 0 };
+  try {
+    state = JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {}
+  if (argv[2] !== String(fixture.prNumber) || argAfter(argv, "--repo") !== fixture.repo) {
+    finish(argv, phase, 2, "", "Review fixture requires the configured repository and pull request.\\n", {
+      reviewFixture: true,
+      reviewFixtureViolation: true,
+    });
+  }
+  const view = fixture.views[Math.min(state.views, fixture.views.length - 1)];
+  const viewIndex = state.views;
+  state.views += 1;
+  writeFileSync(statePath, JSON.stringify(state), "utf8");
+  append({
+    type: "github_pr_viewed",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    headRefOid: view.headRefOid,
+    isDraft: view.isDraft,
+    prNumber: fixture.prNumber,
+    repo: fixture.repo,
+    state: view.state,
+    viewIndex,
+  });
+  finish(argv, phase, 0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
+}
 
 const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;
 if (simulated !== null) {

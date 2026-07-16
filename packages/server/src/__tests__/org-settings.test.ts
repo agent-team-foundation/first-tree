@@ -12,6 +12,7 @@ import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
+import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import * as orgSettingsService from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
@@ -75,6 +76,26 @@ async function createReviewerAgent(
     return updated;
   }
   return agent;
+}
+
+async function seedReviewerInstallation(
+  app: FastifyInstance,
+  organizationId: string,
+  options: { pullRequests?: "read" | "write"; suspendedAt?: string | null } = {},
+): Promise<void> {
+  const numericId = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
+  await upsertInstallationFromMetadata(app.db, {
+    installation: {
+      id: numericId,
+      accountType: "Organization",
+      accountLogin: "owner",
+      accountGithubId: numericId + 1,
+      permissions: { metadata: "read", pull_requests: options.pullRequests ?? "write" },
+      events: ["pull_request"],
+      suspendedAt: options.suspendedAt ?? null,
+    },
+    hubOrganizationId: organizationId,
+  });
 }
 
 describe("org-settings service", () => {
@@ -719,6 +740,7 @@ describe("org-settings service", () => {
     const admin = await createAdminContext(app);
     const otherManager = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, { managerId: otherManager.memberId });
+    await seedReviewerInstallation(app, admin.organizationId);
 
     const out = await orgSettingsService.putOrgSetting(
       app.db,
@@ -746,6 +768,7 @@ describe("org-settings service", () => {
       clientId: admin.clientId,
       managerId: admin.memberId,
     });
+    await seedReviewerInstallation(app, admin.organizationId);
 
     await orgSettingsService.putOrgSetting(
       app.db,
@@ -763,6 +786,27 @@ describe("org-settings service", () => {
     );
 
     expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
+  });
+
+  it("context_tree_features requires an active installation with Pull requests write before enabling", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, {
+      clientId: admin.clientId,
+      managerId: admin.memberId,
+    });
+    const enable = () =>
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId, memberId: admin.memberId },
+      );
+
+    await expect(enable()).rejects.toThrow(/Connect this team's GitHub App installation/);
+    await seedReviewerInstallation(app, admin.organizationId, { pullRequests: "read" });
+    await expect(enable()).rejects.toThrow(/accept Pull requests: write/);
   });
 
   it("context_tree_features rejects enabled reviewer input without agentUuid", async () => {
@@ -2022,6 +2066,7 @@ describe("org-settings API (admin gating + masking)", () => {
       clientId: admin.clientId,
       managerId: admin.memberId,
     });
+    await seedReviewerInstallation(app, admin.organizationId);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree_features`;
 
     const get1 = await app.inject({
@@ -2096,6 +2141,7 @@ describe("org-settings API (admin gating + masking)", () => {
       displayName: "Team Reviewer",
       name: `team-reviewer-${crypto.randomUUID().slice(0, 8)}`,
     });
+    await seedReviewerInstallation(app, admin.organizationId);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree_features`;
 
     await orgSettingsService.putOrgSetting(

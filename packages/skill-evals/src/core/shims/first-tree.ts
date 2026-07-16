@@ -5,20 +5,43 @@ import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
 import type { RunPaths } from "../types.js";
 
-export function createFirstTreeShim(paths: RunPaths): void {
+export function createFirstTreeShim(
+  paths: RunPaths,
+  options: {
+    modelVerifyMode?: "real" | "shim";
+    recordedModelVerifyCwd?: string;
+    recordedModelVerifyHead?: string;
+    recordedModelVerifyPath?: string;
+    reviewFixturePath?: string;
+  } = {},
+): void {
   const tsxBin = join(paths.packageRoot, "node_modules", ".bin", "tsx");
   const sourceCliEntry = join(paths.repoRoot, "apps", "cli", "src", "cli", "index.ts");
   const distCliEntry = join(paths.repoRoot, "apps", "cli", "dist", "cli", "index.mjs");
   const shimPath = join(paths.binDir, "first-tree");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 const TSX_BIN = ${JSON.stringify(tsxBin)};
 const SOURCE_CLI_ENTRY = ${JSON.stringify(sourceCliEntry)};
 const DIST_CLI_ENTRY = ${JSON.stringify(distCliEntry)};
+const MODEL_VERIFY_MODE = ${JSON.stringify(options.modelVerifyMode ?? "shim")};
+const RECORDED_MODEL_VERIFY_CWD = ${JSON.stringify(options.recordedModelVerifyCwd ?? null)};
+const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyHead ?? null)};
+const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
+const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
 
 function preview(value) {
   if (!value) return "";
@@ -244,6 +267,45 @@ const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
 trace("first-tree call: " + commandLine(argv));
 
+if (argv[0] === "github" && argv[1] === "context-review" && argv[2] === "submit" && REVIEW_FIXTURE_PATH) {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const runId = optionValue(argv, "--run");
+  const commitOid = optionValue(argv, "--head");
+  const event = optionValue(argv, "--event");
+  const bodyFile = optionValue(argv, "--body-file");
+  const exactOptions = argv.length === 11;
+  const action = event === "APPROVE" ? "approve" : event === "COMMENT" ? "comment" : event === "REQUEST_CHANGES" ? "request-changes" : null;
+  let body = "";
+  try {
+    body = bodyFile && bodyFile !== "-" ? readFileSync(bodyFile, "utf8") : "";
+  } catch {}
+  const valid = exactOptions && runId === fixture.runId && commitOid === fixture.reviewHeadOid && action && body.length > 0;
+  if (!valid) {
+    finish(argv, phase, 2, "", "Invalid Context Reviewer App submission fixture.\\n", { blockedByEval: true });
+  }
+  append({
+    type: "context_review_submitted",
+    phase,
+    action,
+    appActor: "first-tree-eval[bot]",
+    body,
+    bodyFileUsed: true,
+    commitOid,
+    currentHeadOid: fixture.submissionHeadOid,
+    prNumber: fixture.prNumber,
+    repo: fixture.repo,
+    runId,
+  });
+  finish(
+    argv,
+    phase,
+    0,
+    JSON.stringify({ action: event, reviewedHead: commitOid, reviewId: 4242, reviewUrl: "https://github.com/owner/context-tree/pull/42#pullrequestreview-4242", appActor: "first-tree-eval[bot]" }) + "\\n",
+    "",
+    { recordedOnly: true },
+  );
+}
+
 if (argv[0] === "github") {
   const exitCode = 1;
   const stderr = "Blocked first-tree github command in skill eval. No real GitHub side effect was attempted.\\n";
@@ -309,7 +371,60 @@ if (argv[0] === "tree" && argv[1] === "tree") {
   runTreeTree(argv, phase);
 }
 
-if (phase === "model" && argv[0] === "tree" && argv[1] === "verify") {
+if (RECORDED_MODEL_VERIFY_PATH && phase === "model" && argv[0] === "tree" && argv[1] === "verify") {
+  const exactCommand = argv.length === 3 && argv[2] === "--json";
+  let actualCwd = null;
+  let expectedCwd = null;
+  try {
+    actualCwd = realpathSync(process.cwd());
+    expectedCwd = RECORDED_MODEL_VERIFY_CWD ? realpathSync(RECORDED_MODEL_VERIFY_CWD) : null;
+  } catch {}
+  const headResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" });
+  const symbolicHeadResult = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  const statusResult = spawnSync("git", ["status", "--porcelain"], { cwd: process.cwd(), encoding: "utf8" });
+  const actualHead = headResult.status === 0 ? headResult.stdout.trim() : null;
+  const clean = statusResult.status === 0 && statusResult.stdout.trim() === "";
+  const verifyBindingValid =
+    exactCommand &&
+    actualCwd !== null &&
+    expectedCwd !== null &&
+    actualCwd === expectedCwd &&
+    actualHead === RECORDED_MODEL_VERIFY_HEAD &&
+    symbolicHeadResult.status !== 0 &&
+    clean;
+  if (!verifyBindingValid) {
+    finish(
+      argv,
+      phase,
+      2,
+      "",
+      "Recorded validator replay requires the registered clean detached PR-head worktree and exact 'tree verify --json' command.\\n",
+      {
+        actualHead,
+        expectedHead: RECORDED_MODEL_VERIFY_HEAD,
+        recordedRealVerify: false,
+        verifyBindingValid: false,
+      },
+    );
+  }
+  const recorded = JSON.parse(readFileSync(RECORDED_MODEL_VERIFY_PATH, "utf8"));
+  let stdout = recorded.stdout;
+  try {
+    const parsed = JSON.parse(stdout);
+    if (parsed && typeof parsed === "object") parsed.targetRoot = process.cwd();
+    stdout = JSON.stringify(parsed) + "\\n";
+  } catch {}
+  finish(argv, phase, recorded.exitCode, stdout, recorded.stderr, {
+    actualHead,
+    recordedRealVerify: true,
+    verifyBindingValid: true,
+  });
+}
+
+if (MODEL_VERIFY_MODE === "shim" && phase === "model" && argv[0] === "tree" && argv[1] === "verify") {
   runTreeVerify(argv, phase);
 }
 

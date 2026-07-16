@@ -23,6 +23,8 @@ import {
 } from "./core/result-store.js";
 import { changedFilesFromGit, formatSelectionSummary, selectSkillEvalRecommendations } from "./core/select.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
+import { formatContextTreeReviewGateSummary, runContextTreeReviewGate } from "./suites/context-tree-review/index.js";
+import type { BatchSummary as ReviewBatchSummary } from "./suites/context-tree-review/types.js";
 import {
   findFirstTreeReadPeriodicCase,
   formatFirstTreeReadGateSummary,
@@ -104,6 +106,7 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
   pnpm --filter @first-tree/skill-evals eval:periodic
   pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read
@@ -481,7 +484,12 @@ function floorResultEntries(
   }));
 }
 
-type GateBatchSummary = ReadBatchSummary | SeedBatchSummary | WelcomeBatchSummary | WriteBatchSummary;
+type GateBatchSummary =
+  | ReadBatchSummary
+  | ReviewBatchSummary
+  | SeedBatchSummary
+  | WelcomeBatchSummary
+  | WriteBatchSummary;
 
 function gateResultEntries(
   packageRootPath: string,
@@ -777,6 +785,22 @@ async function runGate(options: CliOptions): Promise<void> {
     return;
   }
 
+  if (options.suite === "context-tree-review") {
+    const batch = await runContextTreeReviewGate(packageRootPath, {
+      caseId: options.caseId,
+      claudeBin: options.claudeBin,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      provider: options.provider,
+      verbose: options.verbose,
+    });
+    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
+    printGateWithOptionalQuality(formatContextTreeReviewGateSummary(batch), batch, null, options.json);
+    if (batch.failed > 0) process.exitCode = 1;
+    return;
+  }
+
   if (options.suite === "first-tree-write") {
     if (options.includeQuality) {
       assertIncludedQualityCase(options, FIRST_TREE_WRITE_QUALITY_DEFINITION.gateCaseId);
@@ -883,7 +907,7 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   throw new Error(
-    "eval:gate currently requires --suite first-tree-read, --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
+    "eval:gate currently requires --suite context-tree-review, --suite first-tree-read, --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
   );
 }
 

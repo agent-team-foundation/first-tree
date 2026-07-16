@@ -57,6 +57,7 @@ export const CORE_SKILL_NAMES = [
   "first-tree-file-bug",
   "first-tree-read",
   "first-tree-write",
+  "context-tree-review",
 ] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;

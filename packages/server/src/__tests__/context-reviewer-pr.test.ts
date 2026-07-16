@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -17,6 +17,8 @@ import {
   normalizeGithubRepo,
   renderContextReviewerPrPrompt,
 } from "../services/context-reviewer-pr.js";
+import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
+import { createMember } from "../services/member.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -98,6 +100,7 @@ async function createReviewer(
 }
 
 async function enableReviewer(app: App, admin: Awaited<ReturnType<typeof createAdminContext>>, reviewerUuid: string) {
+  await seedReviewerInstallation(app, admin.organizationId);
   await putOrgSetting(
     app.db,
     admin.organizationId,
@@ -114,6 +117,22 @@ async function enableReviewer(app: App, admin: Awaited<ReturnType<typeof createA
   );
 }
 
+async function seedReviewerInstallation(app: App, organizationId: string): Promise<void> {
+  const numericId = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
+  await upsertInstallationFromMetadata(app.db, {
+    installation: {
+      id: numericId,
+      accountType: "Organization",
+      accountLogin: "owner",
+      accountGithubId: numericId + 1,
+      permissions: { metadata: "read", pull_requests: "write" },
+      events: ["pull_request"],
+      suspendedAt: null,
+    },
+    hubOrganizationId: organizationId,
+  });
+}
+
 async function seedGithubIdentity(app: App, userId: string, login: string) {
   await app.db.insert(authIdentities).values({
     id: randomUUID(),
@@ -127,7 +146,7 @@ async function seedGithubIdentity(app: App, userId: string, login: string) {
 }
 
 describe("Context Reviewer PR prompt", () => {
-  it("renders the EJS prompt with required review instructions", async () => {
+  it("renders event facts and delegates the workflow to context-tree-review", async () => {
     const prompt = await renderContextReviewerPrPrompt({
       repoFullName: "owner/context-tree",
       prNumber: 123,
@@ -142,31 +161,26 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000001",
       reviewerManagerGithubLogin: "reviewer-manager",
-      reviewerManagerIsPrAuthor: false,
     });
 
-    expect(prompt).toContain("Context Reviewer");
+    expect(prompt).toContain("Context Tree pull request event");
+    expect(prompt).toContain("Load the installed `context-tree-review` skill");
+    expect(prompt).toContain("strictly execute that skill");
+    expect(prompt).toContain("Repository: owner/context-tree");
+    expect(prompt).toContain("Pull request: #123");
     expect(prompt).toContain("PR author: writer");
     expect(prompt).toContain("Event sender: writer");
     expect(prompt).toContain("Reviewer manager GitHub login: reviewer-manager");
-    expect(prompt).toContain("Known approval blocker: not known from First Tree metadata");
-    expect(prompt).toContain("gh api user --jq .login");
-    expect(prompt).toContain("clear, accurate");
-    expect(prompt).toContain("missing background");
-    expect(prompt).toContain("excessive detail");
-    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --request-changes --body-file");
-    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --comment --body-file");
-    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(prompt).toContain("Context review run: 01900000-0000-7000-8000-000000000001");
+    expect(prompt).not.toContain("Known self-approval blocker");
     expect(prompt).toContain("Draft status from webhook: ready for review");
-    expect(prompt).toContain(
-      "Treat `pull_request.synchronize` and `pull_request.ready_for_review` as fresh review requests",
-    );
-    expect(prompt).toContain("Do not rely on an older approval or comment review");
-    expect(prompt).toContain("Context changes requested");
-    expect(prompt).toContain("Still unclear or needs more detail");
-    expect(prompt).toContain("Independent approval required");
-    expect(prompt).toContain("review action was submitted: `approved`, `commented`, `changes_requested`, or `failed`");
+    expect(prompt).not.toContain("Review goals:");
+    expect(prompt).not.toContain("Required workflow:");
+    expect(prompt).not.toContain("gh pr review");
+    expect(prompt).not.toContain("gh api user");
+    expect(prompt).not.toContain("Context changes requested");
   });
 
   it("renders when optional refs are missing", async () => {
@@ -184,19 +198,15 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000002",
       reviewerManagerGithubLogin: null,
-      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Base ref: unknown");
     expect(prompt).toContain("Head ref: unknown");
     expect(prompt).toContain("Trigger event: pull_request.synchronize");
-    expect(prompt).toContain(
-      "Draft status from webhook: unknown; inspect the current PR state before choosing an outcome",
-    );
-    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --request-changes --body-file");
-    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --comment --body-file");
-    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --approve --body-file");
+    expect(prompt).toContain("Draft status from webhook: unknown");
+    expect(prompt).toContain("Load the installed `context-tree-review` skill");
   });
 
   it("renders draft-specific non-approval instructions", async () => {
@@ -214,14 +224,13 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000003",
       reviewerManagerGithubLogin: null,
-      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Draft status from webhook: draft");
-    expect(prompt).toContain("If the pull request is still a draft, do not approve it");
-    expect(prompt).toContain("approval is deferred until the PR is ready for review");
-    expect(prompt).toContain("the pull request is not a draft");
+    expect(prompt).not.toContain("If the pull request is still a draft");
+    expect(prompt).not.toContain("approval is deferred until the PR is ready for review");
   });
 
   it("renders comment trigger context when present", async () => {
@@ -239,8 +248,8 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: "https://github.com/owner/context-tree/pull/125#issuecomment-1",
       commentAuthorLogin: "commenter",
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000004",
       reviewerManagerGithubLogin: null,
-      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Trigger event: issue_comment.created");
@@ -248,7 +257,7 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("Comment URL: https://github.com/owner/context-tree/pull/125#issuecomment-1");
   });
 
-  it("renders a known self-approval blocker as a failed approval path", async () => {
+  it("renders the server-authored App publication run without a host self-approval branch", async () => {
     const prompt = await renderContextReviewerPrPrompt({
       repoFullName: "owner/context-tree",
       prNumber: 127,
@@ -263,14 +272,14 @@ describe("Context Reviewer PR prompt", () => {
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      contextReviewRunId: "01900000-0000-7000-8000-000000000005",
       reviewerManagerGithubLogin: "Writer",
-      reviewerManagerIsPrAuthor: true,
     });
 
-    expect(prompt).toContain("Known approval blocker: yes");
-    expect(prompt).toContain("GitHub requires a non-author approver");
-    expect(prompt).toContain("review action as `failed`");
-    expect(prompt).toContain("authenticated reviewer is the PR author");
+    expect(prompt).toContain("Context review run: 01900000-0000-7000-8000-000000000005");
+    expect(prompt).not.toContain("Known self-approval blocker");
+    expect(prompt).not.toContain("Independent approval required");
+    expect(prompt).not.toContain("gh pr review");
   });
 });
 
@@ -357,6 +366,7 @@ describe("handleContextReviewerPrEvent", () => {
       }),
     ).resolves.toEqual({ handled: false, reason: "feature_disabled" });
 
+    await seedReviewerInstallation(app, admin.organizationId);
     await putOrgSetting(
       app.db,
       admin.organizationId,
@@ -465,11 +475,9 @@ describe("handleContextReviewerPrEvent", () => {
     );
 
     const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
-    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --request-changes --body-file");
-    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --comment --body-file");
-    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
-    expect(message?.content).toContain("Context changes requested");
-    expect(message?.content).toContain("Still unclear or needs more detail");
+    expect(message?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(message?.content).not.toContain("gh pr review");
+    expect(message?.content).not.toContain("Context changes requested");
     expect(message?.content).toContain("Trigger event: pull_request.opened");
     expect(message?.content).toContain("Draft status from webhook: ready for review");
     expect(message?.content).toContain("PR author: writer");
@@ -488,7 +496,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(entry?.notify).toBe(true);
   });
 
-  it("marks approval as blocked when the reviewer manager GitHub login is the PR author", async () => {
+  it("records host-manager identity for audit without creating a self-author outcome", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     await seedGithubIdentity(app, admin.userId, "Writer");
@@ -506,13 +514,15 @@ describe("handleContextReviewerPrEvent", () => {
 
     const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
     expect(message?.content).toContain("Reviewer manager GitHub login: Writer");
-    expect(message?.content).toContain("Known approval blocker: yes");
-    expect(message?.content).toContain("Independent approval required");
+    expect(message?.content).toContain("Context review run:");
+    expect(message?.content).not.toContain("Known self-approval blocker");
+    expect(message?.content).not.toContain("Independent approval required");
     expect(message?.metadata).toMatchObject({
       contextTreeReviewer: true,
       pullRequestAuthorLogin: "writer",
       reviewerManagerGithubLogin: "Writer",
-      reviewerManagerIsPrAuthor: true,
+      contextReviewReviewerAgentUuid: reviewer.uuid,
+      contextReviewSubmission: { state: "pending" },
     });
   });
 
@@ -541,10 +551,151 @@ describe("handleContextReviewerPrEvent", () => {
     expect(messageRows).toHaveLength(2);
     const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
     expect(followUp?.content).toContain("Trigger event: pull_request.opened");
-    expect(followUp?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
-    expect(followUp?.content).toContain("Do not rely on an older approval or comment review");
+    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(followUp?.content).not.toContain("gh pr review");
     const chatRows = await app.db.select({ id: chats.id }).from(chats);
     expect(chatRows).toHaveLength(1);
+  });
+
+  it("atomically reserves one reviewer chat for concurrent first deliveries", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    const opened = pullRequestPayload({
+      pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
+    });
+    const synchronized = pullRequestPayload({
+      action: "synchronize",
+      pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
+    });
+    const [first, second] = await Promise.all([
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: opened,
+        organizationId: admin.organizationId,
+      }),
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: synchronized,
+        organizationId: admin.organizationId,
+      }),
+    ]);
+
+    if (!first.handled || !second.handled) throw new Error("expected concurrent events to be handled");
+    expect(second.chatId).toBe(first.chatId);
+    const chatRows = await app.db.select({ id: chats.id }).from(chats);
+    expect(chatRows).toEqual([{ id: first.chatId }]);
+    const runMessages = await app.db
+      .select({ metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, first.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id));
+    expect(runMessages.length).toBeGreaterThanOrEqual(1);
+    expect(runMessages.length).toBeLessThanOrEqual(2);
+    expect(runMessages[0]?.metadata).toMatchObject({
+      triggerEvent: "pull_request.synchronize",
+      contextReviewHeadSha: "b".repeat(40),
+    });
+  });
+
+  it("does not suppress a delayed opened task after the configured reviewer changes", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const firstReviewer = await createReviewer(app, admin, { name: "first-reviewer" });
+    await enableReviewer(app, admin, firstReviewer.uuid);
+
+    const synchronized = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        action: "synchronize",
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+    if (!synchronized.handled) throw new Error("expected synchronize event handled");
+
+    const currentReviewer = await createReviewer(app, admin, { name: "current-reviewer" });
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: currentReviewer.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+    const opened = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+
+    expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
+    if (!opened.handled) throw new Error("expected delayed opened event handled");
+    const runMessages = await app.db
+      .select({ id: messages.id, metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, synchronized.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id));
+    expect(runMessages).toHaveLength(2);
+    expect(runMessages[0]).toMatchObject({
+      id: opened.messageId,
+      metadata: {
+        triggerEvent: "pull_request.opened",
+        contextReviewReviewerAgentUuid: currentReviewer.uuid,
+        contextReviewReviewerManagerHumanAgentId: admin.humanAgentUuid,
+      },
+    });
+  });
+
+  it("does not suppress a delayed opened task after the reviewer manager changes", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    const synchronized = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        action: "synchronize",
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+    if (!synchronized.handled) throw new Error("expected synchronize event handled");
+
+    const currentManager = await createMember(app.db, admin.organizationId, {
+      username: `review-manager-${randomUUID().slice(0, 8)}`,
+      displayName: "Current Review Manager",
+      role: "admin",
+    });
+    await app.db.update(agents).set({ managerId: currentManager.id }).where(eq(agents.uuid, reviewer.uuid));
+    const opened = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload({
+        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
+      }),
+      organizationId: admin.organizationId,
+    });
+
+    expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
+    if (!opened.handled) throw new Error("expected delayed opened event handled");
+    const runMessages = await app.db
+      .select({ id: messages.id, metadata: messages.metadata })
+      .from(messages)
+      .where(eq(messages.chatId, synchronized.chatId))
+      .orderBy(desc(messages.createdAt), desc(messages.id));
+    expect(runMessages).toHaveLength(2);
+    expect(runMessages[0]).toMatchObject({
+      id: opened.messageId,
+      metadata: {
+        triggerEvent: "pull_request.opened",
+        contextReviewReviewerAgentUuid: reviewer.uuid,
+        contextReviewReviewerManagerHumanAgentId: currentManager.agentId,
+      },
+    });
   });
 
   it("reuses the reviewer chat for pull_request.synchronize and notifies the reviewer", async () => {
@@ -575,9 +726,8 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.source).toBe("github");
     expect(followUp?.format).toBe("markdown");
     expect(followUp?.content).toContain("Trigger event: pull_request.synchronize");
-    expect(followUp?.content).toContain("clear, accurate");
-    expect(followUp?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
-    expect(followUp?.content).toContain("Do not rely on an older approval or comment review");
+    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(followUp?.content).not.toContain("gh pr review");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
@@ -622,8 +772,8 @@ describe("handleContextReviewerPrEvent", () => {
     const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
     expect(followUp?.content).toContain("Trigger event: pull_request.ready_for_review");
     expect(followUp?.content).toContain("Draft status from webhook: ready for review");
-    expect(followUp?.content).toContain("Do not rely on an older approval or comment review");
-    expect(followUp?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(followUp?.content).not.toContain("gh pr review");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
@@ -662,7 +812,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.content).toContain("Trigger event: issue_comment.created");
     expect(followUp?.content).toContain("Comment author: commenter");
     expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-1");
-    expect(followUp?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -709,7 +859,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.content).toContain("Trigger event: pull_request_review_comment.created");
     expect(followUp?.content).toContain("Comment author: reviewer-user");
     expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#discussion_r1");
-    expect(followUp?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "pull_request_review_comment",
@@ -770,7 +920,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.content).toContain("Trigger event: issue_comment.created");
     expect(followUp?.content).toContain("Comment author: MANAGER-LOGIN");
     expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-2");
-    expect(followUp?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -865,7 +1015,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.content).toContain("Trigger event: issue_comment.created");
     expect(followUp?.content).toContain("Comment author: unrelated-human");
     expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-3");
-    expect(followUp?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
   });
 
   it("skips non-PR issue_comment.created without creating a reviewer chat", async () => {

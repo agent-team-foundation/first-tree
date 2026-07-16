@@ -21,6 +21,7 @@ import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
+import { findInstallationByOrg } from "./github-app-installations.js";
 
 /**
  * Per-organization settings, keyed by `(organizationId, namespace)`. The
@@ -427,6 +428,19 @@ async function assertContextReviewerAgentAllowed(
 
   if (!agent || agent.organizationId !== orgId || agent.type === "human" || agent.status !== "active") {
     throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
+  }
+
+  const installation = await findInstallationByOrg(db, orgId);
+  if (!installation) {
+    throw new BadRequestError("Connect this team's GitHub App installation before enabling Context Reviewer");
+  }
+  if (installation.suspendedAt) {
+    throw new BadRequestError("Unsuspend this team's GitHub App installation before enabling Context Reviewer");
+  }
+  if (installation.permissions.pull_requests !== "write") {
+    throw new BadRequestError(
+      "The GitHub App installation owner must accept Pull requests: write before enabling Context Reviewer",
+    );
   }
 }
 

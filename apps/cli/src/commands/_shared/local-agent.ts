@@ -114,7 +114,7 @@ function resolveRuntimeSessionToken(): string | undefined {
 export function handleSdkError(error: unknown): never {
   if (error instanceof SdkError) {
     const exitCode = error.statusCode === 401 ? 3 : 1;
-    fail(`HTTP_${error.statusCode}`, error.message, exitCode);
+    fail(error.code ?? `HTTP_${error.statusCode}`, error.message, exitCode);
   }
   if (error instanceof TypeError && "cause" in error) {
     fail("CONNECTION_ERROR", `Cannot connect to server: ${error.message}`, 6);

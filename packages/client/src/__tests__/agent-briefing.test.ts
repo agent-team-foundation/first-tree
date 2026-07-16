@@ -335,6 +335,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(familyMap).toContain("The generated Context Tree Policy above is the always-present baseline");
     expect(familyMap).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
+    expect(familyMap).toMatch(/\|\s*`context-tree-review`\s*\| a Cloud Context Reviewer wake-up/);
 
     const treelessFamily = topLevelSection(
       buildAgentBriefing(makeOpts({ contextTreePath: null })),
@@ -346,6 +347,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).not.toContain("first-tree-gitlab");
     expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
+    expect(treelessFamily).toMatch(/\|\s*`context-tree-review`\s*\| a Cloud Context Reviewer wake-up/);
     expect(treelessFamily).toContain("These First Tree skills are installed in every workspace");
     expect(treelessFamily).not.toContain("# Required Reading");
   });
@@ -690,6 +692,7 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("## Context Tree Policy");
     expect(tree).toContain("load `first-tree-write`");
     expect(tree).toContain("load `first-tree-read`");
+    expect(tree).toContain("exclusively, not `first-tree-read`");
     expect(tree).toContain("**Normal content**");
     expect(tree).toContain("**Archive/supporting content**");
     expect(tree).toContain("**Member content**");
@@ -697,6 +700,7 @@ describe("buildAgentBriefing — Context Tree", () => {
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
     expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
+    expect(tree).toContain("Context Tree PR\nreviews: load `context-tree-review` exclusively");
     expect(tree).toContain("first-tree tree tree --help");
     expect(tree).toContain("tree tree` selectors");
     expect(tree).toContain("root `NODE.md`");
