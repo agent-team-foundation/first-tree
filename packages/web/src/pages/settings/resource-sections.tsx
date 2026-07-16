@@ -30,9 +30,8 @@ import { ResourcePreviewDialog } from "./resource-preview-dialog.js";
  * Section list for a subset of the team's runtime resource types, extracted
  * from the Settings → Resources page so a type can live on a different
  * Settings page without duplicating the list/editor/retire machinery. The
- * `repo` type renders in the provider-neutral code-access area on Settings →
- * Integrations; prompt, skill, and MCP resources remain on Settings →
- * Resources.
+ * `repo` type renders on the provider-neutral Settings → Repositories page;
+ * prompt, skill, and MCP resources remain on Settings → Resources.
  *
  * Behaviour matches the Resources page: everyone can open the read-only
  * preview (the eye icon); only admins see add / edit / retire affordances.
@@ -109,7 +108,7 @@ export function ResourceTypeSections({
         types.map((type) => {
           // When the host overrides a section's title, derive fallback copy from
           // that title so the surface stays coherent. Hosts with sentence-like
-          // titles (for example "Code available to agents") can supply explicit
+          // titles (for example "Code repositories") can supply explicit
           // add/empty labels rather than relying on this simple noun fallback.
           const overrideTitle = titleFor?.(type);
           const pluralNoun = overrideTitle ? overrideTitle.toLowerCase() : typeLabelPlural(type).toLowerCase();

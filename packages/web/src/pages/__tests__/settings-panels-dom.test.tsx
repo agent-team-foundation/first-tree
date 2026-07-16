@@ -152,6 +152,7 @@ async function renderDom(
           <Routes>
             <Route path="/settings/*" element={element}>
               <Route path="context" element={<div>Settings child</div>} />
+              <Route path="repositories" element={<div>Repositories child</div>} />
               <Route path="integrations/*" element={<div>Integrations child</div>} />
             </Route>
           </Routes>
@@ -195,7 +196,7 @@ async function click(element: Element | null): Promise<void> {
 }
 
 async function selectOption(container: ParentNode, label: string): Promise<void> {
-  await click(container.querySelector('[aria-label="Context Reviewer agent"]'));
+  await click(container.querySelector('[aria-label="Automatic PR review agent"]'));
   await waitForCondition(
     () => [...document.body.querySelectorAll('[role="option"]')].some((option) => option.textContent?.includes(label)),
     `Expected select option "${label}"`,
@@ -325,6 +326,7 @@ describe("settings panels", () => {
 
     const desktop = await renderDom(<SettingsLayout />, "/settings/integrations/github");
     expect(desktop.container.textContent).toContain("Computers");
+    expect(desktop.container.textContent).toContain("Repositories");
     expect(desktop.container.textContent).toContain("Integrations");
     // The onboarding nav entry is labelled "Setup" (renamed from "Onboarding"
     // so the sidebar label and the page heading no longer drift).
@@ -337,6 +339,7 @@ describe("settings panels", () => {
     const narrow = await renderDom(<SettingsLayout />);
     expect(narrow.container.querySelector("aside")).toBeNull();
     expect(narrow.container.textContent).toContain("Computers");
+    expect(narrow.container.textContent).toContain("Repositories");
     expect(narrow.container.textContent).toContain("Integrations");
     expect(narrow.container.textContent).not.toContain("Setup");
     await act(async () => narrow.root.unmount());
@@ -345,20 +348,31 @@ describe("settings panels", () => {
     const unloaded = await renderDom(<SettingsLayout />);
     expect(unloaded.container.textContent).toBe("");
     await act(async () => unloaded.root.unmount());
+
+    authMock.value = { ...authMock.value, meLoaded: true };
+    viewportMock.value = "xl";
+    const repositories = await renderDom(<SettingsLayout />, "/settings/repositories");
+    const pageHeading = repositories.container.querySelector("h1");
+    expect(pageHeading?.textContent).toBe("Repositories");
+    expect(pageHeading?.classList.contains("sr-only")).toBe(true);
+    expect(repositories.container.textContent).toContain("Repositories child");
+    await act(async () => repositories.root.unmount());
   });
 
   it("renders Context Tree binding configuration and keeps manual editing hidden by default", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
-    await waitForText(container, "Repository");
-    // The redundant in-body "Your team's Context Tree" label was removed; the
-    // section title "Repository" now carries that framing.
+    await waitForText(container, "Context Tree");
+    const headings = [...container.querySelectorAll("h2")].map((heading) => heading.textContent);
+    expect(headings).toEqual(["Context Tree"]);
+    expect(headings).not.toContain("Repository");
+    expect(headings).not.toContain("Context Reviewer");
     expect(container.textContent).not.toContain("Your team's Context Tree");
     expect(container.textContent).toContain("https://github.com/acme/context");
-    expect(container.textContent).toContain("branch main");
-    expect(container.textContent).toContain("View on the Context page");
-    expect(container.textContent).toContain("Context Reviewer");
+    expect(container.textContent).toContain("main branch");
+    expect(container.textContent).toContain("Open Context");
+    expect(container.textContent).toContain("Automatic PR review");
     expect(container.querySelectorAll<HTMLButtonElement>('[role="tab"]').length).toBe(0);
     expect(container.textContent).not.toContain("Connect your code & build your Context Tree");
     expect(container.textContent).not.toContain("Repo URL");
@@ -370,7 +384,7 @@ describe("settings panels", () => {
   it("shows and saves manual context tree settings with blank values normalized to null", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "View on the Context page");
+    await waitForText(container, "Open Context");
 
     await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
@@ -432,12 +446,11 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "View on the Context page");
+    await waitForText(container, "Open Context");
 
     expect(container.textContent).toContain("https://github.com/acme/context");
-    expect(container.textContent).toContain("branch main");
+    expect(container.textContent).toContain("main branch");
     expect(buttonByText(container, "Edit")).toBeNull();
-    expect(container.textContent).toContain("Context Reviewer");
     expect(container.textContent).toContain("Automatic PR review");
     expect(container.textContent).toContain("Off");
     expect(reviewerSwitch(container)).toBeNull();
@@ -459,7 +472,7 @@ describe("settings panels", () => {
   it("renders Context Reviewer settings without resetting manual binding draft values", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "View on the Context page");
+    await waitForText(container, "Open Context");
 
     await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
@@ -467,7 +480,7 @@ describe("settings panels", () => {
     if (!repoInput) throw new Error("Expected repo input");
     await setInputValue(repoInput, "https://github.com/acme/draft-context");
 
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("false");
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
@@ -507,7 +520,7 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
     await waitForText(container, "Alpha Reviewer");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
 
@@ -523,7 +536,7 @@ describe("settings panels", () => {
   it("does not save when flipping the Switch on (no agent) and back off", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await click(reviewerSwitch(container));
     await waitForText(container, "Reviewer agent");
@@ -538,12 +551,12 @@ describe("settings panels", () => {
   it("enables Context Reviewer, filters eligible agents, and saves the selected agent", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await click(reviewerSwitch(container));
     await waitForText(container, "Reviewer agent");
     await waitForCondition(() => agentApiMocks.listAllAgents.mock.calls.length > 0, "Expected agents to load");
-    await waitForText(container, "Select an agent to enable Context Reviewer.");
+    await waitForText(container, "Select an agent to enable automatic PR review.");
 
     await selectOption(container, "Alpha Reviewer");
     expect(document.body.textContent).not.toContain("Human User");
@@ -564,11 +577,18 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await waitForText(container, "Beta Reviewer");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
-    expect(container.textContent).toContain("Beta Reviewer");
+    const reviewerMetadata = buttonByText(container, "Reviewer agent · Beta Reviewer");
+    expect(reviewerMetadata).not.toBeNull();
+    expect(reviewerMetadata?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).toBeNull();
+
+    await click(reviewerMetadata);
+    expect(reviewerMetadata?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).not.toBeNull();
 
     await act(async () => root.unmount());
   });
@@ -594,7 +614,7 @@ describe("settings panels", () => {
       );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await waitForText(container, "Late Page Reviewer");
     expect(agentApiMocks.listAllAgents).toHaveBeenNthCalledWith(1, { limit: 100 });
@@ -615,11 +635,29 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await click(reviewerSwitch(container));
     await waitForText(container, "No active non-human agents are available.");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+    expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps an unavailable saved reviewer actionable when no replacement agents exist", async () => {
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-deleted" }),
+    );
+    agentApiMocks.listAllAgents.mockResolvedValueOnce(
+      paginatedAgents([managedAgent({ uuid: "human-only", displayName: "Only Human", type: "human" })]),
+    );
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+
+    await waitForText(container, "No active non-human agents are available.");
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+    expect(container.textContent).not.toContain("agent-deleted");
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
@@ -640,7 +678,7 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Automatic PR review");
 
     await waitForText(container, "Other Admin Reviewer");
     expect(container.textContent).not.toContain("Current reviewer is not your active agent.");
@@ -661,7 +699,7 @@ describe("settings panels", () => {
     );
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
-    await waitForText(container, "View on the Context page");
+    await waitForText(container, "Open Context");
     await waitForText(container, "Context Reviewer Bot");
     expect(container.textContent).toContain("Automatic PR review");
     expect(container.textContent).toContain("On");
@@ -669,7 +707,7 @@ describe("settings panels", () => {
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(reviewerSwitch(container)).toBeNull();
-    expect(container.querySelector('[aria-label="Context Reviewer agent"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).toBeNull();
 
     await act(async () => root.unmount());
   });
@@ -688,7 +726,7 @@ describe("settings panels", () => {
     expect(container.textContent).not.toContain("agent-deleted");
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(reviewerSwitch(container)).toBeNull();
-    expect(container.querySelector('[aria-label="Context Reviewer agent"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Automatic PR review agent"]')).toBeNull();
 
     await act(async () => root.unmount());
   });

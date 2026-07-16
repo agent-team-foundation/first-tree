@@ -1,3 +1,4 @@
+import { deriveRepoLocalPath } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
@@ -21,8 +22,8 @@ import { titleWithSemantics, useJustSaved } from "./agent-detail/save-semantics.
 import { fetchAllAgents } from "./team/index.js";
 
 /**
- * Settings → Context tree. Per-org Context Tree **configuration**: which repo /
- * branch the team's tree is bound to, plus the Context Reviewer feature.
+ * Context Tree block on Settings → Repositories. It owns the per-org repo /
+ * branch binding plus the separate Context Reviewer feature.
  *
  * This page is config, not status — the live "is the tree fresh / who reads &
  * writes it" view is the top-level Context tab, and building a team's first tree
@@ -88,12 +89,9 @@ export function ContextTreeSettingsPanel() {
   };
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <Section
-        title="Repository"
-        description="The repository your team's Context Tree lives in. Changes apply to new agent sessions — members should restart their agents to pick up the change."
-      >
-        <div style={{ paddingTop: "var(--sp-4)" }}>
+    <Section title="Context Tree" description="The repository that stores your team's shared context.">
+      <div>
+        <div style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}>
           {settingQuery.isLoading ? (
             <div className="text-body" style={{ color: "var(--fg-3)" }}>
               Loading…
@@ -151,10 +149,9 @@ export function ContextTreeSettingsPanel() {
             </form>
           ) : null}
         </div>
-      </Section>
-
-      <ContextReviewerSection hasBinding={hasBinding} isAdmin={isAdmin} />
-    </div>
+        <ContextReviewerSection hasBinding={hasBinding} isAdmin={isAdmin} />
+      </div>
+    </Section>
   );
 }
 
@@ -175,26 +172,43 @@ function BoundTree({
   onToggleEdit: () => void;
   onViewContext: () => void;
 }) {
+  const name = deriveRepoLocalPath(repo) || repo;
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      {isAdmin ? (
-        <div className="flex justify-end">
-          <Button type="button" variant="link" className="h-auto p-0" onClick={onToggleEdit}>
-            {editing ? "Close" : "Edit"}
+      <div className="flex flex-col sm:flex-row sm:items-start" style={{ gap: "var(--sp-3)" }}>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-baseline" style={{ gap: "var(--sp-3)" }}>
+            <span className="text-body font-medium truncate" style={{ color: "var(--fg)" }} title={name}>
+              {name}
+            </span>
+            <span className="text-label shrink-0" style={{ color: "var(--fg-3)" }}>
+              {branch} branch
+            </span>
+          </div>
+          <div
+            className="text-caption"
+            style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)", wordBreak: "break-all" }}
+          >
+            {repo}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center" style={{ gap: "var(--sp-4)" }}>
+          {isAdmin ? (
+            <Button
+              type="button"
+              variant="link"
+              className="h-auto p-0"
+              style={{ color: "var(--fg-3)" }}
+              onClick={onToggleEdit}
+            >
+              {editing ? "Close" : "Edit"}
+            </Button>
+          ) : null}
+          <Button type="button" variant="link" className="h-auto p-0" onClick={onViewContext}>
+            <span>Open Context</span>
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
-      ) : null}
-      <span className="text-body mono" style={{ color: "var(--fg)", wordBreak: "break-all" }}>
-        {repo}
-      </span>
-      <span className="text-label" style={{ color: "var(--fg-3)" }}>
-        branch <span className="mono">{branch}</span>
-      </span>
-      <div style={{ marginTop: "var(--sp-1)" }}>
-        <Button type="button" variant="link" className="h-auto p-0" onClick={onViewContext}>
-          <span>View on the Context page</span>
-          <ArrowRight className="h-4 w-4" />
-        </Button>
       </div>
     </div>
   );
@@ -248,7 +262,9 @@ function NoTree({
 }
 
 /** Context Reviewer: assign an agent to auto-review Context Tree PRs. Meaningful
- *  only once a tree is bound. Was the old "Features" tab; now a plain section.
+ *  only once a tree is bound. It is a row inside the Context Tree section, not
+ *  a peer heading: the binding and reviewer are one visible chapter but remain
+ *  separate settings models.
  *
  *  This is an immediate-save config block (no page-level Save), mirroring the
  *  Agent Detail Switch rows: flipping the Switch or picking an agent persists at
@@ -310,7 +326,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
   const selectedIsCandidate = reviewerCandidates.some((agent) => agent.uuid === serverAgentUuid);
   // Enabled, but the saved reviewer is no longer an active agent this admin can
   // see: keep the Switch on, warn, and let them re-pick or turn it off.
-  const reviewerMissing = serverEnabled && !selectedIsCandidate && !agentsLoading && reviewerCandidates.length > 0;
+  const reviewerMissing = serverEnabled && !selectedIsCandidate && !agentsLoading;
   // Switch is on for setup but no agent chosen yet — prompt for the pick that
   // actually enables the feature.
   const awaitingAgent = setupOpen && !serverEnabled && !agentsLoading && reviewerCandidates.length > 0;
@@ -343,125 +359,135 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
     featuresMutation.mutate({ enabled: true, agentUuid: uuid });
   };
 
+  const selectedReviewer = reviewerCandidates.find((agent) => agent.uuid === serverAgentUuid) ?? null;
+
   return (
-    <Section
-      title={titleWithSemantics("Context Reviewer", justSaved)}
-      description="Assign an agent to review Context Tree PRs."
-    >
-      <div style={{ paddingTop: "var(--sp-4)" }}>
-        {!hasBinding ? (
-          <div className="text-body" style={{ color: "var(--fg-3)" }}>
-            Available once your team has a Context Tree.
-          </div>
-        ) : featuresQuery.isLoading ? (
-          <div className="text-body" style={{ color: "var(--fg-3)" }}>
-            Loading…
-          </div>
-        ) : featuresQuery.error ? (
-          <div className="text-body" style={{ color: "var(--state-error)" }}>
-            {featuresQuery.error instanceof Error ? featuresQuery.error.message : "Failed to load feature settings"}
-          </div>
-        ) : (
-          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-            {isAdmin ? (
-              <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)", padding: "var(--sp-3) 0" }}>
+      {!hasBinding ? (
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          Available once your team has a Context Tree.
+        </div>
+      ) : featuresQuery.isLoading ? (
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          Loading…
+        </div>
+      ) : featuresQuery.error ? (
+        <div className="text-body" style={{ color: "var(--state-error)" }}>
+          {featuresQuery.error instanceof Error ? featuresQuery.error.message : "Failed to load feature settings"}
+        </div>
+      ) : (
+        <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+          {isAdmin ? (
+            <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+              <div className="min-w-0">
                 <span id={toggleLabelId} className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                  Automatic PR review
+                  {titleWithSemantics("Automatic PR review", justSaved)}
                 </span>
-                <Switch
-                  checked={switchOn}
-                  onCheckedChange={handleToggle}
-                  disabled={saving || (!serverEnabled && !appReviewReady)}
-                  aria-labelledby={toggleLabelId}
-                />
+                {serverEnabled && selectedReviewer ? (
+                  <button
+                    type="button"
+                    className="block rounded-[var(--radius-input)] border-0 bg-transparent p-0 text-left text-label focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}
+                    aria-expanded={setupOpen}
+                    onClick={() => setSetupOpen((open) => !open)}
+                  >
+                    Reviewer agent · {agentLabel(selectedReviewer)}
+                  </button>
+                ) : null}
               </div>
-            ) : (
-              <ContextReviewerReadOnly
-                contextReviewer={
-                  featuresQuery.data?.contextReviewer ?? { enabled: false, agentUuid: null, reviewerAgent: null }
-                }
+              <Switch
+                checked={switchOn}
+                onCheckedChange={handleToggle}
+                disabled={saving || (!serverEnabled && !appReviewReady)}
+                aria-labelledby={toggleLabelId}
               />
-            )}
+            </div>
+          ) : (
+            <ContextReviewerReadOnly
+              contextReviewer={
+                featuresQuery.data?.contextReviewer ?? { enabled: false, agentUuid: null, reviewerAgent: null }
+              }
+            />
+          )}
 
-            {isAdmin && switchOn ? (
-              <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-                <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
-                  Reviewer agent
+          {isAdmin && (setupOpen || reviewerMissing) ? (
+            <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+              <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
+                Reviewer agent
+              </span>
+              {agentsLoading ? (
+                <div className="text-body" style={{ color: "var(--fg-3)" }}>
+                  Loading agents…
+                </div>
+              ) : reviewerCandidates.length === 0 ? (
+                <div className="text-body" style={{ color: "var(--fg-3)" }}>
+                  No active non-human agents are available.
+                </div>
+              ) : (
+                <Select
+                  aria-label="Automatic PR review agent"
+                  value={serverEnabled && selectedIsCandidate ? (serverAgentUuid ?? "") : ""}
+                  onChange={handleSelectAgent}
+                  disabled={saving}
+                  options={[
+                    { value: "", label: "Select an agent", disabled: true },
+                    ...reviewerCandidates.map((agent) => ({
+                      value: agent.uuid,
+                      label: agentLabel(agent),
+                      hint: agent.name || undefined,
+                    })),
+                  ]}
+                  placeholder="Select an agent"
+                  searchable={reviewerCandidates.length > 6}
+                />
+              )}
+              {awaitingAgent ? (
+                <div className="text-label" style={{ color: "var(--fg-3)" }}>
+                  Select an agent to enable automatic PR review.
+                </div>
+              ) : null}
+              {reviewerMissing && reviewerCandidates.length > 0 ? (
+                <div className="text-label" style={{ color: "var(--fg-3)" }}>
+                  Current reviewer is not an active organization agent. Choose another agent, or turn automatic PR
+                  review off.
+                </div>
+              ) : null}
+              {managedAgentsQuery.error ? (
+                <div className="text-body" style={{ color: "var(--state-error)" }}>
+                  {managedAgentsQuery.error instanceof Error
+                    ? managedAgentsQuery.error.message
+                    : "Failed to load agents"}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {appReviewActionRequired ? (
+            <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+              <span className="text-body" style={{ color: "var(--warning)" }}>
+                Action required: the GitHub App installation must be active and grant Pull requests: write before it can
+                publish automatic review results.
+              </span>
+              {installation?.manageUrl ? (
+                <a className="text-label" href={installation.manageUrl} target="_blank" rel="noreferrer">
+                  Manage on GitHub
+                </a>
+              ) : (
+                <span className="text-label" style={{ color: "var(--fg-3)" }}>
+                  Connect the installation in Settings → Integrations → GitHub.
                 </span>
-                {agentsLoading ? (
-                  <div className="text-body" style={{ color: "var(--fg-3)" }}>
-                    Loading agents…
-                  </div>
-                ) : reviewerCandidates.length === 0 ? (
-                  <div className="text-body" style={{ color: "var(--fg-3)" }}>
-                    No active non-human agents are available.
-                  </div>
-                ) : (
-                  <Select
-                    aria-label="Context Reviewer agent"
-                    value={serverEnabled && selectedIsCandidate ? (serverAgentUuid ?? "") : ""}
-                    onChange={handleSelectAgent}
-                    disabled={saving}
-                    options={[
-                      { value: "", label: "Select an agent", disabled: true },
-                      ...reviewerCandidates.map((agent) => ({
-                        value: agent.uuid,
-                        label: agentLabel(agent),
-                        hint: agent.name || undefined,
-                      })),
-                    ]}
-                    placeholder="Select an agent"
-                    searchable={reviewerCandidates.length > 6}
-                  />
-                )}
-                {awaitingAgent ? (
-                  <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Select an agent to enable Context Reviewer.
-                  </div>
-                ) : null}
-                {reviewerMissing ? (
-                  <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Current reviewer is not an active organization agent. Choose another agent, or turn Context Reviewer
-                    off.
-                  </div>
-                ) : null}
-                {managedAgentsQuery.error ? (
-                  <div className="text-body" style={{ color: "var(--state-error)" }}>
-                    {managedAgentsQuery.error instanceof Error
-                      ? managedAgentsQuery.error.message
-                      : "Failed to load agents"}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+              )}
+            </div>
+          ) : null}
 
-            {appReviewActionRequired ? (
-              <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-                <span className="text-body" style={{ color: "var(--warning)" }}>
-                  Action required: the GitHub App installation must be active and grant Pull requests: write before it
-                  can publish Context Reviewer results.
-                </span>
-                {installation?.manageUrl ? (
-                  <a className="text-label" href={installation.manageUrl} target="_blank" rel="noreferrer">
-                    Manage on GitHub
-                  </a>
-                ) : (
-                  <span className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Connect the installation in Settings → GitHub.
-                  </span>
-                )}
-              </div>
-            ) : null}
-
-            {featuresMutation.error instanceof Error ? (
-              <div className="text-body" style={{ color: "var(--state-error)" }}>
-                {featuresMutation.error.message}
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
-    </Section>
+          {featuresMutation.error instanceof Error ? (
+            <div className="text-body" style={{ color: "var(--state-error)" }}>
+              {featuresMutation.error.message}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -485,25 +511,20 @@ function ContextReviewerReadOnly({
     : null;
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+    <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+      <div className="min-w-0">
         <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
           Automatic PR review
         </span>
-        <span className="text-label" style={{ color: contextReviewer.enabled ? "var(--success)" : "var(--fg-3)" }}>
-          {contextReviewer.enabled ? "On" : "Off"}
-        </span>
+        {contextReviewer.enabled ? (
+          <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+            {reviewerLabel ? `Reviewer agent · ${reviewerLabel}` : "Configured reviewer is no longer available."}
+          </div>
+        ) : null}
       </div>
-      {contextReviewer.enabled ? (
-        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-          <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
-            Reviewer agent
-          </span>
-          <span className="text-body" style={{ color: reviewerLabel ? "var(--fg)" : "var(--fg-3)" }}>
-            {reviewerLabel ?? "Configured reviewer is no longer available."}
-          </span>
-        </div>
-      ) : null}
+      <span className="text-label" style={{ color: contextReviewer.enabled ? "var(--success)" : "var(--fg-3)" }}>
+        {contextReviewer.enabled ? "On" : "Off"}
+      </span>
     </div>
   );
 }

@@ -42,13 +42,13 @@ import { cn } from "../lib/utils.js";
  * Sub-routes:
  *   Computers     — user-scoped: machines connected to First Tree (most-frequent
  *                   entry point — placed first)
- *   Context tree  — org-scoped Context Tree binding (repo / branch). Visible
- *                   to all members (read-only); only admins can edit.
+ *   Repositories  — provider-neutral Team code resources plus the separate
+ *                   org-scoped Context Tree binding. Visible to all members
+ *                   (read-only); only admins can edit.
  *   Resources     — org-scoped runtime resources (prompt / skill / mcp).
  *                   Visible to all members (read-only); only admins can manage.
- *   Integrations  — Team code access plus provider-specific GitHub/GitLab
- *                   connections. Visible to all members (read-only); only
- *                   admins can mutate them.
+ *   Integrations  — provider-specific GitHub/GitLab connections for events,
+ *                   identity, and webhooks.
  *   Setup         — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
  */
@@ -68,9 +68,9 @@ type Item = {
 const ITEMS: Item[] = [
   { to: "/settings/computers", label: "Computers" },
   {
-    to: "/settings/context",
-    label: "Context tree",
-    description: "The shared knowledge tree your team's agents read from.",
+    to: "/settings/repositories",
+    label: "Repositories",
+    description: "Manage code available to agents and the repository backing your team's Context Tree.",
   },
   {
     to: "/settings/resources",
@@ -80,15 +80,19 @@ const ITEMS: Item[] = [
   {
     to: "/settings/integrations",
     label: "Integrations",
-    description: "Choose the code agents can access and connect providers for events and identity.",
+    description: "Connect providers for webhooks, identity, and event routing.",
   },
   { to: "/settings/onboarding", label: "Setup" },
 ];
 
-export function SettingsLayout() {
+export function SettingsLayout({ activePathname }: { activePathname?: string } = {}) {
   const { onboardingCompletedAt, meLoaded } = useAuth();
   const viewport = useWorkspaceViewport();
-  const { pathname } = useLocation();
+  const { pathname: routePathname } = useLocation();
+  // DEV preview galleries render this real layout below their own route. Let
+  // those galleries supply the path whose heading/nav state they are showing;
+  // production always follows the actual router location.
+  const pathname = activePathname ?? routePathname;
   // Wait for `/me` to resolve before rendering the nav so role-dependent
   // entries such as Onboarding do not flicker during a fresh page load.
   if (!meLoaded) {
@@ -133,7 +137,12 @@ export function SettingsLayout() {
           }}
         >
           {visible.map((item) => (
-            <PillLink key={item.to} to={item.to} label={item.label} />
+            <PillLink
+              key={item.to}
+              to={item.to}
+              label={item.label}
+              activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
+            />
           ))}
         </nav>
         <div className="flex-1 min-w-0">
@@ -162,7 +171,12 @@ export function SettingsLayout() {
       >
         <nav className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
           {visible.map((item) => (
-            <SidebarLink key={item.to} to={item.to} label={item.label} />
+            <SidebarLink
+              key={item.to}
+              to={item.to}
+              label={item.label}
+              activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
+            />
           ))}
         </nav>
       </aside>
@@ -200,7 +214,7 @@ function SettingsHeader({ item }: { item: Item | undefined }) {
   );
 }
 
-function SidebarLink({ to, label }: { to: string; label: string }) {
+function SidebarLink({ to, label, activeOverride }: { to: string; label: string; activeOverride?: boolean }) {
   return (
     <NavLink
       to={to}
@@ -209,24 +223,27 @@ function SidebarLink({ to, label }: { to: string; label: string }) {
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       )}
     >
-      {({ isActive }) => (
-        <span
-          className={cn("block", isActive && "font-medium")}
-          style={{
-            padding: "var(--sp-2) var(--sp-3)",
-            borderRadius: "var(--radius-input)",
-            color: isActive ? "var(--fg)" : "var(--fg-3)",
-            background: isActive ? "var(--bg-hover)" : "transparent",
-          }}
-        >
-          {label}
-        </span>
-      )}
+      {({ isActive }) => {
+        const active = activeOverride ?? isActive;
+        return (
+          <span
+            className={cn("block", active && "font-medium")}
+            style={{
+              padding: "var(--sp-2) var(--sp-3)",
+              borderRadius: "var(--radius-input)",
+              color: active ? "var(--fg)" : "var(--fg-3)",
+              background: active ? "var(--bg-hover)" : "transparent",
+            }}
+          >
+            {label}
+          </span>
+        );
+      }}
     </NavLink>
   );
 }
 
-function PillLink({ to, label }: { to: string; label: string }) {
+function PillLink({ to, label, activeOverride }: { to: string; label: string; activeOverride?: boolean }) {
   return (
     <NavLink
       to={to}
@@ -235,19 +252,22 @@ function PillLink({ to, label }: { to: string; label: string }) {
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       )}
     >
-      {({ isActive }) => (
-        <span
-          className={cn("inline-block whitespace-nowrap", isActive && "font-medium")}
-          style={{
-            padding: "var(--sp-1_5) var(--sp-3)",
-            borderRadius: "var(--radius-input)",
-            color: isActive ? "var(--fg)" : "var(--fg-3)",
-            background: isActive ? "var(--bg-hover)" : "transparent",
-          }}
-        >
-          {label}
-        </span>
-      )}
+      {({ isActive }) => {
+        const active = activeOverride ?? isActive;
+        return (
+          <span
+            className={cn("inline-block whitespace-nowrap", active && "font-medium")}
+            style={{
+              padding: "var(--sp-1_5) var(--sp-3)",
+              borderRadius: "var(--radius-input)",
+              color: active ? "var(--fg)" : "var(--fg-3)",
+              background: active ? "var(--bg-hover)" : "transparent",
+            }}
+          >
+            {label}
+          </span>
+        );
+      }}
     </NavLink>
   );
 }

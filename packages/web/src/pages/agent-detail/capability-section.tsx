@@ -225,12 +225,11 @@ function AddCapabilityMenu(props: {
   onNavigateAway?: (to: string) => void;
 }) {
   const navigate = useNavigate();
-  // Team repos are managed in the provider-neutral code-access area on
-  // Settings → Integrations; the other resource types stay on Settings →
-  // Resources. The anchor makes this exit land on the shared section rather
-  // than implying that Team code belongs to the active GitHub connection.
-  const settingsPath = props.type === "repo" ? "/settings/integrations/github#code-access" : "/settings/resources";
-  const settingsLabel = props.type === "repo" ? "Manage Team code access" : "Manage in Settings → Resources";
+  // Team repos are managed on the provider-neutral Settings → Repositories
+  // page; the other resource types stay on Settings → Resources. The anchor
+  // makes this exit deterministic even from a deeply scrolled Agent page.
+  const settingsPath = props.type === "repo" ? "/settings/repositories#code-repositories" : "/settings/resources";
+  const settingsLabel = props.type === "repo" ? "Manage Team repositories" : "Manage in Settings → Resources";
   const goToSettings = () => (props.onNavigateAway ?? navigate)(settingsPath);
   return (
     <Popover
