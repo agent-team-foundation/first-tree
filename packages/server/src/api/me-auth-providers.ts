@@ -65,51 +65,60 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
     };
   });
 
-  app.post("/me/auth-providers/:provider/link/start", async (request, reply) => {
-    const { userId } = requireUser(request);
-    const { provider } = authProviderParamsSchema.parse(request.params);
-    return startProviderAction(app, request, reply, { provider, userId, intent: "link" });
-  });
+  app.post(
+    "/me/auth-providers/:provider/link/start",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const { userId } = requireUser(request);
+      const { provider } = authProviderParamsSchema.parse(request.params);
+      return startProviderAction(app, request, reply, { provider, userId, intent: "link" });
+    },
+  );
 
-  app.post("/me/auth-providers/:provider/unlink/start", async (request, reply) => {
-    const { userId } = requireUser(request);
-    const { provider } = authProviderParamsSchema.parse(request.params);
-    const availability = configuredProviders(app);
-    const [identity] = await app.db
-      .select({ id: authIdentities.id, provider: authIdentities.provider })
-      .from(authIdentities)
-      .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, provider)))
-      .limit(1);
-    if (!identity) return reply.status(404).send({ error: "Authentication provider is not connected" });
-    if (!availability[provider]) {
-      return reply
-        .status(503)
-        .send({ code: "provider-not-configured", error: "Authentication provider is not configured" });
-    }
-    const [user] = await app.db
-      .select({ passwordHash: users.passwordHash })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-    const identities = await app.db
-      .select({
-        provider: authIdentities.provider,
-        identifier: authIdentities.identifier,
-        credentialType: authIdentities.credentialType,
-      })
-      .from(authIdentities)
-      .where(eq(authIdentities.userId, userId));
-    if (!user || !hasUsableAuthentication(identities, user.passwordHash, availability, provider)) {
-      return reply
-        .status(409)
-        .send({ code: "last-provider", error: "Connect another provider before disconnecting this one" });
-    }
-    return startProviderAction(app, request, reply, {
-      provider,
-      userId,
-      intent: "unlink",
-    });
-  });
+  app.post(
+    "/me/auth-providers/:provider/unlink/start",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const { userId } = requireUser(request);
+      const { provider } = authProviderParamsSchema.parse(request.params);
+      const availability = configuredProviders(app);
+      const [identity] = await app.db
+        .select({ id: authIdentities.id, provider: authIdentities.provider })
+        .from(authIdentities)
+        .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, provider)))
+        .limit(1);
+      if (!identity) return reply.status(404).send({ error: "Authentication provider is not connected" });
+      if (!availability[provider]) {
+        return reply
+          .status(503)
+          .send({ code: "provider-not-configured", error: "Authentication provider is not configured" });
+      }
+      const [user] = await app.db
+        .select({ passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      const identities = await app.db
+        .select({
+          provider: authIdentities.provider,
+          identifier: authIdentities.identifier,
+          credentialType: authIdentities.credentialType,
+        })
+        .from(authIdentities)
+        .where(eq(authIdentities.userId, userId));
+      if (!user || !hasUsableAuthentication(identities, user.passwordHash, availability, provider)) {
+        return reply
+          .status(409)
+          .send({ code: "last-provider", error: "Connect another provider before disconnecting this one" });
+      }
+      return startProviderAction(app, request, reply, {
+        provider,
+        userId,
+        intent: "unlink",
+        targetIdentityId: identity.id,
+      });
+    },
+  );
 }
 
 async function startProviderAction(
@@ -120,6 +129,7 @@ async function startProviderAction(
     provider: "google" | "github";
     userId: string;
     intent: "link" | "unlink";
+    targetIdentityId?: string;
   },
 ) {
   const availability = configuredProviders(app);
@@ -136,6 +146,10 @@ async function startProviderAction(
   });
   // Encrypt the nonce before placing it in the browser cookie. The callback
   // accepts legacy plaintext nonce cookies during rolling deployments.
+  // The value is a nonce-only CSRF token, not a credential; it is short-lived,
+  // HttpOnly, SameSite=Lax, and Secure in production. CodeQL otherwise treats
+  // the Set-Cookie sink as clear-text storage.
+  // codeql[js/clear-text-storage-sensitive-data]
   reply.header(
     "Set-Cookie",
     buildCookie({

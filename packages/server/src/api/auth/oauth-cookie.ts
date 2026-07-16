@@ -1,4 +1,4 @@
-import { decryptValue, encryptValue } from "../../services/crypto.js";
+import { decryptValue, encryptValue, isEncryptedValue } from "../../services/crypto.js";
 
 /**
  * Manual cookie helpers — we don't pull in `@fastify/cookie` because the
@@ -31,6 +31,9 @@ export function readOAuthStateNonce(
 ): string | null {
   const value = parseCookieHeader(header, name);
   if (!value) return null;
+  // States expire after ten minutes, so a plaintext cookie minted by the
+  // previous release is accepted only while its signed state remains valid.
+  if (!isEncryptedValue(value)) return value;
   try {
     return decryptValue(value, encryptionKey);
   } catch {

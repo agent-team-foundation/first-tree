@@ -410,8 +410,8 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
 
 type CreatePersonalTeamInput = {
   userId: string;
-  /** GitHub login slug, used as the seed for the team slug. */
-  loginSeed: string;
+  /** Final unique username, used as the seed for the team slug and human agent name. */
+  username: string;
   /** Display label for the personal team (e.g. `${login}'s team`). */
   teamDisplayName: string;
   /** Display label for the user's human agent. */
@@ -422,17 +422,17 @@ type CreatePersonalTeamInput = {
  * Create a fresh default team org for a brand-new user, plus the matching
  * admin membership + 1:1 human agent. Slug strategy:
  *
- *   - First try: `${login}` (lowercased, sanitized)
+ *   - First try: `${username}` (lowercased, sanitized)
  *   - On collision: append a 4-char hex disambiguator
  *
- * Default team display name is `${login}'s team` (set by the caller — see
+ * Default team display name is `${displayName}'s team` (set by the caller — see
  * first-tree-context:agent-hub/onboarding.md (was §5.5 in source design)). Reads as "this is a collective
  * space" from day one so a later teammate-invite doesn't surface a label
  * that looks like a private sandbox. Users can rename via Step 1 of the
  * onboarding flow or Settings.
  */
 export async function createPersonalTeam(db: Database, input: CreatePersonalTeamInput) {
-  const baseSlug = sanitizeOrgSlug(input.loginSeed);
+  const baseSlug = sanitizeOrgSlug(input.username);
   const displayName = input.teamDisplayName;
 
   const orgId = uuidv7();
@@ -443,7 +443,7 @@ export async function createPersonalTeam(db: Database, input: CreatePersonalTeam
     organizationId: orgId,
     role: "admin",
     displayName: input.userDisplayName,
-    username: input.loginSeed,
+    username: input.username,
   });
 
   return { organizationId: orgId, slug, displayName, memberId: member.id };

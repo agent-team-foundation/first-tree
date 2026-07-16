@@ -63,7 +63,7 @@ describe("membership service edge coverage", () => {
     await expect(
       createPersonalTeam(fakeDb as never, {
         userId: "user-1",
-        loginSeed: "Retry User",
+        username: "Retry User",
         teamDisplayName: "Retry User's team",
         userDisplayName: "Retry User",
       }),

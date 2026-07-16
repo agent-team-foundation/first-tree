@@ -13,6 +13,7 @@ import {
   getStoredGithubAccessToken,
   hasUsableAuthentication,
   IdentityConflictError,
+  IdentityMismatchError,
   isUsableLegacyPasswordHash,
   LastIdentityError,
   linkExternalIdentity,
@@ -190,11 +191,13 @@ describe("auth identity extra coverage", () => {
     const secondDb = connectDatabase(databaseUrl);
     const firstUserId = uuidv7();
     const secondUserId = uuidv7();
+    const sameBindingUserId = uuidv7();
     const providerRaceUserId = uuidv7();
     try {
       await app.db.insert(users).values([
         { id: firstUserId, username: "link-race-a", passwordHash: "x", displayName: "Link Race A" },
         { id: secondUserId, username: "link-race-b", passwordHash: "x", displayName: "Link Race B" },
+        { id: sameBindingUserId, username: "link-race-same", passwordHash: "x", displayName: "Link Race Same" },
         { id: providerRaceUserId, username: "link-race-c", passwordHash: "x", displayName: "Link Race C" },
       ]);
       const sharedProfile = githubExternalProfile({
@@ -211,6 +214,16 @@ describe("auth identity extra coverage", () => {
       expect(subjectRace.filter((result) => result.status === "rejected")[0]?.reason).toBeInstanceOf(
         IdentityConflictError,
       );
+
+      const sameBindingProfile = githubExternalProfile({
+        id: "gh-concurrent-same-binding",
+        login: "same-binding",
+      });
+      const sameBindingRace = await Promise.all([
+        linkExternalIdentity(firstDb, sameBindingUserId, sameBindingProfile),
+        linkExternalIdentity(secondDb, sameBindingUserId, sameBindingProfile),
+      ]);
+      expect(sameBindingRace.sort()).toEqual(["already-linked", "linked"]);
 
       const providerRace = await Promise.allSettled([
         linkExternalIdentity(
@@ -238,6 +251,9 @@ describe("auth identity extra coverage", () => {
     const app = getApp();
     const oauthOnlyUserId = uuidv7();
     const legacyUserId = uuidv7();
+    const googleOnlyIdentityId = uuidv7();
+    const githubDisabledIdentityId = uuidv7();
+    const legacyIdentityId = uuidv7();
     await app.db.insert(users).values([
       { id: oauthOnlyUserId, username: "oauth-only", passwordHash: "x", displayName: "OAuth Only" },
       {
@@ -249,21 +265,21 @@ describe("auth identity extra coverage", () => {
     ]);
     await app.db.insert(authIdentities).values([
       {
-        id: uuidv7(),
+        id: googleOnlyIdentityId,
         userId: oauthOnlyUserId,
         provider: "google",
         identifier: "google-only",
         metadata: {},
       },
       {
-        id: uuidv7(),
+        id: githubDisabledIdentityId,
         userId: oauthOnlyUserId,
         provider: "github",
         identifier: "github-disabled",
         metadata: {},
       },
       {
-        id: uuidv7(),
+        id: legacyIdentityId,
         userId: legacyUserId,
         provider: "google",
         identifier: "google-legacy",
@@ -283,10 +299,47 @@ describe("auth identity extra coverage", () => {
     ).toBe(false);
 
     await expect(
-      unlinkExternalIdentity(app.db, oauthOnlyUserId, "google", "google-only", { google: true, github: false }),
+      unlinkExternalIdentity(
+        app.db,
+        oauthOnlyUserId,
+        "google",
+        "google-only",
+        { google: true, github: false },
+        googleOnlyIdentityId,
+      ),
     ).rejects.toBeInstanceOf(LastIdentityError);
+
+    const replacementIdentityId = uuidv7();
+    await app.db.delete(authIdentities).where(eq(authIdentities.id, googleOnlyIdentityId));
+    await app.db.insert(authIdentities).values({
+      id: replacementIdentityId,
+      userId: oauthOnlyUserId,
+      provider: "google",
+      identifier: "google-replacement",
+      metadata: {},
+    });
     await expect(
-      unlinkExternalIdentity(app.db, legacyUserId, "google", "google-legacy", { google: true, github: false }),
+      unlinkExternalIdentity(
+        app.db,
+        oauthOnlyUserId,
+        "google",
+        "google-replacement",
+        { google: true, github: true },
+        googleOnlyIdentityId,
+      ),
+    ).rejects.toBeInstanceOf(IdentityMismatchError);
+    await expect(
+      app.db.select().from(authIdentities).where(eq(authIdentities.id, replacementIdentityId)),
+    ).resolves.toHaveLength(1);
+    await expect(
+      unlinkExternalIdentity(
+        app.db,
+        legacyUserId,
+        "google",
+        "google-legacy",
+        { google: true, github: false },
+        legacyIdentityId,
+      ),
     ).resolves.toBeUndefined();
   });
 });

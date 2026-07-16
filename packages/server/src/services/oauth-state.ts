@@ -51,6 +51,7 @@ type StatePayload = {
   userId?: string;
   provider?: "google" | "github";
   oidcNonce?: string;
+  targetIdentityId?: string;
 };
 
 export type SignOAuthStateOptions = {
@@ -62,6 +63,7 @@ export type SignOAuthStateOptions = {
   userId?: string;
   provider?: "google" | "github";
   oidcNonce?: string;
+  targetIdentityId?: string;
 };
 
 /**
@@ -86,6 +88,7 @@ export async function signOAuthState(
   if (opts.userId) claims.userId = opts.userId;
   if (opts.provider) claims.provider = opts.provider;
   if (opts.oidcNonce) claims.oidcNonce = opts.oidcNonce;
+  if (opts.targetIdentityId) claims.targetIdentityId = opts.targetIdentityId;
   const token = await new SignJWT({ ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
@@ -116,6 +119,7 @@ export async function verifyOAuthState(
   userId?: string;
   provider?: "google" | "github";
   oidcNonce?: string;
+  targetIdentityId?: string;
 }> {
   const secret = new TextEncoder().encode(jwtSecret);
   let payload: StatePayload;
@@ -144,6 +148,9 @@ export async function verifyOAuthState(
   for (const value of [payload.userId, payload.oidcNonce]) {
     if (value !== undefined && typeof value !== "string") throw new Error("OAuth state payload malformed");
   }
+  if (payload.targetIdentityId !== undefined && typeof payload.targetIdentityId !== "string") {
+    throw new Error("OAuth state payload malformed");
+  }
 
   if (!cookieNonce || cookieNonce !== payload.nonce) {
     throw new Error("OAuth state nonce / cookie mismatch");
@@ -157,5 +164,6 @@ export async function verifyOAuthState(
     ...(payload.userId ? { userId: payload.userId } : {}),
     ...(payload.provider ? { provider: payload.provider } : {}),
     ...(payload.oidcNonce ? { oidcNonce: payload.oidcNonce } : {}),
+    ...(payload.targetIdentityId ? { targetIdentityId: payload.targetIdentityId } : {}),
   };
 }

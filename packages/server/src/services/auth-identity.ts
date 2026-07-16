@@ -174,7 +174,17 @@ export async function linkExternalIdentity(
       await updateIdentitySnapshot(db, userId, profile);
       return "already-linked";
     }
-    if (constraint === "uq_auth_identities_user_provider") throw new IdentityConflictError();
+    if (constraint === "uq_auth_identities_user_provider") {
+      const [current] = await db
+        .select({ identifier: authIdentities.identifier })
+        .from(authIdentities)
+        .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, profile.provider)))
+        .limit(1);
+      if (!current) throw error;
+      if (current.identifier !== profile.subject) throw new IdentityConflictError();
+      await updateIdentitySnapshot(db, userId, profile);
+      return "already-linked";
+    }
     throw error;
   }
 }
@@ -185,6 +195,7 @@ export async function unlinkExternalIdentity(
   provider: AuthProvider,
   reauthenticatedSubject: string,
   availability: AuthProviderAvailability,
+  targetIdentityId: string,
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const [user] = await tx
@@ -204,7 +215,9 @@ export async function unlinkExternalIdentity(
       .where(eq(authIdentities.userId, userId))
       .for("update");
     const target = identities.find((identity) => identity.provider === provider);
-    if (!target || target.identifier !== reauthenticatedSubject) throw new IdentityMismatchError();
+    if (!target || target.id !== targetIdentityId || target.identifier !== reauthenticatedSubject) {
+      throw new IdentityMismatchError();
+    }
     if (!hasUsableAuthentication(identities, user.passwordHash, availability, provider)) {
       throw new LastIdentityError();
     }

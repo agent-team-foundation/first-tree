@@ -1,9 +1,11 @@
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { readOAuthStateNonce } from "../api/auth/oauth-cookie.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { signTokensForUser } from "../services/auth.js";
+import { OAUTH_STATE_COOKIE, verifyOAuthState } from "../services/oauth-state.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestApp, useTestApp } from "./helpers.js";
 
@@ -79,22 +81,77 @@ describe("user authentication provider management", () => {
         metadata: {},
       },
     ]);
+    const googleConfig = app.config.oauth?.google;
     if (app.config.oauth) Reflect.deleteProperty(app.config.oauth, "google");
+    try {
+      const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/auth-providers/github/unlink/start",
+        headers: { authorization: `Bearer ${tokens.accessToken}` },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code: "last-provider" });
+      const [githubIdentity] = await app.db
+        .select({ id: authIdentities.id })
+        .from(authIdentities)
+        .where(eq(authIdentities.identifier, "github-config-change"));
+      expect(githubIdentity).toBeTruthy();
+    } finally {
+      if (app.config.oauth && googleConfig) Reflect.set(app.config.oauth, "google", googleConfig);
+    }
+  });
+
+  it("binds unlink reauthentication state to the identity row present at start", async () => {
+    const app = getApp();
+    const userId = uuidv7();
+    const googleIdentityId = uuidv7();
+    await app.db.insert(users).values({
+      id: userId,
+      username: "provider-unlink-state",
+      passwordHash: "x",
+      displayName: "Provider Unlink State",
+    });
+    await app.db.insert(authIdentities).values([
+      {
+        id: googleIdentityId,
+        userId,
+        provider: "google",
+        identifier: "google-unlink-state",
+        metadata: {},
+      },
+      {
+        id: uuidv7(),
+        userId,
+        provider: "github",
+        identifier: "github-unlink-state",
+        metadata: {},
+      },
+    ]);
     const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);
 
     const response = await app.inject({
       method: "POST",
-      url: "/api/v1/me/auth-providers/github/unlink/start",
+      url: "/api/v1/me/auth-providers/google/unlink/start",
       headers: { authorization: `Bearer ${tokens.accessToken}` },
     });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ code: "last-provider" });
-    const [githubIdentity] = await app.db
-      .select({ id: authIdentities.id })
-      .from(authIdentities)
-      .where(eq(authIdentities.identifier, "github-config-change"));
-    expect(githubIdentity).toBeTruthy();
+    expect(response.statusCode).toBe(200);
+    const state = new URL(response.json().redirectUrl).searchParams.get("state") ?? "";
+    const cookieNonce = readOAuthStateNonce(
+      response.headers["set-cookie"],
+      OAUTH_STATE_COOKIE,
+      app.config.secrets.encryptionKey,
+    );
+    const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
+    expect(verified).toMatchObject({
+      intent: "unlink",
+      provider: "google",
+      userId,
+      targetIdentityId: googleIdentityId,
+    });
   });
 });
 

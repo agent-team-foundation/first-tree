@@ -16,8 +16,7 @@ import {
   unlinkExternalIdentity,
 } from "../../services/auth-identity.js";
 import { buildGoogleAuthorizeUrl, exchangeGoogleCode } from "../../services/google-oauth.js";
-import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
-import { createPersonalTeam, ensureMembership, pickPrimaryMembership } from "../../services/membership.js";
+import { completeExternalAccountBootstrap, OAuthBootstrapError } from "../../services/oauth-bootstrap.js";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_STATE_COOKIE_MAX_AGE_S,
@@ -40,6 +39,10 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     });
     // Encrypt the short-lived CSRF nonce before placing it in the browser
     // cookie; the callback also accepts legacy plaintext nonce cookies.
+    // The value is a nonce-only CSRF token, not an access credential or
+    // provider identity; it is short-lived, HttpOnly, SameSite=Lax, and Secure
+    // in production. CodeQL otherwise treats the Set-Cookie sink as storage.
+    // codeql[js/clear-text-storage-sensitive-data]
     reply.header("Set-Cookie", stateCookie(nonce, OAUTH_STATE_COOKIE_MAX_AGE_S, app.config.secrets.encryptionKey));
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/google/callback`;
     app.log.info({ event: "oauth.start", provider: "google", intent: "sign-in" }, "OAuth flow started");
@@ -67,7 +70,12 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       app.log.warn({ err: error, event: "oauth.callback_rejected", provider: "google" }, "OAuth state rejected");
       return redirectError(reply, "state-expired");
     }
+    if (verified.provider && verified.provider !== "google") {
+      app.log.warn({ event: "oauth.callback_rejected", provider: "google", reason: "provider-mismatch" });
+      return redirectError(reply, "state-expired", verified.next);
+    }
     // Clear the single-use OAuth state cookie after validating it.
+    // codeql[js/clear-text-storage-sensitive-data]
     reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
@@ -94,10 +102,17 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
           app.log.info({ event: "identity.linked", provider: "google", userId: verified.userId }, "Identity linked");
           return reply.redirect("/user-settings?connection=google-linked", 302);
         }
-        await unlinkExternalIdentity(app.db, verified.userId, "google", profile.subject, {
-          google: Boolean(app.config.oauth?.google),
-          github: Boolean(app.config.oauth?.githubApp),
-        });
+        await unlinkExternalIdentity(
+          app.db,
+          verified.userId,
+          "google",
+          profile.subject,
+          {
+            google: Boolean(app.config.oauth?.google),
+            github: Boolean(app.config.oauth?.githubApp),
+          },
+          verified.targetIdentityId ?? "",
+        );
         app.log.info({ event: "identity.unlinked", provider: "google", userId: verified.userId }, "Identity unlinked");
         return reply.redirect("/user-settings?connection=google-unlinked", 302);
       } catch (error) {
@@ -122,62 +137,38 @@ async function completeGoogleSignIn(
   next: string,
 ) {
   const account = await findOrCreateUserFromExternalAccount(app.db, profile);
-  const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
-  let joinPath: "invite" | "solo" | "returning" = "returning";
-  let organizationId: string | null = null;
-  let orgPinned = false;
-  const inviteMatch = /^\/invite\/([^/?#]+)/.exec(next);
-
-  if (inviteMatch?.[1]) {
-    const invitation = await findActiveByToken(app.db, inviteMatch[1]);
-    if (!invitation) return redirectError(reply, "invite-invalid");
-    if (allowedOrganizationId && invitation.organizationId !== allowedOrganizationId) {
-      return redirectError(reply, "invite-not-allowed");
-    }
-    await ensureMembership(app.db, {
-      userId: account.userId,
-      organizationId: invitation.organizationId,
-      role: invitation.role === "admin" ? "admin" : "member",
-      displayName: account.displayName,
-      username: account.username,
-    });
-    await recordRedemption(app.db, {
-      invitationId: invitation.id,
-      userId: account.userId,
+  let bootstrap: Awaited<ReturnType<typeof completeExternalAccountBootstrap>>;
+  try {
+    bootstrap = await completeExternalAccountBootstrap(app.db, account, {
+      next,
+      allowedOrganizationId: app.config.access?.allowedOrganizationId ?? null,
       ip: request.ip,
       userAgent: request.headers["user-agent"] ?? null,
     });
-    organizationId = invitation.organizationId;
-    orgPinned = true;
-    joinPath = "invite";
-    next = "/";
-  } else {
-    const primary = await pickPrimaryMembership(app.db, account.userId);
-    if (primary) organizationId = primary.organizationId;
-    else {
-      if (allowedOrganizationId) return redirectError(reply, "invite-required");
-      const team = await createPersonalTeam(app.db, {
-        userId: account.userId,
-        loginSeed: account.username,
-        teamDisplayName: personalTeamDisplayName(account.displayName),
-        userDisplayName: account.displayName,
-      });
-      organizationId = team.organizationId;
-      orgPinned = true;
-      joinPath = "solo";
-      next = "/";
-    }
+  } catch (error) {
+    if (error instanceof OAuthBootstrapError) return redirectError(reply, error.code, next);
+    throw error;
   }
-
-  if (!organizationId) return redirectError(reply, "membership-unresolved");
+  if (bootstrap.teamCreated) {
+    app.log.info(
+      {
+        event: "onboarding.team_created",
+        provider: "google",
+        userId: account.userId,
+        organizationId: bootstrap.organizationId,
+        source: "oauth-bootstrap",
+      },
+      "onboarding funnel: team auto-created at OAuth bootstrap",
+    );
+  }
   const tokens = await signTokensForUser(app.config.secrets.jwtSecret, account.userId, app.config.auth);
   const fragment = new URLSearchParams({
     access: tokens.accessToken,
     refresh: tokens.refreshToken,
-    next,
-    joinPath,
-    org: organizationId,
-    ...(orgPinned ? { orgPinned: "1" } : {}),
+    next: bootstrap.next,
+    joinPath: bootstrap.joinPath,
+    org: bootstrap.organizationId,
+    ...(bootstrap.orgPinned ? { orgPinned: "1" } : {}),
   }).toString();
   app.log.info(
     {
@@ -202,8 +193,4 @@ function stateCookie(value: string, maxAge: number, encryptionKey: string): stri
 function redirectError(reply: FastifyReply, code: string, next = "/") {
   const fragment = new URLSearchParams({ error: code, next }).toString();
   return reply.redirect(`/auth/complete#${fragment}`, 302);
-}
-
-function personalTeamDisplayName(displayName: string): string {
-  return `${displayName.slice(0, 193)}'s team`;
 }
