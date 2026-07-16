@@ -1,6 +1,6 @@
 import {
   createMeChatSchema,
-  createTaskChatSchema,
+  createWebTaskChatSchema,
   listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   paginationQuerySchema,
@@ -119,7 +119,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     const scope = await requireOrgMembership(request, app.db);
     const rawBody = request.body;
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
-      const body = createTaskChatSchema.parse(rawBody);
+      const body = createWebTaskChatSchema.parse(rawBody);
       const initialRecipientAgentIds = [
         ...body.initialRecipientAgentIds,
         ...(await resolveAgentIdsByNameInOrg(app.db, scope.organizationId, body.initialRecipientNames)),

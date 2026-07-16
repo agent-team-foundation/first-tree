@@ -41,6 +41,11 @@ chats and the adjacent campaign quickstart handoff.
   legacy input that normalizes to `{ campaign: "production-scan", repoSlug }`;
   requests must not send both fields. An onboarding action still stamps
   completion like any onboarding kickoff.
+- Campaign action fields belong only to the signed-in Web DTO
+  (`CreateWebTaskChat`). The agent SDK's `CreateTaskChat` type and
+  `/api/v1/agent/chats` contract do not expose them; a raw agent request that
+  attempts either field is rejected rather than silently receiving Web-user
+  authority.
 
 ## Retired Contract Boundary
 

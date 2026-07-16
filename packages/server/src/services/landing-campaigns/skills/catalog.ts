@@ -75,6 +75,6 @@ export function buildLandingCampaignRetryBootstrap(skillSet: LandingCampaignSkil
   return [
     `${skillSet.retrySummary} ${repoUrl}`,
     "",
-    `${skillSet.agentDisplayName} — if a scan is already in progress in this chat, continue where you left off. Otherwise clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on ${repoUrl}.`,
+    `${skillSet.agentDisplayName} — if work for this campaign is already in progress in this chat, continue where you left off. Otherwise clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on ${repoUrl}.`,
   ].join("\n");
 }

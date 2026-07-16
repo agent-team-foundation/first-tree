@@ -37,6 +37,8 @@ message must be the same visible task text that the agent receives.
   Production Scan field all resolve to the same Production Scan launcher key.
 - A malformed report key degrades to explicit no-report instructions and never
   becomes a path or URL controlled by the caller.
+- The public agent SDK request type does not offer campaign action fields, and a
+  raw agent request containing either the current or legacy field returns 400.
 
 ## Expected Result
 

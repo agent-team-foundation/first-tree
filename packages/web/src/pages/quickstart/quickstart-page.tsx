@@ -141,9 +141,9 @@ export function QuickstartPage() {
   const actionStartedRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Already-onboarded users skip onboarding: hand the scan findings straight to
-  // their default agent as a task chat. The handoff flag is cleared only after
-  // the chat exists — on failure it stays, and re-clicking the fix link retries.
+  // Already-onboarded users skip onboarding: hand the campaign result straight
+  // to their default agent as a task chat. The handoff flag is cleared only
+  // after the chat exists, so reopening the action link can retry a failure.
   const startActionChat = useCallback(async () => {
     if (!actionHandoff || !actionCampaign || actionStartedRef.current) return;
     actionStartedRef.current = true;
@@ -151,7 +151,7 @@ export function QuickstartPage() {
     try {
       const { agent } = await getNewChatDefaultCandidates({});
       if (!agent) {
-        throw new Error("No connected agent yet. Connect your computer, then open the fix link again.");
+        throw new Error("No connected agent yet. Connect your computer, then open this campaign action link again.");
       }
       const created = await createMeTaskChat({
         mode: "task",
