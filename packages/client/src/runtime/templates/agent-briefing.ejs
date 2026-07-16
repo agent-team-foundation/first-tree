@@ -517,11 +517,9 @@ gap only after an actual command failure.<% } %>
 
 ## First Tree Family
 
-The generated Context Tree Policy above is the always-present baseline. The
-skills below load on demand: each skill's `description` field drives
-progressive disclosure when a task mentions its domain. For general /
-harness skills (`tdoc`, `review`, `simplify`, `update-config`,
-…) trust the auto-injected list.
+The generated Context Tree Policy is always present. Skills below load on
+demand from their `description`; trust auto-injected routing for general
+harness skills (`tdoc`, `review`, `simplify`, `update-config`, …).
 
 | Skill | Load when |
 |---|---|
@@ -536,11 +534,9 @@ harness skills (`tdoc`, `review`, `simplify`, `update-config`,
 
 ## First Tree Family
 
-These First Tree skills are installed in every workspace. Each row's
-`description` drives progressive disclosure. If the task is to build the
-team's Context Tree from readable sources, load `first-tree-seed`. If a
-read/write task needs a tree that is not bound yet, use the Tree Location
-guidance above to surface/setup/seed first.
+These skills install in every workspace and route from their `description`.
+For tree construction load `first-tree-seed`; if a read/write task has no
+binding, follow the Tree Location guidance before proceeding.
 
 | Skill | Load when |
 |---|---|

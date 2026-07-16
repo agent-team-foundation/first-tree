@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -48,17 +48,17 @@ function setup(id: string) {
   return { currentCase, paths, sourceRepoPath };
 }
 
-function runAllCapabilities(sourceRepoPath: string): void {
+function runAllCapabilities(sourceRepoPath: string, eventPath?: string, expectWebObserveFailure = false): void {
+  if (eventPath !== undefined) mkdirSync(dirname(eventPath), { recursive: true });
   for (const surface of ["cli", "web"]) {
     for (const capability of ["build", "run", "drive", "observe", "measure", "reset"]) {
-      const result = runCommand(
-        process.execPath,
-        ["tools/product.mjs", "harness", surface, capability],
-        sourceRepoPath,
-      );
-      if (!(surface === "web" && capability === "observe" && result.exitCode === 42)) {
-        assertCommandOk(result);
-      }
+      const result = spawnSync(process.execPath, ["tools/product.mjs", "harness", surface, capability], {
+        cwd: sourceRepoPath,
+        encoding: "utf8",
+        env: eventPath === undefined ? process.env : { ...process.env, NORTHSTAR_EVENT_PATH: eventPath },
+      });
+      const expectedExitCode = expectWebObserveFailure && surface === "web" && capability === "observe" ? 42 : 0;
+      expect(result.status, result.stderr).toBe(expectedExitCode);
     }
   }
 }
@@ -83,28 +83,46 @@ function appendModelEvidence(paths: ReturnType<typeof createRunPaths>, finalText
   });
 }
 
+function gradeBlockedReport(reportLines: readonly string[]) {
+  const { currentCase, paths, sourceRepoPath } = setup("first-tree-qa-readiness-blocked");
+  runAllCapabilities(sourceRepoPath, undefined, true);
+  writeText(join(paths.workspacePath, "qa-artifacts", "run-context.md"), "# Run Context\n");
+  writeText(join(paths.workspacePath, "qa-artifacts", "report.md"), reportLines.join("\n"));
+  appendModelEvidence(
+    paths,
+    "Web observer unavailable. Evidence is in product-events.jsonl; measured latency was 17 ms.",
+  );
+  const validation = validateFixture(paths, sourceRepoPath);
+  return {
+    currentCase,
+    metrics: deriveMetrics(readEvents(paths.eventsPath), currentCase, validation, 0, paths),
+  };
+}
+
 describe("first-tree-qa deterministic grader", () => {
   it("passes a complete readiness matrix followed by plan and real CLI behavior", () => {
     const { currentCase, paths, sourceRepoPath } = setup("first-tree-qa-ready-then-scope");
     assertCommandOk(runCommand(process.execPath, ["--test"], sourceRepoPath));
     expect(existsSync(join(paths.workspacePath, "qa-artifacts", "product-events.jsonl"))).toBe(false);
-    runAllCapabilities(sourceRepoPath);
-    writeText(join(paths.workspacePath, "qa-artifacts", "run-context.md"), "# Run Context\n");
-    writeText(join(paths.workspacePath, "qa-artifacts", "plan.md"), "# QA Plan\n");
+    const nestedArtifacts = join(paths.workspacePath, "qa-artifacts", "northstar-cli-status");
+    runAllCapabilities(sourceRepoPath, join(nestedArtifacts, "evidence", "readiness-events.jsonl"));
+    writeText(
+      join(nestedArtifacts, "run-context.md"),
+      "# Run Context\n\n## Scoped execution\n\nValidate the CLI status boundary.\n",
+    );
     const task = spawnSync(process.execPath, ["tools/product.mjs", "task", "cli", "status"], {
       cwd: sourceRepoPath,
       encoding: "utf8",
       env: {
         ...process.env,
-        NORTHSTAR_EVENT_PATH: join(paths.workspacePath, "qa-artifacts", "status-events.jsonl"),
+        NORTHSTAR_EVENT_PATH: join(nestedArtifacts, "evidence", "status-events.jsonl"),
       },
     });
     expect(task.status).toBe(0);
     writeText(
-      join(paths.workspacePath, "qa-artifacts", "report.md"),
+      join(nestedArtifacts, "report.md"),
       [
-        "# QA Report",
-        "Status: PASS",
+        "# PASS — Northstar CLI status",
         "Evidence: product-events.jsonl and Northstar CLI status healthy (jobs=3).",
         "Performance: latency 17 ms.",
         "Case disposition: no-change.",
@@ -124,13 +142,16 @@ describe("first-tree-qa deterministic grader", () => {
 
   it("passes a blocked readiness matrix without planning or task execution", () => {
     const { currentCase, paths, sourceRepoPath } = setup("first-tree-qa-readiness-blocked");
-    runAllCapabilities(sourceRepoPath);
-    writeText(join(paths.workspacePath, "qa-artifacts", "run-context.md"), "# Run Context\n");
+    runAllCapabilities(sourceRepoPath, undefined, true);
     writeText(
       join(paths.workspacePath, "qa-artifacts", "report.md"),
       [
         "# QA Report",
-        "Status: BLOCKED",
+        "- Status: `BLOCKED`",
+        "## Target facts",
+        "Northstar ships CLI and Web surfaces.",
+        "## Provisional readiness checklist",
+        "All twelve capability cells were attempted.",
         "Evidence: product-events.jsonl records web:observe as unavailable.",
         "Performance: CLI latency 17 ms; Web latency 29 ms.",
         "Case disposition: no-change.",
@@ -147,5 +168,35 @@ describe("first-tree-qa deterministic grader", () => {
     expect(metrics.taskRan).toBe(false);
     expect(metrics.sourceRepoChanged).toBe(false);
     expect(casePassed(currentCase, metrics)).toBe(true);
+  });
+
+  it("rejects an unresolved report template even when other outcome evidence exists", () => {
+    const { currentCase, metrics } = gradeBlockedReport([
+      "# QA Report",
+      "## Status",
+      "`PASS` | `FAIL` | `BLOCKED` | `INCONCLUSIVE`",
+      "Evidence: product-events.jsonl records web:observe as unavailable.",
+      "Performance: latency 17 ms.",
+      "## Case Disposition",
+      "`no-change` | `candidate-new-case` | `candidate-case-update` | `move-to-product-test` | `move-to-skill-eval` | `merge-or-retire`",
+    ]);
+
+    expect(metrics.expectedStatusObserved).toBe(false);
+    expect(metrics.dispositionObserved).toBe(false);
+    expect(casePassed(currentCase, metrics)).toBe(false);
+  });
+
+  it("rejects reports that select multiple statuses or dispositions", () => {
+    const { currentCase, metrics } = gradeBlockedReport([
+      "# QA Report",
+      "Status: BLOCKED | FAIL",
+      "Evidence: product-events.jsonl records web:observe as unavailable.",
+      "Performance: latency 17 ms.",
+      "Case disposition: no-change | candidate-new-case",
+    ]);
+
+    expect(metrics.expectedStatusObserved).toBe(false);
+    expect(metrics.dispositionObserved).toBe(false);
+    expect(casePassed(currentCase, metrics)).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { runCommand } from "../../core/commands.js";
 import { findStringValue, isRecord } from "../../core/events.js";
@@ -137,15 +137,104 @@ function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
 }
 
+function artifactFiles(root: string, suffix: string): readonly string[] {
+  if (!existsSync(root)) return [];
+  const files: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) files.push(...artifactFiles(path, suffix));
+    if (entry.isFile() && entry.name.endsWith(suffix)) files.push(path);
+  }
+  return files.sort();
+}
+
 function markdownArtifacts(artifacts: string): readonly string[] {
-  if (!existsSync(artifacts)) return [];
-  return readdirSync(artifacts, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => join(artifacts, entry.name));
+  return artifactFiles(artifacts, ".md");
 }
 
 function matchingArtifact(paths: readonly string[], pattern: RegExp): string | null {
-  return paths.find((path) => pattern.test(path)) ?? null;
+  return paths.find((path) => pattern.test(basename(path))) ?? null;
+}
+
+function matchingPlanArtifact(paths: readonly string[]): string | null {
+  return (
+    paths.find((path) => {
+      if (/(?:plan|scope)/iu.test(basename(path))) return true;
+      return /^#{1,6}\s*(?:formal\s+execution\s+scope|scoped\s+execution|qa\s+plan)\b/imu.test(
+        readFileSync(path, "utf8"),
+      );
+    }) ?? null
+  );
+}
+
+function matchingRunContextArtifact(paths: readonly string[]): string | null {
+  return (
+    paths.find((path) => {
+      if (/(?:run-context|readiness|matrix)/iu.test(basename(path))) return true;
+      return /^#{1,6}\s*(?:target(?:\s+and\s+harness|\s+facts)|provisional\s+readiness\s+checklist|readiness\s+(?:decision|result))\b/imu.test(
+        readFileSync(path, "utf8"),
+      );
+    }) ?? null
+  );
+}
+
+const REPORT_STATUSES = ["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"] as const;
+const REPORT_DISPOSITIONS = [
+  "no-change",
+  "candidate-new-case",
+  "candidate-case-update",
+  "move-to-product-test",
+  "move-to-skill-eval",
+  "merge-or-retire",
+] as const;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function reportFieldCandidates(reportText: string, field: "disposition" | "status"): readonly string[] {
+  const label =
+    field === "status" ? /^(?:QA\s+)?status(?:\s*:\s*(.*))?$/iu : /^(?:QA\s+)?case\s+disposition(?:\s*:\s*(.*))?$/iu;
+  const lines = reportText.split("\n");
+  const candidates: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (field === "status") {
+      const statusHeading = /^#{1,6}\s+(PASS|FAIL|BLOCKED|INCONCLUSIVE)(?:\b|\s*[-—:])/iu.exec(
+        (lines[index] ?? "").trim(),
+      );
+      if (statusHeading?.[1] !== undefined) candidates.push(statusHeading[1]);
+    }
+    const normalized = (lines[index] ?? "")
+      .trim()
+      .replace(/^[-+*]\s+/u, "")
+      .replace(/^#{1,6}\s*/u, "")
+      .replace(/[*_`]/gu, "");
+    const match = label.exec(normalized);
+    if (match === null) continue;
+    const inline = match[1]?.trim();
+    if (inline) {
+      candidates.push(inline);
+      continue;
+    }
+    const next = lines.slice(index + 1).find((line) => line.trim().length > 0);
+    if (next !== undefined) candidates.push(next.trim().replace(/[*_`]/gu, ""));
+  }
+  return candidates;
+}
+
+function selectedReportValue<const TValue extends string>(
+  reportText: string,
+  field: "disposition" | "status",
+  values: readonly TValue[],
+): TValue | null {
+  const selected = new Set<TValue>();
+  for (const candidate of reportFieldCandidates(reportText, field)) {
+    for (const value of values) {
+      const token = new RegExp(`(?:^|[^a-z-])${escapeRegExp(value)}(?=$|[^a-z-])`, "iu");
+      if (token.test(candidate)) selected.add(value);
+    }
+  }
+  return selected.size === 1 ? ([...selected][0] ?? null) : null;
 }
 
 export function deriveMetrics(
@@ -156,11 +245,7 @@ export function deriveMetrics(
   paths: RunPaths,
 ): EvalMetrics {
   const artifacts = join(paths.workspacePath, "qa-artifacts");
-  const productEvents = existsSync(artifacts)
-    ? readdirSync(artifacts, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-        .flatMap((entry) => readProductEvents(join(artifacts, entry.name)))
-    : [];
+  const productEvents = artifactFiles(artifacts, ".jsonl").flatMap(readProductEvents);
   const attemptedCapabilities = sortedUnique(
     productEvents.map(capabilityKey).filter((value): value is string => value !== null),
   );
@@ -178,8 +263,8 @@ export function deriveMetrics(
   );
   const readinessComplete = successfulCapabilities.length === QA_SURFACES.length * QA_CAPABILITIES.length;
   const artifactMarkdown = markdownArtifacts(artifacts);
-  const runContextPath = matchingArtifact(artifactMarkdown, /(?:run-context|readiness|matrix)/iu);
-  const planPath = matchingArtifact(artifactMarkdown, /(?:plan|scope)/iu);
+  const runContextPath = matchingRunContextArtifact(artifactMarkdown);
+  const planPath = matchingPlanArtifact(artifactMarkdown);
   const reportPath = matchingArtifact(artifactMarkdown, /report/iu);
   const planExists = planPath !== null && existsSync(planPath);
   const reportExists = reportPath !== null && existsSync(reportPath);
@@ -205,9 +290,10 @@ export function deriveMetrics(
 
   return {
     attemptedCapabilities,
-    dispositionObserved: /\bno-change\b/iu.test(combined),
+    dispositionObserved:
+      selectedReportValue(reportText, "disposition", REPORT_DISPOSITIONS) === evalCase.expected.disposition,
     evidenceObserved: /product-events\.jsonl|evidence|artifact/iu.test(combined),
-    expectedStatusObserved: new RegExp(`\\b${evalCase.expected.status}\\b`, "u").test(combined),
+    expectedStatusObserved: selectedReportValue(reportText, "status", REPORT_STATUSES) === evalCase.expected.status,
     failedCapabilities,
     finalResponse: response,
     fixtureValidationOk: fixtureValidation.ok,

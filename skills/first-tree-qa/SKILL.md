@@ -49,7 +49,8 @@ with evidence instead of pretending the requested validation ran.
 
 After `QA READY`, translate the request into a focused validation question and choose the tests, QA cases, product paths,
 data, failure branches, performance work, and evidence needed to answer it. Cover direct behavior and credible adjacent
-risk without turning every request into an exhaustive certification.
+risk without turning every request into an exhaustive certification. Record this formal execution scope before running
+any task behavior.
 
 For an unscoped request such as "QA this repository," run full-system QA: repository-supported test suites, every product
 surface, critical cross-surface journeys, installation and recovery paths, and risk-based performance and exploratory
@@ -72,7 +73,9 @@ findings, performance observations, gaps, and limitations. A `PASS` never extend
 
 Put one case disposition in the final report for every run: `no-change`, `candidate-new-case`,
 `candidate-case-update`, `move-to-product-test`, `move-to-skill-eval`, or `merge-or-retire`. Do not edit the committed
-case library during the run.
+case library during the run. Use `no-change` when coverage already sits at the right layer; recommend a move only for an
+existing committed QA case that belongs elsewhere. A move does not describe where newly validated behavior already has
+coverage. Existing correct product-test coverage with no QA case to migrate is `no-change`, not `move-to-product-test`.
 
 ## QA Case Maintenance
 
