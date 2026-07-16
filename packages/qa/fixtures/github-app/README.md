@@ -27,7 +27,9 @@ delivery needs those extra endpoints mocked plus a following chat — out of sco
 
 ## Enabling the App in the QA run cell
 
-The server's App config block is all-or-nothing — set every field together or the server rejects it at boot:
+The five core credentials (id, client id/secret, private key, webhook secret) are an atomic block — set them together or
+the server rejects the config at boot. `_SLUG` is separate: optional at boot, required only for `install-url` (the recipe
+sets it because it exercises that route).
 
 ```
 FIRST_TREE_GITHUB_APP_ID=123456

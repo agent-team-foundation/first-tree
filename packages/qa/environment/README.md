@@ -49,9 +49,10 @@ configured App. A real App/webhook secret is often unavailable in an isolated ce
 `BLOCKED`, or mock them to validate First Tree's own request/parse/verify logic. Reusable assets live in
 `fixtures/github-app/` (mock REST API + webhook payloads + full recipe).
 
-- The App config block is all-or-nothing: set every `FIRST_TREE_GITHUB_APP_*` field together (id, client id/secret,
-  private key, webhook secret; plus `_SLUG` for install-url) or the server rejects it at boot. A clean boot omits the
-  "GitHub App not configured" log line and the webhook route stops returning its 501 stub.
+- The five core credentials — `FIRST_TREE_GITHUB_APP_ID`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY`,
+  `_WEBHOOK_SECRET` — are an atomic block: set them together or the server rejects the config at boot. `_SLUG` is separate
+  — optional at boot, required only for `install-url`. A clean boot omits the "GitHub App not configured" log line and the
+  webhook route stops returning its 501 stub.
 - Generate a throwaway PKCS#8 key at run time (`openssl genpkey -algorithm RSA`); never commit one. Pass the multi-line
   PEM via a shell export, or a quoted `--env-file` value (Node 22.13+ supports quoted multi-line env values) — the export
   just avoids the quoting/escaping fuss.
