@@ -97,6 +97,7 @@ const DEFAULT_SKILL_NAMES = [
   "first-tree-write",
   "context-tree-review",
   "context-tree-audit",
+  "first-tree-qa",
 ] as const;
 
 function node(title: string, body: string, extraFrontmatter = ""): string {

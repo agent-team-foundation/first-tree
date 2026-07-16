@@ -236,4 +236,5 @@ export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree-file-bug",
   "context-tree-review",
   "context-tree-audit",
+  "first-tree-qa",
 ] as const;

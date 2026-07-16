@@ -35,6 +35,10 @@ const SKILL_BY_PATH: readonly {
     skill: "context-tree-review",
   },
   {
+    paths: ["skills/first-tree-qa/", "packages/qa/", "packages/skill-evals/src/suites/first-tree-qa/"],
+    skill: "first-tree-qa",
+  },
+  {
     paths: ["skills/first-tree-read/", "packages/skill-evals/src/suites/first-tree-read/"],
     skill: "first-tree-read",
   },
@@ -125,6 +129,7 @@ function addAllImplementedGateRecommendations(recommendations: Map<string, EvalR
     "first-tree-welcome",
     "context-tree-review",
     "context-tree-audit",
+    "first-tree-qa",
   ] as const) {
     addRecommendation(recommendations, {
       command: gateCommand(skill),

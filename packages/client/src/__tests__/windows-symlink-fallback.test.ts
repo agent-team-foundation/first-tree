@@ -24,6 +24,7 @@ const CORE_SKILLS = [
   "first-tree-welcome",
   "first-tree-seed",
   "first-tree-file-bug",
+  "first-tree-qa",
   "first-tree-read",
   "first-tree-write",
 ] as const;

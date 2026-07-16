@@ -1,10 +1,12 @@
 # QA Plan
 
+Create only after the complete harness is `QA READY`.
+
 ## Target
 
-- Object:
-- Ref:
+- Object/ref:
 - Request:
+- Ready run context:
 
 ## Validation Question
 
@@ -12,24 +14,19 @@ State the single question this run must answer.
 
 ## Scope
 
-- In:
-- Out:
-- Selected cases:
-- Task-specific checks:
+- In-scope surfaces and journeys:
+- Out of scope:
+- Selected tests and QA cases:
+- Task-specific and exploratory checks:
+- Data, identities, roles, and reset points:
 
-## Run Cell
+## Evidence And Performance
 
-- Run root:
-- Source worktree:
-- Services:
-- Data setup:
-- Provider/auth readiness:
+- Evidence needed:
+- Deep performance protocol, if required:
 
-## Evidence Needed
+## Limits And Stop Conditions
 
-Name the evidence that would make the conclusion credible.
-
-## Stop Conditions
-
+- Resource/time limits:
 - `BLOCKED` if:
 - `INCONCLUSIVE` if:

@@ -1,6 +1,7 @@
 # Environment Recipes
 
-Formal QA runs use a disposable run cell so validation does not mutate the operator's checkout or shared local services.
+Formal First Tree QA uses a complete, disposable Docker-backed harness so validation does not mutate the operator's
+checkout or shared services.
 
 ## Temporary Source Worktree
 
@@ -14,55 +15,29 @@ git clone --bare --no-hardlinks <source-repo> "$RUN_ROOT_REAL/repo.git"
 git --git-dir="$RUN_ROOT_REAL/repo.git" worktree add --detach "$RUN_ROOT_REAL/source" <target-ref>
 ```
 
-`realpath` is intentional: on macOS `/tmp` normally resolves through `/private/tmp`, and git writes absolute gitdir paths
-for worktrees. Mounting the unresolved path into Docker can leave containerized git commands pointing at a path that does
-not exist.
+`realpath` matters on macOS because `/tmp` normally resolves through `/private/tmp` and git stores absolute worktree
+paths. Mount the resolved root at the same absolute path inside containers.
 
-This recipe materializes committed refs only. Uncommitted changes in a developer checkout are silently omitted unless
-they are first committed, stashed into a ref, or otherwise materialized as the `<target-ref>`. If the requested target
-depends on uncommitted local state that cannot be reproduced in the run cell, mark the run `BLOCKED` or explicitly report
-the limitation instead of claiming full validation.
+This recipe materializes committed refs only. If requested behavior depends on unreproducible local state, report the
+limitation or `BLOCKED`; never silently test a different target.
 
-Mount the resolved run root at the same absolute path inside containers when host and container artifact paths need to
-match.
+## Complete Docker Run Cell
 
-## Docker Run Cell
+- Use a unique Compose/project prefix and run-local networks, volumes, homes, ports, and data.
+- Build and start the complete First Tree product surface: final CLI/package artifacts, production Server/Web image and
+  Postgres, documentation, portable artifacts, runtime/daemon paths, and other shipped surfaces discovered at the ref.
+- Bind public endpoints to loopback and discover dynamic host ports after startup.
+- Do not expose Postgres, artifacts, provider homes, runtime homes, or host credential stores.
+- Use native or platform bridges for artifacts that cannot execute credibly in Linux Docker; keep their state run-local.
+- Define reset and cleanup for every surface before declaring readiness.
 
-Use Docker for product services that are part of the tested behavior.
-
-Principles:
-
-- run only the services required by the selected QA scope;
-- keep state in run-local volumes or run-root subdirectories;
-- use a unique Compose project name per run;
-- bind web/server ports to loopback by default and discover actual ports after startup;
-- do not expose Postgres, artifact directories, provider homes, runtime homes, or host credential stores.
-
-Common service shapes:
-
-- CLI or docs behavior: source worktree plus a command runner.
-- API behavior: Postgres plus server.
-- Web behavior: Postgres, server, web, and browser tooling.
-- Runtime behavior: runtime runner plus provider bridge, only when real agent behavior is in scope.
+The task scope is chosen after the cell reaches `QA READY`; it does not decide which formal surfaces are initialized.
 
 ## Provider Bridge
 
-Provider state can be an input to runtime QA, but it must be bridged deliberately.
+Classify provider readiness as `binary-detected`, `binary-launchable`, or `one-turn-ready`. A provider-backed product
+operation requires `one-turn-ready`; a binary probe alone cannot prove real agent behavior.
 
-Readiness levels:
-
-- `binary-detected`: a provider binary or bundled source is detected.
-- `binary-launchable`: the provider binary can start, or provider doctor/smoke checks pass.
-- `one-turn-ready`: provider auth and runtime session state are sufficient for a real agent turn.
-
-Real agent behavior cases require `one-turn-ready`.
-
-Boundary:
-
-- discover host provider state first;
-- copy or read-only mount only the minimum credential material needed for the run;
-- use a Linux-compatible provider binary inside Docker;
-- do not assume a macOS or Windows host binary can run inside the container;
-- do not mount the full host provider home as writable shared state.
-
-Missing provider/auth readiness is `BLOCKED`, not product `FAIL`.
+Discover host state first, bridge only the minimum required material, prefer read-only copies/mounts, and use a compatible
+runtime binary for the target platform. Never mount a full host provider home writable. Missing auth, entitlement,
+compatible binaries, or authorized turn capacity is `BLOCKED`, not product `FAIL`.

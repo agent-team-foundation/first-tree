@@ -1,46 +1,37 @@
 # Plan Briefing
 
-Use this briefing to turn a QA task request into a run-local QA plan.
+Use this briefing only after the complete harness is `QA READY`. Turn the request into a focused, run-local validation
+plan without redesigning or shrinking the harness.
 
 ## Input
 
-A task request should identify the target, objective, scope, context, risk focus, environment constraints, and reporting
-expectations. It does not need to be a complete test plan.
-
-If a human provides a test plan, treat it as input context. The run-local QA plan is still the artifact of record for the
-current run.
-
-Ask a human only when the next step depends on a product or scope decision that cannot be settled from the request,
-repository, Context Tree, or a conservative default. Missing setup facts can usually be recorded as assumptions or stop
-conditions instead.
+Use the original request, exact target, completed `run-context.md`, repository/Context Tree context, existing tests, and
+the case library. Ask a human only when a product or scope decision cannot be resolved from those inputs or a safe
+conservative default.
 
 ## Steps
 
-- Read the required task context before selecting cases.
-- Identify the product surfaces and behavior boundaries that must be validated.
+- State one validation question.
+- Select product and cross-surface paths that answer it, including credible adjacent risk.
 - Select relevant cases from `cases/` and add task-specific exploratory checks when needed.
-- Decide the run cell shape and which services are actually required.
-- Decide data setup, provider/auth readiness, and external-access needs.
-- Decide which observability capabilities are necessary to support the conclusion.
-- Record known limitations and out-of-scope areas before executing.
+- Choose data, identities, roles, failure/recovery branches, and reset points from the ready harness.
+- Choose real-product evidence and any deeper performance protocol required by the task or risk.
+- Record out-of-scope areas, resource limits, and stop conditions.
+
+For an unscoped request such as "QA this repository," plan full-system QA: all repository-supported suites, every formal
+surface, critical cross-surface journeys, installation/recovery, persistence/restart, performance characterization, and
+risk-based exploration.
 
 ## Plan Shape
 
-Keep the plan short enough to guide execution:
+Keep the plan concise:
 
-- target object and ref;
-- validation question;
-- product surfaces in scope;
-- selected reusable cases and task-specific checks;
-- run-cell shape and required services;
-- data setup and provider/auth readiness;
-- evidence needed for a credible conclusion;
-- out-of-scope areas and known limits;
-- stop conditions that produce `BLOCKED` or `INCONCLUSIVE`.
+- target, request, and validation question;
+- reference to the ready run context;
+- in-scope surfaces, journeys, tests, cases, and task-specific checks;
+- data and identity setup for the selected scenarios;
+- evidence and performance work needed for the conclusion;
+- out-of-scope behavior, limits, and `BLOCKED`/`INCONCLUSIVE` stop conditions.
 
-## Data Boundary
-
-Environment setup creates a known baseline. Case-specific data preparation creates the state needed to answer the
-validation question. If data creation is itself the tested behavior, create that data through the product entry point.
-If data is only a precondition, direct fixture or database setup is acceptable inside the isolated QA database when it is
-recorded as setup rather than product evidence.
+If data creation is itself under test, create it through the product. Direct fixture or database setup is acceptable only
+as a recorded precondition and is not product-behavior evidence.

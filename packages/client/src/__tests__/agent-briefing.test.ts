@@ -332,7 +332,7 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
       buildAgentBriefing(makeOpts({ contextTreePath: "/tree" })),
       "# Skills (First Tree Managed)",
     );
-    expect(familyMap).toContain("The generated Context Tree Policy above is the always-present baseline");
+    expect(familyMap).toContain("The generated Context Tree Policy is always present");
     expect(familyMap).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(familyMap).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(familyMap).toMatch(/\|\s*`context-tree-review`\s*\| a Cloud Context Reviewer wake-up/);
@@ -346,12 +346,13 @@ describe("buildAgentBriefing — Context Tree policy and skill routing", () => {
     expect(treelessFamily).toContain("first-tree-seed");
     expect(treelessFamily).toContain("first-tree-file-bug");
     expect(treelessFamily).not.toContain("first-tree-gitlab");
+    expect(treelessFamily).toContain("first-tree-qa");
     expect(treelessFamily).toMatch(/\|\s*`first-tree-read`\s*\| read relevant Context Tree files before acting/);
     expect(treelessFamily).toMatch(/\|\s*`first-tree-write`\s*\| reflect a concrete source artifact/);
     expect(treelessFamily).toMatch(/\|\s*`context-tree-review`\s*\| a Cloud Context Reviewer wake-up/);
     expect(treelessFamily).toMatch(/\|\s*`context-tree-audit`\s*\| a human explicitly asks to audit/);
     expect(treelessFamily).toMatch(/without a binding, the audit fails closed/);
-    expect(treelessFamily).toContain("These First Tree skills are installed in every workspace");
+    expect(treelessFamily).toContain("These skills install in every workspace");
     expect(treelessFamily).not.toContain("# Required Reading");
   });
 });

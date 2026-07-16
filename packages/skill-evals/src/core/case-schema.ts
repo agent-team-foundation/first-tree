@@ -5,6 +5,7 @@ export const SHIPPED_SKILLS = [
   "first-tree-welcome",
   "context-tree-review",
   "context-tree-audit",
+  "first-tree-qa",
 ] as const;
 
 // Skills that ship in the runtime but are intentionally NOT modeled by this

@@ -9,6 +9,7 @@ quota.
 ```bash
 pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
@@ -106,6 +107,12 @@ isolated `HOME` / temp directory, an environment allowlist, and failing command
 guards for common external side-effect commands such as `git`, `gh`,
 `first-tree`, `curl`, and `wget`. This is a guardrail for the text judge; it is
 not a substitute for a future direct no-tools judge API.
+
+`eval:gate -- --suite first-tree-qa` runs two complete-harness cases. One
+blocks readiness when the Web observer is unavailable; the other proves that
+both CLI and Web reach QA readiness before the requested CLI behavior is
+planned and executed. Both grade source immutability, evidence, performance,
+and final case disposition.
 
 `eval:gate -- --suite first-tree-read` runs the live tested-agent gate for
 `first-tree-read`. It covers the existing read cases through the shared gate

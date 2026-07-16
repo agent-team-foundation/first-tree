@@ -517,11 +517,9 @@ gap only after an actual command failure.<% } %>
 
 ## First Tree Family
 
-The generated Context Tree Policy above is the always-present baseline. The
-skills below load on demand: each skill's `description` field drives
-progressive disclosure when a task mentions its domain. For general /
-harness skills (`tdoc`, `review`, `simplify`, `update-config`,
-…) trust the auto-injected list.
+The generated Context Tree Policy is always present. Skills below load on
+demand from their `description`; trust auto-injected routing for general
+harness skills (`tdoc`, `review`, `simplify`, `update-config`, …).
 
 | Skill | Load when |
 |---|---|
@@ -529,17 +527,16 @@ harness skills (`tdoc`, `review`, `simplify`, `update-config`,
 | `first-tree-read`    | read relevant Context Tree files before acting from task / path / feature signals |
 | `first-tree-write`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | `first-tree-seed`    | bootstrap the team's Context Tree from readable sources (declared repos or a local Git repo / GitHub URL supplied in chat); create + bind if none exists, fill a bound-but-empty tree, or continue Phase 2 in the same setup chat after Phase 1 merges |
+| `first-tree-qa` | test, validate, reproduce, release-qualify, or assess performance by establishing the complete product harness before task-specific execution |
 | `first-tree-file-bug` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's `gh` CLI |
 | `context-tree-review` | a Cloud Context Reviewer wake-up or an explicit request to review, approve, or request changes on a Context Tree pull request |
 | `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems |<% } else { %>
 
 ## First Tree Family
 
-These First Tree skills are installed in every workspace. Each row's
-`description` drives progressive disclosure. If the task is to build the
-team's Context Tree from readable sources, load `first-tree-seed`. If a
-read/write task needs a tree that is not bound yet, use the Tree Location
-guidance above to surface/setup/seed first.
+These skills install in every workspace and route from their `description`.
+For tree construction load `first-tree-seed`; if a read/write task has no
+binding, follow the Tree Location guidance before proceeding.
 
 | Skill | Load when |
 |---|---|
@@ -547,6 +544,7 @@ guidance above to surface/setup/seed first.
 | `first-tree-read`    | read relevant Context Tree files before acting from task / path / feature signals |
 | `first-tree-write`   | reflect a concrete source artifact (PR, design doc, meeting note, review thread, or pasted source) into the Context Tree |
 | `first-tree-seed` | set up the team's Context Tree from readable sources — declared workspace repos or a local Git repo / GitHub URL supplied in chat; creates + binds the tree if none exists, fills a bound-but-empty tree, and can continue Phase 2 in the same setup chat after Phase 1 merges |
+| `first-tree-qa` | test, validate, reproduce, release-qualify, or assess performance by establishing the complete product harness before task-specific execution |
 | `first-tree-file-bug` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's `gh` CLI |
 | `context-tree-review` | a Cloud Context Reviewer wake-up or an explicit request to review, approve, or request changes on a Context Tree pull request |
 | `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems; without a binding, the audit fails closed |<% } %>

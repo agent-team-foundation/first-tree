@@ -1,39 +1,35 @@
 # Execute Briefing
 
-Use this briefing to execute a planned QA run and report the result.
+Use this briefing after `QA READY` and a run-local plan exist.
 
 ## Execution Loop
 
-- Execute against the isolated run cell described in the QA plan.
-- Prefer black-box product entry points: CLI, HTTP API, web UI, daemon/runtime behavior, provider behavior, and persisted
-  state.
-- Use source reading to understand risk and interpret behavior, not as the only evidence for `PASS`.
-- Adjust the plan when live facts contradict assumptions, and record the reason.
-- Leave a traceable record of what ran, why it changed from the plan, and where the supporting evidence lives.
-- Stop early with `BLOCKED` when required setup, data, credentials, or provider readiness cannot be established.
-- Stop with `INCONCLUSIVE` when validation ran but evidence is incomplete, unstable, interrupted, or contradictory.
+- Confirm the relevant harness capabilities and reset paths remain ready.
+- Exercise final artifacts through CLI, HTTP, Web, SDK/client, daemon/runtime, provider, installer, and persisted-state
+  boundaries selected by the plan.
+- Use source and internal logs for risk discovery and diagnosis, not as the only evidence for product behavior.
+- Verify meaningful preconditions and use independent readback or restart boundaries when needed.
+- Save evidence and record findings as they occur; do not reconstruct the run from memory at the end.
+- Adapt when live facts contradict the plan, recording what changed and why.
+- Continue safe planned work after a finding while the harness remains trustworthy.
+- Use `BLOCKED` for unmet external/setup preconditions and `INCONCLUSIVE` for partial, unstable, interrupted, or
+  contradictory evidence.
 
-## Evidence
+## Evidence And Reporting
 
-Choose the evidence needed for the task. Useful evidence can include command output, service logs, API responses, database
-observations, screenshots, browser console output, provider smoke checks, or runtime turns. No single evidence type is
-required for every run.
+Connect each material conclusion to evidence that supports it. Summarize sensitive evidence and retain only safe local
+artifact paths.
 
-The report should connect each important conclusion to the evidence that supports it. If the evidence is too sensitive
-to quote, summarize it and keep the local artifact path available for the operator.
+Return one overall status: `PASS`, `FAIL`, `BLOCKED`, or `INCONCLUSIVE`. Include:
 
-## Reporting
+- exact scope and target;
+- harness readiness and environment limits;
+- evidence and reproducible findings;
+- performance observations relevant to readiness and the task;
+- skipped, blocked, unstable, or out-of-scope areas;
+- artifact paths and cleanup state;
+- final case disposition: `no-change`, `candidate-new-case`, `candidate-case-update`, `move-to-product-test`,
+  `move-to-skill-eval`, or `merge-or-retire`.
 
-Use one overall status: `PASS`, `FAIL`, `BLOCKED`, or `INCONCLUSIVE`.
-
-A useful report includes:
-
-- status and one-sentence conclusion;
-- scope actually covered;
-- evidence that supports the conclusion;
-- findings, including any reproducible product bugs;
-- limitations and skipped areas;
-- artifact paths.
-
-For `FAIL`, produce a bug artifact with reproduction steps, expected behavior, actual behavior, evidence, impact, and
-suspected owner or dispatch direction. Do not turn the bug artifact into an implementation plan.
+For `FAIL`, produce a bug artifact with reproduction, expected/actual behavior, evidence, impact, and likely dispatch
+surface, but no implementation plan. Record case feedback without editing the committed case library during the run.
