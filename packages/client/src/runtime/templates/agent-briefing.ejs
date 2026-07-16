@@ -3,7 +3,17 @@
   every session start. NEVER copy this file, in whole or in part, back into
   any prompt configuration.
 
-  Where each section comes from, and where to edit it:
+  Where each section comes from, and where to edit it:<% if (legacyPrompt) { %>
+    # Agent Prompt (legacy merged) → this agent's prompt configuration,
+                      served as ONE merged blob by a First Tree server that
+                      predates per-section provenance; team prompt resources,
+                      binding-managed agent prompt overrides (both managed in
+                      Cloud → Org Settings → Resources, never via prompt
+                      set), and this agent's own editable prompt fragment
+                      are indistinguishable inside it;
+                      read (own fragment only):  <%- bin %> agent config prompt show <agent> --raw
+                      write (own fragment only): <%- bin %> agent config prompt set <agent> -f <file>
+                      NEVER copy the merged section back into prompt set<% } else { %>
     # Team Prompt   → team prompt resources (Cloud → Org Settings →
                       Resources); managed by team admins; read-only here
     # Agent Prompt  → this agent's own prompt fragment;
@@ -11,7 +21,7 @@
                       write: <%- bin %> agent config prompt set <agent> -f <file>
     # Agent Prompt Overrides → agent-specific resource bindings that
                       replace team prompts; managed in Cloud, NOT via
-                      prompt set
+                      prompt set<% } %>
   Every other section is First Tree Managed — injected by the runtime and
   not editable through any prompt configuration.
 ====================================================================== -->
@@ -50,7 +60,17 @@ prompt.*<% for (const row of agentPromptOverrideRows) { %>
 
 <%- row.body %><% } %><% } %><% if (legacyPrompt) { %>
 
-## Agent-Specific Prompt
+# Agent Prompt (legacy merged — may include team-shared content)
+
+*Source: this agent's prompt configuration, served as one merged blob by a
+First Tree server that predates per-section provenance. Team prompt
+resources (managed by team admins), binding-managed agent prompt overrides
+(NOT editable with `prompt set` — both managed in Cloud → Org Settings →
+Resources), and this agent's own editable prompt fragment are
+indistinguishable here. Read the editable fragment alone with
+`<%- bin %> agent config prompt show <%- agentId %> --raw`; replace it with
+`<%- bin %> agent config prompt set <%- agentId %>`. Do NOT copy any of this
+merged section into your per-agent prompt.*
 
 <%- legacyPrompt %><% } %>
 
