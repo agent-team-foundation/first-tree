@@ -41,6 +41,8 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("first-tree github context-review submit");
     expect(skill).toContain('--run "$CONTEXT_REVIEW_RUN_ID"');
     expect(skill).toContain("Never call local `gh api .../reviews`");
+    expect(skill).toContain("The review workflow does not depend on");
+    expect(skill).toContain("strict per-head merge gate");
     expect(cloud).toContain("context-tree-review");
     expect(cloud).not.toContain("gh pr review");
     expect(cloud).not.toContain("tree verify");

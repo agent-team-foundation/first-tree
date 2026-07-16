@@ -162,9 +162,11 @@ review`, or another GitHub write as a fallback.
 GitHub does not provide a current-head compare-and-set for review creation. If
 a new push lands after the final view, Cloud may accept a review bound only to
 the inspected old commit; report that exact reviewed commit and let the
-synchronize event create a fresh run. Repository governance must dismiss stale
-approvals (or provide an equivalent current-head rule); this skill neither
-changes nor guarantees that policy.
+synchronize event create a fresh run. The review workflow does not depend on
+repository merge-policy settings. If the repository treats App approval as a
+strict per-head merge gate, its governance must dismiss stale approvals on
+push or provide an equivalent current-head rule; this skill neither changes
+nor guarantees that policy.
 
 Permission upgrade, missing installation/repository access, stale head,
 invalid run/session, and unknown GitHub delivery all fail closed. Never retry
