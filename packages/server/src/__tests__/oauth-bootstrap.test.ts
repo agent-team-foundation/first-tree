@@ -1,6 +1,7 @@
 import { googleExternalProfile } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { connectDatabase } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
@@ -79,5 +80,63 @@ describe("provider-neutral OAuth bootstrap", () => {
     });
 
     expect(result).toMatchObject({ joinPath: "solo", next: "/", teamCreated: true });
+  });
+
+  it("serializes concurrent first sign-ins into one personal team graph", async () => {
+    const app = getApp();
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const firstDb = connectDatabase(databaseUrl);
+    const secondDb = connectDatabase(databaseUrl);
+    const bootstrapInput = {
+      next: "/",
+      allowedOrganizationId: null,
+      ip: null,
+      userAgent: "oauth-bootstrap-concurrency-test",
+    };
+    try {
+      const results = await Promise.all(
+        [firstDb, secondDb].map(async (db, index) => {
+          const account = await findOrCreateUserFromExternalAccount(
+            db,
+            googleExternalProfile({
+              sub: "google-bootstrap-concurrent-subject",
+              email: `bootstrap-race-${index}@example.com`,
+              emailVerified: true,
+              name: `Bootstrap Race ${index}`,
+            }),
+          );
+          return completeExternalAccountBootstrap(db, account, bootstrapInput);
+        }),
+      );
+
+      expect(results[0]?.account.userId).toBe(results[1]?.account.userId);
+      expect(results[0]?.organizationId).toBe(results[1]?.organizationId);
+      expect(results.map((result) => result.teamCreated).sort()).toEqual([false, true]);
+
+      const [identity] = await app.db
+        .select({ userId: authIdentities.userId })
+        .from(authIdentities)
+        .where(eq(authIdentities.identifier, "google-bootstrap-concurrent-subject"));
+      expect(identity?.userId).toBe(results[0]?.account.userId);
+      const userTeams = await app.db
+        .select({ organizationId: members.organizationId })
+        .from(members)
+        .where(eq(members.userId, results[0]?.account.userId ?? ""));
+      expect(userTeams).toHaveLength(1);
+      const teams = await app.db
+        .select({ id: organizations.id })
+        .from(organizations)
+        .where(eq(organizations.id, results[0]?.organizationId ?? ""));
+      expect(teams).toHaveLength(1);
+      const humanAgents = await app.db
+        .select({ uuid: agents.uuid })
+        .from(agents)
+        .where(eq(agents.organizationId, results[0]?.organizationId ?? ""));
+      expect(humanAgents).toHaveLength(1);
+    } finally {
+      await firstDb.end();
+      await secondDb.end();
+    }
   });
 });
