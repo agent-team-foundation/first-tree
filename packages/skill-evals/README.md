@@ -9,12 +9,15 @@ quota.
 ```bash
 pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit
 pnpm --filter @first-tree/skill-evals eval:periodic
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed
@@ -105,6 +108,12 @@ guards for common external side-effect commands such as `git`, `gh`,
 `first-tree`, `curl`, and `wget`. This is a guardrail for the text judge; it is
 not a substitute for a future direct no-tools judge API.
 
+`eval:gate -- --suite first-tree-qa` runs two complete-harness cases. One
+blocks readiness when the Web observer is unavailable; the other proves that
+both CLI and Web reach QA readiness before the requested CLI behavior is
+planned and executed. Both grade source immutability, evidence, performance,
+and final case disposition.
+
 `eval:gate -- --suite first-tree-read` runs the live tested-agent gate for
 `first-tree-read`. It covers the existing read cases through the shared gate
 runner:
@@ -122,6 +131,25 @@ Tree skill family, binds a deterministic Context Tree fixture, and then runs
 the same read trigger oracle. This covers the generated-briefing and
 skill-topology boundary only; real Cloud chat delivery, GitHub webhooks, and
 live First Tree runtime E2E remain outside skill evals.
+
+`eval:gate -- --suite context-tree-review` runs the read-only Context Tree pull
+request review gate. Its deterministic GitHub shim permits only PR state reads,
+identity lookup, and one body-file review submission; all other `gh` commands
+remain blocked. The cases require validator-first ordering and cover structural
+failure, semantic failure, ready approval, draft deferral, archive-only scope,
+human authority, self-approval, and stale-head suppression. The fixture records
+the real source-tree validator result before the sandboxed model run so the
+agent receives the exact structural verdict without contacting GitHub.
+
+`eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
+against deterministic local default-branch fixtures. It requires the Audit
+skill to own routing exclusively, fixes discovery to a clean detached remote
+HEAD snapshot, replays a real source validator result before semantic reads,
+and records every forge or human artifact through mocks. Cases cover a
+mechanical focused PR, a strong evidence-backed write handoff, weak
+cross-domain escalation, locked-decision authority, report-only zero mutation,
+and missing-binding fail-closed behavior. This gate never performs a real
+GitHub or First Tree external write.
 
 `eval:gate -- --suite first-tree-write` runs the live tested-agent gate for
 `first-tree-write`. It covers the minimum source-boundary cases:

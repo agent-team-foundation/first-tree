@@ -1,3 +1,4 @@
+import { type AuthProviderAvailability, authProviderAvailabilitySchema } from "@first-tree/shared";
 import type { ChannelName } from "@first-tree/shared/channel";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client.js";
@@ -5,6 +6,7 @@ import { api } from "../api/client.js";
 type ServerBootstrapConfig = {
   channel: ChannelName | null;
   growthLandingPagesEnabled: boolean;
+  authProviders: AuthProviderAvailability;
 };
 
 /**
@@ -34,10 +36,19 @@ export function extractGrowthLandingPagesEnabled(data: unknown): boolean {
   return false;
 }
 
+export function extractAuthProviderAvailability(data: unknown): AuthProviderAvailability {
+  if (typeof data !== "object" || data === null || !("authProviders" in data)) {
+    return { google: false, github: false };
+  }
+  const result = authProviderAvailabilitySchema.safeParse(data.authProviders);
+  return result.success ? result.data : { google: false, github: false };
+}
+
 function extractServerBootstrapConfig(data: unknown): ServerBootstrapConfig {
   return {
     channel: extractChannel(data),
     growthLandingPagesEnabled: extractGrowthLandingPagesEnabled(data),
+    authProviders: extractAuthProviderAvailability(data),
   };
 }
 
@@ -98,4 +109,15 @@ export function useGrowthLandingPagesState(): { enabled: boolean; settled: boole
 
 export function useGrowthLandingPagesEnabled(): boolean {
   return useGrowthLandingPagesState().enabled;
+}
+
+export function useAuthProviderAvailabilityState(): {
+  providers: AuthProviderAvailability;
+  settled: boolean;
+} {
+  const { config, settled } = useServerBootstrapConfig();
+  return {
+    providers: config?.authProviders ?? { google: false, github: false },
+    settled,
+  };
 }

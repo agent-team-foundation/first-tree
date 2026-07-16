@@ -44,6 +44,18 @@ describe("skill eval selection", () => {
     ]);
   });
 
+  it("selects QA floor and gate for skill and package changes", () => {
+    const summary = selectSkillEvalRecommendations([
+      "skills/first-tree-qa/SKILL.md",
+      "packages/qa/templates/qa-report.md",
+    ]);
+
+    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
+      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-qa",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa",
+    ]);
+  });
+
   it("selects all implemented gates and quality when shared judge core changes", () => {
     const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/judge/schema.ts"]);
 
@@ -53,6 +65,9 @@ describe("skill eval selection", () => {
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome",
@@ -68,6 +83,9 @@ describe("skill eval selection", () => {
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-qa",
       "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
     ]);
   });
@@ -85,6 +103,20 @@ describe("skill eval selection", () => {
         reason:
           "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
         suite: "first-tree-read",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
+        suite: "context-tree-audit",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
+        suite: "context-tree-review",
       },
       {
         command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
@@ -106,6 +138,20 @@ describe("skill eval selection", () => {
         reason:
           "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
         suite: "first-tree-read",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
+        suite: "context-tree-audit",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
+        suite: "context-tree-review",
       },
       {
         command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",

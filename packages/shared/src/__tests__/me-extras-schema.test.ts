@@ -56,6 +56,23 @@ describe("kickoffOnboardingSchema", () => {
 
     expect(parsed.success).toBe(false);
   });
+
+  it("accepts one campaign action contract and rejects it alongside the legacy field", () => {
+    const base = { agentUuid: "agent-1", bootstrap: "Fix the findings." };
+    expect(
+      kickoffOnboardingSchema.parse({
+        ...base,
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/api" },
+      }).campaignAction,
+    ).toEqual({ campaign: "production-scan", repoSlug: "acme/api" });
+    expect(
+      kickoffOnboardingSchema.safeParse({
+        ...base,
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/api" },
+        scanFixRepoSlug: "acme/api",
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("treeSetupKickoffSchema", () => {

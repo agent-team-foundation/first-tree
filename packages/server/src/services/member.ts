@@ -11,6 +11,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { createAgent } from "./agent.js";
 import { forceDisconnect } from "./connection-manager.js";
+import { suspendGitlabLinksForMembership } from "./gitlab-identities.js";
 import { MEMBER_STATUSES, reactivateMembership } from "./membership.js";
 import * as presenceService from "./presence.js";
 import { recomputeWatchersForAgent, recomputeWatchersForMember } from "./watcher.js";
@@ -337,6 +338,7 @@ export async function deleteMember(db: Database, id: string, callerOrgId: string
     if (!deactivated) {
       throw new ConflictError(`Membership "${id}" is not active`);
     }
+    await suspendGitlabLinksForMembership(tx as unknown as Database, id);
     await tx
       .update(agents)
       .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })

@@ -118,6 +118,25 @@ function emitCodexTerminalProviderFailure(ctx: SessionContext, messagePreview: s
   });
 }
 
+function emitCodexRetryExhausted(ctx: SessionContext, messagePreview: string): void {
+  ctx.emitEvent({
+    kind: "error",
+    payload: {
+      source: "runtime",
+      message: encodeProviderRetryEventMessage({
+        event: "provider_retry_exhausted",
+        provider: "codex",
+        scope: "provider_turn",
+        category: "provider_capacity",
+        reasonCode: "provider_overloaded_exhausted",
+        replaySafety: "user_visible",
+        userSeverity: "error",
+        messagePreview,
+      }),
+    },
+  });
+}
+
 function emitClaudeProviderFailure(
   ctx: SessionContext,
   input: {
@@ -1965,6 +1984,56 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     expect(notice).toContain("credentials need attention");
     expect(notice).toContain("refresh token was revoked");
     expect(ackEntry).toHaveBeenCalledWith(21);
+    const [noticeOrder] = sendMessage.mock.invocationCallOrder;
+    const [ackOrder] = ackEntry.mock.invocationCallOrder;
+    if (noticeOrder === undefined || ackOrder === undefined) throw new Error("expected notice and ack order");
+    expect(noticeOrder).toBeLessThan(ackOrder);
+
+    await sm.shutdown();
+  });
+
+  it("posts a durable runtime notice before ACKing a Codex retry-exhausted turn once", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue({ id: "runtime-notice" });
+    const sdk = {
+      register: vi.fn(),
+      sendMessage,
+      sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
+    } as unknown as FirstTreeHubSDK;
+    let capturedCtx: SessionContext | undefined;
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      sdk,
+      handlerConfig: { workspaceRoot: "/tmp/test", runtimeProvider: "codex" },
+    });
+
+    await sm.dispatch(
+      mockEntry({ id: 27, chatId: "chat-codex-retry-exhausted", messageId: "msg-codex-retry-exhausted" }),
+    );
+    if (!capturedCtx || !capturedToken || !capturedMessage) throw new Error("delivery was not captured");
+
+    emitCodexRetryExhausted(capturedCtx, "Selected model is at capacity. Please try a different model.");
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_retry_exhausted",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(27);
     const [noticeOrder] = sendMessage.mock.invocationCallOrder;
     const [ackOrder] = ackEntry.mock.invocationCallOrder;
     if (noticeOrder === undefined || ackOrder === undefined) throw new Error("expected notice and ack order");

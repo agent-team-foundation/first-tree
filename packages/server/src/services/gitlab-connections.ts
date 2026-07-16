@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { GitlabConnectionSummary } from "@first-tree/shared";
+import type { GitlabConnectionSummary, GitlabReviewerMode } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
@@ -27,6 +27,36 @@ export function normalizeGitlabOrigin(raw: string): string {
 export function buildClaimReadyGitlabDeliveryId(connectionId: string, upstreamId: string): string {
   const digest = createHash("sha256").update(upstreamId).digest("base64url");
   return `${connectionId}:${digest}`;
+}
+
+export type DeclaredGitlabVersion = {
+  value: string;
+  supportsReviewerWebhooks: boolean;
+};
+
+/** Parse GitLab's documented `User-Agent: GitLab/<VERSION>` compatibility hint. */
+export function parseDeclaredGitlabVersion(userAgent: string | undefined): DeclaredGitlabVersion | null {
+  if (!userAgent) return null;
+  const match = /^gitlab\/((\d+)\.(\d+)(?:\.(\d+))?(?:[-+][0-9A-Za-z.-]+)?)$/i.exec(userAgent.trim());
+  if (!match) return null;
+  const major = Number(match[2]);
+  const minor = Number(match[3]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return null;
+  return {
+    value: match[1] ?? `${major}.${minor}`,
+    supportsReviewerWebhooks: major > 15 || (major === 15 && minor >= 3),
+  };
+}
+
+export function resolveGitlabReviewerMode(input: {
+  currentMode: GitlabReviewerMode;
+  declaredVersion: DeclaredGitlabVersion | null;
+  reviewerField: "valid" | "missing" | "invalid" | "not_applicable";
+}): GitlabReviewerMode {
+  if (input.currentMode === "reviewers" || input.reviewerField === "valid") return "reviewers";
+  if (input.declaredVersion?.supportsReviewerWebhooks) return "reviewers";
+  if (input.declaredVersion) return "assignee";
+  return input.currentMode;
 }
 
 type GitlabConnectionInput = {
@@ -92,7 +122,9 @@ export async function replaceGitlabConnection(
     const tx = rawTx as unknown as Database;
     await lockOrganization(tx, input.organizationId);
     const [current] = await tx
-      .select({ id: gitlabConnections.id })
+      .select({
+        id: gitlabConnections.id,
+      })
       .from(gitlabConnections)
       .where(eq(gitlabConnections.organizationId, input.organizationId))
       .for("update")
@@ -133,6 +165,10 @@ export async function regenerateGitlabConnectionBearer(
         lastValidInboundAt: null,
         lastProcessingFailureAt: null,
         lastProcessingFailureCode: null,
+        reviewerMode: "unknown",
+        lastObservedVersion: null,
+        lastReviewerSchemaAnomalyAt: null,
+        lastReviewerSchemaAnomalyCode: null,
         updatedByMemberId: memberId,
         updatedAt: new Date(),
       })
@@ -155,7 +191,9 @@ export async function deleteGitlabConnection(db: Database, connectionId: string)
 
     await lockOrganization(tx, candidate.organizationId);
     const [connection] = await tx
-      .select({ id: gitlabConnections.id })
+      .select({
+        id: gitlabConnections.id,
+      })
       .from(gitlabConnections)
       .where(
         and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.organizationId, candidate.organizationId)),
@@ -214,6 +252,41 @@ export async function markGitlabInboundSeen(db: Database, connectionId: string, 
     .where(and(eq(gitlabConnections.id, connectionId), eq(gitlabConnections.tokenHash, tokenHash)));
 }
 
+export async function markGitlabStableDeliveryObserved(db: Database, connectionId: string): Promise<void> {
+  await db
+    .update(gitlabConnections)
+    .set({
+      stableDeliveryObservedAt: sql`coalesce(${gitlabConnections.stableDeliveryObservedAt}, now())`,
+      updatedAt: new Date(),
+    })
+    .where(eq(gitlabConnections.id, connectionId));
+}
+
+/** Persist the declared version and one-way reviewer compatibility latch under the ingress fence. */
+export async function observeGitlabCompatibility(
+  db: Database,
+  connectionId: string,
+  input: { declaredVersion: string | null; reviewerMode: GitlabReviewerMode; reviewersValid: boolean },
+): Promise<void> {
+  await db
+    .update(gitlabConnections)
+    .set({
+      ...(input.declaredVersion ? { lastObservedVersion: input.declaredVersion } : {}),
+      reviewerMode: input.reviewerMode,
+      ...(input.reviewersValid ? { lastReviewerSchemaAnomalyAt: null, lastReviewerSchemaAnomalyCode: null } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(gitlabConnections.id, connectionId));
+}
+
+/** Actionable Settings signal; malformed payload never changes the reviewer mode. */
+export async function markGitlabReviewerSchemaAnomaly(db: Database, connectionId: string, code: string): Promise<void> {
+  await db
+    .update(gitlabConnections)
+    .set({ lastReviewerSchemaAnomalyAt: new Date(), lastReviewerSchemaAnomalyCode: code, updatedAt: new Date() })
+    .where(eq(gitlabConnections.id, connectionId));
+}
+
 export async function markGitlabProcessingFailure(
   db: Database,
   connectionId: string,
@@ -235,6 +308,13 @@ export async function getGitlabConnectionSummary(db: Database, connectionId: str
     displayName: connection.displayName,
     instanceOrigin: connection.instanceOrigin,
     endpointSeen: connection.endpointFirstSeenAt != null,
+    stableDeliveryObserved: connection.stableDeliveryObservedAt != null,
+    reviewerCapability: {
+      mode: connection.reviewerMode as GitlabReviewerMode,
+      lastObservedVersion: connection.lastObservedVersion,
+      lastSchemaAnomalyAt: connection.lastReviewerSchemaAnomalyAt?.toISOString() ?? null,
+      lastSchemaAnomalyCode: connection.lastReviewerSchemaAnomalyCode,
+    },
     health: {
       lastValidInboundAt: connection.lastValidInboundAt?.toISOString() ?? null,
       lastProcessingFailureAt: connection.lastProcessingFailureAt?.toISOString() ?? null,

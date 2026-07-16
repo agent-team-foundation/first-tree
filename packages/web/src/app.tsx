@@ -32,10 +32,13 @@ import { QuickstartPage } from "./pages/quickstart/quickstart-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
+import { SettingsGitlabPage } from "./pages/settings/gitlab.js";
+import { SettingsIntegrationsLayout } from "./pages/settings/integrations.js";
 import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsResourcesPage } from "./pages/settings/resources.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
+import { UserSettingsPage } from "./pages/user-settings.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -170,6 +173,7 @@ export function App() {
               {/* /signup retired — Continue with GitHub on /login covers signup. */}
               <Route path="/signup" element={<Navigate to="/login" replace />} />
               <Route path="/auth/github/complete" element={<OAuthCompletePage />} />
+              <Route path="/auth/complete" element={<OAuthCompletePage />} />
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
@@ -424,6 +428,7 @@ export function App() {
                       lives under /settings, not as a peer of the
                       people-and-agents view. */}
                   <Route path="team" element={<TeamPage />} />
+                  <Route path="user-settings" element={<UserSettingsPage />} />
 
                   {/* Settings master-detail. Team name editing lives in the
                       header-left TeamSwitcher, so settings only hosts setup
@@ -434,18 +439,22 @@ export function App() {
                     <Route path="context" element={<SettingsContextTreePage />} />
                     <Route path="resources" element={<SettingsResourcesPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
-                    <Route path="github" element={<SettingsGithubPage />} />
+                    <Route path="github" element={<Navigate to="/settings/integrations/github" replace />} />
+                    <Route path="integrations" element={<SettingsIntegrationsLayout />}>
+                      <Route index element={<Navigate to="github" replace />} />
+                      <Route path="github" element={<SettingsGithubPage />} />
+                      <Route path="gitlab" element={<SettingsGitlabPage />} />
+                    </Route>
                     <Route path="onboarding" element={<SettingsOnboardingPage />} />
                     {/* Old name was "setup" — keep the redirect so existing
                         in-app links / saved bookmarks keep working. */}
                     <Route path="setup" element={<Navigate to="/settings/onboarding" replace />} />
-                    <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
                   </Route>
 
                   {/* Backwards-compat redirects for old top-level + sub-tab routes */}
                   <Route path="agents" element={<Navigate to="/team" replace />} />
                   <Route path="clients" element={<Navigate to="/settings/computers" replace />} />
-                  <Route path="integrations" element={<Navigate to="/settings/computers" replace />} />
+                  <Route path="integrations" element={<Navigate to="/settings/integrations/github" replace />} />
                   <Route path="team/members" element={<Navigate to="/team" replace />} />
                   <Route path="team/agents" element={<Navigate to="/team" replace />} />
                   <Route path="team/invite" element={<Navigate to="/team" replace />} />

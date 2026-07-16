@@ -258,7 +258,11 @@ export type InstallationToken = {
 export async function mintInstallationToken(
   appJwt: string,
   installationId: number,
-  opts: { fetcher?: typeof fetch } = {},
+  opts: {
+    fetcher?: typeof fetch;
+    repositories?: readonly string[];
+    permissions?: Record<string, "read" | "write">;
+  } = {},
 ): Promise<InstallationToken> {
   const fetcher = opts.fetcher ?? fetch;
   const res = await fetcher(APP_INSTALLATION_TOKEN_URL(installationId), {
@@ -268,6 +272,10 @@ export async function mintInstallationToken(
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
     },
+    body:
+      opts.repositories || opts.permissions
+        ? JSON.stringify({ repositories: opts.repositories, permissions: opts.permissions })
+        : undefined,
   });
   if (!res.ok) {
     throw new GithubAppApiError(res.status, `GitHub App installation-token request failed (${res.status})`);
@@ -286,6 +294,138 @@ export async function mintInstallationToken(
     // distinction is degenerate; default to "all" so downstream code has
     // one fewer optional to thread through.
     repositorySelection: body.repository_selection ?? "all",
+  };
+}
+
+export type GithubPullRequestForReview = {
+  number: number;
+  state: "open" | "closed";
+  draft: boolean;
+  merged: boolean;
+  headSha: string;
+  htmlUrl: string;
+};
+
+export type GithubPullRequestReview = {
+  id: number;
+  htmlUrl: string;
+  actor: string;
+  commitId: string | null;
+  body: string;
+  state: string | null;
+};
+
+function pullRequestUrl(owner: string, repo: string, prNumber: number): string {
+  return `${REPOSITORY_URL(owner, repo)}/pulls/${prNumber}`;
+}
+
+function installationHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+export async function getPullRequestForReview(
+  installationToken: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<GithubPullRequestForReview> {
+  const res = await (opts.fetcher ?? fetch)(pullRequestUrl(owner, repo, prNumber), {
+    headers: installationHeaders(installationToken),
+  });
+  if (!res.ok) {
+    throw new GithubAppApiError(res.status, `GitHub pull request fetch failed (${res.status})`);
+  }
+  const body = (await res.json()) as {
+    number: number;
+    state: "open" | "closed";
+    draft?: boolean;
+    merged?: boolean;
+    merged_at?: string | null;
+    head: { sha: string };
+    html_url: string;
+  };
+  return {
+    number: body.number,
+    state: body.state,
+    draft: body.draft === true,
+    merged: body.merged === true || body.merged_at != null,
+    headSha: body.head.sha,
+    htmlUrl: body.html_url,
+  };
+}
+
+export async function createPullRequestReview(
+  installationToken: string,
+  input: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    commitId: string;
+    event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+    body: string;
+  },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<GithubPullRequestReview> {
+  const res = await (opts.fetcher ?? fetch)(`${pullRequestUrl(input.owner, input.repo, input.prNumber)}/reviews`, {
+    method: "POST",
+    headers: { ...installationHeaders(installationToken), "Content-Type": "application/json" },
+    body: JSON.stringify({ commit_id: input.commitId, event: input.event, body: input.body }),
+  });
+  if (!res.ok) {
+    throw new GithubAppApiError(res.status, `GitHub pull request review creation failed (${res.status})`);
+  }
+  return parsePullRequestReview(await res.json());
+}
+
+export async function listPullRequestReviewsForRun(
+  installationToken: string,
+  input: { owner: string; repo: string; prNumber: number; marker: string; appSlug: string },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<GithubPullRequestReview[]> {
+  const matches: GithubPullRequestReview[] = [];
+  for (let page = 1; ; page += 1) {
+    const pageParam = page === 1 ? "" : `&page=${page}`;
+    const res = await (opts.fetcher ?? fetch)(
+      `${pullRequestUrl(input.owner, input.repo, input.prNumber)}/reviews?per_page=100${pageParam}`,
+      { headers: installationHeaders(installationToken) },
+    );
+    if (!res.ok) {
+      throw new GithubAppApiError(res.status, `GitHub pull request review list failed (${res.status})`);
+    }
+    const reviews = (await res.json()) as unknown[];
+    matches.push(
+      ...reviews
+        .map(parsePullRequestReview)
+        .filter((review) => review.actor === `${input.appSlug}[bot]` && review.body.includes(input.marker)),
+    );
+    if (reviews.length < 100) return matches;
+  }
+}
+
+function parsePullRequestReview(value: unknown): GithubPullRequestReview {
+  const body = value as {
+    id: number;
+    html_url: string;
+    user?: { login?: string };
+    commit_id?: string | null;
+    body?: string | null;
+    state?: string | null;
+  };
+  if (!Number.isInteger(body.id) || !body.html_url || !body.user?.login) {
+    throw new GithubAppApiError(502, "GitHub pull request review response was malformed");
+  }
+  return {
+    id: body.id,
+    htmlUrl: body.html_url,
+    actor: body.user.login,
+    commitId: body.commit_id ?? null,
+    body: body.body ?? "",
+    state: body.state ?? null,
   };
 }
 

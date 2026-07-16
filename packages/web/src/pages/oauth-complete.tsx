@@ -11,8 +11,12 @@ import { markOnboardingResume } from "../utils/onboarding-flags.js";
  * minted in `packages/server/src/api/auth/github.ts` — keep in sync.
  */
 const CALLBACK_ERROR_COPY: Record<string, string> = {
-  "state-expired":
-    "This GitHub connection took too long or was already used. Head back and start the connection again.",
+  "state-expired": "This authentication request took too long or was already used. Head back and start again.",
+  "provider-not-configured": "This sign-in provider is not configured on this First Tree deployment.",
+  "provider-exchange-failed": "The sign-in provider did not accept the authentication handshake. Try again.",
+  "identity-conflict": "That external account already belongs to another First Tree user.",
+  "identity-mismatch": "You selected a different external account. Start again with the connected account.",
+  "last-provider": "Connect another sign-in method before disconnecting this one.",
   "github-exchange-failed": "GitHub didn't accept the sign-in handshake. Head back and try again in a moment.",
   "install-not-admin":
     "The GitHub App was installed, but connecting it needs an admin of the First Tree team it was started from. Ask a team admin to finish the connection from Settings → GitHub.",

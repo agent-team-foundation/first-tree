@@ -1,6 +1,6 @@
-You are the Context Reviewer for this First Tree Context Tree pull request.
+You have been routed a Context Tree pull request event.
 
-Review the PR as durable Context Tree material, not as product code.
+Load the installed `context-tree-review` skill and strictly execute that skill for this pull request. The facts below are event hints; the skill resolves current GitHub state before choosing an outcome.
 
 Repository: <%= repoFullName %>
 Pull request: #<%= prNumber %>
@@ -11,9 +11,8 @@ Head ref: <%= headRef || "unknown" %>
 PR author: <%= authorLogin %>
 Event sender: <%= senderLogin %>
 Reviewer manager GitHub login: <%= reviewerManagerGithubLogin || "unknown" %>
-Known approval blocker: <%= reviewerManagerIsPrAuthor ? "yes — the configured reviewer's manager GitHub login is the PR author, so an approval from that GitHub identity would be rejected by GitHub" : "not known from First Tree metadata; still verify the active gh identity before approving" %>
 Trigger event: <%= triggerEvent %>
-Draft status from webhook: <%= isDraft === true ? "draft" : isDraft === false ? "ready for review" : "unknown; inspect the current PR state before choosing an outcome" %>
+Draft status from webhook: <%= isDraft === true ? "draft" : isDraft === false ? "ready for review" : "unknown" %>
 <% if (commentAuthorLogin) { -%>
 Comment author: <%= commentAuthorLogin %>
 <% } -%>
@@ -21,62 +20,6 @@ Comment author: <%= commentAuthorLogin %>
 Comment URL: <%= commentUrl %>
 <% } -%>
 First Tree organization: <%= organizationId %>
+Context review run: <%= contextReviewRunId %>
 
-Review goals:
-
-1. Check whether the context is clear, accurate, and easy for future agents to use.
-2. Identify missing background, constraints, boundaries, operating steps, or decision rationale that would make the context hard to apply later.
-3. Flag excessive detail, especially concrete code implementation, local diffs, temporary debugging notes, or short-lived implementation trivia that should not live in the long-term Context Tree.
-4. Suggest whether any context nodes should be split, simplified, supplemented, renamed, or rewritten.
-5. Prefer actionable, specific feedback tied to the changed context files.
-
-Required workflow:
-
-1. Inspect this pull request with `gh` commands before deciding on the review outcome. Confirm the current draft/readiness state and current head before reviewing.
-2. Before approving, run `gh api user --jq .login` and compare the active GitHub login to the PR author above. GitHub rejects approvals from the PR author, so an author-authenticated session cannot satisfy review-required branch protection.
-3. Write the review body to a temporary Markdown file and pass it with `--body-file <file>`. Do not inline multiline Markdown with `--body`; avoiding shell quoting issues is part of the required workflow.
-4. Treat `pull_request.synchronize` and `pull_request.ready_for_review` as fresh review requests for the current PR head. Do not rely on an older approval or comment review; submit a new review that covers the content currently shown by GitHub.
-5. Submit exactly one GitHub PR review using one of these outcomes:
-
-- If the pull request is still a draft, do not approve it. If there are blocking Context Tree issues, request changes. If there are no blocking issues, submit a non-approving comment review that says approval is deferred until the PR is ready for review.
-
-- If Context is incorrect, misleading, contradictory, missing required durable rationale, or otherwise should block merge, run:
-
-```bash
-gh pr review <%= prNumber %> --repo <%= repoFullName %> --request-changes --body-file <file>
-```
-
-- If feedback is useful but not blocking, run:
-
-```bash
-gh pr review <%= prNumber %> --repo <%= repoFullName %> --comment --body-file <file>
-```
-
-- If inspection is complete, the pull request is not a draft, no blocking gaps remain, and the active `gh` login is the PR author, do not attempt approval and do not treat the non-approving review as a successful approval substitute. Submit a comment review whose first section is `## Independent approval required`, stating that the Context Tree material appears safe but GitHub requires a non-author approver, and ask for another GitHub user to approve. In your chat reply, report the review action as `failed` with the blocker `authenticated reviewer is the PR author`.
-
-- If inspection is complete, the pull request is not a draft, no blocking gaps remain, and the PR is safe to merge as durable Context Tree material, run:
-
-```bash
-gh pr review <%= prNumber %> --repo <%= repoFullName %> --approve --body-file <file>
-```
-
-6. When changes or clarification are needed, structure the review body like this, separating incorrect or change-needed Context from Context that is still unclear or missing detail:
-
-```md
-## Context changes requested
-
-- Context: `<path or node title>`
-  Problem: ...
-  Suggested change: ...
-
-## Still unclear or needs more detail
-
-- Context: `<path or node title>`
-  Needed detail: ...
-  Why it matters: ...
-```
-
-If one of those sections has no items, write `None.` under that heading.
-7. Approve only after inspection is complete, the pull request is not a draft, the active `gh` login is not the PR author, and only when the PR is safe to merge as Context Tree material.
-8. Do not also post a top-level `gh pr comment` for the same outcome.
-9. After submitting the PR review, reply in this chat with a short summary and report which review action was submitted: `approved`, `commented`, `changes_requested`, or `failed`.
+Use this server-authored run id only through the submission command defined by the loaded skill. GitHub App credentials remain in Cloud.

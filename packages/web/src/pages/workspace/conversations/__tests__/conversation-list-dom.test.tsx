@@ -360,13 +360,14 @@ describe("ConversationList", () => {
 
     await click(container.querySelector('button[aria-label="Filter"]'));
     // Source now defaults to all-checked (no zero-source state); unchecking Agent
-    // narrows to Human + GitHub, which the Unread assertion below expects.
+    // narrows to Human + GitHub + GitLab, which the Unread assertion below expects.
     await click(
       [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Agent")) ?? null,
     );
     expect(container.textContent).toContain("Filters");
     expect(container.textContent).toContain("Human");
     expect(container.textContent).toContain("GitHub");
+    expect(container.textContent).toContain("GitLab");
 
     await click(buttonByText(container, "Unread"));
     await flush();
@@ -375,7 +376,7 @@ describe("ConversationList", () => {
         filter: "unread",
         engagement: "active",
         watching: undefined,
-        origin: ["manual", "github"],
+        origin: ["manual", "github", "gitlab"],
         with: undefined,
         cursor: undefined,
       },

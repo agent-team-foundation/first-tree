@@ -15,6 +15,17 @@ export {
   locateDocAnchor,
   locateDocAnchors,
 } from "./doc-anchor.js";
+export {
+  DISPLAY_NAME_MAX_LENGTH,
+  type ExternalAccountProfile,
+  githubExternalProfile,
+  googleExternalProfile,
+  normalizeExternalProfile,
+  normalizeUsername,
+  USERNAME_BASE_MAX_LENGTH,
+  USERNAME_MAX_LENGTH,
+  USERNAME_SUFFIX_RESERVE,
+} from "./external-account.js";
 // -- Mention extraction (shared by the server fan-out resolver and other readers) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
@@ -201,6 +212,7 @@ export {
   type ChatType,
   type CreateChat,
   type CreateTaskChat,
+  type CreateWebTaskChat,
   chatDetailSchema,
   chatEngagementStatusSchema,
   chatParticipantDetailSchema,
@@ -209,6 +221,7 @@ export {
   chatTypeSchema,
   createChatSchema,
   createTaskChatSchema,
+  createWebTaskChatSchema,
   type LegacyCreateChat,
   legacyCreateChatSchema,
   type PatchChatEngagement,
@@ -250,8 +263,10 @@ export {
   GITHUB_ENTITY_TYPES,
   type GithubChatMetadata,
   type GithubEntityType,
+  type GitlabChatMetadata,
   githubChatMetadataSchema,
   githubEntityTypeSchema,
+  gitlabChatMetadataSchema,
   type OptionalChatMetadata,
   optionalChatMetadataSchema,
 } from "./schemas/chat-metadata.js";
@@ -294,6 +309,19 @@ export {
   paginatedResponse,
   paginationQuerySchema,
 } from "./schemas/common.js";
+export {
+  CONTEXT_REVIEW_BODY_MAX_BYTES,
+  CONTEXT_REVIEW_ERROR_CODES,
+  CONTEXT_REVIEW_EVENTS,
+  type ContextReviewErrorCode,
+  type ContextReviewEvent,
+  type ContextReviewSubmitRequest,
+  type ContextReviewSubmitResponse,
+  contextReviewErrorCodeSchema,
+  contextReviewEventSchema,
+  contextReviewSubmitRequestSchema,
+  contextReviewSubmitResponseSchema,
+} from "./schemas/context-review.js";
 export {
   CONTEXT_TREE_CHANGE_TYPES,
   CONTEXT_TREE_EDGE_KINDS,
@@ -441,12 +469,24 @@ export {
 export {
   type FollowGitlabEntity,
   followGitlabEntitySchema,
+  GITLAB_IDENTITY_LINK_STATES,
+  GITLAB_REVIEWER_MODES,
   type GitlabConnectionCreate,
   type GitlabConnectionSecretResponse,
   type GitlabConnectionSummary,
+  type GitlabIdentityLinkCreate,
+  type GitlabIdentityLinkState,
+  type GitlabIdentityLinkSummary,
+  type GitlabReviewerMode,
+  type GitlabTargetClass,
   gitlabConnectionCreateSchema,
   gitlabConnectionSecretResponseSchema,
   gitlabConnectionSummarySchema,
+  gitlabIdentityLinkCreateSchema,
+  gitlabIdentityLinkStateSchema,
+  gitlabIdentityLinkSummarySchema,
+  gitlabReviewerModeSchema,
+  gitlabTargetClassSchema,
 } from "./schemas/gitlab.js";
 export {
   extractCaption,
@@ -509,8 +549,13 @@ export {
   rotateInvitationSchema,
 } from "./schemas/invitation.js";
 export {
+  isKnownLandingCampaignSlug,
   isLandingCampaignTrialAgentMetadata,
   isLandingCampaignTrialChatLocked,
+  KNOWN_LANDING_CAMPAIGN_SLUGS,
+  type KnownLandingCampaignSlug,
+  knownLandingCampaignSlugSchema,
+  type LandingCampaignActionContext,
   type LandingCampaignRepoMetadata,
   type LandingCampaignStartRequest,
   type LandingCampaignStartResponse,
@@ -519,7 +564,9 @@ export {
   type LandingCampaignTrialChatMetadata,
   type LandingCampaignTrialChatState,
   type LandingCampaignTrialLimitReason,
+  landingCampaignActionContextSchema,
   landingCampaignRepoMetadataSchema,
+  landingCampaignRepoSlugSchema,
   landingCampaignSlugSchema,
   landingCampaignStartRequestSchema,
   landingCampaignStartResponseSchema,
@@ -696,12 +743,33 @@ export {
   notificationTypeSchema,
 } from "./schemas/notification.js";
 export {
+  AUTH_PROVIDERS,
+  type AuthProvider,
+  type AuthProviderActionResult,
+  type AuthProviderAvailability,
+  type AuthProviderConnection,
+  type AuthProviderConnectionsResponse,
+  authProviderActionResultSchema,
+  authProviderAvailabilitySchema,
+  authProviderConnectionSchema,
+  authProviderConnectionsResponseSchema,
+  authProviderParamsSchema,
   type GithubCallbackQuery,
   type GithubDevCallbackQuery,
   type GithubStartQuery,
+  type GoogleCallbackQuery,
   githubCallbackQuerySchema,
   githubDevCallbackQuerySchema,
   githubStartQuerySchema,
+  googleCallbackQuerySchema,
+  OAUTH_ERROR_CODES,
+  OAUTH_INTENTS,
+  type OAuthErrorCode,
+  type OAuthIntent,
+  type OAuthStartQuery,
+  oauthErrorCodeSchema,
+  oauthIntentSchema,
+  oauthStartQuerySchema,
 } from "./schemas/oauth.js";
 export {
   type ContextTreeActiveBinding,

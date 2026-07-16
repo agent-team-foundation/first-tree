@@ -131,7 +131,7 @@ async function seedInstallation(
     accountLogin: "owner",
     accountGithubId: 1000 + opts.installationId,
     hubOrganizationId: opts.orgId,
-    permissions: { contents: "read" },
+    permissions: { contents: "read", pull_requests: "write" },
     events: ["pull_request", "issues"],
     suspendedAt: opts.suspended ? new Date() : null,
   });
@@ -1663,11 +1663,9 @@ describe("POST /webhooks/github-app", () => {
       .from(messages)
       .where(eq(messages.chatId, chat?.id ?? ""))
       .limit(1);
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --request-changes --body-file");
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --comment --body-file");
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
-    expect(message?.content).toContain("Context changes requested");
-    expect(message?.content).toContain("Still unclear or needs more detail");
+    expect(message?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(message?.content).not.toContain("gh pr review");
+    expect(message?.content).not.toContain("Context changes requested");
     expect(message?.content).toContain("Draft status from webhook: ready for review");
     expect(message?.metadata).toMatchObject({
       source: "github",
@@ -1715,7 +1713,7 @@ describe("POST /webhooks/github-app", () => {
     expect(followUpMessage?.content).toContain(
       "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
     );
-    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(followUpMessage?.content).toContain("Load the installed `context-tree-review` skill");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -1774,8 +1772,8 @@ describe("POST /webhooks/github-app", () => {
     );
     expect(followUpMessage?.content).toContain("Trigger event: pull_request.ready_for_review");
     expect(followUpMessage?.content).toContain("Draft status from webhook: ready for review");
-    expect(followUpMessage?.content).toContain("Do not rely on an older approval or comment review");
-    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(followUpMessage?.content).toContain("Load the installed `context-tree-review` skill");
+    expect(followUpMessage?.content).not.toContain("gh pr review");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",

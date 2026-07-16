@@ -140,5 +140,9 @@ export const gitlabEventCardSchema = z.object({
     key: z.string().min(1),
     url: z.string().nullable(),
   }),
+  reason: z.enum(["mentioned", "review_requested", "assigned", "subscribed"]).optional(),
+  mentionedUser: z.string().optional(),
+  /** Stage 3 routes the request; Stage 4 is required before review can run. */
+  reviewRoutingStatus: z.literal("routed_source_not_ready").optional(),
 });
 export type GitlabEventCard = z.infer<typeof gitlabEventCardSchema>;

@@ -407,8 +407,10 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
 
   // A repo has no user-meaningful name — it's the `owner/repo` of the URL — so we
   // don't ask for one: the display name is derived from the (normalized) URL. The
-  // URL is normalized first so common paste shapes (github.com/org/repo, org/repo)
-  // work without a scheme; the server schema still validates the result. Repos are
+  // URL is normalized first so common full-host paste shapes work without a
+  // scheme; the server schema still validates the result. The owner/repo shorthand
+  // remains GitHub-specific, so the provider-neutral UI prompts for a full host.
+  // Repos are
   // always a team-wide default: pin `defaultEnabled: "recommended"` (editing a
   // legacy Opt-in repo normalizes it to recommended).
   const normalizedUrl = normalizeRepoUrl(url);
@@ -426,7 +428,7 @@ function RepoEditor({ state, save, onClose }: EditorProps) {
         label="Repository URL"
         value={url}
         onChange={setUrl}
-        placeholder="github.com/org/repo"
+        placeholder="https://git.example.com/org/repo.git"
         mono
         required
       />

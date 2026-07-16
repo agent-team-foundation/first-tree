@@ -1,4 +1,4 @@
-import type { OnboardingEvent, OnboardingEventName } from "@first-tree/shared";
+import type { LandingCampaignActionContext, OnboardingEvent, OnboardingEventName } from "@first-tree/shared";
 import { api } from "./client.js";
 
 export type StartOnboardingChatArgs = {
@@ -14,12 +14,8 @@ export type StartOnboardingChatArgs = {
    * member's own connect-computer → create-agent journey stays resumable.
    */
   stamp?: "completed" | "invitee_skip" | "none";
-  /**
-   * Production-scan fix conversion: `owner/repo`. When set, the server keys the
-   * kickoff chat `<humanAgent>:scan-fix:<repoSlug>` so this fix launcher dedups
-   * with the already-onboarded direct path instead of duplicating it.
-   */
-  scanFixRepoSlug?: string;
+  /** Campaign + repo pair used by both action entry paths for dedup. */
+  campaignAction?: LandingCampaignActionContext;
 };
 
 export type StartOnboardingChatResult = {

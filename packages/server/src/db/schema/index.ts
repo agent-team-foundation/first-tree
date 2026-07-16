@@ -18,6 +18,7 @@ export { githubAppInstallations } from "./github-app-installations.js";
 export { githubEntityChatMappings } from "./github-entity-chat-mappings.js";
 export { gitlabConnections } from "./gitlab-connections.js";
 export { gitlabEntityChatMappings } from "./gitlab-entity-chat-mappings.js";
+export { gitlabIdentityLinks } from "./gitlab-identity-links.js";
 export { inboxEntries } from "./inbox-entries.js";
 export { invitationRedemptions, invitations } from "./invitations.js";
 export { members } from "./members.js";

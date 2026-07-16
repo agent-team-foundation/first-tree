@@ -1,52 +1,40 @@
 # Setup Briefing
 
-Use this briefing to prepare an isolated QA run cell. The agent owns the exact commands for the current task and host.
+Use this briefing to make every formal First Tree product surface testable before planning the requested validation.
 
 ## Goal
 
-Create a disposable environment where product behavior can be observed without mutating the operator's original checkout
-or shared local services.
+Create a disposable, complete harness without mutating the operator's checkout, credentials, or shared local services.
+For every shipped or publicly promised surface, establish:
+
+- `Build`: final artifact and exact toolchain;
+- `Run`: dependencies, configuration, data, startup, and health;
+- `Drive`: a real user, operator, consumer, protocol, device, or provider action;
+- `Observe`: credible product output or independent state readback;
+- `Measure`: lightweight build, size, startup, latency, and resource signals appropriate to the surface;
+- `Reset`: a safe way to restore known state and repeat the observation.
 
 ## Expected Shape
 
-A formal run normally has:
-
-- a temporary run root;
-- a one-time bare clone inside that run root;
-- a detached source worktree materialized from the target ref;
-- a unique Docker Compose project name;
-- run-local Docker networks and volumes;
-- run-local homes for First Tree, provider state, browser state, and service state;
-- an `artifacts/` directory for plans, reports, logs, evidence, and bug artifacts.
-
-The exact services scale with the QA scope. A CLI-only task may need only a runner container and source worktree. API
-validation usually needs Postgres plus server. Web validation usually needs web, server, database, and browser tooling.
-Runtime validation needs a provider bridge only when real agent behavior is in scope.
+A formal run has a temporary run root, run-local bare clone and detached worktree, unique Docker project, isolated
+networks/volumes/homes, and an external artifact directory. Build and start all formal surfaces, not only those suggested
+by the eventual task scope. Use native, device, or provider bridges where Docker cannot credibly host a surface.
 
 ## Setup Rules
 
-- Resolve the run root with `realpath` before mounting it into Docker.
-- Mount the run root at the same absolute path inside containers when artifact paths must be shared between host and
-  container.
-- Run only the services needed by the selected QA scope.
-- Keep server, web, database, CLI runner, daemon, and runtime runner inside Docker when they are part of the tested
-  scope.
-- Discover dynamic host ports after services start and record them in the run context.
-- Treat setup failures as `BLOCKED` when they prevent the requested validation.
+- Resolve the run root with `realpath` before sharing paths with Docker.
+- Mount shared run paths at the same absolute location inside containers.
+- Build final deliverables and record ref, artifact hashes or image identities, commands, versions, endpoints, and data.
+- Keep server, web, database, CLI runner, daemon, and runtime runner inside Docker where credible.
+- Discover dynamic host ports after startup and bind them to loopback by default.
+- Continue independent setup probes after one gap when safe so the readiness record is complete.
+- Record target failures separately from environment, provider, platform, or harness failures.
+- Before readiness, write only `run-context.md` and a provisional checklist; do not select cases or write `plan.md`.
 
-## Run Context
+## `QA READY` Gate
 
-Record enough setup state for someone else to interpret the report:
+Declare `QA READY` only when every formal surface has all six capabilities. Record a lightweight performance baseline
+and a reset smoke for each surface. If readiness fails, report the supported status and evidence without entering formal
+task execution.
 
-- target ref and source path;
-- run root and artifact path;
-- Compose project name and active services;
-- service URLs or dynamic ports;
-- data setup steps;
-- provider/auth readiness state;
-- setup limitations or degraded paths.
-
-## Artifact Boundary
-
-Run artifacts are temporary process output. They should be summarized back to the requester, not committed to the source
-repository.
+Run artifacts are temporary process output. Summarize them to the requester; never commit them to the repository.

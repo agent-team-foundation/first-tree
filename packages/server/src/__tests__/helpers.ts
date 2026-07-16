@@ -58,6 +58,8 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   channel?: Config["channel"];
+  googleOAuth?: boolean;
+  githubOAuth?: boolean;
   /** Document review (docloop) routes. Defaults to enabled in tests. */
   docsEnabled?: boolean;
   growthLandingPagesEnabled?: boolean;
@@ -148,6 +150,14 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       ? { access: { allowedOrganizationId: opts.allowedOrganizationId.trim() || undefined } }
       : {}),
     oauth: {
+      ...(opts.googleOAuth
+        ? {
+            google: {
+              clientId: "test-google-client-id",
+              clientSecret: "test-google-client-secret",
+            },
+          }
+        : {}),
       // Stub GitHub App creds. Tests that exercise the App flow inject
       // fetchers / mocks at the service-call layer and never actually
       // consume these values — see github-app.test.ts.
@@ -202,6 +212,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     },
     instanceId: "test-instance",
   };
+  if (opts.githubOAuth === false && config.oauth) Reflect.deleteProperty(config.oauth, "githubApp");
   // Pin the singleton so service-layer helpers that go through
   // `getServerCliBinding()` (e.g. message / agent error hints)
   // find a config in-process. Production paths reach this via `initConfig`;

@@ -150,7 +150,11 @@ export function decideProviderRetry(input: {
   const attempt = Math.max(1, Math.floor(input.attempt));
   const retryAfterMs = input.retryAfterMs ?? input.classification.retryAfterMs;
 
-  if (input.scope === "provider_turn" && isUnsafeReplay(input.replaySafety)) {
+  if (
+    input.scope === "provider_turn" &&
+    isUnsafeReplay(input.replaySafety) &&
+    !isRetryableUserVisibleFailure(input.classification.category, input.replaySafety)
+  ) {
     return stop("unsafe_replay", "unsafe_replay", input.replaySafety, "warning");
   }
 
@@ -242,23 +246,25 @@ function decideProviderTurnCapacity(
   if (replaySafety === "pre_provider") {
     return decideProviderTurnTransient(reasonCode, attempt, replaySafety);
   }
-  if (reasonCode === "provider_overloaded" && retryAfterMs === undefined && attempt <= PROVIDER_TURN_MAX_RETRIES) {
-    return retry(
-      reasonCode,
-      attempt,
-      PROVIDER_TURN_MAX_RETRIES,
-      PROVIDER_TURN_DELAYS_MS[attempt - 1] ?? 1500,
-      "foreground",
-      replaySafety,
-      "warning",
-    );
+  if (reasonCode === "provider_overloaded" && retryAfterMs === undefined) {
+    if (attempt <= PROVIDER_TURN_MAX_RETRIES) {
+      return retry(
+        reasonCode,
+        attempt,
+        PROVIDER_TURN_MAX_RETRIES,
+        PROVIDER_TURN_DELAYS_MS[attempt - 1] ?? 1500,
+        "foreground",
+        replaySafety,
+        "warning",
+      );
+    }
+    return stop(`${reasonCode}_exhausted`, "exhausted", replaySafety, "error");
   }
-  if (
-    retryAfterMs !== undefined &&
-    retryAfterMs <= PROVIDER_TURN_CAPACITY_SHORT_WAIT_MS &&
-    attempt <= PROVIDER_TURN_MAX_RETRIES
-  ) {
-    return retry(reasonCode, attempt, PROVIDER_TURN_MAX_RETRIES, retryAfterMs, "foreground", replaySafety, "warning");
+  if (retryAfterMs !== undefined && retryAfterMs <= PROVIDER_TURN_CAPACITY_SHORT_WAIT_MS) {
+    if (attempt <= PROVIDER_TURN_MAX_RETRIES) {
+      return retry(reasonCode, attempt, PROVIDER_TURN_MAX_RETRIES, retryAfterMs, "foreground", replaySafety, "warning");
+    }
+    return stop(`${reasonCode}_exhausted`, "exhausted", replaySafety, "error");
   }
   return stop("capacity_wait_required", "capacity_wait_required", replaySafety, "warning");
 }
@@ -337,6 +343,10 @@ function stop(
 
 function isUnsafeReplay(replaySafety: ReplaySafety): boolean {
   return replaySafety === "user_visible" || replaySafety === "unsafe" || replaySafety === "unknown";
+}
+
+function isRetryableUserVisibleFailure(category: ProviderFailureCategory, replaySafety: ReplaySafety): boolean {
+  return replaySafety === "user_visible" && (category === "provider_capacity" || category === "transient_transport");
 }
 
 type ErrorShape = {

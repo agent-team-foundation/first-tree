@@ -1,3 +1,5 @@
+import { decryptValue, encryptValue, isEncryptedValue } from "../../services/crypto.js";
+
 /**
  * Manual cookie helpers — we don't pull in `@fastify/cookie` because the
  * SaaS onboarding flow needs exactly one cookie (the OAuth state nonce).
@@ -16,6 +18,27 @@ export function parseCookieHeader(header: string | string[] | undefined, name: s
     }
   }
   return null;
+}
+
+export function protectOAuthStateNonce(nonce: string, encryptionKey: string): string {
+  return encryptValue(nonce, encryptionKey);
+}
+
+export function readOAuthStateNonce(
+  header: string | string[] | undefined,
+  name: string,
+  encryptionKey: string,
+): string | null {
+  const value = parseCookieHeader(header, name);
+  if (!value) return null;
+  // States expire after ten minutes, so a plaintext cookie minted by the
+  // previous release is accepted only while its signed state remains valid.
+  if (!isEncryptedValue(value)) return value;
+  try {
+    return decryptValue(value, encryptionKey);
+  } catch {
+    return null;
+  }
 }
 
 export function buildCookie(opts: {

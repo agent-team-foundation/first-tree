@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  isKnownLandingCampaignSlug,
   isLandingCampaignTrialAgentMetadata,
   isLandingCampaignTrialChatLocked,
+  landingCampaignActionContextSchema,
+  landingCampaignSlugSchema,
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
 } from "../schemas/landing-campaign.js";
@@ -12,6 +15,27 @@ const repo = {
   owner: "acme",
   name: "api",
 };
+
+describe("landing campaign active registry", () => {
+  it("distinguishes active campaign slugs from valid historical metadata slugs", () => {
+    expect(isKnownLandingCampaignSlug("production-scan")).toBe(true);
+    expect(isKnownLandingCampaignSlug("seed-api")).toBe(false);
+    expect(landingCampaignSlugSchema.safeParse("seed-api").success).toBe(true);
+  });
+
+  it("validates a trusted campaign + owner/repo action context", () => {
+    expect(landingCampaignActionContextSchema.parse({ campaign: "production-scan", repoSlug: "Acme/api.js" })).toEqual({
+      campaign: "production-scan",
+      repoSlug: "Acme/api.js",
+    });
+    expect(landingCampaignActionContextSchema.safeParse({ campaign: "retired", repoSlug: "acme/api" }).success).toBe(
+      false,
+    );
+    expect(
+      landingCampaignActionContextSchema.safeParse({ campaign: "production-scan", repoSlug: "acme" }).success,
+    ).toBe(false);
+  });
+});
 
 describe("landing campaign metadata schemas", () => {
   it("parses valid trial agent metadata and rejects absent or invalid values", () => {

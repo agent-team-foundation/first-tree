@@ -99,46 +99,6 @@ describe("server routing + fan-out filter (explicit mentions only)", () => {
     expect(obsBEntries).toHaveLength(0);
   });
 
-  it("suppressNotifyAgentIds drops an agent from the wake set but still writes a silent row", async () => {
-    // Generic echo capability (S2/D1): a suppressed agent that would otherwise
-    // be woken (here via metadata.mentions) is NOT notified, yet still receives
-    // a notify=false context row so the message still lands.
-    const app = getApp();
-    const uid = crypto.randomUUID().slice(0, 6);
-    const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
-
-    await sendMessage(
-      app.db,
-      chat.id,
-      sender.agent.uuid,
-      {
-        source: "api",
-        format: "text",
-        content: "review",
-        metadata: { mentions: [obsA.uuid, obsB.uuid] },
-      },
-      { suppressNotifyAgentIds: [obsB.uuid] },
-    );
-
-    // obsA mentioned and not suppressed → woken.
-    expect(await inboxEntriesFor(app, chat.id, obsA.uuid)).toHaveLength(1);
-    // obsB mentioned but suppressed → not woken (no notify=true row)…
-    expect(await inboxEntriesFor(app, chat.id, obsB.uuid)).toHaveLength(0);
-    // …yet still receives exactly one silent (notify=false) context row.
-    const [obsBRow] = await app.db
-      .select({ inboxId: agents.inboxId })
-      .from(agents)
-      .where(eq(agents.uuid, obsB.uuid))
-      .limit(1);
-    const obsBInbox = obsBRow?.inboxId ?? "";
-    const obsBAll = await app.db
-      .select({ notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, obsBInbox), eq(inboxEntries.chatId, chat.id)));
-    expect(obsBAll).toHaveLength(1);
-    expect(obsBAll[0]?.notify).toBe(false);
-  });
-
   it("a narrative `@<peer>` in content alone does NOT wake the peer (server does not parse content)", async () => {
     // Regression guard for the explicit-only contract.
     const app = getApp();

@@ -40,6 +40,10 @@ const contextApiMocks = vi.hoisted(() => ({
   initializeContextTree: vi.fn(),
 }));
 
+const githubAppMocks = vi.hoisted(() => ({
+  getGithubAppInstallation: vi.fn(),
+}));
+
 const viewportMock = vi.hoisted(() => ({
   value: "xl" as "xl" | "md" | "narrow",
 }));
@@ -55,6 +59,8 @@ vi.mock("../../api/agents.js", () => agentApiMocks);
 vi.mock("../../api/onboarding-events.js", () => onboardingEventMocks);
 
 vi.mock("../../api/context-tree.js", () => contextApiMocks);
+
+vi.mock("../../api/github-app.js", () => githubAppMocks);
 
 vi.mock("../../hooks/use-viewport.js", () => ({
   useWorkspaceViewport: () => viewportMock.value,
@@ -146,7 +152,7 @@ async function renderDom(
           <Routes>
             <Route path="/settings/*" element={element}>
               <Route path="context" element={<div>Settings child</div>} />
-              <Route path="github" element={<div>GitHub child</div>} />
+              <Route path="integrations/*" element={<div>Integrations child</div>} />
             </Route>
           </Routes>
         </QueryClientProvider>
@@ -263,6 +269,19 @@ beforeEach(() => {
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getRawContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getContextTreeFeaturesSetting.mockResolvedValue(contextTreeFeatures());
+  githubAppMocks.getGithubAppInstallation.mockResolvedValue({
+    installationId: 42,
+    accountLogin: "acme",
+    accountType: "Organization",
+    accountGithubId: 12345,
+    repositorySelection: "selected",
+    permissions: { metadata: "read", pull_requests: "write" },
+    events: ["pull_request"],
+    suspended: false,
+    manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
     contextTree(body),
   );
@@ -304,13 +323,13 @@ describe("settings panels", () => {
   it("renders settings layout variants and filters admin/onboarding nav entries", async () => {
     const { SettingsLayout } = await import("../settings.js");
 
-    const desktop = await renderDom(<SettingsLayout />, "/settings/github");
+    const desktop = await renderDom(<SettingsLayout />, "/settings/integrations/github");
     expect(desktop.container.textContent).toContain("Computers");
-    expect(desktop.container.textContent).toContain("GitHub");
+    expect(desktop.container.textContent).toContain("Integrations");
     // The onboarding nav entry is labelled "Setup" (renamed from "Onboarding"
     // so the sidebar label and the page heading no longer drift).
     expect(desktop.container.textContent).toContain("Setup");
-    expect(desktop.container.textContent).toContain("GitHub child");
+    expect(desktop.container.textContent).toContain("Integrations child");
     await act(async () => desktop.root.unmount());
 
     authMock.value = { ...authMock.value, role: "member", onboardingCompletedAt: NOW };
@@ -318,7 +337,7 @@ describe("settings panels", () => {
     const narrow = await renderDom(<SettingsLayout />);
     expect(narrow.container.querySelector("aside")).toBeNull();
     expect(narrow.container.textContent).toContain("Computers");
-    expect(narrow.container.textContent).toContain("GitHub");
+    expect(narrow.container.textContent).toContain("Integrations");
     expect(narrow.container.textContent).not.toContain("Setup");
     await act(async () => narrow.root.unmount());
 
@@ -453,6 +472,31 @@ describe("settings panels", () => {
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/draft-context");
+
+    await act(async () => root.unmount());
+  });
+
+  it("requires the installation permission upgrade before enabling Context Reviewer", async () => {
+    githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
+      installationId: 42,
+      accountLogin: "acme",
+      accountType: "Organization",
+      accountGithubId: 12345,
+      repositorySelection: "selected",
+      permissions: { metadata: "read", pull_requests: "read" },
+      events: ["pull_request"],
+      suspended: false,
+      manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+
+    await waitForText(container, "Action required");
+    expect(reviewerSwitch(container)?.disabled).toBe(true);
+    expect(container.textContent).toContain("Pull requests: write");
+    expect(container.querySelector('a[href*="settings/installations/42"]')?.textContent).toContain("Manage on GitHub");
 
     await act(async () => root.unmount());
   });

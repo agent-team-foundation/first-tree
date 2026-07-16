@@ -26,6 +26,7 @@ export const ORIGIN_OPTIONS: ReadonlyArray<{ value: ChatSource; label: string }>
   // the Source group-by buckets ("Started by me/teammates").
   { value: "manual", label: "Human" },
   { value: "github", label: "GitHub" },
+  { value: "gitlab", label: "GitLab" },
   { value: "agent", label: "Agent" },
 ];
 

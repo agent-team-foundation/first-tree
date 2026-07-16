@@ -6,18 +6,12 @@ import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { GithubAppInstallationPanel } from "../github-app-installation-panel.js";
-import { ResourceTypeSections } from "./resource-sections.js";
 
 /**
- * Settings → GitHub. Members can read the team's GitHub connection and source
- * repo catalog; admin-only actions stay hidden in the panel/resource sections.
- *
- * Two sections:
- *   - GitHub Connection — the GitHub App installation panel (connect /
- *     disconnect / install for admins; read-only state for members).
- *   - Source Repos — the team's `repo` runtime resources, moved here from
- *     Settings → Resources so the repos agents work on sit next to the
- *     GitHub connection their code and events flow through.
+ * Settings → Integrations → GitHub. Members can read the team's GitHub
+ * connection; admin-only actions stay hidden in the installation panel. Team
+ * code access is provider-neutral and lives in the shared Integrations layout
+ * above the GitHub/GitLab connection tabs.
  *
  * `?from=context`: the Context tab is the single place a team builds its
  * Context Tree, but installing + connecting GitHub lives here (the one place
@@ -57,7 +51,6 @@ export function SettingsGithubPage() {
       <Section title="Connection">
         <GithubAppInstallationPanel readOnly={!isAdmin} />
       </Section>
-      <ResourceTypeSections types={["repo"]} titleFor={() => "Source repos"} />
     </div>
   );
 }
@@ -66,7 +59,7 @@ export function SettingsGithubPage() {
  * The Context round-trip return. Before the team is connected it's a quiet line
  * explaining why the user was sent here; once connected it becomes the explicit
  * way back to building (deliberately a button, not an auto-redirect, so the user
- * stays in control and can adjust source repos below first if they want).
+ * stays in control and can adjust shared code access above first if they want).
  */
 function ContextReturn({ connected }: { connected: boolean }) {
   if (!connected) {

@@ -7,6 +7,29 @@ export const landingCampaignSlugSchema = z
   .max(100)
   .regex(/^[a-z0-9][a-z0-9-]*$/u, "Campaign must be a kebab-case slug.");
 
+/** Campaigns that the current Cloud build can actively launch or hand off. */
+export const KNOWN_LANDING_CAMPAIGN_SLUGS = ["production-scan"] as const;
+export const knownLandingCampaignSlugSchema = z.enum(KNOWN_LANDING_CAMPAIGN_SLUGS);
+export type KnownLandingCampaignSlug = z.infer<typeof knownLandingCampaignSlugSchema>;
+
+export function isKnownLandingCampaignSlug(value: unknown): value is KnownLandingCampaignSlug {
+  return knownLandingCampaignSlugSchema.safeParse(value).success;
+}
+
+export const landingCampaignRepoSlugSchema = z
+  .string()
+  .max(200)
+  .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u);
+
+/** Trusted campaign action context carried by direct and onboarding chat creation. */
+export const landingCampaignActionContextSchema = z
+  .object({
+    campaign: knownLandingCampaignSlugSchema,
+    repoSlug: landingCampaignRepoSlugSchema,
+  })
+  .strict();
+export type LandingCampaignActionContext = z.infer<typeof landingCampaignActionContextSchema>;
+
 export const landingCampaignStartRequestSchema = z.object({
   organizationId: z.string().min(1).optional(),
   campaign: landingCampaignSlugSchema,

@@ -237,10 +237,11 @@ export async function getCallerEngagement(
 // `github` bucket — by design, since the popover-level filter doesn't
 // care about the entity sub-type.
 
-const KNOWN_NON_MANUAL_PREDICATE = sql`(c.metadata->>'source' IN ('github', 'agent'))`;
+const KNOWN_NON_MANUAL_PREDICATE = sql`(c.metadata->>'source' IN ('github', 'gitlab', 'agent'))`;
 
 const chatSourceSqlExpression = sql`CASE
     WHEN c.metadata->>'source' = 'github' THEN 'github'
+    WHEN c.metadata->>'source' = 'gitlab' THEN 'gitlab'
     WHEN c.metadata->>'source' = 'agent' THEN 'agent'
     ELSE 'manual'
   END`;
@@ -270,6 +271,8 @@ function sourceFilterSql(source: ChatSource): SQL {
       return sql`(${KNOWN_NON_MANUAL_PREDICATE}) IS NOT TRUE`;
     case "github":
       return sql`(c.metadata->>'source' = 'github')`;
+    case "gitlab":
+      return sql`(c.metadata->>'source' = 'gitlab')`;
     case "agent":
       return sql`(c.metadata->>'source' = 'agent')`;
   }

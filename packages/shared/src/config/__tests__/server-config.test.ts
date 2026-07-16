@@ -61,6 +61,44 @@ describe("server config", () => {
     expect(fieldSchema.parse(undefined)).toBeUndefined();
   });
 
+  it("loads Google OAuth only when both credentials are configured", async () => {
+    const missingDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    const missing = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: missingDir,
+    });
+    expect(missing.oauth?.google).toBeUndefined();
+
+    resetConfig();
+    const configuredDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_GOOGLE_CLIENT_ID", "google-client-id");
+    vi.stubEnv("FIRST_TREE_GOOGLE_CLIENT_SECRET", "google-client-secret");
+    const configured = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: configuredDir,
+    });
+    expect(configured.oauth?.google).toEqual({
+      clientId: "google-client-id",
+      clientSecret: "google-client-secret",
+    });
+  });
+
+  it("rejects partial Google OAuth configuration", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_GOOGLE_CLIENT_ID", "google-client-id");
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/clientSecret/);
+  });
+
   it("keeps growth landing pages disabled by default and enables them via env", async () => {
     const defaultConfigDir = makeTempConfigDir();
     stubRequiredProductionConfig();

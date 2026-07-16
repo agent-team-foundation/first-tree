@@ -35,10 +35,10 @@ const log = createLogger("message");
 const ADDRESSED_AGENT_IDS_METADATA_KEY = "addressedAgentIds";
 
 /**
- * Metadata keys reserved for server-owned write paths. Stripped from caller
- * input so an HTTP POST cannot smuggle a UI-trust marker into a regular
- * message — see the `allowSystemSender` field on `SendMessageOptions` for the
- * `systemSender` threat model.
+ * Metadata keys reserved for server-owned write paths. UI-only markers are
+ * stripped from caller input; publication-authority markers fail closed so an
+ * HTTP POST cannot smuggle them into a regular message. See the matching
+ * trusted-internal fields on `SendMessageOptions` for each threat model.
  *
  * Returns the same reference when nothing is stripped, so the common case
  * (no reserved keys present) does not allocate.
@@ -47,6 +47,14 @@ function stripUntrustedMetadataKeys(
   meta: Record<string, unknown>,
   options: SendMessageOptions,
 ): Record<string, unknown> {
+  const contextReviewKey = Object.keys(meta).find(
+    (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
+  );
+  if (contextReviewKey && !options.allowContextReviewRun) {
+    throw new BadRequestError(
+      `Metadata key "${contextReviewKey}" is reserved for server-authored Context Reviewer runs.`,
+    );
+  }
   const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;
   const shouldStripAddressedAgentIds = ADDRESSED_AGENT_IDS_METADATA_KEY in meta;
   const shouldStripCliBodyOrigin = CLI_BODY_ORIGIN_METADATA_KEY in meta;
@@ -299,19 +307,6 @@ export type SendMessageOptions = {
    */
   addressedToAgentIds?: readonly string[];
   /**
-   * Agent IDs to **exclude from the notify (wake) set** even when they would
-   * otherwise be woken via `metadata.mentions` or `addressedToAgentIds`.
-   * Generic trusted-delivery capability, decoupled from `senderId`: the
-   * suppressed agent still receives a `notify=false` inbox row (the message
-   * still lands in history / replays as context), it is simply not woken.
-   *
-   * This is intentionally generic and decoupled from `senderId`; a trusted
-   * dispatcher can keep attribution chat-local while excluding specific agents
-   * from wake. `purpose === "agent-final-text"` still forces silent for
-   * everyone; this only narrows the notify set within the non-silenced branch.
-   */
-  suppressNotifyAgentIds?: readonly string[];
-  /**
    * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
    * uses that key to re-attribute a row to a synthetic SCM provider sender
    * (avatar + name override) instead of the row's actual `senderId`. To
@@ -324,6 +319,13 @@ export type SendMessageOptions = {
    * alongside each provider card's conjunctive UI trust gate.
    */
   allowSystemSender?: boolean;
+  /**
+   * Trusted-internal capability for creating a Context Reviewer run message.
+   * The `contextTreeReviewer` and `contextReview*` metadata namespace carries
+   * publication authority and is rejected at every ordinary message boundary.
+   * Only the GitHub webhook Context Reviewer dispatcher may set this option.
+   */
+  allowContextReviewRun?: boolean;
   /**
    * Trusted-internal escape hatch for a send performed inside an existing
    * outer database transaction. When enabled, session activation and the
@@ -465,18 +467,15 @@ export function preflightMessageSendIntent(input: {
         skipMentionEnforcement: false,
         forceSilentFanOut: false,
       };
-  const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
-
   // Persist the notify-worthy live non-human agents — the recipients whose
   // sessions the send is expected to wake. `mentions` only carries explicit @s /
   // receiverNames, NOT system `addressedToAgentIds` routing (e.g. onboarding
   // kickoff bootstrap), so a surface that needs to know who a turn awaits a
   // reply from can't rely on `mentions` alone. This projection is server-owned
-  // and mirrors fan-out notify semantics: final-text and suppressed recipients
-  // are silent context, not awaited agents.
+  // and mirrors fan-out notify semantics: final-text recipients are silent
+  // context, not awaited agents.
   const addressedAgentIds = !purposeProfile.forceSilentFanOut
     ? [...routedRecipientIds].filter((id) => {
-        if (suppressNotifySet.has(id)) return false;
         const participant = participantsById.get(id);
         return participant !== undefined && participant.status === "active" && participant.type !== "human";
       })
@@ -623,6 +622,10 @@ async function sendMessageInner(
   options: SendMessageOptions,
 ): Promise<SendMessageResult> {
   const txResult = await db.transaction(async (tx) => {
+    const isContextReviewRun =
+      data.source === "github" &&
+      data.metadata?.contextTreeReviewer === true &&
+      typeof data.metadata.contextReviewRunId === "string";
     // 1. Load participants and sender (inbox + org) in parallel — both are
     //    needed for fan-out + mention enforcement + post-tx session
     //    activation. Running concurrently keeps the hot send path on a
@@ -660,11 +663,70 @@ async function sendMessageInner(
     // Trial chat state is a server-owned single-run state machine. Lock and
     // re-read only those rows so concurrent outbox writes cannot apply stale
     // running-state transitions after another send completes the trial.
-    const chatRow = initialTrial
-      ? (
-          await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
-        )[0]
-      : chatRowSnapshot;
+    const chatRow =
+      initialTrial || isContextReviewRun
+        ? (
+            await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
+          )[0]
+        : chatRowSnapshot;
+
+    let contextReviewBlockedByRunId: string | null = null;
+    if (isContextReviewRun) {
+      const [latestRun] = await tx
+        .select({ metadata: messages.metadata })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.chatId, chatId),
+            eq(messages.source, "github"),
+            sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
+            sql`${messages.metadata}->>'contextReviewRunId' IS NOT NULL`,
+          ),
+        )
+        .orderBy(desc(messages.createdAt), desc(messages.id))
+        .limit(1);
+      const latestSubmission = latestRun?.metadata.contextReviewSubmission as
+        | { state?: unknown; reviewedHead?: unknown }
+        | undefined;
+      const latestState = latestSubmission?.state;
+      const inheritedBlocker =
+        latestState === "pending" && typeof latestRun?.metadata.contextReviewBlockedByRunId === "string"
+          ? latestRun.metadata.contextReviewBlockedByRunId
+          : null;
+      const activeBlocker =
+        latestState === "submitting" || latestState === "unknown"
+          ? typeof latestRun?.metadata.contextReviewRunId === "string"
+            ? latestRun.metadata.contextReviewRunId
+            : null
+          : inheritedBlocker;
+      if (activeBlocker) {
+        const previousHead =
+          latestState === "submitting" || latestState === "unknown"
+            ? typeof latestSubmission?.reviewedHead === "string"
+              ? latestSubmission.reviewedHead.toLowerCase()
+              : null
+            : typeof latestRun?.metadata.contextReviewHeadSha === "string"
+              ? latestRun.metadata.contextReviewHeadSha.toLowerCase()
+              : null;
+        const incomingHead =
+          typeof data.metadata?.contextReviewHeadSha === "string"
+            ? data.metadata.contextReviewHeadSha.toLowerCase()
+            : null;
+        const safelySupersedesOldHead =
+          data.metadata?.triggerEvent === "pull_request.synchronize" &&
+          previousHead !== null &&
+          incomingHead !== null &&
+          /^[0-9a-f]{40}$/.test(previousHead) &&
+          /^[0-9a-f]{40}$/.test(incomingHead) &&
+          previousHead !== incomingHead;
+        if (!safelySupersedesOldHead) {
+          throw new ForbiddenError(
+            "A previous Context Reviewer run has an unresolved GitHub review delivery for this head. Reconcile it before creating another run.",
+          );
+        }
+        contextReviewBlockedByRunId = activeBlocker;
+      }
+    }
 
     const prepared = preflightMessageSendIntent({
       chatId,
@@ -674,7 +736,10 @@ async function sendMessageInner(
       options,
       participants,
     });
-    const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
+    const { content: outboundContent, metadata: preparedMetadata, mentionedAgentIds: mergedMentions } = prepared;
+    const metadataToStore = contextReviewBlockedByRunId
+      ? { ...preparedMetadata, contextReviewBlockedByRunId }
+      : preparedMetadata;
 
     assertLandingCampaignTrialMessageAllowed({
       chat: chatRow,
@@ -732,9 +797,6 @@ async function sendMessageInner(
     //      nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
-    // Generic wake-exclusion: agents here still get a `notify=false` inbox
-    // row (message lands), they are just not woken. Decoupled from `senderId`.
-    const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
     // inbox row. agentId is needed by the post-tx session-activation step
     // (Step 1b) but is not part of the inbox_entries schema — it's stripped
@@ -745,10 +807,7 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify:
-          !prepared.forceSilentFanOut &&
-          (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)) &&
-          !suppressNotifySet.has(p.agentId),
+        notify: !prepared.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
       }));
 
     if (fanout.length > 0) {
@@ -1028,6 +1087,9 @@ export async function editMessage(
   if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
   if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
   if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
+  if (msg.metadata.contextTreeReviewer === true && typeof msg.metadata.contextReviewRunId === "string") {
+    throw new ForbiddenError("Server-authored Context Reviewer task messages cannot be edited");
+  }
 
   // The open-question counter (`open_request_count`) is maintained only on the
   // send path, keyed off `format=request`. Allowing an edit to flip a message
@@ -1066,10 +1128,11 @@ export async function editMessage(
     setClause.content = effectiveContent;
   }
 
-  // Track edit in metadata
-  const meta = (msg.metadata ?? {}) as Record<string, unknown>;
-  meta.editedAt = new Date().toISOString();
-  setClause.metadata = meta;
+  // Patch only the edit timestamp in Postgres so concurrent server-owned
+  // metadata transitions cannot be overwritten by a stale read of the row.
+  setClause.metadata = sql`jsonb_set(${messages.metadata}, '{editedAt}', ${JSON.stringify(
+    new Date().toISOString(),
+  )}::jsonb)`;
 
   const [updated] = await db.update(messages).set(setClause).where(eq(messages.id, messageId)).returning();
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");

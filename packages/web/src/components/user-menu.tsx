@@ -1,5 +1,6 @@
-import { LogOut } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { Avatar } from "./avatar.js";
 
@@ -19,6 +20,7 @@ const PARENT_URL = "https://first-tree.ai";
  */
 export function UserMenu() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -83,6 +85,19 @@ export function UserMenu() {
 
           {/* User actions */}
           <div className="py-1">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                navigate("/user-settings");
+              }}
+              className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+              style={{ color: "var(--fg)" }}
+            >
+              <Settings className="h-3.5 w-3.5" />
+              <span>User Settings</span>
+            </button>
             <button
               type="button"
               role="menuitem"

@@ -143,6 +143,8 @@ type TurnErrorInfo = {
 
 type CurrentTurn = {
   turnId: string;
+  providerAttemptNumber: number;
+  providerRetryChain: boolean;
   status: "inProgress" | "completed" | "failed" | "interrupted";
   primaryToken: DeliveryToken;
   acceptedMessages: SessionMessage[];
@@ -206,6 +208,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let startupTurnPending = false;
   let turnStartInProgress = false;
   let turnStartAttempt: ProviderAttempt | null = null;
+  let cancelProviderRetryBackoff: (() => void) | null = null;
+  let providerRetryFence = false;
   let pendingDrainInProgress = false;
   let pendingDrainScheduled = false;
   let shutdownRequested = false;
@@ -235,6 +239,30 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     });
   }
 
+  function isExplicitTransientSettlement(settlement: ProviderAttemptSettlement): boolean {
+    return (
+      settlement.classification.category === "provider_capacity" ||
+      settlement.classification.category === "transient_transport"
+    );
+  }
+
+  async function waitForProviderRetry(delayMs: number): Promise<boolean> {
+    if (shutdownRequested) return false;
+    await new Promise<void>((resolveDelay) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (cancelProviderRetryBackoff === finish) cancelProviderRetryBackoff = null;
+        resolveDelay();
+      };
+      const timer = setTimeout(finish, delayMs);
+      cancelProviderRetryBackoff = finish;
+    });
+    return !shutdownRequested;
+  }
+
   function emitProviderSettlementEvent(sessionCtx: SessionContext, settlement: ProviderAttemptSettlement): void {
     sessionCtx.emitEvent({
       kind: "error",
@@ -249,6 +277,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     attempt: ProviderAttempt,
     error: TurnErrorInfo,
     turn?: Pick<CurrentTurn, "userVisibleOutput">,
+    attemptNumber = 1,
   ): ProviderAttemptSettlement | null {
     const diagnostic = isCodexStreamDiagnosticMessage(error.message);
     const classification = attempt.recordSignal({
@@ -266,7 +295,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         attempt.setReplaySafety("pre_visible");
       }
     }
-    return attempt.settle({ attempt: 1 });
+    return attempt.settle({ attempt: attemptNumber });
   }
 
   type AcceptedTurnStopDisposition =
@@ -278,7 +307,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     settlement: ProviderAttemptSettlement,
   ): TurnConsumedErrorReason | null {
     if (settlement.decision.action !== "stop") return null;
-    if (settlement.decision.terminalKind === "exhausted") return null;
+    if (settlement.decision.terminalKind === "exhausted") return "provider_retry_exhausted";
     if (settlement.classification.category === "deterministic_input") {
       return deterministicTerminalRejectionReason(errorInfoForSettlement(error, settlement));
     }
@@ -1009,6 +1038,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     token: DeliveryToken,
     sessionCtx: SessionContext,
     allowStaleRolloutRecovery = true,
+    providerAttemptNumber = 1,
+    providerRetryChain = false,
   ): Promise<boolean> {
     const client = appServer;
     if (!client || !threadId) {
@@ -1046,7 +1077,15 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         pendingChatContextPrompt = promptSnapshot;
         const staleThreadId = extractCodexStaleRolloutThreadId(err) ?? threadId;
         await startFreshThreadAfterStaleRollout(activePayload, sessionCtx, staleThreadId);
-        return runTurnFromText(inputText, messages, token, sessionCtx, false);
+        return runTurnFromText(
+          inputText,
+          messages,
+          token,
+          sessionCtx,
+          false,
+          providerAttemptNumber,
+          providerRetryChain,
+        );
       }
       const attempt = turnStartAttempt ?? createProviderAttempt();
       turnStartAttempt = null;
@@ -1111,7 +1150,14 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
 
     recordBufferedHistoricalTokenUsageExcept(turnId);
-    const turn = await createCurrentTurn(turnId, messages, token, sessionCtx);
+    const turn = await createCurrentTurn(
+      turnId,
+      messages,
+      token,
+      sessionCtx,
+      providerAttemptNumber,
+      providerRetryChain,
+    );
     turnStartAttempt = null;
     turnStartInProgress = false;
     schedulePendingDrain();
@@ -1121,12 +1167,23 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     replayBufferedNotifications(turn, sessionCtx);
     await currentTurnPromise;
     turnSettlementInProgress = true;
+    let providerRetrySettlement: ProviderAttemptSettlement | null = null;
     try {
-      await settleTurn(turn, sessionCtx);
+      providerRetrySettlement = await settleTurn(turn, sessionCtx);
     } finally {
       turnSettlementInProgress = false;
+      if (providerRetrySettlement) providerRetryFence = true;
       if (currentTurn === turn) currentTurn = null;
-      schedulePendingDrain();
+      if (!providerRetrySettlement) schedulePendingDrain();
+    }
+    if (providerRetrySettlement?.decision.action === "retry") {
+      const { attempt, delayMs, maxAttempts } = providerRetrySettlement.decision;
+      sessionCtx.log(
+        `codex app-server turn retry ${attempt}/${(maxAttempts ?? attempt) + 1} after ${delayMs}ms; ` +
+          `${providerRetrySettlement.classification.category}: ${providerRetrySettlement.messagePreview}`,
+      );
+      if (!(await waitForProviderRetry(delayMs))) return false;
+      return runTurnFromText(inputText, turn.acceptedMessages, token, sessionCtx, true, attempt + 1, true);
     }
     // Reached the provider (turn/start accepted, turn id assigned), so the
     // notice-bearing input was delivered to the model.
@@ -1151,6 +1208,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     messages: readonly SessionMessage[],
     token: DeliveryToken,
     sessionCtx: SessionContext,
+    providerAttemptNumber: number,
+    providerRetryChain: boolean,
   ): Promise<CurrentTurn> {
     let resolveTerminal: () => void = () => {};
     const terminalPromise = new Promise<void>((resolve) => {
@@ -1160,6 +1219,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     providerAttempt.setReplaySafety("pre_visible");
     const turn: CurrentTurn = {
       turnId,
+      providerAttemptNumber,
+      providerRetryChain,
       status: "inProgress",
       primaryToken: token,
       acceptedMessages: [...messages],
@@ -1180,6 +1241,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       resolveTerminal,
     };
     currentTurn = turn;
+    if (providerRetryChain) providerRetryFence = false;
     token.processingStarted(messages);
     currentTurnPromise = terminalPromise.finally(() => {
       currentTurnPromise = null;
@@ -1209,12 +1271,12 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     await closeAppServerAfterUnknownCustody(sessionCtx, reason, err);
   }
 
-  async function settleTurn(turn: CurrentTurn, sessionCtx: SessionContext): Promise<void> {
+  async function settleTurn(turn: CurrentTurn, sessionCtx: SessionContext): Promise<ProviderAttemptSettlement | null> {
     if (turn.inFlightAppend) await turn.inFlightAppend;
 
     if (turn.stopRequested || shutdownRequested) {
       schedulePendingDrain();
-      return;
+      return null;
     }
 
     const completedSuccessfully = turn.providerCompleted && turn.failure === null && turn.status === "completed";
@@ -1237,6 +1299,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     let retryReason: string | null = null;
     let consumedErrorReason: TurnConsumedErrorReason | null = null;
     let terminalRejectionReason: string | null = null;
+    let providerRetrySettlement: ProviderAttemptSettlement | null = null;
 
     if (completedEmptyCompactFailure) {
       terminalRejectionReason = deterministicTerminalRejectionReason(completedEmptyCompactFailure);
@@ -1300,11 +1363,28 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       }
     } else if (turn.failure) {
       const failure = mergeFailureWithDiagnostic(turn.failure, turn.lastSdkError);
-      const providerSettlement = recordAppServerFailureSignal(turn.providerAttempt, failure, turn);
+      const providerSettlement = recordAppServerFailureSignal(
+        turn.providerAttempt,
+        failure,
+        turn,
+        turn.providerAttemptNumber,
+      );
       const providerStopDisposition = providerSettlement
         ? acceptedTurnStopDisposition(failure, providerSettlement)
         : null;
-      if (providerSettlement && providerStopDisposition) {
+      if (providerSettlement?.decision.action === "retry") {
+        emitProviderSettlementEvent(sessionCtx, providerSettlement);
+        if (
+          isExplicitTransientSettlement(providerSettlement) &&
+          (providerSettlement.decision.replaySafety === "user_visible" || turn.providerRetryChain)
+        ) {
+          providerRetrySettlement = providerSettlement;
+        } else {
+          const kind = classifyAppServerFailure(failure);
+          retryReason = `codex_${kind}_failure`;
+          sessionCtx.log(`codex app-server turn failed (${kind}): ${turn.failure.message}`);
+        }
+      } else if (providerSettlement && providerStopDisposition) {
         emitProviderSettlementEvent(sessionCtx, providerSettlement);
         if (!turn.sdkErrorEmitted) {
           sessionCtx.emitEvent({
@@ -1334,11 +1414,26 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         codexErrorInfo: null,
         additionalDetails: null,
       };
-      const streamEndSettlement = recordAppServerFailureSignal(turn.providerAttempt, streamEndError, turn);
+      const streamEndSettlement = recordAppServerFailureSignal(
+        turn.providerAttempt,
+        streamEndError,
+        turn,
+        turn.providerAttemptNumber,
+      );
       const providerStopDisposition = streamEndSettlement
         ? acceptedTurnStopDisposition(streamEndError, streamEndSettlement)
         : null;
-      if (streamEndSettlement && providerStopDisposition) {
+      if (streamEndSettlement?.decision.action === "retry") {
+        emitProviderSettlementEvent(sessionCtx, streamEndSettlement);
+        if (
+          isExplicitTransientSettlement(streamEndSettlement) &&
+          (streamEndSettlement.decision.replaySafety === "user_visible" || turn.providerRetryChain)
+        ) {
+          providerRetrySettlement = streamEndSettlement;
+        } else {
+          retryReason = "codex_app_server_stream_ended_without_completion";
+        }
+      } else if (streamEndSettlement && providerStopDisposition) {
         emitProviderSettlementEvent(sessionCtx, streamEndSettlement);
         sessionCtx.emitEvent({
           kind: "error",
@@ -1376,6 +1471,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       });
     }
 
+    if (providerRetrySettlement) return providerRetrySettlement;
+
     if (terminalRejectionReason) {
       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
       await turn.primaryToken.terminalRejected(turn.acceptedMessages, terminalRejectionReason, {
@@ -1405,21 +1502,23 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           sessionCtx.log(`landing trial turn completion confirmation failed after provider completion: ${err.message}`);
           turn.primaryToken.retry(turn.acceptedMessages, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
           await closeAppServerAfterUncommittablePrefix(sessionCtx, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
-          return;
+          return null;
         }
         await turn.primaryToken.complete(turn.acceptedMessages, settlement.action.outcome);
       } else {
         sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
         turn.primaryToken.retry(turn.acceptedMessages, settlement.action.reason);
         await closeAppServerAfterUncommittablePrefix(sessionCtx, settlement.action.reason);
-        return;
+        return null;
       }
     }
     schedulePendingDrain();
+    return null;
   }
 
   function schedulePendingDrain(): void {
     if (pendingDrainScheduled || pendingDrainInProgress) return;
+    if (providerRetryFence) return;
     if (pendingInputs.length === 0 || shutdownRequested) return;
     if (!appServer || !threadId) return;
     if (turnSettlementInProgress || turnStartInProgress) return;
@@ -1440,6 +1539,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
 
   async function drainPendingInputs(): Promise<void> {
     if (pendingDrainInProgress || pendingInputs.length === 0 || shutdownRequested) return;
+    if (providerRetryFence) return;
     if (!appServer || !threadId) return;
     const sessionCtx = ctx;
     if (!sessionCtx) return;
@@ -1668,6 +1768,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       const hasExplicitDeliveryToken = token !== undefined;
       const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       shutdownRequested = false;
+      providerRetryFence = false;
       startupTurnPending = true;
       ctx = sessionCtx;
       try {
@@ -1700,6 +1801,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       const hasExplicitDeliveryToken = token !== undefined;
       const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       shutdownRequested = false;
+      providerRetryFence = false;
       startupTurnPending = message !== undefined;
       ctx = sessionCtx;
       try {
@@ -1766,8 +1868,11 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     },
 
     async suspend() {
+      shutdownRequested = true;
+      providerRetryFence = false;
       startupTurnPending = false;
       turnStartInProgress = false;
+      cancelProviderRetryBackoff?.();
       retryQueuedMessages("codex_suspend_before_terminal");
       await interruptCurrentTurn();
       await appServer?.shutdown();
@@ -1783,6 +1888,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
 
     async shutdown(reason?: string) {
       shutdownRequested = true;
+      providerRetryFence = false;
+      cancelProviderRetryBackoff?.();
       retryQueuedMessages(reason ?? "codex_shutdown_before_terminal");
       await interruptCurrentTurn();
       await appServer?.shutdown();

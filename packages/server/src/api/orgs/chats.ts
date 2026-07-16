@@ -1,6 +1,6 @@
 import {
   createMeChatSchema,
-  createTaskChatSchema,
+  createWebTaskChatSchema,
   listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   paginationQuerySchema,
@@ -15,7 +15,7 @@ import { createChat, listChatsForMember, resolveAgentIdsByNameInOrg } from "../.
 import { assertNoLandingCampaignTrialAgents } from "../../services/landing-campaigns/guards.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { scanFixKickoffKey } from "../../services/onboarding-kickoff.js";
+import { campaignActionKickoffKey, resolveCampaignActionContext } from "../../services/onboarding-kickoff.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -119,7 +119,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     const scope = await requireOrgMembership(request, app.db);
     const rawBody = request.body;
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
-      const body = createTaskChatSchema.parse(rawBody);
+      const body = createWebTaskChatSchema.parse(rawBody);
       const initialRecipientAgentIds = [
         ...body.initialRecipientAgentIds,
         ...(await resolveAgentIdsByNameInOrg(app.db, scope.organizationId, body.initialRecipientNames)),
@@ -133,6 +133,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
       );
       await assertAllAgentsVisibleInOrg(app.db, scope, visibleTargetIds);
       await assertNoLandingCampaignTrialAgents(app.db, visibleTargetIds);
+      const campaignAction = resolveCampaignActionContext(body.campaignAction, body.scanFixRepoSlug);
       const result = await createChat(app.db, {
         mode: "task",
         initiatorAgentId: scope.humanAgentId,
@@ -143,11 +144,9 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
         description: body.description ?? null,
         initialMessage: { ...body.initialMessage, source: "web" },
         source: "manual",
-        // Production-scan fix conversion: key the launcher on the repo so
-        // re-entering the fix link reuses it (and dedups with the onboarding
-        // path that carries the same key) instead of creating a duplicate.
-        ...(body.scanFixRepoSlug
-          ? { onboardingKickoffKey: scanFixKickoffKey(scope.humanAgentId, body.scanFixRepoSlug) }
+        // Campaign actions share one key across direct and onboarding paths.
+        ...(campaignAction
+          ? { onboardingKickoffKey: campaignActionKickoffKey(scope.humanAgentId, campaignAction) }
           : {}),
       });
       notifyRecipients(app.notifier, result.recipients, result.message.id);

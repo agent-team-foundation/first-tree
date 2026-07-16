@@ -55,9 +55,17 @@ function requiredInputsForAttempt(attempt: number): number {
 }
 
 async function waitForObservedInputs(attempt: number, count: number): Promise<void> {
-  const deadline = Date.now() + 1000;
+  const deadline = Date.now() + 3000;
   while (observedInputMessages.filter((message) => message.attempt === attempt).length < count) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for attempt ${attempt} inputs`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+async function waitForCondition(predicate: () => boolean, description: string): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
     await new Promise((resolve) => setImmediate(resolve));
   }
 }
@@ -153,6 +161,7 @@ function buildCache() {
 
 describe("claude-code handler — transient stream-error retry replays user message", () => {
   it("re-pushes the original prompt into the rebuilt InputController so the SDK isn't left idle", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     resetSdkMockState();
 
     const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -185,54 +194,79 @@ describe("claude-code handler — transient stream-error retry replays user mess
       },
     };
 
-    await handler.start(
-      {
-        id: "m1",
-        chatId: "chat-stream-retry",
-        senderId: "user-1",
-        format: "text",
-        content: ORIGINAL_PROMPT,
-        metadata: null,
-      },
-      ctx,
-    );
-    // suspend awaits `consumerDone` so the consumer loop runs through all
-    // retries and the eventual retry-exhausted ack before we assert.
-    await handler.suspend();
-    await new Promise((r) => setImmediate(r));
+    try {
+      await handler.start(
+        {
+          id: "m1",
+          chatId: "chat-stream-retry",
+          senderId: "user-1",
+          format: "text",
+          content: ORIGINAL_PROMPT,
+          metadata: null,
+        },
+        ctx,
+      );
+      await waitForCondition(
+        () => logs.filter((line) => line.includes("Attempting auto-resume")).length === 1,
+        "first scheduled stream retry",
+      );
 
-    // First retry must have been attempted — proves the catch path fired
-    // on the wrapped stream error.
-    expect(logs.some((l) => l.includes("Attempting auto-resume (retry 1/"))).toBe(true);
+      expect(attemptIdx).toBe(1);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(attemptIdx).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForObservedInputs(2, 1);
 
-    // The smoking gun: the rebuilt query (attempt 2) must have received
-    // a user message containing the original prompt. Pre-fix this was
-    // empty and the SDK subprocess hung idle.
-    const attempt2Inputs = observedInputMessages.filter((m) => m.attempt === 2);
-    expect(attempt2Inputs.length).toBeGreaterThan(0);
-    expect(attempt2Inputs.some((m) => m.content.includes(ORIGINAL_PROMPT))).toBe(true);
+      await waitForCondition(
+        () => logs.filter((line) => line.includes("Attempting auto-resume")).length === 2,
+        "second scheduled stream retry",
+      );
+      expect(attemptIdx).toBe(2);
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(attemptIdx).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForObservedInputs(3, 1);
+      await waitForCondition(() => finishTurnCalled.mock.calls.length === 1, "stream retry exhaustion settlement");
 
-    // And the first attempt also saw the prompt (sanity check that the
-    // mock plumbing works at all).
-    const attempt1Inputs = observedInputMessages.filter((m) => m.attempt === 1);
-    expect(attempt1Inputs.some((m) => m.content.includes(ORIGINAL_PROMPT))).toBe(true);
+      // suspend awaits `consumerDone` after the retry-exhausted settlement.
+      await handler.suspend();
+      await new Promise((r) => setImmediate(r));
 
-    // After both retries fail transient (same wrapped API error every
-    // time), the handler must end in the retry-exhausted / permanent
-    // branch and ack — per PR #612 § "permanent → ack".
-    expect(finishTurnCalled).toHaveBeenCalledTimes(1);
+      // First retry must have been attempted — proves the catch path fired
+      // on the wrapped stream error.
+      expect(logs.some((l) => l.includes("Attempting auto-resume (retry 1/"))).toBe(true);
 
-    // A user-visible error must be surfaced on retry-exhaustion (so the
-    // chat timeline shows what happened), AND the turn must be closed
-    // with status:"error" so the frontend turn-grouping filter doesn't
-    // wait forever for the success boundary.
-    const errors = emitted.filter((e) => e.kind === "error");
-    expect(errors.some((e) => e.kind === "error" && e.payload.source === "sdk")).toBe(true);
-    const turnEnds = emitted.filter((e) => e.kind === "turn_end");
-    expect(turnEnds.length).toBeGreaterThan(0);
-    const lastTurnEnd = turnEnds[turnEnds.length - 1];
-    if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
-    expect(lastTurnEnd.payload.status).toBe("error");
+      // The smoking gun: the rebuilt query (attempt 2) must have received
+      // a user message containing the original prompt. Pre-fix this was
+      // empty and the SDK subprocess hung idle.
+      const attempt2Inputs = observedInputMessages.filter((m) => m.attempt === 2);
+      expect(attempt2Inputs.length).toBeGreaterThan(0);
+      expect(attempt2Inputs.some((m) => m.content.includes(ORIGINAL_PROMPT))).toBe(true);
+
+      // And the first attempt also saw the prompt (sanity check that the
+      // mock plumbing works at all).
+      const attempt1Inputs = observedInputMessages.filter((m) => m.attempt === 1);
+      expect(attempt1Inputs.some((m) => m.content.includes(ORIGINAL_PROMPT))).toBe(true);
+
+      // After both retries fail transient (same wrapped API error every
+      // time), the handler must end in the retry-exhausted / permanent
+      // branch and ack — per PR #612 § "permanent → ack".
+      expect(finishTurnCalled).toHaveBeenCalledTimes(1);
+
+      // A user-visible error must be surfaced on retry-exhaustion (so the
+      // chat timeline shows what happened), AND the turn must be closed
+      // with status:"error" so the frontend turn-grouping filter doesn't
+      // wait forever for the success boundary.
+      const errors = emitted.filter((e) => e.kind === "error");
+      expect(errors.some((e) => e.kind === "error" && e.payload.source === "sdk")).toBe(true);
+      const turnEnds = emitted.filter((e) => e.kind === "turn_end");
+      expect(turnEnds.length).toBeGreaterThan(0);
+      const lastTurnEnd = turnEnds[turnEnds.length - 1];
+      if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
+      expect(lastTurnEnd.payload.status).toBe("error");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("replays every provider-entered input in a coalesced transient retry", async () => {

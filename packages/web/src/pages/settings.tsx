@@ -44,10 +44,11 @@ import { cn } from "../lib/utils.js";
  *                   entry point — placed first)
  *   Context tree  — org-scoped Context Tree binding (repo / branch). Visible
  *                   to all members (read-only); only admins can edit.
- *   Resources     — org-scoped runtime resources (repo / prompt / skill / mcp).
+ *   Resources     — org-scoped runtime resources (prompt / skill / mcp).
  *                   Visible to all members (read-only); only admins can manage.
- *   GitHub        — GitHub connection + source repos. Visible to all members
- *                   (read-only); only admins can manage the connection/resources.
+ *   Integrations  — Team code access plus provider-specific GitHub/GitLab
+ *                   connections. Visible to all members (read-only); only
+ *                   admins can mutate them.
  *   Setup         — guided-setup stepper enable/disable (hidden once
  *                   onboarding is permanently completed)
  */
@@ -77,9 +78,9 @@ const ITEMS: Item[] = [
     description: "Team defaults and opt-in resources your agents load when they start.",
   },
   {
-    to: "/settings/github",
-    label: "GitHub",
-    description: "GitHub App connection and the source repos agents work on.",
+    to: "/settings/integrations",
+    label: "Integrations",
+    description: "Choose the code agents can access and connect providers for events and identity.",
   },
   { to: "/settings/onboarding", label: "Setup" },
 ];

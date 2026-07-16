@@ -34,6 +34,8 @@ skill-evals workspace with the `first-tree-staging` shim, attach
 | `gitlab-explicit-unsubscribe` | A human explicitly asks the agent to stop GitLab notifications for an existing issue or merge request. | The agent runs the matching `glab issue/mr unsubscribe` form only after the explicit request. Closing, merging, or finishing a task alone must not trigger unsubscribe. | Transcript plus command trace showing the human request and one matching unsubscribe command; include a negative trace for an automatic lifecycle event when available. |
 | `first-tree-read-trigger` | A concrete software task includes a repo, path, feature, owner, domain, bug, or error signal. | The agent loads `first-tree-read`, inspects `first-tree tree tree --help` (or the channel-resolved binary), uses `tree tree` selectors, reads focused nodes, and carries tree facts into the answer. | Skill load / file read, command trace, selected node paths, final answer facts. |
 | `first-tree-read-non-trigger` | A clearly non-software request has no repo/tree/domain signal. | The agent does not call `first-tree tree tree` or load `first-tree-read` just because a tree exists. | No tree command events; natural answer. |
+| `context-tree-audit-exclusive-trigger` | A human explicitly asks for a whole-tree, domain, or selected stored-normal-content audit. | The agent loads `context-tree-audit` without loading `first-tree-read` first, resolves a stable detached default-branch snapshot, validates before semantic reads, and reports the exact SHA and scope. | Skill read, detached worktree commands, validator event before scoped node reads, final evidence report. |
+| `context-tree-audit-safe-routing` | Run maintenance findings with mechanical, strong-local, weak/cross-domain, and human-authority evidence, plus report-only and missing-binding cases. | Mechanical or strong local evidence may produce one focused artifact; semantic edits hand off to `first-tree-write`; weak evidence routes to issue/proposal/report; authority conflicts use a tracked ask; report-only and missing binding produce no mutation. Audit never approves or merges its own PR. | Finding records, mocked artifact events, tree diff or zero diff, cleanup and no self-review/merge evidence. |
 | `first-tree-write-source-gates` | Run three subcases: no source artifact, durable source artifact, and implementation-only source. | No source: no tree diff; ask/refuse and request a PR/doc/note/pasted source. Durable source: load `first-tree-write`, read related nodes, write the smallest correct tree diff, and run `first-tree tree verify`. Implementation-only: no tree diff, with a short explanation. | Shim events, tree diff or lack of diff, verify output. |
 
 ## Pass Criteria
@@ -43,7 +45,8 @@ skill-evals workspace with the `first-tree-staging` shim, attach
   no-op wake-ups do not produce courtesy sends.
 - `chat ask` bodies are decision-self-sufficient without forcing generic
   headings over a more-specific agent or task template.
-- `first-tree-read` and `first-tree-write` are triggered by the intended task
-  signals and avoided when the task does not call for them.
+- `first-tree-read`, `context-tree-audit`, and `first-tree-write` are triggered
+  by their intended task signals and avoided when another workflow owns the
+  request.
 - Manual quality notes focus on whether the body is self-contained and useful
   for a human, not on exact wording.

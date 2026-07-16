@@ -45,6 +45,9 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     const rawBody = request.body;
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
+      if ("campaignAction" in rawBody || "scanFixRepoSlug" in rawBody) {
+        throw new BadRequestError("Landing campaign actions can only be started by the signed-in web user.");
+      }
       const body = createTaskChatSchema.parse(rawBody);
       const initialRecipientAgentIds = [
         ...body.initialRecipientAgentIds,
@@ -314,6 +317,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
         connectionId: body.connectionId,
         chatId: request.params.chatId,
         declaredByAgentId: identity.uuid,
+        boundVia: "agent_declared",
         entityUrl: body.entityUrl,
       });
       return reply.status(201).send({ entity });

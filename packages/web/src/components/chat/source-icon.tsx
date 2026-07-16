@@ -3,6 +3,7 @@ import {
   CircleDot,
   GitCommit,
   Github,
+  Gitlab,
   GitPullRequest,
   type LucideIcon,
   MessageCircle,
@@ -34,6 +35,7 @@ import {
 const SOURCE_ICON_MAP: Record<ChatSource, LucideIcon> = {
   manual: MessagesSquare,
   github: Github,
+  gitlab: Gitlab,
   agent: Sparkles,
 };
 
@@ -47,6 +49,7 @@ const GITHUB_ENTITY_ICON_MAP: Record<GithubEntityType, LucideIcon> = {
 const SOURCE_LABEL_MAP: Record<ChatSource, string> = {
   manual: "Human-created chat",
   github: "GitHub",
+  gitlab: "GitLab",
   agent: "Agent-created task",
 };
 

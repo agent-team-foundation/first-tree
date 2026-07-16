@@ -13,6 +13,7 @@ import postgres from "postgres";
 import { ZodError } from "zod";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
+import { agentContextReviewRunRoutes } from "./api/agent/context-review-runs.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
 import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
@@ -26,6 +27,7 @@ import { agentConfigRoutes } from "./api/agents-config.js";
 import { agentResourcesRoutes } from "./api/agents-resources.js";
 import { attachmentRoutes } from "./api/attachments.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
+import { googleOauthRoutes } from "./api/auth/google.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { chatRoutes } from "./api/chats.js";
@@ -34,11 +36,14 @@ import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
 import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
 import { gitlabConnectionRoutes } from "./api/gitlab-connections.js";
+import { gitlabIdentityLinkRoutes } from "./api/gitlab-identity-links.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
+import { scanCampaignExportRoutes } from "./api/internal/scan-campaign-exports.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { landingCampaignRoutes } from "./api/landing-campaigns.js";
 import { meRoutes } from "./api/me.js";
+import { meAuthProviderRoutes } from "./api/me-auth-providers.js";
 import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
@@ -50,6 +55,7 @@ import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.j
 import { orgDocumentRoutes } from "./api/orgs/documents.js";
 import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgGitlabConnectionRoutes } from "./api/orgs/gitlab-connections.js";
+import { orgGitlabIdentityLinkRoutes } from "./api/orgs/gitlab-identity-links.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
@@ -494,6 +500,7 @@ export async function buildApp(config: Config) {
       await api.register(gitlabWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
+      await api.register(googleOauthRoutes, { prefix: "/auth/google" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
       // Public read for manager-uploaded agent avatars — `<img src>` cannot
@@ -513,6 +520,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
+          await scope.register(meAuthProviderRoutes);
           await scope.register(landingCampaignRoutes, { prefix: "/me/landing-campaigns" });
           await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),
@@ -528,6 +536,13 @@ export async function buildApp(config: Config) {
           await scope.register(attachmentRoutes);
         }),
         { prefix: "/attachments" },
+      );
+
+      await api.register(
+        userScope("internalAnalyticsScope", async (scope) => {
+          await scope.register(scanCampaignExportRoutes, { prefix: "/analytics/scan-campaign-exports" });
+        }),
+        { prefix: "/internal" },
       );
 
       // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────
@@ -547,6 +562,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgResourceRoutes, { prefix: "/resources" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgGitlabConnectionRoutes, { prefix: "/gitlab-connections" });
+          await scope.register(orgGitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
@@ -573,6 +589,7 @@ export async function buildApp(config: Config) {
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
           await scope.register(gitlabConnectionRoutes, { prefix: "/gitlab-connections" });
+          await scope.register(gitlabIdentityLinkRoutes, { prefix: "/gitlab-identity-links" });
           if (config.docs.enabled) {
             await scope.register(documentRoutes, { prefix: "/documents" });
             await scope.register(documentCommentRoutes, { prefix: "/document-comments" });
@@ -586,6 +603,7 @@ export async function buildApp(config: Config) {
         agentScope("agentRuntimeScope", async (scope) => {
           await scope.register(agentMeRoutes);
           await scope.register(agentChatRoutes, { prefix: "/chats" });
+          await scope.register(agentContextReviewRunRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);

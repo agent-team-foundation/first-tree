@@ -19,9 +19,12 @@ import { installCoreSkills, writeAgentBriefing } from "../runtime/bootstrap.js";
 
 const originalPlatform = process.platform;
 const CORE_SKILLS = [
+  "context-tree-review",
+  "context-tree-audit",
   "first-tree-welcome",
   "first-tree-seed",
   "first-tree-file-bug",
+  "first-tree-qa",
   "first-tree-read",
   "first-tree-write",
 ] as const;

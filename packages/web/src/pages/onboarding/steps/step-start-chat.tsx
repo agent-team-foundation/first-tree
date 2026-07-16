@@ -1,3 +1,4 @@
+import type { LandingCampaignActionContext } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -6,11 +7,12 @@ import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { CommunityChannels } from "../../../components/community-channels.js";
 import { Button } from "../../../components/ui/button.js";
-import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../../../utils/onboarding-flags.js";
+import { readCampaignActionHandoffFlag, writeCampaignActionHandoffFlag } from "../../../utils/onboarding-flags.js";
+import { getCampaign } from "../../quickstart/campaigns.js";
 import {
+  buildCampaignActionBootstrap,
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
-  buildScanFixBootstrap,
   buildValueFirstBootstrap,
 } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
@@ -31,8 +33,8 @@ async function runStartChat(args: {
   topic: string;
   treeBindingPlan?: TreeBindingPlan | "none";
   joinPath?: "invite";
-  /** Production-scan fix conversion `owner/repo` — keys the launcher for dedup. */
-  scanFixRepoSlug?: string;
+  /** Campaign + repo pair used by both action entry paths for dedup. */
+  campaignAction?: LandingCampaignActionContext;
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
   const agent = await resolveOnboardingAgent(args.organizationId);
@@ -44,7 +46,7 @@ async function runStartChat(args: {
     topic: args.topic,
     treeBindingPlan: args.treeBindingPlan ?? "none",
     joinPath: args.joinPath,
-    ...(args.scanFixRepoSlug ? { scanFixRepoSlug: args.scanFixRepoSlug } : {}),
+    ...(args.campaignAction ? { campaignAction: args.campaignAction } : {}),
   });
   await args.complete(chatId);
 }
@@ -74,7 +76,8 @@ function AdminStartChat() {
   // Production-scan fix conversion captured by /quickstart (`action=fix`).
   // Read straight off the session flag; cleared once the chat exists so
   // `finishLater` keeps it for a resumed run.
-  const [scanFixHandoff] = useState(() => readScanFixHandoffFlag());
+  const [campaignActionHandoff] = useState(() => readCampaignActionHandoffFlag());
+  const campaignActionConfig = campaignActionHandoff ? getCampaign(campaignActionHandoff.campaign) : null;
 
   // `selectedRepoUrls` is only populated by StepConnectCode, which the
   // value-first redesign removed from the onboarding sequence (see steps.ts).
@@ -114,17 +117,26 @@ function AdminStartChat() {
       if (!hasRepos) {
         await runStartChat({
           bootstrap: (agent) =>
-            scanFixHandoff
-              ? buildScanFixBootstrap(agent.displayName || "your agent", scanFixHandoff)
+            campaignActionHandoff && campaignActionConfig
+              ? buildCampaignActionBootstrap(
+                  agent.displayName || "your agent",
+                  campaignActionConfig.action,
+                  campaignActionHandoff,
+                )
               : buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
-          topic: scanFixHandoff ? "Fix production scan blockers" : "Get started with First Tree",
+          topic: campaignActionConfig?.action.topic ?? "Get started with First Tree",
           treeBindingPlan: "none",
-          // Key the fix launcher on the repo so it dedups with the direct path.
-          ...(scanFixHandoff?.repoSlug ? { scanFixRepoSlug: scanFixHandoff.repoSlug } : {}),
+          ...(campaignActionHandoff?.repoSlug
+            ? {
+                campaignAction: {
+                  campaign: campaignActionHandoff.campaign,
+                  repoSlug: campaignActionHandoff.repoSlug,
+                },
+              }
+            : {}),
           complete: async (chatId) => {
-            // The chat now exists with the fix bootstrap — the handoff is consumed.
-            writeScanFixHandoffFlag(null);
+            writeCampaignActionHandoffFlag(null);
             await completeAndEnterChat(chatId);
           },
         });
@@ -180,7 +192,7 @@ function AdminStartChat() {
             // Scan-fix handoffs are consumed by the admin fix path only — drop
             // any stale flag once a non-fix first chat exists, so a later
             // onboarding run in this tab cannot consume someone else's scan.
-            writeScanFixHandoffFlag(null);
+            writeCampaignActionHandoffFlag(null);
             await completeAndEnterChat(chatId);
           },
         });
@@ -374,7 +386,7 @@ function InviteeReady() {
           // Scan-fix handoffs are consumed by the admin fix path only — drop
           // any stale flag once a non-fix first chat exists, so a later
           // onboarding run in this tab cannot consume someone else's scan.
-          writeScanFixHandoffFlag(null);
+          writeCampaignActionHandoffFlag(null);
           await completeAndEnterChat(chatId);
         },
       });
@@ -437,7 +449,7 @@ function InviteeNotReady() {
           // Scan-fix handoffs are consumed by the admin fix path only — drop
           // any stale flag once a non-fix first chat exists, so a later
           // onboarding run in this tab cannot consume someone else's scan.
-          writeScanFixHandoffFlag(null);
+          writeCampaignActionHandoffFlag(null);
           await completeAndEnterChat(chatId);
         },
       });

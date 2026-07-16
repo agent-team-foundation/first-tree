@@ -16,8 +16,10 @@
  * on), not a client re-pull trigger.
  */
 
+import { isKnownLandingCampaignSlug, type KnownLandingCampaignSlug } from "@first-tree/shared";
+
 export type LandingCampaignSkillSet = {
-  id: string;
+  id: KnownLandingCampaignSlug;
   version: string;
   agentName: string;
   agentDisplayName: string;
@@ -26,23 +28,30 @@ export type LandingCampaignSkillSet = {
   skillRepoUrl: string;
   /** Skill inside the cloned repo that the bootstrap message names. */
   skillName: string;
+  /** User-facing explanation shown before the trial agent instruction. */
+  trialSummary: string;
+  /** User-facing explanation shown when a silent trial is restarted. */
+  retrySummary: string;
 };
 
 const LANDING_CAMPAIGN_SKILL_SET_VERSION = "2026.07.07.1";
 
-const LANDING_CAMPAIGN_SKILL_SETS: Record<string, Omit<LandingCampaignSkillSet, "id" | "version">> = {
+const LANDING_CAMPAIGN_SKILL_SETS: Record<KnownLandingCampaignSlug, Omit<LandingCampaignSkillSet, "id" | "version">> = {
   "production-scan": {
     agentName: "production-scanner",
     agentDisplayName: "Production Scanner",
     chatTopic: "Production readiness scan",
     skillRepoUrl: "https://github.com/agent-team-foundation/launch-readiness-scan",
     skillName: "production-scan",
+    trialSummary:
+      "It's giving your code a safe, read-only check before launch — you'll get a score, the problems that actually matter, and the exact fix for each one.",
+    retrySummary: "The scan didn't get started, so First Tree has restarted it. Same safe, read-only check on:",
   },
 };
 
 export function getLandingCampaignSkillSet(campaign: string): LandingCampaignSkillSet | null {
+  if (!isKnownLandingCampaignSlug(campaign)) return null;
   const entry = LANDING_CAMPAIGN_SKILL_SETS[campaign];
-  if (!entry) return null;
   return { id: campaign, version: LANDING_CAMPAIGN_SKILL_SET_VERSION, ...entry };
 }
 
@@ -50,7 +59,7 @@ export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet,
   return [
     `Welcome to First Tree. ${skillSet.agentDisplayName} is connected to your code: ${repoUrl}`,
     "",
-    "It's giving your code a safe, read-only check before launch — you'll get a score, the problems that actually matter, and the exact fix for each one.",
+    skillSet.trialSummary,
     "",
     `${skillSet.agentDisplayName} — clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on the repo above.`,
   ].join("\n");
@@ -64,8 +73,8 @@ export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet,
  */
 export function buildLandingCampaignRetryBootstrap(skillSet: LandingCampaignSkillSet, repoUrl: string): string {
   return [
-    `The scan didn't get started, so First Tree has restarted it. Same safe, read-only check on: ${repoUrl}`,
+    `${skillSet.retrySummary} ${repoUrl}`,
     "",
-    `${skillSet.agentDisplayName} — if a scan is already in progress in this chat, continue where you left off. Otherwise clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on ${repoUrl}.`,
+    `${skillSet.agentDisplayName} — if work for this campaign is already in progress in this chat, continue where you left off. Otherwise clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on ${repoUrl}.`,
   ].join("\n");
 }

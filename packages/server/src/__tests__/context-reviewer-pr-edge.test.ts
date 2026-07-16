@@ -41,8 +41,8 @@ describe("Context Reviewer PR internals", () => {
         commentUrl: null,
         commentAuthorLogin: null,
         organizationId: "org_1",
+        contextReviewRunId: "01900000-0000-7000-8000-000000000001",
         reviewerManagerGithubLogin: null,
-        reviewerManagerIsPrAuthor: false,
       }),
     ).rejects.toThrow("Context Reviewer PR prompt template is missing");
   });
