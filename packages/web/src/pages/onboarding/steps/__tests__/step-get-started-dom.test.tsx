@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingFlowValue } from "../../onboarding-flow.js";
@@ -88,18 +88,19 @@ function teammateAgent(uuid: string, displayName: string, managerId: string) {
   };
 }
 
-async function renderStep(value: OnboardingFlowValue): Promise<HTMLElement> {
+async function renderStep(value: OnboardingFlowValue, opts: { strict?: boolean } = {}): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   roots.push(root);
-  const ui: ReactElement = (
+  const inner: ReactElement = (
     <QueryClientProvider client={queryClient}>
       <OnboardingFlowContext.Provider value={value}>
         <StepGetStarted />
       </OnboardingFlowContext.Provider>
     </QueryClientProvider>
   );
+  const ui: ReactElement = opts.strict ? <StrictMode>{inner}</StrictMode> : inner;
   await act(async () => {
     root.render(ui);
     await Promise.resolve();
@@ -155,6 +156,30 @@ describe("StepGetStarted", () => {
     expect(value.goNext).toHaveBeenCalledTimes(1);
     expect(container.textContent).toBe("");
     expect(mocks.listAgents).not.toHaveBeenCalled();
+  });
+
+  it("self-skip advances exactly once under StrictMode's double-invoked mount effect", async () => {
+    // The original defect existed only under StrictMode: goNext is a relative
+    // increment, so a double-fired mount effect without the one-shot ref would
+    // advance twice and skip connect-computer. Render under REAL StrictMode so
+    // removing the guard fails this test.
+    const value = flow({ offerTeamAgentStart: false });
+    await renderStep(value, { strict: true });
+    expect(value.goNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed roster read shows an error with retry, not a false empty state", async () => {
+    mocks.listAgents.mockRejectedValueOnce(new Error("boom"));
+    const value = flow();
+    const container = await renderStep(value);
+    await click(buttonByText(container, "Quick start"));
+    await flushQueries();
+    expect(container.textContent).toContain("Couldn't load your team's agents");
+    expect(container.textContent).not.toContain("No team agent is available");
+    // Retry refetches and renders the roster.
+    await click(buttonByText(container, "Try again"));
+    await flushQueries();
+    expect(container.textContent).toContain("Dev Assistant");
   });
 
   it("offers both choices; the primary continues the standard setup", async () => {

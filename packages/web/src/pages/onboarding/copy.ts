@@ -350,6 +350,10 @@ export const COPY = {
     runBy: (owner: string) => `Run by ${owner}`,
     startChat: "Start chat",
     pickEmpty: "No team agent is available right now — set up your own instead.",
+    /** Roster read failed — distinct from empty, so a network blip never
+     *  becomes a false "no agent available" claim. */
+    pickError: "Couldn't load your team's agents just now.",
+    pickRetry: "Try again",
     /** Footnote under the list: quick start does not finish setup. */
     pickFootnote: "Starting here won't finish your setup — you can complete it any time from Settings.",
   },

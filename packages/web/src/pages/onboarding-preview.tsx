@@ -283,7 +283,7 @@ type NetProfile = {
    * selected org, not the fixture org). Opt-in: scenarios that don't declare
    * it fall through to the real fetch.
    */
-  orgAgents?: "pending" | Array<{ uuid: string; name: string; displayName: string; managerId: string }>;
+  orgAgents?: "pending" | "error" | Array<{ uuid: string; name: string; displayName: string; managerId: string }>;
   /** GET /orgs/:id/members — owner names for the picker's "Run by X" tag. */
   orgMembers?: boolean;
 };
@@ -321,6 +321,7 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   // org. Opt-in via the scenario's net profile; otherwise fall through.
   if (activeNet.orgAgents !== undefined && /^\/orgs\/[^/]+\/agents$/.test(p ?? "")) {
     if (activeNet.orgAgents === "pending") return new Promise<Response>(() => {});
+    if (activeNet.orgAgents === "error") return statusResponse(500, JSON.stringify({ error: "roster unavailable" }));
     return jsonResponse({
       items: activeNet.orgAgents.map((a) => ({
         ...a,
@@ -859,12 +860,24 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     label: "Pick · no team agent",
     group: "Get-started fork states",
     role: "invitee",
-    // A failed roster read collapses to the same empty state (continue setup),
-    // so this doubles as the picker's error variant.
     wizard: {
       step: "get-started",
       flow: { offerTeamAgentStart: true },
       net: { orgAgents: [], orgMembers: true },
+      body: <StepGetStarted defaultMode="pick" />,
+    },
+  },
+  {
+    id: "inv-fork-pick-error",
+    label: "Pick · roster failed",
+    group: "Get-started fork states",
+    role: "invitee",
+    // A rejected roster read is a DISTINCT state from empty: it names the
+    // failure and offers retry instead of falsely claiming no agent exists.
+    wizard: {
+      step: "get-started",
+      flow: { offerTeamAgentStart: true },
+      net: { orgAgents: "error", orgMembers: true },
       body: <StepGetStarted defaultMode="pick" />,
     },
   },

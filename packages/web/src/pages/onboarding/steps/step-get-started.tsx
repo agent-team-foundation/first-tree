@@ -13,26 +13,27 @@ import { useOnboardingFlow } from "../onboarding-flow.js";
 import { startChatErrorMessage } from "../provision-tree.js";
 import { startOnboardingChat } from "../tree-setup-chat.js";
 
-// The server caps each agents page at 100 (paginationQuerySchema). Bound the
-// walk so a pathological org can never spin this into an unbounded loop; 10
-// pages = 1000 shareable team agents, far beyond any real team's picker.
-const MAX_PICKER_PAGES = 10;
-
 /**
  * Every org-visible, addressable, non-human agent — paged through so the
- * candidate set matches the org-wide readiness bit (`currentOrgHasUsableAgent`)
- * rather than a single 100-row page. `type=agent` filters human mirrors out
- * server-side so they never consume page slots and hide an eligible agent on a
- * later page.
+ * candidate set matches the org-wide readiness bit (`currentOrgHasUsableAgent`),
+ * which is an unbounded existence query: the walk runs until the server
+ * reports no further page, never treating a fixed page count as exhaustive.
+ * `type=agent` filters human mirrors out server-side so they never consume
+ * page slots and hide an eligible agent on a later page. A non-advancing
+ * (repeated) cursor aborts the walk so a misbehaving server cannot loop the
+ * client forever.
  */
 async function listAllNonHumanAddressableAgents(): Promise<Agent[]> {
   const out: Agent[] = [];
   let cursor: string | undefined;
-  for (let page = 0; page < MAX_PICKER_PAGES; page++) {
+  const seenCursors = new Set<string>();
+  for (;;) {
     const res = await listAgents({ limit: 100, type: "agent", addressableOnly: true, cursor });
     out.push(...res.items);
-    if (!res.nextCursor) break;
-    cursor = res.nextCursor;
+    const next = res.nextCursor;
+    if (!next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    cursor = next;
   }
   return out;
 }
@@ -217,6 +218,20 @@ function PickTeamAgent({ onBack, onContinueSetup }: { onBack: () => void; onCont
       )}
       {agentsQuery.isLoading ? (
         <StatusRow state="waiting" label="Loading team agents…" />
+      ) : agentsQuery.isError ? (
+        // A failed roster read is NOT "no team agent": claiming emptiness on a
+        // network/server error would be false and unrecoverable. Name the
+        // failure and offer a retry.
+        <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+          <FlowHint tone="error" role="alert">
+            {g.pickError}
+          </FlowHint>
+          <div className="flex">
+            <Button type="button" onClick={() => void agentsQuery.refetch()}>
+              {g.pickRetry}
+            </Button>
+          </div>
+        </div>
       ) : candidates.length === 0 ? (
         <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
           <FlowHint>{g.pickEmpty}</FlowHint>
