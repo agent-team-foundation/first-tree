@@ -30,6 +30,7 @@ const DEFAULT_SKILL_NAMES = [
   "first-tree-read",
   "first-tree-write",
   "context-tree-review",
+  "context-tree-audit",
 ] as const;
 
 function workspaceAgents(skills: readonly { description: string; name: string }[]): string {

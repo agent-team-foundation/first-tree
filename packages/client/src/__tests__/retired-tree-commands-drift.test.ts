@@ -53,6 +53,7 @@ const SHIPPED_SKILLS = [
   "first-tree-seed",
   "first-tree-file-bug",
   "context-tree-review",
+  "context-tree-audit",
 ];
 
 const RETIRED_TREE_SUBCOMMANDS = [

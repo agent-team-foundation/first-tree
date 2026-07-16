@@ -54,6 +54,7 @@ describe("skill eval selection", () => {
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome",
@@ -70,6 +71,7 @@ describe("skill eval selection", () => {
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
       "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
     ]);
   });
@@ -87,6 +89,13 @@ describe("skill eval selection", () => {
         reason:
           "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
         suite: "first-tree-read",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
+        suite: "context-tree-audit",
       },
       {
         command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",
@@ -115,6 +124,13 @@ describe("skill eval selection", () => {
         reason:
           "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
         suite: "first-tree-read",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
+        suite: "context-tree-audit",
       },
       {
         command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review",

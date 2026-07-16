@@ -13,8 +13,9 @@ Context Tree. The generated `AGENTS.md` / `CLAUDE.md` Context Tree Policy is
 the baseline for what belongs in the tree; this skill applies that policy to a
 source-backed write.
 
-Use `first-tree-read` for task-scoped tree reads before acting. Use this skill
-only for source artifact -> tree edit work.
+Use `first-tree-read` for task-scoped tree reads before acting, except when the
+source is a current-session Audit finding whose exact snapshot context is
+already loaded. Use this skill only for source artifact -> tree edit work.
 
 ## Source Gate
 
@@ -23,12 +24,30 @@ Writing is source-driven. Acceptable sources include:
 - a PR/MR, forge Issue, commit discussion, or review thread;
 - a design doc, meeting note, decision note, or pasted source material;
 - a source repo change you just completed, when its design decision now needs
-  durable tree context.
+  durable tree context;
+- an evidence-backed `context-tree-audit` finding from the current session that
+  records the exact audited tree HEAD and scope, path, generated-policy rule,
+  current source evidence, confidence, intended replacement or canonical
+  placement, and risk, and comes from an Audit request that explicitly granted
+  Maintenance mutation authority.
 
 If no concrete source artifact exists, stop and ask for one. Do not invent
 ad-hoc tree edits from memory or from a broad request like "update the tree".
 When the source repo or issue lives on GitHub or GitLab, choose the matching
 forge CLI (`gh` or `glab`) and use PR/MR language accordingly.
+
+An Audit finding is valid only for its recorded tree HEAD. Before any target
+selection, worktree creation, or mutation, fetch the bound upstream default
+branch and require its exact remote HEAD to equal the finding's audited HEAD.
+If it advanced, do not apply the old finding. Re-run Audit validation, target
+and source-evidence reads on a new exact snapshot, or fail closed without a
+tree diff or pull request.
+
+For an Audit finding, repeat that fetch and exact remote-HEAD comparison after
+drafting and verification, immediately before any push or PR/MR creation. If
+the default branch advanced during authoring, do not publish. Safely remove the
+unpublished Audit-origin worktree and local branch, then re-run Audit on a new
+exact snapshot or stop with no remote branch and no PR/MR.
 
 Implementation-only material usually produces no tree write. Refactors,
 function signatures, API shapes, request/response examples, build config,
@@ -58,11 +77,18 @@ relationship.
    Rewrite superseded claims in place; do not append timeline updates. Keep
    canonical content in one place and use normal-to-normal `soft_links` when a
    cross-domain reader needs navigation.
-6. **Verify.** Run `first-tree tree verify --tree-path <tree>` before commit.
-   Non-zero exit blocks the PR/MR.
+6. **Verify and publish.** Run `first-tree tree verify --tree-path <tree>`
+   before commit. Non-zero exit blocks the PR/MR. For an Audit finding, commit
+   only that verified tree state, create a temporary clean detached worktree at
+   that exact commit, and verify the committed tree there. Remove the verification
+   worktree, then perform the second exact-head check above before pushing that
+   branch and creating the draft PR/MR with its head explicitly bound to the
+   published branch.
 7. **Prepare the PR/MR.** One source artifact maps to one tree PR/MR. Keep the
    description focused on the source and the tree nodes changed; do not put
-   PR/MR IDs, source links, or audit trails into node bodies.
+   PR/MR IDs, source links, or audit trails into node bodies. An Audit-originated
+   tree PR/MR must be created as draft and left draft for independent
+   `context-tree-review`; Writer does not mark it ready.
 
 ## Write Rules
 

@@ -16,6 +16,7 @@ pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-review
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite context-tree-audit
 pnpm --filter @first-tree/skill-evals eval:periodic
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed
@@ -132,6 +133,16 @@ failure, semantic failure, ready approval, draft deferral, archive-only scope,
 human authority, self-approval, and stale-head suppression. The fixture records
 the real source-tree validator result before the sandboxed model run so the
 agent receives the exact structural verdict without contacting GitHub.
+
+`eval:gate -- --suite context-tree-audit` runs the manual, focused audit gate
+against deterministic local default-branch fixtures. It requires the Audit
+skill to own routing exclusively, fixes discovery to a clean detached remote
+HEAD snapshot, replays a real source validator result before semantic reads,
+and records every forge or human artifact through mocks. Cases cover a
+mechanical focused PR, a strong evidence-backed write handoff, weak
+cross-domain escalation, locked-decision authority, report-only zero mutation,
+and missing-binding fail-closed behavior. This gate never performs a real
+GitHub or First Tree external write.
 
 `eval:gate -- --suite first-tree-write` runs the live tested-agent gate for
 `first-tree-write`. It covers the minimum source-boundary cases:
