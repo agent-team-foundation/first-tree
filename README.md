@@ -172,6 +172,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 ## Documentation
 
 - [Quickstart](docs/quickstart.md) — from signup to first agent work
+- [Agent Skill Distribution Playbook](docs/agent-skill-distribution-playbook.md) — design, secure, validate, and maintain distributable agent capabilities
 - [Onboarding Guide](docs/onboarding-guide.md) — CLI flow, SDK, troubleshooting
 - [CLI Reference](docs/cli-reference.md) — every command and environment variable
 - [Observability](docs/observability.md) — logs and OpenTelemetry traces

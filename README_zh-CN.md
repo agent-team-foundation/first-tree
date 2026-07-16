@@ -124,6 +124,7 @@ first-tree
 ## 文档
 
 - [Quickstart](docs/quickstart.md) — 从注册到第一次 Agent 工作
+- [Agent Skill 分发设计手册](docs/agent-skill-distribution-playbook.zh-CN.md) — 设计、安全交付、验证和维护可分发的 Agent 能力
 - [Onboarding Guide](docs/onboarding-guide.md) — CLI 流程、SDK、故障排查
 - [CLI Reference](docs/cli-reference.md) — 所有命令和环境变量
 - [Observability](docs/observability.md) — 日志与 OpenTelemetry traces
