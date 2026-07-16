@@ -783,7 +783,9 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     setTreeUrl: () => undefined,
     treeAutoDetectDone: true,
     markTreeAutoDetectDone: () => undefined,
+    offerTeamAgentStart: false,
     completeAndEnterChat: async () => undefined,
+    skipAndEnterChat: async () => undefined,
     finishLater: async () => undefined,
   };
   return {

@@ -95,7 +95,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       // must stay inside the initiating human + selected private-agent ACL.
       // Org-level status still recognizes any completed setup bootstrap below.
       kickoffKey: `${scope.humanAgentId}:${body.agentUuid}:tree-setup`,
-      complete: false,
+      stamp: "none",
     });
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);

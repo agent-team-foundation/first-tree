@@ -26,6 +26,26 @@ describe("STEP_COPY", () => {
     expect(STEP_COPY["start-chat"].title).toBe("");
     expect(STEP_COPY["start-chat"].why).toBe("");
   });
+  it("get-started's title/why stay empty (the fork renders per-sub-state headings itself)", () => {
+    expect(STEP_COPY["get-started"].title).toBe("");
+    expect(STEP_COPY["get-started"].why).toBe("");
+  });
+});
+
+describe("get-started fork copy", () => {
+  it("frames two parallel choices, not a fallback for people without a computer", () => {
+    const g = COPY.getStarted;
+    // The quick start is a peer choice; banned framings would demote it to an
+    // escape hatch ("no computer?") or coin a new product noun.
+    for (const s of [g.chooseTitle, g.chooseWhy, g.own.title, g.own.description, g.quick.title, g.quick.description]) {
+      expect(s.toLowerCase()).not.toContain("no computer");
+      expect(s.toLowerCase()).not.toContain("runtime");
+    }
+    // Descriptive ownership tag, not a new concept name.
+    expect(g.runBy("Zhang Wei")).toBe("Run by Zhang Wei");
+    // Quick start must not claim setup is finished.
+    expect(g.pickFootnote).toContain("won't finish your setup");
+  });
 });
 
 describe("onboarding vocabulary (connect-agent reframe)", () => {

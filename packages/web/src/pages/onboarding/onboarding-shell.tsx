@@ -29,12 +29,21 @@ import { StepProgress } from "./step-progress.js";
  */
 export function OnboardingShell({ children }: { children: ReactNode }) {
   const { activeStep, finishLater, hasAgent } = useOnboardingFlow();
-  const { logout, memberships } = useAuth();
+  const { logout, memberships, currentOrgHasUsableAgent } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
   const copy = STEP_COPY[activeStep];
   const needsTeam = memberships.length === 0;
+
+  // "Finish later" is safe to offer whenever leaving lands somewhere useful:
+  // the member has their own agent (`hasAgent`), OR the org already has a
+  // usable agent they can work with — the team-agent quick-start case. Without
+  // the second clause, a quick-start member who resumes setup via Settings →
+  // Setup (which clears their suppressor) loses the pause affordance and gets
+  // bounced back into onboarding by the workspace gate, with no way back to the
+  // team-agent workspace short of restarting quick start or signing out.
+  const canFinishLater = hasAgent || currentOrgHasUsableAgent;
 
   // A multi-team user gets the real TeamSwitcher plus the bare "Sign out" link.
   // The account-only UserMenu is absent from onboarding chrome. The
@@ -61,9 +70,11 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
           <span className="text-label font-semibold">{COPY.productName}</span>
         </span>
         <div className="inline-flex items-center" style={{ gap: "var(--sp-4)" }}>
-          {/* "Finish later" only once a teammate exists in THIS org — before
-              that the org's workspace is empty, so leaving is a dead end. */}
-          {hasAgent && (
+          {/* "Finish later" only once leaving lands somewhere useful — the
+              member has their own agent, or the org has a usable team agent
+              (quick-start case). Before that the org's workspace is empty, so
+              leaving is a dead end. */}
+          {canFinishLater && (
             <Button
               type="button"
               variant="link"

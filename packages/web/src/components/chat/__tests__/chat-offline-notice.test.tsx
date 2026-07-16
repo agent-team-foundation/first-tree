@@ -7,10 +7,22 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
 
-const mocks = vi.hoisted(() => ({ fetchChatAgentStatuses: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  fetchChatAgentStatuses: vi.fn(),
+  useOrgAgents: vi.fn(),
+}));
 vi.mock("../../../api/agent-status.js", () => ({
   chatAgentStatusQueryKey: (chatId: string) => ["chat-agent-status", chatId],
   fetchChatAgentStatuses: mocks.fetchChatAgentStatuses,
+}));
+// The container resolves "does this agent run on a teammate's computer?" from
+// the auth memberId + the shared org roster cache; both are mocked so these
+// tests stay focused on notice behavior.
+vi.mock("../../../auth/auth-context.js", () => ({
+  useAuth: () => ({ memberId: "member-me" }),
+}));
+vi.mock("../../../lib/use-org-agents.js", () => ({
+  useOrgAgents: mocks.useOrgAgents,
 }));
 
 // Imported after the mock is registered.
@@ -85,6 +97,8 @@ beforeEach(() => {
   });
   latestPath = "";
   mocks.fetchChatAgentStatuses.mockReset().mockResolvedValue([]);
+  // Default: roster unknown (empty) → the reconnect action is preserved.
+  mocks.useOrgAgents.mockReset().mockReturnValue({ data: { items: [] } });
 });
 
 afterEach(() => {
@@ -162,5 +176,32 @@ describe("ChatOfflineNotice (container)", () => {
       await Promise.resolve();
     });
     expect(latestPath).toBe("/settings/computers");
+  });
+
+  it("a teammate-run agent shows where it runs and offers no Reconnect", async () => {
+    vi.useFakeTimers();
+    queryClient.setQueryData(["chat-agent-status", "c1"], [status("a1", false)]);
+    // Roster resolves a1 to an agent managed by ANOTHER member.
+    mocks.useOrgAgents.mockReturnValue({ data: { items: [{ uuid: "a1", managerId: "member-other" }] } });
+    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} />);
+    await act(async () => {
+      vi.advanceTimersByTime(8100);
+      await Promise.resolve();
+    });
+    expect(notice()?.textContent).toContain("runs on a teammate's computer");
+    expect(h.container.querySelector("button")).toBeNull();
+  });
+
+  it("an agent the viewer manages keeps the Reconnect action", async () => {
+    vi.useFakeTimers();
+    queryClient.setQueryData(["chat-agent-status", "c1"], [status("a1", false)]);
+    mocks.useOrgAgents.mockReturnValue({ data: { items: [{ uuid: "a1", managerId: "member-me" }] } });
+    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} />);
+    await act(async () => {
+      vi.advanceTimersByTime(8100);
+      await Promise.resolve();
+    });
+    expect(notice()?.textContent).toContain("anything you send will start");
+    expect(h.container.querySelector<HTMLButtonElement>("button")?.textContent).toContain("Reconnect");
   });
 });

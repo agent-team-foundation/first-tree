@@ -46,8 +46,18 @@ export type KickoffOnboardingArgs = {
   topic: string;
   /** Stable idempotency key for this kickoff surface. */
   kickoffKey: string;
-  /** Whether this kickoff should stamp onboarding completion after the chat exists. */
-  complete: boolean;
+  /**
+   * How the membership's onboarding state is stamped once the chat exists:
+   *   - "completed"    — terminal completion (audit stamp + suppressor,
+   *     reason="completed"), the single-chat start-chat default;
+   *   - "invitee_skip" — team-agent start: suppress auto-open only
+   *     (reason="invitee_skip"), never completion, so the member lands in the
+   *     workspace with the standard connect-computer → create-agent journey
+   *     still pending and resumable;
+   *   - "none"         — stamp nothing (support/background chats that defer
+   *     completion until every required chat exists).
+   */
+  stamp: "completed" | "invitee_skip" | "none";
   /**
    * Optional side effect to run once the kickoff chat exists AND its
    * participants are validated — createChat enforces the cross-org / active /
@@ -219,13 +229,14 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
  *      onboarding key (race-safe via the unique index on
  *      `chats.onboarding_kickoff_key`);
  *   2. send the bootstrap message only if the chat has no messages yet;
- *   3. optionally stamp `onboarding_completed_at` (+ suppressed/reason) only
- *      after the chat exists, and only if not already stamped.
+ *   3. stamp membership onboarding state per `stamp` only after the chat
+ *      exists, and only if not already stamped.
  *
  * Re-running it — a reopened tab, a network retry, or the tree setup recovery
- * surface — converges on the same chat. Single-chat onboarding paths keep
- * `complete: true`; support/background paths use `complete: false` and stamp
- * completion only after all required chats exist.
+ * surface — converges on the same chat. Single-chat onboarding paths pass
+ * `stamp: "completed"`; the team-agent quick start passes `"invitee_skip"`
+ * (suppress auto-open without completion); support/background paths pass
+ * `"none"` and stamp completion only after all required chats exist.
  */
 export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArgs): Promise<KickoffOnboardingResult> {
   const initialMessage: SendMessage = {
@@ -247,11 +258,16 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
     beforeInitialMessage: args.onChatReady,
   });
 
-  // 3. Stamp completion now that the chat exists, when requested. Multi-chat
-  //    onboarding paths defer this until every required kickoff chat has
-  //    succeeded. Mirrors POST /me/onboarding-completed: completion writes the
-  //    audit stamp AND the suppressor (reason="completed") together.
-  if (args.complete) {
+  // 3. Stamp onboarding state now that the chat exists, when requested.
+  //    Multi-chat onboarding paths defer this until every required kickoff
+  //    chat has succeeded ("none"). Completion mirrors POST
+  //    /me/onboarding-completed: the audit stamp AND the suppressor
+  //    (reason="completed") are written together. A team-agent start writes
+  //    only the suppressor with reason="invitee_skip": the member enters the
+  //    workspace through a teammate's org-visible agent, and the standard
+  //    connect-computer → create-agent journey stays pending (never stamped
+  //    complete) so it remains resumable.
+  if (args.stamp === "completed") {
     const now = new Date();
     await db
       .update(members)
@@ -261,6 +277,17 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
         onboardingSuppressedReason: "completed",
       })
       .where(and(eq(members.id, args.memberId), isNull(members.onboardingCompletedAt)));
+  } else if (args.stamp === "invitee_skip") {
+    // Guarded like PATCH /me/onboarding: only the first suppressor wins, so a
+    // retry (or a member who already dismissed/completed) never rewrites an
+    // existing stamp or downgrades a completed membership.
+    await db
+      .update(members)
+      .set({
+        onboardingSuppressedAt: new Date(),
+        onboardingSuppressedReason: "invitee_skip",
+      })
+      .where(and(eq(members.id, args.memberId), isNull(members.onboardingSuppressedAt)));
   }
 
   return {

@@ -7,6 +7,13 @@ export type StartOnboardingChatArgs = {
   bootstrap: string;
   topic?: string;
   complete?: boolean;
+  /**
+   * How the membership's onboarding state is stamped once the chat exists.
+   * Supersedes `complete` server-side. `"invitee_skip"` is the team-agent
+   * start: suppress onboarding auto-open without stamping completion, so the
+   * member's own connect-computer → create-agent journey stays resumable.
+   */
+  stamp?: "completed" | "invitee_skip" | "none";
   /** Campaign + repo pair used by both action entry paths for dedup. */
   campaignAction?: LandingCampaignActionContext;
 };

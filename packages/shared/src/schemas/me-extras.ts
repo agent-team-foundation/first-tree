@@ -65,6 +65,17 @@ export const kickoffOnboardingSchema = z
     bootstrap: z.string().min(1),
     topic: z.string().trim().min(1).max(120).optional(),
     complete: z.boolean().optional(),
+    // How the membership's onboarding state is stamped once the kickoff chat
+    // exists. Takes precedence over the older boolean `complete` when both are
+    // present:
+    //   - "completed"    — terminal completion (same as `complete: true`).
+    //   - "invitee_skip" — team-agent start: the member begins in a teammate's
+    //     org-visible agent chat WITHOUT their own runtime. Writes only the
+    //     auto-open suppressor (reason="invitee_skip"), never the completion
+    //     stamp, so the standard connect-computer → create-agent journey stays
+    //     pending and resumable from the workspace.
+    //   - "none"         — stamp nothing (same as `complete: false`).
+    stamp: z.enum(["completed", "invitee_skip", "none"]).optional(),
     // Trusted landing-campaign action context. Direct and onboarding paths use
     // the same server-composed idempotency key for this campaign + repo.
     campaignAction: landingCampaignActionContextSchema.optional(),

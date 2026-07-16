@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
@@ -171,6 +172,103 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(member?.onboardingCompletedAt).not.toBeNull();
     expect(member?.onboardingSuppressedAt).not.toBeNull();
     expect(member?.onboardingSuppressedReason).toBe("completed");
+  });
+
+  it("team-agent start (stamp=invitee_skip) suppresses auto-open without stamping completion", async () => {
+    const app = getApp();
+    // The agent's manager: an ordinary teammate whose org-visible agent the
+    // joining member starts with.
+    const owner = await createTestAdmin(app, { username: `owner-${crypto.randomUUID().slice(0, 8)}` });
+    const agent = await createOrgAgent(app, owner);
+    await app.db.update(agents).set({ visibility: "organization" }).where(eq(agents.uuid, agent.uuid));
+
+    // The joining member: same org (createTestAdmin shares the default org),
+    // no personal agent, not the target agent's manager.
+    const joiner = await createTestAdmin(app, { username: `joiner-${crypto.randomUUID().slice(0, 8)}` });
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, joiner.memberId));
+
+    const payload = {
+      organizationId: joiner.organizationId,
+      agentUuid: agent.uuid,
+      bootstrap: "Bootstrap Agent, hi — I just joined the team.",
+      topic: "Get settled on First Tree",
+      stamp: "invitee_skip",
+    };
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${joiner.accessToken}` },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    const { chatId } = res.json<{ chatId: string }>();
+
+    // The chat is keyed per (joining human, team agent) like any onboarding kickoff.
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(chat?.onboardingKickoffKey).toBe(`${joiner.humanAgentUuid}:${agent.uuid}:onboarding`);
+
+    // Suppressor stamped with the invitee_skip reason; completion NOT stamped —
+    // the standard connect-computer → create-agent journey stays pending.
+    const [joinerMember] = await app.db.select().from(members).where(eq(members.id, joiner.memberId)).limit(1);
+    expect(joinerMember?.onboardingSuppressedAt).not.toBeNull();
+    expect(joinerMember?.onboardingSuppressedReason).toBe("invitee_skip");
+    expect(joinerMember?.onboardingCompletedAt).toBeNull();
+
+    // The agent owner's own onboarding state is untouched.
+    const [ownerMember] = await app.db.select().from(members).where(eq(members.id, owner.memberId)).limit(1);
+    expect(ownerMember?.onboardingSuppressedAt).toBeNull();
+    expect(ownerMember?.onboardingCompletedAt).toBeNull();
+
+    // Retry converges: same chat, no duplicate bootstrap, stamps unchanged.
+    const retry = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${joiner.accessToken}` },
+      payload,
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json<{ chatId: string }>().chatId).toBe(chatId);
+    const msgs = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(msgs).toHaveLength(1);
+    const [afterRetry] = await app.db.select().from(members).where(eq(members.id, joiner.memberId)).limit(1);
+    expect(afterRetry?.onboardingSuppressedAt?.getTime()).toBe(joinerMember?.onboardingSuppressedAt?.getTime());
+    expect(afterRetry?.onboardingCompletedAt).toBeNull();
+  });
+
+  it("invitee_skip never overwrites an existing suppressor or downgrades a completed membership", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+
+    // Membership already terminally completed (completion writes both stamps).
+    const completedAt = new Date("2026-01-01T00:00:00Z");
+    await app.db
+      .update(members)
+      .set({
+        onboardingCompletedAt: completedAt,
+        onboardingSuppressedAt: completedAt,
+        onboardingSuppressedReason: "completed",
+      })
+      .where(eq(members.id, admin.memberId));
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "Start another chat after completion.",
+        topic: "Get settled on First Tree",
+        stamp: "invitee_skip",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
+    expect(member?.onboardingSuppressedReason).toBe("completed");
+    expect(member?.onboardingSuppressedAt?.getTime()).toBe(completedAt.getTime());
+    expect(member?.onboardingCompletedAt?.getTime()).toBe(completedAt.getTime());
   });
 
   it("is idempotent — a second call reuses the chat, sends no duplicate, keeps the stamp", async () => {

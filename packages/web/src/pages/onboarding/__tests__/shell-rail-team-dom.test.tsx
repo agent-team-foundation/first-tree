@@ -21,6 +21,7 @@ const eventMock = vi.hoisted(() => ({
 const authMock = vi.hoisted(() => ({
   logout: vi.fn(),
   organizationId: "org-1",
+  currentOrgHasUsableAgent: false,
   role: "admin" as "admin" | "member",
   teamDisplayName: "Acme",
   user: { id: "user-1", displayName: "Gandy", username: "gandy", avatarUrl: null },
@@ -151,6 +152,7 @@ beforeEach(() => {
   authMock.role = "admin";
   authMock.teamDisplayName = "Acme";
   authMock.switchingOrg = null;
+  authMock.currentOrgHasUsableAgent = false;
   document.body.innerHTML = "";
   flowMock.value = {
     activeStep: "create-team",
@@ -219,6 +221,24 @@ describe("onboarding shell and team step", () => {
     expect(container.textContent).not.toContain("I'll finish later");
     // Invitee path also shows only the 3 setup milestones.
     expect(container.textContent).toContain("Step 2 of 3");
+  });
+
+  it("keeps finish-later for a quick-start member (no personal agent, usable team agent)", async () => {
+    // The team-agent quick-start case: Settings -> Setup resume cleared the
+    // suppressor, the member has no personal agent, but the org has a usable
+    // team agent — leaving is NOT a dead end, so the pause stays available.
+    authMock.currentOrgHasUsableAgent = true;
+    flowMock.value = {
+      ...flowMock.value,
+      activeStep: "connect-computer",
+      path: "invitee",
+      hasAgent: false,
+    };
+    const { OnboardingShell } = await import("../onboarding-shell.js");
+
+    const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
+
+    expect(container.textContent).toContain("I'll finish later");
   });
 
   it("renders the opening step with the same progress and heading layout as setup steps", async () => {

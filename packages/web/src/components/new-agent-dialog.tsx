@@ -735,7 +735,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 <div>
                   <div className="text-body font-medium">Visible to your team</div>
                   <div className="text-caption text-muted-foreground">
-                    Anyone on your team can @mention and chat with it.
+                    Anyone on your team can @mention it and start work with it — it runs on your computer and uses your
+                    plan.
                   </div>
                 </div>
               </OptionCard>
