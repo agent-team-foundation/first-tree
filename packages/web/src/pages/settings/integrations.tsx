@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router";
+import { useEffect, useRef } from "react";
+import { NavLink, Outlet, useLocation } from "react-router";
 import { cn } from "../../lib/utils.js";
 import { ResourceTypeSections } from "./resource-sections.js";
 
@@ -14,9 +15,30 @@ const PROVIDERS = [
  * depend on a GitHub App or GitLab webhook connection.
  */
 export function SettingsIntegrationsLayout() {
+  const location = useLocation();
+  const codeAccessRef = useRef<HTMLDivElement>(null);
+
+  // React Router updates the URL fragment but does not scroll the app's
+  // persistent overflow container. Position and focus the shared section
+  // explicitly so exits from a deeply scrolled Agent page cannot land below
+  // the intended destination.
+  useEffect(() => {
+    if (location.hash !== "#code-access") return;
+    const target = codeAccessRef.current;
+    if (!target) return;
+    target.scrollIntoView({ block: "start" });
+    target.focus({ preventScroll: true });
+  }, [location.hash]);
+
   return (
     <div>
-      <div id="code-access" style={{ padding: "var(--sp-2) var(--sp-5) 0", scrollMarginTop: "var(--sp-4)" }}>
+      <div
+        ref={codeAccessRef}
+        id="code-access"
+        tabIndex={-1}
+        aria-label="Code available to agents"
+        style={{ padding: "var(--sp-2) var(--sp-5) 0", scrollMarginTop: "var(--sp-4)" }}
+      >
         <ResourceTypeSections
           types={["repo"]}
           titleFor={() => "Code available to agents"}

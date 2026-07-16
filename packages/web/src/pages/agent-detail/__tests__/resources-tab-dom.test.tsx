@@ -331,6 +331,7 @@ describe("ResourcesTab", () => {
 
   it("renders the repo section (Environment) with rows and an actionable add menu", async () => {
     const { ResourceTypeSection } = await import("../capability-section.js");
+    const onNavigateAway = vi.fn();
     // An enabled team repo to render, plus a legacy team repo still flagged
     // Opt-in (available). Team repos are now always On by default, so the opt-in
     // one must NOT be offered as an "enable from team" option.
@@ -382,7 +383,14 @@ describe("ResourcesTab", () => {
     });
 
     const container = await renderRouted(
-      <ResourceTypeSection type="repo" data={data} canEdit pending={false} onMutate={vi.fn()} />,
+      <ResourceTypeSection
+        type="repo"
+        data={data}
+        canEdit
+        pending={false}
+        onMutate={vi.fn()}
+        onNavigateAway={onNavigateAway}
+      />,
     );
 
     expect(container.textContent).toContain("Repositories");
@@ -402,7 +410,8 @@ describe("ResourcesTab", () => {
     // provider-neutral Team code-access area in Settings. Skill/MCP/prompt
     // menus keep the Resources destination.
     expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
-    expect(buttonByText(document.body, "Manage Team code access")).toBeTruthy();
+    await click(buttonByText(document.body, "Manage Team code access"));
+    expect(onNavigateAway).toHaveBeenCalledWith("/settings/integrations/github#code-access");
     expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeNull();
   });
 

@@ -3,9 +3,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+let originalScrollIntoView: typeof HTMLElement.prototype.scrollIntoView;
+let scrollIntoView: ReturnType<typeof vi.fn>;
 
 vi.mock("../resource-sections.js", () => ({
   ResourceTypeSections: (props: {
@@ -49,7 +52,14 @@ async function renderLayout(path = "/settings/integrations/github"): Promise<{ c
   return { container, root };
 }
 
+beforeEach(() => {
+  originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+  scrollIntoView = vi.fn();
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
+});
+
 afterEach(() => {
+  HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
   document.body.innerHTML = "";
   vi.restoreAllMocks();
 });
@@ -74,6 +84,7 @@ describe("SettingsIntegrationsLayout", () => {
     expect(nav).not.toBeNull();
     expect(nav?.querySelector('a[href="/settings/integrations/github"]')?.getAttribute("aria-current")).toBe("page");
     expect(nav?.querySelector('a[href="/settings/integrations/gitlab"]')).not.toBeNull();
+    expect(scrollIntoView).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
 
@@ -86,6 +97,17 @@ describe("SettingsIntegrationsLayout", () => {
         .querySelector('nav[aria-label="Connection provider"] a[href="/settings/integrations/gitlab"]')
         ?.getAttribute("aria-current"),
     ).toBe("page");
+    await act(async () => root.unmount());
+  });
+
+  it("positions and focuses the shared code section when the Agent shortcut supplies its hash", async () => {
+    const { container, root } = await renderLayout("/settings/integrations/github#code-access");
+    const target = container.querySelector<HTMLElement>("#code-access");
+    expect(target?.getAttribute("aria-label")).toBe("Code available to agents");
+    expect(target?.tabIndex).toBe(-1);
+    expect(scrollIntoView).toHaveBeenCalledOnce();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+    expect(document.activeElement).toBe(target);
     await act(async () => root.unmount());
   });
 });
