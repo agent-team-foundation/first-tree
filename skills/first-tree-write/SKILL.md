@@ -13,8 +13,9 @@ Context Tree. The generated `AGENTS.md` / `CLAUDE.md` Context Tree Policy is
 the baseline for what belongs in the tree; this skill applies that policy to a
 source-backed write.
 
-Use `first-tree-read` for task-scoped tree reads before acting. Use this skill
-only for source artifact -> tree edit work.
+Use `first-tree-read` for task-scoped tree reads before acting, except when the
+source is a current-session Audit finding whose exact snapshot context is
+already loaded. Use this skill only for source artifact -> tree edit work.
 
 ## Source Gate
 
@@ -23,12 +24,23 @@ Writing is source-driven. Acceptable sources include:
 - a PR/MR, forge Issue, commit discussion, or review thread;
 - a design doc, meeting note, decision note, or pasted source material;
 - a source repo change you just completed, when its design decision now needs
-  durable tree context.
+  durable tree context;
+- an evidence-backed `context-tree-audit` finding from the current session that
+  records the exact audited tree HEAD and scope, path, generated-policy rule,
+  current source evidence, confidence, intended replacement or canonical
+  placement, and risk.
 
 If no concrete source artifact exists, stop and ask for one. Do not invent
 ad-hoc tree edits from memory or from a broad request like "update the tree".
 When the source repo or issue lives on GitHub or GitLab, choose the matching
 forge CLI (`gh` or `glab`) and use PR/MR language accordingly.
+
+An Audit finding is valid only for its recorded tree HEAD. Before any target
+selection, worktree creation, or mutation, fetch the bound upstream default
+branch and require its exact remote HEAD to equal the finding's audited HEAD.
+If it advanced, do not apply the old finding. Re-run Audit validation, target
+and source-evidence reads on a new exact snapshot, or fail closed without a
+tree diff or pull request.
 
 Implementation-only material usually produces no tree write. Refactors,
 function signatures, API shapes, request/response examples, build config,

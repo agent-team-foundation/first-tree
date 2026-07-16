@@ -33,6 +33,7 @@ describe("context-tree-review fixture", () => {
         "first-tree-read",
         "first-tree-write",
         "context-tree-review",
+        "context-tree-audit",
       ]) {
         expect(agents).toContain(`\`${skill}\``);
         expect(readFileSync(join(paths.workspacePath, ".agents", "skills", skill, "SKILL.md"), "utf8")).toContain(

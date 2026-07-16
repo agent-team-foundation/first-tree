@@ -12,6 +12,7 @@ export function createFirstTreeShim(
     recordedModelVerifyCwd?: string;
     recordedModelVerifyHead?: string;
     recordedModelVerifyPath?: string;
+    auditFixturePath?: string;
     reviewFixturePath?: string;
   } = {},
 ): void {
@@ -41,6 +42,7 @@ const MODEL_VERIFY_MODE = ${JSON.stringify(options.modelVerifyMode ?? "shim")};
 const RECORDED_MODEL_VERIFY_CWD = ${JSON.stringify(options.recordedModelVerifyCwd ?? null)};
 const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyHead ?? null)};
 const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
+const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
 
 function preview(value) {
@@ -223,7 +225,25 @@ function runTreeTree(argv, phase) {
     if (!patternMatches(rel + " " + title, pattern)) continue;
     rows.push("- " + rel + " [" + title + "]");
   }
-  finish(argv, phase, 0, rows.join("\\n") + "\\n", "", { shimmedByEval: true });
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" });
+  const symbolic = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: process.cwd(), encoding: "utf8" });
+  const status = spawnSync("git", ["status", "--porcelain"], { cwd: process.cwd(), encoding: "utf8" });
+  finish(argv, phase, 0, rows.join("\\n") + "\\n", "", {
+    actualHead: head.status === 0 ? head.stdout.trim() : null,
+    clean: status.status === 0 && status.stdout.trim() === "",
+    detachedHead: symbolic.status !== 0,
+    shimmedByEval: true,
+  });
+}
+
+function bodyFromFileOption(argv) {
+  const bodyFile = optionValue(argv, "-F") || optionValue(argv, "--file");
+  if (!bodyFile) return "";
+  try {
+    return readFileSync(bodyFile === "-" ? 0 : bodyFile, "utf8");
+  } catch {
+    return "";
+  }
 }
 
 function runTreeVerify(argv, phase) {
@@ -349,6 +369,18 @@ if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(a
 }
 
 if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "")) {
+  if (AUDIT_FIXTURE_PATH && argv[1] === "ask") {
+    const fixture = JSON.parse(readFileSync(AUDIT_FIXTURE_PATH, "utf8"));
+    append({
+      type: "audit_artifact_created",
+      phase,
+      artifact: "human-ask",
+      argv,
+      body: bodyFromFileOption(argv),
+      cwd: process.cwd(),
+      repo: fixture.repo,
+    });
+  }
   const exitCode = 0;
   const stdout = "Recorded first-tree chat " + argv[1] + " in skill eval. No real message was sent.\\n";
   process.stdout.write(stdout);
@@ -411,6 +443,25 @@ if (RECORDED_MODEL_VERIFY_PATH && phase === "model" && argv[0] === "tree" && arg
     );
   }
   const recorded = JSON.parse(readFileSync(RECORDED_MODEL_VERIFY_PATH, "utf8"));
+  let auditOriginAdvanced = false;
+  if (AUDIT_FIXTURE_PATH) {
+    const fixture = JSON.parse(readFileSync(AUDIT_FIXTURE_PATH, "utf8"));
+    if (fixture.scenario === "stale-before-write" && fixture.originPath && fixture.advancedHeadOid) {
+      const advanced = spawnSync(
+        "git",
+        ["--git-dir", fixture.originPath, "update-ref", "refs/heads/main", fixture.advancedHeadOid, fixture.headOid],
+        { encoding: "utf8" },
+      );
+      auditOriginAdvanced = advanced.status === 0;
+      if (!auditOriginAdvanced) {
+        finish(argv, phase, 2, "", "Failed to advance the deterministic audit origin.\\n", {
+          auditOriginAdvanced: false,
+          recordedRealVerify: false,
+          verifyBindingValid: true,
+        });
+      }
+    }
+  }
   let stdout = recorded.stdout;
   try {
     const parsed = JSON.parse(stdout);
@@ -419,6 +470,7 @@ if (RECORDED_MODEL_VERIFY_PATH && phase === "model" && argv[0] === "tree" && arg
   } catch {}
   finish(argv, phase, recorded.exitCode, stdout, recorded.stderr, {
     actualHead,
+    auditOriginAdvanced,
     recordedRealVerify: true,
     verifyBindingValid: true,
   });

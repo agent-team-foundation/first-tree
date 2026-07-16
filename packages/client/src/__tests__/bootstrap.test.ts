@@ -360,6 +360,7 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
     "first-tree-read",
     "first-tree-write",
     "context-tree-review",
+    "context-tree-audit",
   ];
 
   function expectSkillInstalled(workspace: string, name: string): void {
@@ -453,6 +454,7 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
       { name: "first-tree-read", version: "1.0.0" },
       { name: "first-tree-write", version: "1.0.0" },
       { name: "context-tree-review", version: "1.0.0" },
+      { name: "context-tree-audit", version: "1.0.0" },
     ]);
 
     const logs: string[] = [];
@@ -499,8 +501,9 @@ describe("inline skill installer — copy/version/symlink mechanics", () => {
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-file-bug"))).toBe(false);
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-read"))).toBe(false);
     expect(existsSync(join(workspace, ".agents", "skills", "context-tree-review"))).toBe(false);
+    expect(existsSync(join(workspace, ".agents", "skills", "context-tree-audit"))).toBe(false);
     expect(logs.join("\n")).toContain(
-      "failed first-tree-welcome, first-tree-file-bug, first-tree-read, first-tree-write, context-tree-review",
+      "failed first-tree-welcome, first-tree-file-bug, first-tree-read, first-tree-write, context-tree-review, context-tree-audit",
     );
     expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-welcome)");
   });
@@ -620,6 +623,7 @@ describe("installCoreSkills", () => {
     "first-tree-read",
     "first-tree-write",
     "context-tree-review",
+    "context-tree-audit",
   ];
 
   it("installs every First Tree skill even without a Context Tree binding", () => {

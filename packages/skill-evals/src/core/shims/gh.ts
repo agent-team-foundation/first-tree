@@ -5,7 +5,10 @@ import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
 import type { RunPaths } from "../types.js";
 
-export function createGhShim(paths: RunPaths, options: { reviewFixturePath?: string } = {}): void {
+export function createGhShim(
+  paths: RunPaths,
+  options: { auditFixturePath?: string; reviewFixturePath?: string } = {},
+): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
@@ -13,6 +16,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
+const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
 
 function preview(value) {
@@ -60,6 +64,18 @@ function finish(argv, phase, exitCode, stdout, stderr, extra = {}) {
 function argAfter(argv, name) {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] || "" : "";
+}
+
+function artifactBody(argv) {
+  const inline = argAfter(argv, "--body") || argAfter(argv, "-b");
+  if (inline) return inline;
+  const bodyFile = argAfter(argv, "--body-file") || argAfter(argv, "-F");
+  if (!bodyFile) return "";
+  try {
+    return readFileSync(bodyFile === "-" ? 0 : bodyFile, "utf8");
+  } catch {
+    return "";
+  }
 }
 
 function ghMethod(argv) {
@@ -197,6 +213,68 @@ const argv = process.argv.slice(2);
 const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "gh_call", phase, argv, cwd: process.cwd() });
 trace("gh call: " + commandLine(argv));
+
+if (AUDIT_FIXTURE_PATH) {
+  const fixture = JSON.parse(readFileSync(AUDIT_FIXTURE_PATH, "utf8"));
+  const repoMatches = argAfter(argv, "--repo") === fixture.repo;
+  if (argv[0] === "repo" && argv[1] === "view") {
+    const jq = argAfter(argv, "--jq");
+    if (jq === ".nameWithOwner") finish(argv, phase, 0, fixture.repo + "\\n", "", { auditFixture: true });
+    if (jq === ".defaultBranchRef.name") {
+      finish(argv, phase, 0, fixture.defaultBranch + "\\n", "", { auditFixture: true });
+    }
+    finish(
+      argv,
+      phase,
+      0,
+      JSON.stringify({ nameWithOwner: fixture.repo, defaultBranchRef: { name: fixture.defaultBranch } }) + "\\n",
+      "",
+      { auditFixture: true },
+    );
+  }
+  if (argv[0] === "pr" && argv[1] === "create") {
+    if (!repoMatches || fixture.mode === "report-only" || fixture.scenario === "no-binding") {
+      finish(argv, phase, 2, "", "Audit fixture rejected pull request creation.\\n", {
+        auditFixture: true,
+        auditFixtureViolation: true,
+      });
+    }
+    append({
+      type: "audit_artifact_created",
+      phase,
+      artifact: "pull-request",
+      argv,
+      body: artifactBody(argv),
+      cwd: process.cwd(),
+      repo: fixture.repo,
+    });
+    finish(argv, phase, 0, "https://github.com/owner/context-tree/pull/77\\n", "", {
+      auditFixture: true,
+      recordedOnly: true,
+    });
+  }
+  if (argv[0] === "issue" && argv[1] === "create") {
+    if (!repoMatches || fixture.mode === "report-only" || fixture.scenario === "no-binding") {
+      finish(argv, phase, 2, "", "Audit fixture rejected issue creation.\\n", {
+        auditFixture: true,
+        auditFixtureViolation: true,
+      });
+    }
+    append({
+      type: "audit_artifact_created",
+      phase,
+      artifact: "issue",
+      argv,
+      body: artifactBody(argv),
+      cwd: process.cwd(),
+      repo: fixture.repo,
+    });
+    finish(argv, phase, 0, "https://github.com/owner/context-tree/issues/88\\n", "", {
+      auditFixture: true,
+      recordedOnly: true,
+    });
+  }
+}
 
 if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));

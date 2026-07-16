@@ -25,6 +25,7 @@ const BUNDLED_SKILLS = [
   "first-tree-seed",
   "first-tree-file-bug",
   "context-tree-review",
+  "context-tree-audit",
 ];
 
 function findRepoRoot(startDir) {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Context Tree Audit"
+  short_description: "Audit stored Context Tree decisions safely"
+  default_prompt: "Use $context-tree-audit to audit the requested stored normal Context Tree scope on a stable default-branch snapshot and route evidence-backed findings safely."
