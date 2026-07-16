@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
 import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
@@ -469,6 +469,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
@@ -1857,32 +1858,178 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
-  it("consumes unsafe replay stops after visible output instead of terminal-rejecting them", async () => {
+  it("retries visible provider capacity failures twice, then exhausts and consumes once", async () => {
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();
     const handler = makeHandler(fake);
-    const ctx = makeContext();
+    const settlementOrder: string[] = [];
+    const emitEvent = vi.fn<(event: SessionEvent) => void>((event) => {
+      if (event.kind !== "error") return;
+      const payload = parseProviderRetryEventMessage(event.payload.message);
+      if (payload) settlementOrder.push(payload.event);
+    });
+    token.complete = vi.fn<DeliveryToken["complete"]>(async () => {
+      settlementOrder.push("complete");
+    });
+    const ctx = makeContext({ emitEvent });
     const message = makeMessage("m1", "first");
 
     const startPromise = handler.start(message, ctx, token);
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    vi.useFakeTimers();
 
-    fake.emit("item/completed", {
-      threadId: "thread-app-server",
-      turnId: "turn-1",
-      item: { type: "agentMessage", id: "item-turn-1", text: "partial answer", phase: null, memoryCitation: null },
-    });
-    fake.close("transport is closed");
+    const failCapacityAttempt = (turnId: string, visible: boolean): void => {
+      if (visible) {
+        fake.emit("item/completed", {
+          threadId: "thread-app-server",
+          turnId,
+          item: {
+            type: "fileChange",
+            id: `file-${turnId}`,
+            status: "completed",
+            changes: [{ path: "src/changed.ts" }],
+          },
+        });
+      }
+      failTurn(fake, turnId, { message: "Selected model is at capacity. Please try a different model." });
+    };
+
+    failCapacityAttempt("turn-1", true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(fake.turnCounter).toBe(2);
+
+    failCapacityAttempt("turn-2", false);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(fake.turnCounter).toBe(3);
+
+    failCapacityAttempt("turn-3", false);
     await startPromise;
 
+    expect(settlementOrder).toEqual([
+      "provider_retry_scheduled",
+      "provider_retry_scheduled",
+      "provider_retry_exhausted",
+      "complete",
+    ]);
+    expect(token.complete).toHaveBeenCalledTimes(1);
     expect(token.complete).toHaveBeenCalledWith([message], {
       status: "error",
       terminal: true,
       completion: "consumed",
-      reason: "unsafe_replay",
+      reason: "provider_retry_exhausted",
     });
     expect(token.terminalRejected).not.toHaveBeenCalled();
     expect(token.retry).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("fences an injected tail during provider retry backoff until the retry turn starts", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const tailToken = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+    const tail = makeMessage("m2", "second");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.turnCounter === 1);
+    vi.useFakeTimers();
+
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: {
+        type: "fileChange",
+        id: "file-turn-1",
+        status: "completed",
+        changes: [{ path: "src/changed.ts" }],
+      },
+    });
+    failTurn(fake, "turn-1", { message: "Selected model is at capacity. Please try a different model." });
+    fake.deferNextSteer();
+    expect(handler.inject(tail, tailToken)).toEqual({ kind: "owned", mode: "queued" });
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fake.turnCounter).toBe(1);
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.turnCounter).toBe(2);
+    await vi.runOnlyPendingTimersAsync();
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+
+    fake.resolveSteer({ turnId: "turn-2" });
+    await vi.advanceTimersByTimeAsync(0);
+    completeTurn(fake, "turn-2", "done");
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith([message, tail], { status: "success", terminal: true });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(tailToken.retry).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it.each([
+    "success",
+    "exhausted",
+  ] as const)("carries a successfully steered tail into the provider retry %s settlement", async (outcome) => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const tailToken = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+    const tail = makeMessage("m2", "second");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.turnCounter === 1);
+
+    expect(handler.inject(tail, tailToken)).toEqual({ kind: "owned", mode: "queued" });
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
+    await flushAsync();
+    vi.useFakeTimers();
+
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: {
+        type: "fileChange",
+        id: "file-turn-1",
+        status: "completed",
+        changes: [{ path: "src/changed.ts" }],
+      },
+    });
+    failTurn(fake, "turn-1", { message: "Selected model is at capacity. Please try a different model." });
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(fake.turnCounter).toBe(2);
+    if (outcome === "success") {
+      completeTurn(fake, "turn-2", "done");
+    } else {
+      failTurn(fake, "turn-2", { message: "Selected model is at capacity. Please try a different model." });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(fake.turnCounter).toBe(3);
+      failTurn(fake, "turn-3", { message: "Selected model is at capacity. Please try a different model." });
+    }
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith(
+      [message, tail],
+      outcome === "success"
+        ? { status: "success", terminal: true }
+        : {
+            status: "error",
+            terminal: true,
+            completion: "consumed",
+            reason: "provider_retry_exhausted",
+          },
+    );
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(tailToken.retry).not.toHaveBeenCalled();
+    expect(tailToken.complete).not.toHaveBeenCalled();
 
     await handler.shutdown();
   });

@@ -293,6 +293,15 @@ describe("decideProviderRetry", () => {
         retryAfterMs: 120_000,
       }),
     ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_rate_limited",
+        replaySafety: "user_visible",
+        attempt: 3,
+        retryAfterMs: 25_000,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
   });
 
   it("returns capacity_wait_required for provider-entered long capacity refusals", () => {
@@ -310,18 +319,59 @@ describe("decideProviderRetry", () => {
     });
   });
 
-  it("stops unsafe provider_turn replay before retrying", () => {
+  it("retries classified transient provider_turn failures after user-visible output", () => {
     expect(
       decide({
         category: "transient_transport",
         replaySafety: "user_visible",
         attempt: 1,
       }),
-    ).toMatchObject({ action: "stop", terminalKind: "unsafe_replay" });
+    ).toMatchObject({ action: "retry", delayMs: 500, retryMode: "foreground" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_overloaded",
+        replaySafety: "user_visible",
+        attempt: 1,
+      }),
+    ).toMatchObject({ action: "retry", delayMs: 500, retryMode: "foreground" });
+    expect(
+      decide({
+        category: "transient_transport",
+        replaySafety: "user_visible",
+        attempt: 3,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_overloaded",
+        replaySafety: "user_visible",
+        attempt: 3,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "exhausted" });
+    expect(
+      decide({
+        category: "provider_capacity",
+        reasonCode: "provider_usage_limit",
+        replaySafety: "user_visible",
+        attempt: 1,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "capacity_wait_required" });
+  });
+
+  it("stops provider_turn retry when replay custody is unknown", () => {
     expect(
       decide({
         category: "transient_transport",
         replaySafety: "unknown",
+        attempt: 1,
+      }),
+    ).toMatchObject({ action: "stop", terminalKind: "unsafe_replay" });
+    expect(
+      decide({
+        category: "unknown",
+        replaySafety: "user_visible",
         attempt: 1,
       }),
     ).toMatchObject({ action: "stop", terminalKind: "unsafe_replay" });

@@ -783,7 +783,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let currentQuery: Query | null = null;
   let activeProviderEnv: Record<string, string | undefined> | null = null;
   let inputController: InputController<PendingSdkInput> | null = null;
-  let abortController: AbortController | null = null;
+  let providerRetryBackoffAbort: AbortController | null = null;
   let consumerDone: Promise<void> | null = null;
   let retryCount = 0;
   let ctx: SessionContext | null = null;
@@ -834,6 +834,46 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * tracked separately by `PendingAckMessage.providerEntered`.
    */
   const unclosedSdkInputs: PendingSdkInput[] = [];
+
+  function cancelProviderRetryBackoff(): void {
+    providerRetryBackoffAbort?.abort();
+    providerRetryBackoffAbort = null;
+  }
+
+  function providerRetryBackoffPending(): boolean {
+    return providerRetryBackoffAbort !== null;
+  }
+
+  /**
+   * Honor the shared provider retry delay while allowing suspend/shutdown to
+   * interrupt the foreground retry chain immediately.
+   */
+  async function waitForProviderRetry(delayMs: number): Promise<boolean> {
+    if (delayMs <= 0) return true;
+
+    cancelProviderRetryBackoff();
+    const backoffAbort = new AbortController();
+    providerRetryBackoffAbort = backoffAbort;
+
+    try {
+      await new Promise<void>((resolveDelay) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          backoffAbort.signal.removeEventListener("abort", finish);
+          resolveDelay();
+        };
+        const timer = setTimeout(finish, delayMs);
+        backoffAbort.signal.addEventListener("abort", finish, { once: true });
+        if (backoffAbort.signal.aborted) finish();
+      });
+      return !backoffAbort.signal.aborted;
+    } finally {
+      if (providerRetryBackoffAbort === backoffAbort) providerRetryBackoffAbort = null;
+    }
+  }
 
   function emitProviderTurnRetryEvent(
     sessionCtx: SessionContext,
@@ -1262,6 +1302,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await maybeSwitchConfig(sessionCtx);
     } catch (err) {
       sessionCtx.log(`maybeSwitchConfig errored: ${err instanceof Error ? err.message : String(err)}`);
+      // Path B may already have retired the provider-retry consumer before a
+      // fallible config-restart step fails. Do not continue into an orphaned
+      // input controller. Retire the provider transport before returning the
+      // provider-entered prefix and unentered tail to runtime recovery so a
+      // fresh handler cannot overlap the abandoned native process.
+      retireProviderTransport();
+      retryBufferedMessages("claude_config_restart_failed_recovery");
+      failFatalSessionForRecovery(sessionCtx, "claude_config_restart_failed");
+      return;
     }
     if (recoverIfInputClosed(item)) return;
 
@@ -1338,6 +1387,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx.failSessionForRecovery?.(reason, claudeSessionId ?? undefined);
   }
 
+  function retireProviderTransport(): void {
+    cancelProviderRetryBackoff();
+
+    const controller = inputController;
+    inputController = null;
+    try {
+      controller?.end();
+    } catch {
+      // best-effort transport cleanup
+    }
+
+    const query = currentQuery;
+    currentQuery = null;
+    try {
+      query?.close();
+    } catch {
+      // best-effort transport cleanup
+    }
+
+    activeProviderEnv = null;
+  }
+
   /**
    * Rebuild the SDK query in resume mode AND re-push every input already handed
    * to the previous query's controller for the still-unclosed turn, preserving
@@ -1383,9 +1454,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     resume?: string,
     providerEnv?: Record<string, string | undefined>,
   ): void {
-    inputRecoveryReason = null;
-    inputController = new InputController<PendingSdkInput>();
-    abortController = new AbortController();
+    // Construct the replacement locally so a synchronous SDK constructor
+    // failure cannot leave the handler pointing at an orphan controller while
+    // the previous query still owns the unsettled turn.
+    const nextInputController = new InputController<PendingSdkInput>();
+    const nextAbortController = new AbortController();
 
     // Step 6: M1 hard-codes bypassPermissions per PRD §5.1.6 (permission mode
     // is intentionally not exposed to admins).
@@ -1395,14 +1468,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     const childEnv = providerEnv ?? buildEnv(sessionCtx);
 
-    currentQuery = claudeQuery({
-      prompt: providerPromptInputs(inputController.iterable),
+    const nextQuery = claudeQuery({
+      prompt: providerPromptInputs(nextInputController.iterable),
       options: {
         sessionId: resume ? undefined : sessionId,
         resume,
         cwd: cwd ?? undefined,
         persistSession: true,
-        abortController,
+        abortController: nextAbortController,
         permissionMode,
         allowDangerouslySkipPermissions: true,
         // SDK 0.2.84 defaults to isolation mode — no filesystem settings are
@@ -1433,6 +1506,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         ...buildClaudeQueryOptions(payload, chatContextForPrompt),
       },
     });
+
+    inputRecoveryReason = null;
+    inputController = nextInputController;
+    currentQuery = nextQuery;
     activeProviderEnv = childEnv;
   }
 
@@ -1452,7 +1529,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       appliedPayload.model !== newPayload.model;
 
     // Path A: same-family model swap → in-flight setModel.
-    if (onlyModelChanged && isSameModelFamily(appliedModel, newPayload.model)) {
+    if (onlyModelChanged && isSameModelFamily(appliedModel, newPayload.model) && !providerRetryBackoffPending()) {
       try {
         await currentQuery.setModel(newPayload.model);
         sessionCtx.log(
@@ -1472,6 +1549,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // still iterating the OLD query and will exit once `oldQuery.close()`
     // drains it, so the new query would otherwise have no reader.
     sessionCtx.log(`[configHotSwitch] path=restart fromVersion=${appliedConfigVersion} toVersion=${cached.version}`);
+    // Path B takes ownership of the unsettled turn. Retire an old consumer
+    // that may be waiting in provider retry backoff before any async restart
+    // preparation can yield; otherwise its timer could later respawn another
+    // query alongside the config-switch consumer.
+    cancelProviderRetryBackoff();
     // Rewrite AGENTS.md (CLAUDE.md symlink) with the new payload so the
     // restarted SDK Query — which reads CLAUDE.md via `settingSources:
     // ["project"]` on construction — picks up the new prompt.append. The
@@ -1611,6 +1693,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     emitProviderTurnSettlementEvent(sessionCtx, settlement);
                     sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
                     toolCallProcessor.flush();
+                    if (!(await waitForProviderRetry(settlement.decision.delayMs))) {
+                      sessionCtx.log("Auto-resume cancelled during provider retry backoff");
+                      return;
+                    }
                     try {
                       respawnQuery(claudeSessionId, sessionCtx);
                     } catch (resumeErr) {
@@ -1878,6 +1964,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           retryCount = decision.attempt;
           emitProviderTurnRetryEvent(sessionCtx, "provider_retry_scheduled", classification, decision, errMsg);
           sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
+
+          if (!(await waitForProviderRetry(decision.delayMs))) {
+            sessionCtx.log("Auto-resume cancelled during provider retry backoff");
+            return;
+          }
 
           try {
             respawnQuery(claudeSessionId, sessionCtx);
@@ -2272,16 +2363,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     async suspend(reason?: string) {
       ctx?.log("Suspending session");
-
-      if (inputController) {
-        inputController.end();
-        inputController = null;
-      }
-
-      if (currentQuery) {
-        currentQuery.close();
-        currentQuery = null;
-      }
+      retireProviderTransport();
 
       // Wait for consumer loop to finish
       if (consumerDone) {
@@ -2289,8 +2371,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         consumerDone = null;
       }
 
-      abortController = null;
-      activeProviderEnv = null;
       // The session is no longer active — any pending replay inputs would be
       // moot. Resume goes through `handler.resume(message, sessionId)`, which
       // builds a fresh replay buffer from its own pushed inputs.
