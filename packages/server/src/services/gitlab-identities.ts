@@ -194,10 +194,6 @@ export async function reconfirmGitlabIdentityLink(
       .where(eq(gitlabIdentityLinks.id, link.id))
       .returning();
     if (!updated) throw new Error("GitLab identity reconfirmation returned no row");
-    await tx
-      .update(gitlabEntityChatMappings)
-      .set({ active: true, updatedAt: now })
-      .where(eq(gitlabEntityChatMappings.identityLinkId, link.id));
     return updated;
   });
   return serializeLink(row);

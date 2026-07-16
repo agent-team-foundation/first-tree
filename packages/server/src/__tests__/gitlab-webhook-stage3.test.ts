@@ -296,6 +296,95 @@ describe("GitLab Stage 3 personnel routing", () => {
     expect(reconfirmed.id).toBe(setup.link.id);
   });
 
+  it("reconfirms after delegate changes without reactivating historical mappings", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const iid = 86;
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+
+    const nextDelegate = await createAgent(app.db, {
+      name: `next-review-agent-${randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Next Review Agent",
+      managerId: setup.admin.memberId,
+      organizationId: setup.admin.organizationId,
+    });
+    await app.db
+      .update(agents)
+      .set({ delegateMention: nextDelegate.uuid })
+      .where(eq(agents.uuid, setup.admin.humanAgentUuid));
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    const mappingScope = and(
+      eq(gitlabEntityChatMappings.connectionId, setup.connection.connectionId),
+      eq(gitlabEntityChatMappings.identityLinkId, setup.link.id),
+      eq(gitlabEntityChatMappings.entityIid, iid),
+    );
+    const beforeLeave = await app.db.select().from(gitlabEntityChatMappings).where(mappingScope);
+    expect(beforeLeave).toHaveLength(2);
+    expect(beforeLeave.filter((row) => row.active)).toMatchObject([{ delegateAgentId: nextDelegate.uuid }]);
+    expect(beforeLeave.find((row) => row.delegateAgentId === setup.delegate.uuid)?.active).toBe(false);
+
+    await createTestAdmin(app, { username: `gitlab-reconfirm-fallback-${randomUUID().slice(0, 8)}` });
+    await deactivateMembership(app.db, setup.admin.memberId, MEMBER_STATUSES.LEFT);
+    expect((await app.db.select().from(gitlabEntityChatMappings).where(mappingScope)).every((row) => !row.active)).toBe(
+      true,
+    );
+    await app.db.transaction(async (tx) => {
+      await reactivateMembership(
+        tx,
+        {
+          id: setup.admin.memberId,
+          agentId: setup.admin.humanAgentUuid,
+          organizationId: setup.admin.organizationId,
+          status: "left",
+        },
+        { displayName: "Test Admin", username: setup.admin.username },
+      );
+    });
+
+    await expect(
+      reconfirmGitlabIdentityLink(app.db, {
+        organizationId: setup.admin.organizationId,
+        linkId: setup.link.id,
+      }),
+    ).resolves.toMatchObject({ id: setup.link.id, state: "active" });
+    expect((await app.db.select().from(gitlabEntityChatMappings).where(mappingScope)).every((row) => !row.active)).toBe(
+      true,
+    );
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    const afterReroute = await app.db.select().from(gitlabEntityChatMappings).where(mappingScope);
+    expect(afterReroute).toHaveLength(2);
+    expect(afterReroute.filter((row) => row.active)).toMatchObject([{ delegateAgentId: nextDelegate.uuid }]);
+    expect(afterReroute.find((row) => row.delegateAgentId === setup.delegate.uuid)?.active).toBe(false);
+  });
+
   it("suspends the current binding on admin member removal", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
