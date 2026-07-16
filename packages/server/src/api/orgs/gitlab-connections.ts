@@ -5,10 +5,8 @@ import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.j
 import {
   createGitlabConnection,
   getGitlabConnectionSummary,
-  listGitlabAutomaticActionsAudit,
   listGitlabConnections,
 } from "../../services/gitlab-connections.js";
-import { listRecentGitlabSkippedTargets } from "../../services/gitlab-target-audit.js";
 import { resolvePublicUrl } from "../../utils/public-url.js";
 
 export async function orgGitlabConnectionRoutes(app: FastifyInstance): Promise<void> {
@@ -38,15 +36,5 @@ export async function orgGitlabConnectionRoutes(app: FastifyInstance): Promise<v
       connection: await getGitlabConnectionSummary(app.db, created.connectionId),
       webhookUrl: `${resolvePublicUrl(app, request)}/api/v1/webhooks/gitlab/${created.bearer}`,
     });
-  });
-
-  app.get<{ Params: { orgId: string } }>("/automatic-actions-audit", async (request) => {
-    const scope = await requireOrgAdmin(request, app.db);
-    return { events: await listGitlabAutomaticActionsAudit(app.db, scope.organizationId) };
-  });
-
-  app.get<{ Params: { orgId: string } }>("/skipped-targets", async (request) => {
-    const scope = await requireOrgAdmin(request, app.db);
-    return { events: await listRecentGitlabSkippedTargets(app.db, scope.organizationId) };
   });
 }

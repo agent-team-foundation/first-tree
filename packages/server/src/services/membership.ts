@@ -327,12 +327,7 @@ export async function deactivateMembership(
     if (existing.status !== status) {
       await tx.update(members).set({ status }).where(eq(members.id, memberId));
     }
-    await suspendGitlabLinksForMembership(
-      tx as unknown as Database,
-      memberId,
-      status === MEMBER_STATUSES.LEFT ? "member_left" : "member_removed",
-      status === MEMBER_STATUSES.LEFT ? memberId : null,
-    );
+    await suspendGitlabLinksForMembership(tx as unknown as Database, memberId);
     await tx
       .update(agents)
       .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })

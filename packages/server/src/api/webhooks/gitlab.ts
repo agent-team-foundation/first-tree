@@ -6,7 +6,9 @@ import {
   markGitlabProcessingFailure,
   markGitlabReviewerSchemaAnomaly,
   markGitlabStableDeliveryObserved,
-  observeGitlabReviewersCapability,
+  observeGitlabCompatibility,
+  parseDeclaredGitlabVersion,
+  resolveGitlabReviewerMode,
   withGitlabIngressFence,
 } from "../../services/gitlab-connections.js";
 import {
@@ -92,15 +94,18 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
           eventHeader,
           body: request.body,
         });
+        const declaredVersion = parseDeclaredGitlabVersion(request.headers["user-agent"]);
         const result = await withGitlabIngressFence(
           app.db,
           endpoint.connection.id,
           endpoint.connection.tokenHash,
           async (tx, fencedConnection) => {
-            const applied = applyGitlabPersonnelEvidence(
-              normalized,
-              fencedConnection.reviewerMode as "unknown" | "assignee" | "reviewers",
-            );
+            const reviewerMode = resolveGitlabReviewerMode({
+              currentMode: fencedConnection.reviewerMode as "unknown" | "assignee" | "reviewers",
+              declaredVersion,
+              reviewerField: normalized.personnel.reviewerField,
+            });
+            const applied = applyGitlabPersonnelEvidence(normalized, reviewerMode);
             const processed = await processScmWebhookDelivery({
               db: tx,
               ingress: normalized.ingress,
@@ -110,9 +115,11 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                 if (normalized.ingress.stableDeliveryId) {
                   await markGitlabStableDeliveryObserved(tx, fencedConnection.id);
                 }
-                if (applied.observeReviewers) {
-                  await observeGitlabReviewersCapability(tx, fencedConnection.id);
-                }
+                await observeGitlabCompatibility(tx, fencedConnection.id, {
+                  declaredVersion: declaredVersion?.value ?? null,
+                  reviewerMode,
+                  reviewersValid: normalized.personnel.reviewerField === "valid",
+                });
                 if (applied.schemaAnomalyCode) {
                   await markGitlabReviewerSchemaAnomaly(tx, fencedConnection.id, applied.schemaAnomalyCode);
                 }
@@ -125,10 +132,8 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                 return resolveGitlabAudience(tx, {
                   organizationId: fencedConnection.organizationId,
                   connectionId: fencedConnection.id,
-                  automaticActionsEnabled: fencedConnection.automaticActionsEnabled,
                   event,
                   entityIdentity: normalized.entityIdentity,
-                  skippedBeforeIdentity: applied.skippedBeforeIdentity,
                 });
               },
               deliver: async (event, audience) => {

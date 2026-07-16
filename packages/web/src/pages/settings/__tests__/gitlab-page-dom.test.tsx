@@ -19,16 +19,10 @@ const apiMocks = vi.hoisted(() => ({
   regenerateGitlabBearer: vi.fn(),
   replaceGitlabConnection: vi.fn(),
   deleteGitlabConnection: vi.fn(),
-  setGitlabAutomaticActions: vi.fn(),
-  confirmGitlabAssigneeMode: vi.fn(),
   listGitlabIdentityLinks: vi.fn(),
-  listGitlabIdentityTransitionAudit: vi.fn(),
   createGitlabIdentityLink: vi.fn(),
-  suspendGitlabIdentityLink: vi.fn(),
-  revokeGitlabIdentityLink: vi.fn(),
+  removeGitlabIdentityLink: vi.fn(),
   reconfirmGitlabIdentityLink: vi.fn(),
-  listGitlabAutomaticActionsAudit: vi.fn(),
-  listGitlabSkippedTargets: vi.fn(),
 }));
 const memberMocks = vi.hoisted(() => ({ listMembers: vi.fn() }));
 
@@ -44,11 +38,9 @@ function connection(overrides: Partial<GitlabConnectionSummary> = {}): GitlabCon
     instanceOrigin: "https://gitlab.internal",
     endpointSeen: true,
     stableDeliveryObserved: false,
-    automaticActions: { enabled: false, acceptedAt: null, acceptedByMemberId: null },
     reviewerCapability: {
       mode: "unknown",
-      assigneeConfirmedAt: null,
-      assigneeConfirmedByMemberId: null,
+      lastObservedVersion: null,
       lastSchemaAnomalyAt: null,
       lastSchemaAnomalyCode: null,
     },
@@ -128,9 +120,6 @@ beforeEach(() => {
   authMock.value = { role: "admin", organizationId: "org-1" };
   apiMocks.listGitlabConnections.mockResolvedValue([]);
   apiMocks.listGitlabIdentityLinks.mockResolvedValue([]);
-  apiMocks.listGitlabIdentityTransitionAudit.mockResolvedValue([]);
-  apiMocks.listGitlabAutomaticActionsAudit.mockResolvedValue([]);
-  apiMocks.listGitlabSkippedTargets.mockResolvedValue([]);
   memberMocks.listMembers.mockResolvedValue([]);
 });
 
@@ -140,6 +129,22 @@ afterEach(() => {
 });
 
 describe("SettingsGitlabPage", () => {
+  it("keeps the configured admin page to connection and account bindings only", async () => {
+    apiMocks.listGitlabConnections.mockResolvedValue([
+      connection({
+        reviewerCapability: { ...connection().reviewerCapability, mode: "reviewers", lastObservedVersion: "17.11.2" },
+      }),
+    ]);
+    const { container, root } = await renderPage();
+    const headings = [...container.querySelectorAll("h2")].map((heading) => heading.textContent);
+    expect(headings).toEqual(["Connection", "GitLab account bindings"]);
+    expect(container.textContent).toContain("Reviewer compatibility: Modern");
+    expect(container.textContent).not.toContain("Automatic actions");
+    expect(container.textContent).not.toContain("Skipped targets");
+    expect(container.textContent).not.toContain("Suspend");
+    await act(async () => root.unmount());
+  });
+
   it("shows the secret exactly once outside query/mutation caches", async () => {
     const webhookUrl = "https://first-tree.example/api/v1/webhooks/gitlab/one-time-secret";
     apiMocks.createGitlabConnection.mockResolvedValue({ connection: connection(), webhookUrl });
@@ -258,11 +263,10 @@ describe("SettingsGitlabPage", () => {
     apiMocks.listGitlabConnections.mockResolvedValue([connection({ organizationId: "org-member" })]);
     const { container, root } = await renderPage();
     expect(container.textContent).toContain("Inbound webhook observed");
-    expect(container.textContent).toContain("Automatic actions");
+    expect(container.textContent).toContain("GitLab version");
     expect(container.textContent).not.toContain("Regenerate URL");
     expect(container.textContent).not.toContain("GitLab account bindings");
     expect(apiMocks.listGitlabIdentityLinks).not.toHaveBeenCalled();
-    expect(apiMocks.listGitlabSkippedTargets).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
 

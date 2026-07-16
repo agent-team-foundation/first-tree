@@ -1,15 +1,10 @@
-import type {
-  GitlabIdentityLinkSummary,
-  GitlabIdentityTransition,
-  GitlabIdentityTransitionAudit,
-} from "@first-tree/shared";
-import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
+import type { GitlabIdentityLinkSummary } from "@first-tree/shared";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
-import { gitlabIdentityTransitionAudit } from "../db/schema/gitlab-identity-transition-audit.js";
 import { members } from "../db/schema/members.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
@@ -39,64 +34,12 @@ function serializeLink(row: typeof gitlabIdentityLinks.$inferSelect): GitlabIden
     organizationId: row.organizationId,
     membershipId: row.membershipId,
     connectionId: row.connectionId,
-    instanceOrigin: row.instanceOrigin,
     displayUsername: row.displayUsername,
     normalizedUsername: row.normalizedUsername,
     state: row.state as GitlabIdentityLinkSummary["state"],
-    stateReason: row.stateReason,
-    createdByMemberId: row.createdByMemberId,
-    confirmedByMemberId: row.confirmedByMemberId,
-    confirmedAt: row.confirmedAt?.toISOString() ?? null,
-    suspendedByMemberId: row.suspendedByMemberId,
-    suspendedAt: row.suspendedAt?.toISOString() ?? null,
-    revokedByMemberId: row.revokedByMemberId,
-    revokedAt: row.revokedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
-}
-
-function serializeTransition(row: typeof gitlabIdentityTransitionAudit.$inferSelect): GitlabIdentityTransitionAudit {
-  return {
-    ...row,
-    transition: row.transition as GitlabIdentityTransition,
-    createdAt: row.createdAt.toISOString(),
-  };
-}
-
-async function recordIdentityTransition(
-  db: Database,
-  link: Pick<
-    typeof gitlabIdentityLinks.$inferSelect,
-    | "id"
-    | "organizationId"
-    | "connectionId"
-    | "instanceOrigin"
-    | "membershipId"
-    | "displayUsername"
-    | "normalizedUsername"
-  >,
-  input: {
-    transition: GitlabIdentityTransition;
-    actorMemberId: string | null;
-    reason: string | null;
-    createdAt?: Date;
-  },
-): Promise<void> {
-  await db.insert(gitlabIdentityTransitionAudit).values({
-    id: uuidv7(),
-    organizationId: link.organizationId,
-    identityLinkId: link.id,
-    connectionId: link.connectionId,
-    instanceOrigin: link.instanceOrigin,
-    membershipId: link.membershipId,
-    displayUsername: link.displayUsername,
-    normalizedUsername: link.normalizedUsername,
-    transition: input.transition,
-    actorMemberId: input.actorMemberId,
-    reason: input.reason,
-    createdAt: input.createdAt ?? new Date(),
-  });
 }
 
 export async function listGitlabIdentityLinks(
@@ -111,19 +54,6 @@ export async function listGitlabIdentityLinks(
   return rows.map(serializeLink);
 }
 
-export async function listGitlabIdentityTransitionAudit(
-  db: Database,
-  organizationId: string,
-): Promise<GitlabIdentityTransitionAudit[]> {
-  const rows = await db
-    .select()
-    .from(gitlabIdentityTransitionAudit)
-    .where(eq(gitlabIdentityTransitionAudit.organizationId, organizationId))
-    .orderBy(desc(gitlabIdentityTransitionAudit.createdAt))
-    .limit(100);
-  return rows.map(serializeTransition);
-}
-
 export async function createGitlabIdentityLink(
   db: Database,
   input: {
@@ -131,7 +61,6 @@ export async function createGitlabIdentityLink(
     connectionId: string;
     membershipId: string;
     username: string;
-    actorMemberId: string;
   },
 ): Promise<GitlabIdentityLinkSummary> {
   const username = normalizeGitlabUsername(input.username);
@@ -164,30 +93,20 @@ export async function createGitlabIdentityLink(
           organizationId: input.organizationId,
           membershipId: input.membershipId,
           connectionId: connection.id,
-          instanceOrigin: connection.instanceOrigin,
           displayUsername: username.display,
           normalizedUsername: username.normalized,
           state: "active",
-          createdByMemberId: input.actorMemberId,
-          confirmedByMemberId: input.actorMemberId,
-          confirmedAt: now,
           createdAt: now,
           updatedAt: now,
         })
         .returning();
       if (!created) throw new Error("GitLab identity link insert returned no row");
-      await recordIdentityTransition(tx as unknown as Database, created, {
-        transition: "created",
-        actorMemberId: input.actorMemberId,
-        reason: "admin_created",
-        createdAt: now,
-      });
       return created;
     });
     return serializeLink(row);
   } catch (err) {
     if (postgresErrorCode(err) === PG_UNIQUE_VIOLATION) {
-      throw new ConflictError("That membership or GitLab username already has an active link for this connection");
+      throw new ConflictError("That membership or GitLab username already has a link for this connection");
     }
     throw err;
   }
@@ -212,161 +131,80 @@ async function disableIdentityMappings(db: Database, linkIds: string[]): Promise
     .where(and(inArray(gitlabEntityChatMappings.identityLinkId, linkIds), eq(gitlabEntityChatMappings.active, true)));
 }
 
-export async function suspendGitlabIdentityLink(
+export async function removeGitlabIdentityLink(
   db: Database,
-  input: { organizationId: string; linkId: string; actorMemberId: string; reason?: string },
-): Promise<GitlabIdentityLinkSummary> {
-  const row = await db.transaction(async (tx) => {
+  input: { organizationId: string; linkId: string },
+): Promise<void> {
+  await db.transaction(async (tx) => {
     const link = await getLinkForUpdate(tx as unknown as Database, input.linkId, input.organizationId);
-    if (link.state === "revoked") throw new ConflictError("Revoked GitLab identity links are terminal");
-    if (link.state === "suspended") return link;
-    const now = new Date();
-    const reason = input.reason ?? "admin_suspended";
-    const [updated] = await tx
-      .update(gitlabIdentityLinks)
-      .set({
-        state: "suspended",
-        stateReason: reason,
-        suspendedByMemberId: input.actorMemberId,
-        suspendedAt: now,
-        updatedAt: now,
-      })
+    const [deleted] = await tx
+      .delete(gitlabIdentityLinks)
       .where(eq(gitlabIdentityLinks.id, link.id))
-      .returning();
-    await disableIdentityMappings(tx as unknown as Database, [link.id]);
-    if (!updated) throw new Error("GitLab identity suspension returned no row");
-    await recordIdentityTransition(tx as unknown as Database, link, {
-      transition: "suspended",
-      actorMemberId: input.actorMemberId,
-      reason,
-      createdAt: now,
-    });
-    return updated;
+      .returning({ id: gitlabIdentityLinks.id });
+    if (!deleted) throw new NotFoundError("GitLab identity link not found");
   });
-  return serializeLink(row);
-}
-
-export async function revokeGitlabIdentityLink(
-  db: Database,
-  input: { organizationId: string; linkId: string; actorMemberId: string; reason?: string },
-): Promise<GitlabIdentityLinkSummary> {
-  const row = await db.transaction(async (tx) => {
-    const link = await getLinkForUpdate(tx as unknown as Database, input.linkId, input.organizationId);
-    if (link.state === "revoked") return link;
-    const now = new Date();
-    const reason = input.reason ?? "admin_revoked";
-    const [updated] = await tx
-      .update(gitlabIdentityLinks)
-      .set({
-        state: "revoked",
-        stateReason: reason,
-        revokedByMemberId: input.actorMemberId,
-        revokedAt: now,
-        updatedAt: now,
-      })
-      .where(eq(gitlabIdentityLinks.id, link.id))
-      .returning();
-    await disableIdentityMappings(tx as unknown as Database, [link.id]);
-    if (!updated) throw new Error("GitLab identity revocation returned no row");
-    await recordIdentityTransition(tx as unknown as Database, link, {
-      transition: "revoked",
-      actorMemberId: input.actorMemberId,
-      reason,
-      createdAt: now,
-    });
-    return updated;
-  });
-  return serializeLink(row);
 }
 
 export async function reconfirmGitlabIdentityLink(
   db: Database,
-  input: { organizationId: string; linkId: string; actorMemberId: string; reason?: string },
+  input: { organizationId: string; linkId: string },
 ): Promise<GitlabIdentityLinkSummary> {
-  try {
-    const row = await db.transaction(async (tx) => {
-      const [snapshot] = await tx
-        .select({
-          connectionId: gitlabIdentityLinks.connectionId,
-          membershipId: gitlabIdentityLinks.membershipId,
-        })
-        .from(gitlabIdentityLinks)
-        .where(
-          and(eq(gitlabIdentityLinks.id, input.linkId), eq(gitlabIdentityLinks.organizationId, input.organizationId)),
-        )
-        .limit(1);
-      if (!snapshot) throw new NotFoundError("GitLab identity link not found");
-      if (!snapshot.connectionId) {
-        throw new ConflictError("The original GitLab connection was removed; create a new identity link");
-      }
-      const [connection] = await tx
-        .select({ id: gitlabConnections.id })
-        .from(gitlabConnections)
-        .where(
-          and(
-            eq(gitlabConnections.id, snapshot.connectionId),
-            eq(gitlabConnections.organizationId, input.organizationId),
-          ),
-        )
-        .for("update")
-        .limit(1);
-      if (!connection)
-        throw new ConflictError("The original GitLab connection was removed; create a new identity link");
-      const [membership] = await tx
-        .select({ status: members.status })
-        .from(members)
-        .where(and(eq(members.id, snapshot.membershipId), eq(members.organizationId, input.organizationId)))
-        .for("update")
-        .limit(1);
-      const link = await getLinkForUpdate(tx as unknown as Database, input.linkId, input.organizationId);
-      if (link.connectionId !== connection.id || link.membershipId !== snapshot.membershipId) {
-        throw new ConflictError("The original GitLab connection was removed; create a new identity link");
-      }
-      if (link.state === "revoked") throw new ConflictError("Revoked GitLab identity links cannot be reactivated");
-      if (link.state === "active") return link;
-      if (!membership || membership.status !== "active") {
-        throw new ConflictError("GitLab identity can only be reconfirmed for an active membership");
-      }
-      const now = new Date();
-      const reason = input.reason ?? "admin_reconfirmed";
-      const [updated] = await tx
-        .update(gitlabIdentityLinks)
-        .set({
-          state: "active",
-          stateReason: reason,
-          confirmedByMemberId: input.actorMemberId,
-          confirmedAt: now,
-          suspendedByMemberId: null,
-          suspendedAt: null,
-          updatedAt: now,
-        })
-        .where(eq(gitlabIdentityLinks.id, link.id))
-        .returning();
-      if (!updated) throw new Error("GitLab identity reconfirmation returned no row");
-      await recordIdentityTransition(tx as unknown as Database, link, {
-        transition: "reconfirmed",
-        actorMemberId: input.actorMemberId,
-        reason,
-        createdAt: now,
-      });
-      return updated;
-    });
-    return serializeLink(row);
-  } catch (err) {
-    if (postgresErrorCode(err) === PG_UNIQUE_VIOLATION) {
-      throw new ConflictError("That membership or GitLab username already has an active link for this connection");
+  const row = await db.transaction(async (tx) => {
+    const [snapshot] = await tx
+      .select({
+        connectionId: gitlabIdentityLinks.connectionId,
+        membershipId: gitlabIdentityLinks.membershipId,
+      })
+      .from(gitlabIdentityLinks)
+      .where(
+        and(eq(gitlabIdentityLinks.id, input.linkId), eq(gitlabIdentityLinks.organizationId, input.organizationId)),
+      )
+      .limit(1);
+    if (!snapshot) throw new NotFoundError("GitLab identity link not found");
+    const [connection] = await tx
+      .select({ id: gitlabConnections.id })
+      .from(gitlabConnections)
+      .where(
+        and(
+          eq(gitlabConnections.id, snapshot.connectionId),
+          eq(gitlabConnections.organizationId, input.organizationId),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (!connection) throw new ConflictError("The GitLab connection was removed; create a new identity link");
+    const [membership] = await tx
+      .select({ status: members.status })
+      .from(members)
+      .where(and(eq(members.id, snapshot.membershipId), eq(members.organizationId, input.organizationId)))
+      .for("update")
+      .limit(1);
+    const link = await getLinkForUpdate(tx as unknown as Database, input.linkId, input.organizationId);
+    if (link.connectionId !== connection.id || link.membershipId !== snapshot.membershipId) {
+      throw new ConflictError("The GitLab connection was removed; create a new identity link");
     }
-    throw err;
-  }
+    if (link.state === "active") return link;
+    if (!membership || membership.status !== "active") {
+      throw new ConflictError("GitLab identity can only be reconfirmed for an active membership");
+    }
+    const now = new Date();
+    const [updated] = await tx
+      .update(gitlabIdentityLinks)
+      .set({ state: "active", updatedAt: now })
+      .where(eq(gitlabIdentityLinks.id, link.id))
+      .returning();
+    if (!updated) throw new Error("GitLab identity reconfirmation returned no row");
+    await tx
+      .update(gitlabEntityChatMappings)
+      .set({ active: true, updatedAt: now })
+      .where(eq(gitlabEntityChatMappings.identityLinkId, link.id));
+    return updated;
+  });
+  return serializeLink(row);
 }
 
 /** Membership leave/removal hook. The caller already owns the member lifecycle transaction. */
-export async function suspendGitlabLinksForMembership(
-  db: Database,
-  membershipId: string,
-  reason: "member_left" | "member_removed",
-  actorMemberId: string | null = null,
-): Promise<void> {
+export async function suspendGitlabLinksForMembership(db: Database, membershipId: string): Promise<void> {
   const active = await db
     .select()
     .from(gitlabIdentityLinks)
@@ -376,50 +214,12 @@ export async function suspendGitlabLinksForMembership(
   const ids = active.map((row) => row.id);
   await db
     .update(gitlabIdentityLinks)
-    .set({ state: "suspended", stateReason: reason, suspendedAt: new Date(), updatedAt: new Date() })
+    .set({
+      state: "suspended",
+      updatedAt: new Date(),
+    })
     .where(inArray(gitlabIdentityLinks.id, ids));
   await disableIdentityMappings(db, ids);
-  const now = new Date();
-  for (const link of active) {
-    await recordIdentityTransition(db, link, {
-      transition: reason,
-      actorMemberId,
-      reason,
-      createdAt: now,
-    });
-  }
-}
-
-/** Connection replace/delete hook. Links stay as audit snapshots and never transfer to the replacement. */
-export async function suspendGitlabLinksForConnection(
-  db: Database,
-  connectionId: string,
-  actorMemberId: string | null = null,
-): Promise<void> {
-  const links = await db
-    .select()
-    .from(gitlabIdentityLinks)
-    .where(eq(gitlabIdentityLinks.connectionId, connectionId))
-    .orderBy(asc(gitlabIdentityLinks.id))
-    .for("update");
-  if (links.length === 0) return;
-  const activeIds = links.filter((row) => row.state === "active").map((row) => row.id);
-  if (activeIds.length > 0) {
-    await db
-      .update(gitlabIdentityLinks)
-      .set({ state: "suspended", stateReason: "connection_removed", suspendedAt: new Date(), updatedAt: new Date() })
-      .where(inArray(gitlabIdentityLinks.id, activeIds));
-    await disableIdentityMappings(db, activeIds);
-  }
-  const now = new Date();
-  for (const link of links) {
-    await recordIdentityTransition(db, link, {
-      transition: "connection_removed",
-      actorMemberId,
-      reason: "connection_removed",
-      createdAt: now,
-    });
-  }
 }
 
 export type ResolvedGitlabIdentity = {

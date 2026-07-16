@@ -112,22 +112,4 @@ describe("preflightMessageSendIntent — addressedAgentIds", () => {
     expect(result.metadata.mentions).toEqual(["agent-2"]);
     expect(result.metadata.addressedAgentIds).toBeUndefined();
   });
-
-  it("excludes suppressNotifyAgentIds from addressedAgentIds", () => {
-    const result = preflightMessageSendIntent({
-      chatId: "c1",
-      senderId: "human-1",
-      senderType: "human",
-      data: {
-        format: "text",
-        content: "please review",
-        source: "api",
-        metadata: { mentions: ["agent-1", "agent-2"] },
-      },
-      options: { suppressNotifyAgentIds: ["agent-2"] },
-      participants: [HUMAN, AGENT, AGENT_TWO],
-    });
-    expect(result.metadata.mentions).toEqual(["agent-1", "agent-2"]);
-    expect(result.metadata.addressedAgentIds).toEqual(["agent-1"]);
-  });
 });

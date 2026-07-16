@@ -12,15 +12,13 @@ import { createChat } from "../services/chat.js";
 import {
   createGitlabConnection,
   findActiveGitlabEndpoint,
-  setGitlabAutomaticActions,
   withGitlabIngressFence,
 } from "../services/gitlab-connections.js";
 import { declareGitlabEntityFollow } from "../services/gitlab-entity-follow.js";
 import {
   createGitlabIdentityLink,
   reconfirmGitlabIdentityLink,
-  revokeGitlabIdentityLink,
-  suspendGitlabIdentityLink,
+  removeGitlabIdentityLink,
   suspendGitlabLinksForMembership,
 } from "../services/gitlab-identities.js";
 import {
@@ -83,14 +81,6 @@ async function setup(app: App) {
     connectionId: connection.connectionId,
     membershipId: admin.memberId,
     username: "Reviewer.One",
-    actorMemberId: admin.memberId,
-  });
-  await setGitlabAutomaticActions(app.db, {
-    connectionId: connection.connectionId,
-    organizationId: admin.organizationId,
-    actorMemberId: admin.memberId,
-    enabled: true,
-    acceptTeamWideForgeryRisk: true,
   });
   return { admin, delegate, connection, link };
 }
@@ -129,10 +119,8 @@ async function holdIngressAfterDurableCard(
     const audience = await resolveGitlabAudience(tx, {
       organizationId: fixture.admin.organizationId,
       connectionId: fixture.connection.connectionId,
-      automaticActionsEnabled: true,
       event,
       entityIdentity: identity,
-      skippedBeforeIdentity: applied.skippedBeforeIdentity,
     });
     const delivery = await deliverGitlabCards(app, {
       event,
@@ -152,7 +140,7 @@ describe("GitLab identity authority fencing", () => {
   const getApp = useTestApp();
 
   it.each([
-    { boundVia: "human_declared" as const, transition: "revoke" as const },
+    { boundVia: "human_declared" as const, transition: "remove" as const },
     { boundVia: "agent_declared" as const, transition: "member_leave" as const },
   ])("fences an explicit $boundVia actor against $transition", async ({ boundVia, transition }) => {
     const app = getApp();
@@ -160,7 +148,7 @@ describe("GitLab identity authority fencing", () => {
     if (transition === "member_leave") {
       await createTestAdmin(app, { username: `actor-fence-fallback-${randomUUID().slice(0, 8)}` });
     }
-    const iid = transition === "revoke" ? 71 : 72;
+    const iid = transition === "remove" ? 71 : 72;
     const chat = await createChat(app.db, fixture.admin.humanAgentUuid, {
       type: "group",
       participantIds: [fixture.delegate.uuid],
@@ -200,10 +188,8 @@ describe("GitLab identity authority fencing", () => {
         const audience = await resolveGitlabAudience(tx, {
           organizationId: fixture.admin.organizationId,
           connectionId: fixture.connection.connectionId,
-          automaticActionsEnabled: true,
           event,
           entityIdentity,
-          skippedBeforeIdentity: applied.skippedBeforeIdentity,
         });
         expect(audience.actorHumanId).toBe(fixture.admin.humanAgentUuid);
         entered.resolve();
@@ -222,11 +208,10 @@ describe("GitLab identity authority fencing", () => {
 
     let transitionSettled = false;
     const transitionPromise = (
-      transition === "revoke"
-        ? revokeGitlabIdentityLink(app.db, {
+      transition === "remove"
+        ? removeGitlabIdentityLink(app.db, {
             organizationId: fixture.admin.organizationId,
             linkId: fixture.link.id,
-            actorMemberId: fixture.admin.memberId,
           })
         : deactivateMembership(app.db, fixture.admin.memberId, MEMBER_STATUSES.LEFT)
     ).then(() => {
@@ -261,10 +246,8 @@ describe("GitLab identity authority fencing", () => {
   }, 20_000);
 
   it.each([
-    { transition: "suspend" as const, existing: true },
-    { transition: "suspend" as const, existing: false },
-    { transition: "revoke" as const, existing: true },
-    { transition: "revoke" as const, existing: false },
+    { transition: "remove" as const, existing: true },
+    { transition: "remove" as const, existing: false },
     { transition: "leave" as const, existing: true },
     { transition: "leave" as const, existing: false },
   ])("serializes $transition against an in-flight $existing identity route", async ({ transition, existing }) => {
@@ -296,17 +279,10 @@ describe("GitLab identity authority fencing", () => {
 
     let transitionSettled = false;
     const transitionPromise = (async () => {
-      if (transition === "suspend") {
-        await suspendGitlabIdentityLink(app.db, {
+      if (transition === "remove") {
+        await removeGitlabIdentityLink(app.db, {
           organizationId: fixture.admin.organizationId,
           linkId: fixture.link.id,
-          actorMemberId: fixture.admin.memberId,
-        });
-      } else if (transition === "revoke") {
-        await revokeGitlabIdentityLink(app.db, {
-          organizationId: fixture.admin.organizationId,
-          linkId: fixture.link.id,
-          actorMemberId: fixture.admin.memberId,
         });
       } else {
         await deactivateMembership(app.db, fixture.admin.memberId, MEMBER_STATUSES.LEFT);
@@ -320,7 +296,8 @@ describe("GitLab identity authority fencing", () => {
     await ingress;
     await transitionPromise;
     const [link] = await app.db.select().from(gitlabIdentityLinks).where(eq(gitlabIdentityLinks.id, fixture.link.id));
-    expect(link?.state).toBe(transition === "revoke" ? "revoked" : "suspended");
+    if (transition === "remove") expect(link).toBeUndefined();
+    else expect(link?.state).toBe("suspended");
     const activeMappings = await app.db
       .select()
       .from(gitlabEntityChatMappings)
@@ -399,11 +376,7 @@ describe("GitLab identity authority fencing", () => {
     const app = getApp();
     const fixture = await setup(app);
     await createTestAdmin(app, { username: `identity-lock-fallback-${randomUUID().slice(0, 8)}` });
-    await suspendGitlabIdentityLink(app.db, {
-      organizationId: fixture.admin.organizationId,
-      linkId: fixture.link.id,
-      actorMemberId: fixture.admin.memberId,
-    });
+    await suspendGitlabLinksForMembership(app.db, fixture.admin.memberId);
 
     let membershipLocked!: () => void;
     let continueLeave!: () => void;
@@ -419,7 +392,7 @@ describe("GitLab identity authority fencing", () => {
       membershipLocked();
       await release;
       await rawTx.update(members).set({ status: MEMBER_STATUSES.LEFT }).where(eq(members.id, fixture.admin.memberId));
-      await suspendGitlabLinksForMembership(tx, fixture.admin.memberId, "member_left");
+      await suspendGitlabLinksForMembership(tx, fixture.admin.memberId);
     });
     await locked;
 
@@ -427,7 +400,6 @@ describe("GitLab identity authority fencing", () => {
     const reconfirming = reconfirmGitlabIdentityLink(app.db, {
       organizationId: fixture.admin.organizationId,
       linkId: fixture.link.id,
-      actorMemberId: fixture.admin.memberId,
     }).then(
       () => {
         reconfirmSettled = true;

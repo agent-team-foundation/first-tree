@@ -1,19 +1,10 @@
 import { gitlabIdentityLinkCreateSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireOrgAdmin } from "../../scope/require-org.js";
-import {
-  createGitlabIdentityLink,
-  listGitlabIdentityLinks,
-  listGitlabIdentityTransitionAudit,
-} from "../../services/gitlab-identities.js";
+import { createGitlabIdentityLink, listGitlabIdentityLinks } from "../../services/gitlab-identities.js";
 
 /** Class B — admin-only GitLab username bindings for one organization. */
 export async function orgGitlabIdentityLinkRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { orgId: string } }>("/audit", async (request) => {
-    const scope = await requireOrgAdmin(request, app.db);
-    return { events: await listGitlabIdentityTransitionAudit(app.db, scope.organizationId) };
-  });
-
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
     return { links: await listGitlabIdentityLinks(app.db, scope.organizationId) };
@@ -27,7 +18,6 @@ export async function orgGitlabIdentityLinkRoutes(app: FastifyInstance): Promise
       connectionId: body.connectionId,
       membershipId: body.membershipId,
       username: body.username,
-      actorMemberId: scope.memberId,
     });
     return reply.status(201).send(link);
   });
