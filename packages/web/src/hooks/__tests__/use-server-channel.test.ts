@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client.js";
 import {
+  extractAuthProviderAvailability,
   extractChannel,
   extractGrowthLandingPagesEnabled,
   useGrowthLandingPagesEnabled,
@@ -84,9 +85,30 @@ describe("extractGrowthLandingPagesEnabled", () => {
   });
 });
 
+describe("extractAuthProviderAvailability", () => {
+  it("accepts the public provider availability shape", () => {
+    expect(extractAuthProviderAvailability({ authProviders: { google: true, github: false } })).toEqual({
+      google: true,
+      github: false,
+    });
+  });
+
+  it("fails closed for missing or malformed availability", () => {
+    expect(extractAuthProviderAvailability({})).toEqual({ google: false, github: false });
+    expect(extractAuthProviderAvailability({ authProviders: { google: "yes", github: true } })).toEqual({
+      google: false,
+      github: false,
+    });
+  });
+});
+
 describe("server bootstrap hooks", () => {
   it("reads channel and growth flags from the public bootstrap config", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ channel: "staging", growthLandingPagesEnabled: true });
+    vi.mocked(api.get).mockResolvedValueOnce({
+      channel: "staging",
+      growthLandingPagesEnabled: true,
+      authProviders: { google: true, github: true },
+    });
 
     const observed = await renderBootstrapProbe();
 

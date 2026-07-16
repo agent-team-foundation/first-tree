@@ -7,7 +7,7 @@ const FALSE_VALUES = new Set(["0", "false", "off", "no"]);
 const REDACTED = "[REDACTED]";
 const SENSITIVE_KEY_RE =
   /token|secret|password|credential|authorization|cookie|jwt|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?code/i;
-const ROUTE_TEXT_RE = /\/(?:invite\/[^\s"'<>)]*|auth\/github\/complete[^\s"'<>)]*)/g;
+const ROUTE_TEXT_RE = /\/(?:invite\/[^\s"'<>)]*|auth\/(?:github\/)?complete[^\s"'<>)]*)/g;
 const ABSOLUTE_URL_TEXT_RE = /https?:\/\/[^\s"'<>)]*/gi;
 
 type WebSentryConfig = {
@@ -148,7 +148,7 @@ function sanitizeString(value: string): string {
     .replace(ROUTE_TEXT_RE, (match) => sanitizePath(stripUrlSuffix(match)))
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`)
     .replace(
-      /(access_token|refresh_token|token|api_key|apiKey|secret|password|oauth_code|code)=([^&\s]+)/gi,
+      /(access_token|refresh_token|access|refresh|token|api_key|apiKey|secret|password|oauth_code|code)=([^&\s]+)/gi,
       `$1=${REDACTED}`,
     );
 }

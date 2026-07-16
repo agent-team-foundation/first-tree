@@ -34,7 +34,7 @@ import {
   verifyOAuthState,
 } from "../../services/oauth-state.js";
 import { resolvePublicUrl } from "../../utils/public-url.js";
-import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
+import { buildCookie, protectOAuthStateNonce, readOAuthStateNonce } from "./oauth-cookie.js";
 
 /**
  * GitHub sign-in surface. All routes are public (no member JWT required).
@@ -90,7 +90,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       "Set-Cookie",
       buildCookie({
         name: OAUTH_STATE_COOKIE,
-        value: nonce,
+        value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
         maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
         secure: isProd,
       }),
@@ -129,7 +129,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.redirect("/", 302);
     }
 
-    const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
+    const cookieNonce = readOAuthStateNonce(
+      request.headers.cookie,
+      OAUTH_STATE_COOKIE,
+      app.config.secrets.encryptionKey,
+    );
 
     let next: string;
     let targetOrganizationId: string | null = null;
@@ -235,7 +239,10 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
           app.log.info({ event: "identity.linked", provider: "github", userId: stateUserId }, "Identity linked");
           return reply.redirect("/user-settings?connection=github-linked", 302);
         }
-        await unlinkExternalIdentity(app.db, stateUserId, "github", profile.githubId);
+        await unlinkExternalIdentity(app.db, stateUserId, "github", profile.githubId, {
+          google: Boolean(app.config.oauth?.google),
+          github: Boolean(app.config.oauth?.githubApp),
+        });
         app.log.info({ event: "identity.unlinked", provider: "github", userId: stateUserId }, "Identity unlinked");
         return reply.redirect("/user-settings?connection=github-unlinked", 302);
       } catch (error) {

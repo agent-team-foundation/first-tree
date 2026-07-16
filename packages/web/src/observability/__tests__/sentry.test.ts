@@ -266,4 +266,37 @@ describe("sanitizeWebSentryEvent", () => {
     ]);
     expect(event.message).toBe("send apiKey=[REDACTED] and oauth_code=[REDACTED]");
   });
+
+  it("redacts the generic OAuth completion route and short token keys", () => {
+    const event = sanitizeWebSentryEvent(
+      {
+        message: "OAuth failed at /auth/complete#access=access-secret&refresh=refresh-secret",
+        extra: { callback: "/auth/complete#access=access-secret&refresh=refresh-secret" },
+      },
+      {
+        enabled: true,
+        dsn: "https://public@example.ingest.sentry.io/1",
+        environment: "production",
+        release: "first-tree-web@test-sha",
+        buildId: "test-sha",
+        sampleRate: 0.1,
+      },
+    );
+
+    expect(event.message).toBe("OAuth failed at /auth/complete");
+    expect(event.extra?.callback).toBe("/auth/complete");
+    expect(
+      sanitizeWebSentryEvent(
+        { message: "access=secret&refresh=secret" },
+        {
+          enabled: true,
+          dsn: "https://public@example.ingest.sentry.io/1",
+          environment: "production",
+          release: "first-tree-web@test-sha",
+          buildId: "test-sha",
+          sampleRate: 0.1,
+        },
+      ).message,
+    ).toBe("access=[REDACTED]&refresh=[REDACTED]");
+  });
 });

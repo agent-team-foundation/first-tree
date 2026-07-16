@@ -27,6 +27,14 @@ export type GithubTokenBundle = {
   refreshTokenExpiresAt?: string;
 };
 
+export type AuthProviderAvailability = Readonly<Record<AuthProvider, boolean>>;
+
+export type AuthCredentialSnapshot = {
+  provider: string;
+  identifier: string;
+  credentialType: string | null;
+};
+
 export class IdentityConflictError extends Error {
   constructor() {
     super("External identity already belongs to another user");
@@ -46,6 +54,25 @@ export class IdentityMismatchError extends Error {
     super("Re-authenticated identity does not match the connected identity");
     this.name = "IdentityMismatchError";
   }
+}
+
+export function isUsableLegacyPasswordHash(passwordHash: string): boolean {
+  return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(passwordHash);
+}
+
+export function hasUsableAuthentication(
+  identities: readonly AuthCredentialSnapshot[],
+  passwordHash: string,
+  availability: AuthProviderAvailability,
+  excludedProvider?: AuthProvider,
+): boolean {
+  if (isUsableLegacyPasswordHash(passwordHash)) return true;
+  return identities.some((identity) => {
+    if (identity.provider === excludedProvider) return false;
+    if (identity.credentialType === "password" || identity.credentialType === "webauthn") return true;
+    if (identity.provider !== "google" && identity.provider !== "github") return false;
+    return availability[identity.provider];
+  });
 }
 
 export async function findOrCreateUserFromExternalAccount(
@@ -111,27 +138,45 @@ export async function linkExternalIdentity(
   userId: string,
   profile: ExternalAccountProfile,
 ): Promise<"linked" | "already-linked"> {
-  return db.transaction(async (tx) => {
-    const [bySubject] = await tx
-      .select({ userId: authIdentities.userId })
-      .from(authIdentities)
-      .where(and(eq(authIdentities.provider, profile.provider), eq(authIdentities.identifier, profile.subject)))
-      .limit(1);
-    if (bySubject && bySubject.userId !== userId) throw new IdentityConflictError();
-    if (bySubject) {
-      await updateIdentitySnapshot(tx as unknown as Database, userId, profile);
+  try {
+    return await db.transaction(async (tx) => {
+      const [bySubject] = await tx
+        .select({ userId: authIdentities.userId })
+        .from(authIdentities)
+        .where(and(eq(authIdentities.provider, profile.provider), eq(authIdentities.identifier, profile.subject)))
+        .limit(1);
+      if (bySubject && bySubject.userId !== userId) throw new IdentityConflictError();
+      if (bySubject) {
+        await updateIdentitySnapshot(tx as unknown as Database, userId, profile);
+        return "already-linked";
+      }
+
+      const [byProvider] = await tx
+        .select({ identifier: authIdentities.identifier })
+        .from(authIdentities)
+        .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, profile.provider)))
+        .limit(1);
+      if (byProvider) throw new IdentityConflictError();
+      await tx.insert(authIdentities).values(identityValues(userId, profile));
+      return "linked";
+    });
+  } catch (error) {
+    const constraint = uniqueViolationConstraint(error);
+    if (errorField(error, "code") !== PG_UNIQUE_VIOLATION) throw error;
+    if (constraint === "uq_auth_identities_provider_identifier") {
+      const [winner] = await db
+        .select({ userId: authIdentities.userId })
+        .from(authIdentities)
+        .where(and(eq(authIdentities.provider, profile.provider), eq(authIdentities.identifier, profile.subject)))
+        .limit(1);
+      if (!winner) throw error;
+      if (winner.userId !== userId) throw new IdentityConflictError();
+      await updateIdentitySnapshot(db, userId, profile);
       return "already-linked";
     }
-
-    const [byProvider] = await tx
-      .select({ identifier: authIdentities.identifier })
-      .from(authIdentities)
-      .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, profile.provider)))
-      .limit(1);
-    if (byProvider) throw new IdentityConflictError();
-    await tx.insert(authIdentities).values(identityValues(userId, profile));
-    return "linked";
-  });
+    if (constraint === "uq_auth_identities_user_provider") throw new IdentityConflictError();
+    throw error;
+  }
 }
 
 export async function unlinkExternalIdentity(
@@ -139,16 +184,30 @@ export async function unlinkExternalIdentity(
   userId: string,
   provider: AuthProvider,
   reauthenticatedSubject: string,
+  availability: AuthProviderAvailability,
 ): Promise<void> {
   await db.transaction(async (tx) => {
+    const [user] = await tx
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, userId))
+      .for("update");
+    if (!user) throw new Error("Cannot disconnect authentication provider for a missing user");
     const identities = await tx
-      .select({ id: authIdentities.id, provider: authIdentities.provider, identifier: authIdentities.identifier })
+      .select({
+        id: authIdentities.id,
+        provider: authIdentities.provider,
+        identifier: authIdentities.identifier,
+        credentialType: authIdentities.credentialType,
+      })
       .from(authIdentities)
       .where(eq(authIdentities.userId, userId))
       .for("update");
     const target = identities.find((identity) => identity.provider === provider);
     if (!target || target.identifier !== reauthenticatedSubject) throw new IdentityMismatchError();
-    if (identities.length <= 1) throw new LastIdentityError();
+    if (!hasUsableAuthentication(identities, user.passwordHash, availability, provider)) {
+      throw new LastIdentityError();
+    }
     await tx.delete(authIdentities).where(eq(authIdentities.id, target.id));
   });
 }
@@ -266,7 +325,7 @@ async function insertWithUsernameRetry(
       const code = errorField(error, "code");
       if (code !== PG_UNIQUE_VIOLATION) throw error;
       const constraint = uniqueViolationConstraint(error);
-      if (constraint && constraint !== "users_username_unique") throw error;
+      if (constraint !== "users_username_unique") throw error;
       candidate = `${base}-${randomBytes(2).toString("hex")}`;
     }
   }
@@ -275,17 +334,17 @@ async function insertWithUsernameRetry(
 }
 
 function uniqueViolationConstraint(error: unknown): string | undefined {
-  return errorField(error, "constraint");
+  return errorField(error, "constraint_name") ?? errorField(error, "constraint");
 }
 
-function errorField(error: unknown, field: "code" | "constraint"): string | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const record = error as Record<string, unknown>;
-  if (typeof record[field] === "string") return record[field];
-  if (record.cause && typeof record.cause === "object") {
-    const cause = record.cause as Record<string, unknown>;
-    const value = cause[field];
-    return typeof value === "string" ? value : undefined;
+function errorField(error: unknown, field: "code" | "constraint" | "constraint_name"): string | undefined {
+  const visited = new Set<object>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !visited.has(current)) {
+    visited.add(current);
+    const value = Reflect.get(current, field);
+    if (typeof value === "string") return value;
+    current = Reflect.get(current, "cause");
   }
   return undefined;
 }

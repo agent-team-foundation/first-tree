@@ -4,6 +4,7 @@ import { useAuth } from "../auth/auth-context.js";
 import { readFromPath } from "../auth/redirect-from-state.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
+import { useAuthProviderAvailabilityState } from "../hooks/use-server-channel.js";
 
 // Marketing site (parent brand) — the "Back to home" link points here rather
 // than the in-app landing route. Mirrors the pattern in footer.tsx / layout.tsx.
@@ -12,12 +13,10 @@ const PARENT_URL = "https://first-tree.ai";
 const REPO_URL = "https://github.com/agent-team-foundation/first-tree";
 
 /**
- * Sign-in entry. Single path: GitHub OAuth. The legacy password form has
- * been retired — pre-OAuth users are auto-migrated server-side by
- * `findOrCreateUserFromGithub`, which binds a fresh github identity to
- * any user whose `users.username` matches the GitHub login (case-
- * insensitive). They click "Continue with GitHub" once and keep their old
- * organization, agents, and history.
+ * Sign-in entry. Provider availability comes from the public bootstrap
+ * endpoint so self-hosted deployments never render a broken OAuth choice.
+ * The legacy password form has been retired; OAuth sign-in preserves the
+ * user's existing organization, agents, and history.
  *
  * On localhost a "Dev: skip GitHub" button is rendered alongside; it
  * jumps to `/auth/github/dev-callback` which mints a stub identity in
@@ -30,6 +29,7 @@ const REPO_URL = "https://github.com/agent-team-foundation/first-tree";
  */
 export function LoginPage() {
   const { isAuthenticated } = useAuth();
+  const { providers, settled: providersSettled } = useAuthProviderAvailabilityState();
   const location = useLocation();
   const isLocalhost =
     typeof window !== "undefined" &&
@@ -49,6 +49,8 @@ export function LoginPage() {
     redirectTo === "/"
       ? "/api/v1/auth/google/start"
       : `/api/v1/auth/google/start?next=${encodeURIComponent(redirectTo)}`;
+
+  const availableProviderLabels = [...(providers.google ? ["Google"] : []), ...(providers.github ? ["GitHub"] : [])];
 
   // Stable dev identity — same id every time so reloads land on the same
   // user, agents, and conversations. Using `1` (not the more obvious 42)
@@ -87,23 +89,41 @@ export function LoginPage() {
           </div>
 
           <div className="mt-6 space-y-4">
-            <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
-              <a href={googleHref}>
-                <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
-                Continue with Google
-              </a>
-            </Button>
-
-            <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
-              <a href={githubHref}>
-                <Github className="h-4 w-4" />
-                Continue with GitHub
-              </a>
-            </Button>
+            {!providersSettled ? (
+              <p className="text-center text-label text-fg-3">Loading sign-in options…</p>
+            ) : (
+              <>
+                {providers.google && (
+                  <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
+                    <a href={googleHref}>
+                      <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
+                      Continue with Google
+                    </a>
+                  </Button>
+                )}
+                {providers.github && (
+                  <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
+                    <a href={githubHref}>
+                      <Github className="h-4 w-4" />
+                      Continue with GitHub
+                    </a>
+                  </Button>
+                )}
+                {availableProviderLabels.length === 0 && (
+                  <p className="text-center text-label text-fg-3">
+                    No sign-in providers are configured. Contact your administrator.
+                  </p>
+                )}
+              </>
+            )}
 
             <p className="text-center text-label text-fg-3">
-              <span className="font-medium text-fg-2">Sign in uses only your Google or GitHub identity.</span> You
-              authorize a repo later, only when an agent needs to work in it.
+              <span className="font-medium text-fg-2">
+                {availableProviderLabels.length > 0
+                  ? `Sign in uses your ${availableProviderLabels.join(" or ")} identity.`
+                  : "Sign-in options are managed by this deployment."}
+              </span>{" "}
+              You authorize a repo later, only when an agent needs to work in it.
             </p>
 
             <div className="flex items-center justify-center gap-4 border-t border-border pt-4 text-caption text-fg-3">

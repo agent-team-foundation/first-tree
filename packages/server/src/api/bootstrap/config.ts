@@ -20,6 +20,10 @@ export async function bootstrapConfigRoutes(app: FastifyInstance): Promise<void>
       // Product flag for growth landing funnels. Kept separate from release
       // channel so staging/dev do not implicitly expose public campaigns.
       growthLandingPagesEnabled: app.config.growth.landingPagesEnabled,
+      authProviders: {
+        google: Boolean(app.config.oauth?.google),
+        github: Boolean(app.config.oauth?.githubApp),
+      },
     };
   });
 }

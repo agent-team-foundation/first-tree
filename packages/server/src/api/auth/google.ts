@@ -25,7 +25,7 @@ import {
   verifyOAuthState,
 } from "../../services/oauth-state.js";
 import { resolvePublicUrl } from "../../utils/public-url.js";
-import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
+import { buildCookie, protectOAuthStateNonce, readOAuthStateNonce } from "./oauth-cookie.js";
 
 export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/start", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
@@ -38,10 +38,9 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       intent: "sign-in",
       oidcNonce,
     });
-    // The cookie stores only a random, short-lived CSRF nonce, not a token or
-    // provider identity. It is HttpOnly, SameSite=Lax, and Secure in prod.
-    // codeql[js/clear-text-storage-of-sensitive-data]
-    reply.header("Set-Cookie", stateCookie(nonce));
+    // Encrypt the short-lived CSRF nonce before placing it in the browser
+    // cookie; the callback also accepts legacy plaintext nonce cookies.
+    reply.header("Set-Cookie", stateCookie(nonce, OAUTH_STATE_COOKIE_MAX_AGE_S, app.config.secrets.encryptionKey));
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/google/callback`;
     app.log.info({ event: "oauth.start", provider: "google", intent: "sign-in" }, "OAuth flow started");
     return reply.redirect(
@@ -56,7 +55,11 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     const { code, state, error: providerError } = googleCallbackQuerySchema.parse(request.query);
     if (providerError) return redirectError(reply, "provider-exchange-failed");
     if (!code || !state) return redirectError(reply, "provider-exchange-failed");
-    const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
+    const cookieNonce = readOAuthStateNonce(
+      request.headers.cookie,
+      OAUTH_STATE_COOKIE,
+      app.config.secrets.encryptionKey,
+    );
     let verified: Awaited<ReturnType<typeof verifyOAuthState>>;
     try {
       verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
@@ -64,9 +67,8 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       app.log.warn({ err: error, event: "oauth.callback_rejected", provider: "google" }, "OAuth state rejected");
       return redirectError(reply, "state-expired");
     }
-    // This deletion header clears the same nonce-only cookie.
-    // codeql[js/clear-text-storage-of-sensitive-data]
-    reply.header("Set-Cookie", stateCookie("", 0));
+    // Clear the single-use OAuth state cookie after validating it.
+    reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
     let profile: ReturnType<typeof googleExternalProfile>;
@@ -92,7 +94,10 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
           app.log.info({ event: "identity.linked", provider: "google", userId: verified.userId }, "Identity linked");
           return reply.redirect("/user-settings?connection=google-linked", 302);
         }
-        await unlinkExternalIdentity(app.db, verified.userId, "google", profile.subject);
+        await unlinkExternalIdentity(app.db, verified.userId, "google", profile.subject, {
+          google: Boolean(app.config.oauth?.google),
+          github: Boolean(app.config.oauth?.githubApp),
+        });
         app.log.info({ event: "identity.unlinked", provider: "google", userId: verified.userId }, "Identity unlinked");
         return reply.redirect("/user-settings?connection=google-unlinked", 302);
       } catch (error) {
@@ -185,8 +190,13 @@ async function completeGoogleSignIn(
   return reply.redirect(`/auth/complete#${fragment}`, 302);
 }
 
-function stateCookie(value: string, maxAge = OAUTH_STATE_COOKIE_MAX_AGE_S): string {
-  return buildCookie({ name: OAUTH_STATE_COOKIE, value, maxAge, secure: process.env.NODE_ENV === "production" });
+function stateCookie(value: string, maxAge: number, encryptionKey: string): string {
+  return buildCookie({
+    name: OAUTH_STATE_COOKIE,
+    value: maxAge > 0 ? protectOAuthStateNonce(value, encryptionKey) : "",
+    maxAge,
+    secure: process.env.NODE_ENV === "production",
+  });
 }
 
 function redirectError(reply: FastifyReply, code: string, next = "/") {

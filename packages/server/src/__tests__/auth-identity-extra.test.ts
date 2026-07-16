@@ -1,10 +1,23 @@
+import { githubExternalProfile } from "@first-tree/shared";
+import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { connectDatabase } from "../db/connection.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { requireAgent } from "../middleware/require-identity.js";
 import { requireUser } from "../scope/require-user.js";
-import { findOrCreateUserFromGithub, getStoredGithubAccessToken } from "../services/auth-identity.js";
+import {
+  findOrCreateUserFromExternalAccount,
+  findOrCreateUserFromGithub,
+  getStoredGithubAccessToken,
+  hasUsableAuthentication,
+  IdentityConflictError,
+  isUsableLegacyPasswordHash,
+  LastIdentityError,
+  linkExternalIdentity,
+  unlinkExternalIdentity,
+} from "../services/auth-identity.js";
 import { encryptValue } from "../services/crypto.js";
 import { uuidv7 } from "../uuid.js";
 import { useTestApp } from "./helpers.js";
@@ -103,8 +116,9 @@ describe("auth identity extra coverage", () => {
       transaction: async (callback: (tx: unknown) => Promise<void>) => {
         transactionAttempts += 1;
         if (transactionAttempts <= 4) {
-          const err = new Error("duplicate username") as Error & { code: string };
+          const err = new Error("duplicate username") as Error & { code: string; constraint_name: string };
           err.code = "23505";
+          err.constraint_name = "users_username_unique";
           throw err;
         }
         await callback({
@@ -130,5 +144,149 @@ describe("auth identity extra coverage", () => {
     expect(transactionAttempts).toBe(5);
     expect(insertedUsernames).toHaveLength(1);
     expect(insertedUsernames[0]).toMatch(/^retry-[0-9a-f-]{12}$/);
+  });
+
+  it("converges concurrent sign-ins for one external subject onto one user", async () => {
+    const app = getApp();
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const firstDb = connectDatabase(databaseUrl);
+    const secondDb = connectDatabase(databaseUrl);
+    try {
+      const profileA = githubExternalProfile({
+        id: "gh-concurrent-sign-in",
+        login: "race-a",
+        name: "Race A",
+        email: null,
+      });
+      const profileB = githubExternalProfile({
+        id: "gh-concurrent-sign-in",
+        login: "race-b",
+        name: "Race B",
+        email: null,
+      });
+      const results = await Promise.all([
+        findOrCreateUserFromExternalAccount(firstDb, profileA),
+        findOrCreateUserFromExternalAccount(secondDb, profileB),
+      ]);
+
+      expect(results[0]?.userId).toBe(results[1]?.userId);
+      const usersForIdentity = await app.db
+        .select({ userId: authIdentities.userId })
+        .from(authIdentities)
+        .where(eq(authIdentities.identifier, "gh-concurrent-sign-in"));
+      expect(usersForIdentity).toEqual([{ userId: results[0]?.userId }]);
+    } finally {
+      await firstDb.end();
+      await secondDb.end();
+    }
+  });
+
+  it("maps concurrent identity-link races to idempotence or conflict", async () => {
+    const app = getApp();
+    const databaseUrl = process.env.DATABASE_URL ?? "";
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for the concurrency test");
+    const firstDb = connectDatabase(databaseUrl);
+    const secondDb = connectDatabase(databaseUrl);
+    const firstUserId = uuidv7();
+    const secondUserId = uuidv7();
+    const providerRaceUserId = uuidv7();
+    try {
+      await app.db.insert(users).values([
+        { id: firstUserId, username: "link-race-a", passwordHash: "x", displayName: "Link Race A" },
+        { id: secondUserId, username: "link-race-b", passwordHash: "x", displayName: "Link Race B" },
+        { id: providerRaceUserId, username: "link-race-c", passwordHash: "x", displayName: "Link Race C" },
+      ]);
+      const sharedProfile = githubExternalProfile({
+        id: "gh-concurrent-link",
+        login: "concurrent-link",
+        name: "Concurrent Link",
+        email: null,
+      });
+      const subjectRace = await Promise.allSettled([
+        linkExternalIdentity(firstDb, firstUserId, sharedProfile),
+        linkExternalIdentity(secondDb, secondUserId, sharedProfile),
+      ]);
+      expect(subjectRace.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(subjectRace.filter((result) => result.status === "rejected")[0]?.reason).toBeInstanceOf(
+        IdentityConflictError,
+      );
+
+      const providerRace = await Promise.allSettled([
+        linkExternalIdentity(
+          firstDb,
+          providerRaceUserId,
+          githubExternalProfile({ id: "gh-provider-a", login: "provider-a" }),
+        ),
+        linkExternalIdentity(
+          secondDb,
+          providerRaceUserId,
+          githubExternalProfile({ id: "gh-provider-b", login: "provider-b" }),
+        ),
+      ]);
+      expect(providerRace.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(providerRace.filter((result) => result.status === "rejected")[0]?.reason).toBeInstanceOf(
+        IdentityConflictError,
+      );
+    } finally {
+      await firstDb.end();
+      await secondDb.end();
+    }
+  });
+
+  it("protects the last usable credential when provider configuration changes", async () => {
+    const app = getApp();
+    const oauthOnlyUserId = uuidv7();
+    const legacyUserId = uuidv7();
+    await app.db.insert(users).values([
+      { id: oauthOnlyUserId, username: "oauth-only", passwordHash: "x", displayName: "OAuth Only" },
+      {
+        id: legacyUserId,
+        username: "legacy-password",
+        passwordHash: await bcrypt.hash("legacy", 1),
+        displayName: "Legacy",
+      },
+    ]);
+    await app.db.insert(authIdentities).values([
+      {
+        id: uuidv7(),
+        userId: oauthOnlyUserId,
+        provider: "google",
+        identifier: "google-only",
+        metadata: {},
+      },
+      {
+        id: uuidv7(),
+        userId: oauthOnlyUserId,
+        provider: "github",
+        identifier: "github-disabled",
+        metadata: {},
+      },
+      {
+        id: uuidv7(),
+        userId: legacyUserId,
+        provider: "google",
+        identifier: "google-legacy",
+        metadata: {},
+      },
+    ]);
+
+    expect(isUsableLegacyPasswordHash("x")).toBe(false);
+    expect(isUsableLegacyPasswordHash("not-a-bcrypt-hash")).toBe(false);
+    expect(
+      hasUsableAuthentication(
+        [{ provider: "github", identifier: "github-disabled", credentialType: null }],
+        "x",
+        { google: true, github: false },
+        "google",
+      ),
+    ).toBe(false);
+
+    await expect(
+      unlinkExternalIdentity(app.db, oauthOnlyUserId, "google", "google-only", { google: true, github: false }),
+    ).rejects.toBeInstanceOf(LastIdentityError);
+    await expect(
+      unlinkExternalIdentity(app.db, legacyUserId, "google", "google-legacy", { google: true, github: false }),
+    ).resolves.toBeUndefined();
   });
 });

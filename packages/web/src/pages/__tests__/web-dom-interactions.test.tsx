@@ -1271,30 +1271,52 @@ describe("web DOM interaction coverage", () => {
 
   it("renders login states and builds safe OAuth links", async () => {
     const { LoginPage } = await import("../login.js");
+    const { api } = await import("../../api/client.js");
+    const originalGet = api.get;
+    let availability = { google: true, github: true };
+    api.get = async <T,>(path: string): Promise<T> => {
+      if (path === "/bootstrap/config") {
+        return { authProviders: availability } as T;
+      }
+      return originalGet<T>(path);
+    };
 
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...window.location, hostname: "localhost" },
-    });
-    authMock.value = { ...authMock.value, isAuthenticated: false };
-    const local = await renderDom(<LoginPage />, "/login", undefined);
-    await waitForText("Continue with GitHub", local.container);
-    await waitForText("only your GitHub identity", local.container);
-    await waitForText("Dev: skip GitHub", local.container);
-    expect(local.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start"]')).toBeTruthy();
-    await unmountRoot(local.root);
+    try {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { ...window.location, hostname: "localhost" },
+      });
+      authMock.value = { ...authMock.value, isAuthenticated: false };
+      const local = await renderDom(<LoginPage />, "/login", undefined);
+      await waitForText("Continue with GitHub", local.container);
+      await waitForText("Sign in uses your Google or GitHub identity.", local.container);
+      await waitForText("Dev: skip GitHub", local.container);
+      expect(local.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start"]')).toBeTruthy();
+      await unmountRoot(local.root);
 
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...window.location, hostname: "app.example.com" },
-    });
-    const deepLink = await renderDom(<LoginPage />, "/login", undefined);
-    expect(deepLink.container.textContent).not.toContain("Dev: skip GitHub");
-    await unmountRoot(deepLink.root);
+      availability = { google: true, github: false };
+      const googleOnly = await renderDom(<LoginPage />, "/login", undefined);
+      await waitForText("Continue with Google", googleOnly.container);
+      expect(googleOnly.container.textContent).not.toContain("Continue with GitHub");
+      await unmountRoot(googleOnly.root);
 
-    authMock.value = { ...authMock.value, isAuthenticated: true };
-    const authed = await renderDom(<LoginPage />, "/login", undefined);
-    expect(authed.container.textContent).toBe("");
+      availability = { google: false, github: true };
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { ...window.location, hostname: "app.example.com" },
+      });
+      const deepLink = await renderDom(<LoginPage />, "/login", undefined);
+      await waitForText("Continue with GitHub", deepLink.container);
+      expect(deepLink.container.textContent).not.toContain("Continue with Google");
+      expect(deepLink.container.textContent).not.toContain("Dev: skip GitHub");
+      await unmountRoot(deepLink.root);
+
+      authMock.value = { ...authMock.value, isAuthenticated: true };
+      const authed = await renderDom(<LoginPage />, "/login", undefined);
+      expect(authed.container.textContent).toBe("");
+    } finally {
+      api.get = originalGet;
+    }
   });
 
   it("consumes OAuth fragments and reports missing tokens", async () => {

@@ -3,40 +3,63 @@ import { authProviderParamsSchema } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { users } from "../db/schema/users.js";
 import { requireUser } from "../scope/require-user.js";
+import {
+  type AuthCredentialSnapshot,
+  type AuthProviderAvailability,
+  hasUsableAuthentication,
+} from "../services/auth-identity.js";
 import { buildAppAuthorizeUrl } from "../services/github-app.js";
 import { buildGoogleAuthorizeUrl } from "../services/google-oauth.js";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../services/oauth-state.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
-import { buildCookie } from "./auth/oauth-cookie.js";
+import { buildCookie, protectOAuthStateNonce } from "./auth/oauth-cookie.js";
 
 export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> {
   app.get("/me/auth-providers", async (request) => {
     const { userId } = requireUser(request);
+    const availability = configuredProviders(app);
+    const [user] = await app.db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!user) throw new Error("Authenticated user is missing");
     const rows = await app.db
       .select({
         provider: authIdentities.provider,
+        identifier: authIdentities.identifier,
+        credentialType: authIdentities.credentialType,
         email: authIdentities.email,
         metadata: authIdentities.metadata,
         createdAt: authIdentities.createdAt,
       })
       .from(authIdentities)
       .where(eq(authIdentities.userId, userId));
-    const connectedCount = rows.filter((row) => row.provider === "google" || row.provider === "github").length;
+    const snapshots: AuthCredentialSnapshot[] = rows.map((row) => ({
+      provider: row.provider,
+      identifier: row.identifier,
+      credentialType: row.credentialType,
+    }));
     return {
       providers: (["google", "github"] as const).map((provider) => {
         const row = rows.find((candidate) => candidate.provider === provider);
         const metadata = row?.metadata ?? {};
+        const canUnlink =
+          Boolean(row) &&
+          availability[provider] &&
+          hasUsableAuthentication(snapshots, user.passwordHash, availability, provider);
         return {
           provider,
-          available: provider === "google" ? Boolean(app.config.oauth?.google) : Boolean(app.config.oauth?.githubApp),
+          available: availability[provider],
           connected: Boolean(row),
           accountName: typeof metadata.accountName === "string" ? metadata.accountName : null,
           email: row?.email ?? null,
           avatarUrl: typeof metadata.avatarUrl === "string" ? metadata.avatarUrl : null,
           connectedAt: row?.createdAt.toISOString() ?? null,
-          canUnlink: Boolean(row) && connectedCount > 1,
-          unlinkBlockedReason: row && connectedCount <= 1 ? "last-provider" : null,
+          canUnlink,
+          unlinkBlockedReason: row && !canUnlink && availability[provider] ? "last-provider" : null,
         };
       }),
     };
@@ -51,17 +74,32 @@ export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> 
   app.post("/me/auth-providers/:provider/unlink/start", async (request, reply) => {
     const { userId } = requireUser(request);
     const { provider } = authProviderParamsSchema.parse(request.params);
+    const availability = configuredProviders(app);
     const [identity] = await app.db
-      .select({ id: authIdentities.id })
+      .select({ id: authIdentities.id, provider: authIdentities.provider })
       .from(authIdentities)
       .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, provider)))
       .limit(1);
     if (!identity) return reply.status(404).send({ error: "Authentication provider is not connected" });
+    if (!availability[provider]) {
+      return reply
+        .status(503)
+        .send({ code: "provider-not-configured", error: "Authentication provider is not configured" });
+    }
+    const [user] = await app.db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
     const identities = await app.db
-      .select({ id: authIdentities.id })
+      .select({
+        provider: authIdentities.provider,
+        identifier: authIdentities.identifier,
+        credentialType: authIdentities.credentialType,
+      })
       .from(authIdentities)
       .where(eq(authIdentities.userId, userId));
-    if (identities.length <= 1) {
+    if (!user || !hasUsableAuthentication(identities, user.passwordHash, availability, provider)) {
       return reply
         .status(409)
         .send({ code: "last-provider", error: "Connect another provider before disconnecting this one" });
@@ -84,28 +122,32 @@ async function startProviderAction(
     intent: "link" | "unlink";
   },
 ) {
+  const availability = configuredProviders(app);
+  if (!availability[input.provider]) {
+    return reply
+      .status(503)
+      .send({ code: "provider-not-configured", error: "Authentication provider is not configured" });
+  }
   const publicUrl = resolvePublicUrl(app, request);
   const oidcNonce = input.provider === "google" ? randomBytes(24).toString("base64url") : undefined;
   const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/user-settings", {
     ...input,
     oidcNonce,
   });
-  // The cookie contains only a random, short-lived CSRF nonce. It is not a
-  // credential and is protected with HttpOnly, SameSite=Lax, and Secure in
-  // production; CodeQL otherwise mistakes the Set-Cookie header for storage.
-  // codeql[js/clear-text-storage-of-sensitive-data]
+  // Encrypt the nonce before placing it in the browser cookie. The callback
+  // accepts legacy plaintext nonce cookies during rolling deployments.
   reply.header(
     "Set-Cookie",
     buildCookie({
       name: OAUTH_STATE_COOKIE,
-      value: nonce,
+      value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
       maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
       secure: process.env.NODE_ENV === "production",
     }),
   );
   if (input.provider === "google") {
     const config = app.config.oauth?.google;
-    if (!config) return reply.status(503).send({ code: "provider-not-configured", error: "Google is not configured" });
+    if (!config) throw new Error("Google provider availability drifted during OAuth start");
     return {
       redirectUrl: buildGoogleAuthorizeUrl({
         clientId: config.clientId,
@@ -116,12 +158,19 @@ async function startProviderAction(
     };
   }
   const config = app.config.oauth?.githubApp;
-  if (!config) return reply.status(503).send({ code: "provider-not-configured", error: "GitHub is not configured" });
+  if (!config) throw new Error("GitHub provider availability drifted during OAuth start");
   return {
     redirectUrl: buildAppAuthorizeUrl({
       clientId: config.clientId,
       redirectUri: `${publicUrl}/api/v1/auth/github/callback`,
       state: token,
     }),
+  };
+}
+
+function configuredProviders(app: FastifyInstance): AuthProviderAvailability {
+  return {
+    google: Boolean(app.config.oauth?.google),
+    github: Boolean(app.config.oauth?.githubApp),
   };
 }

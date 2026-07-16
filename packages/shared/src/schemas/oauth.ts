@@ -4,6 +4,12 @@ export const AUTH_PROVIDERS = ["google", "github"] as const;
 export const authProviderSchema = z.enum(AUTH_PROVIDERS);
 export type AuthProvider = z.infer<typeof authProviderSchema>;
 
+export const authProviderAvailabilitySchema = z.object({
+  google: z.boolean(),
+  github: z.boolean(),
+});
+export type AuthProviderAvailability = z.infer<typeof authProviderAvailabilitySchema>;
+
 export const OAUTH_INTENTS = ["sign-in", "link", "unlink"] as const;
 export const oauthIntentSchema = z.enum(OAUTH_INTENTS);
 export type OAuthIntent = z.infer<typeof oauthIntentSchema>;
