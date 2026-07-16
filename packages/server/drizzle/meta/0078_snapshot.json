@@ -1,5 +1,5 @@
 {
-  "id": "ee06f27b-4fd3-4ee1-8023-dab8053c357a",
+  "id": "8ff937a2-03b9-4d23-9a8c-98e8516d0b8b",
   "prevId": "3084c87e-6675-4eb3-9095-e6ee666029a3",
   "version": "7",
   "dialect": "postgresql",
@@ -3999,6 +3999,180 @@
         "ck_gitlab_identity_active_connection": {
           "name": "ck_gitlab_identity_active_connection",
           "value": "\"gitlab_identity_links\".\"state\" <> 'active' OR \"gitlab_identity_links\".\"connection_id\" IS NOT NULL"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.gitlab_identity_transition_audit": {
+      "name": "gitlab_identity_transition_audit",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "identity_link_id": {
+          "name": "identity_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "instance_origin": {
+          "name": "instance_origin",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "membership_id": {
+          "name": "membership_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_username": {
+          "name": "display_username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "normalized_username": {
+          "name": "normalized_username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "transition": {
+          "name": "transition",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_member_id": {
+          "name": "actor_member_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_gitlab_identity_transition_org_created": {
+          "name": "idx_gitlab_identity_transition_org_created",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_gitlab_identity_transition_link_created": {
+          "name": "idx_gitlab_identity_transition_link_created",
+          "columns": [
+            {
+              "expression": "identity_link_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "gitlab_identity_transition_audit_organization_id_organizations_id_fk": {
+          "name": "gitlab_identity_transition_audit_organization_id_organizations_id_fk",
+          "tableFrom": "gitlab_identity_transition_audit",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "gitlab_identity_transition_audit_identity_link_id_gitlab_identity_links_id_fk": {
+          "name": "gitlab_identity_transition_audit_identity_link_id_gitlab_identity_links_id_fk",
+          "tableFrom": "gitlab_identity_transition_audit",
+          "tableTo": "gitlab_identity_links",
+          "columnsFrom": [
+            "identity_link_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "gitlab_identity_transition_audit_actor_member_id_members_id_fk": {
+          "name": "gitlab_identity_transition_audit_actor_member_id_members_id_fk",
+          "tableFrom": "gitlab_identity_transition_audit",
+          "tableTo": "members",
+          "columnsFrom": [
+            "actor_member_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ck_gitlab_identity_transition": {
+          "name": "ck_gitlab_identity_transition",
+          "value": "\"gitlab_identity_transition_audit\".\"transition\" IN ('created', 'suspended', 'reconfirmed', 'revoked', 'member_left', 'member_removed', 'connection_removed')"
         }
       },
       "isRLSEnabled": false
