@@ -565,8 +565,13 @@ export {
   rotateInvitationSchema,
 } from "./schemas/invitation.js";
 export {
+  isKnownLandingCampaignSlug,
   isLandingCampaignTrialAgentMetadata,
   isLandingCampaignTrialChatLocked,
+  KNOWN_LANDING_CAMPAIGN_SLUGS,
+  type KnownLandingCampaignSlug,
+  knownLandingCampaignSlugSchema,
+  type LandingCampaignActionContext,
   type LandingCampaignRepoMetadata,
   type LandingCampaignStartRequest,
   type LandingCampaignStartResponse,
@@ -575,7 +580,9 @@ export {
   type LandingCampaignTrialChatMetadata,
   type LandingCampaignTrialChatState,
   type LandingCampaignTrialLimitReason,
+  landingCampaignActionContextSchema,
   landingCampaignRepoMetadataSchema,
+  landingCampaignRepoSlugSchema,
   landingCampaignSlugSchema,
   landingCampaignStartRequestSchema,
   landingCampaignStartResponseSchema,

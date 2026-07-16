@@ -274,8 +274,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -305,7 +306,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
       initialRecipientAgentIds: ["agent-dev-1"],
       // The key new hop: the direct path carries the repo slug so the server
       // keys this launcher for cross-path dedup.
-      scanFixRepoSlug: "acme/backend",
+      campaignAction: { campaign: "production-scan", repoSlug: "acme/backend" },
     });
     expect(body?.initialMessage).toMatchObject({ format: "text", source: "web" });
     expect(body?.initialMessage.content).toContain(
@@ -314,7 +315,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     // Direct path uses the greeting-free bootstrap: the agent isn't being onboarded.
     expect(body?.initialMessage.content).not.toContain("welcome aboard");
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-fix-1", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBeNull();
   });
 
   it("waits for /me: with meLoaded=false a fix link routes nowhere and calls nothing", async () => {
@@ -350,8 +351,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     expect(agentsApiMock.getNewChatDefaultCandidates).not.toHaveBeenCalled();
     expect(meChatsApiMock.createMeTaskChat).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -389,8 +391,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(container.textContent).toContain("server unavailable");
     expect(navigateMock).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -416,8 +419,9 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(meChatsApiMock.createMeTaskChat).not.toHaveBeenCalled();
     expect(container.textContent).toContain("No connected agent yet");
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
       JSON.stringify({
+        campaign: "production-scan",
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
         repoSlug: "acme/backend",
@@ -433,7 +437,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     await renderPage(["/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend"]);
 
     expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledTimes(1);
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBeNull();
   });
 
   it("action=fix with an invalid report stores reportKey: null and still routes", async () => {
@@ -444,8 +448,13 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
-    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
-      JSON.stringify({ repoUrl: "https://github.com/acme/backend", reportKey: null, repoSlug: "acme/backend" }),
+    expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).toBe(
+      JSON.stringify({
+        campaign: "production-scan",
+        repoUrl: "https://github.com/acme/backend",
+        reportKey: null,
+        repoSlug: "acme/backend",
+      }),
     );
   });
 });

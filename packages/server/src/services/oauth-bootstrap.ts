@@ -1,3 +1,4 @@
+import { isKnownLandingCampaignSlug } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { users } from "../db/schema/users.js";
@@ -120,7 +121,7 @@ export async function completeExternalAccountBootstrap(
 
 export function shouldPreserveSoloSignupNext(next: string): boolean {
   const parsed = new URL(next, "http://first-tree.local");
-  return parsed.pathname === "/quickstart" && parsed.searchParams.get("campaign") === "production-scan";
+  return parsed.pathname === "/quickstart" && isKnownLandingCampaignSlug(parsed.searchParams.get("campaign"));
 }
 
 export function personalTeamDisplayName(displayName: string): string {

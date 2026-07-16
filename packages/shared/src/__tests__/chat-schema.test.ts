@@ -39,6 +39,27 @@ describe("chat write schemas", () => {
     });
   });
 
+  it("accepts one campaign action contract and rejects it alongside the legacy field", () => {
+    const base = {
+      mode: "task" as const,
+      initialRecipientAgentIds: ["agent-1"],
+      initialMessage,
+    };
+    expect(
+      createTaskChatSchema.parse({
+        ...base,
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/api" },
+      }).campaignAction,
+    ).toEqual({ campaign: "production-scan", repoSlug: "acme/api" });
+    expect(
+      createTaskChatSchema.safeParse({
+        ...base,
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/api" },
+        scanFixRepoSlug: "acme/api",
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires update chat requests to change at least one field", () => {
     expect(updateChatSchema.safeParse({}).success).toBe(false);
     expect(updateChatSchema.parse({ topic: "  Release prep  " })).toEqual({

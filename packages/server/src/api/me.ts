@@ -39,7 +39,12 @@ import {
   selfCreateOrganization,
 } from "../services/membership.js";
 import { notifyRecipients } from "../services/notifier.js";
-import { hasTreeSetupKickoffMessage, kickoffOnboarding, scanFixKickoffKey } from "../services/onboarding-kickoff.js";
+import {
+  campaignActionKickoffKey,
+  hasTreeSetupKickoffMessage,
+  kickoffOnboarding,
+  resolveCampaignActionContext,
+} from "../services/onboarding-kickoff.js";
 import { getOrgContextTreeWithMeta } from "../services/org-settings.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { serializeDate } from "../utils.js";
@@ -352,6 +357,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const campaignAction = resolveCampaignActionContext(body.campaignAction, body.scanFixRepoSlug);
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,
@@ -359,11 +365,10 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
       topic: body.topic ?? "Get started with First Tree",
-      // A production-scan fix conversion keys on the repo so this launcher
-      // dedups with the already-onboarded direct path; a normal onboarding
-      // kickoff keeps the per-(human, agent) onboarding key.
-      kickoffKey: body.scanFixRepoSlug
-        ? scanFixKickoffKey(humanAgentId, body.scanFixRepoSlug)
+      // Campaign actions key on campaign + repo so the direct and onboarding
+      // launchers converge; a normal kickoff remains per-(human, agent).
+      kickoffKey: campaignAction
+        ? campaignActionKickoffKey(humanAgentId, campaignAction)
         : `${humanAgentId}:${body.agentUuid}:onboarding`,
       complete: body.complete ?? true,
     });

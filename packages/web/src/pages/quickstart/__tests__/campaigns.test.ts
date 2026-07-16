@@ -11,7 +11,11 @@ describe("campaign registry", () => {
   });
 
   it("getCampaign returns the web handoff config for a known slug, null otherwise", () => {
-    expect(getCampaign("production-scan")).toEqual({ slug: "production-scan", needsRepo: true });
+    expect(getCampaign("production-scan")).toMatchObject({
+      slug: "production-scan",
+      needsRepo: true,
+      action: { queryValue: "fix", topic: "Fix production scan blockers" },
+    });
     expect(getCampaign("agent-readiness")).toBeNull();
     expect(getCampaign("unknown")).toBeNull();
     expect(getCampaign(null)).toBeNull();

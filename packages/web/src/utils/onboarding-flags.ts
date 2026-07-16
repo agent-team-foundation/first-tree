@@ -1,3 +1,5 @@
+import { isKnownLandingCampaignSlug, type KnownLandingCampaignSlug } from "@first-tree/shared";
+
 /**
  * Onboarding-related browser-side flags (sessionStorage).
  *
@@ -113,15 +115,17 @@ export function clearOnboardingSessionFlags(): void {
   for (const k of toRemove) ss.removeItem(k);
 }
 
-const SCAN_FIX_HANDOFF_KEY = "onboarding:scanFixHandoff";
+const CAMPAIGN_ACTION_HANDOFF_KEY = "onboarding:campaignActionHandoff";
+const LEGACY_SCAN_FIX_HANDOFF_KEY = "onboarding:scanFixHandoff";
 
 /**
- * Production-scan fix conversion captured by /quickstart (`action=fix`).
+ * Campaign action captured by /quickstart (`action=<configured action>`).
  * Global like `agentUuid` (the fix link carries no org); consumed and cleared
  * by the onboarding start-chat completion, kept by `finishLater`. The durable
  * fallback is the fix link itself — the user can always re-click it.
  */
-export type StoredScanFixHandoff = {
+export type StoredCampaignActionHandoff = {
+  campaign: KnownLandingCampaignSlug;
   repoUrl: string;
   reportKey: string | null;
   /**
@@ -133,36 +137,68 @@ export type StoredScanFixHandoff = {
   repoSlug?: string;
 };
 
-export function readScanFixHandoffFlag(): StoredScanFixHandoff | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(SCAN_FIX_HANDOFF_KEY);
-  if (!raw) return null;
+function parseStoredCampaignActionHandoff(raw: string, campaign?: unknown): StoredCampaignActionHandoff | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) throw new Error("not an object");
     const o = parsed as Record<string, unknown>;
-    if (typeof o.repoUrl !== "string" || !(typeof o.reportKey === "string" || o.reportKey === null)) {
-      throw new Error("invalid scan-fix handoff");
+    const resolvedCampaign = campaign ?? o.campaign;
+    if (
+      !isKnownLandingCampaignSlug(resolvedCampaign) ||
+      typeof o.repoUrl !== "string" ||
+      !(typeof o.reportKey === "string" || o.reportKey === null)
+    ) {
+      throw new Error("invalid campaign action handoff");
     }
-    // Only carry a well-formed `owner/repo` slug. A corrupt same-origin flag
-    // with a malformed slug must degrade to "no slug" (falls back to the
-    // default onboarding key) rather than reach the server and 400 the whole
-    // kickoff — the server keys on this and rejects anything off-pattern.
     const repoSlug =
       typeof o.repoSlug === "string" && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(o.repoSlug) ? o.repoSlug : undefined;
     return {
+      campaign: resolvedCampaign,
       repoUrl: o.repoUrl,
       reportKey: o.reportKey,
       ...(repoSlug ? { repoSlug } : {}),
     };
   } catch {
-    window.sessionStorage.removeItem(SCAN_FIX_HANDOFF_KEY);
     return null;
   }
 }
 
-export function writeScanFixHandoffFlag(handoff: StoredScanFixHandoff | null): void {
+export function readCampaignActionHandoffFlag(): StoredCampaignActionHandoff | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.sessionStorage.getItem(CAMPAIGN_ACTION_HANDOFF_KEY);
+  if (raw) {
+    const parsed = parseStoredCampaignActionHandoff(raw);
+    if (parsed) return parsed;
+    window.sessionStorage.removeItem(CAMPAIGN_ACTION_HANDOFF_KEY);
+  }
+
+  // Normalize the one deployed pre-generic shape so an OAuth/onboarding tab
+  // opened before this release still reaches the same production-scan action.
+  const legacyRaw = window.sessionStorage.getItem(LEGACY_SCAN_FIX_HANDOFF_KEY);
+  if (!legacyRaw) return null;
+  const legacy = parseStoredCampaignActionHandoff(legacyRaw, "production-scan");
+  if (legacy) return legacy;
+  window.sessionStorage.removeItem(LEGACY_SCAN_FIX_HANDOFF_KEY);
+  return null;
+}
+
+export function writeCampaignActionHandoffFlag(handoff: StoredCampaignActionHandoff | null): void {
   if (typeof window === "undefined") return;
-  if (handoff === null) window.sessionStorage.removeItem(SCAN_FIX_HANDOFF_KEY);
-  else window.sessionStorage.setItem(SCAN_FIX_HANDOFF_KEY, JSON.stringify(handoff));
+  window.sessionStorage.removeItem(LEGACY_SCAN_FIX_HANDOFF_KEY);
+  if (handoff === null) window.sessionStorage.removeItem(CAMPAIGN_ACTION_HANDOFF_KEY);
+  else window.sessionStorage.setItem(CAMPAIGN_ACTION_HANDOFF_KEY, JSON.stringify(handoff));
+}
+
+/** Compatibility shape/functions for already-deployed production-scan callers. */
+export type StoredScanFixHandoff = Omit<StoredCampaignActionHandoff, "campaign">;
+
+export function readScanFixHandoffFlag(): StoredScanFixHandoff | null {
+  const handoff = readCampaignActionHandoffFlag();
+  if (handoff?.campaign !== "production-scan") return null;
+  const { campaign: _campaign, ...legacy } = handoff;
+  return legacy;
+}
+
+export function writeScanFixHandoffFlag(handoff: StoredScanFixHandoff | null): void {
+  writeCampaignActionHandoffFlag(handoff ? { campaign: "production-scan", ...handoff } : null);
 }

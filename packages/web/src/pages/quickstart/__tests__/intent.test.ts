@@ -6,6 +6,7 @@ import {
   clearCampaignIntent,
   normalizeGitHubRepoUrl,
   normalizeReportKey,
+  readCampaignActionHandoff,
   readCampaignHandoff,
   readCampaignIntent,
   readScanFixHandoff,
@@ -184,11 +185,37 @@ describe("readScanFixHandoff", () => {
   });
 });
 
+describe("readCampaignActionHandoff", () => {
+  it("reads only the action configured for the known campaign", () => {
+    expect(
+      readCampaignActionHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&action=fix&report=report-1`,
+        hash: "",
+      }),
+    ).toMatchObject({ campaign: "production-scan", action: "fix", repoSlug: "acme/backend" });
+    expect(
+      readCampaignActionHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&action=unknown`,
+        hash: "",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("readCampaignHandoff vs action=fix", () => {
   it("does NOT treat a fix link as a trial handoff", () => {
     expect(
       readCampaignHandoff({
         search: "?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=k1",
+        hash: "",
+      }),
+    ).toBeNull();
+  });
+
+  it("does NOT treat any unknown non-empty action as a trial handoff", () => {
+    expect(
+      readCampaignHandoff({
+        search: `?campaign=production-scan&repo=${REPO_ENC}&action=unknown`,
         hash: "",
       }),
     ).toBeNull();

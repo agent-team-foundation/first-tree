@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { optionalChatMetadataSchema } from "./chat-metadata.js";
+import { landingCampaignActionContextSchema, landingCampaignRepoSlugSchema } from "./landing-campaign.js";
 import { sendMessageSchema } from "./message.js";
 
 export const CHAT_TYPES = {
@@ -61,15 +62,16 @@ export const createTaskChatSchema = z
     contextParticipantAgentIds: z.array(z.string().min(1)).default([]),
     contextParticipantNames: z.array(z.string().min(1)).default([]),
     initialMessage: sendMessageSchema,
-    // Production-scan fix conversion (already-onboarded direct path). When set,
-    // this task chat is keyed `<humanAgent>:scan-fix:<repoSlug>` so re-entering
-    // the fix link reuses the same launcher instead of creating a duplicate,
-    // and it dedups with the onboarding-path kickoff that carries the same key.
-    scanFixRepoSlug: z
-      .string()
-      .max(200)
-      .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/)
-      .optional(),
+    // Trusted landing-campaign action context. The server derives the shared
+    // idempotency key from this pair; the browser never supplies the key.
+    campaignAction: landingCampaignActionContextSchema.optional(),
+    // Compatibility for already-deployed production-scan clients.
+    scanFixRepoSlug: landingCampaignRepoSlugSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.campaignAction && value.scanFixRepoSlug) {
+      ctx.addIssue({ code: "custom", message: "Use campaignAction or scanFixRepoSlug, not both." });
+    }
   })
   .refine((v) => v.initialRecipientAgentIds.length > 0 || v.initialRecipientNames.length > 0, {
     message: "task chat creation requires at least one initial recipient",

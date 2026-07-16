@@ -48,7 +48,7 @@ function kickoffFixPayload(admin: Awaited<ReturnType<typeof createTestAdmin>>, a
     agentUuid,
     bootstrap: "Fix the launch blockers (onboarding path).",
     topic: FIX_TOPIC,
-    scanFixRepoSlug: REPO_SLUG,
+    campaignAction: { campaign: "production-scan", repoSlug: REPO_SLUG },
     complete: true,
   };
 }
@@ -57,7 +57,7 @@ function directFixPayload(agentUuid: string) {
   return {
     mode: "task" as const,
     topic: FIX_TOPIC,
-    scanFixRepoSlug: REPO_SLUG,
+    campaignAction: { campaign: "production-scan", repoSlug: REPO_SLUG },
     initialRecipientAgentIds: [agentUuid],
     initialRecipientNames: [],
     contextParticipantAgentIds: [],
@@ -153,17 +153,46 @@ describe("production-scan fix conversion — cross-path idempotency", () => {
       method: "POST",
       url: KICKOFF_URL,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...kickoffFixPayload(admin, agent.uuid), scanFixRepoSlug: "Acme/Orders" },
+      payload: {
+        ...kickoffFixPayload(admin, agent.uuid),
+        campaignAction: { campaign: "production-scan", repoSlug: "Acme/Orders" },
+      },
     });
     const direct = await app.inject({
       method: "POST",
       url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/chats`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...directFixPayload(agent.uuid), scanFixRepoSlug: "acme/orders" },
+      payload: {
+        ...directFixPayload(agent.uuid),
+        campaignAction: { campaign: "production-scan", repoSlug: "acme/orders" },
+      },
     });
     expect(direct.json<{ chatId: string }>().chatId).toBe(onboarding.json<{ chatId: string }>().chatId);
     const fixChats = await app.db.select().from(chats).where(eq(chats.topic, FIX_TOPIC));
     expect(fixChats).toHaveLength(1);
+  });
+
+  it("keeps stale scanFixRepoSlug clients on the same production-scan key", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const generic = kickoffFixPayload(admin, agent.uuid);
+    const { campaignAction: _campaignAction, ...legacy } = generic;
+
+    const onboarding = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...legacy, scanFixRepoSlug: REPO_SLUG },
+    });
+    const direct = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/chats`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: directFixPayload(agent.uuid),
+    });
+
+    expect(direct.json<{ chatId: string }>().chatId).toBe(onboarding.json<{ chatId: string }>().chatId);
   });
 
   it("a non-scan-fix onboarding kickoff keeps the default onboarding key", async () => {

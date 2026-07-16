@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../onboarding-flags.js";
+import {
+  readCampaignActionHandoffFlag,
+  readScanFixHandoffFlag,
+  writeCampaignActionHandoffFlag,
+  writeScanFixHandoffFlag,
+} from "../onboarding-flags.js";
 
 function createStorage(): Storage {
   const data = new Map<string, string>();
@@ -32,7 +37,32 @@ afterEach(() => {
 });
 
 describe("scan-fix handoff flag", () => {
-  afterEach(() => writeScanFixHandoffFlag(null));
+  afterEach(() => writeCampaignActionHandoffFlag(null));
+
+  it("round-trips the generic campaign action key", () => {
+    const handoff = {
+      campaign: "production-scan" as const,
+      repoUrl: "https://github.com/octo/app",
+      reportKey: "octo-app-20260707-ab12cd3",
+      repoSlug: "octo/app",
+    };
+    writeCampaignActionHandoffFlag(handoff);
+    expect(readCampaignActionHandoffFlag()).toEqual(handoff);
+    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
+  });
+
+  it("normalizes the deployed legacy key into production-scan context", () => {
+    window.sessionStorage.setItem(
+      "onboarding:scanFixHandoff",
+      JSON.stringify({ repoUrl: "https://github.com/octo/app", reportKey: null, repoSlug: "octo/app" }),
+    );
+    expect(readCampaignActionHandoffFlag()).toEqual({
+      campaign: "production-scan",
+      repoUrl: "https://github.com/octo/app",
+      reportKey: null,
+      repoSlug: "octo/app",
+    });
+  });
 
   it("round-trips a handoff", () => {
     const h = { repoUrl: "https://github.com/octo/app", reportKey: "octo-app-20260707-ab12cd3" };
