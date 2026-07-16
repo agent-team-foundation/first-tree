@@ -27,6 +27,7 @@ type FreshnessObservation = {
 
 type CommitEvidence = {
   committedHead: string;
+  gitCommonDir: string;
   order: number;
   repoPath: string;
 };
@@ -34,8 +35,18 @@ type CommitEvidence = {
 type WriterVerifyEvidence = {
   actualHead: string;
   committedState: boolean;
+  detachedHead: boolean;
+  gitCommonDir: string;
   order: number;
   verifiedTreePath: string;
+};
+
+type VerifyWorktreeCleanupEvidence = {
+  detachedHead: boolean;
+  gitCommonDir: string;
+  order: number;
+  removedHead: string;
+  removedWorktreePath: string;
 };
 
 function commandEvidence(event: unknown): CommandEvidence | null {
@@ -202,6 +213,7 @@ export function deriveMetrics(
   let targetEvidenceOrder: number | null = null;
   let writeSkillOrder: number | null = null;
   const writerVerifyEvidence: WriterVerifyEvidence[] = [];
+  const verifyWorktreeCleanupEvidence: VerifyWorktreeCleanupEvidence[] = [];
   const authoringOrders: number[] = [];
   const commitEvidence: CommitEvidence[] = [];
   const publicationEvidence: Array<{ order: number; publishedRef: string }> = [];
@@ -263,11 +275,14 @@ export function deriveMetrics(
           event.writerVerifyBindingValid === true &&
           event.exitCode === 0 &&
           typeof event.actualHead === "string" &&
+          typeof event.gitCommonDir === "string" &&
           typeof event.verifiedTreePath === "string"
         ) {
           writerVerifyEvidence.push({
             actualHead: event.actualHead,
             committedState: event.committedState === true,
+            detachedHead: event.detachedHead === true,
+            gitCommonDir: event.gitCommonDir,
             order,
             verifiedTreePath: event.verifiedTreePath,
           });
@@ -299,9 +314,29 @@ export function deriveMetrics(
     if (
       event.type === "audit_tree_commit_succeeded" &&
       typeof event.committedHead === "string" &&
+      typeof event.gitCommonDir === "string" &&
       typeof event.repoPath === "string"
     ) {
-      commitEvidence.push({ committedHead: event.committedHead, order, repoPath: event.repoPath });
+      commitEvidence.push({
+        committedHead: event.committedHead,
+        gitCommonDir: event.gitCommonDir,
+        order,
+        repoPath: event.repoPath,
+      });
+    }
+    if (
+      event.type === "audit_tree_verify_worktree_removed" &&
+      typeof event.gitCommonDir === "string" &&
+      typeof event.removedHead === "string" &&
+      typeof event.removedWorktreePath === "string"
+    ) {
+      verifyWorktreeCleanupEvidence.push({
+        detachedHead: event.detachedHead === true,
+        gitCommonDir: event.gitCommonDir,
+        order,
+        removedHead: event.removedHead,
+        removedWorktreePath: event.removedWorktreePath,
+      });
     }
     if (
       event.type === "audit_tree_publication_succeeded" &&
@@ -374,6 +409,8 @@ export function deriveMetrics(
           (item) =>
             item.order > lastAuthoringOrder &&
             item.order < onlyCommit.order &&
+            !item.detachedHead &&
+            item.gitCommonDir === onlyCommit.gitCommonDir &&
             item.verifiedTreePath === onlyCommit.repoPath,
         ) ?? null);
   const committedTreeVerify =
@@ -382,9 +419,22 @@ export function deriveMetrics(
       : (writerVerifyEvidence.find(
           (item) =>
             item.order > onlyCommit.order &&
-            item.verifiedTreePath === onlyCommit.repoPath &&
+            item.detachedHead &&
+            item.gitCommonDir === onlyCommit.gitCommonDir &&
+            item.verifiedTreePath !== onlyCommit.repoPath &&
             item.actualHead === onlyCommit.committedHead &&
             item.committedState,
+        ) ?? null);
+  const committedTreeVerifyCleanup =
+    onlyCommit === null || committedTreeVerify === null
+      ? null
+      : (verifyWorktreeCleanupEvidence.find(
+          (item) =>
+            item.order > committedTreeVerify.order &&
+            item.detachedHead &&
+            item.gitCommonDir === onlyCommit.gitCommonDir &&
+            item.removedHead === onlyCommit.committedHead &&
+            item.removedWorktreePath === committedTreeVerify.verifiedTreePath,
         ) ?? null);
   const initialExpectedHead =
     evalCase.fixture.scenario === "stale-before-write" ? expectation.advancedHeadOid : expectation.headOid;
@@ -397,7 +447,7 @@ export function deriveMetrics(
       .sort((left, right) => left - right)[0] ?? null;
   const publicationFreshness = freshnessPair(
     publicationExpectedHead,
-    committedTreeVerify?.order ?? null,
+    committedTreeVerifyCleanup?.order ?? null,
     firstPublicationBoundary,
   );
   const writeFreshnessChecked = initialFreshness !== null;
@@ -453,8 +503,10 @@ export function deriveMetrics(
           preCommitVerify.order < onlyCommit.order &&
           committedTreeVerify !== null &&
           onlyCommit.order < committedTreeVerify.order &&
+          committedTreeVerifyCleanup !== null &&
+          committedTreeVerify.order < committedTreeVerifyCleanup.order &&
           publicationFreshness !== null &&
-          committedTreeVerify.order < publicationFreshness.fetchOrder &&
+          committedTreeVerifyCleanup.order < publicationFreshness.fetchOrder &&
           publicationFreshness.fetchOrder < publicationFreshness.observationOrder &&
           onlyPublicationOrder !== null &&
           publicationFreshness.observationOrder < onlyPublicationOrder &&
@@ -470,6 +522,8 @@ export function deriveMetrics(
             preCommitVerify.order < onlyCommit.order &&
             committedTreeVerify !== null &&
             onlyCommit.order < committedTreeVerify.order &&
+            committedTreeVerifyCleanup !== null &&
+            committedTreeVerify.order < committedTreeVerifyCleanup.order &&
             publicationFreshness !== null &&
             publicationEvidence.length === 0 &&
             artifactOrders.length === 0

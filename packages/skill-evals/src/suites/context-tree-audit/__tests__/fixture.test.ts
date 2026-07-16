@@ -243,9 +243,21 @@ describe("context-tree-audit fixture", () => {
           { cwd: paths.workspacePath, encoding: "utf8", env: gitEnv },
         ).status,
       ).toBe(0);
+      const committedHead = spawnSync("git", ["rev-parse", "HEAD"], {
+        cwd: authoringWorktree,
+        encoding: "utf8",
+      }).stdout.trim();
+      const committedVerifyWorktree = join(paths.workspacePath, ".first-tree-eval", "audit-committed-verify-worktree");
+      expect(
+        spawnSync(
+          join(modelPaths.binDir, "git"),
+          ["-C", "context-tree", "worktree", "add", committedVerifyWorktree, "--detach", committedHead],
+          { cwd: paths.workspacePath, encoding: "utf8", env: gitEnv },
+        ).status,
+      ).toBe(0);
       const committedVerify = spawnSync(
         join(modelPaths.binDir, "first-tree"),
-        ["tree", "verify", "--tree-path", authoringWorktree],
+        ["tree", "verify", "--tree-path", committedVerifyWorktree],
         {
           cwd: paths.workspacePath,
           encoding: "utf8",
@@ -253,6 +265,13 @@ describe("context-tree-audit fixture", () => {
         },
       );
       expect(committedVerify.status).toBe(0);
+      expect(
+        spawnSync(
+          join(modelPaths.binDir, "git"),
+          ["-C", "context-tree", "worktree", "remove", committedVerifyWorktree],
+          { cwd: paths.workspacePath, encoding: "utf8", env: gitEnv },
+        ).status,
+      ).toBe(0);
       expect(
         spawnSync(join(modelPaths.binDir, "git"), ["-C", "context-tree", "fetch", "origin"], {
           cwd: paths.workspacePath,
@@ -312,16 +331,54 @@ describe("context-tree-audit fixture", () => {
           writerVerifyBindingValid: true,
         }),
       );
+      expect(readEvents(paths.eventsPath)).toContainEqual(
+        expect.objectContaining({
+          detachedHead: true,
+          removedHead: committedHead,
+          removedWorktreePath: committedVerifyWorktree,
+          type: "audit_tree_verify_worktree_removed",
+        }),
+      );
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }
   }, 15_000);
 
-  it("rejects a committed tree changed after its pre-commit verification", () => {
+  it("rejects a leaked detached committed-verification worktree in focused fixture state", () => {
     const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "strong-local");
     if (!evalCase) throw new Error("Missing strong-local audit case.");
     const paths = createRunPaths({
-      caseId: `${evalCase.id}-post-verify-commit-am`,
+      caseId: `${evalCase.id}-leaked-commit-verify-worktree`,
+      packageRoot,
+      startedAt: "2026-07-16T00:00:10.250Z",
+    });
+    try {
+      const fixture = setupFixture(evalCase, paths);
+      if (!fixture.treePath || !fixture.expectation.headOid) {
+        throw new Error("Leaked worktree fixture did not create a bound tree.");
+      }
+      const leakedWorktree = join(paths.workspacePath, ".first-tree-eval", "leaked-commit-verify-worktree");
+      expect(
+        spawnSync("git", ["worktree", "add", leakedWorktree, "--detach", fixture.expectation.headOid], {
+          cwd: fixture.treePath,
+          encoding: "utf8",
+        }).status,
+      ).toBe(0);
+      expect(inspectFixtureState(fixture).unpublishedAuthoringStateClean).toBe(false);
+    } finally {
+      rmSync(paths.runRoot, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    "--assume-unchanged",
+    "--skip-worktree",
+  ] as const)("rejects a %s working-tree repair that hides an invalid committed object", (hiddenIndexFlag) => {
+    const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "strong-local");
+    if (!evalCase) throw new Error("Missing strong-local audit case.");
+    const flagName = hiddenIndexFlag.slice(2);
+    const paths = createRunPaths({
+      caseId: `${evalCase.id}-${flagName}-repair`,
       packageRoot,
       startedAt: "2026-07-16T00:00:10.500Z",
     });
@@ -348,11 +405,12 @@ describe("context-tree-audit fixture", () => {
           { cwd: fixture.treePath, encoding: "utf8" },
         ).status,
       ).toBe(0);
-      const authoringWorktree = join(paths.workspacePath, ".first-tree-eval", "post-verify-authoring-worktree");
+      const authoringWorktree = join(paths.workspacePath, ".first-tree-eval", `${flagName}-authoring-worktree`);
+      const branchName = `audit-${flagName}`;
       expect(
         spawnSync(
           join(modelPaths.binDir, "git"),
-          ["-C", "context-tree", "worktree", "add", authoringWorktree, "-b", "audit-post-verify"],
+          ["-C", "context-tree", "worktree", "add", authoringWorktree, "-b", branchName],
           { cwd: paths.workspacePath, encoding: "utf8", env },
         ).status,
       ).toBe(0);
@@ -380,7 +438,7 @@ describe("context-tree-audit fixture", () => {
 
       writeFileSync(
         target,
-        `---\ntitle: "Audit Contract"\n---\n\n# Audit Contract\n\n## Decision\n\nAudit evidence retention is 90 days.\n`,
+        `---\ntitle: "Audit Contract"\nowners: [eval-owner]\nsoft_links: [missing/context-node]\n---\n\n# Audit Contract\n\n## Decision\n\nAudit evidence retention is 90 days.\n`,
         "utf8",
       );
       expect(
@@ -390,19 +448,23 @@ describe("context-tree-audit fixture", () => {
           { cwd: paths.workspacePath, encoding: "utf8", env },
         ).status,
       ).toBe(0);
+      const committedHead = spawnSync("git", ["rev-parse", "HEAD"], {
+        cwd: authoringWorktree,
+        encoding: "utf8",
+      }).stdout.trim();
       expect(
-        spawnSync(join(modelPaths.binDir, "first-tree"), ["tree", "verify", "--tree-path", authoringWorktree], {
-          cwd: paths.workspacePath,
+        spawnSync("git", ["update-index", hiddenIndexFlag, "system/audit-contract.md"], {
+          cwd: authoringWorktree,
           encoding: "utf8",
-          env,
         }).status,
-      ).not.toBe(0);
-
+      ).toBe(0);
       writeFileSync(
         target,
         `---\ntitle: "Audit Contract"\nowners: [eval-owner]\n---\n\n# Audit Contract\n\n## Decision\n\nAudit evidence retention is 90 days.\n`,
         "utf8",
       );
+      expect(spawnSync("git", ["status", "--porcelain"], { cwd: authoringWorktree, encoding: "utf8" }).stdout).toBe("");
+      expect(spawnSync("git", ["diff", "--exit-code"], { cwd: authoringWorktree, encoding: "utf8" }).status).toBe(0);
       expect(
         spawnSync(join(modelPaths.binDir, "first-tree"), ["tree", "verify", "--tree-path", authoringWorktree], {
           cwd: paths.workspacePath,
@@ -410,11 +472,29 @@ describe("context-tree-audit fixture", () => {
           env,
         }).status,
       ).toBe(0);
+      const committedVerifyWorktree = join(
+        paths.workspacePath,
+        ".first-tree-eval",
+        `${flagName}-committed-verify-worktree`,
+      );
+      expect(
+        spawnSync("git", ["worktree", "add", committedVerifyWorktree, "--detach", committedHead], {
+          cwd: fixture.treePath,
+          encoding: "utf8",
+        }).status,
+      ).toBe(0);
+      expect(
+        spawnSync(join(modelPaths.binDir, "first-tree"), ["tree", "verify", "--tree-path", committedVerifyWorktree], {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env,
+        }).status,
+      ).not.toBe(0);
       const writerVerifies = readEvents(paths.eventsPath).filter(
         (event) => (event as { auditWriterVerify?: unknown }).auditWriterVerify === true,
       ) as Array<{ committedState?: unknown; exitCode?: unknown }>;
-      expect(writerVerifies.map((event) => event.exitCode)).toEqual([0, 1, 0]);
-      expect(writerVerifies.at(-1)?.committedState).toBe(false);
+      expect(writerVerifies.map((event) => event.exitCode)).toEqual([0, 0, 1]);
+      expect(writerVerifies.at(-2)?.committedState).toBe(false);
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }

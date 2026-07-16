@@ -38,8 +38,20 @@ function isAuditSnapshotAdd(command, fixture, repoPath) {
   return command.includes("--detach") && targetsSnapshot && !command.includes("-b") && !command.includes("-B");
 }
 
+function isDetachedReadWorktreeAdd(command) {
+  return (
+    command[0] === "worktree" &&
+    command[1] === "add" &&
+    command.includes("--detach") &&
+    !command.includes("-b") &&
+    !command.includes("-B")
+  );
+}
+
 function isAuthoringCommand(command, fixture, repoPath) {
-  if (command[0] === "worktree" && command[1] === "add") return !isAuditSnapshotAdd(command, fixture, repoPath);
+  if (command[0] === "worktree" && command[1] === "add") {
+    return !isAuditSnapshotAdd(command, fixture, repoPath) && !isDetachedReadWorktreeAdd(command);
+  }
   if (command[0] === "branch" && (command.includes("-d") || command.includes("-D") || command.includes("--delete"))) {
     return false;
   }
@@ -52,7 +64,30 @@ function isPublicationCommand(command) {
 
 function gitCommonDir(repoPath) {
   const result = spawnSync(REAL_GIT, ["-C", repoPath, "rev-parse", "--git-common-dir"], { encoding: "utf8" });
-  return result.status === 0 ? resolve(repoPath, result.stdout.trim()) : null;
+  return result.status === 0 ? realpathSync(resolve(repoPath, result.stdout.trim())) : null;
+}
+
+function worktreeRemoval(command, repoPath) {
+  if (command[0] !== "worktree" || command[1] !== "remove") return null;
+  const target = command.slice(2).find((arg) => !arg.startsWith("-"));
+  if (!target) return null;
+  try {
+    const removedWorktreePath = realpathSync(resolve(repoPath, target));
+    const head = spawnSync(REAL_GIT, ["-C", removedWorktreePath, "rev-parse", "HEAD"], { encoding: "utf8" });
+    const symbolicHead = spawnSync(REAL_GIT, ["-C", removedWorktreePath, "symbolic-ref", "-q", "HEAD"], {
+      encoding: "utf8",
+    });
+    const commonDir = gitCommonDir(removedWorktreePath);
+    if (head.status !== 0 || commonDir === null) return null;
+    return {
+      detachedHead: symbolicHead.status !== 0,
+      gitCommonDir: commonDir,
+      removedHead: head.stdout.trim(),
+      removedWorktreePath,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function publicationTarget(command, repoPath) {
@@ -77,6 +112,8 @@ const argv = process.argv.slice(2);
 const fixture = JSON.parse(readFileSync(AUDIT_FIXTURE_PATH, "utf8"));
 const context = commandContext(argv);
 const mainTreePath = resolve(fixture.workspacePath, "context-tree");
+const mainCommonDir = gitCommonDir(mainTreePath);
+const removal = worktreeRemoval(context.command, context.repoPath);
 const exactFetch =
   context.repoPath === mainTreePath &&
   context.command.length === 2 &&
@@ -115,7 +152,23 @@ if (authoringCommand && result.status === 0) {
     command: context.command,
     committedHead: commitHead?.status === 0 ? commitHead.stdout.trim() : null,
     cwd: process.cwd(),
+    gitCommonDir: gitCommonDir(context.repoPath),
     repoPath: realpathSync(context.repoPath),
+  });
+}
+
+if (
+  removal &&
+  result.status === 0 &&
+  removal.detachedHead &&
+  removal.gitCommonDir === mainCommonDir &&
+  removal.removedHead !== fixture.headOid &&
+  removal.removedWorktreePath !== fixture.auditWorktreePath
+) {
+  append({
+    type: "audit_tree_verify_worktree_removed",
+    phase: process.env.FIRST_TREE_EVAL_PHASE || "model",
+    ...removal,
   });
 }
 

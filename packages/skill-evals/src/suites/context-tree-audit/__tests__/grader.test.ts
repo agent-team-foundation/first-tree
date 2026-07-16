@@ -115,7 +115,9 @@ function passingEvents(): unknown[] {
       argv: ["tree", "verify", "--json"],
       auditWriterVerify: true,
       committedState: false,
+      detachedHead: false,
       exitCode: 0,
+      gitCommonDir: "/workspace/context-tree/.git",
       phase: "model",
       type: "first_tree_result",
       verifiedTreePath: "/workspace/.first-tree-eval/audit-authoring-worktree",
@@ -123,6 +125,7 @@ function passingEvents(): unknown[] {
     },
     {
       committedHead: "def789",
+      gitCommonDir: "/workspace/context-tree/.git",
       phase: "model",
       repoPath: "/workspace/.first-tree-eval/audit-authoring-worktree",
       type: "audit_tree_commit_succeeded",
@@ -132,11 +135,21 @@ function passingEvents(): unknown[] {
       argv: ["tree", "verify", "--json"],
       auditWriterVerify: true,
       committedState: true,
+      detachedHead: true,
       exitCode: 0,
+      gitCommonDir: "/workspace/context-tree/.git",
       phase: "model",
       type: "first_tree_result",
-      verifiedTreePath: "/workspace/.first-tree-eval/audit-authoring-worktree",
+      verifiedTreePath: "/workspace/.first-tree-eval/audit-committed-verify-worktree",
       writerVerifyBindingValid: true,
+    },
+    {
+      detachedHead: true,
+      gitCommonDir: "/workspace/context-tree/.git",
+      phase: "model",
+      removedHead: "def789",
+      removedWorktreePath: "/workspace/.first-tree-eval/audit-committed-verify-worktree",
+      type: "audit_tree_verify_worktree_removed",
     },
     {
       branch: "main",
@@ -371,6 +384,39 @@ describe("context-tree-audit grader", () => {
     ) as Record<string, unknown> | undefined;
     if (!postCommitVerify) throw new Error("Missing committed-tree verification.");
     postCommitVerify.committedState = false;
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects an attached worktree as committed-tree verification", () => {
+    const events = passingEvents();
+    const commitIndex = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_tree_commit_succeeded",
+    );
+    const postCommitVerify = events.find(
+      (event, index) => index > commitIndex && (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    ) as Record<string, unknown> | undefined;
+    if (!postCommitVerify) throw new Error("Missing committed-tree verification.");
+    postCommitVerify.detachedHead = false;
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects publication without committed verification worktree cleanup", () => {
+    const events = passingEvents().filter(
+      (event) => (event as { type?: string }).type !== "audit_tree_verify_worktree_removed",
+    );
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects committed verification worktree cleanup after publication freshness", () => {
+    const events = passingEvents();
+    const cleanupIndex = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_tree_verify_worktree_removed",
+    );
+    const cleanup = events.splice(cleanupIndex, 1)[0];
+    const secondObservationIndex = events.findLastIndex(
+      (event) => (event as { type?: string }).type === "audit_write_freshness_observed",
+    );
+    events.splice(secondObservationIndex + 1, 0, cleanup);
     expect(passes(events)).toBe(false);
   });
 

@@ -381,6 +381,11 @@ export function inspectFixtureState(fixture: AuditFixture): AuditFixtureState {
     }
   }
   const worktrees = runCommand("git", ["worktree", "list", "--porcelain"], fixture.treePath).stdout;
+  const currentWorktreePaths = worktreePaths(fixture.treePath);
+  const addedWorktreePaths = currentWorktreePaths.filter((path) => !fixture.initialWorktreePaths.includes(path));
+  const noLeakedDetachedWorktree = addedWorktreePaths.every(
+    (path) => runCommand("git", ["symbolic-ref", "-q", "HEAD"], path).exitCode === 0,
+  );
   const originMain = runCommand(
     "git",
     ["--git-dir", fixture.originPath, "rev-parse", "refs/heads/main"],
@@ -400,9 +405,10 @@ export function inspectFixtureState(fixture: AuditFixture): AuditFixtureState {
     noGuessedTreeState: true,
     originMainExpected: originMain === fixture.expectedOriginMainOid,
     unpublishedAuthoringStateClean:
-      fixture.expectation.scenario !== "stale-before-publish" ||
-      (JSON.stringify(localBranches(fixture.treePath)) === JSON.stringify(fixture.initialLocalBranches) &&
-        JSON.stringify(worktreePaths(fixture.treePath)) === JSON.stringify(fixture.initialWorktreePaths)),
+      noLeakedDetachedWorktree &&
+      (fixture.expectation.scenario !== "stale-before-publish" ||
+        (JSON.stringify(localBranches(fixture.treePath)) === JSON.stringify(fixture.initialLocalBranches) &&
+          JSON.stringify(currentWorktreePaths) === JSON.stringify(fixture.initialWorktreePaths))),
   };
 }
 

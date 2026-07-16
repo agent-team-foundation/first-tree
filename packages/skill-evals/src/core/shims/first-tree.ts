@@ -431,10 +431,29 @@ if (AUDIT_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] ===
     mainCommonDir = mainCommon.status === 0 ? realpathSync(resolve(mainTreePath, mainCommon.stdout.trim())) : null;
   } catch {}
   const headResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: verifyTargetPath, encoding: "utf8" });
-  const statusResult = spawnSync("git", ["status", "--porcelain"], { cwd: verifyTargetPath, encoding: "utf8" });
+  const symbolicHeadResult = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], {
+    cwd: verifyTargetPath,
+    encoding: "utf8",
+  });
+  const statusResult = spawnSync(
+    "git",
+    ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
+    { cwd: verifyTargetPath, encoding: "utf8" },
+  );
+  const indexFlagsResult = spawnSync("git", ["ls-files", "-v"], {
+    cwd: verifyTargetPath,
+    encoding: "utf8",
+  });
   const actualHead = headResult.status === 0 ? headResult.stdout.trim() : null;
+  const detachedHead = symbolicHeadResult.status !== 0;
   const worktreeClean = statusResult.status === 0 && statusResult.stdout.trim() === "";
-  const committedState = actualHead !== fixture.headOid && worktreeClean;
+  const indexFlagsClean =
+    indexFlagsResult.status === 0 &&
+    indexFlagsResult.stdout
+      .split("\\n")
+      .filter((line) => line.length > 0)
+      .every((line) => line.startsWith("H "));
+  const committedState = actualHead !== fixture.headOid && detachedHead && worktreeClean && indexFlagsClean;
   const authoredState = actualHead !== fixture.headOid || !worktreeClean;
   const writerVerifyBindingValid =
     exactCommand &&
@@ -490,6 +509,9 @@ if (AUDIT_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] ===
       auditOriginAdvanced,
       auditWriterVerify: true,
       committedState,
+      detachedHead,
+      gitCommonDir: actualCommonDir,
+      indexFlagsClean,
       verifiedTreePath: actualCwd,
       writerVerifyBindingValid: true,
     });
