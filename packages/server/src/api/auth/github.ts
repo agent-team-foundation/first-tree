@@ -1,26 +1,27 @@
 import {
   githubCallbackQuerySchema,
   githubDevCallbackQuerySchema,
+  githubExternalProfile,
   githubStartQuerySchema,
   safeRedirectPath,
 } from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { signTokensForUser } from "../../services/auth.js";
 import {
-  findOrCreateUserFromGithub,
+  findOrCreateGithubAccount,
   type GithubProfile,
   type GithubTokenBundle,
+  IdentityConflictError,
+  IdentityMismatchError,
+  LastIdentityError,
+  linkExternalIdentity,
+  unlinkExternalIdentity,
 } from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
 import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
-import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
-import {
-  createPersonalTeam,
-  ensureMembership,
-  findActiveMembership,
-  pickPrimaryMembership,
-} from "../../services/membership.js";
+import { findActiveMembership } from "../../services/membership.js";
+import { completeExternalAccountBootstrap, OAuthBootstrapError } from "../../services/oauth-bootstrap.js";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_STATE_COOKIE_MAX_AGE_S,
@@ -28,7 +29,7 @@ import {
   verifyOAuthState,
 } from "../../services/oauth-state.js";
 import { resolvePublicUrl } from "../../utils/public-url.js";
-import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
+import { buildCookie, protectOAuthStateNonce, readOAuthStateNonce } from "./oauth-cookie.js";
 
 /**
  * GitHub sign-in surface. All routes are public (no member JWT required).
@@ -78,13 +79,13 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
 
-    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext);
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext, { provider: "github" });
     const isProd = process.env.NODE_ENV === "production";
     reply.header(
       "Set-Cookie",
       buildCookie({
         name: OAUTH_STATE_COOKIE,
-        value: nonce,
+        value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
         maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
         secure: isProd,
       }),
@@ -123,16 +124,27 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.redirect("/", 302);
     }
 
-    const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
+    const cookieNonce = readOAuthStateNonce(
+      request.headers.cookie,
+      OAUTH_STATE_COOKIE,
+      app.config.secrets.encryptionKey,
+    );
 
     let next: string;
     let targetOrganizationId: string | null = null;
     let kickoffUserId: string | null = null;
+    let intent: "sign-in" | "link" | "unlink" = "sign-in";
+    let stateUserId: string | null = null;
+    let targetIdentityId: string | null = null;
+    let verified: Awaited<ReturnType<typeof verifyOAuthState>>;
     try {
-      const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
+      verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
       next = verified.next;
       targetOrganizationId = verified.targetOrganizationId ?? null;
       kickoffUserId = verified.kickoffUserId ?? null;
+      intent = verified.intent ?? "sign-in";
+      stateUserId = verified.userId ?? null;
+      targetIdentityId = verified.targetIdentityId ?? null;
     } catch (err) {
       // Browser-facing: the user just navigated here from github.com. A raw
       // JSON body would strand them on the API URL — most commonly after
@@ -142,6 +154,14 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         "github callback state rejected — redirecting to SPA error surface",
       );
       return redirectCallbackError(reply, "state-expired");
+    }
+
+    if (verified.provider && verified.provider !== "github") {
+      app.log.warn(
+        { event: "oauth.callback_rejected", provider: "github", reason: "provider-mismatch" },
+        "OAuth state provider does not match callback",
+      );
+      return redirectCallbackError(reply, "state-expired", next);
     }
 
     if (!code) {
@@ -203,6 +223,50 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // (`devBindInstallation`); it rides along here purely for log context.
     const callbackInstallationId =
       installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
+
+    if (intent === "link" || intent === "unlink") {
+      if (!stateUserId) return redirectCallbackError(reply, "state-expired", "/user-settings");
+      const external = githubExternalProfile({
+        id: profile.githubId,
+        login: profile.login,
+        name: profile.displayName,
+        email: profile.email,
+        avatarUrl: profile.avatarUrl,
+        metadata: {
+          ...(tokens.encryptedAccessToken ? { accessToken: tokens.encryptedAccessToken } : {}),
+          ...(tokens.accessTokenExpiresAt ? { accessTokenExpiresAt: tokens.accessTokenExpiresAt } : {}),
+          ...(tokens.encryptedRefreshToken ? { refreshToken: tokens.encryptedRefreshToken } : {}),
+          ...(tokens.refreshTokenExpiresAt ? { refreshTokenExpiresAt: tokens.refreshTokenExpiresAt } : {}),
+        },
+      });
+      try {
+        if (intent === "link") {
+          await linkExternalIdentity(app.db, stateUserId, external);
+          app.log.info({ event: "identity.linked", provider: "github", userId: stateUserId }, "Identity linked");
+          return reply.redirect("/user-settings?connection=github-linked", 302);
+        }
+        await unlinkExternalIdentity(
+          app.db,
+          stateUserId,
+          "github",
+          profile.githubId,
+          {
+            google: Boolean(app.config.oauth?.google),
+            github: Boolean(app.config.oauth?.githubApp),
+          },
+          targetIdentityId ?? "",
+        );
+        app.log.info({ event: "identity.unlinked", provider: "github", userId: stateUserId }, "Identity unlinked");
+        return reply.redirect("/user-settings?connection=github-unlinked", 302);
+      } catch (error) {
+        if (error instanceof IdentityConflictError)
+          return reply.redirect("/user-settings?error=identity-conflict", 302);
+        if (error instanceof IdentityMismatchError)
+          return reply.redirect("/user-settings?error=identity-mismatch", 302);
+        if (error instanceof LastIdentityError) return reply.redirect("/user-settings?error=last-provider", 302);
+        throw error;
+      }
+    }
 
     return completeOauthFlow(app, request, reply, profile, next, tokens, callbackInstallationId, targetOrganizationId, {
       kickoffUserId,
@@ -319,6 +383,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
  */
 type CallbackErrorCode =
   | "state-expired"
+  | "provider-not-configured"
+  | "provider-exchange-failed"
+  | "identity-conflict"
+  | "identity-mismatch"
+  | "last-provider"
   | "github-exchange-failed"
   | "install-not-admin"
   | "install-not-verified"
@@ -402,7 +471,8 @@ async function completeOauthFlow(
   } = {},
 ) {
   const { kickoffUserId = null, browserFacing = false, devBindInstallation = false } = opts;
-  const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
+  const account = await findOrCreateGithubAccount(app.db, profile, oauthTokens);
+  const { userId } = account;
   const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
 
   // Track which signup path the user took. Surfaced to the SPA via the
@@ -425,38 +495,39 @@ async function completeOauthFlow(
   // caller's Settings `next`) yet still names a specific org to pin.
   let orgPinned = false;
 
-  if (inviteMatch?.[1]) {
-    const token = inviteMatch[1];
-    const inv = await findActiveByToken(app.db, token);
-    if (!inv) {
-      if (browserFacing) return redirectCallbackError(reply, "invite-invalid");
-      return reply.status(404).send({ error: "Invitation not found or no longer valid" });
+  if (inviteMatch?.[1] || !targetOrganizationId) {
+    let bootstrap: Awaited<ReturnType<typeof completeExternalAccountBootstrap>>;
+    try {
+      bootstrap = await completeExternalAccountBootstrap(app.db, account, {
+        next,
+        allowedOrganizationId,
+        ip: request.ip,
+        userAgent: request.headers["user-agent"] ?? null,
+      });
+    } catch (error) {
+      if (!(error instanceof OAuthBootstrapError)) throw error;
+      if (browserFacing) return redirectCallbackError(reply, error.code, next);
+      const statusCode = error.code === "invite-invalid" ? 404 : 403;
+      return reply.status(statusCode).send({ error: oauthBootstrapErrorMessage(error.code) });
     }
-    if (allowedOrganizationId && inv.organizationId !== allowedOrganizationId) {
-      if (browserFacing) return redirectCallbackError(reply, "invite-not-allowed");
-      return reply.status(403).send({ error: "Invitation is not allowed on this server" });
-    }
-    await ensureMembership(app.db, {
-      userId,
-      organizationId: inv.organizationId,
-      role: inv.role === "admin" ? "admin" : "member",
-      displayName: profile.displayName?.trim() || profile.login,
-      username: profile.login,
-    });
-    await recordRedemption(app.db, {
-      invitationId: inv.id,
-      userId,
-      ip: request.ip,
-      userAgent: request.headers["user-agent"] ?? null,
-    });
-    joinPath = "invite";
+    joinPath = bootstrap.joinPath;
     resolved = true;
-    resolvedOrganizationId = inv.organizationId;
-    orgPinned = true;
-    // Drop the now-consumed invite path; land on the team dashboard so the
-    // onboarding modal can layer on top.
-    next = "/";
-  } else if (targetOrganizationId) {
+    resolvedOrganizationId = bootstrap.organizationId;
+    orgPinned = bootstrap.orgPinned;
+    next = bootstrap.next;
+    if (bootstrap.teamCreated) {
+      app.log.info(
+        {
+          event: "onboarding.team_created",
+          provider: "github",
+          userId,
+          organizationId: bootstrap.organizationId,
+          source: "oauth-bootstrap",
+        },
+        "onboarding funnel: team auto-created at OAuth bootstrap",
+      );
+    }
+  } else {
     // App-install flow: the org rode in the signed state minted by the
     // admin-gated `/install-url` (codex P1-3). The bind rests on the
     // KICKOFF user's authority — re-checked live against `members`,
@@ -521,43 +592,6 @@ async function completeOauthFlow(
     // as a returning sign-in — otherwise a concurrent org switch in another
     // tab would land the Settings page on the user's last-used org instead.
     orgPinned = true;
-  } else {
-    const primary = await pickPrimaryMembership(app.db, userId);
-    if (primary) {
-      resolved = true;
-      resolvedOrganizationId = primary.organizationId;
-      // joinPath stays "returning"; preserve caller's original `next` intent.
-    } else {
-      if (allowedOrganizationId) {
-        if (browserFacing) return redirectCallbackError(reply, "invite-required");
-        return reply.status(403).send({ error: "This server requires an invitation link to join" });
-      }
-      const personal = await createPersonalTeam(app.db, {
-        userId,
-        loginSeed: profile.login,
-        // Per first-tree-context:agent-hub/onboarding.md (was §5.5 in source design), default team name is
-        // `${login}'s team` — reads as a collective space, matches Linear's
-        // convention. The user can rename in Step 1 of onboarding.
-        teamDisplayName: `${profile.login}'s team`,
-        userDisplayName: profile.displayName?.trim() || profile.login,
-      });
-      joinPath = "solo";
-      resolved = true;
-      resolvedOrganizationId = personal.organizationId;
-      orgPinned = true;
-      next = shouldPreserveSoloSignupNext(next) ? next : "/";
-      // Onboarding funnel: structured log marker. Picked up by logfire/otel
-      // pipelines via `event: "onboarding.team_created"` for funnel views.
-      app.log.info(
-        {
-          event: "onboarding.team_created",
-          userId,
-          organizationId: personal.organizationId,
-          source: "oauth-bootstrap",
-        },
-        "onboarding funnel: team auto-created at OAuth bootstrap",
-      );
-    }
   }
 
   // Direct installation bind — DEV-CALLBACK ONLY, gated by `devBindInstallation`.
@@ -612,7 +646,8 @@ async function completeOauthFlow(
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
 }
 
-function shouldPreserveSoloSignupNext(next: string): boolean {
-  const parsed = new URL(next, "http://first-tree.local");
-  return parsed.pathname === "/quickstart" && parsed.searchParams.get("campaign") === "production-scan";
+function oauthBootstrapErrorMessage(code: OAuthBootstrapError["code"]): string {
+  if (code === "invite-invalid") return "Invitation not found or no longer valid";
+  if (code === "invite-not-allowed") return "Invitation is not allowed on this server";
+  return "This server requires an invitation link to join";
 }

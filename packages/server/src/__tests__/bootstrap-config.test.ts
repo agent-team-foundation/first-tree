@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { useTestApp } from "./helpers.js";
+import { createTestApp, useTestApp } from "./helpers.js";
 
 describe("GET /bootstrap/config", () => {
   const getApp = useTestApp();
@@ -20,6 +20,7 @@ describe("GET /bootstrap/config", () => {
       // "hide agent final text" toggle). Test app defaults to the dev channel.
       channel: "dev",
       growthLandingPagesEnabled: false,
+      authProviders: { google: false, github: true },
     });
   });
 });
@@ -46,5 +47,27 @@ describe("GET /bootstrap/config — growth landing flag", () => {
       channel: "prod",
       growthLandingPagesEnabled: true,
     });
+  });
+});
+
+describe("GET /bootstrap/config — authentication provider availability", () => {
+  it("reports a Google-only deployment", async () => {
+    const app = await createTestApp({ googleOAuth: true, githubOAuth: false });
+    try {
+      const res = await app.inject({ method: "GET", url: "/api/v1/bootstrap/config" });
+      expect(res.json().authProviders).toEqual({ google: true, github: false });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reports a GitHub-only deployment", async () => {
+    const app = await createTestApp({ githubOAuth: true });
+    try {
+      const res = await app.inject({ method: "GET", url: "/api/v1/bootstrap/config" });
+      expect(res.json().authProviders).toEqual({ google: false, github: true });
+    } finally {
+      await app.close();
+    }
   });
 });

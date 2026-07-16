@@ -410,8 +410,8 @@ export async function repairMembershipHumanMirrors(db: Database): Promise<Member
 
 type CreatePersonalTeamInput = {
   userId: string;
-  /** GitHub login slug, used as the seed for the team slug. */
-  loginSeed: string;
+  /** Final unique username, used as the seed for the team slug and human agent name. */
+  username: string;
   /** Display label for the personal team (e.g. `${login}'s team`). */
   teamDisplayName: string;
   /** Display label for the user's human agent. */
@@ -422,17 +422,17 @@ type CreatePersonalTeamInput = {
  * Create a fresh default team org for a brand-new user, plus the matching
  * admin membership + 1:1 human agent. Slug strategy:
  *
- *   - First try: `${login}` (lowercased, sanitized)
+ *   - First try: `${username}` (lowercased, sanitized)
  *   - On collision: append a 4-char hex disambiguator
  *
- * Default team display name is `${login}'s team` (set by the caller — see
+ * Default team display name is `${displayName}'s team` (set by the caller — see
  * first-tree-context:agent-hub/onboarding.md (was §5.5 in source design)). Reads as "this is a collective
  * space" from day one so a later teammate-invite doesn't surface a label
  * that looks like a private sandbox. Users can rename via Step 1 of the
  * onboarding flow or Settings.
  */
 export async function createPersonalTeam(db: Database, input: CreatePersonalTeamInput) {
-  const baseSlug = sanitizeOrgSlug(input.loginSeed);
+  const baseSlug = sanitizeOrgSlug(input.username);
   const displayName = input.teamDisplayName;
 
   const orgId = uuidv7();
@@ -443,7 +443,7 @@ export async function createPersonalTeam(db: Database, input: CreatePersonalTeam
     organizationId: orgId,
     role: "admin",
     displayName: input.userDisplayName,
-    username: input.loginSeed,
+    username: input.username,
   });
 
   return { organizationId: orgId, slug, displayName, memberId: member.id };
@@ -460,16 +460,12 @@ function sanitizeOrgSlug(raw: string): string {
   );
 }
 
-/** Postgres `unique_violation` SQLSTATE — `organizations.name` UNIQUE tripping. */
-const PG_UNIQUE_VIOLATION = "23505";
-
 /**
  * Attempt INSERT into `organizations` with `base` slug, retrying with a
- * disambiguator on UNIQUE constraint violations. Two concurrent OAuth
- * sign-ins for the same GitHub `login` would race here without retry —
- * pre-check `SELECT` followed by `INSERT` has a TOCTOU window the unique
- * constraint catches but the catch path needs to exist. Returns the slug
- * actually used.
+ * disambiguator when the unique slug is already occupied. `ON CONFLICT DO
+ * NOTHING` is intentional: this helper is also called inside the user-row
+ * transaction used by OAuth bootstrap, where catching a 23505 would leave
+ * the transaction aborted before the retry can run.
  */
 async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string, displayName: string): Promise<string> {
   const [existing] = await db
@@ -480,20 +476,27 @@ async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string,
   let candidate = existing ? `${base}-${randomBytes(2).toString("hex")}` : base;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
-      return candidate;
-    } catch (err) {
-      const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
-      if (code !== PG_UNIQUE_VIOLATION) throw err;
-      candidate = `${base}-${randomBytes(2).toString("hex")}`;
-    }
+    const [inserted] = await db
+      .insert(organizations)
+      .values({ id: orgId, name: candidate, displayName })
+      .onConflictDoNothing({ target: organizations.name })
+      .returning({ name: organizations.name });
+    if (inserted) return inserted.name;
+    candidate = `${base}-${randomBytes(2).toString("hex")}`;
   }
 
   // Pathological collision storm — random suffix always wins.
   candidate = `${base}-${uuidv7().slice(0, 12)}`;
-  await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
-  return candidate;
+  const [inserted] = await db
+    .insert(organizations)
+    .values({ id: orgId, name: candidate, displayName })
+    .onConflictDoNothing({ target: organizations.name })
+    .returning({ name: organizations.name });
+  if (inserted) return inserted.name;
+
+  // UUID fragments make this practically unreachable; retain a clear error
+  // rather than silently returning a slug whose organization was not created.
+  throw new Error("Unable to allocate a unique organization slug");
 }
 
 /** List ACTIVE memberships (omit soft-deleted "left"/"removed") for a user. */

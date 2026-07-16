@@ -19,6 +19,14 @@ const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
   })
   .default("codex");
 
+const googleOauthConfig = optional({
+  clientId: field(z.string().min(1), { env: "FIRST_TREE_GOOGLE_CLIENT_ID" }),
+  clientSecret: field(z.string().min(1), {
+    env: "FIRST_TREE_GOOGLE_CLIENT_SECRET",
+    secret: true,
+  }),
+});
+
 function serverSecretOptions(env: string, auto: string, autoGenerateSecrets: boolean) {
   return autoGenerateSecrets ? { env, auto, secret: true } : { env, secret: true };
 }
@@ -209,6 +217,7 @@ export const serverConfigSchema = defineConfig({
   // installation token at request time (see `services/github-app-token.ts`);
   // no global token belongs here.
   oauth: optional({
+    ...({ google: googleOauthConfig } as { google?: typeof googleOauthConfig }),
     /**
      * GitHub App credentials. A single App installation simultaneously
      * unlocks user-OAuth, the webhook stream, and installation-token
