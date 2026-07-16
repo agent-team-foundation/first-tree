@@ -331,6 +331,7 @@ describe("ResourcesTab", () => {
 
   it("renders the repo section (Environment) with rows and an actionable add menu", async () => {
     const { ResourceTypeSection } = await import("../capability-section.js");
+    const onNavigateAway = vi.fn();
     // An enabled team repo to render, plus a legacy team repo still flagged
     // Opt-in (available). Team repos are now always On by default, so the opt-in
     // one must NOT be offered as an "enable from team" option.
@@ -382,7 +383,14 @@ describe("ResourcesTab", () => {
     });
 
     const container = await renderRouted(
-      <ResourceTypeSection type="repo" data={data} canEdit pending={false} onMutate={vi.fn()} />,
+      <ResourceTypeSection
+        type="repo"
+        data={data}
+        canEdit
+        pending={false}
+        onMutate={vi.fn()}
+        onNavigateAway={onNavigateAway}
+      />,
     );
 
     expect(container.textContent).toContain("Repositories");
@@ -398,11 +406,12 @@ describe("ResourcesTab", () => {
     // The opt-in repo is not enableable, and there's no "Enable from team" list…
     expect(buttonByText(document.body, "Opt-in repo")).toBeNull();
     expect(document.body.textContent).not.toContain("Enable from team");
-    // …but the menu stays actionable: add a private repo or jump to Settings.
-    // Team repos manage on Settings → GitHub (Source Repos live there);
-    // skill/MCP/prompt menus keep the Resources destination.
+    // …but the menu stays actionable: add a private repo or jump to the
+    // provider-neutral Team code-access area in Settings. Skill/MCP/prompt
+    // menus keep the Resources destination.
     expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
-    expect(buttonByText(document.body, "Manage in Settings → GitHub")).toBeTruthy();
+    await click(buttonByText(document.body, "Manage Team code access"));
+    expect(onNavigateAway).toHaveBeenCalledWith("/settings/integrations/github#code-access");
     expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeNull();
   });
 
