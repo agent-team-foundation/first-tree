@@ -52,10 +52,13 @@ configured App. A real App/webhook secret is often unavailable in an isolated ce
 - The App config block is all-or-nothing: set every `FIRST_TREE_GITHUB_APP_*` field together (id, client id/secret,
   private key, webhook secret; plus `_SLUG` for install-url) or the server rejects it at boot. A clean boot omits the
   "GitHub App not configured" log line and the webhook route stops returning its 501 stub.
-- Generate a throwaway PKCS#8 key at run time (`openssl genpkey -algorithm RSA`); never commit one. `node --env-file`
-  cannot hold a multi-line PEM, so pass the key via a shell export rather than the `.env` file.
-- Redirect REST calls to the mock with `FIRST_TREE_GITHUB_API_BASE_URL`; the mock returns canned token/repo data and does
-  not verify the JWT.
+- Generate a throwaway PKCS#8 key at run time (`openssl genpkey -algorithm RSA`); never commit one. Pass the multi-line
+  PEM via a shell export, or a quoted `--env-file` value (Node 22.13+ supports quoted multi-line env values) — the export
+  just avoids the quoting/escaping fuss.
+- Redirect REST calls with `FIRST_TREE_GITHUB_API_BASE_URL` set to a URL the server can reach (`localhost` only if the
+  mock shares the server's container; otherwise the compose service name or `host.docker.internal`). The mock answers two
+  endpoints only (token + repos), so paths needing other GitHub REST — a real `follow`'s `/repos/:o/:r` +
+  `/repos/:o/:r/issues/:n`, OAuth, org repos — fall through and stay out of scope.
 - Sign webhooks with `x-hub-signature-256: sha256=<HMAC-SHA256(webhook_secret, raw_body)>` and set `x-github-event` /
   `x-github-delivery`. This exercises signature verification, record-only install recording, and delivery-id dedup.
 
