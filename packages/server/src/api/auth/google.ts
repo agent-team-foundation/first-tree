@@ -42,7 +42,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     // The value is a nonce-only CSRF token, not an access credential or
     // provider identity; it is short-lived, HttpOnly, SameSite=Lax, and Secure
     // in production. CodeQL otherwise treats the Set-Cookie sink as storage.
-    // codeql[js/clear-text-storage-sensitive-data]
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookie(nonce, OAUTH_STATE_COOKIE_MAX_AGE_S, app.config.secrets.encryptionKey));
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/google/callback`;
     app.log.info({ event: "oauth.start", provider: "google", intent: "sign-in" }, "OAuth flow started");
@@ -75,7 +75,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       return redirectError(reply, "state-expired", verified.next);
     }
     // Clear the single-use OAuth state cookie after validating it.
-    // codeql[js/clear-text-storage-sensitive-data]
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 

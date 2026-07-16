@@ -149,7 +149,7 @@ async function startProviderAction(
   // The value is a nonce-only CSRF token, not a credential; it is short-lived,
   // HttpOnly, SameSite=Lax, and Secure in production. CodeQL otherwise treats
   // the Set-Cookie sink as clear-text storage.
-  // codeql[js/clear-text-storage-sensitive-data]
+  // codeql[js/clear-text-storage-of-sensitive-data]
   reply.header(
     "Set-Cookie",
     buildCookie({
