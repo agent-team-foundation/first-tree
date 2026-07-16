@@ -288,12 +288,13 @@ type ResultMessage = {
   total_cost_usd?: number;
   num_turns?: number;
   session_id?: string;
-  // Per-model token usage for this turn. Anthropic's Claude Agent SDK populates
-  // this on every ResultMessage (success and error subtypes). A single turn can
-  // span multiple models (e.g. fast-mode), so we emit one `token_usage` event
-  // per entry. Keys are model identifiers (e.g. "claude-opus-4-7"). Older SDK
-  // versions may omit the field entirely — treat absence as "no usage to emit"
-  // rather than an error.
+  // Per-model cumulative token usage for the current SDK Query. Anthropic's
+  // Claude Agent SDK populates this on every ResultMessage (success and error
+  // subtypes). A single turn can span multiple models (e.g. fast-mode), so the
+  // handler diffs consecutive snapshots and emits one `token_usage` delta per
+  // changed model. Keys are model identifiers (e.g. "claude-opus-4-7"). Older
+  // SDK versions may omit the field entirely — treat absence as "no usage to
+  // emit" rather than an error.
   modelUsage?: Record<
     string,
     {
@@ -303,6 +304,13 @@ type ResultMessage = {
       cacheCreationInputTokens?: number;
     }
   >;
+};
+
+type ClaudeModelUsageCounters = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
 };
 
 function isResultMessage(message: unknown): message is ResultMessage {
@@ -344,22 +352,45 @@ export function detectClaudeAuthFailure(message: unknown): { rawMessage: string 
 }
 
 /**
- * Emit one `token_usage` event per (model) entry in the result's `modelUsage`.
- * The SDK lumps cache-creation tokens under their own field, but the wire
- * schema folds them into `inputTokens` because they bill as input. Best-effort:
- * a missing/empty `modelUsage` is silently skipped (older SDKs and some error
- * subtypes don't populate it). Per-entry emit failures are swallowed so token
- * accounting never blocks the turn close that follows.
+ * Diff a Query's cumulative `modelUsage` snapshots and emit one `token_usage`
+ * event per changed model. The baseline is scoped to the concrete SDK Query:
+ * a respawn/resume starts from an empty baseline because the new native process
+ * owns a fresh cumulative counter. The SDK lumps cache-creation tokens under
+ * their own field, but the wire schema folds their delta into `inputTokens`
+ * because they bill as input.
+ *
+ * Best-effort: a missing/empty `modelUsage` is silently skipped (older SDKs
+ * and some error subtypes don't populate it). Per-entry emit failures are
+ * swallowed so token accounting never blocks the turn close that follows.
  */
-function emitTokenUsageFromResult(message: ResultMessage, sessionCtx: SessionContext): void {
+function emitTokenUsageFromResult(
+  message: ResultMessage,
+  sessionCtx: SessionContext,
+  baseline: Map<string, ClaudeModelUsageCounters>,
+): void {
   const usage = message.modelUsage;
   if (!usage) return;
   for (const [model, m] of Object.entries(usage)) {
     if (!m) continue;
-    const cacheCreation = m.cacheCreationInputTokens ?? 0;
-    const cachedRead = m.cacheReadInputTokens ?? 0;
-    const inputTokens = (m.inputTokens ?? 0) + cacheCreation;
-    const outputTokens = m.outputTokens ?? 0;
+    const current: ClaudeModelUsageCounters = {
+      inputTokens: m.inputTokens ?? 0,
+      outputTokens: m.outputTokens ?? 0,
+      cacheReadInputTokens: m.cacheReadInputTokens ?? 0,
+      cacheCreationInputTokens: m.cacheCreationInputTokens ?? 0,
+    };
+    const previous = baseline.get(model);
+    baseline.set(model, current);
+    const delta = (key: keyof ClaudeModelUsageCounters): number => {
+      const value = current[key];
+      const prior = previous?.[key] ?? 0;
+      // Defensive reset handling: if a provider counter ever rolls back within
+      // one Query, treat the new value as the start of a fresh counter rather
+      // than dropping the usage or emitting a negative schema value.
+      return value >= prior ? value - prior : value;
+    };
+    const inputTokens = delta("inputTokens") + delta("cacheCreationInputTokens");
+    const cachedRead = delta("cacheReadInputTokens");
+    const outputTokens = delta("outputTokens");
     if (inputTokens === 0 && cachedRead === 0 && outputTokens === 0) continue;
     try {
       sessionCtx.emitEvent({
@@ -1646,7 +1677,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (!currentQuery) return;
 
         try {
-          for await (const message of currentQuery) {
+          // `modelUsage` is cumulative only within one concrete Query/native
+          // process. Capture both together so a config hot-switch can start a
+          // new consumer without sharing or clearing the old consumer's
+          // accounting baseline while it drains.
+          const query = currentQuery;
+          const modelUsageBaseline = new Map<string, ClaudeModelUsageCounters>();
+          for await (const message of query) {
             // Every message refreshes lastActivity to prevent idle timeout
             sessionCtx.recordProviderActivity();
 
@@ -1672,7 +1709,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
             if (isResultMessage(message)) {
               const providerEnteredPrefix = pendingProviderEnteredPrefix();
-              emitTokenUsageFromResult(message, sessionCtx);
+              emitTokenUsageFromResult(message, sessionCtx, modelUsageBaseline);
               const providerFailure = mergeClaudeProviderFailures({
                 resultFailure: claudeFailureFromSdkResult(message),
                 assistantFailure: pendingAssistantProviderFailure,
