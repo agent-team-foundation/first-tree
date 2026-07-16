@@ -41,3 +41,23 @@ operation requires `one-turn-ready`; a binary probe alone cannot prove real agen
 Discover host state first, bridge only the minimum required material, prefer read-only copies/mounts, and use a compatible
 runtime binary for the target platform. Never mount a full host provider home writable. Missing auth, entitlement,
 compatible binaries, or authorized turn capacity is `BLOCKED`, not product `FAIL`.
+
+## Mock GitHub App
+
+The GitHub App surface (install-url, installation-token minting, repository catalog, signed webhook ingest) needs a
+configured App. A real App/webhook secret is often unavailable in an isolated cell, so a run may report those sub-areas
+`BLOCKED`, or mock them to validate First Tree's own request/parse/verify logic. Reusable assets live in
+`fixtures/github-app/` (mock REST API + webhook payloads + full recipe).
+
+- The App config block is all-or-nothing: set every `FIRST_TREE_GITHUB_APP_*` field together (id, client id/secret,
+  private key, webhook secret; plus `_SLUG` for install-url) or the server rejects it at boot. A clean boot omits the
+  "GitHub App not configured" log line and the webhook route stops returning its 501 stub.
+- Generate a throwaway PKCS#8 key at run time (`openssl genpkey -algorithm RSA`); never commit one. `node --env-file`
+  cannot hold a multi-line PEM, so pass the key via a shell export rather than the `.env` file.
+- Redirect REST calls to the mock with `FIRST_TREE_GITHUB_API_BASE_URL`; the mock returns canned token/repo data and does
+  not verify the JWT.
+- Sign webhooks with `x-hub-signature-256: sha256=<HMAC-SHA256(webhook_secret, raw_body)>` and set `x-github-event` /
+  `x-github-delivery`. This exercises signature verification, record-only install recording, and delivery-id dedup.
+
+A mock proves the deployment's request/parse/verify wiring, not github.com's live responses; the real install dialog and
+full followed-chat card delivery stay out of an isolated cell.

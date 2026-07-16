@@ -1,0 +1,13 @@
+{
+  "action": "opened",
+  "installation": { "id": 88800001 },
+  "repository": { "full_name": "acme-org/backend", "id": 555, "private": true },
+  "issue": {
+    "number": 9,
+    "title": "Mock issue",
+    "html_url": "https://github.com/acme-org/backend/issues/9",
+    "state": "open",
+    "user": { "login": "gh-mockadmin", "id": 88001 }
+  },
+  "sender": { "login": "gh-mockadmin", "id": 88001 }
+}
