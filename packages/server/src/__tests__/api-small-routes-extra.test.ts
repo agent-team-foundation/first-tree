@@ -23,6 +23,7 @@ const routeMocks = {
   getMeDocPreview: vi.fn(),
   getOrganization: vi.fn(),
   getOrgContextTreeBinding: vi.fn(),
+  getOrgSetting: vi.fn(),
   generateConnectToken: vi.fn(),
   ensureMembership: vi.fn(),
   findActiveByToken: vi.fn(),
@@ -117,6 +118,7 @@ function mockRouteDependencies(): void {
   }));
   vi.doMock("../services/org-settings.js", () => ({
     getOrgContextTreeBinding: routeMocks.getOrgContextTreeBinding,
+    getOrgSetting: routeMocks.getOrgSetting,
   }));
   vi.doMock("../services/organization.js", () => ({
     getOrganization: routeMocks.getOrganization,
@@ -350,6 +352,15 @@ describe("small API route handlers", () => {
       resourcesService: { resolveRuntimeConfig: vi.fn().mockReturnValue({ env: { A: "1" }, resources: [] }) },
     });
     routeMocks.getOrgContextTreeBinding.mockResolvedValue({ branch: "main", repo: "owner/tree" });
+    routeMocks.getOrgSetting.mockResolvedValue({
+      contextReviewer: {
+        agentUuid: null,
+        enabled: false,
+        governance: "human",
+        mergeMethod: "squash",
+        workflow: "legacy_app",
+      },
+    });
 
     await agentConfigRoutes(app as never);
     await agentContextTreeInfoRoutes(app as never);
@@ -357,6 +368,13 @@ describe("small API route handlers", () => {
     await expect(route(routes, "GET", "/config").handler({})).resolves.toEqual({ env: { A: "1" }, resources: [] });
     await expect(route(routes, "GET", "/context-tree/info").handler({})).resolves.toEqual({
       branch: "main",
+      contextReviewer: {
+        agentUuid: null,
+        enabled: false,
+        governance: "human",
+        mergeMethod: "squash",
+        workflow: "legacy_app",
+      },
       repo: "owner/tree",
     });
   });
