@@ -940,8 +940,8 @@ describe("page SSR smoke coverage", () => {
     const { ClientsPage } = await import("../clients.js");
     const { LandingPage } = await import("../landing/index.js");
     const { SettingsComputersPage } = await import("../settings/computers.js");
-    const { SettingsContextTreePage } = await import("../settings/context-tree.js");
     const { SettingsGithubPage } = await import("../settings/github.js");
+    const { SettingsRepositoriesPage } = await import("../settings/repositories.js");
     const { SettingsResourcesPage } = await import("../settings/resources.js");
     const { TeamPage } = await import("../team/index.js");
 
@@ -955,14 +955,16 @@ describe("page SSR smoke coverage", () => {
     // Page titles moved to the Settings layout; assert on stable section
     // content each sub-page renders on its own.
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsContextTreePage />)).toContain("Repository");
+    const repositories = renderPage(<SettingsRepositoriesPage />, "/settings/repositories");
+    expect(repositories).toContain("Code repositories");
+    expect(repositories).toContain("Context Tree");
     expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: "member" };
-    // Settings GitHub, Context tree, and Resources stay visible (read-only)
+    // Settings GitHub, Repositories, and Resources stay visible (read-only)
     // for members.
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<SettingsContextTreePage />)).toContain("Repository");
+    expect(renderPage(<SettingsRepositoriesPage />, "/settings/repositories")).toContain("Context Tree");
     expect(renderPage(<SettingsResourcesPage />)).toContain("Loading");
 
     authMock.value = { ...authMock.value, role: null };
@@ -1381,7 +1383,7 @@ describe("page SSR smoke coverage", () => {
       ),
     ).toContain("Join Acme");
     expect(renderPage(<GithubAppInstallationPanel />)).toContain("Connected to");
-    expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Repository");
+    expect(renderPage(<ContextTreeSettingsPanel />)).toContain("Context Tree");
     expect(renderPage(<UserMenu />)).toContain("user-menu");
     expect(() => renderPage(<TeamSetupModal action="create" onClose={() => undefined} />)).not.toThrow();
     expect(renderPage(<SettingsLayout />)).toContain("Settings");

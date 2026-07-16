@@ -7,8 +7,8 @@ import { ResourceTypeSections } from "./resource-sections.js";
  * surface), not on the Team roster — see the Settings IA in settings.tsx.
  *
  * The `repo` type is deliberately absent here: Team code repositories render
- * in the provider-neutral "Code available to agents" area on Settings →
- * Integrations, above the GitHub/GitLab connection tabs.
+ * in the provider-neutral "Code repositories" area on Settings →
+ * Repositories.
  *
  * Visible to all members. Everyone can open the read-only preview; only
  * admins see add / edit / retire affordances (see ResourceTypeSections).
