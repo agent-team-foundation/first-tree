@@ -16,12 +16,26 @@ type ArtifactEvidence = {
   artifact: AuditArtifact;
   body: string;
   draft: boolean;
+  headRef: string | null;
 };
 
 type FreshnessObservation = {
   bindingValid: boolean;
   observedHead: string | null;
   order: number;
+};
+
+type CommitEvidence = {
+  committedHead: string;
+  order: number;
+  repoPath: string;
+};
+
+type WriterVerifyEvidence = {
+  actualHead: string;
+  committedState: boolean;
+  order: number;
+  verifiedTreePath: string;
 };
 
 function commandEvidence(event: unknown): CommandEvidence | null {
@@ -187,9 +201,10 @@ export function deriveMetrics(
   let siblingEvidenceOrder: number | null = null;
   let targetEvidenceOrder: number | null = null;
   let writeSkillOrder: number | null = null;
-  const writerVerifyOrders: number[] = [];
+  const writerVerifyEvidence: WriterVerifyEvidence[] = [];
   const authoringOrders: number[] = [];
-  const publicationOrders: number[] = [];
+  const commitEvidence: CommitEvidence[] = [];
+  const publicationEvidence: Array<{ order: number; publishedRef: string }> = [];
   const freshnessFetchOrders: number[] = [];
   const freshnessObservations: FreshnessObservation[] = [];
   const artifactOrders: number[] = [];
@@ -243,8 +258,19 @@ export function deriveMetrics(
           verifyBoundToSnapshot = true;
           verifyOrder = order;
         }
-        if (event.auditWriterVerify === true && event.writerVerifyBindingValid === true && event.exitCode === 0) {
-          writerVerifyOrders.push(order);
+        if (
+          event.auditWriterVerify === true &&
+          event.writerVerifyBindingValid === true &&
+          event.exitCode === 0 &&
+          typeof event.actualHead === "string" &&
+          typeof event.verifiedTreePath === "string"
+        ) {
+          writerVerifyEvidence.push({
+            actualHead: event.actualHead,
+            committedState: event.committedState === true,
+            order,
+            verifiedTreePath: event.verifiedTreePath,
+          });
         }
       }
       if (event.blockedByEval === true) blockedExternalAttempts += 1;
@@ -264,11 +290,19 @@ export function deriveMetrics(
           artifact: event.artifact,
           body: typeof event.body === "string" ? event.body : "",
           draft: event.draft === true,
+          headRef: typeof event.headRef === "string" ? event.headRef : null,
         });
         artifactOrders.push(order);
       }
     }
     if (event.type === "audit_tree_authoring_started") authoringOrders.push(order);
+    if (
+      event.type === "audit_tree_commit_succeeded" &&
+      typeof event.committedHead === "string" &&
+      typeof event.repoPath === "string"
+    ) {
+      commitEvidence.push({ committedHead: event.committedHead, order, repoPath: event.repoPath });
+    }
     if (
       event.type === "audit_tree_publication_succeeded" &&
       event.repo === expectation.repo &&
@@ -276,7 +310,7 @@ export function deriveMetrics(
       typeof event.publishedRef === "string" &&
       event.publishedRef.startsWith("refs/heads/")
     ) {
-      publicationOrders.push(order);
+      publicationEvidence.push({ order, publishedRef: event.publishedRef });
     }
     if (
       event.type === "audit_write_freshness_fetch" &&
@@ -332,22 +366,48 @@ export function deriveMetrics(
 
   const firstAuthoringOrder = authoringOrders[0] ?? null;
   const lastAuthoringOrder = authoringOrders.at(-1) ?? null;
-  const writerVerifyOrder =
-    lastAuthoringOrder === null ? null : (writerVerifyOrders.find((order) => order > lastAuthoringOrder) ?? null);
+  const onlyCommit = commitEvidence.length === 1 ? (commitEvidence[0] ?? null) : null;
+  const preCommitVerify =
+    lastAuthoringOrder === null || onlyCommit === null
+      ? null
+      : (writerVerifyEvidence.find(
+          (item) =>
+            item.order > lastAuthoringOrder &&
+            item.order < onlyCommit.order &&
+            item.verifiedTreePath === onlyCommit.repoPath,
+        ) ?? null);
+  const committedTreeVerify =
+    onlyCommit === null
+      ? null
+      : (writerVerifyEvidence.find(
+          (item) =>
+            item.order > onlyCommit.order &&
+            item.verifiedTreePath === onlyCommit.repoPath &&
+            item.actualHead === onlyCommit.committedHead &&
+            item.committedState,
+        ) ?? null);
   const initialExpectedHead =
     evalCase.fixture.scenario === "stale-before-write" ? expectation.advancedHeadOid : expectation.headOid;
   const initialFreshness = freshnessPair(initialExpectedHead, writeSkillOrder, firstAuthoringOrder);
   const publicationExpectedHead =
     evalCase.fixture.scenario === "stale-before-publish" ? expectation.advancedHeadOid : expectation.headOid;
   const firstPublicationBoundary =
-    [publicationOrders[0], artifactOrders[0]]
+    [publicationEvidence[0]?.order, artifactOrders[0]]
       .filter((item): item is number => item !== undefined)
       .sort((left, right) => left - right)[0] ?? null;
-  const publicationFreshness = freshnessPair(publicationExpectedHead, writerVerifyOrder, firstPublicationBoundary);
+  const publicationFreshness = freshnessPair(
+    publicationExpectedHead,
+    committedTreeVerify?.order ?? null,
+    firstPublicationBoundary,
+  );
   const writeFreshnessChecked = initialFreshness !== null;
   const publicationFreshnessChecked = publicationFreshness !== null;
   const draftPullRequestObserved =
-    artifactEvidence.length === 1 && artifactEvidence[0]?.artifact === "pull-request" && artifactEvidence[0].draft;
+    artifactEvidence.length === 1 &&
+    artifactEvidence[0]?.artifact === "pull-request" &&
+    artifactEvidence[0].draft &&
+    publicationEvidence.length === 1 &&
+    artifactEvidence[0].headRef === publicationEvidence[0]?.publishedRef;
   const evidenceOrders = [targetEvidenceOrder];
   if (
     ["decision-lock", "report-only", "stale-before-publish", "stale-before-write", "strong-local"].includes(
@@ -361,7 +421,7 @@ export function deriveMetrics(
   const requiredEvidenceComplete = completeEvidenceOrders.length === evidenceOrders.length;
   const lastEvidenceOrder = completeEvidenceOrders.length > 0 ? Math.max(...completeEvidenceOrders) : null;
   const onlyArtifactOrder = artifactOrders.length === 1 ? artifactOrders[0] : null;
-  const onlyPublicationOrder = publicationOrders.length === 1 ? (publicationOrders[0] ?? null) : null;
+  const onlyPublicationOrder = publicationEvidence.length === 1 ? (publicationEvidence[0]?.order ?? null) : null;
   const coreOrderValid =
     skillFileReadOrder !== null &&
     helpOrder !== null &&
@@ -387,10 +447,14 @@ export function deriveMetrics(
         ? firstAuthoringOrder !== null &&
           lastAuthoringOrder !== null &&
           initialFreshness.observationOrder < firstAuthoringOrder &&
-          writerVerifyOrder !== null &&
-          lastAuthoringOrder < writerVerifyOrder &&
+          preCommitVerify !== null &&
+          lastAuthoringOrder < preCommitVerify.order &&
+          onlyCommit !== null &&
+          preCommitVerify.order < onlyCommit.order &&
+          committedTreeVerify !== null &&
+          onlyCommit.order < committedTreeVerify.order &&
           publicationFreshness !== null &&
-          writerVerifyOrder < publicationFreshness.fetchOrder &&
+          committedTreeVerify.order < publicationFreshness.fetchOrder &&
           publicationFreshness.fetchOrder < publicationFreshness.observationOrder &&
           onlyPublicationOrder !== null &&
           publicationFreshness.observationOrder < onlyPublicationOrder &&
@@ -399,18 +463,26 @@ export function deriveMetrics(
           onlyPublicationOrder < onlyArtifactOrder
         : evalCase.fixture.scenario === "stale-before-publish"
           ? firstAuthoringOrder !== null &&
-            writerVerifyOrder !== null &&
+            preCommitVerify !== null &&
             lastAuthoringOrder !== null &&
-            lastAuthoringOrder < writerVerifyOrder &&
+            lastAuthoringOrder < preCommitVerify.order &&
+            onlyCommit !== null &&
+            preCommitVerify.order < onlyCommit.order &&
+            committedTreeVerify !== null &&
+            onlyCommit.order < committedTreeVerify.order &&
             publicationFreshness !== null &&
-            publicationOrders.length === 0 &&
+            publicationEvidence.length === 0 &&
             artifactOrders.length === 0
-          : firstAuthoringOrder === null && publicationOrders.length === 0 && artifactOrders.length === 0);
+          : firstAuthoringOrder === null &&
+            commitEvidence.length === 0 &&
+            publicationEvidence.length === 0 &&
+            artifactOrders.length === 0);
   } else if (!evidenceOrderValid) {
     evidenceOrderValid =
       coreOrderValid &&
       authoringOrders.length === 0 &&
-      publicationOrders.length === 0 &&
+      commitEvidence.length === 0 &&
+      publicationEvidence.length === 0 &&
       (evalCase.expected.action === "issue-or-ask" || evalCase.expected.action === "human-ask"
         ? onlyArtifactOrder !== null &&
           onlyArtifactOrder !== undefined &&

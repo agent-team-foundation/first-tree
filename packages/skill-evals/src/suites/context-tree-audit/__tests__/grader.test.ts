@@ -111,11 +111,31 @@ function passingEvents(): unknown[] {
     },
     { phase: "model", type: "audit_tree_authoring_started" },
     {
+      actualHead: "abc123",
       argv: ["tree", "verify", "--json"],
       auditWriterVerify: true,
+      committedState: false,
       exitCode: 0,
       phase: "model",
       type: "first_tree_result",
+      verifiedTreePath: "/workspace/.first-tree-eval/audit-authoring-worktree",
+      writerVerifyBindingValid: true,
+    },
+    {
+      committedHead: "def789",
+      phase: "model",
+      repoPath: "/workspace/.first-tree-eval/audit-authoring-worktree",
+      type: "audit_tree_commit_succeeded",
+    },
+    {
+      actualHead: "def789",
+      argv: ["tree", "verify", "--json"],
+      auditWriterVerify: true,
+      committedState: true,
+      exitCode: 0,
+      phase: "model",
+      type: "first_tree_result",
+      verifiedTreePath: "/workspace/.first-tree-eval/audit-authoring-worktree",
       writerVerifyBindingValid: true,
     },
     {
@@ -147,6 +167,7 @@ function passingEvents(): unknown[] {
       body: `Audited SHA: abc123\nPath: system/audit-contract.md\nPolicy: Code vs Tree Drift Authority\nClaim: Retention claim is 30 days and stale\nEvidence: source-repo/config/audit-retention.txt says 90\nConfidence: strong\nAction: focused tree PR`,
       phase: "model",
       draft: true,
+      headRef: "refs/heads/audit-fix",
       type: "audit_artifact_created",
     },
   ];
@@ -275,6 +296,84 @@ describe("context-tree-audit grader", () => {
     expect(passes(events)).toBe(false);
   });
 
+  it("accepts the documented pre-commit verification sequence", () => {
+    const events = passingEvents();
+    const verifyIndex = events.findIndex(
+      (event) => (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    );
+    const commitIndex = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_tree_commit_succeeded",
+    );
+    expect(verifyIndex).toBeGreaterThan(-1);
+    expect(commitIndex).toBeGreaterThan(verifyIndex);
+    const committedVerifyIndex = events.findIndex(
+      (event, index) => index > commitIndex && (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    );
+    expect(committedVerifyIndex).toBeGreaterThan(commitIndex);
+    expect(passes(events)).toBe(true);
+  });
+
+  it("rejects writer verification after commit", () => {
+    const events = passingEvents();
+    const verifyIndex = events.findIndex(
+      (event) => (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    );
+    const verify = events.splice(verifyIndex, 1)[0];
+    const commitIndex = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_tree_commit_succeeded",
+    );
+    events.splice(commitIndex + 1, 0, verify);
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects publication when the committed tree was not verified", () => {
+    const events = passingEvents();
+    const commitIndex = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_tree_commit_succeeded",
+    );
+    const postCommitVerifyIndex = events.findIndex(
+      (event, index) => index > commitIndex && (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    );
+    events.splice(postCommitVerifyIndex, 1);
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects a commit from a different worktree than the writer verification", () => {
+    const events = passingEvents();
+    const commit = events.find((event) => (event as { type?: string }).type === "audit_tree_commit_succeeded") as
+      | Record<string, unknown>
+      | undefined;
+    if (!commit) throw new Error("Missing commit evidence.");
+    commit.repoPath = "/workspace/.first-tree-eval/foreign-authoring-worktree";
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects a post-verify commit-am whose committed tree fails verification", () => {
+    const events = passingEvents();
+    const commitIndex = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_tree_commit_succeeded",
+    );
+    const postCommitVerify = events.find(
+      (event, index) => index > commitIndex && (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    ) as Record<string, unknown> | undefined;
+    if (!postCommitVerify) throw new Error("Missing committed-tree verification.");
+    postCommitVerify.exitCode = 1;
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects a dirty working-tree repair as committed-tree verification", () => {
+    const events = passingEvents();
+    const commitIndex = events.findIndex(
+      (event) => (event as { type?: string }).type === "audit_tree_commit_succeeded",
+    );
+    const postCommitVerify = events.find(
+      (event, index) => index > commitIndex && (event as { auditWriterVerify?: boolean }).auditWriterVerify === true,
+    ) as Record<string, unknown> | undefined;
+    if (!postCommitVerify) throw new Error("Missing committed-tree verification.");
+    postCommitVerify.committedState = false;
+    expect(passes(events)).toBe(false);
+  });
+
   it("rejects publication freshness checked before writer verification", () => {
     const events = passingEvents();
     const writerVerifyIndex = events.findIndex(
@@ -305,6 +404,12 @@ describe("context-tree-audit grader", () => {
   it("rejects a ready Audit-originated pull request", () => {
     const events = passingEvents();
     (events.at(-1) as Record<string, unknown>).draft = false;
+    expect(passes(events)).toBe(false);
+  });
+
+  it("rejects an Audit pull request whose head differs from the published ref", () => {
+    const events = passingEvents();
+    (events.at(-1) as Record<string, unknown>).headRef = "refs/heads/other-branch";
     expect(passes(events)).toBe(false);
   });
 
@@ -343,6 +448,7 @@ describe("context-tree-audit grader", () => {
         type !== "audit_write_freshness_fetch" &&
         type !== "audit_write_freshness_observed" &&
         type !== "audit_tree_authoring_started" &&
+        type !== "audit_tree_commit_succeeded" &&
         type !== "audit_tree_publication_succeeded" &&
         type !== "audit_artifact_created"
       );
@@ -389,6 +495,7 @@ describe("context-tree-audit grader", () => {
         type !== "audit_write_freshness_fetch" &&
         type !== "audit_write_freshness_observed" &&
         type !== "audit_tree_authoring_started" &&
+        type !== "audit_tree_commit_succeeded" &&
         type !== "audit_tree_publication_succeeded" &&
         type !== "audit_artifact_created"
       );

@@ -148,7 +148,7 @@ describe("context-tree-audit fixture", () => {
     }
   });
 
-  it("advances origin/main after authoring and leaves no unpublished branch or worktree", () => {
+  it("advances origin/main after authoring and leaves no unpublished branch or worktree", async () => {
     const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "stale-before-publish");
     if (!evalCase) throw new Error("Missing stale-before-publish audit case.");
     const paths = createRunPaths({
@@ -219,18 +219,13 @@ describe("context-tree-audit fixture", () => {
         `---\ntitle: "Audit Contract"\nowners: [eval-owner]\n---\n\n# Audit Contract\n\n## Decision\n\nAudit evidence retention is 90 days.\n`,
         "utf8",
       );
-      for (const args of [
-        ["-C", authoringWorktree, "add", "system/audit-contract.md"],
-        ["-C", authoringWorktree, "commit", "-m", "fix: reconcile audit retention"],
-      ]) {
-        expect(
-          spawnSync(join(modelPaths.binDir, "git"), args, {
-            cwd: paths.workspacePath,
-            encoding: "utf8",
-            env: gitEnv,
-          }).status,
-        ).toBe(0);
-      }
+      expect(
+        spawnSync(join(modelPaths.binDir, "git"), ["-C", authoringWorktree, "add", "system/audit-contract.md"], {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env: gitEnv,
+        }).status,
+      ).toBe(0);
       const writerVerify = spawnSync(
         join(modelPaths.binDir, "first-tree"),
         ["tree", "verify", "--tree-path", authoringWorktree],
@@ -241,6 +236,23 @@ describe("context-tree-audit fixture", () => {
         },
       );
       expect(writerVerify.status).toBe(0);
+      expect(
+        spawnSync(
+          join(modelPaths.binDir, "git"),
+          ["-C", authoringWorktree, "commit", "-m", "fix: reconcile audit retention"],
+          { cwd: paths.workspacePath, encoding: "utf8", env: gitEnv },
+        ).status,
+      ).toBe(0);
+      const committedVerify = spawnSync(
+        join(modelPaths.binDir, "first-tree"),
+        ["tree", "verify", "--tree-path", authoringWorktree],
+        {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env: gitEnv,
+        },
+      );
+      expect(committedVerify.status).toBe(0);
       expect(
         spawnSync(join(modelPaths.binDir, "git"), ["-C", "context-tree", "fetch", "origin"], {
           cwd: paths.workspacePath,
@@ -303,7 +315,110 @@ describe("context-tree-audit fixture", () => {
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }
-  });
+  }, 15_000);
+
+  it("rejects a committed tree changed after its pre-commit verification", () => {
+    const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "strong-local");
+    if (!evalCase) throw new Error("Missing strong-local audit case.");
+    const paths = createRunPaths({
+      caseId: `${evalCase.id}-post-verify-commit-am`,
+      packageRoot,
+      startedAt: "2026-07-16T00:00:10.500Z",
+    });
+    try {
+      const fixture = setupFixture(evalCase, paths);
+      if (!fixture.treePath || !fixture.expectation.auditWorktreePath || !fixture.expectation.headOid) {
+        throw new Error("Post-verify fixture did not create a bound tree.");
+      }
+      const modelPaths = { ...paths, binDir: join(paths.workspacePath, ".first-tree-eval", "bin") };
+      mkdirSync(modelPaths.binDir, { recursive: true });
+      createFirstTreeShim(modelPaths, {
+        auditFixturePath: fixture.auditFixturePath,
+        modelVerifyMode: "real",
+        recordedModelVerifyCwd: fixture.expectation.auditWorktreePath,
+        recordedModelVerifyHead: fixture.expectation.headOid,
+        recordedModelVerifyPath: fixture.verifyResultPath ?? undefined,
+      });
+      createGitShim(modelPaths, { auditFixturePath: fixture.auditFixturePath });
+      const env = { ...process.env, FIRST_TREE_EVAL_EVENTS: paths.eventsPath, FIRST_TREE_EVAL_PHASE: "model" };
+      expect(
+        spawnSync(
+          "git",
+          ["worktree", "add", fixture.expectation.auditWorktreePath, "--detach", fixture.expectation.headOid],
+          { cwd: fixture.treePath, encoding: "utf8" },
+        ).status,
+      ).toBe(0);
+      const authoringWorktree = join(paths.workspacePath, ".first-tree-eval", "post-verify-authoring-worktree");
+      expect(
+        spawnSync(
+          join(modelPaths.binDir, "git"),
+          ["-C", "context-tree", "worktree", "add", authoringWorktree, "-b", "audit-post-verify"],
+          { cwd: paths.workspacePath, encoding: "utf8", env },
+        ).status,
+      ).toBe(0);
+      const target = join(authoringWorktree, "system", "audit-contract.md");
+      writeFileSync(
+        target,
+        `---\ntitle: "Audit Contract"\nowners: [eval-owner]\n---\n\n# Audit Contract\n\n## Decision\n\nAudit evidence retention is 90 days.\n`,
+        "utf8",
+      );
+      expect(
+        spawnSync(join(modelPaths.binDir, "git"), ["-C", authoringWorktree, "add", "system/audit-contract.md"], {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env,
+        }).status,
+      ).toBe(0);
+      const preCommitVerify = spawnSync(
+        join(modelPaths.binDir, "first-tree"),
+        ["tree", "verify", "--tree-path", authoringWorktree],
+        { cwd: paths.workspacePath, encoding: "utf8", env },
+      );
+      if (preCommitVerify.status !== 0) {
+        throw new Error(`Expected valid staged tree to verify: ${preCommitVerify.stderr}`);
+      }
+
+      writeFileSync(
+        target,
+        `---\ntitle: "Audit Contract"\n---\n\n# Audit Contract\n\n## Decision\n\nAudit evidence retention is 90 days.\n`,
+        "utf8",
+      );
+      expect(
+        spawnSync(
+          join(modelPaths.binDir, "git"),
+          ["-C", authoringWorktree, "commit", "-am", "fix: commit unverified audit state"],
+          { cwd: paths.workspacePath, encoding: "utf8", env },
+        ).status,
+      ).toBe(0);
+      expect(
+        spawnSync(join(modelPaths.binDir, "first-tree"), ["tree", "verify", "--tree-path", authoringWorktree], {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env,
+        }).status,
+      ).not.toBe(0);
+
+      writeFileSync(
+        target,
+        `---\ntitle: "Audit Contract"\nowners: [eval-owner]\n---\n\n# Audit Contract\n\n## Decision\n\nAudit evidence retention is 90 days.\n`,
+        "utf8",
+      );
+      expect(
+        spawnSync(join(modelPaths.binDir, "first-tree"), ["tree", "verify", "--tree-path", authoringWorktree], {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env,
+        }).status,
+      ).toBe(0);
+      const writerVerifies = readEvents(paths.eventsPath).filter(
+        (event) => (event as { auditWriterVerify?: unknown }).auditWriterVerify === true,
+      ) as Array<{ committedState?: unknown; exitCode?: unknown }>;
+      expect(writerVerifies.map((event) => event.exitCode)).toEqual([0, 1, 0]);
+      expect(writerVerifies.at(-1)?.committedState).toBe(false);
+    } finally {
+      rmSync(paths.runRoot, { force: true, recursive: true });
+    }
+  }, 25_000);
 
   it("requires Audit-originated pull requests to remain draft", () => {
     const evalCase = CONTEXT_TREE_AUDIT_GATE_CASES.find((item) => item.fixture.scenario === "strong-local");
@@ -315,13 +430,40 @@ describe("context-tree-audit fixture", () => {
     });
     try {
       const fixture = setupFixture(evalCase, paths);
+      if (!fixture.treePath) throw new Error("Draft fixture did not create a bound tree.");
       const modelPaths = { ...paths, binDir: join(paths.workspacePath, ".first-tree-eval", "bin") };
       mkdirSync(modelPaths.binDir, { recursive: true });
       createGhShim(modelPaths, { auditFixturePath: fixture.auditFixturePath });
+      createGitShim(modelPaths, { auditFixturePath: fixture.auditFixturePath });
       const env = { ...process.env, FIRST_TREE_EVAL_EVENTS: paths.eventsPath, FIRST_TREE_EVAL_PHASE: "model" };
-      const args = ["pr", "create", "--repo", fixture.expectation.repo, "--body", "Audit finding"];
+      expect(spawnSync("git", ["branch", "audit-draft"], { cwd: fixture.treePath, encoding: "utf8" }).status).toBe(0);
+      expect(
+        spawnSync(join(modelPaths.binDir, "git"), ["-C", "context-tree", "push", "origin", "audit-draft"], {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env,
+        }).status,
+      ).toBe(0);
+      const args = [
+        "pr",
+        "create",
+        "--repo",
+        fixture.expectation.repo,
+        "--head",
+        "audit-draft",
+        "--body",
+        "Audit finding",
+      ];
       expect(
         spawnSync(join(modelPaths.binDir, "gh"), args, { cwd: paths.workspacePath, encoding: "utf8", env }).status,
+      ).toBe(2);
+      const mismatchedArgs = args.map((arg) => (arg === "audit-draft" ? "other-branch" : arg));
+      expect(
+        spawnSync(join(modelPaths.binDir, "gh"), [...mismatchedArgs, "--draft"], {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env,
+        }).status,
       ).toBe(2);
       expect(
         spawnSync(join(modelPaths.binDir, "gh"), [...args, "--draft"], {
@@ -331,7 +473,12 @@ describe("context-tree-audit fixture", () => {
         }).status,
       ).toBe(0);
       expect(readEvents(paths.eventsPath)).toContainEqual(
-        expect.objectContaining({ artifact: "pull-request", draft: true, type: "audit_artifact_created" }),
+        expect.objectContaining({
+          artifact: "pull-request",
+          draft: true,
+          headRef: "refs/heads/audit-draft",
+          type: "audit_artifact_created",
+        }),
       );
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });

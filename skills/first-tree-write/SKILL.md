@@ -77,8 +77,11 @@ relationship.
    Rewrite superseded claims in place; do not append timeline updates. Keep
    canonical content in one place and use normal-to-normal `soft_links` when a
    cross-domain reader needs navigation.
-6. **Verify.** Run `first-tree tree verify --tree-path <tree>` before commit.
-   Non-zero exit blocks the PR/MR.
+6. **Verify and publish.** Run `first-tree tree verify --tree-path <tree>`
+   before commit. Non-zero exit blocks the PR/MR. For an Audit finding, commit
+   only that verified tree state, verify the committed tree again, then perform
+   the second exact-head check above before pushing that branch and creating
+   the draft PR/MR with its head explicitly bound to the published branch.
 7. **Prepare the PR/MR.** One source artifact maps to one tree PR/MR. Keep the
    description focused on the source and the tree nodes changed; do not put
    PR/MR IDs, source links, or audit trails into node bodies. An Audit-originated

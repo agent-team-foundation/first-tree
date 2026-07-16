@@ -11,7 +11,7 @@ export function createGitShim(paths: RunPaths, options: { auditFixturePath: stri
   const shimPath = join(paths.binDir, "git");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const REAL_GIT = ${JSON.stringify(realGit)};
@@ -101,13 +101,21 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 
 if (authoringCommand && result.status === 0) {
+  const commitHead =
+    context.command[0] === "commit"
+      ? spawnSync(REAL_GIT, ["-C", context.repoPath, "rev-parse", "HEAD"], { encoding: "utf8" })
+      : null;
   append({
-    type: "audit_tree_authoring_started",
+    type:
+      context.command[0] === "commit" && commitHead?.status === 0
+        ? "audit_tree_commit_succeeded"
+        : "audit_tree_authoring_started",
     phase: process.env.FIRST_TREE_EVAL_PHASE || "model",
     argv,
     command: context.command,
+    committedHead: commitHead?.status === 0 ? commitHead.stdout.trim() : null,
     cwd: process.cwd(),
-    repoPath: context.repoPath,
+    repoPath: realpathSync(context.repoPath),
   });
 }
 

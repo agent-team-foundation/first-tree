@@ -78,6 +78,26 @@ function artifactBody(argv) {
   }
 }
 
+function auditPublishedRefs(fixture) {
+  try {
+    return readFileSync(EVENTS_PATH, "utf8")
+      .split("\\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter(
+        (event) =>
+          event.type === "audit_tree_publication_succeeded" &&
+          event.phase === "model" &&
+          event.repo === fixture.repo &&
+          event.remote === "origin" &&
+          typeof event.publishedRef === "string",
+      )
+      .map((event) => event.publishedRef);
+  } catch {
+    return [];
+  }
+}
+
 function ghMethod(argv) {
   const separate = argAfter(argv, "-X") || argAfter(argv, "--method");
   if (separate) return separate.toUpperCase();
@@ -234,7 +254,17 @@ if (AUDIT_FIXTURE_PATH) {
   }
   if (argv[0] === "pr" && argv[1] === "create") {
     const draft = argv.includes("--draft");
-    if (!repoMatches || !draft || fixture.mode === "report-only" || fixture.scenario === "no-binding") {
+    const head = argAfter(argv, "--head");
+    const publishedRefs = auditPublishedRefs(fixture);
+    const publishedHeadMatches = publishedRefs.length === 1 && publishedRefs[0] === "refs/heads/" + head;
+    if (
+      !repoMatches ||
+      !draft ||
+      !head ||
+      !publishedHeadMatches ||
+      fixture.mode === "report-only" ||
+      fixture.scenario === "no-binding"
+    ) {
       finish(argv, phase, 2, "", "Audit fixture rejected pull request creation.\\n", {
         auditFixture: true,
         auditFixtureViolation: true,
@@ -248,6 +278,7 @@ if (AUDIT_FIXTURE_PATH) {
       body: artifactBody(argv),
       cwd: process.cwd(),
       draft,
+      headRef: "refs/heads/" + head,
       repo: fixture.repo,
     });
     finish(argv, phase, 0, "https://github.com/owner/context-tree/pull/77\\n", "", {

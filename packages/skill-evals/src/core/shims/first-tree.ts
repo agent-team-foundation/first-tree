@@ -433,7 +433,9 @@ if (AUDIT_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] ===
   const headResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: verifyTargetPath, encoding: "utf8" });
   const statusResult = spawnSync("git", ["status", "--porcelain"], { cwd: verifyTargetPath, encoding: "utf8" });
   const actualHead = headResult.status === 0 ? headResult.stdout.trim() : null;
-  const authoredState = actualHead !== fixture.headOid || (statusResult.status === 0 && statusResult.stdout.trim() !== "");
+  const worktreeClean = statusResult.status === 0 && statusResult.stdout.trim() === "";
+  const committedState = actualHead !== fixture.headOid && worktreeClean;
+  const authoredState = actualHead !== fixture.headOid || !worktreeClean;
   const writerVerifyBindingValid =
     exactCommand &&
     actualCwd !== null &&
@@ -459,6 +461,7 @@ if (AUDIT_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] ===
     if (
       result.status === 0 &&
       fixture.scenario === "stale-before-publish" &&
+      committedState &&
       fixture.originPath &&
       fixture.advancedHeadOid
     ) {
@@ -486,6 +489,7 @@ if (AUDIT_FIXTURE_PATH && phase === "model" && argv[0] === "tree" && argv[1] ===
       actualHead,
       auditOriginAdvanced,
       auditWriterVerify: true,
+      committedState,
       verifiedTreePath: actualCwd,
       writerVerifyBindingValid: true,
     });
