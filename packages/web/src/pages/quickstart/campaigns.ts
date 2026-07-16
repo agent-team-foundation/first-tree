@@ -45,6 +45,20 @@ const CAMPAIGNS: Record<CampaignSlug, CampaignConfig> = {
         "The scan report link didn't carry over, so start by checking access to the repository, then ask me to share the report or re-run the scan.",
     },
   },
+  "agent-readiness": {
+    slug: "agent-readiness",
+    needsRepo: true,
+    action: {
+      queryValue: "fix",
+      topic: "Adopt agent readiness fixes",
+      request: "apply the prioritized fixes from my Agent Team Readiness report",
+      reportBaseUrl: "https://report.first-tree.ai",
+      withReportInstruction:
+        "Start from the machine-readable atr-1 report. Before applying anything, verify that its repository.source normalizes to the requested repository URL; stop and surface any mismatch. Then address the prioritized blockers first. Keep any AGENTS.md or Context Tree change review-first and source-backed; do not turn the report's runtime, permission, or team-behavior unknowns into assumptions. If the findings link has expired, or the repository isn't accessible from here, say exactly what is needed — a re-run of the scan, the narrowest GitHub access, or a local path.",
+      withoutReportInstruction:
+        "The readiness report link didn't carry over, so start by checking access to the repository, then ask me to share the report or re-run the scan.",
+    },
+  },
 };
 
 export function isKnownCampaign(slug: unknown): slug is CampaignSlug {

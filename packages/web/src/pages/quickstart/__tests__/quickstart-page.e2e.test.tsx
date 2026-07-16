@@ -169,6 +169,19 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-1", { replace: true });
   });
 
+  it("starts the agent-readiness campaign through the same generic launcher", async () => {
+    seedIntent("agent-readiness");
+    await renderPage();
+
+    expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      campaign: "agent-readiness",
+      repoUrl: "https://github.com/acme/backend",
+    });
+    expect(readCampaignIntent()).toBeNull();
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-1", { replace: true });
+  });
+
   it("renders the workspace shell for an existing trial chat and does not restart the trial", async () => {
     seedIntent("production-scan");
     const container = await renderPage(["/quickstart?c=chat-1"]);
@@ -181,7 +194,7 @@ describe("QuickstartPage — landing campaign trial flow", () => {
   it("shows the workspace (no dead-end) for an unsupported campaign handoff", async () => {
     seedIntent("production-scan");
     const container = await renderPage([
-      "/quickstart?campaign=agent-readiness&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
+      "/quickstart?campaign=unsupported-campaign&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
     ]);
 
     expect(container.querySelector('[data-testid="quickstart-trial-chat"]')).not.toBeNull();

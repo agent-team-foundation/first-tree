@@ -34,7 +34,7 @@ export type LandingCampaignSkillSet = {
   retrySummary: string;
 };
 
-const LANDING_CAMPAIGN_SKILL_SET_VERSION = "2026.07.07.1";
+const LANDING_CAMPAIGN_SKILL_SET_VERSION = "2026.07.17.1";
 
 const LANDING_CAMPAIGN_SKILL_SETS: Record<KnownLandingCampaignSlug, Omit<LandingCampaignSkillSet, "id" | "version">> = {
   "production-scan": {
@@ -46,6 +46,17 @@ const LANDING_CAMPAIGN_SKILL_SETS: Record<KnownLandingCampaignSlug, Omit<Landing
     trialSummary:
       "It's giving your code a safe, read-only check before launch — you'll get a score, the problems that actually matter, and the exact fix for each one.",
     retrySummary: "The scan didn't get started, so First Tree has restarted it. Same safe, read-only check on:",
+  },
+  "agent-readiness": {
+    agentName: "agent-team-readiness-scanner",
+    agentDisplayName: "Agent Team Readiness Scanner",
+    chatTopic: "Agent team readiness scan",
+    skillRepoUrl: "https://github.com/agent-team-foundation/agent-team-readiness-scan",
+    skillName: "agent-team-readiness",
+    trialSummary:
+      "It's checking whether your repo gives multiple coding agents the shared instructions, isolation, ownership, context, verification, and handoff structure they need — you'll get a six-dimension score, cited evidence, and review-ready drafts.",
+    retrySummary:
+      "The readiness scan didn't get started, so First Tree has restarted the same safe, read-only check on:",
   },
 };
 
