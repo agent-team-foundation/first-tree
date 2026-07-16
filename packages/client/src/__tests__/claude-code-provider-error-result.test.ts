@@ -235,7 +235,7 @@ describe("claude-code handler — structured provider error result", () => {
     });
   });
 
-  it("does not replay a transient structured failure after assistant text was emitted", async () => {
+  it("retries a transient structured failure after assistant text was emitted", async () => {
     mockState.nextMessages = [
       {
         type: "assistant",
@@ -253,18 +253,30 @@ describe("claude-code handler — structured provider error result", () => {
     ];
     const { sendMessage, forwardResult, emitted, completed } = await runSingleResultTurn();
 
-    expect(mockState.queryCalls).toBe(1);
+    expect(mockState.queryCalls).toBe(3);
     expect(forwardResult).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     expect(emitted.some((event) => event.kind === "assistant_text")).toBe(true);
 
     const providerPayloads = providerRetryPayloads(emitted);
+    expect(providerPayloads).toHaveLength(3);
     expect(providerPayloads[0]).toMatchObject({
-      event: "provider_failure_terminal",
+      event: "provider_retry_scheduled",
       provider: "claude-code",
       scope: "provider_turn",
       category: "transient_transport",
-      reasonCode: "unsafe_replay",
+      attempt: 1,
+      replaySafety: "user_visible",
+    });
+    expect(providerPayloads[1]).toMatchObject({
+      event: "provider_retry_scheduled",
+      category: "transient_transport",
+      attempt: 2,
+      replaySafety: "user_visible",
+    });
+    expect(providerPayloads[2]).toMatchObject({
+      event: "provider_retry_exhausted",
+      category: "transient_transport",
       replaySafety: "user_visible",
     });
     expect(formatProviderFailureRuntimeNotice(firstProviderPayload(providerPayloads))).toContain(
@@ -274,7 +286,7 @@ describe("claude-code handler — structured provider error result", () => {
       status: "error",
       terminal: true,
       completion: "consumed",
-      reason: "unsafe_replay",
+      reason: "provider_retry_exhausted",
     });
   });
 

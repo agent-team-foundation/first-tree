@@ -78,7 +78,7 @@ describe("ProviderAttempt", () => {
     expect(settled?.messagePreview).toContain("diagnostic: Reconnecting... 2/5");
   });
 
-  it("stops retry when user-visible output makes replay unsafe", () => {
+  it("retries a transient transport failure after user-visible output", () => {
     const a = attempt();
 
     a.markUserVisibleOutput();
@@ -88,9 +88,8 @@ describe("ProviderAttempt", () => {
     });
 
     expect(settled?.decision).toMatchObject({
-      action: "stop",
-      terminalKind: "unsafe_replay",
-      reasonCode: "unsafe_replay",
+      action: "retry",
+      replaySafety: "user_visible",
     });
   });
 });
