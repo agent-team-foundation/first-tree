@@ -24,7 +24,6 @@ export async function sendScmSystemCard(
     metadata: Record<string, unknown>;
     database?: Database;
     deferPostCommitEffects?: boolean;
-    suppressNotifyAgentIds?: readonly string[];
   },
 ) {
   const sent = await sendMessage(
@@ -41,7 +40,6 @@ export async function sendScmSystemCard(
       allowSystemSender: true,
       allowRecipientlessSend: true,
       deferPostCommitEffects: input.deferPostCommitEffects,
-      suppressNotifyAgentIds: input.suppressNotifyAgentIds,
     },
   );
   const { message, recipients } = sent;

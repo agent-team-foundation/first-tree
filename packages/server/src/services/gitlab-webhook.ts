@@ -30,7 +30,6 @@ import {
   normalizeGitlabUsername,
   resolveActiveGitlabIdentity,
 } from "./gitlab-identities.js";
-import { recordGitlabSkippedTarget } from "./gitlab-target-audit.js";
 import { type DeferredScmCardPostCommitEffects, sendScmSystemCard } from "./scm-card-delivery.js";
 import {
   compareScmDeliveryEntries,
@@ -76,12 +75,26 @@ export type GitlabPersonnelEvidence = {
 export type AppliedGitlabPersonnel = {
   event: NormalizedScmEvent | null;
   candidates: GitlabPersonnelCandidate[];
-  skippedBeforeIdentity: Array<
-    GitlabPersonnelCandidate & { reason: "reviewer_mode_unconfirmed" | "review_target_schema_anomaly" }
-  >;
-  observeReviewers: boolean;
   schemaAnomalyCode: string | null;
 };
+
+type GitlabPersonnelSkipReason =
+  | "identity_not_found"
+  | "identity_not_active"
+  | "membership_not_active"
+  | "delegate_missing"
+  | "delegate_ineligible";
+
+function logSkippedGitlabTarget(input: {
+  organizationId: string;
+  connectionId: string;
+  entityKey: string;
+  targetClass: GitlabTargetClass;
+  externalUsername: string;
+  reason: GitlabPersonnelSkipReason;
+}): void {
+  log.info({ ...input, metric: "gitlab_personnel_target_skipped_total" }, "skipped normalized GitLab personnel target");
+}
 
 function object(value: unknown, label: string): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -440,13 +453,10 @@ export function applyGitlabPersonnelEvidence(
     return {
       event: null,
       candidates: [],
-      skippedBeforeIdentity: [],
-      observeReviewers: false,
       schemaAnomalyCode: null,
     };
   }
   const candidates: GitlabPersonnelCandidate[] = [];
-  const skippedBeforeIdentity: AppliedGitlabPersonnel["skippedBeforeIdentity"] = [];
   const add = (externalUsername: string, targetClass: GitlabTargetClass): void => {
     const normalizedUsername = normalizeGitlabUsername(externalUsername).normalized;
     if (
@@ -467,7 +477,8 @@ export function applyGitlabPersonnelEvidence(
   } else if (normalized.event.eventType === "merge_request") {
     const reviewerEvidenceIsUsable =
       normalized.personnel.reviewerField === "valid" && !normalized.personnel.anomalyCode;
-    const legacyAssigneeIsReviewer = normalized.personnel.reviewerField === "missing" && reviewerMode === "assignee";
+    const legacyAssigneeIsReviewer =
+      normalized.personnel.reviewerField === "missing" && (reviewerMode === "assignee" || reviewerMode === "unknown");
     if (reviewerEvidenceIsUsable) {
       for (const username of normalized.personnel.reviewerAdded) add(username, "reviewer");
       for (const username of normalized.personnel.assigneeAdded) add(username, "assignee");
@@ -475,15 +486,6 @@ export function applyGitlabPersonnelEvidence(
       for (const username of normalized.personnel.assigneeAdded) add(username, "reviewer");
     } else {
       for (const username of normalized.personnel.assigneeAdded) add(username, "assignee");
-      if (normalized.personnel.reviewerField === "missing" && reviewerMode === "unknown") {
-        for (const username of normalized.personnel.assigneeAdded) {
-          skippedBeforeIdentity.push({
-            externalUsername: username,
-            targetClass: "reviewer",
-            reason: "reviewer_mode_unconfirmed",
-          });
-        }
-      }
     }
   }
 
@@ -494,17 +496,11 @@ export function applyGitlabPersonnelEvidence(
   return {
     event: { ...normalized.event, targets },
     candidates,
-    skippedBeforeIdentity,
-    observeReviewers: normalized.personnel.reviewerField === "valid",
     schemaAnomalyCode: normalized.personnel.anomalyCode
       ? normalized.personnel.anomalyCode
       : normalized.personnel.reviewerField === "invalid"
         ? (normalized.personnel.anomalyCode ?? "reviewers_invalid")
-        : normalized.event.eventType === "merge_request" &&
-            normalized.personnel.reviewerField === "missing" &&
-            reviewerMode === "reviewers"
-          ? "reviewers_missing_after_capability"
-          : null,
+        : null,
   };
 }
 
@@ -530,13 +526,6 @@ function reasonToTargetClass(reason: InvolveReason): GitlabTargetClass {
   }
 }
 
-export async function resolveGitlabBasicAudience(db: Database, connectionId: string, identity: GitlabEntityIdentity) {
-  const rows = await observeGitlabEntityAndResolveFollowers(db, connectionId, identity);
-  const byChat = new Map<string, (typeof rows)[number]>();
-  for (const row of rows) if (!byChat.has(row.chatId)) byChat.set(row.chatId, row);
-  return { targets: [...byChat.values()], actorHumanId: null };
-}
-
 export type GitlabAudienceResolution = {
   targets: ScmAudienceTarget[];
   actorHumanId: string | null;
@@ -547,44 +536,40 @@ export async function resolveGitlabAudience(
   input: {
     organizationId: string;
     connectionId: string;
-    automaticActionsEnabled: boolean;
     event: NormalizedScmEvent;
     entityIdentity: GitlabEntityIdentity;
-    skippedBeforeIdentity: AppliedGitlabPersonnel["skippedBeforeIdentity"];
   },
 ): Promise<GitlabAudienceResolution> {
   const actorNormalizedUsername = normalizeGitlabUsername(input.event.actor.externalUsername).normalized;
   let actorHumanId: string | null = null;
-  if (input.automaticActionsEnabled) {
-    const identityRows = await db
-      .select({ identityLinkId: gitlabEntityChatMappings.identityLinkId })
-      .from(gitlabEntityChatMappings)
-      .where(
-        and(
-          eq(gitlabEntityChatMappings.connectionId, input.connectionId),
-          eq(gitlabEntityChatMappings.projectId, input.entityIdentity.projectId),
-          eq(gitlabEntityChatMappings.entityType, input.entityIdentity.entityType),
-          eq(gitlabEntityChatMappings.entityIid, input.entityIdentity.entityIid),
-          eq(gitlabEntityChatMappings.boundVia, "identity_target"),
-          eq(gitlabEntityChatMappings.active, true),
-        ),
-      );
-    await lockGitlabIdentityAuthoritySet(db, {
-      organizationId: input.organizationId,
-      connectionId: input.connectionId,
-      normalizedUsernames: input.event.targets
-        .map((target) => normalizeGitlabUsername(target.externalUsername).normalized)
-        .concat(actorNormalizedUsername),
-      identityLinkIds: identityRows.flatMap((row) => (row.identityLinkId ? [row.identityLinkId] : [])),
-    });
-    const actor = await resolveActiveGitlabIdentity(db, {
-      organizationId: input.organizationId,
-      connectionId: input.connectionId,
-      normalizedUsername: actorNormalizedUsername,
-      lockForUpdate: true,
-    });
-    actorHumanId = actor.outcome === "ok" ? actor.identity.humanAgentId : null;
-  }
+  const identityRows = await db
+    .select({ identityLinkId: gitlabEntityChatMappings.identityLinkId })
+    .from(gitlabEntityChatMappings)
+    .where(
+      and(
+        eq(gitlabEntityChatMappings.connectionId, input.connectionId),
+        eq(gitlabEntityChatMappings.projectId, input.entityIdentity.projectId),
+        eq(gitlabEntityChatMappings.entityType, input.entityIdentity.entityType),
+        eq(gitlabEntityChatMappings.entityIid, input.entityIdentity.entityIid),
+        eq(gitlabEntityChatMappings.boundVia, "identity_target"),
+        eq(gitlabEntityChatMappings.active, true),
+      ),
+    );
+  await lockGitlabIdentityAuthoritySet(db, {
+    organizationId: input.organizationId,
+    connectionId: input.connectionId,
+    normalizedUsernames: input.event.targets
+      .map((target) => normalizeGitlabUsername(target.externalUsername).normalized)
+      .concat(actorNormalizedUsername),
+    identityLinkIds: identityRows.flatMap((row) => (row.identityLinkId ? [row.identityLinkId] : [])),
+  });
+  const actor = await resolveActiveGitlabIdentity(db, {
+    organizationId: input.organizationId,
+    connectionId: input.connectionId,
+    normalizedUsername: actorNormalizedUsername,
+    lockForUpdate: true,
+  });
+  actorHumanId = actor.outcome === "ok" ? actor.identity.humanAgentId : null;
   const rows = await observeGitlabEntityAndResolveFollowers(db, input.connectionId, input.entityIdentity);
   const explicitDeclaredByIds = [
     ...new Set(rows.filter((row) => row.boundVia !== "identity_target").map((row) => row.declaredByAgentId)),
@@ -608,7 +593,7 @@ export async function resolveGitlabAudience(
   const targets: ScmAudienceTarget[] = [];
   for (const row of rows) {
     if (row.boundVia === "identity_target") {
-      if (!input.automaticActionsEnabled || !row.identityLinkId || !row.humanAgentId || !row.delegateAgentId) continue;
+      if (!row.identityLinkId || !row.humanAgentId || !row.delegateAgentId) continue;
       const [link] = await db
         .select({ normalizedUsername: gitlabIdentityLinks.normalizedUsername })
         .from(gitlabIdentityLinks)
@@ -657,39 +642,6 @@ export async function resolveGitlabAudience(
     }
   }
 
-  const allPersonnel = [
-    ...input.event.targets.map((target) => ({
-      externalUsername: target.externalUsername,
-      targetClass: reasonToTargetClass(target.reason),
-      reason: null,
-    })),
-    ...input.skippedBeforeIdentity,
-  ];
-  if (!input.automaticActionsEnabled) {
-    for (const target of allPersonnel) {
-      await recordGitlabSkippedTarget(db, {
-        organizationId: input.organizationId,
-        connectionId: input.connectionId,
-        entityKey: input.event.entity.key,
-        targetClass: target.targetClass,
-        externalUsername: target.externalUsername,
-        reason: "automatic_actions_disabled",
-      });
-    }
-    return { targets, actorHumanId: null };
-  }
-
-  for (const skipped of input.skippedBeforeIdentity) {
-    await recordGitlabSkippedTarget(db, {
-      organizationId: input.organizationId,
-      connectionId: input.connectionId,
-      entityKey: input.event.entity.key,
-      targetClass: skipped.targetClass,
-      externalUsername: skipped.externalUsername,
-      reason: skipped.reason,
-    });
-  }
-
   for (const target of input.event.targets) {
     const normalizedUsername = normalizeGitlabUsername(target.externalUsername).normalized;
     const resolved = await resolveActiveGitlabIdentity(db, {
@@ -699,7 +651,7 @@ export async function resolveGitlabAudience(
       lockForUpdate: true,
     });
     if (resolved.outcome !== "ok") {
-      await recordGitlabSkippedTarget(db, {
+      logSkippedGitlabTarget({
         organizationId: input.organizationId,
         connectionId: input.connectionId,
         entityKey: input.event.entity.key,
@@ -966,10 +918,6 @@ export async function deliverGitlabCards(
         },
         database: input.database,
         deferPostCommitEffects: true,
-        // GitLab personnel routing is intentionally card-only for now. Keep
-        // addressed agents as silent context so bind/backlog repair can never
-        // turn a stale webhook authority into a later runtime wake.
-        suppressNotifyAgentIds: mentions,
       });
       if (!sent.deferredPostCommitEffects) throw new Error("GitLab card delivery did not defer post-commit effects");
       stats.postCommitEffects.push(sent.deferredPostCommitEffects);
@@ -979,65 +927,6 @@ export async function deliverGitlabCards(
       stats.failed += 1;
       log.error(
         { err, metric: "gitlab_delivery_failed_total", chatId: delivery.chatId, entityKey: input.event.entity.key },
-        "failed to deliver normalized GitLab event to chat",
-      );
-    }
-  }
-  return stats;
-}
-
-export async function deliverGitlabBasicCards(
-  app: FastifyInstance,
-  event: NormalizedScmEvent,
-  identity: GitlabEntityIdentity,
-  audience: { targets: Array<{ chatId: string; declaredByAgentId: string }> },
-  database: Database = app.db,
-) {
-  if (event.entity.type !== "issue" && event.entity.type !== "pull_request") {
-    throw new Error(`Unsupported GitLab card entity type: ${event.entity.type}`);
-  }
-  const stats: { delivered: number; failed: number; postCommitEffects: DeferredScmCardPostCommitEffects[] } = {
-    delivered: 0,
-    failed: 0,
-    postCommitEffects: [],
-  };
-  const card: GitlabEventCard = {
-    type: "gitlab_event",
-    event: event.eventType,
-    action: event.action,
-    kind: event.kind,
-    project: identity.projectPath,
-    sender: event.actor.externalUsername,
-    title: event.surface.title,
-    body: event.surface.body,
-    url: event.surface.url,
-    entity: { type: event.entity.type, key: event.entity.key, url: event.entity.url ?? null },
-  };
-  for (const target of audience.targets) {
-    try {
-      const sent = await sendScmSystemCard(app, {
-        chatId: target.chatId,
-        senderId: target.declaredByAgentId,
-        provider: "gitlab",
-        content: card,
-        metadata: {
-          event: event.eventType,
-          action: event.action,
-          entityType: event.entity.type,
-          entityKey: event.entity.key,
-        },
-        database,
-        deferPostCommitEffects: true,
-      });
-      if (!sent.deferredPostCommitEffects) {
-        throw new Error("GitLab card delivery did not defer post-commit effects");
-      }
-      stats.postCommitEffects.push(sent.deferredPostCommitEffects);
-      stats.delivered += 1;
-    } catch (err) {
-      stats.failed += 1;
-      log.error(
-        { err, metric: "gitlab_delivery_failed_total", chatId: target.chatId, entityKey: event.entity.key },
         "failed to deliver normalized GitLab event to chat",
       );
     }

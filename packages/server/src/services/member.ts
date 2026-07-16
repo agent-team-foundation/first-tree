@@ -260,7 +260,7 @@ export async function updateOwnProfile(db: Database, userId: string, displayName
   return { id: userId, displayName };
 }
 
-export async function deleteMember(db: Database, id: string, callerOrgId: string, actorMemberId: string | null = null) {
+export async function deleteMember(db: Database, id: string, callerOrgId: string) {
   const transferredAgentIds = await db.transaction(async (tx) => {
     const [targetRef] = await tx
       .select({ organizationId: members.organizationId })
@@ -338,7 +338,7 @@ export async function deleteMember(db: Database, id: string, callerOrgId: string
     if (!deactivated) {
       throw new ConflictError(`Membership "${id}" is not active`);
     }
-    await suspendGitlabLinksForMembership(tx as unknown as Database, id, "member_removed", actorMemberId);
+    await suspendGitlabLinksForMembership(tx as unknown as Database, id);
     await tx
       .update(agents)
       .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })

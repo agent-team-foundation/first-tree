@@ -23,24 +23,15 @@ describe("GitLab Settings API", () => {
       displayName: "Replacement",
       instanceOrigin: "https://gitlab.new",
     });
-    await gitlab.setGitlabAutomaticActions("connection/id", {
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
-    });
-    await gitlab.confirmGitlabAssigneeMode("connection/id");
     await gitlab.deleteGitlabConnection("connection/id");
     await gitlab.listGitlabIdentityLinks();
-    await gitlab.listGitlabIdentityTransitionAudit();
     await gitlab.createGitlabIdentityLink({
       connectionId: "connection/id",
       membershipId: "member/id",
       username: "reviewer",
     });
-    await gitlab.suspendGitlabIdentityLink("link/id");
     await gitlab.reconfirmGitlabIdentityLink("link/id");
-    await gitlab.revokeGitlabIdentityLink("link/id");
-    await gitlab.listGitlabAutomaticActionsAudit();
-    await gitlab.listGitlabSkippedTargets();
+    await gitlab.removeGitlabIdentityLink("link/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/gitlab-connections");
     expect(apiMock.post).toHaveBeenCalledWith("/orgs/current/gitlab-connections", {
@@ -54,9 +45,6 @@ describe("GitLab Settings API", () => {
     });
     expect(apiMock.delete).toHaveBeenCalledWith("/gitlab-connections/connection%2Fid");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/gitlab-identity-links");
-    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/gitlab-identity-links/audit");
-    expect(apiMock.post).toHaveBeenCalledWith("/gitlab-identity-links/link%2Fid/revoke", {});
-    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/gitlab-connections/automatic-actions-audit");
-    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/gitlab-connections/skipped-targets");
+    expect(apiMock.delete).toHaveBeenCalledWith("/gitlab-identity-links/link%2Fid");
   });
 });

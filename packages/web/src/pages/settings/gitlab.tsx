@@ -1,29 +1,18 @@
-import type {
-  GitlabConnectionSummary,
-  GitlabIdentityLinkSummary,
-  GitlabIdentityTransitionAudit,
-  GitlabSkippedTargetReason,
-} from "@first-tree/shared";
+import type { GitlabConnectionSummary, GitlabIdentityLinkSummary } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, ExternalLink, ShieldAlert } from "lucide-react";
+import { Copy, ExternalLink } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { ApiError } from "../../api/client.js";
 import {
-  confirmGitlabAssigneeMode,
   createGitlabConnection,
   createGitlabIdentityLink,
   deleteGitlabConnection,
-  listGitlabAutomaticActionsAudit,
   listGitlabConnections,
   listGitlabIdentityLinks,
-  listGitlabIdentityTransitionAudit,
-  listGitlabSkippedTargets,
   reconfirmGitlabIdentityLink,
   regenerateGitlabBearer,
+  removeGitlabIdentityLink,
   replaceGitlabConnection,
-  revokeGitlabIdentityLink,
-  setGitlabAutomaticActions,
-  suspendGitlabIdentityLink,
 } from "../../api/gitlab-connections.js";
 import { listMembers, type MemberListItem } from "../../api/members.js";
 import { useAuth } from "../../auth/auth-context.js";
@@ -45,7 +34,7 @@ const connectionKey = (organizationId: string | null) => ["gitlab-connections", 
 const identityKey = (organizationId: string | null) => ["gitlab-identity-links", organizationId] as const;
 
 type ConnectionDialog = "create" | "replace" | null;
-type ConfirmAction = "regenerate" | "delete" | "enable-automation" | "disable-automation" | "assignee-mode" | null;
+type ConfirmAction = "regenerate" | "delete" | null;
 
 export function SettingsGitlabPage() {
   const { role, organizationId } = useAuth();
@@ -90,33 +79,10 @@ function OrganizationScopedGitlabPage(props: { role: string | null; organization
     queryFn: listMembers,
     enabled: isAdmin && !!organizationId,
   });
-  const skipped = useQuery({
-    queryKey: ["gitlab-skipped-targets", organizationId],
-    queryFn: listGitlabSkippedTargets,
-    enabled: isAdmin && !!organizationId,
-  });
-  const audit = useQuery({
-    queryKey: ["gitlab-automation-audit", organizationId],
-    queryFn: listGitlabAutomaticActionsAudit,
-    enabled: isAdmin && !!organizationId,
-  });
-  const identityAudit = useQuery({
-    queryKey: ["gitlab-identity-audit", organizationId],
-    queryFn: listGitlabIdentityTransitionAudit,
-    enabled: isAdmin && !!organizationId,
-  });
-  const memberNames = useMemo(
-    () => new Map((members.data ?? []).map((member) => [member.id, member.displayName])),
-    [members.data],
-  );
-
   const refresh = async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: connectionKey(organizationId) }),
       queryClient.invalidateQueries({ queryKey: identityKey(organizationId) }),
-      queryClient.invalidateQueries({ queryKey: ["gitlab-skipped-targets", organizationId] }),
-      queryClient.invalidateQueries({ queryKey: ["gitlab-automation-audit", organizationId] }),
-      queryClient.invalidateQueries({ queryKey: ["gitlab-identity-audit", organizationId] }),
     ]);
   };
 
@@ -146,31 +112,6 @@ function OrganizationScopedGitlabPage(props: { role: string | null; organization
       addToast({ title: "GitLab connection deleted", description: "The old webhook URL no longer authenticates." });
     },
   });
-  const automation = useMutation({
-    mutationFn: (enabled: boolean) => {
-      if (!connection) throw new Error("GitLab connection is missing");
-      return setGitlabAutomaticActions(connection.id, {
-        enabled,
-        ...(enabled ? { acceptTeamWideForgeryRisk: true, reason: "settings_admin_accepted_team_risk" } : {}),
-      });
-    },
-    onSuccess: async (_result, enabled) => {
-      setConfirmAction(null);
-      await refresh();
-      addToast({ title: enabled ? "Automatic actions enabled" : "Automatic actions disabled" });
-    },
-  });
-  const assigneeMode = useMutation({
-    mutationFn: () => {
-      if (!connection) throw new Error("GitLab connection is missing");
-      return confirmGitlabAssigneeMode(connection.id);
-    },
-    onSuccess: async () => {
-      setConfirmAction(null);
-      await refresh();
-    },
-  });
-
   if (role === null || connections.isPending) return <PageStatus>Loading GitLab integration…</PageStatus>;
   if (connections.error) return <PageStatus error>{errorMessage(connections.error)}</PageStatus>;
 
@@ -201,74 +142,20 @@ function OrganizationScopedGitlabPage(props: { role: string | null; organization
       </Section>
 
       {connection ? (
-        <>
+        isAdmin ? (
           <Section
-            title="Automatic actions"
-            description="Personnel routing is off until an administrator accepts the Team-wide URL bearer risk."
+            title="GitLab account bindings"
+            description="Bind exact GitLab usernames to Team members. Reviewer, assignee, and mention events route automatically to the current delegate."
           >
-            <AutomationPanel
+            <IdentityPanel
               connection={connection}
-              isAdmin={isAdmin}
-              onToggle={() =>
-                setConfirmAction(connection.automaticActions.enabled ? "disable-automation" : "enable-automation")
-              }
+              links={identities.data ?? []}
+              members={members.data ?? []}
+              loading={identities.isPending || members.isPending}
+              onChanged={refresh}
             />
           </Section>
-          <Section
-            title="Reviewer mode"
-            description="Reviewer capability is learned from standard GitLab webhook payloads and never downgrades."
-          >
-            <ReviewerPanel
-              connection={connection}
-              isAdmin={isAdmin}
-              onConfirmAssignee={() => setConfirmAction("assignee-mode")}
-            />
-          </Section>
-          {isAdmin ? (
-            <Section
-              title="GitLab account bindings"
-              description="Administrators bind an exact GitLab username to a current Team member. No directory lookup or fuzzy matching."
-            >
-              <IdentityPanel
-                connection={connection}
-                links={identities.data ?? []}
-                members={members.data ?? []}
-                loading={identities.isPending || members.isPending}
-                onChanged={refresh}
-              />
-            </Section>
-          ) : null}
-          {isAdmin ? (
-            <Section
-              title="Recent skipped targets"
-              description="Personnel targets skipped during the last seven days; basic followed-chat cards are independent."
-            >
-              <SkippedTargets rows={skipped.data ?? []} loading={skipped.isPending} />
-            </Section>
-          ) : null}
-          {isAdmin && (audit.data?.length ?? 0) > 0 ? (
-            <Section title="Automatic-action audit">
-              <div className="divide-y divide-border">
-                {audit.data?.map((entry) => (
-                  <div key={entry.id} className="flex items-center justify-between gap-3 py-3 text-body">
-                    <span>
-                      {entry.enabled ? "Risk accepted and automatic actions enabled" : "Automatic actions disabled"}
-                      {` · ${memberNames.get(entry.actorMemberId ?? "") ?? entry.actorMemberId ?? "system"}`}
-                      {entry.reason ? ` · ${entry.reason}` : ""}
-                      {` · ${entry.instanceOrigin}`}
-                    </span>
-                    <time className="text-label text-muted-foreground">{formatDate(entry.createdAt)}</time>
-                  </div>
-                ))}
-              </div>
-            </Section>
-          ) : null}
-          {isAdmin && (identityAudit.data?.length ?? 0) > 0 ? (
-            <Section title="Identity-link audit">
-              <IdentityAudit rows={identityAudit.data ?? []} memberNames={memberNames} />
-            </Section>
-          ) : null}
-        </>
+        ) : null
       ) : null}
 
       <ConnectionEditorDialog
@@ -284,8 +171,8 @@ function OrganizationScopedGitlabPage(props: { role: string | null; organization
       <OneTimeSecretDialog url={secretUrl} onClose={() => setSecretUrl(null)} />
       <ConfirmationDialog
         action={confirmAction}
-        pending={secretActionBusy || remove.isPending || automation.isPending || assigneeMode.isPending}
-        error={secretActionError ?? remove.error ?? automation.error ?? assigneeMode.error}
+        pending={secretActionBusy || remove.isPending}
+        error={secretActionError ?? remove.error}
         onClose={() => {
           setSecretActionError(null);
           setConfirmAction(null);
@@ -293,9 +180,6 @@ function OrganizationScopedGitlabPage(props: { role: string | null; organization
         onConfirm={() => {
           if (confirmAction === "regenerate") void runRegenerate();
           if (confirmAction === "delete") remove.mutate();
-          if (confirmAction === "enable-automation") automation.mutate(true);
-          if (confirmAction === "disable-automation") automation.mutate(false);
-          if (confirmAction === "assignee-mode") assigneeMode.mutate();
         }}
       />
     </div>
@@ -340,6 +224,15 @@ function ConnectionSummary(props: {
           Stable delivery ID:{" "}
           {connection.stableDeliveryObserved ? "Observed" : "Not observed — repeats may duplicate or be lost"}
         </span>
+        <span>GitLab version: {connection.reviewerCapability.lastObservedVersion ?? "Not observed"}</span>
+        <span>
+          Reviewer compatibility:{" "}
+          {connection.reviewerCapability.mode === "reviewers"
+            ? "Modern"
+            : connection.reviewerCapability.mode === "assignee"
+              ? "Legacy fallback"
+              : "Auto-detecting"}
+        </span>
         {connection.health.lastProcessingFailureAt ? (
           <span className="text-destructive sm:col-span-2">
             Latest processing issue: {connection.health.lastProcessingFailureCode ?? "unknown"}
@@ -352,7 +245,7 @@ function ConnectionSummary(props: {
             Regenerate URL
           </Button>
           <Button size="sm" variant="outline" onClick={props.onReplace}>
-            Replace connection
+            Change connection
           </Button>
           <Button size="sm" variant="destructive" onClick={props.onDelete}>
             Delete
@@ -360,80 +253,9 @@ function ConnectionSummary(props: {
         </div>
       ) : null}
       <p className="m-0 text-caption text-muted-foreground">
-        Regenerating invalidates the old URL immediately. Replace or delete clears old entity follows and identity
+        Regenerating invalidates the old URL immediately. Change or delete clears old entity follows and identity
         routing; update every GitLab-side hook manually.
       </p>
-    </div>
-  );
-}
-
-function AutomationPanel(props: { connection: GitlabConnectionSummary; isAdmin: boolean; onToggle: () => void }) {
-  return (
-    <div className="space-y-3 py-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="m-0 text-body font-medium">
-            {props.connection.automaticActions.enabled ? "Enabled" : "Disabled"}
-          </p>
-          <p className="m-0 text-label text-muted-foreground">
-            Basic cards to explicitly followed chats do not require this switch.
-          </p>
-        </div>
-        {props.isAdmin ? (
-          <Button
-            size="sm"
-            variant={props.connection.automaticActions.enabled ? "outline" : "default"}
-            onClick={props.onToggle}
-          >
-            {props.connection.automaticActions.enabled ? "Disable" : "Review risk and enable"}
-          </Button>
-        ) : null}
-      </div>
-      <div className="flex gap-2 rounded-[var(--radius-panel)] bg-destructive/10 p-3 text-label text-destructive">
-        <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />
-        <span>
-          The webhook URL is the only ingress credential. Anyone who learns it can forge reviewer, assignee, mention, or
-          actor fields and affect members and agents across this Team.
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function ReviewerPanel(props: {
-  connection: GitlabConnectionSummary;
-  isAdmin: boolean;
-  onConfirmAssignee: () => void;
-}) {
-  const capability = props.connection.reviewerCapability;
-  return (
-    <div className="space-y-3 py-4 text-body">
-      <p className="m-0">
-        <span className="font-medium">Current mode:</span> {capability.mode}
-      </p>
-      {capability.mode === "unknown" ? (
-        <p className="m-0 text-label text-muted-foreground">
-          No standard reviewers array has been observed. Automatic review routing remains off unless an admin explicitly
-          confirms legacy assignee semantics.
-        </p>
-      ) : null}
-      {capability.mode === "reviewers" ? (
-        <p className="m-0 text-label text-muted-foreground">
-          Standard reviewers payload observed. Missing or malformed reviewer fields now fail closed and never fall back
-          to assignee.
-        </p>
-      ) : null}
-      {capability.lastSchemaAnomalyAt ? (
-        <p className="m-0 text-label text-destructive">
-          Schema anomaly: {capability.lastSchemaAnomalyCode ?? "reviewer payload incompatible"} ·{" "}
-          {formatDate(capability.lastSchemaAnomalyAt)}
-        </p>
-      ) : null}
-      {props.isAdmin && capability.mode === "unknown" ? (
-        <Button size="sm" variant="outline" onClick={props.onConfirmAssignee}>
-          Use legacy assignee as reviewer
-        </Button>
-      ) : null}
     </div>
   );
 }
@@ -448,10 +270,7 @@ function IdentityPanel(props: {
   const { addToast } = useToast();
   const [membershipId, setMembershipId] = useState("");
   const [username, setUsername] = useState("");
-  const [lifecycleConfirmation, setLifecycleConfirmation] = useState<{
-    link: GitlabIdentityLinkSummary;
-    action: "suspend" | "revoke";
-  } | null>(null);
+  const [removeConfirmation, setRemoveConfirmation] = useState<GitlabIdentityLinkSummary | null>(null);
   const queryClient = useQueryClient();
   const create = useMutation({
     mutationFn: () => createGitlabIdentityLink({ connectionId: props.connection.id, membershipId, username }),
@@ -463,10 +282,9 @@ function IdentityPanel(props: {
     },
   });
   const transition = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "suspend" | "revoke" | "reconfirm" }) => {
-      if (action === "suspend") return suspendGitlabIdentityLink(id);
-      if (action === "revoke") return revokeGitlabIdentityLink(id);
-      return reconfirmGitlabIdentityLink(id);
+    mutationFn: async ({ id, action }: { id: string; action: "remove" | "reconfirm" }) => {
+      if (action === "remove") await removeGitlabIdentityLink(id);
+      else await reconfirmGitlabIdentityLink(id);
     },
     onSuccess: async () => {
       await props.onChanged();
@@ -477,6 +295,9 @@ function IdentityPanel(props: {
     () => new Map(props.members.map((member) => [member.id, member.displayName])),
     [props.members],
   );
+  const visibleLinks = useMemo(() => {
+    return props.links.filter((link) => link.connectionId === props.connection.id);
+  }, [props.connection.id, props.links]);
   if (props.loading) return <EmptyRow>Loading account bindings…</EmptyRow>;
   return (
     <div className="space-y-4 py-4">
@@ -520,31 +341,19 @@ function IdentityPanel(props: {
       </form>
       {create.error ? <ErrorText error={create.error} /> : null}
       <div className="divide-y divide-border">
-        {props.links.length === 0 ? (
+        {visibleLinks.length === 0 ? (
           <p className="m-0 py-3 text-label text-muted-foreground">No usernames are bound.</p>
         ) : (
-          props.links.map((link) => (
+          visibleLinks.map((link) => (
             <div key={link.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
               <div>
                 <p className="m-0 text-body">
                   <span className="font-medium">{memberNames.get(link.membershipId) ?? "Former member"}</span> · @
                   {link.displayUsername}
                 </p>
-                <p className="m-0 text-label text-muted-foreground">
-                  {link.state}
-                  {link.stateReason ? ` · ${link.stateReason}` : ""}
-                </p>
+                <p className="m-0 text-label text-muted-foreground">{link.state}</p>
               </div>
               <div className="flex gap-2">
-                {link.state === "active" ? (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => setLifecycleConfirmation({ link, action: "suspend" })}
-                  >
-                    Suspend
-                  </Button>
-                ) : null}
                 {link.state === "suspended" && link.connectionId === props.connection.id ? (
                   <Button
                     size="xs"
@@ -554,15 +363,9 @@ function IdentityPanel(props: {
                     Reconfirm
                   </Button>
                 ) : null}
-                {link.state !== "revoked" ? (
-                  <Button
-                    size="xs"
-                    variant="destructive"
-                    onClick={() => setLifecycleConfirmation({ link, action: "revoke" })}
-                  >
-                    Revoke
-                  </Button>
-                ) : null}
+                <Button size="xs" variant="destructive" onClick={() => setRemoveConfirmation(link)}>
+                  Remove
+                </Button>
               </div>
             </div>
           ))
@@ -570,40 +373,36 @@ function IdentityPanel(props: {
       </div>
       {transition.error ? <ErrorText error={transition.error} /> : null}
       <Dialog
-        open={lifecycleConfirmation !== null}
+        open={removeConfirmation !== null}
         onOpenChange={(open) => {
-          if (!open) setLifecycleConfirmation(null);
+          if (!open) setRemoveConfirmation(null);
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>
-              {lifecycleConfirmation?.action === "revoke" ? "Revoke" : "Suspend"} @
-              {lifecycleConfirmation?.link.displayUsername}?
-            </DialogTitle>
+            <DialogTitle>Remove @{removeConfirmation?.displayUsername}?</DialogTitle>
             <DialogDescription>
-              {lifecycleConfirmation?.action === "revoke"
-                ? "Revocation is terminal. The old link cannot be reactivated; binding the username again creates a new audited link."
-                : "Personnel routing for this username stops immediately. GitLab cards are silent and do not wake agents. An administrator may reconfirm the link later."}
+              This removes the account binding and stops future personnel routing. A wake already accepted into the
+              Inbox may still be delivered once.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setLifecycleConfirmation(null)}>
+            <Button type="button" variant="outline" onClick={() => setRemoveConfirmation(null)}>
               Cancel
             </Button>
             <Button
               type="button"
-              variant={lifecycleConfirmation?.action === "revoke" ? "destructive" : "default"}
+              variant="destructive"
               disabled={transition.isPending}
               onClick={() => {
-                if (!lifecycleConfirmation) return;
+                if (!removeConfirmation) return;
                 transition.mutate(
-                  { id: lifecycleConfirmation.link.id, action: lifecycleConfirmation.action },
-                  { onSuccess: () => setLifecycleConfirmation(null) },
+                  { id: removeConfirmation.id, action: "remove" },
+                  { onSuccess: () => setRemoveConfirmation(null) },
                 );
               }}
             >
-              {lifecycleConfirmation?.action === "revoke" ? "Revoke permanently" : "Suspend"}
+              Remove binding
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -611,54 +410,6 @@ function IdentityPanel(props: {
     </div>
   );
 }
-
-function SkippedTargets(props: { rows: Awaited<ReturnType<typeof listGitlabSkippedTargets>>; loading: boolean }) {
-  if (props.loading) return <EmptyRow>Loading skipped targets…</EmptyRow>;
-  if (props.rows.length === 0) return <EmptyRow>No skipped personnel targets in the last seven days.</EmptyRow>;
-  return (
-    <div className="divide-y divide-border">
-      {props.rows.map((row) => (
-        <div key={row.id} className="grid gap-1 py-3 text-label sm:grid-cols-[1fr_1fr_auto]">
-          <span>
-            @{row.externalUsername} · {row.targetClass} · {row.entityKey}
-          </span>
-          <span className="text-muted-foreground">{SKIP_LABELS[row.reason]}</span>
-          <time className="text-muted-foreground">{formatDate(row.createdAt)}</time>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function IdentityAudit(props: { rows: GitlabIdentityTransitionAudit[]; memberNames: Map<string, string> }) {
-  return (
-    <div className="divide-y divide-border">
-      {props.rows.map((row) => (
-        <div key={row.id} className="grid gap-1 py-3 text-label sm:grid-cols-[1fr_1fr_auto]">
-          <span>
-            @{row.displayUsername} · {row.transition}
-          </span>
-          <span className="text-muted-foreground">
-            {props.memberNames.get(row.actorMemberId ?? "") ?? row.actorMemberId ?? "system"}
-            {row.reason ? ` · ${row.reason}` : ""} · {row.instanceOrigin}
-          </span>
-          <time className="text-muted-foreground">{formatDate(row.createdAt)}</time>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const SKIP_LABELS: Record<GitlabSkippedTargetReason, string> = {
-  automatic_actions_disabled: "Automatic actions disabled",
-  reviewer_mode_unconfirmed: "Reviewer mode unconfirmed",
-  review_target_schema_anomaly: "Reviewer payload anomaly",
-  identity_not_found: "Username not bound",
-  identity_not_active: "Binding not active",
-  membership_not_active: "Member not active",
-  delegate_missing: "No delegate configured",
-  delegate_ineligible: "Delegate not eligible",
-};
 
 function ConnectionEditorDialog(props: {
   mode: ConnectionDialog;
@@ -775,7 +526,8 @@ function OneTimeSecretDialog(props: { url: string | null; onClose: () => void })
         <DialogHeader>
           <DialogTitle>Copy the webhook URL now</DialogTitle>
           <DialogDescription>
-            This secret is shown once. Closing this dialog permanently removes it from the UI.
+            This secret is shown once. Anyone holding it can forge personnel events that route and wake Team agents, so
+            configure it only in trusted GitLab webhooks. Closing this dialog permanently removes it from the UI.
           </DialogDescription>
         </DialogHeader>
         <div
@@ -821,25 +573,6 @@ const CONFIRM_CONTENT: Record<
     description: "The URL, entity follows, and active identity routing are removed. Historical messages remain.",
     confirm: "Delete",
     destructive: true,
-  },
-  "enable-automation": {
-    title: "Accept Team-wide URL bearer risk?",
-    description:
-      "Anyone who learns the URL can forge personnel fields, create or reuse personnel chats, and write cards across this Team. GitLab cards are currently silent and do not wake agents. Enable only if the whole Team accepts that boundary.",
-    confirm: "Accept risk and enable",
-    destructive: true,
-  },
-  "disable-automation": {
-    title: "Disable automatic actions?",
-    description:
-      "Personnel routing stops immediately. Basic cards to explicitly followed chats continue; GitLab cards do not wake agents.",
-    confirm: "Disable",
-  },
-  "assignee-mode": {
-    title: "Use assignee as legacy reviewer?",
-    description:
-      "Only confirm this when your GitLab payload does not have a reviewers array and your Team intentionally uses MR assignee as the review request. Observing reviewers later permanently upgrades the connection.",
-    confirm: "Confirm assignee mode",
   },
 };
 

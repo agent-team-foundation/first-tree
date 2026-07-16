@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
-import { gitlabAutomaticActionsAudit } from "../db/schema/gitlab-automatic-actions-audit.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
-import { gitlabIdentityTransitionAudit } from "../db/schema/gitlab-identity-transition-audit.js";
-import { gitlabSkippedTargetAudit } from "../db/schema/gitlab-skipped-target-audit.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -15,19 +13,19 @@ import { processedEvents } from "../db/schema/processed-events.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import {
-  confirmGitlabAssigneeMode,
   createGitlabConnection,
   deleteGitlabConnection,
   getGitlabConnectionSummary,
+  parseDeclaredGitlabVersion,
+  regenerateGitlabConnectionBearer,
   replaceGitlabConnection,
-  setGitlabAutomaticActions,
 } from "../services/gitlab-connections.js";
 import { declareGitlabEntityFollow } from "../services/gitlab-entity-follow.js";
 import {
   createGitlabIdentityLink,
   reconfirmGitlabIdentityLink,
-  revokeGitlabIdentityLink,
-  suspendGitlabIdentityLink,
+  removeGitlabIdentityLink,
+  suspendGitlabLinksForMembership,
 } from "../services/gitlab-identities.js";
 import { applyGitlabPersonnelEvidence, normalizeGitlabWebhook } from "../services/gitlab-webhook.js";
 import { pollInbox } from "../services/inbox.js";
@@ -67,13 +65,14 @@ function mergeRequestPayload(input: {
   };
 }
 
-async function postMr(app: App, bearer: string, body: object, stableId?: string) {
+async function postMr(app: App, bearer: string, body: object, stableId?: string, userAgent = "GitLab/15.3.0") {
   return app.inject({
     method: "POST",
     url: `/api/v1/webhooks/gitlab/${bearer}`,
     headers: {
       "content-type": "application/json",
       "x-gitlab-event": "Merge Request Hook",
+      "user-agent": userAgent,
       ...(stableId ? { "idempotency-key": stableId } : {}),
     },
     payload: JSON.stringify(body),
@@ -104,7 +103,6 @@ describe("GitLab Stage 3 personnel routing", () => {
       connectionId: connection.connectionId,
       membershipId: admin.memberId,
       username: "Reviewer.One",
-      actorMemberId: admin.memberId,
     });
     return { admin, delegate, connection, link };
   }
@@ -127,7 +125,6 @@ describe("GitLab Stage 3 personnel routing", () => {
       }),
     );
     expect(applyGitlabPersonnelEvidence(opened, "unknown")).toMatchObject({
-      observeReviewers: true,
       schemaAnomalyCode: null,
       candidates: [
         { externalUsername: "Reviewer.One", targetClass: "reviewer" },
@@ -137,21 +134,19 @@ describe("GitLab Stage 3 personnel routing", () => {
 
     const empty = normalize(mergeRequestPayload({ reviewers: [], assignees: [{ username: "Owner.One" }] }));
     expect(applyGitlabPersonnelEvidence(empty, "unknown")).toMatchObject({
-      observeReviewers: true,
       candidates: [{ externalUsername: "Owner.One", targetClass: "assignee" }],
     });
 
     const legacy = normalize(mergeRequestPayload({ assignees: [{ username: "Reviewer.One" }] }));
     expect(applyGitlabPersonnelEvidence(legacy, "unknown")).toMatchObject({
-      candidates: [{ externalUsername: "Reviewer.One", targetClass: "assignee" }],
-      skippedBeforeIdentity: [{ targetClass: "reviewer", reason: "reviewer_mode_unconfirmed" }],
+      candidates: [{ externalUsername: "Reviewer.One", targetClass: "reviewer" }],
     });
     expect(applyGitlabPersonnelEvidence(legacy, "assignee")).toMatchObject({
       candidates: [{ externalUsername: "Reviewer.One", targetClass: "reviewer" }],
     });
     expect(applyGitlabPersonnelEvidence(legacy, "reviewers")).toMatchObject({
       candidates: [{ externalUsername: "Reviewer.One", targetClass: "assignee" }],
-      schemaAnomalyCode: "reviewers_missing_after_capability",
+      schemaAnomalyCode: null,
     });
 
     const update = normalize(
@@ -181,7 +176,6 @@ describe("GitLab Stage 3 personnel routing", () => {
       }),
     );
     expect(applyGitlabPersonnelEvidence(customTemplate, "reviewers")).toMatchObject({
-      observeReviewers: true,
       candidates: [{ externalUsername: "Owner.Two", targetClass: "assignee" }],
       schemaAnomalyCode: "reviewers_delta_missing",
     });
@@ -195,13 +189,12 @@ describe("GitLab Stage 3 personnel routing", () => {
         }),
       );
       expect(applyGitlabPersonnelEvidence(nonTargetAction, "unknown")).toMatchObject({
-        observeReviewers: true,
         candidates: [],
       });
     }
   });
 
-  it("enforces exact identity uniqueness and terminal lifecycle semantics", async () => {
+  it("enforces exact current-binding uniqueness, in-place reconfirmation, and removal", async () => {
     const app = getApp();
     const first = await setupTarget(app);
     await expect(
@@ -210,9 +203,8 @@ describe("GitLab Stage 3 personnel routing", () => {
         connectionId: first.connection.connectionId,
         membershipId: first.admin.memberId,
         username: "another.username",
-        actorMemberId: first.admin.memberId,
       }),
-    ).rejects.toThrow("already has an active link");
+    ).rejects.toThrow("already has a link");
     const secondMember = await createTestAdmin(app, { username: `gitlab-second-${randomUUID().slice(0, 8)}` });
     await expect(
       createGitlabIdentityLink(app.db, {
@@ -220,63 +212,33 @@ describe("GitLab Stage 3 personnel routing", () => {
         connectionId: first.connection.connectionId,
         membershipId: secondMember.memberId,
         username: "reviewer.one",
-        actorMemberId: first.admin.memberId,
       }),
-    ).rejects.toThrow("already has an active link");
+    ).rejects.toThrow("already has a link");
 
-    const suspended = await suspendGitlabIdentityLink(app.db, {
+    await suspendGitlabLinksForMembership(app.db, first.admin.memberId);
+    const [suspended] = await app.db
+      .select()
+      .from(gitlabIdentityLinks)
+      .where(eq(gitlabIdentityLinks.id, first.link.id));
+    expect(suspended?.state).toBe("suspended");
+    const reconfirmed = await reconfirmGitlabIdentityLink(app.db, {
       organizationId: first.admin.organizationId,
       linkId: first.link.id,
-      actorMemberId: first.admin.memberId,
     });
-    expect(suspended.state).toBe("suspended");
-    expect(
-      (
-        await reconfirmGitlabIdentityLink(app.db, {
-          organizationId: first.admin.organizationId,
-          linkId: first.link.id,
-          actorMemberId: first.admin.memberId,
-        })
-      ).state,
-    ).toBe("active");
-    expect(
-      (
-        await revokeGitlabIdentityLink(app.db, {
-          organizationId: first.admin.organizationId,
-          linkId: first.link.id,
-          actorMemberId: first.admin.memberId,
-        })
-      ).state,
-    ).toBe("revoked");
-    await expect(
-      reconfirmGitlabIdentityLink(app.db, {
-        organizationId: first.admin.organizationId,
-        linkId: first.link.id,
-        actorMemberId: first.admin.memberId,
-      }),
-    ).rejects.toThrow("cannot be reactivated");
-    const transitions = await app.db
-      .select()
-      .from(gitlabIdentityTransitionAudit)
-      .where(eq(gitlabIdentityTransitionAudit.identityLinkId, first.link.id))
-      .orderBy(gitlabIdentityTransitionAudit.createdAt);
-    expect(transitions.map((row) => row.transition)).toEqual(["created", "suspended", "reconfirmed", "revoked"]);
-    expect(transitions.find((row) => row.transition === "suspended")).toMatchObject({
-      actorMemberId: first.admin.memberId,
-      reason: "admin_suspended",
+    expect(reconfirmed).toMatchObject({ state: "active", membershipId: first.admin.memberId });
+    expect(reconfirmed.id).toBe(first.link.id);
+    await removeGitlabIdentityLink(app.db, {
+      organizationId: first.admin.organizationId,
+      linkId: reconfirmed.id,
     });
+    expect(
+      await app.db.select().from(gitlabIdentityLinks).where(eq(gitlabIdentityLinks.id, first.link.id)),
+    ).toHaveLength(0);
   });
 
   it("latches reviewer capability without routing personnel on non-target MR actions", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: setup.connection.connectionId,
-      organizationId: setup.admin.organizationId,
-      actorMemberId: setup.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
-    });
     for (const [index, action] of ["close", "reopen", "merge", null].entries()) {
       const response = await postMr(
         app,
@@ -299,12 +261,6 @@ describe("GitLab Stage 3 personnel routing", () => {
         .from(gitlabEntityChatMappings)
         .where(eq(gitlabEntityChatMappings.boundVia, "identity_target")),
     ).toHaveLength(0);
-    expect(
-      await app.db
-        .select()
-        .from(gitlabSkippedTargetAudit)
-        .where(eq(gitlabSkippedTargetAudit.organizationId, setup.admin.organizationId)),
-    ).toHaveLength(0);
   });
 
   it("suspends links on member leave and requires admin reconfirmation after membership restoration", async () => {
@@ -313,7 +269,7 @@ describe("GitLab Stage 3 personnel routing", () => {
     await createTestAdmin(app, { username: `gitlab-fallback-${randomUUID().slice(0, 8)}` });
     await deactivateMembership(app.db, setup.admin.memberId, MEMBER_STATUSES.LEFT);
     const [leftLink] = await app.db.select().from(gitlabIdentityLinks).where(eq(gitlabIdentityLinks.id, setup.link.id));
-    expect(leftLink).toMatchObject({ state: "suspended", stateReason: "member_left" });
+    expect(leftLink).toMatchObject({ state: "suspended" });
 
     await app.db.transaction(async (tx) => {
       await reactivateMembership(
@@ -332,43 +288,115 @@ describe("GitLab Stage 3 personnel routing", () => {
       .from(gitlabIdentityLinks)
       .where(eq(gitlabIdentityLinks.id, setup.link.id));
     expect(stillSuspended?.state).toBe("suspended");
-    expect(
-      (
-        await reconfirmGitlabIdentityLink(app.db, {
-          organizationId: setup.admin.organizationId,
-          linkId: setup.link.id,
-          actorMemberId: setup.admin.memberId,
-        })
-      ).state,
-    ).toBe("active");
-    const history = await app.db
-      .select()
-      .from(gitlabIdentityTransitionAudit)
-      .where(eq(gitlabIdentityTransitionAudit.identityLinkId, setup.link.id))
-      .orderBy(gitlabIdentityTransitionAudit.createdAt);
-    expect(history.map((row) => row.transition)).toEqual(["created", "member_left", "reconfirmed"]);
-    expect(history.find((row) => row.transition === "member_left")?.actorMemberId).toBe(setup.admin.memberId);
+    const reconfirmed = await reconfirmGitlabIdentityLink(app.db, {
+      organizationId: setup.admin.organizationId,
+      linkId: setup.link.id,
+    });
+    expect(reconfirmed).toMatchObject({ state: "active", membershipId: setup.admin.memberId });
+    expect(reconfirmed.id).toBe(setup.link.id);
   });
 
-  it("attributes admin member removal in the identity transition audit", async () => {
+  it("reconfirms after delegate changes without reactivating historical mappings", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
-    const removingAdmin = await createTestAdmin(app, {
-      username: `gitlab-removing-admin-${randomUUID().slice(0, 8)}`,
+    const iid = 86;
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+
+    const nextDelegate = await createAgent(app.db, {
+      name: `next-review-agent-${randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Next Review Agent",
+      managerId: setup.admin.memberId,
+      organizationId: setup.admin.organizationId,
     });
-    await deleteMember(app.db, setup.admin.memberId, setup.admin.organizationId, removingAdmin.memberId);
-    const history = await app.db
-      .select()
-      .from(gitlabIdentityTransitionAudit)
-      .where(eq(gitlabIdentityTransitionAudit.identityLinkId, setup.link.id))
-      .orderBy(gitlabIdentityTransitionAudit.createdAt);
-    expect(history.find((row) => row.transition === "member_removed")).toMatchObject({
-      actorMemberId: removingAdmin.memberId,
-      reason: "member_removed",
+    await app.db
+      .update(agents)
+      .set({ delegateMention: nextDelegate.uuid })
+      .where(eq(agents.uuid, setup.admin.humanAgentUuid));
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    const mappingScope = and(
+      eq(gitlabEntityChatMappings.connectionId, setup.connection.connectionId),
+      eq(gitlabEntityChatMappings.identityLinkId, setup.link.id),
+      eq(gitlabEntityChatMappings.entityIid, iid),
+    );
+    const beforeLeave = await app.db.select().from(gitlabEntityChatMappings).where(mappingScope);
+    expect(beforeLeave).toHaveLength(2);
+    expect(beforeLeave.filter((row) => row.active)).toMatchObject([{ delegateAgentId: nextDelegate.uuid }]);
+    expect(beforeLeave.find((row) => row.delegateAgentId === setup.delegate.uuid)?.active).toBe(false);
+
+    await createTestAdmin(app, { username: `gitlab-reconfirm-fallback-${randomUUID().slice(0, 8)}` });
+    await deactivateMembership(app.db, setup.admin.memberId, MEMBER_STATUSES.LEFT);
+    expect((await app.db.select().from(gitlabEntityChatMappings).where(mappingScope)).every((row) => !row.active)).toBe(
+      true,
+    );
+    await app.db.transaction(async (tx) => {
+      await reactivateMembership(
+        tx,
+        {
+          id: setup.admin.memberId,
+          agentId: setup.admin.humanAgentUuid,
+          organizationId: setup.admin.organizationId,
+          status: "left",
+        },
+        { displayName: "Test Admin", username: setup.admin.username },
+      );
     });
+
+    await expect(
+      reconfirmGitlabIdentityLink(app.db, {
+        organizationId: setup.admin.organizationId,
+        linkId: setup.link.id,
+      }),
+    ).resolves.toMatchObject({ id: setup.link.id, state: "active" });
+    expect((await app.db.select().from(gitlabEntityChatMappings).where(mappingScope)).every((row) => !row.active)).toBe(
+      true,
+    );
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    const afterReroute = await app.db.select().from(gitlabEntityChatMappings).where(mappingScope);
+    expect(afterReroute).toHaveLength(2);
+    expect(afterReroute.filter((row) => row.active)).toMatchObject([{ delegateAgentId: nextDelegate.uuid }]);
+    expect(afterReroute.find((row) => row.delegateAgentId === setup.delegate.uuid)?.active).toBe(false);
   });
 
-  it("keeps identity and audit mutation surfaces admin-only", async () => {
+  it("suspends the current binding on admin member removal", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    await createTestAdmin(app, {
+      username: `gitlab-removing-admin-${randomUUID().slice(0, 8)}`,
+    });
+    await deleteMember(app.db, setup.admin.memberId, setup.admin.organizationId);
+    const [link] = await app.db.select().from(gitlabIdentityLinks).where(eq(gitlabIdentityLinks.id, setup.link.id));
+    expect(link).toMatchObject({ state: "suspended" });
+  });
+
+  it("keeps identity mutation surfaces admin-only and omits manual suspension", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
     await app.db.update(members).set({ role: "member" }).where(eq(members.id, setup.admin.memberId));
@@ -385,38 +413,17 @@ describe("GitLab Stage 3 personnel routing", () => {
       payload: {},
     });
     expect(suspend.statusCode).toBe(404);
-    const audit = await app.inject({
-      method: "GET",
-      url: `/api/v1/orgs/${setup.admin.organizationId}/gitlab-connections/automatic-actions-audit`,
+    const remove = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/gitlab-identity-links/${setup.link.id}`,
       headers: { authorization: `Bearer ${setup.admin.accessToken}` },
     });
-    expect(audit.statusCode).toBe(403);
-    const identityAudit = await app.inject({
-      method: "GET",
-      url: `/api/v1/orgs/${setup.admin.organizationId}/gitlab-identity-links/audit`,
-      headers: { authorization: `Bearer ${setup.admin.accessToken}` },
-    });
-    expect(identityAudit.statusCode).toBe(403);
+    expect(remove.statusCode).toBe(404);
   });
 
-  it("requires Team risk acceptance, routes a reviewer once per chat without wake, and keeps review source pending", async () => {
+  it("routes a reviewer once per chat, wakes its delegate, and keeps source review pending", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
-    await expect(
-      setGitlabAutomaticActions(app.db, {
-        connectionId: setup.connection.connectionId,
-        organizationId: setup.admin.organizationId,
-        actorMemberId: setup.admin.memberId,
-        enabled: true,
-      }),
-    ).rejects.toThrow("accepting the Team-wide");
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: setup.connection.connectionId,
-      organizationId: setup.admin.organizationId,
-      actorMemberId: setup.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
-    });
     const stableId = `stage3-${randomUUID()}`;
     const first = await postMr(
       app,
@@ -476,32 +483,42 @@ describe("GitLab Stage 3 personnel routing", () => {
     if (!inboxId) throw new Error("delegate inbox missing");
     expect(
       await app.db
-        .select({ notify: inboxEntries.notify, status: inboxEntries.status })
+        .select({
+          notify: inboxEntries.notify,
+          status: inboxEntries.status,
+        })
         .from(inboxEntries)
         .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.messageId, card.id))),
-    ).toEqual([{ notify: false, status: "pending" }]);
-    await revokeGitlabIdentityLink(app.db, {
+    ).toEqual([
+      {
+        notify: true,
+        status: "pending",
+      },
+    ]);
+    expect(
+      await app.db
+        .select()
+        .from(agentChatSessions)
+        .where(and(eq(agentChatSessions.agentId, setup.delegate.uuid), eq(agentChatSessions.chatId, mapping.chatId))),
+    ).toHaveLength(1);
+    await removeGitlabIdentityLink(app.db, {
       organizationId: setup.admin.organizationId,
       linkId: setup.link.id,
-      actorMemberId: setup.admin.memberId,
     });
-    expect((await pollInbox(app.db, inboxId, 20)).some((row) => row.messageId === card.id)).toBe(false);
+    expect((await pollInbox(app.db, inboxId, 20)).some((row) => row.messageId === card.id)).toBe(true);
     expect((await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).reviewerCapability.mode).toBe(
       "reviewers",
     );
-    expect(await app.db.select().from(gitlabAutomaticActionsAudit)).toHaveLength(1);
+    const [queued] = await app.db
+      .select({ notify: inboxEntries.notify, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.messageId, card.id)));
+    expect(queued).toEqual({ notify: true, status: "delivered" });
   });
 
   it("keeps reviewer priority when an existing identity line is also assigned", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: setup.connection.connectionId,
-      organizationId: setup.admin.organizationId,
-      actorMemberId: setup.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
-    });
 
     const response = await postMr(
       app,
@@ -548,13 +565,6 @@ describe("GitLab Stage 3 personnel routing", () => {
   ])("prunes actor echo from an explicit $boundVia follow", async ({ boundVia, declaredBy }) => {
     const app = getApp();
     const setup = await setupTarget(app);
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: setup.connection.connectionId,
-      organizationId: setup.admin.organizationId,
-      actorMemberId: setup.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
-    });
     const iid = declaredBy === "human" ? 61 : 62;
     const chat = await createChat(app.db, setup.admin.humanAgentUuid, {
       type: "group",
@@ -607,13 +617,6 @@ describe("GitLab Stage 3 personnel routing", () => {
   it("revalidates a persisted identity routing line before every delivery", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: setup.connection.connectionId,
-      organizationId: setup.admin.organizationId,
-      actorMemberId: setup.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
-    });
     expect(
       (await postMr(app, setup.connection.bearer, mergeRequestPayload({ reviewers: [{ username: "Reviewer.One" }] })))
         .statusCode,
@@ -626,7 +629,7 @@ describe("GitLab Stage 3 personnel routing", () => {
     expect(await app.db.select().from(messages).where(eq(messages.source, "gitlab"))).toHaveLength(1);
   });
 
-  it("keeps basic processing live while automation is off and records actionable skipped reasons", async () => {
+  it("routes personnel automatically when a configured webhook arrives", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
     const response = await postMr(
@@ -639,67 +642,127 @@ describe("GitLab Stage 3 personnel routing", () => {
       .select()
       .from(gitlabEntityChatMappings)
       .where(eq(gitlabEntityChatMappings.boundVia, "identity_target"));
-    expect(identityMappings).toHaveLength(0);
-    const skipped = await app.db
-      .select()
-      .from(gitlabSkippedTargetAudit)
-      .where(eq(gitlabSkippedTargetAudit.organizationId, setup.admin.organizationId));
-    expect(skipped).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ reason: "automatic_actions_disabled", externalUsername: "Reviewer.One" }),
-      ]),
+    expect(identityMappings).toHaveLength(1);
+  });
+
+  it("uses declared GitLab version for legacy fallback and never downgrades modern mode", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    expect(parseDeclaredGitlabVersion("GitLab/15.2.9")).toMatchObject({ supportsReviewerWebhooks: false });
+    expect(parseDeclaredGitlabVersion("GitLab/15.3.0")).toMatchObject({ supportsReviewerWebhooks: true });
+    expect(parseDeclaredGitlabVersion("curl/8.0")).toBeNull();
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid: 80, assignees: [{ username: "Reviewer.One" }] }),
+          undefined,
+          "GitLab/15.2.9",
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect(await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).toMatchObject({
+      reviewerCapability: { mode: "assignee", lastObservedVersion: "15.2.9" },
+    });
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid: 81, reviewers: [] }),
+          undefined,
+          "GitLab/15.3.0",
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect(await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).toMatchObject({
+      reviewerCapability: { mode: "reviewers", lastObservedVersion: "15.3.0" },
+    });
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid: 82, assignees: [{ username: "Reviewer.One" }] }),
+          undefined,
+          "GitLab/15.2.9",
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect((await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).reviewerCapability.mode).toBe(
+      "reviewers",
     );
   });
 
-  it("uses explicit admin confirmation for legacy assignee and never downgrades after reviewers are observed", async () => {
+  it("clears bearer-scoped reviewer compatibility on regeneration and learns it again", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
     expect(
       (
-        await confirmGitlabAssigneeMode(app.db, {
-          connectionId: setup.connection.connectionId,
-          organizationId: setup.admin.organizationId,
-          actorMemberId: setup.admin.memberId,
-        })
-      ).reviewerCapability.mode,
-    ).toBe("assignee");
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: setup.connection.connectionId,
-      organizationId: setup.admin.organizationId,
-      actorMemberId: setup.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid: 84, reviewers: [] }),
+          undefined,
+          "GitLab/17.11.2",
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect(await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).toMatchObject({
+      reviewerCapability: { mode: "reviewers", lastObservedVersion: "17.11.2" },
+    });
+
+    const regenerated = await regenerateGitlabConnectionBearer(
+      app.db,
+      setup.connection.connectionId,
+      setup.admin.memberId,
+    );
+    expect(await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).toMatchObject({
+      reviewerCapability: {
+        mode: "unknown",
+        lastObservedVersion: null,
+        lastSchemaAnomalyAt: null,
+        lastSchemaAnomalyCode: null,
+      },
     });
     expect(
-      (await postMr(app, setup.connection.bearer, mergeRequestPayload({ assignees: [{ username: "Reviewer.One" }] })))
-        .statusCode,
+      (
+        await postMr(
+          app,
+          regenerated.bearer,
+          mergeRequestPayload({ iid: 85, reviewers: [] }),
+          undefined,
+          "GitLab/15.3.0",
+        )
+      ).statusCode,
     ).toBe(200);
-    expect((await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).reviewerCapability.mode).toBe(
-      "assignee",
-    );
-    expect((await postMr(app, setup.connection.bearer, mergeRequestPayload({ reviewers: [] }))).statusCode).toBe(200);
-    expect((await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).reviewerCapability.mode).toBe(
-      "reviewers",
-    );
-    await expect(
-      confirmGitlabAssigneeMode(app.db, {
-        connectionId: setup.connection.connectionId,
-        organizationId: setup.admin.organizationId,
-        actorMemberId: setup.admin.memberId,
-      }),
-    ).rejects.toThrow("cannot downgrade");
+    expect(await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).toMatchObject({
+      reviewerCapability: { mode: "reviewers", lastObservedVersion: "15.3.0" },
+    });
   });
 
-  it("suspends identity-owned routing on connection removal while retaining the audit snapshot", async () => {
+  it("uses assignee fallback without latching mode when GitLab version is unavailable", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: setup.connection.connectionId,
-      organizationId: setup.admin.organizationId,
-      actorMemberId: setup.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
+    const response = await postMr(
+      app,
+      setup.connection.bearer,
+      mergeRequestPayload({ iid: 83, assignees: [{ username: "Reviewer.One" }] }),
+      undefined,
+      "custom-hook-client",
+    );
+    expect(response.statusCode).toBe(200);
+    expect(await getGitlabConnectionSummary(app.db, setup.connection.connectionId)).toMatchObject({
+      reviewerCapability: { mode: "unknown", lastObservedVersion: null },
     });
+    const [card] = await app.db.select().from(messages).where(eq(messages.source, "gitlab"));
+    expect(card?.content).toMatchObject({ reason: "review_requested" });
+  });
+
+  it("deletes identity-owned routing and bindings with the connection", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
     await postMr(app, setup.connection.bearer, mergeRequestPayload({ reviewers: [{ username: "Reviewer.One" }] }));
     const removed = await app.inject({
       method: "DELETE",
@@ -707,52 +770,18 @@ describe("GitLab Stage 3 personnel routing", () => {
       headers: { authorization: `Bearer ${setup.admin.accessToken}` },
     });
     expect(removed.statusCode).toBe(204);
-    const [link] = await app.db.select().from(gitlabIdentityLinks).where(eq(gitlabIdentityLinks.id, setup.link.id));
-    expect(link).toMatchObject({ state: "suspended", stateReason: "connection_removed", connectionId: null });
     expect(
-      await app.db.select().from(gitlabAutomaticActionsAudit).orderBy(gitlabAutomaticActionsAudit.createdAt),
-    ).toEqual([
-      expect.objectContaining({ enabled: true, actorMemberId: setup.admin.memberId }),
-      expect.objectContaining({
-        connectionId: setup.connection.connectionId,
-        enabled: false,
-        actorMemberId: setup.admin.memberId,
-        reason: "connection_deleted",
-      }),
-    ]);
+      await app.db.select().from(gitlabIdentityLinks).where(eq(gitlabIdentityLinks.id, setup.link.id)),
+    ).toHaveLength(0);
     expect(await app.db.select().from(gitlabEntityChatMappings)).toHaveLength(0);
-    expect(
-      await app.db
-        .select()
-        .from(gitlabIdentityTransitionAudit)
-        .where(
-          and(
-            eq(gitlabIdentityTransitionAudit.identityLinkId, setup.link.id),
-            eq(gitlabIdentityTransitionAudit.transition, "connection_removed"),
-          ),
-        ),
-    ).toEqual([
-      expect.objectContaining({
-        connectionId: setup.connection.connectionId,
-        actorMemberId: setup.admin.memberId,
-        instanceOrigin: "https://gitlab.internal",
-      }),
-    ]);
     expect(
       await app.db.select().from(gitlabConnections).where(eq(gitlabConnections.id, setup.connection.connectionId)),
     ).toHaveLength(0);
   });
 
-  it("closes automatic-action audit on replace without inventing withdrawals for disabled connections", async () => {
+  it("replaces the connection without retaining the old identity binding", async () => {
     const app = getApp();
     const enabled = await setupTarget(app);
-    await setGitlabAutomaticActions(app.db, {
-      connectionId: enabled.connection.connectionId,
-      organizationId: enabled.admin.organizationId,
-      actorMemberId: enabled.admin.memberId,
-      enabled: true,
-      acceptTeamWideForgeryRisk: true,
-    });
     const replacement = await replaceGitlabConnection(app.db, {
       expectedConnectionId: enabled.connection.connectionId,
       organizationId: enabled.admin.organizationId,
@@ -760,22 +789,9 @@ describe("GitLab Stage 3 personnel routing", () => {
       displayName: "Replacement GitLab",
       instanceOrigin: "https://gitlab.replacement",
     });
-    const expectedAudit = [
-      expect.objectContaining({ enabled: true, connectionId: enabled.connection.connectionId }),
-      expect.objectContaining({
-        enabled: false,
-        connectionId: enabled.connection.connectionId,
-        actorMemberId: enabled.admin.memberId,
-        reason: "connection_replaced",
-      }),
-    ];
     expect(
-      await app.db.select().from(gitlabAutomaticActionsAudit).orderBy(gitlabAutomaticActionsAudit.createdAt),
-    ).toEqual(expectedAudit);
-
-    await deleteGitlabConnection(app.db, replacement.connectionId, enabled.admin.memberId);
-    expect(
-      await app.db.select().from(gitlabAutomaticActionsAudit).orderBy(gitlabAutomaticActionsAudit.createdAt),
-    ).toEqual(expectedAudit);
+      await app.db.select().from(gitlabIdentityLinks).where(eq(gitlabIdentityLinks.id, enabled.link.id)),
+    ).toHaveLength(0);
+    await deleteGitlabConnection(app.db, replacement.connectionId);
   });
 });
