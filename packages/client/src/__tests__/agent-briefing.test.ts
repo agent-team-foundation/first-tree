@@ -214,6 +214,13 @@ describe("buildAgentBriefing — prompt provenance sections", () => {
     expect(briefing).toContain("first-tree agent config prompt set test-agent");
     expect(briefing).toContain("Do NOT copy any of this\nmerged section into your per-agent prompt.");
 
+    // The merged blob can also embed binding-managed agent prompt overrides,
+    // which `prompt set` cannot edit — both the banner and the Source
+    // paragraph must name that class and its Cloud-managed edit path.
+    expect(briefing.match(/binding-managed agent prompt overrides/g)).toHaveLength(2);
+    expect(briefing).toMatch(/binding-managed agent prompt overrides[\s\S]{0,160}?Org Settings →\s+Resources/);
+    expect(briefing).toMatch(/binding-managed agent prompt overrides\s+\(NOT editable with `prompt set`/);
+
     // The banner documents the heading that actually renders on this path —
     // the legacy merged entry replaces the structured three-heading map.
     expect(briefing).toContain("# Agent Prompt (legacy merged) → this agent's prompt configuration");

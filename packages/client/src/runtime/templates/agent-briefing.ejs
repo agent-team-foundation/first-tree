@@ -6,9 +6,10 @@
   Where each section comes from, and where to edit it:<% if (legacyPrompt) { %>
     # Agent Prompt (legacy merged) → this agent's prompt configuration,
                       served as ONE merged blob by a First Tree server that
-                      predates per-section provenance; team prompt resources
-                      (Cloud → Org Settings → Resources, managed by team
-                      admins) and this agent's own editable prompt fragment
+                      predates per-section provenance; team prompt resources,
+                      binding-managed agent prompt overrides (both managed in
+                      Cloud → Org Settings → Resources, never via prompt
+                      set), and this agent's own editable prompt fragment
                       are indistinguishable inside it;
                       read (own fragment only):  <%- bin %> agent config prompt show <agent> --raw
                       write (own fragment only): <%- bin %> agent config prompt set <agent> -f <file>
@@ -63,9 +64,10 @@ prompt.*<% for (const row of agentPromptOverrideRows) { %>
 
 *Source: this agent's prompt configuration, served as one merged blob by a
 First Tree server that predates per-section provenance. Team prompt
-resources (managed by team admins in Cloud → Org Settings → Resources) and
-this agent's own editable prompt fragment are indistinguishable here. Read
-the editable fragment alone with
+resources (managed by team admins), binding-managed agent prompt overrides
+(NOT editable with `prompt set` — both managed in Cloud → Org Settings →
+Resources), and this agent's own editable prompt fragment are
+indistinguishable here. Read the editable fragment alone with
 `<%- bin %> agent config prompt show <%- agentId %> --raw`; replace it with
 `<%- bin %> agent config prompt set <%- agentId %>`. Do NOT copy any of this
 merged section into your per-agent prompt.*
