@@ -129,6 +129,7 @@ import { FileChip } from "../../../components/ui/file-chip.js";
 import { ImageLightbox, type LightboxImage } from "../../../components/ui/image-lightbox.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
+import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
@@ -153,6 +154,7 @@ import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
+import { applyPersistedChatRename } from "../chat-title-cache.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ParticipantsSection } from "../right-sidebar/participants-section.js";
 import { ChatSummary } from "./chat-summary.js";
@@ -1519,6 +1521,7 @@ export function ChatView({
   onShowConversations?: (() => void) | null;
 }) {
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const agentName = useAgentNameMap();
   const agentIdentity = useAgentIdentityMap();
@@ -2399,11 +2402,22 @@ export function ChatView({
   }, [renaming]);
   const renameMut = useMutation({
     mutationFn: (topic: string | null) => renameChat(chatId, topic),
-    onSuccess: () => {
+    onSuccess: (updatedChat) => {
+      // The write has succeeded, so project the persisted title into the hot
+      // detail + list caches synchronously. The trailing invalidations reconcile
+      // the full server projection without leaving the rail on the old title.
+      applyPersistedChatRename(queryClient, updatedChat);
       setRenaming(false);
+      queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       queryClient.invalidateQueries({ queryKey: ["agent-sessions", agentId] });
       queryClient.invalidateQueries({ queryKey: ["session", agentId, chatId] });
+    },
+    onError: (error) => {
+      addToast({
+        title: "Couldn't rename chat",
+        description: error instanceof Error ? error.message : "The title wasn't saved. Try again.",
+      });
     },
   });
   const commitRename = () => {
