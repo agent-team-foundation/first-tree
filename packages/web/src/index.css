@@ -512,6 +512,7 @@
   --sp-60: 15rem; /* 240px */
   --sp-70: 17.5rem; /* 280px */
   --sp-75: 18.75rem; /* 300px */
+  --sp-90: 22.5rem; /* 360px — people-picker panel width cap (mention popover + participant pickers) */
   --sp-95: 23.75rem; /* 380px — chat-description popover card width (~60ch) */
   --mobile-tabbar-height: 3.5rem; /* 56px */
 
@@ -971,7 +972,7 @@
 }
 .mention-popover {
   min-width: 240px;
-  max-width: 360px;
+  max-width: var(--sp-90);
 }
 .slash-popover {
   min-width: 280px;

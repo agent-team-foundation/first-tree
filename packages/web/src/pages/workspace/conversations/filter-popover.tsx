@@ -143,7 +143,7 @@ export function FilterPopover({
   return (
     <Popover
       align="end"
-      panelStyle={{ minWidth: 240, padding: "var(--sp-2)" }}
+      panelStyle={{ minWidth: 240, maxWidth: "var(--sp-90)", padding: "var(--sp-2)" }}
       trigger={({ open, toggle }) => (
         <button
           type="button"
@@ -312,7 +312,9 @@ function FilterCheckbox({
       >
         {checked && <Check size={10} strokeWidth={3} />}
       </span>
-      <span>{label}</span>
+      <span className="min-w-0 truncate" title={label}>
+        {label}
+      </span>
       <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} className="sr-only" />
     </label>
   );
