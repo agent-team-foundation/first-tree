@@ -33,6 +33,11 @@ const BRIEFING_HEADING_PATTERNS: ReadonlyArray<RegExp> = [
   /^# Working in First Tree\b.*$/m,
   /^# Required Reading\b.*$/m,
   /^## Current Chat Context\b.*$/m,
+  // The legacy-fallback prompt section merges team-shared content into one
+  // blob, so copying it back would freeze team prompts into agent config.
+  // The structured `# Agent Prompt (this agent only — editable)` heading is
+  // deliberately NOT guarded: its body is the agent's own fragment.
+  /^# Agent Prompt \(legacy merged\b.*$/m,
 ];
 
 export type BriefingFingerprint = {
