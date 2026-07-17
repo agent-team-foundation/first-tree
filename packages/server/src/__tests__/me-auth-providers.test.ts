@@ -151,6 +151,7 @@ describe("user authentication provider management", () => {
       provider: "google",
       userId,
       targetIdentityId: googleIdentityId,
+      next: "/user-settings",
     });
   });
 });

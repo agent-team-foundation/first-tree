@@ -31,6 +31,14 @@ import {
 import { resolvePublicUrl } from "../../utils/public-url.js";
 import { buildCookie, protectOAuthStateNonce, readOAuthStateNonce } from "./oauth-cookie.js";
 
+// OAuth link/unlink flows return the browser to the legacy /user-settings
+// path on purpose: rolling deploys keep pre-Account SPA builds (which have no
+// /settings/account route) in circulation, while the new SPA redirects
+// /user-settings -> /settings/account with the query string intact, so both
+// generations land on a working page. Switch this to /settings/account only
+// once pre-Account SPA builds are out of circulation.
+const ACCOUNT_RETURN_PATH = "/user-settings";
+
 /**
  * GitHub sign-in surface. All routes are public (no member JWT required).
  *
@@ -225,7 +233,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
 
     if (intent === "link" || intent === "unlink") {
-      if (!stateUserId) return redirectCallbackError(reply, "state-expired", "/user-settings");
+      if (!stateUserId) return redirectCallbackError(reply, "state-expired", ACCOUNT_RETURN_PATH);
       const external = githubExternalProfile({
         id: profile.githubId,
         login: profile.login,
@@ -243,7 +251,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         if (intent === "link") {
           await linkExternalIdentity(app.db, stateUserId, external);
           app.log.info({ event: "identity.linked", provider: "github", userId: stateUserId }, "Identity linked");
-          return reply.redirect("/user-settings?connection=github-linked", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=github-linked`, 302);
         }
         await unlinkExternalIdentity(
           app.db,
@@ -257,13 +265,14 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
           targetIdentityId ?? "",
         );
         app.log.info({ event: "identity.unlinked", provider: "github", userId: stateUserId }, "Identity unlinked");
-        return reply.redirect("/user-settings?connection=github-unlinked", 302);
+        return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=github-unlinked`, 302);
       } catch (error) {
         if (error instanceof IdentityConflictError)
-          return reply.redirect("/user-settings?error=identity-conflict", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-conflict`, 302);
         if (error instanceof IdentityMismatchError)
-          return reply.redirect("/user-settings?error=identity-mismatch", 302);
-        if (error instanceof LastIdentityError) return reply.redirect("/user-settings?error=last-provider", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-mismatch`, 302);
+        if (error instanceof LastIdentityError)
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=last-provider`, 302);
         throw error;
       }
     }

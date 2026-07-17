@@ -29,6 +29,7 @@ import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { QuickstartPage } from "./pages/quickstart/quickstart-page.js";
+import { SettingsAccountPage } from "./pages/settings/account.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
@@ -39,7 +40,6 @@ import { SettingsRepositoriesPage } from "./pages/settings/repositories.js";
 import { SettingsResourcesPage } from "./pages/settings/resources.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
-import { UserSettingsPage } from "./pages/user-settings.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -429,14 +429,15 @@ export function App() {
                       lives under /settings, not as a peer of the
                       people-and-agents view. */}
                   <Route path="team" element={<TeamPage />} />
-                  <Route path="user-settings" element={<UserSettingsPage />} />
+                  <Route path="user-settings" element={<LegacyUserSettingsRedirect />} />
 
-                  {/* Settings master-detail. Team name editing lives in the
-                      header-left TeamSwitcher, so settings only hosts setup
-                      and integration/resource surfaces. */}
+                  {/* Settings master-detail. User-scoped Account + Computers
+                      and team-scoped setup/integration/resource surfaces share
+                      one shell, with scope made explicit by sidebar groups. */}
                   <Route path="settings" element={<SettingsLayout />}>
-                    <Route index element={<Navigate to="computers" replace />} />
+                    <Route index element={<Navigate to="account" replace />} />
                     <Route path="team" element={<Navigate to="/settings/computers" replace />} />
+                    <Route path="account" element={<SettingsAccountPage />} />
                     <Route path="repositories" element={<SettingsRepositoriesPage />} />
                     <Route path="context" element={<SettingsContextTreePage />} />
                     <Route path="resources" element={<SettingsResourcesPage />} />
@@ -480,6 +481,11 @@ type MobileExperienceState = {
 function AdminRedirect() {
   const location = useLocation();
   return <Navigate to={`/team${location.hash}`} replace />;
+}
+
+function LegacyUserSettingsRedirect() {
+  const location = useLocation();
+  return <Navigate to={{ pathname: "/settings/account", search: location.search, hash: location.hash }} replace />;
 }
 
 function WorkspaceEntry() {

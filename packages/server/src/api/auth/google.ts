@@ -26,6 +26,14 @@ import {
 import { resolvePublicUrl } from "../../utils/public-url.js";
 import { buildCookie, protectOAuthStateNonce, readOAuthStateNonce } from "./oauth-cookie.js";
 
+// OAuth link/unlink flows return the browser to the legacy /user-settings
+// path on purpose: rolling deploys keep pre-Account SPA builds (which have no
+// /settings/account route) in circulation, while the new SPA redirects
+// /user-settings -> /settings/account with the query string intact, so both
+// generations land on a working page. Switch this to /settings/account only
+// once pre-Account SPA builds are out of circulation.
+const ACCOUNT_RETURN_PATH = "/user-settings";
+
 export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/start", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     const config = app.config.oauth?.google;
@@ -95,12 +103,12 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (verified.intent === "link" || verified.intent === "unlink") {
-      if (!verified.userId) return redirectError(reply, "state-expired", "/user-settings");
+      if (!verified.userId) return redirectError(reply, "state-expired", ACCOUNT_RETURN_PATH);
       try {
         if (verified.intent === "link") {
           await linkExternalIdentity(app.db, verified.userId, profile);
           app.log.info({ event: "identity.linked", provider: "google", userId: verified.userId }, "Identity linked");
-          return reply.redirect("/user-settings?connection=google-linked", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=google-linked`, 302);
         }
         await unlinkExternalIdentity(
           app.db,
@@ -114,13 +122,14 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
           verified.targetIdentityId ?? "",
         );
         app.log.info({ event: "identity.unlinked", provider: "google", userId: verified.userId }, "Identity unlinked");
-        return reply.redirect("/user-settings?connection=google-unlinked", 302);
+        return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=google-unlinked`, 302);
       } catch (error) {
         if (error instanceof IdentityConflictError)
-          return reply.redirect("/user-settings?error=identity-conflict", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-conflict`, 302);
         if (error instanceof IdentityMismatchError)
-          return reply.redirect("/user-settings?error=identity-mismatch", 302);
-        if (error instanceof LastIdentityError) return reply.redirect("/user-settings?error=last-provider", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-mismatch`, 302);
+        if (error instanceof LastIdentityError)
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=last-provider`, 302);
         throw error;
       }
     }

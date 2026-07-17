@@ -6,9 +6,10 @@ import { UserMenu } from "../components/user-menu.js";
  * DEV-only visual preview of the account menu, mounted at `/preview/user-menu`
  * (gated by `import.meta.env.DEV` in app.tsx).
  *
- * Renders the REAL `UserMenu` — now account-only (user header + Sign out) —
- * under a faked auth context, no backend or login needed. Team switching and
- * team management moved to the header-left switcher; see `/preview/team-switcher`.
+ * Renders the REAL `UserMenu` — now account-only (user header, Account
+ * settings, and Sign out) — under a faked auth context, no backend or login
+ * needed. Team switching and team management moved to the header-left
+ * switcher; see `/preview/team-switcher`.
  */
 export function UserMenuPreviewPage() {
   const auth = useMemo(
