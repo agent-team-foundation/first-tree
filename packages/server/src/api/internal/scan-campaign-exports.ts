@@ -340,6 +340,11 @@ async function buildScanCampaignExportFromDb(db: Database, input: ScanCampaignEx
       maxEstimatedTokens: trial?.maxEstimatedTokens ?? null,
       limitReason: trial?.limitReason ?? null,
       repo: trial?.repo ?? null,
+      attemptId: trial?.attribution?.attemptId ?? null,
+      variant: trial?.attribution?.variant ?? null,
+      actionConverted: trial?.actionConversion !== undefined,
+      actionChatId: trial?.actionConversion?.chatId ?? null,
+      actionRecordedAt: trial?.actionConversion?.recordedAt ?? null,
       outcome: inferOutcome(trial?.state ?? null, counted.humanMessageCount),
       humanMessageCount: counted.humanMessageCount,
       agentMessageCount: counted.agentMessageCount,
@@ -377,7 +382,7 @@ async function buildScanCampaignExportFromDb(db: Database, input: ScanCampaignEx
   const manifest = {
     exportId,
     createdAt,
-    schemaVersion: 1,
+    schemaVersion: 2,
     request: {
       clientId: input.clientId,
       agentName: input.agentName,

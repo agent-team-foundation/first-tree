@@ -59,6 +59,7 @@ describe("landing campaign metadata schemas", () => {
   });
 
   it("parses valid trial chat metadata with defaults", () => {
+    const attemptId = "018f5f17-7bb0-7d6d-8d86-91c901d5f2bf";
     expect(
       parseLandingCampaignTrialChatMetadata({
         landingCampaignTrial: {
@@ -67,6 +68,8 @@ describe("landing campaign metadata schemas", () => {
           skillSetId: "starter",
           skillSetVersion: "v1",
           repo,
+          attribution: { attemptId, variant: "control" },
+          actionConversion: { chatId: "action-chat-1", recordedAt: "2026-07-16T12:00:00.000Z" },
           state: "awaiting_user",
           inputLocked: true,
           awaitingUserKind: "request",
@@ -78,6 +81,8 @@ describe("landing campaign metadata schemas", () => {
       skillSetId: "starter",
       skillSetVersion: "v1",
       repo,
+      attribution: { attemptId, variant: "control" },
+      actionConversion: { chatId: "action-chat-1", recordedAt: "2026-07-16T12:00:00.000Z" },
       state: "awaiting_user",
       inputLocked: true,
       awaitingUserKind: "request",

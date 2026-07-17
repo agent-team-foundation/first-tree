@@ -21,6 +21,27 @@ export const landingCampaignRepoSlugSchema = z
   .max(200)
   .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/u);
 
+export const landingCampaignAttributionSchema = z
+  .object({
+    attemptId: z.string().uuid(),
+    variant: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+  })
+  .strict();
+export type LandingCampaignAttribution = z.infer<typeof landingCampaignAttributionSchema>;
+
+export const landingCampaignActionConversionSchema = z
+  .object({
+    chatId: z.string().min(1),
+    recordedAt: z.string().datetime(),
+  })
+  .strict();
+export type LandingCampaignActionConversion = z.infer<typeof landingCampaignActionConversionSchema>;
+
 /** Trusted campaign action context carried by direct and onboarding chat creation. */
 export const landingCampaignActionContextSchema = z
   .object({
@@ -34,6 +55,7 @@ export const landingCampaignStartRequestSchema = z.object({
   organizationId: z.string().min(1).optional(),
   campaign: landingCampaignSlugSchema,
   repoUrl: repoUrlSchema,
+  attribution: landingCampaignAttributionSchema.optional(),
 });
 export type LandingCampaignStartRequest = z.infer<typeof landingCampaignStartRequestSchema>;
 
@@ -76,6 +98,8 @@ export const landingCampaignTrialChatMetadataSchema = z.object({
     skillSetId: z.string().min(1),
     skillSetVersion: z.string().min(1),
     repo: landingCampaignRepoMetadataSchema,
+    attribution: landingCampaignAttributionSchema.optional(),
+    actionConversion: landingCampaignActionConversionSchema.optional(),
     state: landingCampaignTrialChatStateSchema,
     inputLocked: z.boolean(),
     awaitingUserKind: landingCampaignTrialAwaitingUserKindSchema.optional(),
