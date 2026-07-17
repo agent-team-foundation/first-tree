@@ -95,13 +95,13 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // The cookie stores only an application-key-encrypted, short-lived CSRF
     // nonce, not a provider credential or identity. CodeQL otherwise treats
     // the Set-Cookie sink itself as clear-text storage.
-    // codeql[js/clear-text-storage-of-sensitive-data]
     const stateCookieHeader = buildCookie({
       name: OAUTH_STATE_COOKIE,
       value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
       maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
       secure: isProd,
     });
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookieHeader);
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
@@ -174,13 +174,13 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // provider denial, or an approval-request setup landing.
     // This Set-Cookie value is intentionally empty and expires the nonce; it
     // does not persist the verified state or any other sensitive value.
-    // codeql[js/clear-text-storage-of-sensitive-data]
     const expiredStateCookieHeader = buildCookie({
       name: OAUTH_STATE_COOKIE,
       value: "",
       maxAge: 0,
       secure: process.env.NODE_ENV === "production",
     });
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", expiredStateCookieHeader);
 
     if (verified.provider && verified.provider !== "github") {
