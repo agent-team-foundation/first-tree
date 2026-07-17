@@ -168,6 +168,7 @@ export function removeClientConnection(clientId: string, ws: WebSocket): string[
     activeConnections.delete(agentId);
   }
   clientConnections.delete(clientId);
+  rejectPendingRepliesForClient(clientId, new Error("Client disconnected"));
   return agentIds;
 }
 
@@ -222,5 +223,66 @@ export function forceDisconnectClient(clientId: string): string[] {
     activeConnections.delete(agentId);
   }
   clientConnections.delete(clientId);
+  rejectPendingRepliesForClient(clientId, new Error("Client disconnected"));
   return agentIds;
+}
+
+/**
+ * HTTP→daemon request/response correlation. Used by host-local discovery
+ * (provider model catalogs) where the web needs a synchronous answer from the
+ * connected computer rather than fire-and-forget + poll.
+ */
+type PendingClientReply = {
+  clientId: string;
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+const pendingClientReplies = new Map<string, PendingClientReply>();
+
+const DEFAULT_CLIENT_REPLY_TIMEOUT_MS = 25_000;
+
+export function waitForClientReply(
+  clientId: string,
+  ref: string,
+  timeoutMs: number = DEFAULT_CLIENT_REPLY_TIMEOUT_MS,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (pendingClientReplies.has(ref)) {
+      reject(new Error(`Duplicate pending client reply ref: ${ref}`));
+      return;
+    }
+    const timer = setTimeout(() => {
+      pendingClientReplies.delete(ref);
+      reject(new Error("Timed out waiting for the computer to reply"));
+    }, timeoutMs);
+    pendingClientReplies.set(ref, { clientId, resolve, reject, timer });
+  });
+}
+
+export function resolveClientReply(clientId: string, ref: string, value: unknown): boolean {
+  const pending = pendingClientReplies.get(ref);
+  if (!pending || pending.clientId !== clientId) return false;
+  clearTimeout(pending.timer);
+  pendingClientReplies.delete(ref);
+  pending.resolve(value);
+  return true;
+}
+
+export function rejectPendingRepliesForClient(clientId: string, error: Error): void {
+  for (const [ref, pending] of pendingClientReplies) {
+    if (pending.clientId !== clientId) continue;
+    clearTimeout(pending.timer);
+    pendingClientReplies.delete(ref);
+    pending.reject(error);
+  }
+}
+
+/** Test seam: drop every pending reply without resolving. */
+export function clearPendingClientRepliesForTests(): void {
+  for (const pending of pendingClientReplies.values()) {
+    clearTimeout(pending.timer);
+  }
+  pendingClientReplies.clear();
 }

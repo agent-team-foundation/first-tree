@@ -2,6 +2,7 @@ import type {
   AgentType,
   ClientCapabilities,
   ConnectTokenResponse,
+  ProviderModelCatalog,
   RuntimeAuthMethod,
   RuntimeProvider,
   UpdateAttempt,
@@ -128,6 +129,16 @@ export function startRuntimeAuth(
   body: { provider: RuntimeProvider; method?: RuntimeAuthMethod },
 ): Promise<{ ref: string; started: true }> {
   return api.post(`/clients/${encodeURIComponent(clientId)}/runtime-auth/start`, body);
+}
+
+/**
+ * Ask the connected computer's daemon for the host-local model catalog for
+ * this provider (Cursor `agent models`, Kimi `~/.kimi-code/config.toml`, …).
+ */
+export function getProviderModels(clientId: string, provider: RuntimeProvider): Promise<ProviderModelCatalog> {
+  return api.get(
+    `/clients/${encodeURIComponent(clientId)}/providers/${encodeURIComponent(provider)}/models`,
+  );
 }
 
 export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }> {

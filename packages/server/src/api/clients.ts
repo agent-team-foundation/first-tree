@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  PROVIDER_MODELS_LIST_TYPE,
   RUNTIME_AUTH_START_TYPE,
+  providerModelCatalogSchema,
   runtimeAuthStartRequestSchema,
+  runtimeProviderSchema,
   updateClientCapabilitiesSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
@@ -11,7 +14,7 @@ import { stampClientResource } from "../observability/request-context.js";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";
 import * as clientService from "../services/client.js";
-import { forceDisconnectClient, sendToClient } from "../services/connection-manager.js";
+import { forceDisconnectClient, rejectPendingRepliesForClient, sendToClient, waitForClientReply } from "../services/connection-manager.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
 
@@ -90,6 +93,45 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     }
     return { ref, started: true as const };
   });
+
+  // Host-local model catalog: ask the connected daemon to discover models from
+  // the real provider on that computer, wait for the correlated reply, and
+  // return the catalog to the web. 503 when the computer is offline or times out.
+  app.get<{ Params: { clientId: string; provider: string } }>(
+    "/:clientId/providers/:provider/models",
+    async (request) => {
+      const { userId } = requireUser(request);
+      const { clientId, provider: rawProvider } = request.params;
+      stampClientResource(request, clientId);
+      await clientService.assertClientOwner(app.db, clientId, { userId });
+      await clientService.assertClientNotRetired(app.db, clientId);
+      const provider = runtimeProviderSchema.parse(rawProvider);
+      const ref = randomUUID();
+      const replyPromise = waitForClientReply(clientId, ref);
+      const delivered = sendToClient(clientId, {
+        type: PROVIDER_MODELS_LIST_TYPE,
+        provider,
+        ref,
+      });
+      if (!delivered) {
+        rejectPendingRepliesForClient(clientId, new Error("Computer not connected"));
+        await replyPromise.catch(() => undefined);
+        throw new ServiceUnavailableError(
+          "Could not list models because this computer is not connected. Make sure the daemon is running, then retry.",
+        );
+      }
+      try {
+        const raw = await replyPromise;
+        return providerModelCatalogSchema.parse(raw);
+      } catch (err) {
+        throw new ServiceUnavailableError(
+          err instanceof Error
+            ? err.message
+            : "Could not list models from this computer. Retry after the daemon is connected.",
+        );
+      }
+    },
+  );
 
   app.post<{ Params: { clientId: string } }>("/:clientId/disconnect", async (request) => {
     const { userId } = requireUser(request);
