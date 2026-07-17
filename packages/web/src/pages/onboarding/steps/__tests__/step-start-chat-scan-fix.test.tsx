@@ -24,6 +24,7 @@ const flowMock = vi.hoisted(() => ({
   treeAutoDetectDone: true,
   markTreeAutoDetectDone: vi.fn(),
   completeAndEnterChat: vi.fn(async () => undefined),
+  reportStepFailure: vi.fn(),
 }));
 
 const resolveAgentMock = vi.hoisted(() => ({
@@ -165,6 +166,7 @@ describe("AdminStartChat — production-scan fix handoff", () => {
     await flush();
 
     expect(flowMock.completeAndEnterChat).not.toHaveBeenCalled();
+    expect(flowMock.reportStepFailure).toHaveBeenCalledWith("start_chat_failed", { step: "start-chat" });
     expect(window.sessionStorage.getItem("onboarding:campaignActionHandoff")).not.toBeNull();
   });
 

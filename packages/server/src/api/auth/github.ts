@@ -92,6 +92,10 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       provider: "github",
     });
     const isProd = process.env.NODE_ENV === "production";
+    // The cookie stores only an application-key-encrypted, short-lived CSRF
+    // nonce, not a provider credential or identity. CodeQL otherwise treats
+    // the Set-Cookie sink itself as clear-text storage.
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header(
       "Set-Cookie",
       buildCookie({
@@ -170,6 +174,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     // A verified state is single-use whether GitHub returns a code, a
     // provider denial, or an approval-request setup landing.
+    // This Set-Cookie value is intentionally empty and expires the nonce; it
+    // does not persist the verified state or any other sensitive value.
+    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header(
       "Set-Cookie",
       buildCookie({
