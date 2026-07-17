@@ -1545,6 +1545,7 @@ describe("web DOM interaction coverage", () => {
     // The avatar menu is account-only: no team rows, just Sign out.
     const account = await renderDom(<UserMenu />);
     await click(account.container.querySelector('button[aria-haspopup="menu"]'));
+    expect(account.container.textContent).toContain("Account settings");
     expect(account.container.textContent).not.toContain("Beta");
     expect(account.container.textContent).not.toContain("Create new team");
     await click(

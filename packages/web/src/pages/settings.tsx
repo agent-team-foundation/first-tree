@@ -39,18 +39,29 @@ import { cn } from "../lib/utils.js";
  * in the nav vs `Setup` as the page title). Section headings are now the top
  * visible tier on every page.
  *
- * Sub-routes:
- *   Computers     — user-scoped: machines connected to First Tree (most-frequent
- *                   entry point — placed first)
- *   Repositories  — provider-neutral Team code resources plus the separate
- *                   org-scoped Context Tree binding. Visible to all members
- *                   (read-only); only admins can edit.
- *   Resources     — org-scoped runtime resources (prompt / skill / mcp).
- *                   Visible to all members (read-only); only admins can manage.
- *   Integrations  — provider-specific GitHub/GitLab connections for events,
- *                   identity, and webhooks.
- *   Setup         — guided-setup stepper enable/disable (hidden once
- *                   onboarding is permanently completed)
+ * Sub-routes are grouped by scope so user-level configuration does not read
+ * as if it changes with the selected team. The nav renders an eyebrow label
+ * per group because the two scopes have different consequences: Personal
+ * entries follow the signed-in user across every team, Team entries configure
+ * the currently selected org.
+ *
+ *   Personal
+ *     Account       — account-scoped: identity and sign-in methods (absorbed
+ *                     the old standalone /user-settings page)
+ *     Computers     — user-scoped: machines connected to First Tree
+ *   Team
+ *     Repositories  — provider-neutral Team code resources plus the separate
+ *                     org-scoped Context Tree binding. Visible to all members
+ *                     (read-only); only admins can edit.
+ *     Resources     — org-scoped runtime resources (prompt / skill / mcp).
+ *                     Visible to all members (read-only); only admins can manage.
+ *     Integrations  — provider-specific GitHub/GitLab connections for events,
+ *                     identity, and webhooks.
+ *     Setup         — guided-setup stepper enable/disable (hidden once
+ *                     onboarding is permanently completed)
+ *
+ * `/settings` lands on Account — the first sidebar row, so the entry point
+ * and the highlighted nav state agree.
  */
 
 type Item = {
@@ -65,25 +76,47 @@ type Item = {
   description?: string;
 };
 
-const ITEMS: Item[] = [
-  { to: "/settings/computers", label: "Computers" },
+type ItemGroup = {
+  label: string;
+  items: Item[];
+};
+
+const GROUPS: ItemGroup[] = [
   {
-    to: "/settings/repositories",
-    label: "Repositories",
-    description: "Manage code available to agents and the repository backing your team's Context Tree.",
+    label: "Personal",
+    items: [
+      {
+        to: "/settings/account",
+        label: "Account",
+        description: "Manage your profile and sign-in methods. These settings follow you across all your teams.",
+      },
+      { to: "/settings/computers", label: "Computers" },
+    ],
   },
   {
-    to: "/settings/resources",
-    label: "Resources",
-    description: "Team defaults and opt-in resources your agents load when they start.",
+    label: "Team",
+    items: [
+      {
+        to: "/settings/repositories",
+        label: "Repositories",
+        description: "Manage code available to agents and the repository backing your team's Context Tree.",
+      },
+      {
+        to: "/settings/resources",
+        label: "Resources",
+        description: "Team defaults and opt-in resources your agents load when they start.",
+      },
+      {
+        to: "/settings/integrations",
+        label: "Integrations",
+        description: "Connect providers for webhooks, identity, and event routing.",
+      },
+      { to: "/settings/onboarding", label: "Setup" },
+    ],
   },
-  {
-    to: "/settings/integrations",
-    label: "Integrations",
-    description: "Connect providers for webhooks, identity, and event routing.",
-  },
-  { to: "/settings/onboarding", label: "Setup" },
 ];
+
+const ITEMS = GROUPS.flatMap((group) => group.items);
 
 export function SettingsLayout({ activePathname }: { activePathname?: string } = {}) {
   const { onboardingCompletedAt, meLoaded } = useAuth();
@@ -103,10 +136,10 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
   // own guard.
   const hasCompletedOnboarding = onboardingCompletedAt !== null;
 
-  const visible = ITEMS.filter((it) => {
-    if (it.to === "/settings/onboarding" && hasCompletedOnboarding) return false;
-    return true;
-  });
+  const visibleGroups = GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => item.to !== "/settings/onboarding" || !hasCompletedOnboarding),
+  })).filter((group) => group.items.length > 0);
 
   // The active sub-route drives the single page `<h1>` (visually hidden) and
   // the optional lead. Match the longest `to` that prefixes the pathname so a
@@ -136,13 +169,20 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
             overflowX: "auto",
           }}
         >
-          {visible.map((item) => (
-            <PillLink
-              key={item.to}
-              to={item.to}
-              label={item.label}
-              activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
-            />
+          {visibleGroups.map((group) => (
+            <div key={group.label} className="flex shrink-0 items-center" style={{ gap: "var(--sp-1)" }}>
+              <span className="text-eyebrow shrink-0" style={{ color: "var(--fg-4)", padding: "0 var(--sp-1)" }}>
+                {group.label.toUpperCase()}
+              </span>
+              {group.items.map((item) => (
+                <PillLink
+                  key={item.to}
+                  to={item.to}
+                  label={item.label}
+                  activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
+                />
+              ))}
+            </div>
           ))}
         </nav>
         <div className="flex-1 min-w-0">
@@ -169,14 +209,26 @@ export function SettingsLayout({ activePathname }: { activePathname?: string } =
           overflowY: "auto",
         }}
       >
-        <nav className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
-          {visible.map((item) => (
-            <SidebarLink
-              key={item.to}
-              to={item.to}
-              label={item.label}
-              activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
-            />
+        <nav className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+          {visibleGroups.map((group) => (
+            <div key={group.label}>
+              <div
+                className="text-eyebrow"
+                style={{ color: "var(--fg-4)", padding: "var(--sp-2) var(--sp-3) var(--sp-1)" }}
+              >
+                {group.label.toUpperCase()}
+              </div>
+              <div className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+                {group.items.map((item) => (
+                  <SidebarLink
+                    key={item.to}
+                    to={item.to}
+                    label={item.label}
+                    activeOverride={activePathname === undefined ? undefined : pathname.startsWith(item.to)}
+                  />
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
       </aside>
