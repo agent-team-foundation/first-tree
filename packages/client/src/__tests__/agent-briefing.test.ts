@@ -621,18 +621,20 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("do not bind GitLab events to a First Tree chat");
     expect(gitlab).toContain("do not require the First Tree GitHub App");
 
-    expect(gitlab).toContain("subscribe by default");
-    expect(gitlab).toContain("skip an unrelated entity or one the user explicitly does not want notifications for");
-    expect(gitlab).toContain("subscription failure means only that GitLab notifications are missing");
-    expect(gitlab).toContain("does not invalidate the entity that was created");
-    expect(gitlab).toContain("only when a human explicitly asks");
-    expect(gitlab).toContain("never automatically when an issue closes");
+    expect(gitlab).toContain("Default: follow what you create");
+    expect(gitlab).toContain("first-tree gitlab follow <url>");
+    expect(gitlab).toContain("pending and inbound-only");
+    expect(gitlab).toContain("without calling GitLab");
+    expect(gitlab).toContain("does not invalidate an entity that was already created");
+    expect(gitlab).toContain("only when the human explicitly asks for personal-account notifications");
+    expect(gitlab).toContain("only when the human explicitly asks this chat");
+    expect(gitlab).toContain("never automatically when an Issue closes");
     expect(gitlab).toContain("an MR merges, or the task finishes");
+    expect(gitlab).toContain("first-tree gitlab unfollow <url>");
+    expect(gitlab).toContain("identity routing remains eligible");
+    expect(gitlab).toContain("first-tree gitlab following");
     expect(gitlab).not.toContain("first-tree-gitlab");
-    expect(gitlab).toContain("glab issue --help");
-    expect(gitlab).toContain("glab mr --help");
 
-    expect(briefing).not.toMatch(/first-tree gitlab (?:follow|unfollow)/u);
     expect(gitlab).not.toContain("install the First Tree GitHub App");
     expect(gitlab).not.toMatch(/`glab (?:issue|mr) (?:subscribe|unsubscribe) [^`]+`/u);
     expect(gitlab).not.toContain("-R <group/project>");
@@ -685,6 +687,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
     expect(overview).toContain("first-tree github …");
+    expect(overview).toContain("first-tree gitlab …");
     expect(overview).toContain("first-tree tree verify");
     expect(overview).toContain("first-tree tree tree");
     expect(overview).not.toContain("github scan");
