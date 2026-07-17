@@ -20,6 +20,7 @@ import {
   sendToClient,
   waitForClientReply,
 } from "../services/connection-manager.js";
+import { isClientConnectedSomewhere } from "../services/provider-models-rpc.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
 
@@ -101,7 +102,10 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
 
   // Host-local model catalog: ask the connected daemon to discover models from
   // the real provider on that computer, wait for the correlated reply, and
-  // return the catalog to the web. 503 when the computer is offline or times out.
+  // return the catalog to the web. When the daemon socket lives on another
+  // replica, fan the reverse command via PG NOTIFY; the result is stored in
+  // clients.metadata and woken with a tiny result NOTIFY. 503 when offline
+  // or timed out.
   app.get<{ Params: { clientId: string; provider: string } }>(
     "/:clientId/providers/:provider/models",
     async (request) => {
@@ -113,17 +117,27 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
       const provider = runtimeProviderSchema.parse(rawProvider);
       const ref = randomUUID();
       const replyPromise = waitForClientReply(clientId, ref);
-      const delivered = sendToClient(clientId, {
+      const command = {
         type: PROVIDER_MODELS_LIST_TYPE,
         provider,
         ref,
-      });
-      if (!delivered) {
-        rejectPendingRepliesForClient(clientId, new Error("Computer not connected"));
-        await replyPromise.catch(() => undefined);
-        throw new ServiceUnavailableError(
-          "Could not list models because this computer is not connected. Make sure the daemon is running, then retry.",
-        );
+      };
+      const deliveredLocally = sendToClient(clientId, command);
+      if (!deliveredLocally) {
+        const client = await clientService.getClient(app.db, clientId);
+        if (!client || !isClientConnectedSomewhere(client)) {
+          rejectPendingRepliesForClient(clientId, new Error("Computer not connected"));
+          await replyPromise.catch(() => undefined);
+          throw new ServiceUnavailableError(
+            "Could not list models because this computer is not connected. Make sure the daemon is running, then retry.",
+          );
+        }
+        await app.notifier.notifyDaemonClientCommand({
+          type: PROVIDER_MODELS_LIST_TYPE,
+          clientId,
+          provider,
+          ref,
+        });
       }
       try {
         const raw = await replyPromise;

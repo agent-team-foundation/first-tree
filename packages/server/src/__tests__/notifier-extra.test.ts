@@ -102,8 +102,15 @@ describe("createNotifier", () => {
     await notifier.notifyChatAudience("chat_1");
     await notifier.notifyChatUpdated("chat_1");
     await notifier.notifyAgentRouteChange(payload);
+    await notifier.notifyDaemonClientCommand({
+      type: "provider-models:list",
+      clientId: "client_1",
+      provider: "cursor",
+      ref: "ref_1",
+    });
+    await notifier.notifyDaemonClientCommandResult({ clientId: "client_1", ref: "ref_1" });
 
-    expect(ok.calls).toHaveLength(10);
+    expect(ok.calls).toHaveLength(12);
     expect(ok.calls.map((values) => values[0])).toEqual([
       "inbox_notifications",
       "config_changes",
@@ -115,6 +122,8 @@ describe("createNotifier", () => {
       "chat_audience_events",
       "chat_updated_events",
       "agent_route_events",
+      "daemon_client_commands",
+      "daemon_client_command_results",
     ]);
 
     const failing = createNotifier(makeListenClient(true).client as never);
@@ -128,6 +137,17 @@ describe("createNotifier", () => {
     await expect(failing.notifyChatAudience("chat_1")).resolves.toBeUndefined();
     await expect(failing.notifyChatUpdated("chat_1")).resolves.toBeUndefined();
     await expect(failing.notifyAgentRouteChange(payload)).resolves.toBeUndefined();
+    await expect(
+      failing.notifyDaemonClientCommand({
+        type: "provider-models:list",
+        clientId: "client_1",
+        provider: "cursor",
+        ref: "ref_1",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      failing.notifyDaemonClientCommandResult({ clientId: "client_1", ref: "ref_1" }),
+    ).resolves.toBeUndefined();
   });
 
   it("parses LISTEN payloads, ignores malformed data, swallows handler errors, and stops idempotently", async () => {
@@ -160,6 +180,14 @@ describe("createNotifier", () => {
       throw new Error("consumer failed");
     });
     const agentRouteSecond = vi.fn();
+    const daemonCommand = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const daemonCommandSecond = vi.fn();
+    const daemonResult = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const daemonResultSecond = vi.fn();
 
     notifier.onConfigChange(config);
     notifier.onSessionStateChange(sessionState);
@@ -176,6 +204,10 @@ describe("createNotifier", () => {
     notifier.onMeChatsChanged(meChatsChanged);
     notifier.onAgentRouteChange(agentRoute);
     notifier.onAgentRouteChange(agentRouteSecond);
+    notifier.onDaemonClientCommand(daemonCommand);
+    notifier.onDaemonClientCommand(daemonCommandSecond);
+    notifier.onDaemonClientCommandResult(daemonResult);
+    notifier.onDaemonClientCommandResult(daemonResultSecond);
     await notifier.start();
 
     listeners.get("config_changes")?.("agent");
@@ -206,6 +238,19 @@ describe("createNotifier", () => {
     );
     listeners.get("agent_route_events")?.("{not json");
     listeners.get("agent_route_events")?.(JSON.stringify({ agentId: "agent_1" }));
+    listeners.get("daemon_client_commands")?.(
+      JSON.stringify({
+        type: "provider-models:list",
+        clientId: "client_1",
+        provider: "cursor",
+        ref: "ref_1",
+      }),
+    );
+    listeners.get("daemon_client_commands")?.("{not json");
+    listeners.get("daemon_client_commands")?.(JSON.stringify({ type: "provider-models:list" }));
+    listeners.get("daemon_client_command_results")?.(JSON.stringify({ clientId: "client_1", ref: "ref_1" }));
+    listeners.get("daemon_client_command_results")?.("{not json");
+    listeners.get("daemon_client_command_results")?.(JSON.stringify({ clientId: "client_1" }));
 
     expect(config).toHaveBeenCalledWith("agent");
     expect(sessionState).toHaveBeenCalledWith({
@@ -243,10 +288,17 @@ describe("createNotifier", () => {
       runtimeProvider: "codex",
       targetClientId: "client_1",
     });
+    expect(daemonCommandSecond).toHaveBeenCalledWith({
+      type: "provider-models:list",
+      clientId: "client_1",
+      provider: "cursor",
+      ref: "ref_1",
+    });
+    expect(daemonResultSecond).toHaveBeenCalledWith({ clientId: "client_1", ref: "ref_1" });
 
     await notifier.stop();
     await notifier.stop();
-    expect(unlisteners).toHaveLength(11);
+    expect(unlisteners).toHaveLength(13);
     for (const unlisten of unlisteners) {
       expect(unlisten).toHaveBeenCalledTimes(1);
     }

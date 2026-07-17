@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ProviderModelCatalog, ProviderModelOption, RuntimeProvider } from "@first-tree/shared";
+import { parse as parseToml } from "smol-toml";
 import { findCursorExecutableOnPath } from "../cursor-binary.js";
 import { runCommand } from "./launch-probe.js";
 
@@ -77,79 +78,47 @@ export function parseCursorModelsOutput(stdout: string): {
 }
 
 /**
- * Minimal TOML extract for Kimi's `~/.kimi-code/config.toml`:
- *   default_model = "kimi-code/k3"
- *   [models."kimi-code/k3"]
- *   display_name = "K3"
- *   model = "k3"
- *
- * Avoids adding a TOML dependency for a narrow, stable config shape.
+ * Parse Kimi Code `config.toml` model tables via a real TOML parser so we
+ * accept both quoted headers (`[models."kimi-code/k3"]`) and bare aliases
+ * (`[models.gemini-3-pro-preview]`) documented by Kimi.
  */
 export function parseKimiConfigModels(toml: string): {
   models: ProviderModelOption[];
   defaultModelId: string | null;
 } {
-  let defaultModelId: string | null = null;
-  const models: ProviderModelOption[] = [];
-  const sections: Array<{ id: string; headerStart: number; bodyStart: number }> = [];
-
-  // Line-oriented scan avoids `\s*` / `.+` regexes that CodeQL flags as
-  // polynomial on untrusted host config text.
-  let cursor = 0;
-  while (cursor <= toml.length) {
-    const nextNl = toml.indexOf("\n", cursor);
-    const lineEnd = nextNl === -1 ? toml.length : nextNl;
-    const line = toml.slice(cursor, lineEnd).replace(/\r$/, "");
-    const trimmed = line.trim();
-
-    if (trimmed.startsWith("default_model")) {
-      const eq = trimmed.indexOf("=");
-      if (eq > 0) {
-        const raw = trimmed.slice(eq + 1).trim();
-        if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
-          defaultModelId = raw.slice(1, -1);
-        }
-      }
-    }
-
-    if (trimmed.startsWith('[models."') && trimmed.endsWith('"]')) {
-      const id = trimmed.slice('[models."'.length, -'"]'.length);
-      if (id.length > 0) {
-        const bodyStart = nextNl === -1 ? toml.length : nextNl + 1;
-        sections.push({ id, headerStart: cursor, bodyStart });
-      }
-    }
-
-    if (nextNl === -1) break;
-    cursor = nextNl + 1;
+  let data: Record<string, unknown>;
+  try {
+    data = parseToml(toml) as Record<string, unknown>;
+  } catch {
+    return { models: [], defaultModelId: null };
   }
 
-  for (let i = 0; i < sections.length; i++) {
-    const section = sections[i];
-    if (!section) continue;
-    const next = sections[i + 1];
-    const bodyEnd = next ? next.headerStart : toml.length;
-    const body = toml.slice(section.bodyStart, bodyEnd);
-    let displayName: string | undefined;
-    for (const bodyLine of body.split("\n")) {
-      const t = bodyLine.replace(/\r$/, "").trim();
-      if (!t.startsWith("display_name")) continue;
-      const eq = t.indexOf("=");
-      if (eq <= 0) continue;
-      const raw = t.slice(eq + 1).trim();
-      if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
-        displayName = raw.slice(1, -1);
-      }
-      break;
-    }
-    const isDefault = defaultModelId === section.id;
+  const defaultModelId = typeof data.default_model === "string" ? data.default_model : null;
+  const modelsRaw = data.models;
+  if (!modelsRaw || typeof modelsRaw !== "object" || Array.isArray(modelsRaw)) {
+    return { models: [], defaultModelId };
+  }
+
+  const models: ProviderModelOption[] = [];
+  for (const [id, value] of Object.entries(modelsRaw as Record<string, unknown>)) {
+    if (!id || typeof value !== "object" || value === null || Array.isArray(value)) continue;
+    const row = value as Record<string, unknown>;
+    const displayName = typeof row.display_name === "string" ? row.display_name : undefined;
+    const isDefault = defaultModelId === id;
     models.push({
-      id: section.id,
+      id,
       ...(displayName ? { label: displayName } : {}),
       ...(isDefault ? { isDefault: true, hint: "default" } : {}),
     });
   }
   return { models, defaultModelId };
+}
+
+/** Effective Kimi config path: `$KIMI_CODE_HOME/config.toml` or `~/.kimi-code/config.toml`. */
+export function resolveKimiConfigPath(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
+  const custom = env.KIMI_CODE_HOME?.trim();
+  const root = custom && custom.length > 0 ? custom : join(home, ".kimi-code");
+  return join(root, "config.toml");
 }
 
 async function discoverCursorModels(deps: DiscoverModelsDeps): Promise<ProviderModelCatalog> {
@@ -185,7 +154,8 @@ async function discoverCursorModels(deps: DiscoverModelsDeps): Promise<ProviderM
 }
 
 async function discoverKimiModels(deps: DiscoverModelsDeps): Promise<ProviderModelCatalog> {
-  const path = deps.kimiConfigPath ?? join(homedir(), ".kimi-code", "config.toml");
+  const env = deps.env ?? process.env;
+  const path = deps.kimiConfigPath ?? resolveKimiConfigPath(env);
   const read =
     deps.readKimiConfig ??
     (async () => {
@@ -208,7 +178,7 @@ async function discoverKimiModels(deps: DiscoverModelsDeps): Promise<ProviderMod
   }
   const parsed = parseKimiConfigModels(toml);
   if (parsed.models.length === 0) {
-    return unavailable("kimi-code", 'Kimi config has no [models."."] entries', deps);
+    return unavailable("kimi-code", "Kimi config has no [models.*] entries", deps);
   }
   return {
     provider: "kimi-code",
