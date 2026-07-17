@@ -14,6 +14,7 @@ import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import type { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
@@ -24,6 +25,8 @@ import { addChatParticipants, recomputeChatWatchers } from "./participant-mode.j
 
 type RequesterIdentity = {
   userId: string;
+  memberId: string;
+  humanAgentUuid: string;
 };
 
 export type ContextReviewTaskAuthority = {
@@ -271,11 +274,67 @@ async function requireMatchingGithubIdentity(
   }
 }
 
+async function requireActiveRequesterMembership(
+  db: Database,
+  input: {
+    organizationId: string;
+    requester: RequesterIdentity;
+    lock: boolean;
+  },
+): Promise<void> {
+  const memberQuery = db
+    .select({
+      id: members.id,
+      userId: members.userId,
+      organizationId: members.organizationId,
+      agentId: members.agentId,
+      status: members.status,
+    })
+    .from(members)
+    .where(eq(members.id, input.requester.memberId))
+    .limit(1);
+  const memberRows = input.lock ? await memberQuery.for("update") : await memberQuery;
+  const [member] = memberRows;
+  if (
+    !member ||
+    member.userId !== input.requester.userId ||
+    member.organizationId !== input.organizationId ||
+    member.agentId !== input.requester.humanAgentUuid ||
+    member.status !== "active"
+  ) {
+    throw new ForbiddenError("Agent Review dispatch requires the requester's active Team membership");
+  }
+
+  const humanAgentQuery = db
+    .select({
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      status: agents.status,
+      managerId: agents.managerId,
+    })
+    .from(agents)
+    .where(eq(agents.uuid, input.requester.humanAgentUuid))
+    .limit(1);
+  const humanAgentRows = input.lock ? await humanAgentQuery.for("update") : await humanAgentQuery;
+  const [humanAgent] = humanAgentRows;
+  if (
+    !humanAgent ||
+    humanAgent.organizationId !== input.organizationId ||
+    humanAgent.type !== AGENT_TYPES.HUMAN ||
+    humanAgent.status !== AGENT_STATUSES.ACTIVE ||
+    humanAgent.managerId !== input.requester.memberId
+  ) {
+    throw new ForbiddenError("Agent Review dispatch requires the requester's active human identity");
+  }
+}
+
 /**
  * Resolve the only authority tuple that may receive a Write-created review
- * task. `lock=true` is used inside the keyed chat transaction: settings writes
- * take the same organization-row lock, while the Reviewer row lock prevents a
- * concurrent suspend/delete from committing across this admission check.
+ * task. `lock=true` is used inside the keyed chat transaction: requester
+ * membership and human-mirror locks serialize leave/removal, settings writes
+ * take the same organization-row lock, and the Reviewer row lock serializes a
+ * concurrent suspend/delete across this admission check.
  */
 export async function resolveContextReviewTaskAuthority(
   db: Database,
@@ -288,6 +347,17 @@ export async function resolveContextReviewTaskAuthority(
   },
 ): Promise<ContextReviewTaskAuthority> {
   if (input.lock) await lockOrganization(db, input.organizationId);
+
+  // Admission and task persistence share one linearization boundary. Member
+  // leave/admin removal lock the same member row before suspending its human
+  // mirror, so lock in member -> human-Agent order here and hold both through
+  // keyed create/reuse. A request that passed route preflight either commits
+  // before revocation, or observes the inactive tuple and persists nothing.
+  await requireActiveRequesterMembership(db, {
+    organizationId: input.organizationId,
+    requester: input.requester,
+    lock: input.lock === true,
+  });
 
   let runtime: Awaited<ReturnType<typeof getOrgContextReviewRuntime>>;
   try {

@@ -127,7 +127,11 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
       const body = createKeyedTaskChatSchema.parse(rawBody);
       const authority = await resolveContextReviewTaskAuthority(app.db, {
         organizationId: scope.organizationId,
-        requester: { userId: scope.userId },
+        requester: {
+          userId: scope.userId,
+          memberId: scope.memberId,
+          humanAgentUuid: scope.humanAgentId,
+        },
         metadata: body.initialMessage.metadata,
       });
       const result = await createChat(app.db, {
@@ -149,7 +153,11 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
         beforeTaskResult: async (tx) => {
           await resolveContextReviewTaskAuthority(tx, {
             organizationId: scope.organizationId,
-            requester: { userId: scope.userId },
+            requester: {
+              userId: scope.userId,
+              memberId: scope.memberId,
+              humanAgentUuid: scope.humanAgentId,
+            },
             metadata: body.initialMessage.metadata,
             expectedReviewerAgentUuid: authority.reviewerAgentUuid,
             lock: true,

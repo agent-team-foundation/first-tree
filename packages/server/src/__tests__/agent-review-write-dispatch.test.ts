@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -173,6 +174,33 @@ async function dispatch(app: App, admin: Admin, member: MemberContext, payload: 
   });
 }
 
+async function waitForBlockedRequesterMembershipLock(
+  observer: ReturnType<typeof postgres>,
+  blockerPid: number,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await observer<{ query: string; wait_event_type: string | null }[]>`
+      SELECT query, wait_event_type
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND ${blockerPid} = ANY(pg_blocking_pids(pid))
+    `;
+    if (
+      rows.some(
+        (row) =>
+          row.wait_event_type === "Lock" &&
+          /\bfrom\s+"?members"?/i.test(row.query) &&
+          /\bfor\s+update\b/i.test(row.query),
+      )
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Timed out waiting for the dispatch transaction to lock requester membership");
+}
+
 describe("member Agent Review task dispatch", () => {
   const getApp = useTestApp();
 
@@ -237,6 +265,52 @@ describe("member Agent Review task dispatch", () => {
     expect(chatMessages).toHaveLength(1);
     const deliveries = await app.db.select().from(inboxEntries).where(eq(inboxEntries.messageId, leftBody.messageId));
     expect(deliveries).toHaveLength(1);
+  });
+
+  it("persists no first task when the requester leaves after route preflight", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+
+    const chatsBefore = await app.db.select({ id: chats.id }).from(chats);
+    const messagesBefore = await app.db.select({ id: messages.id }).from(messages);
+    const inboxBefore = await app.db.select({ id: inboxEntries.id }).from(inboxEntries);
+    const membershipBefore = await app.db.select({ chatId: chatMembership.chatId }).from(chatMembership);
+    const blocker = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    const observer = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    let revocationCommitted = false;
+    try {
+      await blocker`BEGIN`;
+      const [blockerSession] = await blocker<{ pid: number }[]>`SELECT pg_backend_pid()::integer AS pid`;
+      if (!blockerSession) throw new Error("membership revocation session missing");
+      await blocker`UPDATE members SET status = 'left' WHERE id = ${requester.memberId}`;
+      await blocker`UPDATE agents SET status = 'suspended' WHERE uuid = ${requester.humanAgentUuid}`;
+
+      // Ordinary route/preflight reads still see the last committed `active`
+      // row. The keyed transaction then blocks on its member FOR UPDATE until
+      // this revocation commits, after which its in-transaction tuple check
+      // must reject instead of creating Chat/message/Inbox state.
+      const pending = dispatch(app, admin, requester, dispatchPayload());
+      await waitForBlockedRequesterMembershipLock(observer, blockerSession.pid);
+      await blocker`COMMIT`;
+      revocationCommitted = true;
+
+      const response = await pending;
+      expect(response.statusCode).toBe(403);
+      expect(response.body).toContain("active Team membership");
+      expect(await app.db.select({ id: chats.id }).from(chats)).toHaveLength(chatsBefore.length);
+      expect(await app.db.select({ id: messages.id }).from(messages)).toHaveLength(messagesBefore.length);
+      expect(await app.db.select({ id: inboxEntries.id }).from(inboxEntries)).toHaveLength(inboxBefore.length);
+      expect(await app.db.select({ chatId: chatMembership.chatId }).from(chatMembership)).toHaveLength(
+        membershipBefore.length,
+      );
+    } finally {
+      if (!revocationCommitted) await blocker`ROLLBACK`;
+      await observer.end();
+      await blocker.end();
+    }
   });
 
   it("keeps the first opening and packet immutable when the same member retries with a new head", async () => {
@@ -433,6 +507,55 @@ describe("member Agent Review task dispatch", () => {
     expect(backfilledOpening).toEqual(
       expect.arrayContaining([expect.objectContaining({ inboxId: secondReviewer.inboxId, notify: false })]),
     );
+  });
+
+  it("does not reconcile A to B when the requester is removed after route preflight", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    const secondReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+
+    const first = await dispatch(app, admin, requester, dispatchPayload());
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json<DispatchResponse>();
+    await configureReview(app, admin, secondReviewer.uuid);
+    const messagesBefore = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    const inboxBefore = await app.db.select().from(inboxEntries);
+    const membershipBefore = await app.db
+      .select()
+      .from(chatMembership)
+      .where(eq(chatMembership.chatId, firstBody.chatId));
+
+    const blocker = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    const observer = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    let revocationCommitted = false;
+    try {
+      await blocker`BEGIN`;
+      const [blockerSession] = await blocker<{ pid: number }[]>`SELECT pg_backend_pid()::integer AS pid`;
+      if (!blockerSession) throw new Error("membership revocation session missing");
+      await blocker`UPDATE members SET status = 'removed' WHERE id = ${requester.memberId}`;
+      await blocker`UPDATE agents SET status = 'suspended' WHERE uuid = ${requester.humanAgentUuid}`;
+
+      const pending = dispatch(app, admin, requester, dispatchPayload());
+      await waitForBlockedRequesterMembershipLock(observer, blockerSession.pid);
+      await blocker`COMMIT`;
+      revocationCommitted = true;
+
+      const response = await pending;
+      expect(response.statusCode).toBe(403);
+      expect(response.body).toContain("active Team membership");
+      expect(await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId))).toEqual(messagesBefore);
+      expect(await app.db.select().from(inboxEntries)).toEqual(inboxBefore);
+      expect(await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, firstBody.chatId))).toEqual(
+        membershipBefore,
+      );
+    } finally {
+      if (!revocationCommitted) await blocker`ROLLBACK`;
+      await observer.end();
+      await blocker.end();
+    }
   });
 
   it("keeps mutable Chat topic outside task identity during A to B takeover", async () => {
