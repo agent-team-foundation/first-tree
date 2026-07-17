@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { getCampaign } from "../../../../quickstart/campaigns.js";
 import {
+  buildCampaignActionBootstrap,
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
   buildScanFixBootstrap,
@@ -74,6 +76,31 @@ describe("start-chat bootstrap prose", () => {
     // A brand-new teammate is NOT asked to write to or seed the tree.
     expect(message).not.toContain("first-tree-seed");
     expect(message).not.toContain("reflect them into the tree");
+  });
+});
+
+describe("buildCampaignActionBootstrap for agent-readiness", () => {
+  it("carries the atr-1 report into a review-first direct task", () => {
+    const campaign = getCampaign("agent-readiness");
+    if (!campaign) throw new Error("agent-readiness campaign config is missing");
+
+    const message = buildCampaignActionBootstrap(
+      "Dev",
+      campaign.action,
+      {
+        repoUrl: "https://github.com/octo/app",
+        reportKey: "octo-app-20260716-ab12cd34",
+      },
+      "direct",
+    );
+
+    expect(message).toContain("apply the prioritized fixes from my Agent Team Readiness report");
+    expect(message).toContain(
+      "Machine-readable findings: https://report.first-tree.ai/octo-app-20260716-ab12cd34.json",
+    );
+    expect(message).toContain("verify that its repository.source normalizes to the requested repository URL");
+    expect(message).toContain("Keep any AGENTS.md or Context Tree change review-first and source-backed");
+    expect(message).not.toContain("welcome aboard");
   });
 });
 
