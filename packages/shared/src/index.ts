@@ -915,16 +915,19 @@ export {
   sessionStateSchema,
 } from "./schemas/presence.js";
 export {
-  PROVIDER_MODELS_LIST_TYPE,
-  PROVIDER_MODELS_RESULT_TYPE,
+  PROVIDER_MODEL_CATALOG_SOURCES,
   type ProviderModelCatalog,
   type ProviderModelCatalogSource,
   type ProviderModelOption,
-  type ProviderModelsListCommand,
-  type ProviderModelsResultFrame,
   providerModelCatalogSchema,
   providerModelCatalogSourceSchema,
   providerModelOptionSchema,
+} from "./schemas/provider-model-catalog.js";
+export {
+  PROVIDER_MODELS_LIST_TYPE,
+  PROVIDER_MODELS_RESULT_TYPE,
+  type ProviderModelsListCommand,
+  type ProviderModelsResultFrame,
   providerModelsListCommandSchema,
   providerModelsResultFrameSchema,
 } from "./schemas/provider-models.js";

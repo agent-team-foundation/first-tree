@@ -9,7 +9,7 @@ import {
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
-import { ServiceUnavailableError } from "../errors.js";
+import { BadGatewayError, GatewayTimeoutError, ServiceUnavailableError } from "../errors.js";
 import { stampClientResource } from "../observability/request-context.js";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";
@@ -105,7 +105,8 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
   // return the catalog to the web. Delivery is scoped to the DB-authoritative
   // `clients.instance_id` (local send or PG NOTIFY fan-out). Results are stored
   // in clients.metadata; on waiter timeout we still read that durable copy so a
-  // lost NOTIFY does not false-503. Hard 503 only when offline / truly missing.
+  // lost NOTIFY does not false-fail. Computer offline → 502; reply timeout → 504
+  // (web picker maps both to silent degrade; avoid 503 which triggers retry).
   app.get<{ Params: { clientId: string; provider: string } }>(
     "/:clientId/providers/:provider/models",
     async (request) => {
@@ -117,7 +118,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
       const provider = runtimeProviderSchema.parse(rawProvider);
       const client = await clientService.getClient(app.db, clientId);
       if (!client || !isClientConnectedSomewhere(client) || !client.instanceId) {
-        throw new ServiceUnavailableError(
+        throw new BadGatewayError(
           "Could not list models because this computer is not connected. Make sure the daemon is running, then retry.",
         );
       }
@@ -134,7 +135,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
         if (!delivered) {
           rejectPendingRepliesForClient(clientId, new Error("Computer not connected"));
           await replyPromise.catch(() => undefined);
-          throw new ServiceUnavailableError(
+          throw new BadGatewayError(
             "Could not list models because this computer is not connected. Make sure the daemon is running, then retry.",
           );
         }
@@ -154,7 +155,13 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
         // Race-safe fallback: catalog may already be durable while the wake was lost.
         const stored = await readModelCatalogRpcResult(app.db, clientId, ref);
         if (stored) return stored;
-        throw new ServiceUnavailableError(
+        const timedOut = err instanceof Error && err.message.toLowerCase().includes("timed out");
+        if (timedOut) {
+          throw new GatewayTimeoutError(
+            err instanceof Error ? err.message : "Timed out waiting for this computer to list models.",
+          );
+        }
+        throw new BadGatewayError(
           err instanceof Error
             ? err.message
             : "Could not list models from this computer. Retry after the daemon is connected.",

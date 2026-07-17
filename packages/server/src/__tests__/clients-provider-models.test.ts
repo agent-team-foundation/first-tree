@@ -67,7 +67,7 @@ describe("GET /clients/:clientId/providers/:provider/models", () => {
     }
   });
 
-  it("returns 503 when the daemon is not connected", async () => {
+  it("returns 502 when the daemon is not connected", async () => {
     const app = getApp();
     const admin = await createAdminContext(app, { username: `pm-${crypto.randomUUID().slice(0, 6)}` });
     const res = await app.inject({
@@ -75,7 +75,7 @@ describe("GET /clients/:clientId/providers/:provider/models", () => {
       url: `/api/v1/clients/${admin.clientId}/providers/kimi-code/models`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
   });
 
   it("fans the reverse command to the DB-authoritative instance when remote", async () => {
