@@ -18,6 +18,7 @@ import { markOnboardingResume } from "../utils/onboarding-flags.js";
  */
 const CALLBACK_ERROR_COPY: Record<string, string> = {
   "state-expired": "This authentication request took too long or was already used. Head back and start again.",
+  "provider-denied": "GitHub authorization was canceled. Head back and start again when you're ready.",
   "provider-not-configured": "This sign-in provider is not configured on this First Tree deployment.",
   "provider-exchange-failed": "The sign-in provider did not accept the authentication handshake. Try again.",
   "identity-conflict": "That external account already belongs to another First Tree user.",
@@ -79,30 +80,37 @@ export function OAuthCompletePage() {
     const provider = authProviderForCallbackPath(window.location.pathname);
     const accountCreatedRaw = params.get("accountCreated");
     const accountCreated = accountCreatedRaw === "1" ? true : accountCreatedRaw === "0" ? false : null;
+    const callbackIntent = params.get("callbackIntent");
+    // Legacy sign-in callbacks have no explicit intent. New callbacks name
+    // it; authenticated App-install and identity-management completions must
+    // not consume or fabricate acquisition attempts.
+    const shouldReportAuth = callbackIntent === null || callbackIntent === "sign-in";
 
     if (errorCode) {
-      finishAuthAttempt({
-        provider,
-        result: "failed",
-        next,
-        joinPath: normalizeAuthJoinPath(joinPath),
-        reasonCode: normalizeAuthFailureReason(errorCode),
-        accountCreated,
-      });
+      if (shouldReportAuth)
+        finishAuthAttempt({
+          provider,
+          result: "failed",
+          next,
+          joinPath: normalizeAuthJoinPath(joinPath),
+          reasonCode: normalizeAuthFailureReason(errorCode),
+          accountCreated,
+        });
       setError(CALLBACK_ERROR_COPY[errorCode] ?? "Sign-in did not complete. Please try again.");
       setErrorNext(next);
       return;
     }
 
     if (!accessToken || !refreshToken) {
-      finishAuthAttempt({
-        provider,
-        result: "failed",
-        next,
-        joinPath: normalizeAuthJoinPath(joinPath),
-        reasonCode: "missing_tokens",
-        accountCreated,
-      });
+      if (shouldReportAuth)
+        finishAuthAttempt({
+          provider,
+          result: "failed",
+          next,
+          joinPath: normalizeAuthJoinPath(joinPath),
+          reasonCode: "missing_tokens",
+          accountCreated,
+        });
       setError("Sign-in did not complete. Please try again.");
       return;
     }
@@ -128,23 +136,25 @@ export function OAuthCompletePage() {
         // (falling back to the server default when there's no valid one), and
         // selecting here would clobber it.
         if (org && orgPinned) await selectOrganization(org);
-        finishAuthAttempt({
-          provider,
-          result: "success",
-          next,
-          joinPath: normalizeAuthJoinPath(joinPath),
-          accountCreated,
-        });
+        if (shouldReportAuth)
+          finishAuthAttempt({
+            provider,
+            result: "success",
+            next,
+            joinPath: normalizeAuthJoinPath(joinPath),
+            accountCreated,
+          });
         navigate(next, { replace: true });
       } catch {
-        finishAuthAttempt({
-          provider,
-          result: "failed",
-          next,
-          joinPath: normalizeAuthJoinPath(joinPath),
-          reasonCode: "session_bootstrap_failed",
-          accountCreated,
-        });
+        if (shouldReportAuth)
+          finishAuthAttempt({
+            provider,
+            result: "failed",
+            next,
+            joinPath: normalizeAuthJoinPath(joinPath),
+            reasonCode: "session_bootstrap_failed",
+            accountCreated,
+          });
         setError("Sign-in completed, but First Tree couldn't open your workspace. Please try again.");
         setErrorNext(next);
       }

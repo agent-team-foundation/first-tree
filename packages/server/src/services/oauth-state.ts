@@ -47,7 +47,7 @@ type StatePayload = {
    * browser). Absent on the plain `/auth/github/start` sign-in flow.
    */
   kickoffUserId?: string;
-  intent?: "sign-in" | "link" | "unlink";
+  intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
   provider?: "google" | "github";
   oidcNonce?: string;
@@ -59,7 +59,7 @@ export type SignOAuthStateOptions = {
   targetOrganizationId?: string;
   /** See `StatePayload.kickoffUserId`. */
   kickoffUserId?: string;
-  intent?: "sign-in" | "link" | "unlink";
+  intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
   provider?: "google" | "github";
   oidcNonce?: string;
@@ -115,7 +115,7 @@ export async function verifyOAuthState(
   next: string;
   targetOrganizationId?: string;
   kickoffUserId?: string;
-  intent?: "sign-in" | "link" | "unlink";
+  intent?: "sign-in" | "link" | "unlink" | "install";
   userId?: string;
   provider?: "google" | "github";
   oidcNonce?: string;
@@ -139,7 +139,7 @@ export async function verifyOAuthState(
   if (payload.kickoffUserId !== undefined && typeof payload.kickoffUserId !== "string") {
     throw new Error("OAuth state payload malformed");
   }
-  if (payload.intent !== undefined && !["sign-in", "link", "unlink"].includes(payload.intent)) {
+  if (payload.intent !== undefined && !["sign-in", "link", "unlink", "install"].includes(payload.intent)) {
     throw new Error("OAuth state payload malformed");
   }
   if (payload.provider !== undefined && payload.provider !== "google" && payload.provider !== "github") {

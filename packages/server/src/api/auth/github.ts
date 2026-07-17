@@ -87,7 +87,10 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
 
-    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext, { provider: "github" });
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext, {
+      intent: "sign-in",
+      provider: "github",
+    });
     const isProd = process.env.NODE_ENV === "production";
     reply.header(
       "Set-Cookie",
@@ -116,7 +119,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // `installation_id` from the URL is unsigned/forgeable, so it is NEVER a
     // binding authority. Binding is an explicit connect-panel action against
     // the row the trusted `installation.created` webhook recorded.
-    const { code, state, installation_id: installationIdRaw } = parsed;
+    const { code, state, error: providerError, installation_id: installationIdRaw } = parsed;
 
     if (!state) {
       // Stateless setup landing — GitHub redirects here from its OWN
@@ -142,7 +145,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     let next: string;
     let targetOrganizationId: string | null = null;
     let kickoffUserId: string | null = null;
-    let intent: "sign-in" | "link" | "unlink" = "sign-in";
+    let intent: CallbackIntent = "sign-in";
     let stateUserId: string | null = null;
     let targetIdentityId: string | null = null;
     let verified: Awaited<ReturnType<typeof verifyOAuthState>>;
@@ -151,7 +154,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       next = verified.next;
       targetOrganizationId = verified.targetOrganizationId ?? null;
       kickoffUserId = verified.kickoffUserId ?? null;
-      intent = verified.intent ?? "sign-in";
+      intent = verified.intent ?? (targetOrganizationId ? "install" : "sign-in");
       stateUserId = verified.userId ?? null;
       targetIdentityId = verified.targetIdentityId ?? null;
     } catch (err) {
@@ -165,12 +168,32 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return redirectCallbackError(reply, "state-expired");
     }
 
+    // A verified state is single-use whether GitHub returns a code, a
+    // provider denial, or an approval-request setup landing.
+    reply.header(
+      "Set-Cookie",
+      buildCookie({
+        name: OAUTH_STATE_COOKIE,
+        value: "",
+        maxAge: 0,
+        secure: process.env.NODE_ENV === "production",
+      }),
+    );
+
     if (verified.provider && verified.provider !== "github") {
       app.log.warn(
         { event: "oauth.callback_rejected", provider: "github", reason: "provider-mismatch" },
         "OAuth state provider does not match callback",
       );
-      return redirectCallbackError(reply, "state-expired", next);
+      return redirectCallbackError(reply, "state-expired", next, { callbackIntent: intent });
+    }
+
+    if (providerError) {
+      app.log.info(
+        { event: "oauth.provider_denied", provider: "github", intent },
+        "GitHub authorization was denied or canceled",
+      );
+      return redirectCallbackError(reply, "provider-denied", next, { callbackIntent: intent });
     }
 
     if (!code) {
@@ -187,17 +210,6 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       );
       return reply.redirect(next, 302);
     }
-
-    // Clear the state cookie even on success — it's single-use.
-    reply.header(
-      "Set-Cookie",
-      buildCookie({
-        name: OAUTH_STATE_COOKIE,
-        value: "",
-        maxAge: 0,
-        secure: process.env.NODE_ENV === "production",
-      }),
-    );
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
     let profile: GithubProfile;
@@ -223,7 +235,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       };
     } catch (err) {
       app.log.warn({ err, event: "oauth.exchange_failed", provider: "github" }, "GitHub OAuth exchange failed");
-      return redirectCallbackError(reply, "github-exchange-failed", next);
+      return redirectCallbackError(reply, "github-exchange-failed", next, { callbackIntent: intent });
     }
 
     // Pass the URL `installation_id` (validated to a finite number, else null)
@@ -234,7 +246,8 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
 
     if (intent === "link" || intent === "unlink") {
-      if (!stateUserId) return redirectCallbackError(reply, "state-expired", ACCOUNT_RETURN_PATH);
+      if (!stateUserId)
+        return redirectCallbackError(reply, "state-expired", ACCOUNT_RETURN_PATH, { callbackIntent: intent });
       const external = githubExternalProfile({
         id: profile.githubId,
         login: profile.login,
@@ -281,6 +294,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     return completeOauthFlow(app, request, reply, profile, next, tokens, callbackInstallationId, targetOrganizationId, {
       kickoffUserId,
       browserFacing: true,
+      callbackIntent: intent === "install" ? "install" : "sign-in",
     });
   });
 
@@ -393,6 +407,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
  */
 type CallbackErrorCode =
   | "state-expired"
+  | "provider-denied"
   | "provider-not-configured"
   | "provider-exchange-failed"
   | "identity-conflict"
@@ -407,6 +422,8 @@ type CallbackErrorCode =
   | "invite-required"
   | "membership-unresolved";
 
+type CallbackIntent = "sign-in" | "link" | "unlink" | "install";
+
 /**
  * The live `/callback` route is a full-page browser navigation (GitHub
  * redirects the user's browser here), so error replies must land the user
@@ -420,9 +437,19 @@ type CallbackErrorCode =
  * false-success escape hatch right on the failure page — normalize it to
  * the onboarding flow itself.
  */
-function redirectCallbackError(reply: FastifyReply, code: CallbackErrorCode, next?: string) {
+function redirectCallbackError(
+  reply: FastifyReply,
+  code: CallbackErrorCode,
+  next?: string,
+  metadata: { callbackIntent?: CallbackIntent; accountCreated?: boolean } = {},
+) {
   const recoveryNext = next === "/onboarding/connected" ? "/onboarding" : next;
-  const fragment = new URLSearchParams({ error: code, ...(recoveryNext ? { next: recoveryNext } : {}) }).toString();
+  const fragment = new URLSearchParams({
+    error: code,
+    ...(recoveryNext ? { next: recoveryNext } : {}),
+    ...(metadata.callbackIntent ? { callbackIntent: metadata.callbackIntent } : {}),
+    ...(metadata.accountCreated !== undefined ? { accountCreated: metadata.accountCreated ? "1" : "0" } : {}),
+  }).toString();
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
 }
 
@@ -471,6 +498,8 @@ async function completeOauthFlow(
      * dev/test suites assert on status codes).
      */
     browserFacing?: boolean;
+    /** Distinguishes acquisition sign-in from an authenticated App install. */
+    callbackIntent?: "sign-in" | "install";
     /**
      * DEV-CALLBACK ONLY. When true, the `installationId` stub is bound
      * directly to the resolved org (so a local QA session looks connected
@@ -480,7 +509,7 @@ async function completeOauthFlow(
     devBindInstallation?: boolean;
   } = {},
 ) {
-  const { kickoffUserId = null, browserFacing = false, devBindInstallation = false } = opts;
+  const { kickoffUserId = null, browserFacing = false, callbackIntent = "sign-in", devBindInstallation = false } = opts;
   const account = await findOrCreateGithubAccount(app.db, profile, oauthTokens);
   const { userId } = account;
   const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
@@ -516,7 +545,8 @@ async function completeOauthFlow(
       });
     } catch (error) {
       if (!(error instanceof OAuthBootstrapError)) throw error;
-      if (browserFacing) return redirectCallbackError(reply, error.code, next);
+      if (browserFacing)
+        return redirectCallbackError(reply, error.code, next, { callbackIntent, accountCreated: account.created });
       const statusCode = error.code === "invite-invalid" ? 404 : 403;
       return reply.status(statusCode).send({ error: oauthBootstrapErrorMessage(error.code) });
     }
@@ -563,7 +593,11 @@ async function completeOauthFlow(
         },
         "install callback: bind authority is not an active admin of the target org — refusing to bind",
       );
-      if (browserFacing) return redirectCallbackError(reply, "install-not-admin", next);
+      if (browserFacing)
+        return redirectCallbackError(reply, "install-not-admin", next, {
+          callbackIntent,
+          accountCreated: account.created,
+        });
       return reply.status(403).send({ error: "Not an admin of the First Tree organization this installation targets" });
     }
     if (bindAuthorityUserId !== userId) {
@@ -587,7 +621,10 @@ async function completeOauthFlow(
         },
         "install callback: OAuth identity differs from the kickoff admin — refusing (install must use the same GitHub account)",
       );
-      return redirectCallbackError(reply, "install-not-verified", next);
+      return redirectCallbackError(reply, "install-not-verified", next, {
+        callbackIntent,
+        accountCreated: account.created,
+      });
     }
     // No bind happens here: the `installation.created` webhook records the
     // installation (with its requester/installer anchors) and the admin
@@ -631,7 +668,11 @@ async function completeOauthFlow(
   // webhook anchors, and bind only on an explicit connect action there.
 
   if (!resolved) {
-    if (browserFacing) return redirectCallbackError(reply, "membership-unresolved");
+    if (browserFacing)
+      return redirectCallbackError(reply, "membership-unresolved", undefined, {
+        callbackIntent,
+        accountCreated: account.created,
+      });
     return reply.status(500).send({ error: "Failed to resolve membership" });
   }
 
@@ -650,6 +691,7 @@ async function completeOauthFlow(
     next,
     joinPath,
     accountCreated: account.created ? "1" : "0",
+    callbackIntent,
   };
   if (resolvedOrganizationId) fragmentParams.org = resolvedOrganizationId;
   if (orgPinned) fragmentParams.orgPinned = "1";

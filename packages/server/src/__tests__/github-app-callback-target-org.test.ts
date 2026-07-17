@@ -159,6 +159,8 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       .where(eq(members.id, orgBMember.id));
 
     const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      intent: "install",
+      provider: "github",
       targetOrganizationId: orgBId,
       kickoffUserId: admin.userId,
     });
@@ -179,6 +181,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       // the target org instead of restoring the user's last-used one.
       expect(params.get("org")).toBe(orgBId);
       expect(params.get("orgPinned")).toBe("1");
+      expect(params.get("callbackIntent")).toBe("install");
     } finally {
       restore();
     }
@@ -493,6 +496,8 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     // panel), whose polling picks the installation up once approved.
     const app = getApp();
     const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      intent: "install",
+      provider: "github",
       targetOrganizationId: uuidv7(),
       kickoffUserId: uuidv7(),
     });

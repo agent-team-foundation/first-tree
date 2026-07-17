@@ -247,6 +247,8 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       app.config.secrets.jwtSecret,
       resolvePostInstallNext(request.query.next),
       {
+        intent: "install",
+        provider: "github",
         targetOrganizationId: scope.organizationId,
         kickoffUserId: scope.userId,
       },

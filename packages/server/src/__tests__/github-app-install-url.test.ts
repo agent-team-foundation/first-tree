@@ -52,6 +52,8 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
     // on — the browser's github.com identity at callback time may differ.
     expect(verified.targetOrganizationId).toBe(admin.organizationId);
     expect(verified.kickoffUserId).toBe(admin.userId);
+    expect(verified.intent).toBe("install");
+    expect(verified.provider).toBe("github");
   });
 
   it("bakes an allowlisted ?next= into the signed state (onboarding flow)", async () => {

@@ -92,10 +92,69 @@ describe("auth analytics", () => {
     expect(analyticsMocks.trackEvent.mock.calls.some(([name]) => name === "sign_up")).toBe(false);
   });
 
+  it("counts a committed account once when bootstrap fails, then treats the retry as reused", () => {
+    const firstAttemptId = beginAuthAttempt("github", "/invite/missing-token");
+    finishAuthAttempt({
+      provider: "github",
+      result: "failed",
+      next: "/invite/missing-token",
+      reasonCode: "invite-invalid",
+      accountCreated: true,
+    });
+
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledWith(
+      "auth_result",
+      expect.objectContaining({
+        auth_attempt_id: firstAttemptId,
+        result: "failed",
+        account_type: "created",
+        reason_code: "invite-invalid",
+      }),
+    );
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledWith(
+      "sign_up",
+      expect.objectContaining({ auth_attempt_id: firstAttemptId, method: "github" }),
+    );
+
+    // Reloading the callback cannot emit a second conversion: the first
+    // completion consumed its matching anonymous attempt.
+    const callCountAfterFirstCompletion = analyticsMocks.trackEvent.mock.calls.length;
+    finishAuthAttempt({
+      provider: "github",
+      result: "failed",
+      next: "/invite/missing-token",
+      reasonCode: "invite-invalid",
+      accountCreated: true,
+    });
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledTimes(callCountAfterFirstCompletion);
+
+    beginAuthAttempt("github", "/");
+    finishAuthAttempt({
+      provider: "github",
+      result: "success",
+      next: "/",
+      joinPath: "solo",
+      accountCreated: false,
+    });
+    expect(analyticsMocks.trackEvent.mock.calls.filter(([name]) => name === "sign_up")).toHaveLength(1);
+  });
+
+  it("does not fabricate an auth result without a matching provider attempt", () => {
+    finishAuthAttempt({ provider: "github", result: "failed", next: "/", reasonCode: "provider-denied" });
+    expect(analyticsMocks.trackEvent).not.toHaveBeenCalled();
+
+    beginAuthAttempt("google", "/");
+    const callsAfterGoogleStart = analyticsMocks.trackEvent.mock.calls.length;
+    finishAuthAttempt({ provider: "github", result: "success", next: "/", accountCreated: false });
+    expect(analyticsMocks.trackEvent).toHaveBeenCalledTimes(callsAfterGoogleStart);
+    expect(window.sessionStorage.getItem("first-tree:auth-attempt")).not.toBeNull();
+  });
+
   it("classifies callback paths and safe entry points", () => {
     expect(authProviderForCallbackPath("/auth/complete")).toBe("google");
     expect(authProviderForCallbackPath("/auth/github/complete")).toBe("github");
     expect(authEntryPoint("/")).toBe("login");
     expect(authEntryPoint("/settings/github")).toBe("deep_link");
+    expect(normalizeAuthFailureReason("provider-denied")).toBe("provider-denied");
   });
 });

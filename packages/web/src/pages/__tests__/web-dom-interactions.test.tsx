@@ -1358,6 +1358,7 @@ describe("web DOM interaction coverage", () => {
 
   it("renders friendly copy for callback error fragments", async () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
     const replaceState = vi.fn();
     Object.defineProperty(window, "history", { configurable: true, value: { replaceState } });
 
@@ -1377,6 +1378,22 @@ describe("web DOM interaction coverage", () => {
     expect(back?.getAttribute("href")).toBe("/settings/github");
     await unmountRoot(expired.root);
 
+    // Provider cancellation closes the paired sign-in attempt with a fixed,
+    // user-readable reason instead of falling through as a setup landing.
+    beginAuthAttempt("github", "/");
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#error=provider-denied&next=/&callbackIntent=sign-in",
+        pathname: "/auth/github/complete",
+      },
+    });
+    const denied = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await waitForText("authorization was canceled", denied.container);
+    expect(window.sessionStorage.getItem("first-tree:auth-attempt")).toBeNull();
+    await unmountRoot(denied.root);
+
     // Install refused: start-chat admin's authority no longer holds.
     Object.defineProperty(window, "location", {
       configurable: true,
@@ -1391,6 +1408,7 @@ describe("web DOM interaction coverage", () => {
 
   it("activates the callback org only when the server pins it", async () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
     Object.defineProperty(window, "history", {
       configurable: true,
       value: { replaceState: vi.fn() },
@@ -1399,11 +1417,12 @@ describe("web DOM interaction coverage", () => {
     // A pinned destination (install-return keeps joinPath="returning" yet
     // names a specific org): the SPA must activate it, otherwise a concurrent
     // org switch would strand the Settings page on the user's last-used org.
+    const staleAttemptId = beginAuthAttempt("github", "/");
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
         ...window.location,
-        hash: "#access=a&refresh=r&next=/settings/github&joinPath=returning&org=org-b&orgPinned=1",
+        hash: "#access=a&refresh=r&next=/settings/github&joinPath=returning&org=org-b&orgPinned=1&callbackIntent=install",
         pathname: "/auth/github/complete",
       },
     });
@@ -1416,6 +1435,7 @@ describe("web DOM interaction coverage", () => {
     const pinned = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
     await flush();
     expect(pinnedSelect).toHaveBeenCalledWith("org-b");
+    expect(JSON.parse(window.sessionStorage.getItem("first-tree:auth-attempt") ?? "{}").id).toBe(staleAttemptId);
     await unmountRoot(pinned.root);
 
     // A plain returning sign-in carries no pin: the SPA keeps the user's own

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   authProviderAvailabilitySchema,
   authProviderConnectionsResponseSchema,
+  githubCallbackQuerySchema,
   googleCallbackQuerySchema,
   oauthIntentSchema,
 } from "../schemas/oauth.js";
@@ -19,5 +20,13 @@ describe("OAuth schemas", () => {
   it("accepts a Google authorization code and state", () => {
     expect(googleCallbackQuerySchema.safeParse({ code: "code", state: "state" }).success).toBe(true);
     expect(googleCallbackQuerySchema.safeParse({ code: "code" }).success).toBe(false);
+  });
+
+  it("preserves GitHub provider denial and setup callback shapes", () => {
+    expect(githubCallbackQuerySchema.parse({ error: "access_denied", state: "state" })).toMatchObject({
+      error: "access_denied",
+      state: "state",
+    });
+    expect(githubCallbackQuerySchema.safeParse({ state: "state", setup_action: "request" }).success).toBe(true);
   });
 });

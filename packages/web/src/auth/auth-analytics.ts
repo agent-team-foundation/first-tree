@@ -7,6 +7,7 @@ export type AuthEntryPoint = "login" | "deep_link" | "invite" | "campaign";
 export type AuthJoinPath = "solo" | "invite" | "returning" | "unknown";
 export type AuthFailureReason =
   | "state-expired"
+  | "provider-denied"
   | "provider-not-configured"
   | "provider-exchange-failed"
   | "identity-conflict"
@@ -37,6 +38,7 @@ const VARIANT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 
 const CALLBACK_FAILURE_REASONS = new Set<AuthFailureReason>([
   "state-expired",
+  "provider-denied",
   "provider-not-configured",
   "provider-exchange-failed",
   "identity-conflict",
@@ -145,17 +147,22 @@ export function finishAuthAttempt(input: {
   if (typeof window === "undefined") return;
   const stored = readAttempt();
   const attempt = stored?.provider === input.provider ? stored : null;
-  const entryPoint = attempt?.entryPoint ?? authEntryPoint(input.next);
-  const attribution = attempt ?? campaignAttribution(input.next);
+  // A callback without its matching anonymous start is not part of the
+  // acquisition funnel. Besides keeping start/result joinable, this makes
+  // completion idempotent across reloads and preserves an attempt when a
+  // different provider completes. Explicit non-sign-in flows are filtered
+  // by the callback page before reaching this helper.
+  if (!attempt) return;
+  const entryPoint = attempt.entryPoint;
   const params: Record<string, unknown> = {
     provider: input.provider,
     result: input.result,
     entry_point: entryPoint,
     join_path: input.joinPath ?? "unknown",
     account_type: input.accountCreated === true ? "created" : input.accountCreated === false ? "reused" : "unknown",
-    ...(attempt ? { auth_attempt_id: attempt.id } : {}),
-    ...(attribution?.scanAttemptId ? { scan_attempt_id: attribution.scanAttemptId } : {}),
-    ...(attribution?.variant ? { variant: attribution.variant } : {}),
+    auth_attempt_id: attempt.id,
+    ...(attempt.scanAttemptId ? { scan_attempt_id: attempt.scanAttemptId } : {}),
+    ...(attempt.variant ? { variant: attempt.variant } : {}),
     ...(input.reasonCode ? { reason_code: input.reasonCode } : {}),
   };
   trackEvent("auth_result", params);
@@ -166,9 +173,9 @@ export function finishAuthAttempt(input: {
     trackEvent("sign_up", {
       method: input.provider,
       entry_point: entryPoint,
-      ...(attempt ? { auth_attempt_id: attempt.id } : {}),
-      ...(attribution?.scanAttemptId ? { scan_attempt_id: attribution.scanAttemptId } : {}),
-      ...(attribution?.variant ? { variant: attribution.variant } : {}),
+      auth_attempt_id: attempt.id,
+      ...(attempt.scanAttemptId ? { scan_attempt_id: attempt.scanAttemptId } : {}),
+      ...(attempt.variant ? { variant: attempt.variant } : {}),
     });
   }
   window.sessionStorage.removeItem(AUTH_ATTEMPT_KEY);

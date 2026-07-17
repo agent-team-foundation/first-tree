@@ -155,7 +155,11 @@ async function completeGoogleSignIn(
       userAgent: request.headers["user-agent"] ?? null,
     });
   } catch (error) {
-    if (error instanceof OAuthBootstrapError) return redirectError(reply, error.code, next);
+    if (error instanceof OAuthBootstrapError)
+      return redirectError(reply, error.code, next, {
+        callbackIntent: "sign-in",
+        accountCreated: account.created,
+      });
     throw error;
   }
   if (bootstrap.teamCreated) {
@@ -177,6 +181,7 @@ async function completeGoogleSignIn(
     next: bootstrap.next,
     joinPath: bootstrap.joinPath,
     accountCreated: account.created ? "1" : "0",
+    callbackIntent: "sign-in",
     org: bootstrap.organizationId,
     ...(bootstrap.orgPinned ? { orgPinned: "1" } : {}),
   }).toString();
@@ -200,7 +205,17 @@ function stateCookie(value: string, maxAge: number, encryptionKey: string): stri
   });
 }
 
-function redirectError(reply: FastifyReply, code: string, next = "/") {
-  const fragment = new URLSearchParams({ error: code, next }).toString();
+function redirectError(
+  reply: FastifyReply,
+  code: string,
+  next = "/",
+  metadata: { callbackIntent?: "sign-in"; accountCreated?: boolean } = {},
+) {
+  const fragment = new URLSearchParams({
+    error: code,
+    next,
+    ...(metadata.callbackIntent ? { callbackIntent: metadata.callbackIntent } : {}),
+    ...(metadata.accountCreated !== undefined ? { accountCreated: metadata.accountCreated ? "1" : "0" } : {}),
+  }).toString();
   return reply.redirect(`/auth/complete#${fragment}`, 302);
 }
