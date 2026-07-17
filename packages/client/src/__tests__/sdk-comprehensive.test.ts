@@ -21,6 +21,17 @@ const githubEntity = {
   number: 42,
 };
 
+const gitlabEntity = {
+  entityType: "pull_request",
+  entityUrl: "https://gitlab.example/acme/api/-/merge_requests/42",
+  projectPath: "acme/api",
+  entityIid: 42,
+  title: null,
+  state: null,
+  status: "pending",
+  boundVia: "agent_declared",
+};
+
 function jsonResponse(data: unknown, status = 200, headers: TestHeaders = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -189,6 +200,33 @@ describe("FirstTreeHubSDK comprehensive wrappers", () => {
       method: "PATCH",
       body: JSON.stringify({ topic: "New topic", description: null }),
     });
+  });
+
+  it("builds typed GitLab entity follow, list, and URL-unfollow requests", async () => {
+    const fetchMock = mockFetch(
+      jsonResponse({ status: "created", entity: gitlabEntity }, 201),
+      jsonResponse({ items: [gitlabEntity] }),
+      jsonResponse({ removed: 1 }),
+    );
+    const sdk = makeSdk();
+
+    await expect(sdk.followGitlabEntity("chat-1", { entityUrl: gitlabEntity.entityUrl })).resolves.toEqual({
+      status: "created",
+      entity: gitlabEntity,
+    });
+    await expect(sdk.listChatGitlabEntities("chat-1")).resolves.toEqual({ items: [gitlabEntity] });
+    await expect(sdk.unfollowGitlabEntity("chat-1", gitlabEntity.entityUrl)).resolves.toEqual({ removed: 1 });
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      `${SERVER_URL}/api/v1/agent/chats/chat-1/gitlab-entities`,
+      `${SERVER_URL}/api/v1/agent/chats/chat-1/gitlab-entities`,
+      `${SERVER_URL}/api/v1/agent/chats/chat-1/gitlab-entities?entity=${encodeURIComponent(gitlabEntity.entityUrl)}`,
+    ]);
+    expect(requestInit(fetchMock, 0)).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ entityUrl: gitlabEntity.entityUrl }),
+    });
+    expect(requestInit(fetchMock, 2)).toMatchObject({ method: "DELETE" });
   });
 
   it("builds document wrapper paths, queries, and JSON bodies", async () => {
