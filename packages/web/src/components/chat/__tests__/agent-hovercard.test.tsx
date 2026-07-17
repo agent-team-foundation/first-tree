@@ -136,7 +136,7 @@ describe("AgentHovercard", () => {
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("shows identity, one chat status, and a calm two-route footer without profile/runtime metadata", async () => {
+  it("shows identity, one chat status, and lightweight navigation without profile/runtime metadata", async () => {
     seedPassA(
       "chat-1",
       [AGENT_PARTICIPANT],
@@ -172,7 +172,9 @@ describe("AgentHovercard", () => {
     expect(card.textContent).not.toContain("claude-code");
     expect(card.textContent).not.toContain("gandy-mbp");
     const actions = card.querySelector<HTMLElement>("[data-participant-actions]");
-    expect(actions?.style.gridTemplateColumns).toBe("repeat(2, minmax(0, 1fr))");
+    expect(actions?.classList.contains("flex")).toBe(true);
+    expect(actions?.style.border).toBe("");
+    expect(actions?.style.background).toBe("");
     expect([...card.querySelectorAll("a")].map((a) => a.textContent)).toEqual(["New chat", "View profile"]);
     expect(mocks.getAgent).toHaveBeenCalledWith("a1");
   });

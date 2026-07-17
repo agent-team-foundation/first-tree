@@ -115,7 +115,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
       requireGithubGovernanceBootstrap: true,
       requireSourceRead: false,
       requireWorktree: false,
-      responseHints: ["tree init", "CODEOWNERS", "ruleset"],
+      responseHints: ["tree init", "ruleset", "pull request"],
     },
     fixture: {
       sourceRepoState: "bare-readable",
@@ -127,11 +127,11 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "unbound-github-tree-governance-bootstrap",
     prompt:
-      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run the state check, create and bind the tree with tree init --dir context-tree, then configure GitHub governance for the newly created Context Repo. Resolve a satisfiable non-author Code Owner, write and push CODEOWNERS, validate it on GitHub, then create or update the repository-local default-branch ruleset. Do not proceed to Phase 1 skeleton work in this gate.",
+      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run the state check, create and bind the tree with tree init --dir context-tree, then configure the repository-local default-branch ruleset. Require pull requests and block force pushes, but require zero GitHub approvals and no Code Owner review. Do not create or push CODEOWNERS, and do not proceed to Phase 1 skeleton work in this gate.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
-    tags: ["unbound-tree", "github-governance", "codeowners"],
+    tags: ["unbound-tree", "github-governance", "pr-only"],
     tier: "gate",
   },
   {
@@ -141,7 +141,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
       requireGithubGovernanceRecovery: true,
       requireSourceRead: false,
       requireWorktree: false,
-      responseHints: ["tree init", "CODEOWNERS", "ruleset"],
+      responseHints: ["tree init", "ruleset", "pull request", "force push"],
     },
     fixture: {
       sourceRepoState: "bare-readable",
@@ -153,7 +153,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "unbound-github-governance-fail-closed",
     prompt:
-      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run tree init --dir context-tree. If GitHub governance setup cannot resolve or validate a satisfiable non-author Code Owner, fail closed: do not enable require_code_owner_review or POST/PUT the ruleset, continue the seed flow, and tell the user the manual CODEOWNERS plus branch-rules recovery checklist.",
+      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run tree init --dir context-tree. If the existing repository ruleset cannot be inspected, do not POST or PUT a replacement blindly; continue the seed flow and tell the user the manual branch-rules recovery checklist: require pull requests, block force pushes, and require zero GitHub approvals or Code Owner reviews.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",

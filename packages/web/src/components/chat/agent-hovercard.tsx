@@ -152,10 +152,11 @@ function AgentHovercardBody({ agentId, chatId, onAction }: { agentId: string; ch
         <ParticipantKind isHuman={isHuman} isSelf={isSelf} statusView={statusView} />
       </div>
 
-      {/* A single calm footer replaces the old filled-primary + ghost pair.
-          New chat comes first (Workspace first); Agent Detail is an equal,
-          secondary route. A human viewing their own identity gets no dead-end
-          self-chat action. */}
+      {/* Lightweight navigation keeps identity as the card's visual subject:
+          no persistent action container, fill, or divider. New chat comes
+          first (Workspace first); Agent Detail remains an equal secondary
+          route. A human viewing their own identity gets no dead-end self-chat
+          action. */}
       {isSelf ? null : (
         <ParticipantActions
           chatPath={chatPath}
@@ -211,29 +212,20 @@ function ParticipantActions({
   onAction: () => void;
 }) {
   const actionClass =
-    "text-label flex min-h-10 min-w-0 items-center justify-center gap-1 px-1 transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring active:bg-[var(--bg-active)]";
+    "text-label inline-flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-[var(--radius-input)] px-1.5 transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring active:bg-[var(--bg-active)]";
   return (
     <nav
       aria-label="Participant actions"
-      className="grid overflow-hidden rounded-[var(--radius-input)]"
+      className="flex items-center"
       data-participant-actions
-      style={{
-        gridTemplateColumns: profilePath ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)",
-        border: "var(--hairline) solid var(--border)",
-        background: "var(--bg-sunken)",
-      }}
+      style={{ gap: "var(--sp-2)" }}
     >
       <Link to={chatPath} onClick={onAction} className={actionClass} style={{ color: "var(--fg-2)" }}>
         <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="truncate">New chat</span>
       </Link>
       {profilePath ? (
-        <Link
-          to={profilePath}
-          onClick={onAction}
-          className={actionClass}
-          style={{ color: "var(--fg-2)", borderLeft: "var(--hairline) solid var(--border)" }}
-        >
+        <Link to={profilePath} onClick={onAction} className={actionClass} style={{ color: "var(--fg-2)" }}>
           <UserRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span className="truncate">View profile</span>
         </Link>

@@ -82,8 +82,8 @@ function projectChatGitlabEntity(row: GitlabEntityMapping): ChatGitlabEntity {
   if (row.entityType !== "issue" && row.entityType !== "pull_request") {
     throw new Error(`Unsupported persisted GitLab entity type: ${row.entityType}`);
   }
-  if (!isExplicitGitlabDeclaration(row.boundVia)) {
-    throw new Error(`GitLab identity target is not an explicit chat follow: ${row.boundVia}`);
+  if (!isExplicitGitlabDeclaration(row.boundVia) && row.boundVia !== "identity_target") {
+    throw new Error(`Unsupported persisted GitLab binding provenance: ${row.boundVia}`);
   }
   return {
     entityType: row.entityType,
@@ -106,6 +106,7 @@ async function declareGitlabEntityFollowWithStatus(
     declaredByAgentId: string;
     boundVia?: "agent_declared" | "human_declared";
     entityUrl: string;
+    acceptIdentityTarget?: boolean;
   },
 ): Promise<{ row: GitlabEntityMapping; created: boolean }> {
   return withCurrentGitlabConnectionFence(
@@ -122,7 +123,7 @@ async function declareGitlabEntityFollowWithStatus(
         eq(gitlabEntityChatMappings.entityType, parsed.entityType),
         eq(gitlabEntityChatMappings.entityIid, parsed.entityIid),
         eq(gitlabEntityChatMappings.active, true),
-        explicitGitlabDeclarationPredicate(),
+        ...(input.acceptIdentityTarget ? [] : [explicitGitlabDeclarationPredicate()]),
       );
       const [existing] = await rawTx.select().from(gitlabEntityChatMappings).where(baseMatch).limit(1);
       if (existing) return { row: existing, created: false };
@@ -182,6 +183,7 @@ export async function declareCurrentGitlabEntityFollow(
   const result = await declareGitlabEntityFollowWithStatus(db, {
     ...input,
     boundVia: "agent_declared",
+    acceptIdentityTarget: true,
   });
   return {
     status: result.created ? "created" : "already_following",
@@ -204,12 +206,44 @@ export async function listChatGitlabEntities(db: Database, chatId: string) {
     .orderBy(asc(gitlabEntityChatMappings.createdAt));
 }
 
-export async function listDeclaredChatGitlabEntities(
+/**
+ * Public Web projection of every active GitLab binding in a chat.
+ *
+ * Unlike agent-facing `gitlab following`, this includes automatic
+ * `identity_target` rows so a webhook-created chat shows the MR/Issue it is
+ * already routing. Rows are deduplicated by the provider-visible project path,
+ * entity type, and IID because an explicit declaration and an identity route
+ * may independently bind the same entity to one chat.
+ */
+export async function listVisibleChatGitlabEntities(
   db: Database,
   chatId: string,
 ): Promise<ChatGitlabEntityListResponse> {
-  const rows = await listChatGitlabEntities(db, chatId);
-  return { items: rows.map(projectChatGitlabEntity) };
+  const rows = await db
+    .select()
+    .from(gitlabEntityChatMappings)
+    .where(and(eq(gitlabEntityChatMappings.chatId, chatId), eq(gitlabEntityChatMappings.active, true)))
+    .orderBy(asc(gitlabEntityChatMappings.createdAt));
+  const selected = new Map<string, GitlabEntityMapping>();
+  for (const row of rows) {
+    const key = `${row.projectPathNormalized}:${row.entityType}:${row.entityIid}`;
+    const current = selected.get(key);
+    if (
+      !current ||
+      (current.projectId === null && row.projectId !== null) ||
+      (current.title === null && row.title !== null)
+    ) {
+      selected.set(key, row);
+    }
+  }
+  return { items: [...selected.values()].map(projectChatGitlabEntity) };
+}
+
+export async function listCurrentChatGitlabEntities(
+  db: Database,
+  chatId: string,
+): Promise<ChatGitlabEntityListResponse> {
+  return listVisibleChatGitlabEntities(db, chatId);
 }
 
 /** Existing mapping-id human/Web removal contract. */
@@ -228,7 +262,7 @@ export async function removeGitlabEntityFollow(db: Database, chatId: string, map
   return removed.length;
 }
 
-/** Agent/CLI URL contract: remove only explicit declarations in this chat. */
+/** Agent/CLI URL contract: remove every active binding for this entity in this chat. */
 export async function removeCurrentGitlabEntityFollow(
   db: Database,
   input: { organizationId: string; chatId: string; entityUrl: string },
@@ -245,7 +279,6 @@ export async function removeCurrentGitlabEntityFollow(
           eq(gitlabEntityChatMappings.entityType, parsed.entityType),
           eq(gitlabEntityChatMappings.entityIid, parsed.entityIid),
           eq(gitlabEntityChatMappings.active, true),
-          explicitGitlabDeclarationPredicate(),
         ),
       )
       .returning({ id: gitlabEntityChatMappings.id });

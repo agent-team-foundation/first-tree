@@ -137,18 +137,17 @@ ${
   evalCase.expected.requireGithubGovernanceBootstrap
     ? `## GitHub Governance Eval Exception
 
-This case uses local shims for \`tree init\`, \`gh\`, \`git push\`, and the local
-bare \`origin\` created by the shim. You may perform only the simulated Context
-Repo governance path requested in the prompt: create the tree, write and push
-\`.github/CODEOWNERS\` to the shimmed origin, validate it through the \`gh\` shim,
+This case uses local shims for \`tree init\` and \`gh\`. You may perform only the
+simulated Context Repo governance path requested in the prompt: create the tree
 and create/update the repository-local ruleset through the \`gh\` shim. Do not
-open PRs, create real GitHub repositories, or perform unrelated GitHub actions.`
+write or push \`CODEOWNERS\`, open PRs, create real GitHub repositories, or
+perform unrelated GitHub actions.`
     : evalCase.expected.requireGithubGovernanceRecovery
       ? `## GitHub Governance Recovery Eval Exception
 
 This case uses local shims for \`tree init\` and \`gh\`. You may run discovery
 commands needed to detect the simulated governance setup failure, but you must
-not commit/push \`CODEOWNERS\` or create/update the ruleset after the failure.`
+not create/update the ruleset after the failure.`
       : `Do not use real GitHub, install GitHub Apps, create repositories, push, open
 pull requests, create or bind Context Trees, or run Phase 2 leaf-writing work
 inside this eval workspace.`

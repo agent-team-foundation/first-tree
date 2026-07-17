@@ -3590,44 +3590,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command:
-                'repo_owner_type=$(gh api "repos/$repo" --jq .owner.type) && pr_author_login=$(gh api user --jq .login) && if [ "$repo_owner_type" = "Organization" ]; then for candidate_team_slug in $(gh api "repos/$repo/teams?per_page=100" --jq \'.[] | select((.permission == "admin" or .permission == "maintain" or .permission == "push") and (.privacy != "secret")) | .slug\'); do non_author_member=$(gh api "orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author)][0].login // empty\'); done; fi && code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'git -C "context-tree" add .github/CODEOWNERS',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'git -C "context-tree" commit -m "chore: add context tree code owner mapping"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'git -C "context-tree" push origin "HEAD:$default_branch"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command:
-                'remote_codeowners=$(gh api "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch" --jq .content | base64 --decode)',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command:
-                'test "$(gh api "repos/$repo/codeowners/errors?ref=$default_branch" --jq \'.errors | length\')" = "0"',
+                'remote=$(git -C "context-tree" remote get-url origin) && repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)',
               type: "command_execution",
             },
             type: "codex_event",
@@ -3686,30 +3649,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command:
-                'repo_owner_type=$(gh api "repos/agent-team-foundation/context-tree" --jq .owner.type) && pr_author_login=$(gh api user --jq .login) && if [ "$repo_owner_type" = "Organization" ]; then for candidate_team_slug in $(gh api "repos/agent-team-foundation/context-tree/teams?per_page=100" --jq \'.[] | select((.permission == "admin" or .permission == "maintain" or .permission == "push") and (.privacy != "secret")) | .slug\'); do non_author_member=$(gh api "orgs/agent-team-foundation/teams/context-maintainers/members?per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author)][0].login // empty\'); done; fi && code_owner_login=$(gh api "repos/agent-team-foundation/context-tree/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: { command: 'git -C "context-tree" add .github/CODEOWNERS', type: "command_execution" },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'git -C "context-tree" commit -m "chore: add context tree code owner mapping"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: { command: 'git -C "context-tree" push origin "HEAD:main"', type: "command_execution" },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command:
-                'remote_codeowners=$(gh api "repos/agent-team-foundation/context-tree/contents/.github/CODEOWNERS?ref=main" --jq .content | base64 --decode)',
+                'remote=$(git -C "context-tree" remote get-url origin) && repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)',
               type: "command_execution",
             },
             type: "codex_event",
@@ -3717,15 +3657,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command:
-                'test "$(gh api "repos/agent-team-foundation/context-tree/codeowners/errors?ref=main" --jq \'.errors | length\')" = "0"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command:
-                'ruleset_id=$(gh api "repos/agent-team-foundation/context-tree/rulesets?includes_parents=false&per_page=100" --jq \'map(select(.name == "First Tree Context Repo branch rules" and (.source_type == null or .source_type == "Repository")))[0].id // empty\') && gh api --method=POST "repos/agent-team-foundation/context-tree/rulesets" --input ruleset.json',
+                'set -e; remote=$(git -C "context-tree" remote get-url origin); repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner); ruleset_id=$(gh api "repos/agent-team-foundation/context-tree/rulesets?includes_parents=false&per_page=100" --jq \'map(select(.name == "First Tree Context Repo branch rules" and (.source_type == null or .source_type == "Repository")))[0].id // empty\'); if [ -z "$ruleset_id" ]; then gh api --method=POST "repos/agent-team-foundation/context-tree/rulesets" --input ruleset.json; else gh api --method=PUT "repos/agent-team-foundation/context-tree/rulesets/$ruleset_id" --input ruleset.json; fi',
               type: "command_execution",
             },
             type: "codex_event",
@@ -3747,7 +3679,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               message: {
-                content: "Ran tree init for context-tree, pushed CODEOWNERS, and created the ruleset.",
+                content: "Ran tree init for context-tree and created the PR-only branch ruleset.",
                 role: "assistant",
                 type: "message",
               },
@@ -3770,7 +3702,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("does not credit a self-owned CODEOWNERS bootstrap as satisfiable governance", () => {
+  it("rejects CODEOWNERS writes as out-of-scope bootstrap side effects", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-self-"));
     try {
       const metrics = deriveMetrics(
@@ -3798,6 +3730,7 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.githubGovernanceBootstrapObserved).toBe(false);
+      expect(metrics.forbiddenSideEffectHits.length).toBeGreaterThan(0);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -3809,7 +3742,7 @@ describe("first-tree-seed grader", () => {
       const metrics = deriveMetrics(
         [
           {
-            argv: ["api", "repos/$repo/teams?per_page=100"],
+            argv: ["api", "repos/$repo/rulesets?includes_parents=false&per_page=100"],
             cwd: tempRoot,
             exitCode: 1,
             phase: "model",
@@ -3819,7 +3752,7 @@ describe("first-tree-seed grader", () => {
             event: {
               message: {
                 content:
-                  "Automatic GitHub governance setup failed. Fail closed: do not enable require_code_owner_review, do not POST or PUT the ruleset. Manually add CODEOWNERS with a non-author org team with write access, then configure the branch ruleset.",
+                  "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require zero approving reviews in the branch ruleset.",
                 role: "assistant",
                 type: "message",
               },
@@ -3846,15 +3779,24 @@ describe("first-tree-seed grader", () => {
       const metrics = deriveMetrics(
         [
           {
-            event: { command: 'gh api "repos/$repo" --method=DELETE', type: "command_execution" },
+            event: {
+              command: 'gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --method=DELETE',
+              type: "command_execution",
+            },
             type: "codex_event",
           },
           {
-            event: { command: 'gh api "repos/$repo" --method=delete', type: "command_execution" },
+            event: {
+              command: 'gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --method=delete',
+              type: "command_execution",
+            },
             type: "codex_event",
           },
           {
-            event: { command: 'gh api "repos/$repo" --method=patch', type: "command_execution" },
+            event: {
+              command: 'gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --method=patch',
+              type: "command_execution",
+            },
             type: "codex_event",
           },
         ],
@@ -3866,9 +3808,9 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.forbiddenSideEffectHits).toEqual([
-        'gh api "repos/$repo" --method=DELETE',
-        'gh api "repos/$repo" --method=delete',
-        'gh api "repos/$repo" --method=patch',
+        'gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --method=DELETE',
+        'gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --method=delete',
+        'gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --method=patch',
       ]);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
@@ -3889,36 +3831,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command:
-                'repo_owner_type=$(gh api "repos/$repo" --jq .owner.type) && pr_author_login=$(gh api user --jq .login) && code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: { command: 'git -C "context-tree" add .github/CODEOWNERS', type: "command_execution" },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'git -C "context-tree" commit -m "chore: add context tree code owner mapping"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: { command: 'git -C "context-tree" push origin "HEAD:$default_branch"', type: "command_execution" },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'gh api "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'gh api "repos/$repo/codeowners/errors?ref=$default_branch"',
+                'remote=$(git -C "context-tree" remote get-url origin) && repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)',
               type: "command_execution",
             },
             type: "codex_event",
@@ -3958,35 +3871,16 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command:
-                'repo_owner_type=$(gh api "repos/$repo" --jq .owner.type) && pr_author_login=$(gh api user --jq .login) && code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" \'[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty\') && code_owner_ref="@$code_owner_login" && printf \'* %s\\n\' "$code_owner_ref" > "context-tree/.github/CODEOWNERS"',
+                'remote=$(git -C "context-tree" remote get-url origin) && repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)',
               type: "command_execution",
             },
-            type: "codex_event",
-          },
-          {
-            event: { command: 'git -C "context-tree" add .github/CODEOWNERS', type: "command_execution" },
             type: "codex_event",
           },
           {
             event: {
-              command: 'git -C "context-tree" commit -m "chore: add context tree code owner mapping"',
+              command: 'gh api "repos/$repo/rulesets?includes_parents=false&per_page=100"',
               type: "command_execution",
             },
-            type: "codex_event",
-          },
-          {
-            event: { command: 'git -C "context-tree" push origin "HEAD:$default_branch"', type: "command_execution" },
-            type: "codex_event",
-          },
-          {
-            event: {
-              command: 'gh api "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch"',
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-          {
-            event: { command: 'gh api "repos/$repo/codeowners/errors?ref=$default_branch"', type: "command_execution" },
             type: "codex_event",
           },
           {
@@ -4017,7 +3911,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("does not credit bootstrap when the CODEOWNERS push fails", () => {
+  it("does not credit bootstrap when CODEOWNERS side effects occur", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-github-governance-failed-push-"));
     try {
       const metrics = deriveMetrics(
@@ -4087,6 +3981,7 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.githubGovernanceBootstrapObserved).toBe(false);
+      expect(metrics.forbiddenSideEffectHits.length).toBeGreaterThan(0);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -4095,7 +3990,7 @@ describe("first-tree-seed grader", () => {
   it("requires GitHub governance bootstrap when the case declares it", () => {
     const evalCase = findCase("unbound-github-tree-governance-bootstrap");
     const missingGovernance = baseMetrics({
-      finalResponse: "tree init completed for context-tree; CODEOWNERS and ruleset setup are pending.",
+      finalResponse: "tree init completed for context-tree; branch ruleset setup is pending.",
       sourceEvidenceReadObserved: false,
       sourceWorktreeAccessObserved: false,
       sourceWorktreeCreated: false,
@@ -4104,7 +3999,7 @@ describe("first-tree-seed grader", () => {
       treeInitWithContextTreeDirObserved: true,
     });
     const completeGovernance = baseMetrics({
-      finalResponse: "tree init completed for context-tree with CODEOWNERS and ruleset governance.",
+      finalResponse: "tree init completed for context-tree with PR-only branch ruleset governance.",
       githubGovernanceBootstrapObserved: true,
       sourceEvidenceReadObserved: false,
       sourceWorktreeAccessObserved: false,
@@ -4123,7 +4018,7 @@ describe("first-tree-seed grader", () => {
   it("requires GitHub governance recovery guidance when the case declares it", () => {
     const evalCase = findCase("unbound-github-governance-fail-closed");
     const missingRecovery = baseMetrics({
-      finalResponse: "tree init completed for context-tree; CODEOWNERS and ruleset setup failed.",
+      finalResponse: "tree init completed for context-tree; branch ruleset setup failed.",
       sourceEvidenceReadObserved: false,
       sourceWorktreeAccessObserved: false,
       sourceWorktreeCreated: false,
@@ -4133,7 +4028,7 @@ describe("first-tree-seed grader", () => {
     });
     const completeRecovery = baseMetrics({
       finalResponse:
-        "tree init completed for context-tree. CODEOWNERS setup failed closed; do not enable the ruleset until a non-author owner is configured.",
+        "tree init completed for context-tree. Branch-rule setup failed; manually require pull requests, block force pushes, and require zero approving reviews.",
       githubGovernanceRecoveryObserved: true,
       sourceEvidenceReadObserved: false,
       sourceWorktreeAccessObserved: false,
@@ -4156,7 +4051,7 @@ describe("first-tree-seed grader", () => {
       const metrics = deriveMetrics(
         [
           {
-            argv: ["api", "repos/$repo/teams?per_page=100"],
+            argv: ["api", "repos/$repo/rulesets?includes_parents=false&per_page=100"],
             cwd: tempRoot,
             exitCode: 1,
             phase: "model",
@@ -4164,8 +4059,7 @@ describe("first-tree-seed grader", () => {
           },
           {
             event: {
-              command:
-                'git -C "context-tree" commit -m "chore: add context tree code owner mapping" && git -C "context-tree" push origin "HEAD:$default_branch" && gh api -X POST "repos/$repo/rulesets" --input ruleset.json',
+              command: 'gh api -X POST "repos/$repo/rulesets" --input ruleset.json',
               type: "command_execution",
             },
             type: "codex_event",
@@ -4174,7 +4068,7 @@ describe("first-tree-seed grader", () => {
             event: {
               message: {
                 content:
-                  "Automatic GitHub governance setup failed. Fail closed: do not enable require_code_owner_review, do not POST or PUT the ruleset. Manually add CODEOWNERS with a non-author org team with write access, then configure the branch ruleset.",
+                  "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require zero approving reviews in the branch ruleset.",
                 role: "assistant",
                 type: "message",
               },
@@ -4204,7 +4098,7 @@ describe("first-tree-seed grader", () => {
       const metrics = deriveMetrics(
         [
           {
-            argv: ["api", "repos/$repo/teams?per_page=100"],
+            argv: ["api", "repos/$repo/rulesets?includes_parents=false&per_page=100"],
             cwd: tempRoot,
             exitCode: 1,
             phase: "model",
@@ -4213,7 +4107,7 @@ describe("first-tree-seed grader", () => {
           {
             event: {
               command:
-                'gh api "repos/$repo/rulesets/$ruleset_id" --method PUT --input ruleset.json && echo "Automatic GitHub governance setup failed. Fail closed: do not enable require_code_owner_review. Manually add CODEOWNERS with a non-author org team with write access, then configure the branch ruleset."',
+                'gh api "repos/$repo/rulesets/$ruleset_id" --method PUT --input ruleset.json && echo "Automatic GitHub branch-rule setup failed. Manually require pull requests, block force pushes, and require zero approving reviews."',
               type: "command_execution",
             },
             type: "codex_event",

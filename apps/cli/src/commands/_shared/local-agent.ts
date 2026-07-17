@@ -5,6 +5,7 @@ import {
   agentConfigSchema,
   clientConfigSchema,
   defaultConfigDir,
+  defaultDataDir,
   loadAgents,
   resolveConfigReadonly,
 } from "@first-tree/shared/config";
@@ -93,21 +94,23 @@ export function createSdk(agentName?: string): FirstTreeHubSDK {
     serverUrl,
     getAccessToken: (opts) => ensureFreshAccessToken(opts),
     agentId,
-    runtimeSessionToken: resolveRuntimeSessionToken,
+    runtimeSessionToken: () => resolveRuntimeSessionToken(agentId),
     userAgent: CLI_USER_AGENT,
   });
 }
 
-function resolveRuntimeSessionToken(): string | undefined {
-  const tokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
-  if (tokenFile) {
-    try {
-      return readFileSync(tokenFile, "utf8").trim() || undefined;
-    } catch {
-      return undefined;
-    }
+function resolveRuntimeSessionToken(agentId: string): string | undefined {
+  const injectedTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
+  const runtimeAgentId = process.env.FIRST_TREE_AGENT_ID?.trim();
+  const tokenFile =
+    injectedTokenFile && (!runtimeAgentId || runtimeAgentId === agentId)
+      ? injectedTokenFile
+      : join(defaultDataDir(), "runtime-session-tokens", `${agentId}.token`);
+  try {
+    return readFileSync(tokenFile, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
 /** Map an SdkError / connection error to the right CLI `fail()`. */

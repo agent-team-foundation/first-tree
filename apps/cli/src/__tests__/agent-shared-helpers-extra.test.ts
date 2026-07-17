@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +24,7 @@ const configMocks = vi.hoisted(() => ({
   agentConfigSchema: {},
   clientConfigSchema: {},
   defaultConfigDir: vi.fn(),
+  defaultDataDir: vi.fn(),
   loadAgents: vi.fn(),
   resolveConfigReadonly: vi.fn(),
 }));
@@ -85,6 +86,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   restoreEnv();
   configMocks.defaultConfigDir.mockReturnValue("/tmp/first-tree-config");
+  configMocks.defaultDataDir.mockReturnValue(join(tmpdir(), `first-tree-missing-data-${process.pid}-${Date.now()}`));
   configMocks.loadAgents.mockReturnValue(new Map([["nova", { agentId: "agent-1" }]]));
   configMocks.resolveConfigReadonly.mockReturnValue({ client: { id: "client-1" } });
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("token");
@@ -128,6 +130,7 @@ describe("local agent shared helpers", () => {
     const { createSdk } = await import("../commands/_shared/local-agent.js");
 
     process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "runtime-token-1";
+    delete process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
     createSdk("nova");
 
     expect(latestRuntimeSessionTokenProvider()()).toBeUndefined();
@@ -141,6 +144,7 @@ describe("local agent shared helpers", () => {
       const { createSdk } = await import("../commands/_shared/local-agent.js");
 
       process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "runtime-token-1";
+      process.env.FIRST_TREE_AGENT_ID = "agent-1";
       process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
       createSdk("nova");
 
@@ -149,6 +153,27 @@ describe("local agent shared helpers", () => {
 
       writeFileSync(tokenFile, "runtime-token-3\n", "utf8");
       expect(resolveRuntimeSessionToken()).toBe("runtime-token-3");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the selected local agent's canonical runtime session token outside an agent subprocess", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "first-tree-token-"));
+    try {
+      const tokenDir = join(dir, "runtime-session-tokens");
+      const tokenFile = join(tokenDir, "agent-1.token");
+      mkdirSync(tokenDir, { recursive: true });
+      writeFileSync(tokenFile, "runtime-token-4\n", "utf8");
+      configMocks.defaultDataDir.mockReturnValue(dir);
+      delete process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
+      const { createSdk } = await import("../commands/_shared/local-agent.js");
+
+      createSdk("nova");
+
+      expect(latestRuntimeSessionTokenProvider()()).toBe("runtime-token-4");
+      writeFileSync(tokenFile, "runtime-token-5\n", "utf8");
+      expect(latestRuntimeSessionTokenProvider()()).toBe("runtime-token-5");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

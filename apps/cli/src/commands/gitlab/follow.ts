@@ -34,7 +34,7 @@ export function registerGitlabFollowCommand(gitlab: Command): void {
         success({
           ...result,
           hint:
-            `${hint} To stop this chat's manual follow later, use ` +
+            `${hint} To stop this chat's follow later, use ` +
             `\`${channelConfig.binName} gitlab unfollow ${result.entity.entityUrl}\`.`,
         });
       } catch (error) {

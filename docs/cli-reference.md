@@ -636,16 +636,18 @@ and the same entity may be followed independently by multiple chats. A pending
 declaration reports `state: null` because First Tree has not verified provider
 state. There is no GitHub-style `--rebind` or `context-review` command.
 
-`following` returns only explicit `agent_declared` / `human_declared` rows as a
-stable public projection, including `pending` or `active` status. Internal
-connection, organization, mapping, actor, and normalized-path identifiers are
-not returned.
+`following` returns every active binding in the chat as a stable public
+projection, including automatic reviewer / assignee / mention routing and
+explicit `agent_declared` / `human_declared` rows. Pending declarations and
+active webhook-observed bindings report their corresponding status. Internal
+connection, organization, mapping, actor, identity, and normalized-path
+identifiers are not returned.
 
 `unfollow` is URL-based and idempotent: `removed: 0` is terminal success. It
-removes the current chat's explicit declarations only. Independent reviewer,
-assignee, and mention-based identity routing remains eligible for later
-webhooks. After a project rename, use the current URL returned by `following`;
-the inbound-only service cannot resolve an arbitrary old path back to a numeric
+removes every automatic or manual binding for that entity in the current chat.
+A later explicit reviewer, assignee, or mention event may create a new route.
+After a project rename, use the current URL returned by `following`; the
+inbound-only service cannot resolve an arbitrary old path back to a numeric
 project identity.
 
 These commands control First Tree chat attention. Native GitLab

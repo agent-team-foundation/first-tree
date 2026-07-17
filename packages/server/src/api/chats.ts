@@ -29,6 +29,7 @@ import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from 
 import {
   declareGitlabEntityFollow,
   listChatGitlabEntities,
+  listVisibleChatGitlabEntities,
   removeGitlabEntityFollow,
 } from "../services/gitlab-entity-follow.js";
 import {
@@ -340,7 +341,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { chatId: string } }>("/:chatId/gitlab-entities", async (request) => {
     const { chat } = await requireChatAccess(request, app.db);
-    return { entities: await listChatGitlabEntities(app.db, chat.id) };
+    return {
+      // Retain the legacy explicit-row field for response compatibility.
+      entities: await listChatGitlabEntities(app.db, chat.id),
+      ...(await listVisibleChatGitlabEntities(app.db, chat.id)),
+    };
   });
 
   app.post<{ Params: { chatId: string } }>(

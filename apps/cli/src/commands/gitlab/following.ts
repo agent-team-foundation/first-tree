@@ -13,8 +13,8 @@ export function registerGitlabFollowingCommand(gitlab: Command): void {
   gitlab
     .command("following")
     .description(
-      "List this chat's explicit GitLab Issue/MR declarations and their pending or active webhook status. " +
-        "Identity-target routing is intentionally excluded.",
+      "List this chat's GitLab Issue/MR bindings and their pending or active webhook status, including " +
+        "automatic reviewer, assignee, or mention routing.",
     )
     .option("--chat <chatId>", "Target chat (default: the session's FIRST_TREE_CHAT_ID)")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
