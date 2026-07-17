@@ -12,6 +12,8 @@ export { deriveHubUrlFromToken, HubUrlDerivationError } from "./commands/_shared
 // Core types
 export type {
   CheckResult,
+  ContextReviewConfigReader,
+  ContextReviewConfigResult,
   ContextTreeBindingInput,
   ContextTreeConfigWriter,
   ContextTreeUpdateFailedCategory,
@@ -57,6 +59,7 @@ export {
   promoteToWorkspace,
   promptAddAgent,
   promptMissingFields,
+  readContextReviewConfig,
   readWorkspaceManifest,
   resolveAccessToken,
   resolveCliInvocation,

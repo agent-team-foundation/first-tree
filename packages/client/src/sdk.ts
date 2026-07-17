@@ -30,6 +30,7 @@ import {
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
+  type OrgContextTreeFeaturesStorage,
   type PublishDocRequest,
   type PublishDocResponse,
   type RuntimeProvider,
@@ -110,6 +111,10 @@ export type RegisterResult = {
 export type ContextTreeConfig = {
   repo: string | null;
   branch: string | null;
+};
+
+export type ContextReviewRuntimeConfig = ContextTreeConfig & {
+  contextReviewer: OrgContextTreeFeaturesStorage["contextReviewer"];
 };
 
 export type PaginatedResult<T> = {
@@ -538,7 +543,13 @@ export class FirstTreeHubSDK {
 
   /** Fetch Context Tree configuration for this SDK's authenticated agent. */
   async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
-    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+    const info = await this.requestJson<ContextReviewRuntimeConfig>("/api/v1/agent/context-tree/info");
+    return { repo: info.repo, branch: info.branch };
+  }
+
+  /** Read the live bound Tree plus Reviewer assignment as one runtime tuple. */
+  async getAgentContextReviewConfig(): Promise<ContextReviewRuntimeConfig> {
+    return this.requestJson<ContextReviewRuntimeConfig>("/api/v1/agent/context-tree/info");
   }
 
   /** Bind Context Tree configuration for this SDK's authenticated agent organization. */

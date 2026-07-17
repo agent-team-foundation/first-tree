@@ -1,5 +1,176 @@
 import { z } from "zod";
 
+export const CONTEXT_REVIEW_TASK_TYPE = "context_tree_pr_review" as const;
+export const CONTEXT_REVIEW_MANAGED_MARKER = "<!-- first-tree-context-review:managed-v1 -->" as const;
+export const CONTEXT_REVIEW_PACKET_MAX_BYTES = 32 * 1024;
+export const CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH = 64;
+const CONTEXT_REVIEW_TASK_METADATA_MAX_NODES = 8 * 1024;
+
+const githubRepositorySchema = z
+  .string()
+  .trim()
+  .regex(/^[^\s/]+\/[^\s/]+$/, "repository must use owner/name form");
+const gitRefSchema = z.string().trim().min(1).max(1024);
+const commitOidSchema = z
+  .string()
+  .regex(/^[0-9a-f]{40}$/i, "expectedHead must be a full 40-character commit OID")
+  .transform((value) => value.toLowerCase());
+const repositoryPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4096)
+  .refine(
+    (value) =>
+      !value.startsWith("/") &&
+      !value.includes("\\") &&
+      value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== ".."),
+    "path must be a normalized repository-relative path",
+  );
+
+const contextReviewEvidenceSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("reference"),
+      label: z.string().trim().min(1),
+      reference: z.string().trim().min(1),
+      revision: z.string().trim().min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("excerpt"),
+      label: z.string().trim().min(1),
+      provenance: z.string().trim().min(1),
+      text: z.string().trim().min(1),
+    })
+    .strict(),
+]);
+
+/**
+ * Versioned evidence delivered with a managed Context Review task. GitHub and
+ * the live Context Tree binding remain authoritative; this packet supplies
+ * discovery context and the PR author's declared repair scope.
+ */
+export const reviewPacketV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    repository: githubRepositorySchema,
+    pullRequest: z.number().int().positive(),
+    expectedHead: commitOidSchema,
+    baseRef: gitRefSchema,
+    sourceRef: gitRefSchema,
+    requesterGithubLogin: z.string().trim().min(1).max(255),
+    goal: z.string().trim().min(1),
+    source: z
+      .object({
+        label: z.string().trim().min(1),
+        reference: z.string().trim().min(1),
+        revision: z.string().trim().min(1).optional(),
+      })
+      .strict(),
+    decisionSummary: z.string().trim().min(1),
+    rationale: z.string().trim().min(1),
+    targetPaths: z.array(repositoryPathSchema).default([]),
+    repairScope: z.array(repositoryPathSchema).min(1),
+    relevantContextRefs: z.array(z.string().trim().min(1)).default([]),
+    unresolvedQuestions: z.array(z.string().trim().min(1)).default([]),
+    verify: z
+      .object({
+        status: z.enum(["passed", "failed", "not_run"]),
+        summary: z.string().trim().min(1),
+      })
+      .strict(),
+    evidence: z.array(contextReviewEvidenceSchema).default([]),
+  })
+  .strict();
+export type ReviewPacketV1 = z.infer<typeof reviewPacketV1Schema>;
+
+type TaskMetadataInspection = {
+  serializedBytes: number;
+  exceedsMaxDepth: boolean;
+  exceedsMaxNodes: boolean;
+};
+
+function inspectTaskMetadata(value: unknown): TaskMetadataInspection {
+  const encoder = new TextEncoder();
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  let nodeCount = 0;
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) break;
+    nodeCount += 1;
+    if (nodeCount > CONTEXT_REVIEW_TASK_METADATA_MAX_NODES) {
+      return { serializedBytes: 0, exceedsMaxDepth: false, exceedsMaxNodes: true };
+    }
+    if (current.depth > CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH) {
+      return { serializedBytes: 0, exceedsMaxDepth: true, exceedsMaxNodes: false };
+    }
+    if (Array.isArray(current.value)) {
+      for (const item of current.value) pending.push({ value: item, depth: current.depth + 1 });
+      continue;
+    }
+    if (typeof current.value !== "object" || current.value === null) continue;
+    for (const item of Object.values(current.value)) {
+      pending.push({ value: item, depth: current.depth + 1 });
+    }
+  }
+
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("task metadata is not JSON-serializable");
+  return {
+    serializedBytes: encoder.encode(serialized).byteLength,
+    exceedsMaxDepth: false,
+    exceedsMaxNodes: false,
+  };
+}
+
+const contextReviewTaskMetadataShape = z
+  .object({
+    taskType: z.literal(CONTEXT_REVIEW_TASK_TYPE),
+    reviewPacketV1: reviewPacketV1Schema,
+  })
+  .strict();
+
+/** Generic task metadata consumed by the Reviewer runtime. */
+export const contextReviewTaskMetadataSchema = z
+  .unknown()
+  .superRefine((value, ctx) => {
+    let inspection: TaskMetadataInspection;
+    try {
+      inspection = inspectTaskMetadata(value);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Review task metadata could not be safely inspected",
+      });
+      return;
+    }
+    if (inspection.exceedsMaxDepth) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH} levels`,
+      });
+      return;
+    }
+    if (inspection.exceedsMaxNodes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Context Review task metadata is too structurally complex",
+      });
+      return;
+    }
+    if (inspection.serializedBytes > CONTEXT_REVIEW_PACKET_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_PACKET_MAX_BYTES} serialized UTF-8 bytes`,
+      });
+    }
+  })
+  .pipe(contextReviewTaskMetadataShape);
+export type ContextReviewTaskMetadata = z.infer<typeof contextReviewTaskMetadataSchema>;
+
 export const CONTEXT_REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const;
 export const CONTEXT_REVIEW_BODY_MAX_BYTES = 64 * 1024;
 

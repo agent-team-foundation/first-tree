@@ -662,6 +662,7 @@ account's personal notifications and are not a replacement for chat follow.
 first-tree org
 ├── bind-tree <url> [--org <orgId>] [--branch <branch>] # legacy caller-org binding write
 └── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
+    ├── review-config [--agent <name>]                # read live binding + Reviewer assignment
     └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
 
@@ -743,6 +744,20 @@ code:
 Authentication failures exit `3`; connection and timeout failures exit `6`;
 other remote or invalid-response failures exit `1`. Agent-selection failures
 retain exit code `2` and their existing error envelopes.
+
+### org context-tree review-config
+
+```bash
+first-tree org context-tree review-config [--agent <name>]
+```
+
+`review-config` reads the bound repository/branch and the Context Reviewer
+assignment from the same agent-scoped server response. It reports `Off`,
+`Assigned`, or `Not assigned` for the selected runtime Agent. Managed review
+tasks rerun this command before every repair, GitHub projection, and merge
+mutation; an unbound Tree, disabled feature, or different assigned Agent fails
+closed. The command contains no review mode or merge-method setting: managed
+Context Review always uses the assigned Reviewer Agent and exact-head squash.
 
 ### org context-tree set
 

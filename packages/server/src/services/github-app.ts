@@ -304,6 +304,7 @@ export type GithubPullRequestForReview = {
   merged: boolean;
   headSha: string;
   htmlUrl: string;
+  body: string | null;
 };
 
 export type GithubPullRequestReview = {
@@ -348,6 +349,7 @@ export async function getPullRequestForReview(
     merged_at?: string | null;
     head: { sha: string };
     html_url: string;
+    body?: string | null;
   };
   return {
     number: body.number,
@@ -356,6 +358,7 @@ export async function getPullRequestForReview(
     merged: body.merged === true || body.merged_at != null,
     headSha: body.head.sha,
     htmlUrl: body.html_url,
+    body: typeof body.body === "string" ? body.body : null,
   };
 }
 

@@ -537,27 +537,15 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
-  it("requires the installation permission upgrade before enabling Context Reviewer", async () => {
-    githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce({
-      installationId: 42,
-      accountLogin: "acme",
-      accountType: "Organization",
-      accountGithubId: 12345,
-      repositorySelection: "selected",
-      permissions: { metadata: "read", pull_requests: "read" },
-      events: ["pull_request"],
-      suspended: false,
-      manageUrl: "https://github.com/organizations/acme/settings/installations/42",
-      createdAt: NOW,
-      updatedAt: NOW,
-    });
+  it("allows configuring the Reviewer without a GitHub App installation", async () => {
+    githubAppMocks.getGithubAppInstallation.mockResolvedValueOnce(null);
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
-    await waitForText(container, "Action required");
-    expect(reviewerSwitch(container)?.disabled).toBe(true);
-    expect(container.textContent).toContain("Pull requests: write");
-    expect(container.querySelector('a[href*="settings/installations/42"]')?.textContent).toContain("Manage on GitHub");
+    await waitForText(container, "Automatic PR review");
+    expect(reviewerSwitch(container)?.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Action required");
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });

@@ -69,6 +69,34 @@ afterEach(() => {
 });
 
 describe("org context-tree CLI", () => {
+  it("prints the live Reviewer assignment and binding without mode fields", async () => {
+    const sdk = {
+      agentId: "reviewer-1",
+      getAgentContextReviewConfig: vi.fn(async () => ({
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "main",
+        contextReviewer: { enabled: true, agentUuid: "reviewer-1" },
+      })),
+    };
+    localAgentMocks.createSdk.mockReturnValue(sdk);
+
+    await buildProgram().parseAsync(["context-tree", "review-config", "--agent", "reviewer"], { from: "user" });
+
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("reviewer");
+    expect(stderr).toContain("Context Review       Assigned");
+    expect(stderr).toContain("Repository           https://github.com/acme/context-tree.git");
+    expect(successEnvelope()).toEqual({
+      ok: true,
+      data: {
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "main",
+        enabled: true,
+        assigned: true,
+        agentUuid: "reviewer-1",
+      },
+    });
+  });
+
   it("reads and renders a bound agent-scoped binding with the default branch", async () => {
     const sdk = {
       agentId: "agent-1",

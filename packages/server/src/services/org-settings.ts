@@ -13,7 +13,7 @@ import {
   type OrgSettingOutput,
   type OrgSettingStorage,
 } from "@first-tree/shared";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
@@ -21,7 +21,6 @@ import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
-import { findInstallationByOrg } from "./github-app-installations.js";
 
 /**
  * Per-organization settings, keyed by `(organizationId, namespace)`. The
@@ -197,6 +196,44 @@ export async function getOrgSetting<K extends OrgSettingNamespace>(
 export async function getOrgContextTreeBinding(db: Database, orgId: string): Promise<ContextTreeActiveBinding | null> {
   const state = await getOrgContextTreeSettingState(db, orgId);
   return state.kind === "bound" ? state.binding : null;
+}
+
+/**
+ * Read the live Context Tree binding and Reviewer assignment in one database
+ * statement. Review mutations use this tuple so they never combine a binding
+ * from one settings snapshot with an assignment from another.
+ */
+export async function getOrgContextReviewRuntime(
+  db: Database,
+  orgId: string,
+): Promise<{
+  repo: string | null;
+  branch: string | null;
+  contextReviewer: { enabled: boolean; agentUuid: string | null };
+}> {
+  const rows = await db
+    .select({ namespace: organizationSettings.namespace, value: organizationSettings.value })
+    .from(organizationSettings)
+    .where(
+      and(
+        eq(organizationSettings.organizationId, orgId),
+        inArray(organizationSettings.namespace, ["context_tree", "context_tree_features"]),
+      ),
+    );
+  const values = new Map(rows.map((row) => [row.namespace, row.value]));
+  const tree = classifyContextTreeSetting(values.get("context_tree") ?? {});
+  const features = ORG_SETTINGS_NAMESPACES.context_tree_features.storage.parse(
+    values.get("context_tree_features") ?? {},
+  );
+
+  return {
+    repo: tree.kind === "bound" ? tree.binding.repo : null,
+    branch: tree.kind === "bound" ? tree.binding.branch : null,
+    contextReviewer: {
+      enabled: features.contextReviewer.enabled,
+      agentUuid: features.contextReviewer.agentUuid,
+    },
+  };
 }
 
 /**
@@ -428,19 +465,6 @@ async function assertContextReviewerAgentAllowed(
 
   if (!agent || agent.organizationId !== orgId || agent.type === "human" || agent.status !== "active") {
     throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
-  }
-
-  const installation = await findInstallationByOrg(db, orgId);
-  if (!installation) {
-    throw new BadRequestError("Connect this team's GitHub App installation before enabling Context Reviewer");
-  }
-  if (installation.suspendedAt) {
-    throw new BadRequestError("Unsuspend this team's GitHub App installation before enabling Context Reviewer");
-  }
-  if (installation.permissions.pull_requests !== "write") {
-    throw new BadRequestError(
-      "The GitHub App installation owner must accept Pull requests: write before enabling Context Reviewer",
-    );
   }
 }
 

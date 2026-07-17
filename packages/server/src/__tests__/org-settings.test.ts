@@ -788,25 +788,22 @@ describe("org-settings service", () => {
     expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
   });
 
-  it("context_tree_features requires an active installation with Pull requests write before enabling", async () => {
+  it("context_tree_features can enable the assigned Reviewer without a GitHub App installation", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, {
       clientId: admin.clientId,
       managerId: admin.memberId,
     });
-    const enable = () =>
+    await expect(
       orgSettingsService.putOrgSetting(
         app.db,
         admin.organizationId,
         "context_tree_features",
         { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
         { updatedBy: admin.userId, memberId: admin.memberId },
-      );
-
-    await expect(enable()).rejects.toThrow(/Connect this team's GitHub App installation/);
-    await seedReviewerInstallation(app, admin.organizationId, { pullRequests: "read" });
-    await expect(enable()).rejects.toThrow(/accept Pull requests: write/);
+      ),
+    ).resolves.toMatchObject({ contextReviewer: { enabled: true, agentUuid: reviewer.uuid } });
   });
 
   it("context_tree_features rejects enabled reviewer input without agentUuid", async () => {

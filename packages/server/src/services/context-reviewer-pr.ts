@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { chatMetadataSchema } from "@first-tree/shared";
+import { CONTEXT_REVIEW_MANAGED_MARKER, chatMetadataSchema } from "@first-tree/shared";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type * as ejs from "ejs";
 import type { FastifyInstance } from "fastify";
@@ -63,6 +63,7 @@ export type ContextReviewerPrSkipReason =
   | "malformed_payload"
   | "context_tree_repo_unset"
   | "repo_mismatch"
+  | "managed_agent_review"
   | "feature_disabled"
   | "reviewer_agent_missing"
   | "reviewer_agent_invalid";
@@ -79,6 +80,7 @@ type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   headSha: string | null;
   senderType: string | null;
   commentAuthorType: string | null;
+  prBody: string | null;
 };
 
 type ContextReviewerPrTrigger =
@@ -207,6 +209,9 @@ export async function handleContextReviewerPrEvent(
   const info = extractPullRequestPayloadInfo(input.eventType, input.payload, input.organizationId);
   if (!info) {
     return { handled: false, reason: "malformed_payload" };
+  }
+  if (info.prBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER)) {
+    return { handled: false, reason: "managed_agent_review" };
   }
 
   const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
@@ -483,6 +488,7 @@ function extractPullRequestPayloadInfo(
       commentUrl: null,
       commentAuthorLogin: null,
       commentAuthorType: null,
+      prBody: readString(pr?.body),
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -509,6 +515,7 @@ function extractPullRequestPayloadInfo(
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
       commentAuthorType: commentAuthor.type ?? common.senderType,
+      prBody: readString(issue?.body),
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -534,6 +541,7 @@ function extractPullRequestPayloadInfo(
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
       commentAuthorType: commentAuthor.type ?? common.senderType,
+      prBody: readString(pr?.body),
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }

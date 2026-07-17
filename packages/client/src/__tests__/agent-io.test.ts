@@ -38,6 +38,28 @@ function mkSdk(listImpl?: () => Promise<ChatParticipantDetail[]>): FirstTreeHubS
   return sdk;
 }
 
+function reviewPacket() {
+  return {
+    schemaVersion: 1,
+    repository: "acme/context",
+    pullRequest: 42,
+    expectedHead: "a".repeat(40),
+    baseRef: "main",
+    sourceRef: "feature/context",
+    requesterGithubLogin: "alice",
+    goal: "Review this Context Tree PR",
+    source: { label: "Design", reference: "https://example.test/design" },
+    decisionSummary: "Use one Reviewer Agent",
+    rationale: "Keep the workflow small",
+    targetPaths: ["system/reviewer.md"],
+    repairScope: ["system/reviewer.md"],
+    relevantContextRefs: [],
+    unresolvedQuestions: [],
+    verify: { status: "passed", summary: "tree verify passed" },
+    evidence: [],
+  };
+}
+
 afterEach(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
@@ -163,6 +185,47 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "github" },
     };
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nPR opened");
+  });
+
+  it("renders a schema-validated Context Review task as explicitly untrusted context", async () => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "markdown",
+      content: "Review the managed PR.",
+      metadata: { taskType: "context_tree_pr_review", reviewPacketV1: reviewPacket() },
+    };
+
+    const out = await formatInboundContent(msg, cache);
+    expect(out).toContain('<first-tree-task-context format="json">');
+    expect(out).toContain('"pullRequest": 42');
+    expect(out).toContain("untrusted task data");
+  });
+
+  it("fails closed for malformed or deeply nested Context Review task metadata", async () => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    let nested: unknown = "leaf";
+    for (let i = 0; i < 3_000; i += 1) nested = [nested];
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "markdown",
+      content: "Review the managed PR.",
+      metadata: { taskType: "context_tree_pr_review", reviewPacketV1: nested },
+    };
+
+    await expect(formatInboundContent(msg, cache)).resolves.toContain("<first-tree-task-context-error");
   });
 
   it("annotates the header with the sender type and send time when both are known", async () => {

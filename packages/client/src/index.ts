@@ -128,5 +128,12 @@ export {
   INIT_COMPLETE_SENTINEL_REL,
   markWorkspaceInitComplete,
 } from "./runtime/workspace.js";
-export type { AccessTokenProvider, ContextTreeConfig, PaginatedResult, RegisterResult, SdkConfig } from "./sdk.js";
+export type {
+  AccessTokenProvider,
+  ContextReviewRuntimeConfig,
+  ContextTreeConfig,
+  PaginatedResult,
+  RegisterResult,
+  SdkConfig,
+} from "./sdk.js";
 export { FirstTreeHubSDK, FirstTreeHubSDK as FirstTreeSDK, SdkError } from "./sdk.js";

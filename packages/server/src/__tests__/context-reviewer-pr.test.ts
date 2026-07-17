@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -344,6 +345,25 @@ describe("handleContextReviewerPrEvent", () => {
     expect(result).toEqual({ handled: false, reason: "repo_mismatch" });
     const rows = await app.db.select({ id: chats.id }).from(chats);
     expect(rows).toHaveLength(0);
+  });
+
+  it("suppresses the legacy App path for a managed Reviewer task PR", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+    const payload = pullRequestPayload();
+    (payload.pull_request as Record<string, unknown>).body =
+      `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`;
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload,
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({ handled: false, reason: "managed_agent_review" });
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 
   it("skips when the feature is disabled, context repo is missing, reviewer is missing, or action is unsupported", async () => {

@@ -4,7 +4,6 @@ import { ArrowRight } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { listAllAgents, type ManagedAgent } from "../api/agents.js";
-import { getGithubAppInstallation } from "../api/github-app.js";
 import {
   getContextTreeFeaturesSetting,
   getContextTreeSetting,
@@ -290,15 +289,6 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
 
   const serverEnabled = featuresQuery.data?.contextReviewer.enabled ?? false;
   const serverAgentUuid = featuresQuery.data?.contextReviewer.agentUuid ?? null;
-  const installationQuery = useQuery({
-    queryKey: ["github-app-installation", organizationId],
-    queryFn: () => (organizationId ? getGithubAppInstallation(organizationId) : Promise.reject(new Error("no org"))),
-    enabled: !!organizationId && hasBinding,
-  });
-  const installation = installationQuery.data ?? null;
-  const appReviewReady =
-    installation !== null && !installation.suspended && installation.permissions.pull_requests === "write";
-  const appReviewActionRequired = !installationQuery.isLoading && !appReviewReady;
 
   // Pre-persistence on-state: the Switch is flipped on but `enabled` is not yet
   // saved (no agent picked). Once enabled persists, `serverEnabled` carries the
@@ -346,7 +336,6 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
 
   const handleToggle = (next: boolean) => {
     if (next) {
-      if (!appReviewReady) return;
       setSetupOpen(true);
       return;
     }
@@ -398,7 +387,7 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
               <Switch
                 checked={switchOn}
                 onCheckedChange={handleToggle}
-                disabled={saving || (!serverEnabled && !appReviewReady)}
+                disabled={saving}
                 aria-labelledby={toggleLabelId}
               />
             </div>
@@ -459,24 +448,6 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
                     : "Failed to load agents"}
                 </div>
               ) : null}
-            </div>
-          ) : null}
-
-          {appReviewActionRequired ? (
-            <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-              <span className="text-body" style={{ color: "var(--warning)" }}>
-                Action required: the GitHub App installation must be active and grant Pull requests: write before it can
-                publish automatic review results.
-              </span>
-              {installation?.manageUrl ? (
-                <a className="text-label" href={installation.manageUrl} target="_blank" rel="noreferrer">
-                  Manage on GitHub
-                </a>
-              ) : (
-                <span className="text-label" style={{ color: "var(--fg-3)" }}>
-                  Connect the installation in Settings → Integrations → GitHub.
-                </span>
-              )}
             </div>
           ) : null}
 
