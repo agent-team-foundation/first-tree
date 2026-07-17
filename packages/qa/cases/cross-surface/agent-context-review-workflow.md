@@ -24,8 +24,9 @@ GitHub, concurrency, and recovery behavior.
 
 - Use an isolated Docker plus temporary-worktree QA cell with candidate server,
   web, CLI, client runtime, database, and a disposable GitHub repository.
-- Bind a disposable Context Tree and assign one active non-human Reviewer
-  Agent. Do not install the GitHub App for the primary path.
+- Bind a disposable Context Tree and create two active non-human Reviewer
+  Agents, A and B. Assign A initially. Do not install the GitHub App for the
+  primary path.
 - Give the Host GitHub identity only ordinary branch/PR write and merge access;
   configure a disposable check for waiting/failure cases.
 - Until the Write producer ships, create an ordinary task Chat and inject the
@@ -64,6 +65,31 @@ GitHub, concurrency, and recovery behavior.
 - Restart the runtime after delivery and after a repair push. Confirm recovery
   comes from Chat/Inbox, live PR state, canonical marker/status, and worktree
   registry without duplicate results.
+- Hold one clean same-head PR open after A publishes `READY`. Change the live
+  assignment to B and wake B in the same durable PR Chat. Confirm B sees the
+  takeover/history but does not inherit A's marker, status, or `READY`; B must
+  complete a fresh live-head review and publish a result identified by the same
+  Chat, B's Agent UUID, and the inspected head.
+- On that unchanged head, switch B back to A and wake A in the same Chat.
+  Confirm A may reuse only A's own fresh same-head terminal result, never B's.
+  Repeat delivery and interrupt assignee reconciliation to confirm retries
+  create no second Chat, duplicate takeover result, or duplicate active wake.
+- Exercise same-Reviewer freshness on an unchanged head. After A publishes
+  `READY`, separately add new substantive evidence, a blocking finding, a human
+  decision, and a managed declaration/repair-scope change after the terminal
+  result. Confirm each prevents reuse and merge; A must fully review again or
+  produce `NEEDS_HUMAN` for protected/ambiguous input. Confirm a pure duplicate
+  wake or status reflection does not invalidate an otherwise fresh result.
+- Put A's matching terminal result before the first 100-message history page,
+  with both benign and invalidating messages after it. Restart the runtime and
+  confirm recovery follows every history cursor, attributes the result to A,
+  and reaches the same freshness decision without trusting the latest commit
+  status alone.
+- Move A to another Client or runtime provider through the existing
+  runtime-switch flow without changing A's UUID. Confirm the PR Chat and result
+  identity remain stable, the old route loses authority, and the replacement
+  runtime may recover A's own same-head result after fresh live checks rather
+  than being forced into a synthetic Reviewer reassignment.
 - With an App installed only for a comparison fixture, deliver a webhook for a
   managed PR and confirm no App review run or second verdict appears. Confirm a
   pre-existing unmanaged PR may still complete the read-only App path.
@@ -73,12 +99,20 @@ GitHub, concurrency, and recovery behavior.
 `PASS`: evidence proves one assigned Reviewer owns the managed PR, no App is
 required, repairs remain in scope and are fully re-reviewed, stale/revoked
 turns fail closed, only the exact passing head is squash-merged, recovery is
-idempotent, and the App path does not duplicate the managed result.
+idempotent per Chat + Reviewer UUID + head, Reviewer replacement does not create
+a second Chat or inherit another Reviewer's result, same-Agent runtime switching
+preserves identity, only a fresh matching result authorizes merge, complete
+history pagination preserves the same recovery decision, and the App path does
+not duplicate the managed result.
 
 `FAIL`: an unassigned or disabled Agent acts; packet prose grants authority;
 repair escapes scope; a stale head publishes or merges; another merge method,
 force/bypass, or GitHub approval is used; App installation is required; or a
-managed PR receives a second App verdict.
+managed PR receives a second App verdict; B reuses A's same-head result; A
+reuses B's result after ABA; Reviewer replacement creates another PR Chat; or a
+same-Agent runtime switch changes Reviewer identity; a stale/unproven result
+authorizes reuse or merge; recovery stops at the first history page; or a
+commit status is treated as sufficient proof of result ownership.
 
 `BLOCKED`: the isolated cell cannot provide the full product surfaces,
 disposable GitHub repo, eligible runtime, task delivery, or controlled
@@ -91,6 +125,9 @@ and runtime effects cannot be tied to the candidate ref.
 
 Keep target refs; redacted binding/assignment and packet summaries; Chat/Inbox
 timeline; predecessor/successor and merged SHAs; repair-scope diff; check and
-merge records; disabled/reassigned and race traces; restart recovery; and proof
-that the managed PR received no App review. Never retain credentials, private
-sessions, hidden prompts, or unrelated content.
+merge records; disabled/reassigned and race traces; the stable Chat id plus
+redacted A/B Agent UUIDs and result markers; assignee-reconciliation and
+runtime-switch traces; terminal-result boundary and complete-history cursors;
+freshness inputs and decisions; restart recovery; and proof that the managed PR
+received no App review. Never retain credentials, private sessions, hidden
+prompts, or unrelated content.

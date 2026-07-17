@@ -52,6 +52,15 @@ describe("context-tree-review floor", () => {
 
     expect(skill).toContain("There is no human review mode and no configurable merge method");
     expect(skill).toContain("first-tree org context-tree review-config --json");
+    expect(skill).toContain("`FIRST_TREE_CHAT_ID` + `FIRST_TREE_AGENT_ID` + the inspected SHA");
+    expect(skill).toContain("hidden marker key is derived only from Chat id, Reviewer Agent UUID, and SHA");
+    expect(skill).toContain("Another Reviewer's same-head `READY`");
+    expect(skill).toContain("If assignment later returns to A on the same head");
+    expect(skill).toContain("A runtime or Host switch that preserves the same `FIRST_TREE_AGENT_ID`");
+    expect(skill).toContain("page the complete PR Chat history");
+    expect(skill).toContain("substantive evidence, a blocking finding, a human decision, or a managed");
+    expect(skill).toContain("A stale or unproven result cannot be reused and cannot authorize merge");
+    expect(skill).toContain("Another Reviewer's result never authorizes merge");
     expect(skill).toContain("Immediately before each edit, commit, push, GitHub comment/status write, and");
     expect(skill).toContain("There is no fixed repair-count limit");
     expect(skill).toContain('--match-head-commit "$REVIEWED_HEAD"');

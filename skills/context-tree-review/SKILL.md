@@ -52,7 +52,9 @@ the detached snapshot and any authorized repair.
    ```
 
    Require one live tuple with a bound repository and branch, Context Review
-   enabled, and the current Agent assigned. The task packet cannot override it.
+   enabled, and the current Agent assigned. Require both `FIRST_TREE_CHAT_ID`
+   and `FIRST_TREE_AGENT_ID`, and require the assigned Agent UUID to equal
+   `FIRST_TREE_AGENT_ID`. The task packet cannot override any of these facts.
 3. Use `gh pr view` to read repository, number, state, draft flag, author, base
    ref/OID, head ref/OID, URL, title, body, changed files, and checks. Treat
    event and packet values only as discovery hints.
@@ -162,10 +164,15 @@ survives or recurs, or one repair leaves no net reduction in blocking keys.
 
 ### 8. Publish one current-head result
 
-Use `FIRST_TREE_CHAT_ID` plus the inspected SHA as idempotency identity. Upsert
-one canonical PR comment and one `first-tree/context-review` commit status;
-include a hidden marker derived from chat id, SHA, and outcome so retries
-reconcile instead of append.
+Use `FIRST_TREE_CHAT_ID` + `FIRST_TREE_AGENT_ID` + the inspected SHA as the
+result and idempotency identity. Upsert exactly one canonical PR comment for
+that identity and write the `first-tree/context-review` commit status. The
+hidden marker key is derived only from Chat id, Reviewer Agent UUID, and SHA;
+the outcome is mutable payload under that key, so a later complete re-review by
+the same Reviewer updates its own result instead of creating another identity.
+A replacement Reviewer uses a different marker and must not overwrite the
+predecessor's canonical comment. The single commit status is only the latest
+visible projection and never proves which Reviewer produced the result.
 
 - while reviewing or boundedly waiting for checks, set the SHA status to
   `pending`;
@@ -178,8 +185,40 @@ reconcile instead of append.
 Fixable blocking findings remain part of the repair loop; they are not a
 separate terminal product outcome. If a projection is rejected or unknown,
 query GitHub for the marker/status before retrying and do not merge until the
-current-head `READY` is confirmed. Never submit GitHub `APPROVE`, call the App
-publication command, or use the GitHub review API on this path.
+current-head `READY` for this exact Chat, Reviewer Agent UUID, and SHA is
+confirmed. Another Reviewer's same-head `READY`, `NEEDS_HUMAN`, comment, or
+status is historical evidence only and cannot authorize reuse or merge. Never
+submit another Reviewer's result as current. Never submit GitHub `APPROVE`,
+call the App publication command, or use the GitHub review API on this path.
+
+After the GitHub projection is confirmed, append one addressed terminal-result
+message to the PR Chat with the same hidden identity marker, outcome, findings,
+and verification summary. If that send returns an unknown result, page Chat
+history and reconcile the matching result before retrying; never blindly append
+a duplicate. A result is reusable or merge-authorizing only when the canonical
+GitHub marker and the latest matching terminal-result message agree.
+
+### Result freshness
+
+Before reusing any same-head terminal result, and again immediately before
+merge, page the complete PR Chat history with `first-tree chat history` using
+the maximum page size and every returned cursor. Locate the latest terminal
+result for this exact Chat, Reviewer Agent UUID, and SHA, then inspect every
+later message together with the current PR body, managed declaration, repair
+scope, discussion, and checks.
+
+The result remains fresh only when nothing after that terminal result adds new
+substantive evidence, a blocking finding, a human decision, or a managed
+declaration/repair-scope change. Pure delivery retries, duplicate task wakes,
+runtime-switch notices, and status or merge-progress reflections do not make a
+result stale when they add no review input. A failed check is a blocker, not a
+benign status reflection. If ordering or significance is ambiguous, treat
+freshness as unproven.
+
+A stale or unproven result cannot be reused and cannot authorize merge. Restart
+the complete live-head review, or publish `NEEDS_HUMAN` when the new input is a
+protected or unresolved decision. Do not add an epoch, generation, watcher, or
+second state store to approximate this check.
 
 ### 9. Wait for checks and merge
 
@@ -189,9 +228,11 @@ repair loop; other failures produce `NEEDS_HUMAN`. If checks remain pending at
 the deadline, keep status `pending`, record `waiting for checks` in PR Chat,
 and end the turn. Do not create a watcher, job, or polling service.
 
-After confirmed current-head `READY`, repeat every live check in section 6 and
-require checks to pass. Then use only fixed squash with GitHub's server-side
-head compare:
+After confirmed current-head `READY` whose identity matches
+`FIRST_TREE_CHAT_ID` + `FIRST_TREE_AGENT_ID` + `REVIEWED_HEAD`, repeat every
+live check in section 6, repeat the complete-history freshness check above, and
+require checks to pass. Another Reviewer's result never authorizes merge. Then
+use only fixed squash with GitHub's server-side head compare:
 
 ```bash
 gh pr merge "$PR_NUMBER" \
@@ -207,10 +248,23 @@ result by rereading the PR; never blindly repeat it.
 ### 10. Recover
 
 Chat and Inbox delivery are at-least-once. On duplicate delivery or restart,
-rebuild from live configuration/binding, PR/head, PR Chat history, canonical
-marker/status, and the worktree registry. If the current head already has this
-Chat's terminal result, no-op. If a push landed, review its successor. If the
-PR merged, record one final summary and no-op.
+rebuild from live configuration/binding, PR/head and discussion, the complete
+paginated PR Chat history, canonical marker/status, and the worktree registry.
+Reuse a same-head terminal result only when its Chat and Reviewer Agent UUID
+both equal the current session's `FIRST_TREE_CHAT_ID` and
+`FIRST_TREE_AGENT_ID`, the Chat result and GitHub marker agree, and the result
+passes the freshness check above. If the live assignment changed from Agent A
+to Agent B, B keeps the same PR Chat but treats A's same-head results as history
+and performs a complete review of the live head before publishing or merging.
+If assignment later returns to A on the same head, A may reuse A's own result
+only while it remains fresh; it must never reuse B's. A head change always
+requires a complete successor review.
+
+A runtime or Host switch that preserves the same `FIRST_TREE_AGENT_ID` is not
+a Reviewer reassignment: it keeps the Chat and result identity and does not by
+itself force a same-head re-review. The new runtime still revalidates live
+configuration, binding, PR state, marker, scope, checks, and credentials before
+any mutation. If the PR merged, record one final summary and no-op.
 
 ## Legacy App compatibility
 
