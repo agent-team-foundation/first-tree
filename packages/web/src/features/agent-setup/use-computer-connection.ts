@@ -35,6 +35,11 @@ export type ComputerConnection = {
   retry: () => void;
 };
 
+export type UseComputerConnectionOptions = {
+  /** Called once after the final automatic connect-token mint attempt fails. */
+  onTokenMintFailed?: () => void;
+};
+
 /** Silent auto-retries before surfacing a token-mint failure to the user. */
 const TOKEN_MINT_ATTEMPTS = 3;
 const TOKEN_MINT_BACKOFF_MS = [600, 1500];
@@ -55,7 +60,10 @@ function hasReportedCapabilities(caps: ClientCapabilities | null): caps is Clien
   return !!caps && Object.keys(caps).length > 0;
 }
 
-export function useComputerConnection(enabled: boolean): ComputerConnection {
+export function useComputerConnection(
+  enabled: boolean,
+  options: UseComputerConnectionOptions = {},
+): ComputerConnection {
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
   const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
@@ -69,6 +77,8 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
 
   const capabilitiesClientIdRef = useRef<string | null>(null);
   const detectSeqRef = useRef(0);
+  const onTokenMintFailedRef = useRef(options.onTokenMintFailed);
+  onTokenMintFailedRef.current = options.onTokenMintFailed;
 
   // Detect the connected computer + its capabilities.
   useEffect(() => {
@@ -154,6 +164,7 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
           if (cancelled) return;
           if (attempt === TOKEN_MINT_ATTEMPTS - 1) {
             setTokenError(err instanceof Error ? err.message : "Failed to generate connect command");
+            onTokenMintFailedRef.current?.();
             return;
           }
           // Silent backoff before the next attempt.

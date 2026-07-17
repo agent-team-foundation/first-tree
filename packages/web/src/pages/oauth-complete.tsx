@@ -1,6 +1,12 @@
 import { safeRedirectPath } from "@first-tree/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import {
+  authProviderForCallbackPath,
+  finishAuthAttempt,
+  normalizeAuthFailureReason,
+  normalizeAuthJoinPath,
+} from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
@@ -46,8 +52,15 @@ export function OAuthCompletePage() {
   const { adoptTokens, selectOrganization } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [errorNext, setErrorNext] = useState<string>("/");
+  const processedRef = useRef(false);
 
   useEffect(() => {
+    // React StrictMode intentionally re-runs effects in development. OAuth
+    // completion mutates auth state and emits conversion events, so consume
+    // this callback exactly once per page mount.
+    if (processedRef.current) return;
+    processedRef.current = true;
+
     const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
     const params = new URLSearchParams(hash);
     const accessToken = params.get("access");
@@ -63,14 +76,33 @@ export function OAuthCompletePage() {
     const org = params.get("org");
     const orgPinned = params.get("orgPinned") === "1";
     const errorCode = params.get("error");
+    const provider = authProviderForCallbackPath(window.location.pathname);
+    const accountCreatedRaw = params.get("accountCreated");
+    const accountCreated = accountCreatedRaw === "1" ? true : accountCreatedRaw === "0" ? false : null;
 
     if (errorCode) {
+      finishAuthAttempt({
+        provider,
+        result: "failed",
+        next,
+        joinPath: normalizeAuthJoinPath(joinPath),
+        reasonCode: normalizeAuthFailureReason(errorCode),
+        accountCreated,
+      });
       setError(CALLBACK_ERROR_COPY[errorCode] ?? "Sign-in did not complete. Please try again.");
       setErrorNext(next);
       return;
     }
 
     if (!accessToken || !refreshToken) {
+      finishAuthAttempt({
+        provider,
+        result: "failed",
+        next,
+        joinPath: normalizeAuthJoinPath(joinPath),
+        reasonCode: "missing_tokens",
+        accountCreated,
+      });
       setError("Sign-in did not complete. Please try again.");
       return;
     }
@@ -87,15 +119,35 @@ export function OAuthCompletePage() {
     window.history.replaceState(null, "", window.location.pathname);
 
     void (async () => {
-      await adoptTokens({ accessToken, refreshToken });
-      // Activate the resolved org BEFORE navigating only when the server pinned
-      // it (deliberate join / install-return), so the workspace/onboarding gate
-      // evaluates against the just-joined org. For a plain returning sign-in we
-      // skip it: adoptTokens → fetchMe already restored the user's last-used org
-      // (falling back to the server default when there's no valid one), and
-      // selecting here would clobber it.
-      if (org && orgPinned) await selectOrganization(org);
-      navigate(next, { replace: true });
+      try {
+        await adoptTokens({ accessToken, refreshToken });
+        // Activate the resolved org BEFORE navigating only when the server pinned
+        // it (deliberate join / install-return), so the workspace/onboarding gate
+        // evaluates against the just-joined org. For a plain returning sign-in we
+        // skip it: adoptTokens → fetchMe already restored the user's last-used org
+        // (falling back to the server default when there's no valid one), and
+        // selecting here would clobber it.
+        if (org && orgPinned) await selectOrganization(org);
+        finishAuthAttempt({
+          provider,
+          result: "success",
+          next,
+          joinPath: normalizeAuthJoinPath(joinPath),
+          accountCreated,
+        });
+        navigate(next, { replace: true });
+      } catch {
+        finishAuthAttempt({
+          provider,
+          result: "failed",
+          next,
+          joinPath: normalizeAuthJoinPath(joinPath),
+          reasonCode: "session_bootstrap_failed",
+          accountCreated,
+        });
+        setError("Sign-in completed, but First Tree couldn't open your workspace. Please try again.");
+        setErrorNext(next);
+      }
     })();
   }, [adoptTokens, selectOrganization, navigate]);
 

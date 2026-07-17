@@ -176,6 +176,7 @@ async function completeGoogleSignIn(
     refresh: tokens.refreshToken,
     next: bootstrap.next,
     joinPath: bootstrap.joinPath,
+    accountCreated: account.created ? "1" : "0",
     org: bootstrap.organizationId,
     ...(bootstrap.orgPinned ? { orgPinned: "1" } : {}),
   }).toString();

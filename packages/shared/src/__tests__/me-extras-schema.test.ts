@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kickoffOnboardingSchema, treeSetupKickoffSchema } from "../schemas/me-extras.js";
+import { kickoffOnboardingSchema, onboardingEventSchema, treeSetupKickoffSchema } from "../schemas/me-extras.js";
 
 describe("kickoffOnboardingSchema", () => {
   it("accepts a natural onboarding kickoff without an internal kind discriminator", () => {
@@ -72,6 +72,21 @@ describe("kickoffOnboardingSchema", () => {
         scanFixRepoSlug: "acme/api",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("onboardingEventSchema", () => {
+  it("accepts a classified step failure and rejects arbitrary event names", () => {
+    expect(
+      onboardingEventSchema.parse({
+        event: "step_failed",
+        attrs: { step: "create-agent", reasonCode: "agent_create_failed", retryable: true },
+      }),
+    ).toEqual({
+      event: "step_failed",
+      attrs: { step: "create-agent", reasonCode: "agent_create_failed", retryable: true },
+    });
+    expect(onboardingEventSchema.safeParse({ event: "raw_exception" }).success).toBe(false);
   });
 });
 

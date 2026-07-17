@@ -100,6 +100,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     );
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
+    app.log.info({ event: "oauth.start", provider: "github", intent: "sign-in" }, "OAuth flow started");
     // App flow: scope/permissions are declared on the App's GitHub-side
     // settings page (D0b), so we don't pass them here. The user lands on
     // the combined OAuth + install dialog (first-time installer) or just
@@ -221,7 +222,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         refreshTokenExpiresAt: result.refreshTokenExpiresAt,
       };
     } catch (err) {
-      app.log.warn({ err }, "github sign-in code exchange failed");
+      app.log.warn({ err, event: "oauth.exchange_failed", provider: "github" }, "GitHub OAuth exchange failed");
       return redirectCallbackError(reply, "github-exchange-failed", next);
     }
 
@@ -648,10 +649,19 @@ async function completeOauthFlow(
     refresh: tokens.refreshToken,
     next,
     joinPath,
+    accountCreated: account.created ? "1" : "0",
   };
   if (resolvedOrganizationId) fragmentParams.org = resolvedOrganizationId;
   if (orgPinned) fragmentParams.orgPinned = "1";
   const fragment = new URLSearchParams(fragmentParams).toString();
+  app.log.info(
+    {
+      event: account.created ? "oauth.account_created" : "oauth.account_reused",
+      provider: "github",
+      userId,
+    },
+    "OAuth sign-in completed",
+  );
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
 }
 

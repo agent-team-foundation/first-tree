@@ -129,6 +129,7 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  * Web reports:
  *   - `step_viewed`            — a visible standalone onboarding step mounted
  *   - `step_completed`         — the user satisfied a visible step and advanced
+ *   - `step_failed`            — a visible step hit a classified, user-impacting failure
  *   - `step_paused`            — the user chose "finish later" from a step
  *   - `resumed`                — the user resumed guided setup from Settings
  *   - `team_renamed`           — Step 1 user changed the auto-named team
@@ -140,6 +141,7 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
 export const onboardingEventNameSchema = z.enum([
   "step_viewed",
   "step_completed",
+  "step_failed",
   "step_paused",
   "resumed",
   "team_renamed",

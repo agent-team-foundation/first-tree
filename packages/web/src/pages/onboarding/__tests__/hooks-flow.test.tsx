@@ -289,13 +289,14 @@ describe("onboarding hooks and flow", () => {
   it("handles create errors, blank names, retry, and timeout", async () => {
     vi.useFakeTimers();
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };
+    const onFailure = vi.fn();
     clientMocks.api.post
       .mockRejectedValueOnce(new Error("create failed"))
       .mockResolvedValueOnce({ uuid: "agent-slow" });
     agentConfigMocks.getAgentClientStatus.mockResolvedValue({ online: false });
 
     function Probe() {
-      latest.current = useAgentCreation();
+      latest.current = useAgentCreation({ onFailure });
       return <div>{latest.current.phase}</div>;
     }
 
@@ -322,6 +323,7 @@ describe("onboarding hooks and flow", () => {
     });
     expect(expectHookValue(latest.current).error).toBe("create failed");
     expect(expectHookValue(latest.current).phase).toBe("idle");
+    expect(onFailure).toHaveBeenCalledWith({ reasonCode: "agent_create_failed", retryable: true });
 
     const slowCreate = act(async () => {
       const promise = expectHookValue(latest.current).create({
@@ -337,6 +339,7 @@ describe("onboarding hooks and flow", () => {
     });
     await slowCreate;
     expect(expectHookValue(latest.current).phase).toBe("timeout");
+    expect(onFailure).toHaveBeenCalledWith({ reasonCode: "agent_runtime_timeout", retryable: true });
 
     const retry = act(async () => {
       const promise = expectHookValue(latest.current).retry();
@@ -346,6 +349,7 @@ describe("onboarding hooks and flow", () => {
     });
     await retry;
     expect(expectHookValue(latest.current).phase).toBe("timeout");
+    expect(onFailure).toHaveBeenCalledTimes(3);
   });
 
   it("wires onboarding-specific agent side effects in the onboarding provider", async () => {
@@ -419,6 +423,18 @@ describe("onboarding hooks and flow", () => {
       step: "create-team",
       path: "admin",
       organizationId: "org-1",
+    });
+
+    expectHookValue(latest.current).reportStepFailure("team_load_failed", {
+      step: "create-team",
+      retryable: false,
+    });
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_failed", {
+      step: "create-team",
+      path: "admin",
+      organizationId: "org-1",
+      reasonCode: "team_load_failed",
+      retryable: false,
     });
 
     await act(async () => expectHookValue(latest.current).goNext());

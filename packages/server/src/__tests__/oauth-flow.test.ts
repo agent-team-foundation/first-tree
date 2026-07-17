@@ -103,6 +103,7 @@ describe("GitHub OAuth onboarding flow", () => {
     const params = new URLSearchParams(fragment);
     expect(params.get("next")).toBe("/");
     expect(params.get("joinPath")).toBe("solo");
+    expect(params.get("accountCreated")).toBe("1");
 
     // Auth identity is recorded.
     const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "42"));
@@ -228,14 +229,18 @@ describe("GitHub OAuth onboarding flow", () => {
 
   it("second sign-in for same github id reuses the user", async () => {
     const app = getApp();
-    await app.inject({
+    const first = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/dev-callback?githubId=99&login=alice",
     });
-    await app.inject({
+    const firstParams = new URLSearchParams(first.headers.location?.split("#")[1] ?? "");
+    expect(firstParams.get("accountCreated")).toBe("1");
+    const second = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/dev-callback?githubId=99&login=alice",
     });
+    const secondParams = new URLSearchParams(second.headers.location?.split("#")[1] ?? "");
+    expect(secondParams.get("accountCreated")).toBe("0");
     const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "99"));
     expect(ids).toHaveLength(1);
   });

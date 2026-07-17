@@ -464,6 +464,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     activeStep,
     goNext: vi.fn(),
     goTo: vi.fn(),
+    reportStepFailure: vi.fn(),
     organizationId: "org-1",
     memberId: "member-self",
     role: path === "admin" ? "admin" : "member",
@@ -1747,6 +1748,9 @@ describe("web DOM interaction coverage", () => {
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "admin required"));
     const adminForbidden = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Couldn't load your team's repos", adminForbidden.container);
+    expect(adminForbidden.flow.reportStepFailure).toHaveBeenCalledWith("github_repo_list_failed", {
+      step: "connect-code",
+    });
     await unmountRoot(adminForbidden.root);
 
     // A 502 (upstream) / 503 (no_installation|suspended) failure shows the same
@@ -1767,6 +1771,9 @@ describe("web DOM interaction coverage", () => {
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(503, "no installation"));
     const loadFailed = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Couldn't load your team's repos", loadFailed.container);
+    expect(loadFailed.flow.reportStepFailure).toHaveBeenCalledWith("github_repo_list_failed", {
+      step: "connect-code",
+    });
     await unmountRoot(loadFailed.root);
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
@@ -1778,6 +1785,10 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     await waitForText("Couldn't connect a repo here right now", notConfigured.container);
+    expect(notConfigured.flow.reportStepFailure).toHaveBeenCalledWith("github_install_not_configured", {
+      step: "connect-code",
+      retryable: false,
+    });
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Skip for now"),
@@ -2313,6 +2324,7 @@ describe("web DOM interaction coverage", () => {
     expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
     expect(chatApiMocks.createAgentChat).not.toHaveBeenCalled();
     expect(view.flow.completeAndEnterChat).not.toHaveBeenCalled();
+    expect(view.flow.reportStepFailure).toHaveBeenCalledWith("repo_access_check_failed", { step: "start-chat" });
     await unmountRoot(view.root);
   });
 

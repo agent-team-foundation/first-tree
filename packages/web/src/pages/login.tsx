@@ -1,5 +1,6 @@
 import { ArrowLeft, Github, Lock, Zap } from "lucide-react";
 import { Navigate, useLocation } from "react-router";
+import { beginAuthAttempt } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
 import { readFromPath } from "../auth/redirect-from-state.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
@@ -95,7 +96,7 @@ export function LoginPage() {
               <>
                 {providers.google && (
                   <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
-                    <a href={googleHref}>
+                    <a href={googleHref} onClick={() => beginAuthAttempt("google", redirectTo)}>
                       <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
                       Continue with Google
                     </a>
@@ -103,7 +104,7 @@ export function LoginPage() {
                 )}
                 {providers.github && (
                   <Button asChild className="w-full bg-foreground text-background hover:bg-foreground/90">
-                    <a href={githubHref}>
+                    <a href={githubHref} onClick={() => beginAuthAttempt("github", redirectTo)}>
                       <Github className="h-4 w-4" />
                       Continue with GitHub
                     </a>

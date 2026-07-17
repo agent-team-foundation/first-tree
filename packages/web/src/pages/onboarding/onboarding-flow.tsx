@@ -1,7 +1,7 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { reportOnboardingEvent } from "../../api/onboarding-events.js";
+import { type OnboardingFailureReason, reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
 import {
   type AgentCreationPhase,
@@ -35,6 +35,7 @@ import {
  *   a fallback; no longer the default build path.
  */
 export type TreeBindingPlan = "agentSeed" | "useBoundTree" | "createBinding";
+type OnboardingAnalyticsStep = StepId | "connect-code";
 
 export type OnboardingFlowValue = {
   path: OnboardingPath;
@@ -43,6 +44,11 @@ export type OnboardingFlowValue = {
   activeStep: StepId;
   goNext: () => void;
   goTo: (index: number) => void;
+  /** Report a classified failure without exposing raw error text to GA. */
+  reportStepFailure: (
+    reasonCode: OnboardingFailureReason,
+    options?: { step?: OnboardingAnalyticsStep; retryable?: boolean },
+  ) => void;
 
   organizationId: string | null;
   memberId: string | null;
@@ -254,6 +260,22 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     [organizationId, path],
   );
 
+  const reportStepFailure = useCallback(
+    (
+      reasonCode: OnboardingFailureReason,
+      options: { step?: OnboardingAnalyticsStep; retryable?: boolean } = {},
+    ): void => {
+      void reportOnboardingEvent("step_failed", {
+        step: options.step ?? activeStep,
+        path,
+        organizationId: organizationId ?? null,
+        reasonCode,
+        retryable: options.retryable ?? true,
+      });
+    },
+    [activeStep, organizationId, path],
+  );
+
   const lastViewedStepRef = useRef<string | null>(null);
   useEffect(() => {
     const viewKey = `${organizationId ?? "none"}:${path}:${activeStep}`;
@@ -273,7 +295,21 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   // The computer poll only needs to run on the two steps that depend on it.
   const computerEnabled = activeStep === "connect-computer" || activeStep === "create-agent";
-  const computer = useComputerConnection(computerEnabled);
+  const computer = useComputerConnection(computerEnabled, {
+    onTokenMintFailed: () => reportStepFailure("connect_token_mint_failed", { step: "connect-computer" }),
+  });
+
+  // A connected computer with a completed capability report but no usable
+  // runtime is a real blocker, not merely a slow poll. Report once per client
+  // so repeated capability refreshes do not inflate the failure count.
+  const runtimeUnavailableClientRef = useRef<string | null>(null);
+  useEffect(() => {
+    const clientId = computer.connectedClient?.id ?? null;
+    if (!clientId || !computer.capabilitiesLoaded || computer.okRuntimes.length > 0) return;
+    if (runtimeUnavailableClientRef.current === clientId) return;
+    runtimeUnavailableClientRef.current = clientId;
+    reportStepFailure("runtime_unavailable", { step: "connect-computer" });
+  }, [computer.capabilitiesLoaded, computer.connectedClient?.id, computer.okRuntimes.length, reportStepFailure]);
 
   const onAgentOnline = useCallback(() => {
     void refreshMe();
@@ -297,7 +333,11 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     create: createAgent,
     retry: retryAgent,
     createdUuid: createdAgentUuid,
-  } = useAgentCreation({ onCreated: onAgentCreated, onOnline: onAgentOnline });
+  } = useAgentCreation({
+    onCreated: onAgentCreated,
+    onOnline: onAgentOnline,
+    onFailure: ({ reasonCode, retryable }) => reportStepFailure(reasonCode, { step: "create-agent", retryable }),
+  });
 
   const [agentDisplayName, setAgentDisplayName] = useState<string>(() =>
     user?.username ? `${user.username} assistant` : "Assistant",
@@ -415,6 +455,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       activeStep,
       goNext,
       goTo,
+      reportStepFailure,
       organizationId,
       memberId,
       role,
@@ -453,6 +494,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       activeStep,
       goNext,
       goTo,
+      reportStepFailure,
       organizationId,
       memberId,
       role,

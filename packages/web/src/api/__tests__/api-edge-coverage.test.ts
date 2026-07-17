@@ -181,8 +181,11 @@ describe("onboarding and campaign API wrappers", () => {
     const onboarding = await import("../onboarding-events.js");
 
     await expect(
-      onboarding.reportOnboardingEvent("team_renamed", {
-        step: "connect-code",
+      onboarding.reportOnboardingEvent("step_failed", {
+        step: "create-agent",
+        path: "admin",
+        reasonCode: "agent_create_failed",
+        retryable: true,
         organizationId: "org-1",
         chatId: "chat-1",
       }),
@@ -201,10 +204,22 @@ describe("onboarding and campaign API wrappers", () => {
     });
 
     expect(apiMock.post).toHaveBeenNthCalledWith(1, "/me/onboarding/events", {
-      event: "team_renamed",
-      attrs: { step: "connect-code", organizationId: "org-1", chatId: "chat-1" },
+      event: "step_failed",
+      attrs: {
+        step: "create-agent",
+        path: "admin",
+        reasonCode: "agent_create_failed",
+        retryable: true,
+        organizationId: "org-1",
+        chatId: "chat-1",
+      },
     });
-    expect(analyticsMock.trackEvent).toHaveBeenCalledWith("onboarding_team_renamed", { step: "connect-code" });
+    expect(analyticsMock.trackEvent).toHaveBeenCalledWith("onboarding_step_failed", {
+      step: "create-agent",
+      path: "admin",
+      reasonCode: "agent_create_failed",
+      retryable: true,
+    });
     expect(apiMock.post).toHaveBeenNthCalledWith(2, "/me/onboarding-completed", { organizationId: "org/id" });
     expect(apiMock.post).toHaveBeenNthCalledWith(3, "/me/onboarding/kickoff", {
       agentUuid: "agent-1",

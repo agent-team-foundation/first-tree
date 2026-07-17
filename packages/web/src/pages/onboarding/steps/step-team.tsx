@@ -16,7 +16,7 @@ import { useOnboardingFlow } from "../onboarding-flow.js";
  * unchanged name skips the PATCH entirely.
  */
 export function StepTeam() {
-  const { organizationId, goNext } = useOnboardingFlow();
+  const { organizationId, goNext, reportStepFailure } = useOnboardingFlow();
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [name, setName] = useState("");
   const [initialName, setInitialName] = useState("");
@@ -33,11 +33,12 @@ export function StepTeam() {
         setOrgs(list);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : "Failed to load your team");
+        reportStepFailure("team_load_failed", { step: "create-team" });
       } finally {
         setOrgsLoaded(true);
       }
     })();
-  }, []);
+  }, [reportStepFailure]);
 
   useEffect(() => {
     const seed = orgs.find((o) => o.id === organizationId)?.displayName ?? "";
@@ -69,11 +70,12 @@ export function StepTeam() {
         goNext();
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : "Failed to rename team");
+        reportStepFailure("team_rename_failed", { step: "create-team" });
       } finally {
         setSaving(false);
       }
     },
-    [canSubmit, organizationId, trimmed, initialName, goNext],
+    [canSubmit, organizationId, trimmed, initialName, goNext, reportStepFailure],
   );
 
   return (
