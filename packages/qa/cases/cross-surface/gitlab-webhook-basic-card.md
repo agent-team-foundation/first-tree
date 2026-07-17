@@ -62,10 +62,10 @@ completed until a customer-side source mapping exists in a later phase.
   follows continue receiving basic cards, membership restoration does not reactivate the suspended link, and admin
   reconfirmation restores that same current binding in place. A later reconfirmation requires a new upstream personnel
   event.
-- Run `first-tree gitlab unfollow <current-url>` in one chat and confirm only that chat's explicit declaration is removed;
-  the other chat remains followed. Repeat unfollow and require `{ removed: 0 }` terminal success. Then deliver a new event
-  that explicitly targets the linked reviewer/assignee/mention identity and confirm identity-target routing remains
-  eligible even though the manual declaration was removed. Do not require GitLab availability for unfollow.
+- Run `first-tree gitlab unfollow <current-url>` in one chat and confirm every automatic or manual binding for that entity
+  is removed from only that chat; the other chat remains followed. Repeat unfollow and require `{ removed: 0 }` terminal
+  success. Then deliver a new event that explicitly targets the linked reviewer/assignee/mention identity and confirm it
+  may create a new route after the prior chat unfollowed. Do not require GitLab availability for unfollow.
 - Queue a personnel wake, then remove the binding, remove the member, change the delegate, or replace the connection before
   the Inbox drains. Confirm subsequent webhooks use the new authority state while the already accepted wake retains generic
   at-least-once delivery and may still reach the old delegate once, matching GitHub Inbox behavior.
@@ -91,8 +91,9 @@ completed until a customer-side source mapping exists in a later phase.
 `PASS`: endpoint identity alone selects the Team and authority, secrets remain redacted, Cloud performs no GitLab egress,
 the Team has at most one GitLab connection, supported entity events reach only existing followed chats as basic cards,
 stable ids are connection-scoped, exact active identities route to the current eligible delegate with one card per chat and
-a generic at-least-once wake, agent follow/list/unfollow expose only the stable URL contract, explicit unfollow preserves
-identity routing, anomalies fail closed, and no source-review state is claimed.
+a generic at-least-once wake, agent follow/list/unfollow expose only the stable URL contract, chat-scoped unfollow removes
+automatic and manual bindings while later directed events may route afresh, anomalies fail closed, and no source-review
+state is claimed.
 
 `FAIL`: cross-Team resolution, secret exposure, any outbound request to GitLab, incorrect pending binding, duplicate cards
 for one chat within one pass, a fuzzy personnel match, new personnel routing after its authority was removed, reviewer

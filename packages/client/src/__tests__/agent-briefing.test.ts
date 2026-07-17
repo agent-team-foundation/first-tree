@@ -631,7 +631,8 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("never automatically when an Issue closes");
     expect(gitlab).toContain("an MR merges, or the task finishes");
     expect(gitlab).toContain("first-tree gitlab unfollow <url>");
-    expect(gitlab).toContain("identity routing remains eligible");
+    expect(gitlab).toContain("removes every automatic or manual binding");
+    expect(gitlab).toContain("may create a new route");
     expect(gitlab).toContain("first-tree gitlab following");
     expect(gitlab).not.toContain("first-tree-gitlab");
 

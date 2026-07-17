@@ -3,7 +3,10 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { createGitlabConnection } from "../services/gitlab-connections.js";
-import { observeGitlabEntityAndResolveFollowers } from "../services/gitlab-entity-follow.js";
+import {
+  listVisibleChatGitlabEntities,
+  observeGitlabEntityAndResolveFollowers,
+} from "../services/gitlab-entity-follow.js";
 import { createGitlabIdentityLink } from "../services/gitlab-identities.js";
 import { createMeChat } from "../services/me-chat.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -147,13 +150,72 @@ describe("GitLab entity attention agent routes", () => {
       title: "Ship GitLab attention",
       entityState: "opened",
     });
+    expect(await listVisibleChatGitlabEntities(app.db, chatId)).toMatchObject({
+      items: [
+        {
+          entityType: "pull_request",
+          entityUrl,
+          projectPath: "Acme/API",
+          entityIid: 42,
+          title: "Ship GitLab attention",
+          state: "opened",
+          status: "active",
+        },
+      ],
+    });
+    const automaticUrl = "https://gitlab.internal/Acme/API/-/merge_requests/43";
+    await app.db.insert(gitlabEntityChatMappings).values({
+      id: `identity-${randomUUID()}`,
+      organizationId: runtime.organizationId,
+      connectionId: connection.connectionId,
+      chatId,
+      declaredByAgentId: runtime.humanAgentUuid,
+      boundVia: "identity_target",
+      identityLinkId: identity.id,
+      humanAgentId: runtime.humanAgentUuid,
+      delegateAgentId: runtime.agent.uuid,
+      active: true,
+      entityType: "pull_request",
+      entityIid: 43,
+      projectId: 501,
+      projectPath: "Acme/API",
+      projectPathNormalized: "acme/api",
+      entityUrl: automaticUrl,
+      title: "Automatic reviewer route",
+      entityState: "open",
+    });
+    const automaticList = await runtime.request("GET", `/api/v1/agent/chats/${chatId}/gitlab-entities`);
+    expect(automaticList.json()).toMatchObject({
+      items: [
+        { entityIid: 42 },
+        {
+          entityIid: 43,
+          entityUrl: automaticUrl,
+          boundVia: "identity_target",
+          status: "active",
+        },
+      ],
+    });
+    const repeatAutomaticFollow = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/gitlab-entities`, {
+      entityUrl: automaticUrl,
+    });
+    expect(repeatAutomaticFollow.statusCode).toBe(200);
+    expect(repeatAutomaticFollow.json()).toMatchObject({
+      status: "already_following",
+      entity: { entityIid: 43, boundVia: "identity_target" },
+    });
+    const automaticRemoval = await runtime.request(
+      "DELETE",
+      `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(automaticUrl)}`,
+    );
+    expect(automaticRemoval.json()).toEqual({ removed: 1 });
 
     const removed = await runtime.request(
       "DELETE",
       `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
     );
     expect(removed.statusCode).toBe(200);
-    expect(removed.json()).toEqual({ removed: 1 });
+    expect(removed.json()).toEqual({ removed: 2 });
     const repeatedRemoval = await runtime.request(
       "DELETE",
       `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
@@ -173,7 +235,7 @@ describe("GitLab entity attention agent routes", () => {
           eq(gitlabEntityChatMappings.active, true),
         ),
       );
-    expect(remainingFirstChatRows).toEqual([{ boundVia: "identity_target" }]);
+    expect(remainingFirstChatRows).toEqual([]);
 
     expect(
       await app.db

@@ -23,7 +23,7 @@ import {
 } from "../../services/github-entity-follow.js";
 import {
   declareCurrentGitlabEntityFollow,
-  listDeclaredChatGitlabEntities,
+  listCurrentChatGitlabEntities,
   removeCurrentGitlabEntityFollow,
 } from "../../services/gitlab-entity-follow.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
@@ -302,7 +302,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId/gitlab-entities", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    return listDeclaredChatGitlabEntities(app.db, request.params.chatId);
+    return listCurrentChatGitlabEntities(app.db, request.params.chatId);
   });
 
   app.post<{ Params: { chatId: string } }>(

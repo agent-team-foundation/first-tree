@@ -39,7 +39,7 @@ Then ask the agent to perform these subcases:
    (for example, use a Team without a GitLab connection or a wrong-origin URL).
 3. Ask for personal GitLab account notifications and verify that the agent uses
    the native `glab` subscribe form only after this explicit request.
-4. In a separate turn, explicitly ask the chat to stop its manual follow and
+4. In a separate turn, explicitly ask the chat to stop tracking the entity and
    verify `first-tree gitlab unfollow <current-url>`. Do not use close, merge,
    or task completion as the unfollow request.
 
@@ -59,9 +59,10 @@ Capture a redacted generated briefing and command trace showing:
   First Tree chat-attention gap;
 - no native `glab subscribe` action occurs unless the human explicitly asks for
   personal-account notifications;
-- `gitlab unfollow` appears only after the explicit human request, treats
-  `removed: 0` as terminal success, and explains that reviewer/assignee/mention
-  identity routing remains eligible;
+- `gitlab unfollow` appears only after the explicit human request, removes
+  automatic and manual bindings in the current chat, treats `removed: 0` as
+  terminal success, and explains that a later directed personnel event may
+  create a new route;
 - the `gitlab` namespace exposes only `follow`, `following`, and `unfollow`,
   with no `--rebind`, `--connection`, `--mapping-id`, or `context-review`;
 - no GitHub App installation request is emitted for GitLab chat attention.

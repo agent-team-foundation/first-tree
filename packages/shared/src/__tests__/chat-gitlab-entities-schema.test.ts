@@ -29,13 +29,14 @@ describe("chat GitLab entity schemas", () => {
     });
   });
 
-  it("rejects internal mapping fields and unsupported binding provenance", () => {
+  it("accepts automatic identity bindings but rejects internal fields and unknown provenance", () => {
     expect(
       chatGitlabEntitySchema.strict().safeParse({
         ...pendingEntity,
         connectionId: "connection-1",
       }).success,
     ).toBe(false);
-    expect(chatGitlabEntitySchema.safeParse({ ...pendingEntity, boundVia: "identity_target" }).success).toBe(false);
+    expect(chatGitlabEntitySchema.safeParse({ ...pendingEntity, boundVia: "identity_target" }).success).toBe(true);
+    expect(chatGitlabEntitySchema.safeParse({ ...pendingEntity, boundVia: "webhook_guess" }).success).toBe(false);
   });
 });

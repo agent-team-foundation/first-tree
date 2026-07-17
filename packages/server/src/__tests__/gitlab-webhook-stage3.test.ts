@@ -20,7 +20,7 @@ import {
   regenerateGitlabConnectionBearer,
   replaceGitlabConnection,
 } from "../services/gitlab-connections.js";
-import { declareGitlabEntityFollow } from "../services/gitlab-entity-follow.js";
+import { declareGitlabEntityFollow, removeCurrentGitlabEntityFollow } from "../services/gitlab-entity-follow.js";
 import {
   createGitlabIdentityLink,
   reconfirmGitlabIdentityLink,
@@ -462,6 +462,30 @@ describe("GitLab Stage 3 personnel routing", () => {
       identityLinkId: setup.link.id,
       active: true,
     });
+    const visibleBindings = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${mapping.chatId}/gitlab-entities`,
+      headers: { authorization: `Bearer ${setup.admin.accessToken}` },
+    });
+    expect(visibleBindings.statusCode).toBe(200);
+    expect(visibleBindings.json()).toMatchObject({
+      entities: [],
+      items: [
+        {
+          entityType: "pull_request",
+          entityUrl: "https://gitlab.internal/Acme/Reviews/-/merge_requests/17",
+          projectPath: "Acme/Reviews",
+          entityIid: 17,
+          title: "Review this change",
+          state: "open",
+          status: "active",
+          boundVia: "identity_target",
+        },
+      ],
+    });
+    expect(JSON.stringify(visibleBindings.json())).not.toMatch(
+      /connectionId|organizationId|identityLinkId|humanAgentId|delegateAgentId|declaredByAgentId/,
+    );
     const cards = await app.db
       .select()
       .from(messages)
@@ -514,6 +538,40 @@ describe("GitLab Stage 3 personnel routing", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.messageId, card.id)));
     expect(queued).toEqual({ notify: true, status: "delivered" });
+  });
+
+  it("unfollows an automatic route and lets a later reviewer event create a fresh chat", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const payload = mergeRequestPayload({ iid: 19, reviewers: [{ username: "Reviewer.One" }] });
+    expect((await postMr(app, setup.connection.bearer, payload)).statusCode).toBe(200);
+    const [firstMapping] = await app.db
+      .select()
+      .from(gitlabEntityChatMappings)
+      .where(eq(gitlabEntityChatMappings.boundVia, "identity_target"));
+    if (!firstMapping) throw new Error("initial identity mapping missing");
+
+    expect(
+      await removeCurrentGitlabEntityFollow(app.db, {
+        organizationId: setup.admin.organizationId,
+        chatId: firstMapping.chatId,
+        entityUrl: "https://gitlab.internal/Acme/Reviews/-/merge_requests/19",
+      }),
+    ).toEqual({ removed: 1 });
+    expect(
+      await app.db
+        .select()
+        .from(gitlabEntityChatMappings)
+        .where(eq(gitlabEntityChatMappings.boundVia, "identity_target")),
+    ).toHaveLength(0);
+
+    expect((await postMr(app, setup.connection.bearer, payload)).statusCode).toBe(200);
+    const [nextMapping] = await app.db
+      .select()
+      .from(gitlabEntityChatMappings)
+      .where(eq(gitlabEntityChatMappings.boundVia, "identity_target"));
+    expect(nextMapping?.chatId).toBeTruthy();
+    expect(nextMapping?.chatId).not.toBe(firstMapping.chatId);
   });
 
   it("keeps reviewer priority when an existing identity line is also assigned", async () => {

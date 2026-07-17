@@ -98,7 +98,7 @@ describe("gitlab entity attention commands", () => {
     await command(unfollowRoot, "unfollow").parseAsync([entity.entityUrl, "--chat", "chat-explicit"], {
       from: "user",
     });
-    expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("identity routing remains eligible");
+    expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("may create a new route");
     await command(unfollowRoot, "unfollow").parseAsync([entity.entityUrl, "--chat", "chat-explicit"], {
       from: "user",
     });

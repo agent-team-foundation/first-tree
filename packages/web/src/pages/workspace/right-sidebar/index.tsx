@@ -1,6 +1,7 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
 import { useCallback, useState } from "react";
 import { GitHubSection } from "./github-section.js";
+import { GitLabSection } from "./gitlab-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 import { SidebarResizeHandle } from "./resize-handle.js";
 
@@ -55,8 +56,8 @@ function saveWidth(width: number): void {
  *   1. Participants — humans + agents (agents first, since their live status
  *      is the glanceable pulse). Caps the visible roster; rest behind
  *      "Show all".
- *   2. GitHub bindings — read-only PRs / Issues bound to this chat. Hidden
- *      when there are no bindings.
+ *   2. Provider bindings — read-only GitHub and GitLab entities bound to this
+ *      chat. Each provider section is hidden when it has no bindings.
  *
  * Width: the inline rail is drag-resizable (left-edge handle) and remembers
  * its width globally. The narrow-viewport overlay passes a fixed `width` and
@@ -133,6 +134,7 @@ export function ChatRightSidebar({
           readOnly={readOnly}
         />
         <GitHubSection chatId={chatId} />
+        <GitLabSection chatId={chatId} />
       </div>
     </aside>
   );

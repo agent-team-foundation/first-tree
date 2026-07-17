@@ -3,18 +3,20 @@ import { z } from "zod";
 export const chatGitlabEntityTypeSchema = z.enum(["issue", "pull_request"]);
 export type ChatGitlabEntityType = z.infer<typeof chatGitlabEntityTypeSchema>;
 
-export const chatGitlabEntityBoundViaSchema = z.enum(["agent_declared", "human_declared"]);
+export const chatGitlabEntityBoundViaSchema = z.enum(["agent_declared", "human_declared", "identity_target"]);
 export type ChatGitlabEntityBoundVia = z.infer<typeof chatGitlabEntityBoundViaSchema>;
 
 export const chatGitlabEntityStatusSchema = z.enum(["pending", "active"]);
 export type ChatGitlabEntityStatus = z.infer<typeof chatGitlabEntityStatusSchema>;
 
 /**
- * Public projection of one explicit GitLab entity-to-chat declaration.
+ * Public projection of one GitLab entity-to-chat binding.
  *
  * This intentionally excludes mapping, connection, organization, actor, and
- * normalized-path identifiers. `status` is derived from whether webhook
- * ingress has resolved the numeric GitLab project identity.
+ * normalized-path identifiers. The projection includes explicit declarations
+ * and automatic `identity_target` bindings created by personnel routing.
+ * `status` is derived from whether webhook ingress has resolved the numeric
+ * GitLab project identity.
  */
 export const chatGitlabEntitySchema = z.object({
   entityType: chatGitlabEntityTypeSchema,

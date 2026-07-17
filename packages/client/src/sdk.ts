@@ -462,12 +462,12 @@ export class FirstTreeHubSDK {
     });
   }
 
-  /** List explicit GitLab declarations for this chat from the local webhook projection. */
+  /** List automatic and manual GitLab bindings for this chat from the local webhook projection. */
   async listChatGitlabEntities(chatId: string): Promise<ChatGitlabEntityListResponse> {
     return this.requestJson<ChatGitlabEntityListResponse>(`/api/v1/agent/chats/${chatId}/gitlab-entities`);
   }
 
-  /** Remove this chat's explicit declaration. Idempotent; `removed: 0` is success. */
+  /** Remove every automatic or manual binding for this entity in this chat. Idempotent. */
   async unfollowGitlabEntity(chatId: string, entityUrl: string): Promise<UnfollowChatGitlabEntityResponse> {
     return this.requestJson<UnfollowChatGitlabEntityResponse>(
       `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
