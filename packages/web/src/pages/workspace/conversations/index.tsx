@@ -760,8 +760,11 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
         background: "var(--bg-sunken)",
         color: "var(--fg-2)",
       }}
+      title={label}
     >
-      <span>{label}</span>
+      <span className="truncate" style={{ maxWidth: "var(--sp-35)" }}>
+        {label}
+      </span>
       <button
         type="button"
         onClick={onClear}

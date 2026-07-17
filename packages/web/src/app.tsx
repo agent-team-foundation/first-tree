@@ -35,6 +35,7 @@ import { SettingsGithubPage } from "./pages/settings/github.js";
 import { SettingsGitlabPage } from "./pages/settings/gitlab.js";
 import { SettingsIntegrationsLayout } from "./pages/settings/integrations.js";
 import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
+import { SettingsRepositoriesPage } from "./pages/settings/repositories.js";
 import { SettingsResourcesPage } from "./pages/settings/resources.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
@@ -189,7 +190,7 @@ export function App() {
               ) : null}
               {ContextTreePreviewPage ? (
                 <Route
-                  path="/preview/context-tree"
+                  path="/preview/context-tree/*"
                   element={
                     <Suspense fallback={null}>
                       <ContextTreePreviewPage />
@@ -436,6 +437,7 @@ export function App() {
                   <Route path="settings" element={<SettingsLayout />}>
                     <Route index element={<Navigate to="computers" replace />} />
                     <Route path="team" element={<Navigate to="/settings/computers" replace />} />
+                    <Route path="repositories" element={<SettingsRepositoriesPage />} />
                     <Route path="context" element={<SettingsContextTreePage />} />
                     <Route path="resources" element={<SettingsResourcesPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />

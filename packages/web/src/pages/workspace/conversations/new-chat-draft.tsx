@@ -7,7 +7,8 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getNewChatDefaultCandidates } from "../../../api/agents.js";
 import { uploadAttachment, uploadMimeFor } from "../../../api/attachments.js";
 import { type ImageRefContent, readFileAsBase64 } from "../../../api/chats.js";
@@ -22,6 +23,7 @@ import {
   detectMentionTrigger,
   MentionAutocompletePopover,
   type MentionCandidate,
+  mentionOptionTitle,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
@@ -415,17 +417,6 @@ export function NewChatDraft({
       return changed ? [...set] : prev;
     });
   }, [bodyMentions]);
-
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const handler = (ev: MouseEvent) => {
-      if (!pickerContainerRef.current) return;
-      if (pickerContainerRef.current.contains(ev.target as Node)) return;
-      setPickerOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [pickerOpen]);
 
   const createMut = useMutation({
     mutationFn: async ({
@@ -912,6 +903,48 @@ export function NewChatDraft({
   );
 }
 
+const PARTICIPANT_PICKER_VIEWPORT_MARGIN = 8;
+const PARTICIPANT_PICKER_TRIGGER_GAP = 4;
+
+/**
+ * Clamp the new-chat participant picker into the visual viewport. The `[+]`
+ * trigger is inline after the selected chips, so its x-coordinate can be
+ * anywhere in the row; a trigger-relative `left: 0` panel therefore overflows
+ * as soon as earlier chips push the trigger near the right edge.
+ *
+ * Pure geometry keeps the collision behavior stable under unit test while the
+ * component supplies live DOMRect / VisualViewport measurements.
+ */
+export function participantPickerPlacement({
+  anchor,
+  panel,
+  viewport,
+  margin = PARTICIPANT_PICKER_VIEWPORT_MARGIN,
+  gap = PARTICIPANT_PICKER_TRIGGER_GAP,
+}: {
+  anchor: { left: number; top: number; bottom: number };
+  panel: { width: number; height: number };
+  viewport: { left: number; top: number; width: number; height: number };
+  margin?: number;
+  gap?: number;
+}): { left: number; top: number; width: number } {
+  const width = Math.min(panel.width, Math.max(0, viewport.width - margin * 2));
+  const minLeft = viewport.left + margin;
+  const maxLeft = Math.max(minLeft, viewport.left + viewport.width - margin - width);
+  const left = Math.max(minLeft, Math.min(anchor.left, maxLeft));
+
+  const minTop = viewport.top + margin;
+  const maxTop = Math.max(minTop, viewport.top + viewport.height - margin - panel.height);
+  const belowTop = anchor.bottom + gap;
+  const aboveTop = anchor.top - panel.height - gap;
+  const fitsBelow = belowTop <= maxTop;
+  const fitsAbove = aboveTop >= minTop;
+  const preferredTop = fitsBelow || !fitsAbove ? belowTop : aboveTop;
+  const top = Math.max(minTop, Math.min(preferredTop, maxTop));
+
+  return { left, top, width };
+}
+
 /** Participant chip row at the top of the composer card. Renders one
  *  pill per chip with `×` revealed on hover, plus a `[+]` button that
  *  anchors a search-driven dropdown. The search input is always shown so
@@ -949,6 +982,8 @@ function ParticipantChips({
   onRemove: (agentId: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelPosition, setPanelPosition] = useState<{ left: number; top: number; width: number } | null>(null);
   const [highlight, setHighlight] = useState(0);
 
   // Bucket the picker hits into addable (not yet a chip) and already-in
@@ -981,6 +1016,76 @@ function ParticipantChips({
     setHighlight(0);
     inputRef.current?.focus();
   }, [pickerOpen]);
+
+  // The panel is portalled to <body>, so outside-click must treat the trigger
+  // and portal as one interactive region. Otherwise a row mousedown closes and
+  // unmounts the panel before its click can commit the selected participant.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const handler = (event: MouseEvent): void => {
+      const target = event.target as Node;
+      if (pickerContainerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setPickerOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [pickerOpen, pickerContainerRef, setPickerOpen]);
+
+  // Portal + fixed positioning escapes the draft's clipping ancestors. Clamp
+  // against VisualViewport (not only the layout viewport) so browser zoom and
+  // mobile keyboard/viewport shifts keep both horizontal edges reachable.
+  useLayoutEffect(() => {
+    if (!pickerOpen) {
+      setPanelPosition(null);
+      return;
+    }
+    const anchor = pickerContainerRef.current;
+    const panel = panelRef.current;
+    if (!anchor || !panel) return;
+
+    let frame = 0;
+    const place = (): void => {
+      frame = 0;
+      const anchorRect = anchor.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const visualViewport = window.visualViewport;
+      const next = participantPickerPlacement({
+        anchor: anchorRect,
+        panel: panelRect,
+        viewport: {
+          left: visualViewport?.offsetLeft ?? 0,
+          top: visualViewport?.offsetTop ?? 0,
+          width: visualViewport?.width ?? window.innerWidth,
+          height: visualViewport?.height ?? window.innerHeight,
+        },
+      });
+      setPanelPosition((current) =>
+        current?.left === next.left && current.top === next.top && current.width === next.width ? current : next,
+      );
+    };
+    const schedule = (): void => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(place);
+    };
+
+    place();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    observer?.observe(anchor);
+    observer?.observe(panel);
+
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("scroll", schedule);
+    };
+  }, [pickerOpen, pickerContainerRef]);
   // Re-clamp the highlight whenever the candidate set shifts (debounced
   // search lands, chip removed, etc.) so it never points past the end.
   useEffect(() => {
@@ -1061,123 +1166,130 @@ function ParticipantChips({
         >
           <Plus className="h-3 w-3" />
         </button>
-        {pickerOpen && (
-          <div
-            role="listbox"
-            aria-label="Add participant"
-            className="absolute z-20 flex flex-col rounded-[var(--radius-panel)] border shadow-[var(--shadow-md)]"
-            style={{
-              top: "calc(100% + var(--sp-1))",
-              left: 0,
-              minWidth: 280,
-              background: "var(--bg-raised)",
-              borderColor: "var(--border)",
-            }}
-          >
+        {pickerOpen &&
+          createPortal(
             <div
+              ref={panelRef}
+              role="listbox"
+              aria-label="Add participant"
+              data-participant-picker=""
+              className="z-50 flex flex-col rounded-[var(--radius-panel)] border shadow-[var(--shadow-md)]"
               style={{
-                padding: "var(--sp-1_5) var(--sp-2)",
-                borderBottom: "var(--hairline) solid var(--border-faint)",
+                position: "fixed",
+                top: panelPosition?.top ?? -9999,
+                left: panelPosition?.left ?? -9999,
+                visibility: panelPosition ? "visible" : "hidden",
+                width: panelPosition?.width ?? "min(var(--sp-90), calc(100vw - var(--sp-4)))",
+                maxWidth: "var(--sp-90)",
+                boxSizing: "border-box",
+                background: "var(--bg-raised)",
+                borderColor: "var(--border)",
               }}
             >
-              <input
-                ref={inputRef}
-                type="text"
-                value={pickerSearch}
-                onChange={(e) => setPickerSearch(e.target.value)}
-                onKeyDown={onInputKeyDown}
-                placeholder="Search by name…"
-                aria-label="Search agents"
-                className="w-full text-body outline-none"
+              <div
                 style={{
-                  padding: "var(--sp-1) var(--sp-1_5)",
-                  background: "var(--bg-sunken)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: "var(--radius-input)",
-                  color: "var(--fg)",
+                  padding: "var(--sp-1_5) var(--sp-2)",
+                  borderBottom: "var(--hairline) solid var(--border-faint)",
                 }}
-              />
-            </div>
-            <div className="overflow-auto" style={{ maxHeight: "16rem" }}>
-              {emptyHint !== null ? (
-                <div className="text-body" style={{ padding: "var(--sp-2_5) var(--sp-2)", color: "var(--fg-3)" }}>
-                  {emptyHint}
-                </div>
-              ) : (
-                (() => {
-                  // `addableIdx` walks only addable rows so the keyboard
-                  // highlight lines up with `selectable`. Already-in rows
-                  // skip the counter (display-only ✓).
-                  let addableIdx = -1;
-                  let dividerIdx = 0;
-                  return items.map((item) => {
-                    if ("divider" in item) {
-                      dividerIdx += 1;
+              >
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={pickerSearch}
+                  onChange={(e) => setPickerSearch(e.target.value)}
+                  onKeyDown={onInputKeyDown}
+                  placeholder="Search by name…"
+                  aria-label="Search agents"
+                  className="w-full text-body outline-none"
+                  style={{
+                    padding: "var(--sp-1) var(--sp-1_5)",
+                    background: "var(--bg-sunken)",
+                    border: "var(--hairline) solid var(--border)",
+                    borderRadius: "var(--radius-input)",
+                    color: "var(--fg)",
+                  }}
+                />
+              </div>
+              <div className="overflow-auto" style={{ maxHeight: "16rem" }}>
+                {emptyHint !== null ? (
+                  <div className="text-body" style={{ padding: "var(--sp-2_5) var(--sp-2)", color: "var(--fg-3)" }}>
+                    {emptyHint}
+                  </div>
+                ) : (
+                  (() => {
+                    // `addableIdx` walks only addable rows so the keyboard
+                    // highlight lines up with `selectable`. Already-in rows
+                    // skip the counter (display-only ✓).
+                    let addableIdx = -1;
+                    let dividerIdx = 0;
+                    return items.map((item) => {
+                      if ("divider" in item) {
+                        dividerIdx += 1;
+                        return (
+                          <div
+                            key={`__divider-${dividerIdx}`}
+                            role="presentation"
+                            style={{
+                              height: "var(--hairline)",
+                              background: "var(--border-faint)",
+                              margin: "var(--sp-0_5) var(--sp-3)",
+                            }}
+                          />
+                        );
+                      }
+                      const isInChips = chipSet.has(item.agentId);
+                      const fullTitle = mentionOptionTitle(item);
+                      if (isInChips) {
+                        return (
+                          <div
+                            key={item.agentId}
+                            role="presentation"
+                            title={fullTitle ? `${fullTitle} — already in this draft` : "Already in this draft"}
+                            className="flex w-full items-center px-3 py-1.5 text-left text-body"
+                            style={{
+                              background: "transparent",
+                              color: "var(--fg-3)",
+                              cursor: "default",
+                            }}
+                          >
+                            <AgentOption
+                              candidate={item}
+                              ambiguous={ambiguous}
+                              trailing={<Check className="h-3.5 w-3.5" aria-label="Already in draft" />}
+                            />
+                          </div>
+                        );
+                      }
+                      addableIdx += 1;
+                      const myIdx = addableIdx;
+                      const active = myIdx === highlight;
                       return (
-                        <div
-                          key={`__divider-${dividerIdx}`}
-                          role="presentation"
-                          style={{
-                            height: "var(--hairline)",
-                            background: "var(--border-faint)",
-                            margin: "var(--sp-0_5) var(--sp-3)",
-                          }}
-                        />
-                      );
-                    }
-                    const isInChips = chipSet.has(item.agentId);
-                    if (isInChips) {
-                      return (
-                        <div
+                        <button
                           key={item.agentId}
-                          role="presentation"
-                          title={item.name ? `@${item.name} — already in this draft` : "Already in this draft"}
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          title={fullTitle}
+                          onClick={() => onAdd(item.agentId)}
+                          onMouseEnter={() => setHighlight(myIdx)}
                           className="flex w-full items-center px-3 py-1.5 text-left text-body"
                           style={{
-                            background: "transparent",
-                            color: "var(--fg-3)",
-                            cursor: "default",
-                            whiteSpace: "nowrap",
+                            background: active ? "var(--bg-hover)" : "transparent",
+                            color: "var(--fg)",
+                            border: "none",
+                            cursor: "pointer",
                           }}
                         >
-                          <AgentOption
-                            candidate={item}
-                            ambiguous={ambiguous}
-                            trailing={<Check className="h-3.5 w-3.5" aria-label="Already in draft" />}
-                          />
-                        </div>
+                          <AgentOption candidate={item} ambiguous={ambiguous} />
+                        </button>
                       );
-                    }
-                    addableIdx += 1;
-                    const myIdx = addableIdx;
-                    const active = myIdx === highlight;
-                    return (
-                      <button
-                        key={item.agentId}
-                        type="button"
-                        role="option"
-                        aria-selected={active}
-                        title={item.name ? `@${item.name}` : undefined}
-                        onClick={() => onAdd(item.agentId)}
-                        onMouseEnter={() => setHighlight(myIdx)}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-body"
-                        style={{
-                          background: active ? "var(--bg-hover)" : "transparent",
-                          color: "var(--fg)",
-                          border: "none",
-                          cursor: "pointer",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        <AgentOption candidate={item} ambiguous={ambiguous} />
-                      </button>
-                    );
-                  });
-                })()
-              )}
-            </div>
-          </div>
-        )}
+                    });
+                  })()
+                )}
+              </div>
+            </div>,
+            document.body,
+          )}
       </div>
     </div>
   );

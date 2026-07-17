@@ -407,11 +407,11 @@ describe("ResourcesTab", () => {
     expect(buttonByText(document.body, "Opt-in repo")).toBeNull();
     expect(document.body.textContent).not.toContain("Enable from team");
     // …but the menu stays actionable: add a private repo or jump to the
-    // provider-neutral Team code-access area in Settings. Skill/MCP/prompt
+    // provider-neutral Team repositories area in Settings. Skill/MCP/prompt
     // menus keep the Resources destination.
     expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
-    await click(buttonByText(document.body, "Manage Team code access"));
-    expect(onNavigateAway).toHaveBeenCalledWith("/settings/integrations/github#code-access");
+    await click(buttonByText(document.body, "Manage Team repositories"));
+    expect(onNavigateAway).toHaveBeenCalledWith("/settings/repositories#code-repositories");
     expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeNull();
   });
 

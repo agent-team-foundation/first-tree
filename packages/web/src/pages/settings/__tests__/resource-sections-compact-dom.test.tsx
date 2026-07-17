@@ -67,9 +67,9 @@ async function renderSections(): Promise<{ container: HTMLElement; root: Root }>
         <ToastProvider>
           <ResourceTypeSections
             types={["repo"]}
-            titleFor={() => "Code available to agents"}
-            descriptionFor={() => "Choose the code your agents can read and change."}
-            addLabelFor={() => "Add code repository"}
+            titleFor={() => "Code repositories"}
+            descriptionFor={() => "Repositories your agents can read and change."}
+            addLabelFor={() => "Add repository"}
             emptyLabelFor={() => "No code repositories configured yet."}
             compactLimit={3}
           />
@@ -102,9 +102,9 @@ afterEach(() => {
 describe("ResourceTypeSections compact mode", () => {
   it("shows three rows until an accessible View all control expands the section", async () => {
     const { container, root } = await renderSections();
-    expect(container.textContent).toContain("Code available to agents");
-    expect(container.textContent).toContain("Choose the code your agents can read and change.");
-    expect(container.querySelector('button[aria-label="Add code repository"]')).not.toBeNull();
+    expect(container.textContent).toContain("Code repositories");
+    expect(container.textContent).toContain("Repositories your agents can read and change.");
+    expect(container.querySelector('button[aria-label="Add repository"]')).not.toBeNull();
     expect(container.textContent).toContain("alpha");
     expect(container.textContent).toContain("beta");
     expect(container.textContent).toContain("gamma");
@@ -130,7 +130,7 @@ describe("ResourceTypeSections compact mode", () => {
     resourceMocks.listTeamResources.mockResolvedValue([]);
     const { container, root } = await renderSections();
     expect(container.textContent).toContain("No code repositories configured yet.");
-    expect(container.querySelector('button[aria-label="Add code repository"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Add repository"]')).not.toBeNull();
     expect(container.textContent).not.toContain("View all");
     await act(async () => root.unmount());
   });

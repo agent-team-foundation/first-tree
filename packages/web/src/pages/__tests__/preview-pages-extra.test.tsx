@@ -298,11 +298,11 @@ describe("extra preview pages", () => {
   it("renders the context-tree preview gallery", async () => {
     const rendered = await renderPreview(<ContextTreePreviewPage />);
 
-    expect(text(rendered.container)).toContain("Context tree");
+    expect(text(rendered.container)).toContain("Repositories");
     expect(text(rendered.container)).toContain("preview");
     expect(text(rendered.container)).toContain("admin, team HAS a tree");
     expect(text(rendered.container)).toContain("member (read-only)");
-    expect(text(rendered.container)).toContain("Context Reviewer");
+    expect(text(rendered.container)).toContain("Automatic PR review");
     expect(text(rendered.container)).toContain("build · 2 agents");
     expect(text(rendered.container)).toContain("bound tree recovery");
     expect(text(rendered.container)).toContain("Work on this in chat");
