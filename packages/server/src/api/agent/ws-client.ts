@@ -1796,23 +1796,30 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 socket.send(JSON.stringify({ type: "error", message: "Malformed provider-models:result frame" }));
                 return;
               }
-              // Only the DB-authoritative instance accepts results — a replaced
-              // connection on a prior replica must not win the rendezvous.
-              const [owner] = await app.db
-                .select({ instanceId: clients.instanceId })
-                .from(clients)
-                .where(eq(clients.id, clientId))
-                .limit(1);
-              if (!owner || owner.instanceId !== instanceId) {
+              // Reject a locally replaced socket before touching durable state.
+              if (!connectionManager.isActiveClientConnection(clientId, socket)) {
                 app.log.debug(
-                  { clientId, ref: result.data.ref, instanceId, ownerInstanceId: owner?.instanceId ?? null },
-                  "ignoring provider-models:result from non-authoritative instance",
+                  { clientId, ref: result.data.ref },
+                  "ignoring provider-models:result from replaced local socket",
                 );
                 return;
               }
-              // Durable rendezvous first so another replica's HTTP waiter can
-              // load the catalog after the tiny result-wake NOTIFY.
-              await storeModelCatalogRpcResult(app.db, clientId, result.data.ref, result.data.catalog);
+              // Ownership + persist are one UPDATE (`id` AND `instance_id`); a
+              // takeover between a prior SELECT and write cannot land a catalog.
+              const stored = await storeModelCatalogRpcResult(
+                app.db,
+                clientId,
+                result.data.ref,
+                result.data.catalog,
+                instanceId,
+              );
+              if (!stored) {
+                app.log.debug(
+                  { clientId, ref: result.data.ref, instanceId },
+                  "ignoring provider-models:result; client ownership moved before durable write",
+                );
+                return;
+              }
               const resolved = connectionManager.resolveClientReply(clientId, result.data.ref, result.data.catalog);
               await notifier.notifyDaemonClientCommandResult({ clientId, ref: result.data.ref });
               if (!resolved) {
