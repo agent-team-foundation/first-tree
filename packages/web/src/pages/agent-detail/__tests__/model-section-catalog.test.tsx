@@ -175,8 +175,10 @@ describe("ModelSection — daemon catalog", () => {
 
     await flushUntil(
       () =>
-        el.querySelector('[role="img"]')?.getAttribute("aria-label")?.includes("Couldn't read this computer's model list") ??
-        false,
+        el
+          .querySelector('[role="img"]')
+          ?.getAttribute("aria-label")
+          ?.includes("Couldn't read this computer's model list") ?? false,
     );
     expect(el.querySelector('input[aria-label="Model"]')).toBeNull();
     const trigger = el.querySelector<HTMLButtonElement>('button[aria-label="Model"]');
@@ -224,9 +226,7 @@ describe("ModelSection — daemon catalog", () => {
           resolveCatalog = resolve;
         }),
     );
-    const el = await renderWithQuery(
-      <ModelSection value="" onChange={() => {}} provider="cursor" clientId="c1" />,
-    );
+    const el = await renderWithQuery(<ModelSection value="" onChange={() => {}} provider="cursor" clientId="c1" />);
 
     await flushUntil(() => el.querySelector('button[aria-label="Model"]') !== null);
     const trigger = el.querySelector<HTMLButtonElement>('button[aria-label="Model"]');

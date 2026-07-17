@@ -255,9 +255,7 @@ function CatalogModelPicker({
 }) {
   const [customMode, setCustomMode] = useState(false);
   const items = useMemo(() => buildCatalogModelOptions(catalog, value), [catalog, value]);
-  const helpText = helpSuffix
-    ? `${MODEL_HELP_BY_PROVIDER[provider]} ${helpSuffix}`
-    : MODEL_HELP_BY_PROVIDER[provider];
+  const helpText = helpSuffix ? `${MODEL_HELP_BY_PROVIDER[provider]} ${helpSuffix}` : MODEL_HELP_BY_PROVIDER[provider];
 
   if (customMode) {
     return (
