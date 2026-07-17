@@ -186,11 +186,13 @@ describe("first-tree-welcome floor invariants", () => {
     expect(briefingTemplate).not.toContain("onboarding system messages ask for welcome");
   });
 
-  it("hands GitHub Context Repo governance to the seed workflow without duplicating its ruleset contract", () => {
-    expect(skillMarkdown).toMatch(/when it creates a new\s+Context Repo on GitHub/);
-    expect(skillMarkdown).toContain("apply the seed workflow's GitHub governance setup with\n  host `gh`");
-    expect(skillMarkdown).toContain("including a working Code Owner mapping and default-branch rules");
-    expect(skillMarkdown).toMatch(/automatic GitHub governance setup\s+fails/);
+  it("keeps the Context Tree launcher brief user-visible and leaves implementation to seed", () => {
+    expect(skillMarkdown).toContain("Build our team's\n  Context Tree from the connected code");
+    expect(skillMarkdown).toContain("load `first-tree-seed` from the task itself");
+    expect(skillMarkdown).toContain("this launcher does none of\n  that");
+    expect(skillMarkdown).not.toContain("working Code Owner mapping");
+    expect(skillMarkdown).not.toContain("GitHub governance setup");
+    expect(skillMarkdown).not.toContain("default-branch rules");
     expect(skillMarkdown).not.toContain("required_approving_review_count");
     expect(skillMarkdown).not.toContain("dismiss_stale_reviews_on_push");
     expect(skillMarkdown).not.toContain("require_last_push_approval");

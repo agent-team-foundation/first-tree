@@ -11,9 +11,7 @@ export function createGhShim(
 ): void {
   const shimPath = join(paths.binDir, "gh");
   const script = `#!/usr/bin/env node
-import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 
 const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
@@ -114,9 +112,6 @@ function endpointArg(argv) {
 function normalizeEndpoint(endpoint) {
   return endpoint
     .replaceAll("agent-team-foundation/context-tree", "$repo")
-    .replaceAll("agent-team-foundation", "$repo_owner")
-    .replaceAll("context-maintainers", "$candidate_team_slug")
-    .replaceAll("ref=main", "ref=$default_branch")
     .replace(/\\/rulesets\\/42$/u, "/rulesets/$ruleset_id");
 }
 
@@ -126,19 +121,6 @@ function isGovernanceBootstrapCase() {
 
 function isGovernanceRecoveryCase() {
   return (process.env.FIRST_TREE_EVAL_CASE_ID || "") === "unbound-github-governance-fail-closed";
-}
-
-function encodedCodeownersFromOrigin() {
-  for (const repo of [process.cwd(), join(process.cwd(), "context-tree")]) {
-    if (!existsSync(join(repo, ".git"))) continue;
-    const remote = spawnSync("git", ["-C", repo, "remote", "get-url", "origin"], { encoding: "utf8" });
-    if (remote.status !== 0) continue;
-    const result = spawnSync("git", ["--git-dir", remote.stdout.trim(), "show", "main:.github/CODEOWNERS"], {
-      encoding: "utf8",
-    });
-    if (result.status === 0) return Buffer.from(result.stdout, "utf8").toString("base64") + "\\n";
-  }
-  return null;
 }
 
 function rulesetPayloadOk(argv) {
@@ -155,6 +137,14 @@ function rulesetPayloadOk(argv) {
   const pullRequestRules = rules.filter((rule) => rule && rule.type === "pull_request");
   const pullRequest = pullRequestRules[0];
   const parameters = pullRequest && typeof pullRequest === "object" ? pullRequest.parameters || {} : {};
+  const parameterKeys = Object.keys(parameters).sort();
+  const expectedParameterKeys = [
+    "dismiss_stale_reviews_on_push",
+    "require_code_owner_review",
+    "require_last_push_approval",
+    "required_approving_review_count",
+    "required_review_thread_resolution",
+  ];
   const refName = payload.conditions?.ref_name;
   const bypassActors = payload.bypass_actors;
   return (
@@ -170,8 +160,10 @@ function rulesetPayloadOk(argv) {
     rules.length === 2 &&
     nonFastForwardRules.length === 1 &&
     pullRequestRules.length === 1 &&
-    parameters.required_approving_review_count === 1 &&
-    parameters.require_code_owner_review === true &&
+    parameterKeys.length === expectedParameterKeys.length &&
+    parameterKeys.every((key, index) => key === expectedParameterKeys[index]) &&
+    parameters.required_approving_review_count === 0 &&
+    parameters.require_code_owner_review === false &&
     parameters.dismiss_stale_reviews_on_push === false &&
     parameters.require_last_push_approval === false &&
     parameters.required_review_thread_resolution === false
@@ -190,16 +182,6 @@ function bootstrapResponse(argv) {
   if (argv[0] !== "api") return null;
   const rulesetMutation = (endpoint === "repos/$repo/rulesets" || endpoint === "repos/$repo/rulesets/$ruleset_id") && (method === "POST" || method === "PUT");
   if (method !== "GET" && !rulesetMutation) return null;
-  if (endpoint === "user") return { stdout: "seed-author\\n" };
-  if (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree") return { stdout: "Organization\\n" };
-  if (endpoint === "repos/$repo/teams?per_page=100") return { stdout: "context-maintainers\\n" };
-  if (endpoint === "orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100") return { stdout: "tree-reviewer\\n" };
-  if (endpoint === "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100") return { stdout: "tree-reviewer\\n" };
-  if (endpoint === "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch") {
-    const content = encodedCodeownersFromOrigin();
-    return content === null ? { exitCode: 1, stderr: "No pushed CODEOWNERS found in eval origin.\\n" } : { stdout: content };
-  }
-  if (endpoint === "repos/$repo/codeowners/errors?ref=$default_branch") return { stdout: "0\\n" };
   if (endpoint === "repos/$repo/rulesets?includes_parents=false&per_page=100") return { stdout: "\\n" };
   if (rulesetMutation) {
     if (!rulesetPayloadOk(argv)) return { exitCode: 1, stderr: "Invalid ruleset payload in eval fixture.\\n" };
@@ -216,15 +198,8 @@ function recoveryResponse(argv) {
     if (jq === ".defaultBranchRef.name") return { exitCode: 0, stdout: "main\\n" };
   }
   if (argv[0] === "api" && ghMethod(argv) !== "GET") return null;
-  if (argv[0] === "api" && endpoint === "user") return { exitCode: 0, stdout: "seed-author\\n" };
-  if (argv[0] === "api" && (endpoint === "repos/$repo" || endpoint === "repos/agent-team-foundation/context-tree")) {
-    return { exitCode: 0, stdout: "Organization\\n" };
-  }
-  if (argv[0] === "api" && endpoint === "repos/$repo/teams?per_page=100") {
-    return { exitCode: 1, stderr: "No qualifying visible non-author team in eval fixture.\\n" };
-  }
-  if (argv[0] === "api" && endpoint === "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100") {
-    return { exitCode: 1, stderr: "No qualifying non-author collaborator in eval fixture.\\n" };
+  if (argv[0] === "api" && endpoint === "repos/$repo/rulesets?includes_parents=false&per_page=100") {
+    return { exitCode: 1, stderr: "Unable to inspect repository rulesets in eval fixture.\\n" };
   }
   return null;
 }

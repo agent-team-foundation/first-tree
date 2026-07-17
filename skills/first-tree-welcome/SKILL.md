@@ -381,15 +381,10 @@ Key mechanics — read these carefully, they are easy to get wrong:
 - **For "Build your Context Tree"**: the brief is user-visible, so write it in
   plain product language and **name no skill in it** — e.g. "Build our team's
   Context Tree from the connected code — propose an initial structure for me to
-  review, then fill it in." Also include one implementation detail for the
-  woken agent, after the user-visible task sentence: when it creates a new
-  Context Repo on GitHub, apply the seed workflow's GitHub governance setup with
-  host `gh`, including a working Code Owner mapping and default-branch rules. If
-  that automatic GitHub governance setup fails, tell the user it failed and list
-  the manual settings to add. When you are woken in that chat, recognize the
-  tree-build task and load `first-tree-seed` from the task itself; it resolves
-  the tree's state and owns creating + binding + seeding — this launcher does
-  none of that.
+  review, then fill it in." When you are woken in that chat, recognize the
+  tree-build task and load `first-tree-seed` from the task itself; it resolves the
+  tree's state and owns creating + binding + seeding — this launcher does none of
+  that.
 - Give each chat a clear, stable topic.
 
 Then, back in THIS launcher chat, post a short line naming the chats you opened
