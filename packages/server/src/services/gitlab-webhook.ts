@@ -4,17 +4,16 @@ import type {
   GitlabTargetClass,
   InvolveReason,
   NormalizedScmEvent,
+  ScmEntityObservation,
   ScmIngressContext,
+  ScmNormalizedWebhook,
 } from "@first-tree/shared";
 import { chatMetadataSchema } from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../db/connection.js";
-import { agents } from "../db/schema/agents.js";
-import { chatMembership } from "../db/schema/chat-membership.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
-import { members } from "../db/schema/members.js";
 import { BadRequestError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
@@ -35,10 +34,15 @@ import {
   compareScmDeliveryEntries,
   planScmChatDeliveries,
   type ScmAudienceTarget,
+  scmTargetHumanAgentId,
+  scmTargetWakeAgentId,
   scmWakeAgentIds,
   selectScmCardContext,
   selectScmSenderId,
 } from "./scm-chat-delivery-plan.js";
+import { formatGitlabEntityTopic } from "./scm-entity-chat-topic.js";
+import { parseSameProjectClosingIssueRefs } from "./scm-related-refs.js";
+import { decideScmPersonnelTargetChat } from "./scm-target-chat-policy.js";
 
 const log = createLogger("GitlabWebhook");
 
@@ -52,9 +56,7 @@ export class GitlabPersonnelTargetLimitError extends BadRequestError {
   }
 }
 
-export type NormalizedGitlabWebhook = {
-  ingress: ScmIngressContext;
-  event: NormalizedScmEvent | null;
+export type NormalizedGitlabWebhook = ScmNormalizedWebhook & {
   entityIdentity: GitlabEntityIdentity | null;
   personnel: GitlabPersonnelEvidence;
 };
@@ -137,21 +139,21 @@ function gitlabUrl(value: unknown, instanceOrigin: string, label: string): strin
   return url.toString();
 }
 
-function actionKind(action: string | null, fallback: NormalizedScmEvent["kind"]): NormalizedScmEvent["kind"] {
-  switch (action) {
-    case "open":
-      return "opened";
-    case "close":
-      return "closed";
-    case "reopen":
-      return "reopened";
-    case "merge":
-      return "merged";
-    case "update":
-      return "edited";
-    default:
-      return fallback;
+function currentGitlabDraft(attrs: JsonObject): boolean {
+  return typeof attrs.draft === "boolean"
+    ? attrs.draft
+    : typeof attrs.work_in_progress === "boolean"
+      ? attrs.work_in_progress
+      : false;
+}
+
+function draftBecameReady(changes: JsonObject | null): boolean {
+  for (const key of ["draft", "work_in_progress"]) {
+    if (!changes || !(key in changes)) continue;
+    const change = object(changes[key], `changes.${key}`);
+    if (change.previous === true && change.current === false) return true;
   }
+  return false;
 }
 
 function userUsername(value: unknown, label: string): string {
@@ -312,6 +314,7 @@ export function normalizeGitlabWebhook(input: {
   if (!expected || expected === "test") {
     return {
       ingress,
+      observation: null,
       event: null,
       entityIdentity: null,
       personnel: {
@@ -333,7 +336,7 @@ export function normalizeGitlabWebhook(input: {
   let attrs: JsonObject;
   let entityType: "issue" | "pull_request";
   let eventType: string;
-  let kind: NormalizedScmEvent["kind"];
+  let kind: NormalizedScmEvent["kind"] | null;
   let personnel: GitlabPersonnelEvidence = {
     reviewerField: "not_applicable",
     reviewerAdded: [],
@@ -354,7 +357,30 @@ export function normalizeGitlabWebhook(input: {
       assigneeAdded: assigneeUsernames(payload, attrs, action),
       mentions: [],
     };
-    kind = actionKind(action, "other");
+    const changes = payload.changes ? object(payload.changes, "changes") : null;
+    const descriptionChanged = changes !== null && "description" in changes;
+    const titleChanged = changes !== null && "title" in changes;
+    const currentDescription = optionalString(attrs.description) ?? "";
+    const becameReady = draftBecameReady(changes);
+    if (becameReady && "reviewers" in payload) {
+      const currentReviewers = optionalUserArray(payload.reviewers, "reviewers");
+      personnel = { ...personnel, reviewerField: "valid", reviewerAdded: currentReviewers, anomalyCode: null };
+    }
+    personnel.mentions = action === "open" || descriptionChanged ? explicitMentions(currentDescription) : [];
+    kind =
+      action === "open"
+        ? "opened"
+        : action === "update"
+          ? optionalString(attrs.oldrev)
+            ? "synchronized"
+            : descriptionChanged || titleChanged
+              ? "edited"
+              : becameReady || personnel.reviewerAdded.length > 0
+                ? "review_requested"
+                : personnel.assigneeAdded.length > 0
+                  ? "assigned"
+                  : null
+          : null;
   } else if (expected === "issue") {
     attrs = object(payload.object_attributes, "object_attributes");
     entityType = "issue";
@@ -367,13 +393,32 @@ export function normalizeGitlabWebhook(input: {
       mentions: [],
       anomalyCode: null,
     };
-    kind = actionKind(action, "other");
+    const changes = payload.changes ? object(payload.changes, "changes") : null;
+    const descriptionChanged = changes !== null && "description" in changes;
+    const titleChanged = changes !== null && "title" in changes;
+    personnel.mentions =
+      action === "open" || descriptionChanged ? explicitMentions(optionalString(attrs.description) ?? "") : [];
+    kind =
+      action === "open"
+        ? "opened"
+        : action === "close"
+          ? "closed"
+          : action === "reopen"
+            ? "reopened"
+            : action === "update"
+              ? descriptionChanged || titleChanged
+                ? "edited"
+                : personnel.assigneeAdded.length > 0
+                  ? "assigned"
+                  : null
+              : null;
   } else {
     attrs = object(payload.object_attributes, "object_attributes");
     const noteableType = requiredString(attrs.noteable_type, "object_attributes.noteable_type");
     if (noteableType !== "MergeRequest" && noteableType !== "Issue") {
       return {
         ingress,
+        observation: null,
         event: null,
         entityIdentity: null,
         personnel: {
@@ -411,11 +456,15 @@ export function normalizeGitlabWebhook(input: {
   const url = gitlabUrl(optionalString(attrs.url) ?? fallbackUrl, input.instanceOrigin, "entity url");
   const rawState = optionalString(attrs.state, 100);
   const state =
-    kind === "merged" || rawState === "merged"
-      ? "merged"
-      : kind === "closed" || rawState === "closed"
-        ? "closed"
-        : "open";
+    eventType === "note"
+      ? null
+      : action === "merge" || rawState === "merged"
+        ? "merged"
+        : action === "close" || rawState === "closed"
+          ? "closed"
+          : entityType === "pull_request" && currentGitlabDraft(attrs)
+            ? "draft"
+            : "open";
   const entityIdentity: GitlabEntityIdentity = {
     entityType,
     entityIid: iid,
@@ -425,10 +474,7 @@ export function normalizeGitlabWebhook(input: {
     title: title || null,
     entityState: state,
   };
-  const event: NormalizedScmEvent = {
-    ...ingress,
-    eventType,
-    action,
+  const observation: ScmEntityObservation = {
     entity: {
       type: entityType,
       projectKey: String(projectId),
@@ -436,13 +482,37 @@ export function normalizeGitlabWebhook(input: {
       ...(title ? { title } : {}),
       url,
     },
-    actor: { externalUsername: username, isBot: false },
-    kind,
-    targets: [],
-    surface: { title, body: description, url },
-    relatedRefs: [],
+    state,
+    observedAt: new Date().toISOString(),
   };
-  return { ingress, event, entityIdentity, personnel };
+  const descriptionChanged =
+    payload.changes !== null &&
+    payload.changes !== undefined &&
+    typeof payload.changes === "object" &&
+    !Array.isArray(payload.changes) &&
+    "description" in payload.changes;
+  const event: NormalizedScmEvent | null =
+    kind === null
+      ? null
+      : {
+          ...ingress,
+          eventType,
+          action,
+          entity: observation.entity,
+          actor: { externalUsername: username, isBot: false },
+          kind,
+          targets: [],
+          surface: { title, body: description, url },
+          relatedRefs:
+            entityType === "pull_request" && (action === "open" || descriptionChanged)
+              ? parseSameProjectClosingIssueRefs(
+                  description,
+                  String(projectId),
+                  (project, issueNumber) => `${project}:issue:${issueNumber}`,
+                )
+              : [],
+        };
+  return { ingress, observation, event, entityIdentity, personnel };
 }
 
 export function applyGitlabPersonnelEvidence(
@@ -474,6 +544,7 @@ export function applyGitlabPersonnelEvidence(
     for (const username of normalized.personnel.mentions) add(username, "mention");
   } else if (normalized.event.eventType === "issue") {
     for (const username of normalized.personnel.assigneeAdded) add(username, "assignee");
+    for (const username of normalized.personnel.mentions) add(username, "mention");
   } else if (normalized.event.eventType === "merge_request") {
     const reviewerEvidenceIsUsable =
       normalized.personnel.reviewerField === "valid" && !normalized.personnel.anomalyCode;
@@ -487,6 +558,7 @@ export function applyGitlabPersonnelEvidence(
     } else {
       for (const username of normalized.personnel.assigneeAdded) add(username, "assignee");
     }
+    for (const username of normalized.personnel.mentions) add(username, "mention");
   }
 
   const targets = candidates.map((candidate) => ({
@@ -538,6 +610,7 @@ export async function resolveGitlabAudience(
     connectionId: string;
     event: NormalizedScmEvent;
     entityIdentity: GitlabEntityIdentity;
+    followers?: Awaited<ReturnType<typeof observeGitlabEntityAndResolveFollowers>>;
   },
 ): Promise<GitlabAudienceResolution> {
   const actorNormalizedUsername = normalizeGitlabUsername(input.event.actor.externalUsername).normalized;
@@ -570,26 +643,8 @@ export async function resolveGitlabAudience(
     lockForUpdate: true,
   });
   actorHumanId = actor.outcome === "ok" ? actor.identity.humanAgentId : null;
-  const rows = await observeGitlabEntityAndResolveFollowers(db, input.connectionId, input.entityIdentity);
-  const explicitDeclaredByIds = [
-    ...new Set(rows.filter((row) => row.boundVia !== "identity_target").map((row) => row.declaredByAgentId)),
-  ];
-  const explicitOwnerRows =
-    explicitDeclaredByIds.length === 0
-      ? []
-      : await db
-          .select({ declaredByAgentId: agents.uuid, humanAgentId: members.agentId })
-          .from(agents)
-          .innerJoin(
-            members,
-            and(
-              eq(agents.managerId, members.id),
-              eq(members.organizationId, input.organizationId),
-              eq(members.status, "active"),
-            ),
-          )
-          .where(and(eq(agents.organizationId, input.organizationId), inArray(agents.uuid, explicitDeclaredByIds)));
-  const explicitOwnerHumanByAgent = new Map(explicitOwnerRows.map((row) => [row.declaredByAgentId, row.humanAgentId]));
+  const rows =
+    input.followers ?? (await observeGitlabEntityAndResolveFollowers(db, input.connectionId, input.entityIdentity));
   const targets: ScmAudienceTarget[] = [];
   for (const row of rows) {
     if (row.boundVia === "identity_target") {
@@ -621,24 +676,47 @@ export async function resolveGitlabAudience(
         continue;
       }
       targets.push({
-        senderAgentId: row.humanAgentId,
-        humanAgentId: row.humanAgentId,
-        wakeAgentId: row.delegateAgentId,
-        kind: "existing",
-        chatId: row.chatId,
-        involveReason: null,
-        involveLogin: null,
+        entry: {
+          kind: "existing_line",
+          line: {
+            kind: "attention_line",
+            humanAgentId: row.humanAgentId,
+            wakeAgentId: row.delegateAgentId,
+            chatId: row.chatId,
+            provenance: "identity_target",
+          },
+        },
       });
     } else {
-      targets.push({
-        senderAgentId: row.declaredByAgentId,
-        humanAgentId: explicitOwnerHumanByAgent.get(row.declaredByAgentId) ?? null,
-        wakeAgentId: null,
-        kind: "existing",
-        chatId: row.chatId,
-        involveReason: null,
-        involveLogin: null,
-      });
+      const humanAgentId = row.humanAgentId;
+      const wakeAgentId = row.delegateAgentId;
+      if (humanAgentId !== null && wakeAgentId !== null) {
+        targets.push({
+          entry: {
+            kind: "existing_line",
+            line: {
+              kind: "attention_line",
+              humanAgentId,
+              wakeAgentId,
+              chatId: row.chatId,
+              provenance: "explicit",
+            },
+          },
+        });
+      } else {
+        targets.push({
+          entry: {
+            kind: "legacy_route",
+            route: {
+              kind: "legacy_route_only",
+              chatId: row.chatId,
+              senderAgentId: row.declaredByAgentId,
+              wakeAgentId: null,
+              provenance: "legacy_explicit",
+            },
+          },
+        });
+      }
     }
   }
 
@@ -663,29 +741,28 @@ export async function resolveGitlabAudience(
     }
     const existingIndex = targets.findIndex(
       (candidate) =>
-        candidate.humanAgentId === resolved.identity.humanAgentId &&
-        candidate.wakeAgentId === resolved.identity.delegateAgentId &&
-        candidate.kind === "existing",
+        candidate.entry.kind === "existing_line" &&
+        candidate.entry.line.humanAgentId === resolved.identity.humanAgentId &&
+        candidate.entry.line.wakeAgentId === resolved.identity.delegateAgentId,
     );
     if (existingIndex >= 0) {
       const existing = targets[existingIndex];
       if (existing) {
         targets.push({
-          ...existing,
-          involveReason: target.reason,
-          involveLogin: normalizedUsername,
+          entry: existing.entry,
+          directedContext: { reason: target.reason, externalUsername: normalizedUsername },
         });
       }
       continue;
     }
     targets.push({
-      senderAgentId: resolved.identity.humanAgentId,
-      humanAgentId: resolved.identity.humanAgentId,
-      wakeAgentId: resolved.identity.delegateAgentId,
-      kind: "new",
-      chatId: null,
-      involveReason: target.reason,
-      involveLogin: normalizedUsername,
+      entry: {
+        kind: "personnel_target",
+        reason: target.reason,
+        humanAgentId: resolved.identity.humanAgentId,
+        wakeAgentId: resolved.identity.delegateAgentId,
+        externalUsername: normalizedUsername,
+      },
     });
   }
 
@@ -702,17 +779,19 @@ async function resolveGitlabTargetChat(
     target: ScmAudienceTarget;
   },
 ): Promise<{ chatId: string; created: boolean } | null> {
-  if (input.target.kind === "existing") {
-    if (!input.target.chatId) throw new Error("existing GitLab audience target must carry chatId");
-    return { chatId: input.target.chatId, created: false };
+  if (input.target.entry.kind === "existing_line") {
+    return { chatId: input.target.entry.line.chatId, created: false };
   }
-  if (!input.target.humanAgentId || !input.target.wakeAgentId || !input.target.involveLogin) {
-    throw new Error("new GitLab audience target requires human, delegate, and identity username");
+  if (input.target.entry.kind === "legacy_route") {
+    return { chatId: input.target.entry.route.chatId, created: false };
   }
+  const humanAgentId = input.target.entry.humanAgentId;
+  const wakeAgentId = input.target.entry.wakeAgentId;
+  const involveLogin = input.target.entry.externalUsername;
   const resolvedIdentity = await resolveActiveGitlabIdentity(db, {
     organizationId: input.organizationId,
     connectionId: input.connectionId,
-    normalizedUsername: input.target.involveLogin,
+    normalizedUsername: involveLogin,
     lockForUpdate: true,
   });
   if (resolvedIdentity.outcome !== "ok") return null;
@@ -732,8 +811,8 @@ async function resolveGitlabTargetChat(
     (row) =>
       row.active &&
       row.identityLinkId === resolvedIdentity.identity.linkId &&
-      row.humanAgentId === input.target.humanAgentId &&
-      row.delegateAgentId === input.target.wakeAgentId,
+      row.humanAgentId === humanAgentId &&
+      row.delegateAgentId === wakeAgentId,
   );
   if (activeOwn) return { chatId: activeOwn.chatId, created: false };
 
@@ -746,59 +825,40 @@ async function resolveGitlabTargetChat(
       .set({ active: false, updatedAt: new Date() })
       .where(inArray(gitlabEntityChatMappings.id, staleActiveOwnIds));
   }
-  const inactiveOwn = existingRows.find(
-    (row) =>
-      !row.active &&
-      row.identityLinkId === resolvedIdentity.identity.linkId &&
-      row.humanAgentId === input.target.humanAgentId &&
-      row.delegateAgentId === input.target.wakeAgentId,
-  );
-  if (inactiveOwn) {
-    const [reactivated] = await db
-      .update(gitlabEntityChatMappings)
-      .set({ active: true, updatedAt: new Date() })
-      .where(eq(gitlabEntityChatMappings.id, inactiveOwn.id))
-      .returning({ chatId: gitlabEntityChatMappings.chatId });
-    if (reactivated) return { chatId: reactivated.chatId, created: false };
-  }
-
   const activeChatIds = [...new Set(existingRows.filter((row) => row.active).map((row) => row.chatId))];
-  const reusable: string[] = [];
-  for (const chatId of activeChatIds) {
-    const participantRows = await db
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(
-        and(
-          eq(chatMembership.chatId, chatId),
-          eq(chatMembership.accessMode, "speaker"),
-          inArray(chatMembership.agentId, [input.target.humanAgentId, input.target.wakeAgentId]),
-        ),
-      );
-    const participantIds = new Set(participantRows.map((row) => row.agentId));
-    if (participantIds.has(input.target.humanAgentId) && participantIds.has(input.target.wakeAgentId)) {
-      reusable.push(chatId);
-    }
+  const targetDecision = await decideScmPersonnelTargetChat(db, {
+    reason: input.target.entry.reason,
+    candidateChatIds: activeChatIds,
+    humanAgentId,
+    wakeAgentId,
+  });
+  if (targetDecision.kind === "reuse") {
+    return { chatId: targetDecision.chatId, created: false };
   }
 
   let chatId: string;
   let created = false;
-  if (reusable.length === 1) {
-    chatId = reusable[0] ?? "";
+  const relatedChatId = await findGitlabRelatedEntityChat(db, {
+    organizationId: input.organizationId,
+    connectionId: input.connectionId,
+    relatedRefs: input.event.relatedRefs,
+    humanAgentId,
+    wakeAgentId,
+  });
+  if (relatedChatId) {
+    chatId = relatedChatId;
   } else {
     const metadata = chatMetadataSchema.parse({
       source: "gitlab",
       entityType: input.entity.entityType,
       entityKey: input.event.entity.key,
       entityUrl: input.entity.entityUrl,
-      ...(input.target.involveReason === "review_requested" ? { reviewRequestRouted: true } : {}),
+      ...(input.target.entry.reason === "review_requested" ? { reviewRequestRouted: true } : {}),
     });
-    const prefix = input.entity.entityType === "pull_request" ? "MR" : "Issue";
-    const sigil = input.entity.entityType === "pull_request" ? "!" : "#";
-    const createdChat = await createChat(db, input.target.humanAgentId, {
+    const createdChat = await createChat(db, humanAgentId, {
       type: "group",
-      participantIds: [input.target.wakeAgentId],
-      topic: `${prefix} ${sigil}${input.entity.entityIid}: ${input.entity.title ?? input.event.surface.title}`,
+      participantIds: [wakeAgentId],
+      topic: formatGitlabEntityTopic(input.entity, input.target.entry.reason === "review_requested"),
       metadata,
     });
     chatId = createdChat.id;
@@ -810,11 +870,13 @@ async function resolveGitlabTargetChat(
     organizationId: input.organizationId,
     connectionId: input.connectionId,
     chatId,
-    declaredByAgentId: input.target.humanAgentId,
+    declaredByAgentId: humanAgentId,
     boundVia: "identity_target",
     identityLinkId: resolvedIdentity.identity.linkId,
-    humanAgentId: input.target.humanAgentId,
-    delegateAgentId: input.target.wakeAgentId,
+    humanAgentId,
+    delegateAgentId: wakeAgentId,
+    attentionMode: "paired",
+    attentionBackfillVersion: 1,
     active: true,
     entityType: input.entity.entityType,
     entityIid: input.entity.entityIid,
@@ -823,11 +885,52 @@ async function resolveGitlabTargetChat(
     projectPathNormalized: normalizeGitlabProjectPath(input.entity.projectPath),
     entityUrl: input.entity.entityUrl,
     title: input.entity.title,
-    entityState: input.entity.entityState,
+    entityState: input.entity.entityState ?? "open",
     createdAt: new Date(),
     updatedAt: new Date(),
   });
   return { chatId, created };
+}
+
+async function findGitlabRelatedEntityChat(
+  db: Database,
+  input: {
+    organizationId: string;
+    connectionId: string;
+    relatedRefs: NormalizedScmEvent["relatedRefs"];
+    humanAgentId: string;
+    wakeAgentId: string;
+  },
+): Promise<string | null> {
+  const issueRefs = input.relatedRefs.flatMap((ref) => {
+    if (ref.type !== "issue") return [];
+    const match = /^(\d+):issue:(\d+)$/.exec(ref.key);
+    if (!match?.[1] || !match[2]) return [];
+    return [{ projectId: Number(match[1]), issueIid: Number(match[2]) }];
+  });
+  if (issueRefs.length === 0) return null;
+
+  const candidateChatIds = new Set<string>();
+  for (const ref of issueRefs) {
+    const rows = await db
+      .select({ chatId: gitlabEntityChatMappings.chatId })
+      .from(gitlabEntityChatMappings)
+      .where(
+        and(
+          eq(gitlabEntityChatMappings.organizationId, input.organizationId),
+          eq(gitlabEntityChatMappings.connectionId, input.connectionId),
+          eq(gitlabEntityChatMappings.projectId, ref.projectId),
+          eq(gitlabEntityChatMappings.entityType, "issue"),
+          eq(gitlabEntityChatMappings.entityIid, ref.issueIid),
+          eq(gitlabEntityChatMappings.humanAgentId, input.humanAgentId),
+          eq(gitlabEntityChatMappings.delegateAgentId, input.wakeAgentId),
+          eq(gitlabEntityChatMappings.active, true),
+        ),
+      );
+    for (const row of rows) candidateChatIds.add(row.chatId);
+    if (candidateChatIds.size > 1) return null;
+  }
+  return candidateChatIds.size === 1 ? ([...candidateChatIds][0] ?? null) : null;
 }
 
 export async function deliverGitlabCards(
@@ -863,8 +966,8 @@ export async function deliverGitlabCards(
         {
           err,
           metric: "gitlab_delivery_failed_total",
-          humanAgentId: target.humanAgentId,
-          delegateAgentId: target.wakeAgentId,
+          humanAgentId: scmTargetHumanAgentId(target),
+          delegateAgentId: scmTargetWakeAgentId(target),
           entityKey: input.event.entity.key,
         },
         "failed to resolve chat for normalized GitLab target",

@@ -67,6 +67,12 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     title: "Join the team",
     why: "A First Tree team is where you, your teammates, and your agents work together.",
   },
+  "get-started": {
+    // title/why are rendered per-sub-state by StepGetStarted (choose vs pick a
+    // team agent); the shell skips them while empty.
+    title: "",
+    why: "",
+  },
 };
 
 /** One plain launch line for every start-chat finale — admin or invitee, team
@@ -322,6 +328,34 @@ export const COPY = {
     // The primary action on the not-ready screen — start a simple first chat now
     // instead of waiting on the team.
     startAnyway: "Start chat",
+  },
+  /** get-started fork (invitee only): own agent vs team-agent quick start. */
+  getStarted: {
+    chooseTitle: "You're in. How do you want to start?",
+    chooseWhy: "Both paths land you in the team — pick what fits right now.",
+    own: {
+      title: "Set up my own agent",
+      description: "Connect your computer and create your personal agent — the full First Tree experience.",
+      cta: "Continue setup",
+    },
+    quick: {
+      title: "Take a quick look with a team agent",
+      description:
+        "Jump in now and chat with an agent your teammates already run — nothing to install. You can set up your own agent any time later.",
+      cta: "Quick start",
+    },
+    pickTitle: "Pick a team agent",
+    pickWhy: "Start chatting now. You can set up your own agent any time later.",
+    /** Ownership tag on each row — descriptive wording, not a new product concept. */
+    runBy: (owner: string) => `Run by ${owner}`,
+    startChat: "Start chat",
+    pickEmpty: "No team agent is available right now — set up your own instead.",
+    /** Roster read failed — distinct from empty, so a network blip never
+     *  becomes a false "no agent available" claim. */
+    pickError: "Couldn't load your team's agents just now.",
+    pickRetry: "Try again",
+    /** Footnote under the list: quick start does not finish setup. */
+    pickFootnote: "Starting here won't finish your setup — you can complete it any time from Settings.",
   },
   /** failure recovery, shared */
   errors: {

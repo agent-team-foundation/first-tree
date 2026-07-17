@@ -20,6 +20,20 @@ describe("OAuth state JWT", () => {
     expect(result.targetOrganizationId).toBe("01961234-aaaa-7000-8000-000000000001");
   });
 
+  it("round-trips the GitHub App installation intent", async () => {
+    const { token, nonce } = await signOAuthState(SECRET, "/settings/github", {
+      intent: "install",
+      provider: "github",
+      targetOrganizationId: "01961234-aaaa-7000-8000-000000000001",
+    });
+    const result = await verifyOAuthState(SECRET, token, nonce);
+    expect(result).toMatchObject({
+      next: "/settings/github",
+      intent: "install",
+      provider: "github",
+    });
+  });
+
   it("round-trips the identity row bound to an unlink reauthentication", async () => {
     const targetIdentityId = "01961234-bbbb-7000-8000-000000000002";
     const { token, nonce } = await signOAuthState(SECRET, "/user-settings", {

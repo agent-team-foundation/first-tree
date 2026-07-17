@@ -116,16 +116,15 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
    */
   function applyPatch(current: AgentRuntimeConfigPayload, patch: AgentRuntimeConfigPatch): AgentRuntimeConfigPayload {
     rejectLegacyMcpWrite(patch);
-    // Not every variant carries `reasoningEffort` (cursor has no effort
+    // Not every variant carries `reasoningEffort` (Cursor and Kimi Code have no effort
     // channel). Reject an effort patch against such a variant explicitly:
     // zod's re-parse would otherwise STRIP the unknown key and report a
     // successful no-op write (version bump, config-change notification,
     // nothing changed) — the operator must learn the field does not apply.
     if (patch.reasoningEffort !== undefined && !("reasoningEffort" in current)) {
-      throw new BadRequestError(
-        "reasoningEffort is not supported by this agent's runtime provider (Cursor encodes effort in the model id)",
-        { code: "reasoning_effort_unsupported" },
-      );
+      throw new BadRequestError("reasoningEffort is not supported by this agent's runtime provider", {
+        code: "reasoning_effort_unsupported",
+      });
     }
     const currentEffort = "reasoningEffort" in current ? current.reasoningEffort : undefined;
     const nextEffort = patch.reasoningEffort ?? currentEffort;

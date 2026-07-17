@@ -64,6 +64,8 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── doc ...                  Org document library (publish, comments, reply, resolve, status)
+├── github ...               GitHub entity attention and context review
+├── gitlab ...               GitLab Issue/MR entity attention
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
@@ -226,7 +228,7 @@ first-tree agent list --remote --org <id>  # cross-org view (multi-org operators
 ### agent create
 
 ```
-first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|codex|cursor]
+first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|claude-code-tui|codex|cursor|kimi-code]
 ```
 
 Creates the agent row on the server and binds it to the given client
@@ -602,6 +604,58 @@ A `409` means the same (human, delegate) line already lives in another chat
 — `--rebind` MOVES it here (a line is never duplicated). `unfollow` is
 idempotent: `removed: 0` is success, not an error. Requires the org's
 GitHub App installation to cover the repo (`422` otherwise).
+
+---
+
+## gitlab
+
+GitLab Issue and Merge Request attention for the current chat. The commands
+operate entirely on First Tree's local webhook projection: they never call the
+GitLab API, validate an entity live, or use the current `glab` account.
+
+```
+first-tree gitlab
+├── follow <issue-or-mr-url> [--chat <chatId>] [--agent <name>] [--rebind]
+├── following [--chat <chatId>] [--agent <name>]
+└── unfollow <issue-or-mr-url> [--chat <chatId>] [--agent <name>]
+```
+
+```bash
+# Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
+first-tree gitlab follow https://gitlab.example/acme/api/-/issues/42
+first-tree gitlab follow https://gitlab.example/acme/api/-/merge_requests/42 --rebind
+first-tree gitlab following
+first-tree gitlab unfollow https://gitlab.example/acme/api/-/issues/42
+```
+
+`follow` accepts only a full Issue or Merge Request URL from the Team's one
+configured GitLab instance. It records a pending declaration without provider
+egress; the next matching valid webhook supplies numeric project identity and
+activates the declaration. Repeating a follow by the same human/delegate pair
+in the same chat is idempotent. The same pair cannot follow the entity from a
+second chat: the command reports the existing room, and `--rebind` atomically
+moves that line when the task context intentionally changes. Different pairs
+remain independent. A pending
+declaration reports `state: null` because First Tree has not verified provider
+state. There is no GitLab `context-review` command.
+
+`following` returns every active binding in the chat as a stable public
+projection, including automatic reviewer / assignee / mention routing and
+explicit `agent_declared` / `human_declared` rows. Pending declarations and
+active webhook-observed bindings report their corresponding status. Internal
+connection, organization, mapping, actor, identity, and normalized-path
+identifiers are not returned.
+
+`unfollow` is URL-based and idempotent: `removed: 0` is terminal success. It
+removes every automatic or manual binding for that entity in the current chat.
+A later explicit reviewer, assignee, or mention event may create a new route.
+After a project rename, use the current URL returned by `following`; the
+inbound-only service cannot resolve an arbitrary old path back to a numeric
+project identity.
+
+These commands control First Tree chat attention. Native GitLab
+subscribe/unsubscribe operations control only the authenticated GitLab
+account's personal notifications and are not a replacement for chat follow.
 
 ---
 
@@ -1221,9 +1275,10 @@ Old per-route rate-limit env vars are no longer read.
 | `FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS` | `300` (set `0` to disable) |
 | `FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` | `3600` |
 
-`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the GitHub-source archive idle
-threshold. Mapped chats also require all bound entities to be closed/merged;
-source=github chats with no mapping use the same idle threshold.
+`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the SCM-source archive idle
+threshold. Mapped GitHub/GitLab chats also require all bound entities to be
+closed/merged; provider-owned chats with no mapping use the same idle
+threshold.
 
 **Observability:**
 

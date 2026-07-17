@@ -19,6 +19,7 @@ const repo = {
 describe("landing campaign active registry", () => {
   it("distinguishes active campaign slugs from valid historical metadata slugs", () => {
     expect(isKnownLandingCampaignSlug("production-scan")).toBe(true);
+    expect(isKnownLandingCampaignSlug("agent-readiness")).toBe(true);
     expect(isKnownLandingCampaignSlug("seed-api")).toBe(false);
     expect(landingCampaignSlugSchema.safeParse("seed-api").success).toBe(true);
   });
@@ -26,6 +27,10 @@ describe("landing campaign active registry", () => {
   it("validates a trusted campaign + owner/repo action context", () => {
     expect(landingCampaignActionContextSchema.parse({ campaign: "production-scan", repoSlug: "Acme/api.js" })).toEqual({
       campaign: "production-scan",
+      repoSlug: "Acme/api.js",
+    });
+    expect(landingCampaignActionContextSchema.parse({ campaign: "agent-readiness", repoSlug: "Acme/api.js" })).toEqual({
+      campaign: "agent-readiness",
       repoSlug: "Acme/api.js",
     });
     expect(landingCampaignActionContextSchema.safeParse({ campaign: "retired", repoSlug: "acme/api" }).success).toBe(

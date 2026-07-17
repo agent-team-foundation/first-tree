@@ -2,8 +2,8 @@ import {
   activeRuntimeChatIdsResponseSchema,
   addParticipantSchema,
   createTaskChatSchema,
+  followChatGitlabEntityRequestSchema,
   followGithubEntityRequestSchema,
-  followGitlabEntitySchema,
   legacyCreateChatSchema,
   paginationQuerySchema,
   updateChatSchema,
@@ -22,12 +22,13 @@ import {
   removeEntityFollow,
 } from "../../services/github-entity-follow.js";
 import {
-  declareGitlabEntityFollow,
-  listChatGitlabEntities,
-  removeGitlabEntityFollow,
+  declareCurrentGitlabEntityFollow,
+  listCurrentChatGitlabEntities,
+  removeCurrentGitlabEntityFollow,
 } from "../../services/gitlab-entity-follow.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { resolveAgentScmBindingPair } from "../../services/scm-attention-line.js";
 import { sendFollowResult } from "../github-entity-reply.js";
 
 const log = createLogger("AgentChatsRoute");
@@ -302,7 +303,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId/gitlab-entities", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    return { entities: await listChatGitlabEntities(app.db, request.params.chatId) };
+    return listCurrentChatGitlabEntities(app.db, request.params.chatId);
   });
 
   app.post<{ Params: { chatId: string } }>(
@@ -311,26 +312,48 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-      const body = followGitlabEntitySchema.parse(request.body);
-      const entity = await declareGitlabEntityFollow(app.db, {
-        organizationId: identity.organizationId,
-        connectionId: body.connectionId,
+      const body = followChatGitlabEntityRequestSchema.parse(request.body);
+      const pair = await resolveAgentScmBindingPair(app.db, request.params.chatId, identity.uuid);
+      if (!pair) {
+        throw new BadRequestError(
+          "No eligible (human, wake-agent) attention pair: following from an agent session needs an active " +
+            "non-human caller and at least one active human speaker in the chat.",
+        );
+      }
+      const result = await declareCurrentGitlabEntityFollow(app.db, {
+        organizationId: pair.organizationId,
         chatId: request.params.chatId,
         declaredByAgentId: identity.uuid,
-        boundVia: "agent_declared",
+        humanAgentId: pair.humanAgentId,
+        delegateAgentId: pair.wakeAgentId,
         entityUrl: body.entityUrl,
+        rebind: body.rebind,
       });
-      return reply.status(201).send({ entity });
+      if (result.outcome === "conflict") {
+        return reply.status(409).send({
+          error: "ENTITY_FOLLOWED_ELSEWHERE",
+          message:
+            `This GitLab attention line already lives in chat ${result.conflict.chatId}. ` +
+            "Work there, or re-issue with rebind to move it into this chat.",
+          conflict: result.conflict,
+        });
+      }
+      return reply.status(result.response.status === "already_following" ? 200 : 201).send(result.response);
     },
   );
 
-  app.delete<{ Params: { chatId: string }; Querystring: { mappingId?: string } }>(
+  app.delete<{ Params: { chatId: string }; Querystring: { entity?: string } }>(
     "/:chatId/gitlab-entities",
     async (request) => {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-      if (!request.query.mappingId) throw new BadRequestError("Pass ?mappingId=<GitLab follow id> to unfollow.");
-      return { removed: await removeGitlabEntityFollow(app.db, request.params.chatId, request.query.mappingId) };
+      const entityUrl = request.query.entity;
+      if (!entityUrl) throw new BadRequestError("Pass ?entity=<full GitLab issue or merge request URL> to unfollow.");
+      return removeCurrentGitlabEntityFollow(app.db, {
+        organizationId: identity.organizationId,
+        chatId: request.params.chatId,
+        entityUrl,
+      });
     },
   );
 }

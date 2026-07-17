@@ -371,6 +371,7 @@ describe("core update helpers", () => {
     const { installPortableSpec } = await import("../core/update.js");
 
     Object.defineProperty(process, "platform", { configurable: true, value: "freebsd" });
+    Object.defineProperty(process, "arch", { configurable: true, value: "x64" });
     await expect(installPortableSpec("1.2.3")).resolves.toMatchObject({
       ok: false,
       reason: "portable self-update is not supported on freebsd-x64",

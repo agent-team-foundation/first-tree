@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { githubEventCardSchema, normalizedScmEventSchema } from "../schemas/normalized-event.js";
+import {
+  githubEventCardSchema,
+  normalizedScmEventSchema,
+  scmNormalizedWebhookSchema,
+} from "../schemas/normalized-event.js";
 import { scmIngressContextSchema, scmSourceSchema } from "../schemas/scm-source.js";
 
 const sampleSource = {
@@ -109,6 +113,46 @@ describe("normalizedScmEventSchema", () => {
       relatedRefs: [{ type: "pull_request", key: "owner/repo#9" }],
     });
     expect(res.success).toBe(false);
+  });
+});
+
+describe("scmNormalizedWebhookSchema", () => {
+  it("accepts an observation-only lifecycle update", () => {
+    expect(
+      scmNormalizedWebhookSchema.safeParse({
+        ingress: {
+          provider: "gitlab",
+          source: { organizationId: "org-uuid", externalId: "connection-1" },
+          stableDeliveryId: null,
+          ingressAuthority: "url_bearer",
+        },
+        observation: {
+          entity: sampleEvent.entity,
+          state: "merged",
+          observedAt: new Date().toISOString(),
+        },
+        event: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an unknown lifecycle state", () => {
+    expect(
+      scmNormalizedWebhookSchema.safeParse({
+        ingress: {
+          provider: "github",
+          source: sampleSource,
+          stableDeliveryId: "delivery-1",
+          ingressAuthority: "verified_signature",
+        },
+        observation: {
+          entity: sampleEvent.entity,
+          state: "archived",
+          observedAt: new Date().toISOString(),
+        },
+        event: sampleEvent,
+      }).success,
+    ).toBe(false);
   });
 });
 

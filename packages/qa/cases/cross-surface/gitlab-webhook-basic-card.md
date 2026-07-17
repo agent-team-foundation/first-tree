@@ -22,7 +22,7 @@ completed until a customer-side source mapping exists in a later phase.
 - Record the generated webhook URL only in the customer's GitLab configuration; redact its bearer from QA evidence,
   logs, traces, screenshots, and shell history.
 - Prepare two existing chats. Deliver an entity event before either chat follows it, then declare the same issue or
-  merge-request URL in both chats. Bind one exact GitLab username to an active member whose eligible delegate runtime can
+  merge-request URL in both chats through `first-tree gitlab follow`. Bind one exact GitLab username to an active member whose eligible delegate runtime can
   be observed; keep one second username unbound for structured skipped-target diagnostics.
 
 ## Operate and Observe
@@ -38,6 +38,15 @@ completed until a customer-side source mapping exists in a later phase.
   Issue, Merge Request, and Note events for the followed entity. Confirm each pending declaration binds only
   when project path, numeric project id, entity type, and iid are consistent, and each processing pass writes at most one
   GitLab card to the existing chat.
+- Before that matching webhook, run `first-tree gitlab following` in both chats and confirm the stable public projection
+  reports `pending` without connection, organization, mapping, actor, normalized-path, or timestamp fields. After the
+  webhook, confirm both independent chat declarations report `active`, the latest URL/title/state projection is visible,
+  and First Tree made no outbound request to GitLab during follow or list. Deliver an ordinary Note after activation and
+  confirm each explicit human/delegate line produces a notifying Inbox entry and wakes its delegate rather than only
+  appending a silent card.
+- Attempt to follow one human/delegate line from a second chat. Confirm the non-rebind request reports the existing chat
+  without duplicating the line, then use `--rebind` and confirm the line moves atomically while other pairs remain in
+  their original chats.
 - Rename the project, declare the new path before its next event, and verify the pending declaration collapses into the
   existing numeric mapping rather than duplicating or failing it. Confirm two projects with the same entity type and IID
   can coexist in one chat because GitLab IIDs are project-scoped.
@@ -46,8 +55,9 @@ completed until a customer-side source mapping exists in a later phase.
   the delegate. The card may say the review request was routed/source unavailable; it must not claim source review
   running/completed.
 - Deliver ordinary assignee and explicit Note `@mention` targets and confirm they route and wake without being labelled as
-  code review. Verify exact case-insensitive usernames only; display-name, email, similar-name, inactive link, inactive
-  member, missing delegate, and ineligible delegate cases must skip independently and emit only bounded operational logs.
+  code review. Also exercise a new or changed MR/Issue description containing an exact `@mention`. Verify exact
+  case-insensitive usernames only; display-name, email, similar-name, inactive link, inactive member, missing delegate,
+  and ineligible delegate cases must skip independently and emit only bounded operational logs.
 - Verify reviewer mode starts unknown. For `User-Agent: GitLab/15.3.0` or newer, a missing `reviewers` field means no
   reviewer and never falls back to assignee; a valid top-level `reviewers: []` proves modern capability without a target.
   For an older declared version, use assignee as reviewer only when `reviewers` is absent. If the version is unavailable or
@@ -58,11 +68,26 @@ completed until a customer-side source mapping exists in a later phase.
   follows continue receiving basic cards, membership restoration does not reactivate the suspended link, and admin
   reconfirmation restores that same current binding in place. A later reconfirmation requires a new upstream personnel
   event.
+- Run `first-tree gitlab unfollow <current-url>` in one chat and confirm every automatic or manual binding for that entity
+  is removed from only that chat; the other chat remains followed. Repeat unfollow and require `{ removed: 0 }` terminal
+  success. Then deliver a new event that explicitly targets the linked reviewer/assignee/mention identity and confirm it
+  may create a new route after the prior chat unfollowed. Do not require GitLab availability for unfollow.
 - Queue a personnel wake, then remove the binding, remove the member, change the delegate, or replace the connection before
   the Inbox drains. Confirm subsequent webhooks use the new authority state while the already accepted wake retains generic
   at-least-once delivery and may still reach the old delegate once, matching GitHub Inbox behavior.
 - Redeliver with the same stable provider delivery id and confirm whole-request deduplication. Deliver without a stable id
   and confirm no claim is stored; repeated cards are an accepted weak-reliability outcome.
+- Exercise MR code updates, draft/ready transitions, terminal MR/Issue observations, and metadata-only changes. Confirm
+  code updates normalize to actionable synchronized cards, ready transitions can route current reviewers, terminal and
+  metadata-only observations refresh the public title/state projection without inventing an extra card, and label-only
+  Issue updates remain silent.
+- Confirm provider-created chat topics use `MR <project>!<iid>`, `MR Review <project>!<iid>`, or
+  `Issue <project>#<iid>` and refresh after a valid title/project-path observation only while the topic still matches the
+  automatic grammar. A manually renamed topic must remain untouched. In the Web header, confirm the external-link button
+  opens the typed metadata URL in a new tab and identifies GitLab; a manual/follow-only chat must not guess an anchor URL.
+- With all mapped entities terminal, no unread state, no open request, no working/blocked runtime session, and the idle
+  threshold elapsed, confirm the SCM sweeper archives the provider-owned chat. Any one guard must prevent archive, and a
+  later delivered event must revive an archived chat.
 - Regenerate the bearer and confirm the old URL stops authenticating immediately while the replacement URL is returned
   only once. Confirm regeneration also clears the learned GitLab version/reviewer mode so the new bearer learns afresh.
   Replace the Team's single GitLab connection and confirm the old connection, bearer, identity links, and entity/chat
@@ -83,7 +108,11 @@ completed until a customer-side source mapping exists in a later phase.
 `PASS`: endpoint identity alone selects the Team and authority, secrets remain redacted, Cloud performs no GitLab egress,
 the Team has at most one GitLab connection, supported entity events reach only existing followed chats as basic cards,
 stable ids are connection-scoped, exact active identities route to the current eligible delegate with one card per chat and
-a generic at-least-once wake, anomalies fail closed, and no source-review state is claimed.
+a generic at-least-once wake, explicit lines wake on ordinary subscribed events, pair-aware rebind moves rather than
+duplicates a line, agent follow/list/unfollow expose only the stable URL contract, chat-scoped unfollow removes automatic
+and manual bindings while later directed events may route afresh, lifecycle-only observations safely refresh public
+state/topic, terminal chats archive only after all safety guards pass, anomalies fail closed, and no source-review state
+is claimed.
 
 `FAIL`: cross-Team resolution, secret exposure, any outbound request to GitLab, incorrect pending binding, duplicate cards
 for one chat within one pass, a fuzzy personnel match, new personnel routing after its authority was removed, reviewer

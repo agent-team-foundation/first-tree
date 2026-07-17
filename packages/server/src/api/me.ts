@@ -371,7 +371,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       kickoffKey: campaignAction
         ? campaignActionKickoffKey(humanAgentId, campaignAction)
         : `${humanAgentId}:${body.agentUuid}:onboarding`,
-      complete: body.complete ?? true,
+      // `stamp` supersedes the older boolean; stale clients that still send
+      // `complete` keep their exact previous semantics.
+      stamp: body.stamp ?? ((body.complete ?? true) ? "completed" : "none"),
     });
     if (campaignAction) {
       try {

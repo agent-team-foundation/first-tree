@@ -141,7 +141,13 @@ async function resolveAvailableHandle(base: string, isStale: () => boolean): Pro
  * doesn't know about yet — the UI just ignores anything it can't render.
  */
 function asRuntimeProvider(provider: string): RuntimeProvider | null {
-  if (provider === "claude-code" || provider === "claude-code-tui" || provider === "codex" || provider === "cursor") {
+  if (
+    provider === "claude-code" ||
+    provider === "claude-code-tui" ||
+    provider === "codex" ||
+    provider === "cursor" ||
+    provider === "kimi-code"
+  ) {
     return provider;
   }
   return null;
@@ -180,6 +186,7 @@ function prettyRuntimeLabel(provider: RuntimeProvider): string {
   if (provider === "claude-code-tui") return "Claude Code CLI";
   if (provider === "codex") return "Codex";
   if (provider === "cursor") return "Cursor";
+  if (provider === "kimi-code") return "Kimi Code";
   return provider;
 }
 
@@ -735,7 +742,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 <div>
                   <div className="text-body font-medium">Visible to your team</div>
                   <div className="text-caption text-muted-foreground">
-                    Anyone on your team can @mention and chat with it.
+                    Anyone on your team can @mention it and start work with it — it runs on your computer and uses your
+                    plan.
                   </div>
                 </div>
               </OptionCard>
@@ -858,8 +866,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 function NoOkRuntimeBlock() {
   return (
     <p className="text-caption text-destructive">
-      No runtime installed on this computer. Install Claude Code, Codex, or Cursor on it — open this computer&apos;s
-      setup card in Settings → Computers for the install command — then come back.
+      No runtime installed on this computer. Upgrade First Tree for bundled Kimi Code, or install Claude Code, Codex, or
+      Cursor — open this computer&apos;s setup card in Settings → Computers, then come back.
     </p>
   );
 }

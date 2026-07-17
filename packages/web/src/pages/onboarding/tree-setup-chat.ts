@@ -23,7 +23,10 @@ export async function ensureStartChatRepos(
 }
 
 export async function startOnboardingChat(args: {
-  agent: StartChatAgent;
+  /** Only the uuid is sent; the narrow Pick lets the team-agent quick start
+   *  pass a roster `Agent` (a teammate's org-visible agent) as well as the
+   *  member's own `ManagedAgent`. */
+  agent: Pick<StartChatAgent, "uuid">;
   bootstrap: string;
   /** The selected org — scopes the membership completion stamped by the server. */
   organizationId: string | null;
@@ -32,6 +35,14 @@ export async function startOnboardingChat(args: {
   treeBindingPlan: TreeBindingPlan | "none";
   joinPath?: "invite";
   complete?: boolean;
+  /**
+   * Onboarding stamp written once the chat exists — supersedes `complete`
+   * server-side. The team-agent quick start passes `"invitee_skip"`: suppress
+   * auto-open only, never completion.
+   */
+  stamp?: "completed" | "invitee_skip" | "none";
+  /** Funnel-event label override; defaults to the joinPath-derived type. */
+  startChatType?: string;
   /** Campaign + repo pair used by both action entry paths for dedup. */
   campaignAction?: LandingCampaignActionContext;
 }): Promise<string> {
@@ -45,13 +56,14 @@ export async function startOnboardingChat(args: {
     bootstrap: args.bootstrap,
     topic: args.topic,
     complete: args.complete,
+    ...(args.stamp ? { stamp: args.stamp } : {}),
     ...(args.campaignAction ? { campaignAction: args.campaignAction } : {}),
   });
   void reportOnboardingEvent("kickoff_chat_started", {
     agentUuid: args.agent.uuid,
     chatId,
     treeBindingPlan: args.treeBindingPlan,
-    startChatType: args.joinPath === "invite" ? "team-onboarding" : "onboarding",
+    startChatType: args.startChatType ?? (args.joinPath === "invite" ? "team-onboarding" : "onboarding"),
     ...(args.joinPath ? { joinPath: args.joinPath } : {}),
   });
   return chatId;

@@ -421,11 +421,11 @@ describe("POST /me/landing-campaigns/start", () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 
-    const res = await startCampaign(app, admin, "agent-readiness");
+    const res = await startCampaign(app, admin, "unknown-campaign");
 
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({
-      error: expect.stringContaining('Landing campaign "agent-readiness" not found'),
+      error: expect.stringContaining('Landing campaign "unknown-campaign" not found'),
     });
     const serviceMembers = await app.db
       .select()
@@ -442,6 +442,52 @@ describe("POST /me/landing-campaigns/start", () => {
         ),
       );
     expect(trialAgents).toHaveLength(0);
+  });
+
+  it("launches agent-readiness with its external skill and isolated trial identity", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const res = await startCampaign(app, admin, "agent-readiness");
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ chatId: string; agentUuid: string; campaign: string; repoCanonicalKey: string }>();
+    expect(body).toMatchObject({
+      campaign: "agent-readiness",
+      repoCanonicalKey: "github.com/acme/backend",
+    });
+
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    expect(trialAgent).toMatchObject({
+      name: "agent-team-readiness-scanner",
+      displayName: "Agent Team Readiness Scanner",
+    });
+    expect(parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata)).toMatchObject({
+      landingCampaignTrial: true,
+      campaign: "agent-readiness",
+      skillSetId: "agent-readiness",
+      skillSetVersion: "2026.07.17.1",
+    });
+
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(chat?.topic).toBe("Agent team readiness scan");
+    expect(parseLandingCampaignTrialChatMetadata(chat?.metadata)).toMatchObject({
+      campaign: "agent-readiness",
+      agentId: body.agentUuid,
+      repo: { canonicalKey: "github.com/acme/backend" },
+      state: "running",
+      inputLocked: false,
+    });
+
+    const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
+    expect(bootstrap?.content).toContain("clone https://github.com/agent-team-foundation/agent-team-readiness-scan");
+    expect(bootstrap?.content).toContain("run its agent-team-readiness skill on the repo above");
+    expect(bootstrap?.content).toContain("six-dimension score");
+    expect(bootstrap?.metadata).toMatchObject({
+      campaign: "agent-readiness",
+      landingCampaignTrial: true,
+    });
   });
 
   it("rejects invalid or non-GitHub repository URLs before provisioning", async () => {

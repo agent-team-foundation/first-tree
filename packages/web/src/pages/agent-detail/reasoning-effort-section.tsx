@@ -40,6 +40,7 @@ const EFFORT_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, SelectOption[]> = {
   // in the model id itself, so RuntimeTab hides this section entirely for
   // cursor agents. The empty entry keeps the Record exhaustive.
   cursor: [],
+  "kimi-code": [],
 };
 
 const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
@@ -47,6 +48,7 @@ const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   "claude-code-tui": "Applies to new sessions. Unset inherits the local ~/.claude effortLevel; setting it overrides.",
   codex: "Applies to new sessions. Higher means more reasoning per turn; max and ultra require a compatible model.",
   cursor: "Cursor encodes effort in the model id; there is no separate control.",
+  "kimi-code": "Kimi thinking configuration is inherited from the local Kimi configuration.",
 };
 
 export type ReasoningEffortSectionProps = {

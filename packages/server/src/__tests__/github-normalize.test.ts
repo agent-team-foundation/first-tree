@@ -1,6 +1,6 @@
 import type { ScmIngressContext } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { extractMentions, normalizeGithubEvent } from "../services/github-normalize.js";
+import { extractMentions, normalizeGithubEvent, normalizeGithubWebhook } from "../services/github-normalize.js";
 
 const senderUser = { login: "alice", type: "User" };
 const repository = { full_name: "owner/repo" };
@@ -13,6 +13,16 @@ function normalize(eventType: string, payload: unknown, deliveryId: string | nul
     ingressAuthority: "verified_signature",
   };
   return normalizeGithubEvent(eventType, payload, ingress);
+}
+
+function normalizeEnvelope(eventType: string, payload: unknown) {
+  const ingress: ScmIngressContext = {
+    provider: "github",
+    source: { organizationId: "org-uuid", externalId: "installation:99" },
+    stableDeliveryId: "d-envelope",
+    ingressAuthority: "verified_signature",
+  };
+  return normalizeGithubWebhook(eventType, payload, ingress);
 }
 
 describe("extractMentions", () => {
@@ -31,6 +41,47 @@ describe("extractMentions", () => {
   it("returns [] for null/empty", () => {
     expect(extractMentions(null)).toEqual([]);
     expect(extractMentions("")).toEqual([]);
+  });
+});
+
+describe("normalizeGithubWebhook", () => {
+  it("emits an observation-only envelope for terminal pull requests", () => {
+    const normalized = normalizeEnvelope("pull_request", {
+      action: "closed",
+      sender: senderUser,
+      repository,
+      pull_request: {
+        number: 15,
+        title: "Terminal PR",
+        html_url: "https://github.com/owner/repo/pull/15",
+        state: "closed",
+        merged: true,
+      },
+    });
+    expect(normalized.event).toBeNull();
+    expect(normalized.observation).toMatchObject({
+      state: "merged",
+      entity: { type: "pull_request", key: "owner/repo#15", title: "Terminal PR" },
+    });
+    expect(normalized.entityStateSeed?.state).toBe("merged");
+  });
+
+  it("keeps non-transition observations from overwriting lifecycle state", () => {
+    const normalized = normalizeEnvelope("pull_request", {
+      action: "opened",
+      sender: senderUser,
+      repository,
+      pull_request: {
+        number: 16,
+        title: "Opened PR",
+        html_url: "https://github.com/owner/repo/pull/16",
+        state: "open",
+        draft: true,
+      },
+    });
+    expect(normalized.event?.kind).toBe("opened");
+    expect(normalized.observation?.state).toBeNull();
+    expect(normalized.entityStateSeed?.state).toBe("draft");
   });
 });
 

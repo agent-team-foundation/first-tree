@@ -2,10 +2,12 @@ import type {
   ChatGithubEntity,
   ChatGithubEntityListResponse,
   DeclaredBoundVia,
+  GithubEntityBoundVia,
   GithubEntityLiveState,
   GithubEntityType,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { githubEntityBoundViaSchema } from "@first-tree/shared";
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
@@ -19,6 +21,7 @@ import { insertMappingIfAbsent } from "./github-entity-chat.js";
 import { githubEntityDedupKey, githubEntityKeyCandidates, legacyDiscussionEntityKey } from "./github-entity-key.js";
 import { materializeChatGithubEntity } from "./github-entity-live.js";
 import { type EntityState, setEntityTitle } from "./github-entity-state.js";
+import { executeScmFollowLine } from "./scm-attention-line.js";
 
 const log = createLogger("GithubEntityFollow");
 
@@ -424,64 +427,16 @@ export async function declareEntityFollow(
     number: entity.number,
   };
 
-  const result = await insertMappingIfAbsent(db, {
-    organizationId: params.organizationId,
-    humanAgentId: params.humanAgentId,
-    delegateAgentId: params.delegateAgentId,
-    entity: { type: entity.entityType, key: entity.entityKey, url: entity.htmlUrl, title: entity.title ?? undefined },
-    chatId: params.chatId,
-    boundVia: params.boundVia,
-    entityState: entity.entityState,
-  });
-
-  // Repair the persisted title across every row for this entity — not just a
-  // freshly inserted one. `insertMappingIfAbsent` only seeds title on a brand
-  // new row, but the already-following / rebind / conflict paths reuse a
-  // pre-existing row whose title may predate the column (0067) or have changed
-  // upstream. Follow-time resolution already fetched the live title, so refresh
-  // it now instead of waiting for the next webhook (the bug both reviewers
-  // flagged). Runs before the rebind UPDATE below so the moved row keeps the
-  // fresh title; the reinsert-race branch seeds its own row directly. No-op on
-  // a blank title (never clobbers a good label).
-  if (entity.title && entity.title.length > 0) {
-    await setEntityTitle(db, {
-      organizationId: params.organizationId,
-      entityType: entity.entityType,
-      // Candidate keys (not just the canonical one) so a legacy discussion row
-      // stored as `owner/repo#discussion-N` — which rebind moves via the same
-      // candidate set — also gets its title refreshed.
-      entityKey: githubEntityKeyCandidates(entity.entityType, entity.entityKey),
-      title: entity.title,
-    });
-  }
-
-  if (result.inserted) {
-    log.info(
-      { chatId: params.chatId, entityKey: entity.entityKey, boundVia: params.boundVia },
-      "github follow recorded",
-    );
-    return { outcome: "created", entity: wireEntity };
-  }
-
-  if (result.chatId === params.chatId) {
-    return { outcome: "already_following", entity: { ...wireEntity, boundVia: result.boundVia } };
-  }
-
-  if (params.rebind) {
-    const entityKeyCandidates = githubEntityKeyCandidates(entity.entityType, entity.entityKey);
-    // Move the line: the entity's attention home follows the task. Rewrites
-    // `bound_via` to the declared value so a moved `direct` anchor row can't
-    // make the new chat impersonate a github-minted chat's anchor (R13), and
-    // refreshes `boundAt` so the listing dedup's "most recent binding"
-    // ordering reflects the move.
-    const moved = await db
-      .update(githubEntityChatMappings)
-      .set({
-        chatId: params.chatId,
-        boundVia: params.boundVia,
-        entityState: entity.entityState,
-        boundAt: new Date(),
+  type GithubFollowLine = { chatId: string; boundVia: GithubEntityBoundVia; entityKey: string };
+  const entityKeyCandidates = githubEntityKeyCandidates(entity.entityType, entity.entityKey);
+  const listLines = async (): Promise<GithubFollowLine[]> => {
+    const rows = await db
+      .select({
+        chatId: githubEntityChatMappings.chatId,
+        boundVia: githubEntityChatMappings.boundVia,
+        entityKey: githubEntityChatMappings.entityKey,
       })
+      .from(githubEntityChatMappings)
       .where(
         and(
           eq(githubEntityChatMappings.organizationId, params.organizationId),
@@ -491,53 +446,119 @@ export async function declareEntityFollow(
           inArray(githubEntityChatMappings.entityKey, entityKeyCandidates),
         ),
       )
-      .returning({ chatId: githubEntityChatMappings.chatId });
-    if (moved.length === 0) {
-      // The conflicting row vanished between the insert-conflict read and
-      // the UPDATE (concurrent unfollow). Don't report a ghost "rebound" —
-      // fall back to a plain insert so the follow is actually recorded.
-      const reinserted = await insertMappingIfAbsent(db, {
-        organizationId: params.organizationId,
-        humanAgentId: params.humanAgentId,
-        delegateAgentId: params.delegateAgentId,
-        // Seed the title here too: the prior `setEntityTitle` matched zero rows
-        // because the existing row vanished in the race, so this fresh row is
-        // the only one carrying the label.
-        entity: {
-          type: entity.entityType,
-          key: entity.entityKey,
-          url: entity.htmlUrl,
-          title: entity.title ?? undefined,
-        },
-        chatId: params.chatId,
-        boundVia: params.boundVia,
-        entityState: entity.entityState,
-      });
-      if (!reinserted.inserted && reinserted.chatId !== params.chatId) {
-        // Lost yet another race to a third writer — surface the conflict.
-        const [thirdChat] = await db
-          .select({ topic: chats.topic })
-          .from(chats)
-          .where(eq(chats.id, reinserted.chatId))
-          .limit(1);
-        return { outcome: "conflict", conflict: { chatId: reinserted.chatId, topic: thirdChat?.topic ?? null } };
-      }
-      log.info({ chatId: params.chatId, entityKey: entity.entityKey }, "github follow recorded (rebind fallback)");
-      return { outcome: "created", entity: wireEntity };
-    }
-    log.info(
-      { fromChatId: result.chatId, toChatId: params.chatId, entityKey: entity.entityKey },
-      "github follow rebound",
-    );
-    return { outcome: "rebound", entity: wireEntity };
+      .orderBy(
+        desc(sql`${githubEntityChatMappings.entityKey} = ${entity.entityKey}`),
+        asc(githubEntityChatMappings.boundAt),
+      );
+    return rows.map((row) => {
+      const parsed = githubEntityBoundViaSchema.safeParse(row.boundVia);
+      return {
+        chatId: row.chatId,
+        boundVia: parsed.success ? parsed.data : "direct",
+        entityKey: row.entityKey,
+      };
+    });
+  };
+
+  // Refresh an existing row before the shared state machine moves it. A
+  // vanished-row fallback insert seeds the same title through createLine.
+  if (entity.title && entity.title.length > 0) {
+    await setEntityTitle(db, {
+      organizationId: params.organizationId,
+      entityType: entity.entityType,
+      entityKey: entityKeyCandidates,
+      title: entity.title,
+    });
   }
 
-  const [existingChat] = await db
-    .select({ topic: chats.topic })
-    .from(chats)
-    .where(eq(chats.id, result.chatId))
-    .limit(1);
-  return { outcome: "conflict", conflict: { chatId: result.chatId, topic: existingChat?.topic ?? null } };
+  const result = await executeScmFollowLine({
+    targetChatId: params.chatId,
+    rebind: params.rebind,
+    storage: {
+      listLines,
+      removeLines: async (rows) => {
+        const keys = rows.map((row) => row.entityKey);
+        if (keys.length === 0) return;
+        await db
+          .delete(githubEntityChatMappings)
+          .where(
+            and(
+              eq(githubEntityChatMappings.organizationId, params.organizationId),
+              eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
+              eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
+              eq(githubEntityChatMappings.entityType, entity.entityType),
+              inArray(githubEntityChatMappings.entityKey, keys),
+            ),
+          );
+      },
+      getChatTopic: async (chatId) => {
+        const [chat] = await db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+        return chat?.topic ?? null;
+      },
+      moveLine: async (row) => {
+        const [moved] = await db
+          .update(githubEntityChatMappings)
+          .set({
+            chatId: params.chatId,
+            boundVia: params.boundVia,
+            entityState: entity.entityState,
+            boundAt: new Date(),
+          })
+          .where(
+            and(
+              eq(githubEntityChatMappings.organizationId, params.organizationId),
+              eq(githubEntityChatMappings.humanAgentId, params.humanAgentId),
+              eq(githubEntityChatMappings.delegateAgentId, params.delegateAgentId),
+              eq(githubEntityChatMappings.entityType, entity.entityType),
+              eq(githubEntityChatMappings.entityKey, row.entityKey),
+            ),
+          )
+          .returning({
+            chatId: githubEntityChatMappings.chatId,
+            boundVia: githubEntityChatMappings.boundVia,
+            entityKey: githubEntityChatMappings.entityKey,
+          });
+        return moved ? { ...moved, boundVia: params.boundVia } : null;
+      },
+      createLine: async () => {
+        const inserted = await insertMappingIfAbsent(db, {
+          organizationId: params.organizationId,
+          humanAgentId: params.humanAgentId,
+          delegateAgentId: params.delegateAgentId,
+          entity: {
+            type: entity.entityType,
+            key: entity.entityKey,
+            url: entity.htmlUrl,
+            title: entity.title ?? undefined,
+          },
+          chatId: params.chatId,
+          boundVia: params.boundVia,
+          entityState: entity.entityState,
+        });
+        const lines = await listLines();
+        const record = lines.find((line) => line.chatId === inserted.chatId) ?? lines[0];
+        if (!record) throw new Error("GitHub follow insert completed without a surviving mapping");
+        return { record, inserted: inserted.inserted };
+      },
+    },
+  });
+
+  if (result.outcome === "conflict") return result;
+  if (result.outcome === "created") {
+    log.info(
+      { chatId: params.chatId, entityKey: entity.entityKey, boundVia: params.boundVia },
+      "github follow recorded",
+    );
+  } else if (result.outcome === "rebound") {
+    log.info({ toChatId: params.chatId, entityKey: entity.entityKey }, "github follow rebound");
+  }
+  return {
+    outcome: result.outcome,
+    entity: {
+      ...wireEntity,
+      ...(result.outcome === "already_following" ? { boundVia: result.record.boundVia } : {}),
+    },
+  };
 }
 
 /**

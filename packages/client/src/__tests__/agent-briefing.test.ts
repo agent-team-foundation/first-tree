@@ -53,6 +53,7 @@ function topLevelSection(briefing: string, heading: string): string {
     "# Team Prompt (team-shared — read-only for agents)",
     "# Agent Prompt (this agent only — editable)",
     "# Agent Prompt Overrides (this agent only — managed via resource bindings)",
+    "# Agent Prompt (legacy merged — may include team-shared content)",
     "# Working in First Tree (First Tree Managed)",
     "# Context Tree (First Tree Managed)",
     "# Skills (First Tree Managed)",
@@ -196,13 +197,37 @@ describe("buildAgentBriefing — prompt provenance sections", () => {
     reasoningEffort: "" as const,
   };
 
-  it("renders legacy append only as the legacy fallback", () => {
-    expect(buildAgentBriefing(makeOpts({ payload: null }))).not.toContain("## Agent-Specific Prompt");
+  it("renders legacy append only as the legacy fallback, with self-contained provenance", () => {
+    expect(buildAgentBriefing(makeOpts({ payload: null }))).not.toContain("legacy merged");
 
     const payload = { ...basePayload, prompt: { append: "Follow the local plan." } };
     const briefing = buildAgentBriefing(makeOpts({ payload }));
-    expect(briefing).toContain("## Agent-Specific Prompt\n\nFollow the local plan.");
+    expect(briefing).toContain("# Agent Prompt (legacy merged — may include team-shared content)");
+    expect(briefing).toContain("Follow the local plan.");
+    expect(briefing).not.toContain("## Agent-Specific Prompt");
     expect(briefing).not.toContain("# Agent Prompt (this agent only — editable)");
+
+    // The fallback section itself names its source and both edit entry
+    // points, so the file stays self-contained without the structured trio.
+    expect(briefing).toContain("served as one merged blob");
+    expect(briefing).toContain("first-tree agent config prompt show test-agent --raw");
+    expect(briefing).toContain("first-tree agent config prompt set test-agent");
+    expect(briefing).toContain("Do NOT copy any of this\nmerged section into your per-agent prompt.");
+
+    // The merged blob can also embed binding-managed agent prompt overrides,
+    // which `prompt set` cannot edit — both the banner and the Source
+    // paragraph must name that class and its Cloud-managed edit path.
+    expect(briefing.match(/binding-managed agent prompt overrides/g)).toHaveLength(2);
+    expect(briefing).toMatch(/binding-managed agent prompt overrides[\s\S]{0,160}?Org Settings →\s+Resources/);
+    expect(briefing).toMatch(/binding-managed agent prompt overrides\s+\(NOT editable with `prompt set`/);
+
+    // The banner documents the heading that actually renders on this path —
+    // the legacy merged entry replaces the structured three-heading map.
+    expect(briefing).toContain("# Agent Prompt (legacy merged) → this agent's prompt configuration");
+    expect(briefing).toContain("NEVER copy the merged section back into prompt set");
+    expect(briefing).not.toContain("# Team Prompt   → team prompt resources");
+    expect(briefing).not.toContain("# Agent Prompt Overrides → agent-specific resource bindings");
+    expect(briefing).toContain("Every other section is First Tree Managed");
   });
 
   it("separates team prompt, editable agent prompt, and non-editable overrides", () => {
@@ -230,6 +255,7 @@ describe("buildAgentBriefing — prompt provenance sections", () => {
     expect(briefing).toContain("## Tone guide\n\nOverride body.");
     expect(briefing).toMatch(/NOT editable with `prompt set`/);
     expect(briefing).not.toContain("## Agent-Specific Prompt");
+    expect(briefing).not.toContain("legacy merged");
   });
 
   it("renders identity, prompt, and path values without HTML escaping", () => {
@@ -595,18 +621,22 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("do not bind GitLab events to a First Tree chat");
     expect(gitlab).toContain("do not require the First Tree GitHub App");
 
-    expect(gitlab).toContain("subscribe by default");
-    expect(gitlab).toContain("skip an unrelated entity or one the user explicitly does not want notifications for");
-    expect(gitlab).toContain("subscription failure means only that GitLab notifications are missing");
-    expect(gitlab).toContain("does not invalidate the entity that was created");
-    expect(gitlab).toContain("only when a human explicitly asks");
-    expect(gitlab).toContain("never automatically when an issue closes");
+    expect(gitlab).toContain("Default: follow what you create");
+    expect(gitlab).toContain("first-tree gitlab follow <url>");
+    expect(gitlab).toContain("pending and inbound-only");
+    expect(gitlab).toContain("without calling GitLab");
+    expect(gitlab).toContain("gitlab follow <url> --rebind");
+    expect(gitlab).toContain("does not invalidate an entity that was already created");
+    expect(gitlab).toContain("only when the human explicitly asks for personal-account notifications");
+    expect(gitlab).toContain("only when the human explicitly asks this chat");
+    expect(gitlab).toContain("never automatically when an Issue closes");
     expect(gitlab).toContain("an MR merges, or the task finishes");
+    expect(gitlab).toContain("first-tree gitlab unfollow <url>");
+    expect(gitlab).toContain("removes every automatic or manual binding");
+    expect(gitlab).toContain("may create a new route");
+    expect(gitlab).toContain("first-tree gitlab following");
     expect(gitlab).not.toContain("first-tree-gitlab");
-    expect(gitlab).toContain("glab issue --help");
-    expect(gitlab).toContain("glab mr --help");
 
-    expect(briefing).not.toMatch(/first-tree gitlab (?:follow|unfollow)/u);
     expect(gitlab).not.toContain("install the First Tree GitHub App");
     expect(gitlab).not.toMatch(/`glab (?:issue|mr) (?:subscribe|unsubscribe) [^`]+`/u);
     expect(gitlab).not.toContain("-R <group/project>");
@@ -659,6 +689,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(overview).toContain("first-tree agent …");
     expect(overview).toContain("first-tree daemon …");
     expect(overview).toContain("first-tree github …");
+    expect(overview).toContain("first-tree gitlab …");
     expect(overview).toContain("first-tree tree verify");
     expect(overview).toContain("first-tree tree tree");
     expect(overview).not.toContain("github scan");

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { ChatGithubEntity, ChatParticipantDetail } from "@first-tree/shared";
+import type { ChatGithubEntity, ChatGitlabEntity, ChatParticipantDetail } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -17,6 +17,7 @@ const activityMocks = vi.hoisted(() => ({
 const chatMocks = vi.hoisted(() => ({
   createAgentChat: vi.fn(),
   listChatGithubEntities: vi.fn(),
+  listChatGitlabEntities: vi.fn(),
 }));
 
 const sessionMocks = vi.hoisted(() => ({
@@ -47,6 +48,7 @@ vi.mock("../../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../api/chats.js")>()),
   createAgentChat: chatMocks.createAgentChat,
   listChatGithubEntities: chatMocks.listChatGithubEntities,
+  listChatGitlabEntities: chatMocks.listChatGitlabEntities,
 }));
 
 vi.mock("../../../api/sessions.js", async (importOriginal) => ({
@@ -261,6 +263,21 @@ function githubEntity(
   };
 }
 
+function gitlabEntity(
+  overrides: Partial<ChatGitlabEntity> & { entityType: ChatGitlabEntity["entityType"] },
+): ChatGitlabEntity {
+  return {
+    entityType: overrides.entityType,
+    entityUrl: overrides.entityUrl ?? "https://gitlab.internal/acme/web/-/merge_requests/1",
+    projectPath: overrides.projectPath ?? "acme/web",
+    entityIid: overrides.entityIid ?? 1,
+    title: overrides.title ?? null,
+    state: overrides.state ?? null,
+    status: overrides.status ?? "active",
+    boundVia: overrides.boundVia ?? "identity_target",
+  };
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
   window.localStorage.clear();
@@ -296,6 +313,7 @@ beforeEach(() => {
   );
   chatMocks.createAgentChat.mockResolvedValue({ id: "chat-new" });
   chatMocks.listChatGithubEntities.mockResolvedValue({ items: [] });
+  chatMocks.listChatGitlabEntities.mockResolvedValue({ items: [] });
   sessionMocks.listAgentSessions.mockResolvedValue([
     session({ chatId: "chat-build", topic: "Build deploy", state: "active" }),
     session({ chatId: "chat-notes", topic: null, summary: "Notes summary", state: "suspended" }),
@@ -478,6 +496,60 @@ describe("GitHubSection extra DOM behavior", () => {
     expect(populated.container.textContent).toContain("Open");
     expect(populated.container.textContent).toContain("acme/web@abc123");
     await act(async () => populated.root.unmount());
+  });
+});
+
+describe("GitLabSection extra DOM behavior", () => {
+  it("renders an automatic merge-request binding and sorts it before issues", async () => {
+    const { GitLabSection } = await import("../right-sidebar/gitlab-section.js");
+    const mergeRequestUrl = "https://gitlab.internal/Acme/Reviews/-/merge_requests/17";
+    chatMocks.listChatGitlabEntities.mockResolvedValueOnce({
+      items: [
+        gitlabEntity({
+          entityType: "issue",
+          entityUrl: "https://gitlab.internal/Acme/Reviews/-/issues/8",
+          projectPath: "Acme/Reviews",
+          entityIid: 8,
+          title: "Follow-up issue",
+          state: "closed",
+          boundVia: "human_declared",
+        }),
+        gitlabEntity({
+          entityType: "pull_request",
+          entityUrl: mergeRequestUrl,
+          projectPath: "Acme/Reviews",
+          entityIid: 17,
+          title: "Review this change",
+          state: "open",
+          boundVia: "identity_target",
+        }),
+        gitlabEntity({
+          entityType: "pull_request",
+          entityUrl: "https://gitlab.internal/Acme/Reviews/-/merge_requests/18",
+          projectPath: "Acme/Reviews",
+          entityIid: 18,
+          title: "Draft change",
+          state: "draft",
+          boundVia: "identity_target",
+        }),
+      ],
+    });
+
+    const rendered = await renderDom(<GitLabSection chatId="chat-gitlab" />);
+    await waitForText(rendered.container, "Review this change");
+
+    const hrefs = [...rendered.container.querySelectorAll<HTMLAnchorElement>("a")].map((anchor) => anchor.href);
+    expect(hrefs).toEqual([
+      mergeRequestUrl,
+      "https://gitlab.internal/Acme/Reviews/-/merge_requests/18",
+      "https://gitlab.internal/Acme/Reviews/-/issues/8",
+    ]);
+    expect(rendered.container.textContent).toContain("GitLab · 3");
+    expect(rendered.container.textContent).toContain("Reviews!17");
+    expect(rendered.container.textContent).toContain("Open");
+    expect(rendered.container.textContent).toContain("Draft");
+    expect(rendered.container.textContent).toContain("Closed");
+    await act(async () => rendered.root.unmount());
   });
 });
 

@@ -37,6 +37,7 @@ function flow(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue
     activeStep: "connect-computer",
     goNext: vi.fn(),
     goTo: vi.fn(),
+    reportStepFailure: vi.fn(),
     organizationId: "org-1",
     memberId: "member-1",
     role: "admin",
@@ -63,7 +64,9 @@ function flow(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue
     setTreeUrl: vi.fn(),
     treeAutoDetectDone: false,
     markTreeAutoDetectDone: vi.fn(),
+    offerTeamAgentStart: false,
     completeAndEnterChat: vi.fn(),
+    skipAndEnterChat: vi.fn(),
     finishLater: vi.fn(),
     ...overrides,
   };

@@ -158,67 +158,25 @@ clone exactly where Phase 1 (and the runtime) expect it. If the manifest
 carries no tree name yet (a fully unbound workspace), use the conventional
 `<workspaceRoot>/context-tree`.
 
-**Configure GitHub governance after a newly created Context Repo.**
+**Configure GitHub branch rules after a newly created Context Repo.**
 This applies only in state A, only after `tree init` succeeds, and only when the
 new Context Repo is a GitHub repository. Do not run it for an already-bound tree,
 a non-GitHub remote, or a failed/partial `tree init`. Use host `gh`; do not send
 the user to the browser first.
 
-First make the Code Owner gate real and satisfiable on the default branch,
-before enabling the ruleset. Resolve the repository from the new tree checkout
-and the active GitHub login that will author the seed PRs. Then resolve a Code
-Owner who can approve those PRs: prefer a repository-visible org team with
-write/maintain/admin access; otherwise use a direct collaborator with push/admin
-access whose login is different from the active `gh` login. Do **not** make the
-active `gh` user the only Code Owner, because GitHub rejects self-approval from
-the PR author.
+GitHub owns only the repository-shape guard here: changes go through pull
+requests and force / non-fast-forward pushes are blocked. Context Review owns
+the review verdict, so bootstrap must not create a root `CODEOWNERS` mapping or
+require a GitHub approving review. Keep this rule independent of the
+organization's current Context Review workflow; that setting may change after
+bootstrap without rewriting repository governance.
+
+Resolve the repository from the new tree checkout:
 
 ```bash
 remote=$(git -C "<tree>" remote get-url origin)
 repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)
-default_branch=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)
-repo_owner=${repo%%/*}
-repo_owner_type=$(gh api "repos/$repo" --jq .owner.type)
-pr_author_login=$(gh api user --jq .login)
-team_slug=""
-if [ "$repo_owner_type" = "Organization" ]; then
-  for candidate_team_slug in $(gh api "repos/$repo/teams?per_page=100" --jq '.[] | select((.permission == "admin" or .permission == "maintain" or .permission == "push") and (.privacy != "secret")) | .slug'); do
-    non_author_member=$(gh api "orgs/$repo_owner/teams/$candidate_team_slug/members?per_page=100" --jq --arg author "$pr_author_login" '[.[] | select(.login != $author)][0].login // empty')
-    if [ -n "$non_author_member" ]; then
-      team_slug="$candidate_team_slug"
-      break
-    fi
-  done
-fi
-if [ -n "$team_slug" ]; then
-  code_owner_ref="@$repo_owner/$team_slug"
-else
-  code_owner_login=$(gh api "repos/$repo/collaborators?affiliation=direct&permission=push&per_page=100" --jq --arg author "$pr_author_login" '[.[] | select(.login != $author and (.permissions.admin or .permissions.maintain or .permissions.push))][0].login // empty')
-  test -n "$code_owner_login"
-  code_owner_ref="@$code_owner_login"
-fi
-mkdir -p "<tree>/.github"
-printf '* %s\n' "$code_owner_ref" > "<tree>/.github/CODEOWNERS"
-git -C "<tree>" add .github/CODEOWNERS
-git -C "<tree>" commit -m "chore: add context tree code owner mapping"
-git -C "<tree>" push origin "HEAD:$default_branch"
-remote_codeowners=$(gh api "repos/$repo/contents/.github/CODEOWNERS?ref=$default_branch" --jq .content | base64 --decode)
-expected_codeowners=$(printf '* %s\n' "$code_owner_ref")
-test "$remote_codeowners" = "$expected_codeowners"
-test "$(gh api "repos/$repo/codeowners/errors?ref=$default_branch" --jq '.errors | length')" = "0"
 ```
-
-The bootstrap mapping intentionally covers every path (`*`) so GitHub's Code
-Owner review requirement applies to all Context Tree PRs. Personal repositories
-skip the teams lookup and use the non-author direct-collaborator fallback. Org
-repositories may use a team only when the team is not secret and has at least one
-member other than the PR author. If no satisfiable Code Owner can be resolved, or
-if the pushed `CODEOWNERS` file fails GitHub's CODEOWNERS validation, automatic
-GitHub governance setup fails: do not create a self-owned `CODEOWNERS`, do not
-enable `require_code_owner_review`, do not `POST` or `PUT` the ruleset, and tell
-the user to add a root `CODEOWNERS` entry for a non-author user or org team with
-write access before enabling the ruleset. If a future team wants a narrower owner
-or a different org team, that is a follow-on maintenance change after bootstrap.
 
 Then upsert one active repository-local ruleset scoped to the default branch:
 
@@ -243,8 +201,8 @@ The payload must keep these exact semantics:
     {
       "type": "pull_request",
       "parameters": {
-        "required_approving_review_count": 1,
-        "require_code_owner_review": true,
+        "required_approving_review_count": 0,
+        "require_code_owner_review": false,
         "dismiss_stale_reviews_on_push": false,
         "require_last_push_approval": false,
         "required_review_thread_resolution": false
@@ -254,16 +212,14 @@ The payload must keep these exact semantics:
 }
 ```
 
-Together, the root `CODEOWNERS` file and ruleset block force /
-non-fast-forward pushes, require changes through pull requests, require at least
-one approving review from the Code Owner, keep existing reviews when new commits
-are pushed, do not require approval from someone other than the last pusher, and
-do not require every review conversation to be resolved. If any `gh`,
-`CODEOWNERS`, or ruleset step fails after you know the repo is a GitHub Context
-Repo, continue with the seed flow and tell the user automatic GitHub governance
-setup failed. Give the manual checklist above in plain words so they can add the
-root `CODEOWNERS` mapping and branch rules in GitHub settings. Do not treat this
-setup failure as a reason to delete or recreate the Context Repo.
+The ruleset blocks force / non-fast-forward pushes and requires changes through
+pull requests. It deliberately requires zero GitHub approvals and no Code Owner
+review; the remaining review parameters are disabled. If any `gh` or ruleset
+step fails after you know the repo is a GitHub Context Repo, continue with the
+seed flow and tell the user automatic GitHub branch-rule setup failed. Give a
+manual checklist in plain words: require pull requests, block force pushes, and
+require zero approving or Code Owner reviews. Do not treat this setup failure as
+a reason to delete or recreate the Context Repo.
 
 **Delay integration coverage guidance until there is a reviewable milestone —
 recommend, never block.** Detect the Context Tree repo's forge from its own
@@ -1023,11 +979,10 @@ These apply the generated Context Tree Policy to the seed-specific surface.
   `/initialize` path — the two coexist. A GitLab source still uses `glab` for
   source access. Seed does not write the workspace-root `workspace.json`; that
   stays a runtime concern.
-- Install GitHub automation beyond the bootstrap root `CODEOWNERS` mapping and
-  default-branch ruleset applied after a newly created GitHub Context Repo
-  (validate workflows, narrower CODEOWNERS ownership, extra rulesets) — out of
-  scope. If the team wants those, they are separate follow-on workflows after
-  seed lands.
+- Install GitHub automation beyond the default-branch ruleset applied after a
+  newly created GitHub Context Repo (validate workflows, CODEOWNERS ownership,
+  extra rulesets) — out of scope. If the team wants those, they are separate
+  follow-on workflows after seed lands.
 - Touch `AGENTS.md` / `CLAUDE.md` managed blocks at the tree root —
   those are owned by the CLI runtime.
 - Generate content beyond what the signals support. If a candidate

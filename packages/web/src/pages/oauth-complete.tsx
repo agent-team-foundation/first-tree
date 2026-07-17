@@ -1,6 +1,12 @@
 import { safeRedirectPath } from "@first-tree/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import {
+  authProviderForCallbackPath,
+  finishAuthAttempt,
+  normalizeAuthFailureReason,
+  normalizeAuthJoinPath,
+} from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
@@ -12,6 +18,7 @@ import { markOnboardingResume } from "../utils/onboarding-flags.js";
  */
 const CALLBACK_ERROR_COPY: Record<string, string> = {
   "state-expired": "This authentication request took too long or was already used. Head back and start again.",
+  "provider-denied": "GitHub authorization was canceled. Head back and start again when you're ready.",
   "provider-not-configured": "This sign-in provider is not configured on this First Tree deployment.",
   "provider-exchange-failed": "The sign-in provider did not accept the authentication handshake. Try again.",
   "identity-conflict": "That external account already belongs to another First Tree user.",
@@ -46,8 +53,15 @@ export function OAuthCompletePage() {
   const { adoptTokens, selectOrganization } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [errorNext, setErrorNext] = useState<string>("/");
+  const processedRef = useRef(false);
 
   useEffect(() => {
+    // React StrictMode intentionally re-runs effects in development. OAuth
+    // completion mutates auth state and emits conversion events, so consume
+    // this callback exactly once per page mount.
+    if (processedRef.current) return;
+    processedRef.current = true;
+
     const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
     const params = new URLSearchParams(hash);
     const accessToken = params.get("access");
@@ -63,14 +77,40 @@ export function OAuthCompletePage() {
     const org = params.get("org");
     const orgPinned = params.get("orgPinned") === "1";
     const errorCode = params.get("error");
+    const provider = authProviderForCallbackPath(window.location.pathname);
+    const accountCreatedRaw = params.get("accountCreated");
+    const accountCreated = accountCreatedRaw === "1" ? true : accountCreatedRaw === "0" ? false : null;
+    const callbackIntent = params.get("callbackIntent");
+    // Legacy sign-in callbacks have no explicit intent. New callbacks name
+    // it; authenticated App-install and identity-management completions must
+    // not consume or fabricate acquisition attempts.
+    const shouldReportAuth = callbackIntent === null || callbackIntent === "sign-in";
 
     if (errorCode) {
+      if (shouldReportAuth)
+        finishAuthAttempt({
+          provider,
+          result: "failed",
+          next,
+          joinPath: normalizeAuthJoinPath(joinPath),
+          reasonCode: normalizeAuthFailureReason(errorCode),
+          accountCreated,
+        });
       setError(CALLBACK_ERROR_COPY[errorCode] ?? "Sign-in did not complete. Please try again.");
       setErrorNext(next);
       return;
     }
 
     if (!accessToken || !refreshToken) {
+      if (shouldReportAuth)
+        finishAuthAttempt({
+          provider,
+          result: "failed",
+          next,
+          joinPath: normalizeAuthJoinPath(joinPath),
+          reasonCode: "missing_tokens",
+          accountCreated,
+        });
       setError("Sign-in did not complete. Please try again.");
       return;
     }
@@ -87,15 +127,37 @@ export function OAuthCompletePage() {
     window.history.replaceState(null, "", window.location.pathname);
 
     void (async () => {
-      await adoptTokens({ accessToken, refreshToken });
-      // Activate the resolved org BEFORE navigating only when the server pinned
-      // it (deliberate join / install-return), so the workspace/onboarding gate
-      // evaluates against the just-joined org. For a plain returning sign-in we
-      // skip it: adoptTokens → fetchMe already restored the user's last-used org
-      // (falling back to the server default when there's no valid one), and
-      // selecting here would clobber it.
-      if (org && orgPinned) await selectOrganization(org);
-      navigate(next, { replace: true });
+      try {
+        await adoptTokens({ accessToken, refreshToken });
+        // Activate the resolved org BEFORE navigating only when the server pinned
+        // it (deliberate join / install-return), so the workspace/onboarding gate
+        // evaluates against the just-joined org. For a plain returning sign-in we
+        // skip it: adoptTokens → fetchMe already restored the user's last-used org
+        // (falling back to the server default when there's no valid one), and
+        // selecting here would clobber it.
+        if (org && orgPinned) await selectOrganization(org);
+        if (shouldReportAuth)
+          finishAuthAttempt({
+            provider,
+            result: "success",
+            next,
+            joinPath: normalizeAuthJoinPath(joinPath),
+            accountCreated,
+          });
+        navigate(next, { replace: true });
+      } catch {
+        if (shouldReportAuth)
+          finishAuthAttempt({
+            provider,
+            result: "failed",
+            next,
+            joinPath: normalizeAuthJoinPath(joinPath),
+            reasonCode: "session_bootstrap_failed",
+            accountCreated,
+          });
+        setError("Sign-in completed, but First Tree couldn't open your workspace. Please try again.");
+        setErrorNext(next);
+      }
     })();
   }, [adoptTokens, selectOrganization, navigate]);
 

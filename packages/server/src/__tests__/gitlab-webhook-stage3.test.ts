@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
+import { chats } from "../db/schema/chats.js";
 import { gitlabConnections } from "../db/schema/gitlab-connections.js";
 import { gitlabEntityChatMappings } from "../db/schema/gitlab-entity-chat-mappings.js";
 import { gitlabIdentityLinks } from "../db/schema/gitlab-identity-links.js";
@@ -20,7 +21,7 @@ import {
   regenerateGitlabConnectionBearer,
   replaceGitlabConnection,
 } from "../services/gitlab-connections.js";
-import { declareGitlabEntityFollow } from "../services/gitlab-entity-follow.js";
+import { declareGitlabEntityFollow, removeCurrentGitlabEntityFollow } from "../services/gitlab-entity-follow.js";
 import {
   createGitlabIdentityLink,
   reconfirmGitlabIdentityLink,
@@ -42,13 +43,16 @@ function mergeRequestPayload(input: {
   changes?: unknown;
   iid?: number;
   actor?: string;
+  projectPath?: string;
+  title?: string;
 }) {
+  const projectPath = input.projectPath ?? "Acme/Reviews";
   return {
     object_kind: "merge_request",
     project: {
       id: 801,
-      path_with_namespace: "Acme/Reviews",
-      web_url: "https://gitlab.internal/Acme/Reviews",
+      path_with_namespace: projectPath,
+      web_url: `https://gitlab.internal/${projectPath}`,
     },
     user: { username: input.actor ?? "author" },
     ...(Object.hasOwn(input, "reviewers") ? { reviewers: input.reviewers } : {}),
@@ -57,9 +61,9 @@ function mergeRequestPayload(input: {
     object_attributes: {
       iid: input.iid ?? 17,
       ...(input.action === null ? {} : { action: input.action ?? "open" }),
-      title: "Review this change",
+      title: input.title ?? "Review this change",
       description: "Please review",
-      url: `https://gitlab.internal/Acme/Reviews/-/merge_requests/${input.iid ?? 17}`,
+      url: `https://gitlab.internal/${projectPath}/-/merge_requests/${input.iid ?? 17}`,
       state: "opened",
     },
   };
@@ -380,9 +384,10 @@ describe("GitLab Stage 3 personnel routing", () => {
       ).statusCode,
     ).toBe(200);
     const afterReroute = await app.db.select().from(gitlabEntityChatMappings).where(mappingScope);
-    expect(afterReroute).toHaveLength(2);
+    expect(afterReroute).toHaveLength(3);
     expect(afterReroute.filter((row) => row.active)).toMatchObject([{ delegateAgentId: nextDelegate.uuid }]);
-    expect(afterReroute.find((row) => row.delegateAgentId === setup.delegate.uuid)?.active).toBe(false);
+    expect(afterReroute.filter((row) => row.delegateAgentId === setup.delegate.uuid)).toHaveLength(1);
+    expect(afterReroute.filter((row) => !row.active)).toHaveLength(2);
   });
 
   it("suspends the current binding on admin member removal", async () => {
@@ -462,6 +467,32 @@ describe("GitLab Stage 3 personnel routing", () => {
       identityLinkId: setup.link.id,
       active: true,
     });
+    const [automaticChat] = await app.db.select().from(chats).where(eq(chats.id, mapping.chatId));
+    expect(automaticChat?.topic).toBe("MR Review Reviews!17: Review this change");
+    const visibleBindings = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${mapping.chatId}/gitlab-entities`,
+      headers: { authorization: `Bearer ${setup.admin.accessToken}` },
+    });
+    expect(visibleBindings.statusCode).toBe(200);
+    expect(visibleBindings.json()).toMatchObject({
+      entities: [],
+      items: [
+        {
+          entityType: "pull_request",
+          entityUrl: "https://gitlab.internal/Acme/Reviews/-/merge_requests/17",
+          projectPath: "Acme/Reviews",
+          entityIid: 17,
+          title: "Review this change",
+          state: "open",
+          status: "active",
+          boundVia: "identity_target",
+        },
+      ],
+    });
+    expect(JSON.stringify(visibleBindings.json())).not.toMatch(
+      /connectionId|organizationId|identityLinkId|humanAgentId|delegateAgentId|declaredByAgentId/,
+    );
     const cards = await app.db
       .select()
       .from(messages)
@@ -514,6 +545,216 @@ describe("GitLab Stage 3 personnel routing", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.messageId, card.id)));
     expect(queued).toEqual({ notify: true, status: "delivered" });
+  });
+
+  it("refreshes an automatic GitLab anchor topic but preserves a manual rename", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const iid = 25;
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    const [mapping] = await app.db
+      .select()
+      .from(gitlabEntityChatMappings)
+      .where(
+        and(
+          eq(gitlabEntityChatMappings.connectionId, setup.connection.connectionId),
+          eq(gitlabEntityChatMappings.entityIid, iid),
+        ),
+      );
+    if (!mapping) throw new Error("automatic mapping missing");
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({
+            action: "update",
+            iid,
+            reviewers: [],
+            projectPath: "Acme/Renamed",
+            title: "Renamed title",
+            changes: { title: { previous: "Review this change", current: "Renamed title" } },
+          }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect((await app.db.select().from(chats).where(eq(chats.id, mapping.chatId)))[0]?.topic).toBe(
+      "MR Review Renamed!25: Renamed title",
+    );
+
+    await app.db.update(chats).set({ topic: "Manual topic" }).where(eq(chats.id, mapping.chatId));
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({
+            action: "update",
+            iid,
+            reviewers: [],
+            projectPath: "Acme/Renamed",
+            title: "Another title",
+            changes: { title: { previous: "Renamed title", current: "Another title" } },
+          }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    expect((await app.db.select().from(chats).where(eq(chats.id, mapping.chatId)))[0]?.topic).toBe("Manual topic");
+  });
+
+  it("reuses one reviewer membership chat without inventing a target line", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const iid = 23;
+    const chat = await createChat(app.db, setup.admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [setup.delegate.uuid],
+    });
+    await app.db.insert(gitlabEntityChatMappings).values({
+      id: randomUUID(),
+      organizationId: setup.admin.organizationId,
+      connectionId: setup.connection.connectionId,
+      chatId: chat.id,
+      declaredByAgentId: setup.delegate.uuid,
+      boundVia: "agent_declared",
+      humanAgentId: null,
+      delegateAgentId: null,
+      active: true,
+      entityType: "pull_request",
+      entityIid: iid,
+      projectId: 801,
+      projectPath: "Acme/Reviews",
+      projectPathNormalized: "acme/reviews",
+      entityUrl: `https://gitlab.internal/Acme/Reviews/-/merge_requests/${iid}`,
+      title: "Review this change",
+      entityState: "open",
+    });
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({ iid, reviewers: [{ username: "Reviewer.One" }] }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    const rows = await app.db
+      .select()
+      .from(gitlabEntityChatMappings)
+      .where(
+        and(
+          eq(gitlabEntityChatMappings.connectionId, setup.connection.connectionId),
+          eq(gitlabEntityChatMappings.entityIid, iid),
+        ),
+      );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ chatId: chat.id, boundVia: "agent_declared" });
+    expect(
+      await app.db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.chatId, chat.id), eq(messages.source, "gitlab"))),
+    ).toHaveLength(1);
+  });
+
+  it("does not reuse entity membership for an assignment target", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const iid = 24;
+    const existingChat = await createChat(app.db, setup.admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [setup.delegate.uuid],
+    });
+    await app.db.insert(gitlabEntityChatMappings).values({
+      id: randomUUID(),
+      organizationId: setup.admin.organizationId,
+      connectionId: setup.connection.connectionId,
+      chatId: existingChat.id,
+      declaredByAgentId: setup.delegate.uuid,
+      boundVia: "agent_declared",
+      humanAgentId: null,
+      delegateAgentId: null,
+      active: true,
+      entityType: "pull_request",
+      entityIid: iid,
+      projectId: 801,
+      projectPath: "Acme/Reviews",
+      projectPathNormalized: "acme/reviews",
+      entityUrl: `https://gitlab.internal/Acme/Reviews/-/merge_requests/${iid}`,
+      title: "Review this change",
+      entityState: "open",
+    });
+
+    expect(
+      (
+        await postMr(
+          app,
+          setup.connection.bearer,
+          mergeRequestPayload({
+            iid,
+            reviewers: [],
+            assignees: [{ username: "Reviewer.One" }],
+          }),
+        )
+      ).statusCode,
+    ).toBe(200);
+    const rows = await app.db
+      .select()
+      .from(gitlabEntityChatMappings)
+      .where(
+        and(
+          eq(gitlabEntityChatMappings.connectionId, setup.connection.connectionId),
+          eq(gitlabEntityChatMappings.entityIid, iid),
+        ),
+      );
+    expect(rows).toHaveLength(2);
+    const targetLine = rows.find((row) => row.boundVia === "identity_target");
+    expect(targetLine?.chatId).toBeTruthy();
+    expect(targetLine?.chatId).not.toBe(existingChat.id);
+  });
+
+  it("unfollows an automatic route and lets a later reviewer event create a fresh chat", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const payload = mergeRequestPayload({ iid: 19, reviewers: [{ username: "Reviewer.One" }] });
+    expect((await postMr(app, setup.connection.bearer, payload)).statusCode).toBe(200);
+    const [firstMapping] = await app.db
+      .select()
+      .from(gitlabEntityChatMappings)
+      .where(eq(gitlabEntityChatMappings.boundVia, "identity_target"));
+    if (!firstMapping) throw new Error("initial identity mapping missing");
+
+    expect(
+      await removeCurrentGitlabEntityFollow(app.db, {
+        organizationId: setup.admin.organizationId,
+        chatId: firstMapping.chatId,
+        entityUrl: "https://gitlab.internal/Acme/Reviews/-/merge_requests/19",
+      }),
+    ).toEqual({ removed: 1 });
+    expect(
+      await app.db
+        .select()
+        .from(gitlabEntityChatMappings)
+        .where(eq(gitlabEntityChatMappings.boundVia, "identity_target")),
+    ).toHaveLength(0);
+
+    expect((await postMr(app, setup.connection.bearer, payload)).statusCode).toBe(200);
+    const [nextMapping] = await app.db
+      .select()
+      .from(gitlabEntityChatMappings)
+      .where(eq(gitlabEntityChatMappings.boundVia, "identity_target"));
+    expect(nextMapping?.chatId).toBeTruthy();
+    expect(nextMapping?.chatId).not.toBe(firstMapping.chatId);
   });
 
   it("keeps reviewer priority when an existing identity line is also assigned", async () => {
@@ -577,6 +818,8 @@ describe("GitLab Stage 3 personnel routing", () => {
       connectionId: setup.connection.connectionId,
       chatId: chat.id,
       declaredByAgentId: declaredBy === "human" ? setup.admin.humanAgentUuid : setup.delegate.uuid,
+      humanAgentId: setup.admin.humanAgentUuid,
+      delegateAgentId: setup.delegate.uuid,
       boundVia,
       entityUrl: `https://gitlab.internal/Acme/Reviews/-/merge_requests/${iid}`,
     });
@@ -594,6 +837,49 @@ describe("GitLab Stage 3 personnel routing", () => {
         .from(messages)
         .where(and(eq(messages.chatId, chat.id), eq(messages.source, "gitlab"))),
     ).toHaveLength(0);
+  });
+
+  it("wakes the stored delegate for an ordinary event on an explicit attention line", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const iid = 63;
+    const chat = await createChat(app.db, setup.admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [setup.delegate.uuid],
+      topic: `Explicit GitLab follow ${iid}`,
+      metadata: {},
+    });
+    await declareGitlabEntityFollow(app.db, {
+      organizationId: setup.admin.organizationId,
+      connectionId: setup.connection.connectionId,
+      chatId: chat.id,
+      declaredByAgentId: setup.delegate.uuid,
+      humanAgentId: setup.admin.humanAgentUuid,
+      delegateAgentId: setup.delegate.uuid,
+      boundVia: "agent_declared",
+      entityUrl: `https://gitlab.internal/Acme/Reviews/-/merge_requests/${iid}`,
+    });
+
+    expect(
+      (await postMr(app, setup.connection.bearer, mergeRequestPayload({ iid, actor: "another.user", reviewers: [] })))
+        .statusCode,
+    ).toBe(200);
+    const [card] = await app.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chat.id), eq(messages.source, "gitlab")));
+    expect(card?.content).toMatchObject({ reason: "subscribed" });
+    expect(card?.metadata).toMatchObject({ mentions: [setup.delegate.uuid] });
+    const [delegate] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, setup.delegate.uuid));
+    expect(
+      await app.db
+        .select({ notify: inboxEntries.notify })
+        .from(inboxEntries)
+        .where(and(eq(inboxEntries.inboxId, delegate?.inboxId ?? ""), eq(inboxEntries.messageId, card?.id ?? ""))),
+    ).toEqual([{ notify: true }]);
   });
 
   it("rejects oversized personnel payloads before claim or connection health mutation", async () => {

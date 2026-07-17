@@ -1,4 +1,5 @@
 import type { GithubEntityType } from "@first-tree/shared";
+import { formatScmAutoTopic, refreshScmAutoTopic } from "../../services/scm-entity-chat-topic.js";
 
 /**
  * GitHub entity model — the unit of clustering for webhook → chat routing.
@@ -222,10 +223,7 @@ function shortEntityKey(key: string): string {
 export function formatEntityTitle(entity: GithubEntity, eventType: string, action: string): string {
   const prefix = entityTitlePrefix(entity, eventType, action);
   const head = `${prefix} ${shortEntityKey(entity.key)}`;
-  if (entity.title && entity.title.length > 0) {
-    return `${head}: ${entity.title}`;
-  }
-  return head;
+  return formatScmAutoTopic(head, entity.title);
 }
 
 /**
@@ -262,10 +260,14 @@ export function refreshEntityTitle(storedTopic: string, entity: GithubEntity): s
       ? [`${baseTypePrefix(entity.type)} ${shortKey.replace(/#(\d+)$/, "#discussion-$1")}`]
       : [];
   // Longest first so "PR Review repo#7" is matched before "PR repo#7".
-  const matched = [...heads, ...legacyHeads]
-    .sort((a, b) => b.length - a.length)
-    .find((h) => storedTopic === h || storedTopic.startsWith(`${h}: `));
-  if (!matched) return null;
-  const head = legacyHeads.includes(matched) ? (heads[0] ?? matched) : matched;
-  return `${head}: ${entity.title}`;
+  return refreshScmAutoTopic(
+    storedTopic,
+    entity.title,
+    [...heads, ...legacyHeads]
+      .sort((a, b) => b.length - a.length)
+      .map((head) => ({
+        matches: head,
+        nextHead: legacyHeads.includes(head) ? (heads[0] ?? head) : head,
+      })),
+  );
 }

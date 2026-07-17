@@ -337,9 +337,20 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
 
   const previewAgent: Agent = { ...agent, avatarColorToken: picked };
   const hasImage = !!agent.avatarImageUrl;
+  // The runtime/plan consequence must always be disclosed for a non-human
+  // agent — org-visible means teammates can spend the OWNER's computer and
+  // plan — but phrased for who actually pays: "your" only when the viewer owns
+  // the agent, owner-relative wording when an admin edits another member's
+  // agent. Human identities have no runtime, so they get the plain visibility
+  // effect.
+  const orgVisibleHelp = isHuman
+    ? "Anyone on your team can @mention it and work with it."
+    : agent.managerId === memberId
+      ? "Anyone on your team can @mention it and start work with it — it runs on your computer and uses your plan."
+      : "Anyone on your team can @mention it and start work with it — it runs on its owner's computer and uses their plan.";
   const visibilityHelp = canChangeVisibility
     ? visibility === AGENT_VISIBILITY.ORGANIZATION
-      ? "Anyone on your team can @mention and chat with it."
+      ? orgVisibleHelp
       : "Only this agent's owner can see and chat with it."
     : "Only the owner or an admin can change this agent's visibility.";
 

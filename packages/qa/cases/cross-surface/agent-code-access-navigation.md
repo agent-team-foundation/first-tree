@@ -1,6 +1,6 @@
 ---
 id: agent-code-access-navigation
-description: Validate that Team repository access stays provider-neutral across Settings and Agent Detail, including reliable deep-link positioning from a scrolled Agent page.
+description: Validate the independent Repositories settings page, its code and Context Tree sections, and reliable Agent Detail deep-link positioning.
 areas: [cross-surface]
 surfaces: [web]
 ---
@@ -9,69 +9,78 @@ surfaces: [web]
 
 ## Goal
 
-Confirm that Team repository access is one provider-neutral catalog shared by
-agents, while GitHub and GitLab connections remain separate event, identity,
-and webhook controls. Validate the real Agent Detail → Settings navigation
-through the Web shell's persistent scroll container; deterministic DOM tests
-own the URL and hash-effect branches, while this case owns the assembled
-browser positioning and cross-page information hierarchy.
+Confirm that Settings → Repositories is the provider-neutral home for both
+Team code repositories and the separate Context Tree repository binding. The
+two models share one repository-oriented destination without sharing state or
+credentials. GitHub and GitLab tabs remain connection-only. Validate the real
+Agent Detail → Settings navigation through the Web shell's persistent scroll
+container and the assembled page's heading hierarchy.
 
 ## Preconditions
 
 - Run the target ref in the isolated Docker plus temporary-worktree QA cell.
 - Prepare one Team admin, one ordinary member, and a manageable non-human
-  agent. Seed at least four recommended Team repository resources using a mix
-  of GitHub, GitLab, and another valid Git-server URL.
-- The provider connection states may be connected or disconnected, but record
-  them before the run. Do not place real private-repository credentials in the
-  Team resource payload or QA artifacts.
+  agent. Seed at least four recommended Team code repositories using a mix of
+  GitHub, GitLab, and another valid Git-server URL.
+- Bind a Context Tree repository on its default branch and configure an active
+  reviewer agent. Provider connections may be connected or disconnected, but
+  record their states before the run. Do not place real private-repository
+  credentials in Team resource payloads or QA artifacts.
 
 ## Operate and Observe
 
-- As the admin, open Settings → Integrations under both the GitHub and GitLab
-  tabs. Confirm **Code available to agents** is above **Connections**, shows
-  the same Team repository catalog on both routes, and does not move into or
-  duplicate inside either provider tab.
-- Confirm the first three repositories are visible and the fourth is hidden
-  behind **View all (4)**. Expand and collapse the list, then add or edit a
-  repository with a full non-GitHub URL and verify the shared catalog updates
-  without requiring a GitHub App or GitLab webhook connection.
-- As the ordinary member, confirm the same shared catalog is readable while
-  add, edit, and retire controls remain unavailable. Provider connection
-  controls must retain their existing role boundary.
+- As the admin, open Settings → Repositories. Confirm the page has no repeated
+  visible **Repositories** heading. **Code repositories** and **Context Tree**
+  must be the only peer section headings; repository names and **Automatic PR
+  review** must read as lower-level row labels, with URLs, branch, and reviewer
+  rendered as quieter metadata.
+- Confirm **Code repositories** appears first, with the first three rows visible
+  and the fourth behind **View all (4)**. Expand and collapse the list, then add
+  or edit a full non-GitHub URL. Verify the catalog updates without requiring a
+  GitHub App or GitLab webhook connection.
+- In **Context Tree**, confirm the compact binding row shows the repository
+  name, full URL, and default branch, with **Edit** and **Open Context** as
+  secondary actions. Confirm **Automatic PR review** is a row in this same
+  section, not a third section heading, and its saved reviewer is metadata that
+  can open the selector.
+- Open Settings → Integrations under GitHub and GitLab. Confirm the catalog and
+  Context Tree binding do not appear there; the surface contains only
+  **Connections** and provider-specific controls.
+- As the ordinary member, confirm both Repositories sections remain readable,
+  while add, edit, retire, and reviewer mutation controls are unavailable.
 - Open the agent's repository-management surface, scroll the persistent main
-  pane far enough that preserving the old offset would skip the top of the
-  Settings page, and choose **Manage Team code access**. Confirm navigation
-  lands with the shared code section visibly positioned and focused rather
-  than leaving the viewport below it. Repeat after visiting both a GitHub and
-  a GitLab connection tab.
-- Confirm the agent's effective repository list reflects recommended Team
+  pane far enough that preserving the old offset would skip the destination,
+  and choose **Manage Team repositories**. Confirm navigation lands on and
+  focuses **Code repositories**. Repeat with the legacy Settings → Context URL
+  and confirm it lands on and focuses **Context Tree**.
+- Confirm the agent's effective repository list reflects recommended Team code
   resources independently of provider connection state. The UI may explain
-  that private clone access uses Git credentials on the agent computer; it
-  must not imply that webhook or provider-connection credentials clone code.
+  that private clone access uses Git credentials on the agent computer; it must
+  not imply that provider connection credentials clone code.
 
 ## Evidence
 
-Capture the before-navigation Agent viewport and the positioned Settings
-destination, both provider-tab routes with the same catalog, compact and
-expanded list states, and admin-versus-member controls. Record only redacted
+Capture the Repositories page hierarchy, compact and expanded code lists, the
+Context Tree row, both provider-only Integrations tabs, admin-versus-member
+controls, and the positioned deep-link destinations. Record only redacted
 repository coordinates and connection summaries; never retain Git tokens,
 private clone credentials, or one-time webhook bearers.
 
 ## Expected Result
 
-`PASS`: one provider-neutral Team repository catalog appears above provider
-connections, role boundaries are preserved, the compact list behaves as
-described, and the Agent shortcut reliably positions the shared section from
-a deeply scrolled origin page.
+`PASS`: one independent Repositories page presents exactly two visible section
+headings in the intended order, preserves both models' role boundaries, keeps
+provider tabs connection-only, and reliably positions both current and legacy
+deep links.
 
-`FAIL`: repository management is provider-bound or duplicated, connection
-state changes catalog availability, a member gains write controls, or the
-Agent shortcut preserves an offset that hides the destination.
+`FAIL`: the page repeats its own title, promotes a row to section-heading level,
+mixes the two repository models, duplicates repository management under a
+provider, grants member write controls, or leaves a deep-link destination out
+of view.
 
 `BLOCKED`: the isolated run cell cannot create the required Team roles,
-manageable agent, or repository fixtures.
+manageable agent, repository fixtures, or Context Tree binding.
 
-`INCONCLUSIVE`: source inspection or unit-test output exists, but the real
-persistent-scroll navigation and assembled Settings hierarchy were not
-observed in a browser.
+`INCONCLUSIVE`: source inspection or unit-test output exists, but the assembled
+Settings hierarchy and persistent-scroll navigation were not observed in a
+browser.

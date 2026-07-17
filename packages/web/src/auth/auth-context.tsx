@@ -1,7 +1,6 @@
 import type { MeMembership, OrgBrief } from "@first-tree/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { trackEvent } from "../analytics.js";
 import { login as loginApi } from "../api/auth.js";
 import {
   ADMIN_WS_ORG_CHANGED_EVENT,
@@ -464,16 +463,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // un-completing the user.
     const organizationId = currentMembership?.organizationId;
     const optimistic = new Date().toISOString();
-    // Fire the GA `sign_up` conversion exactly once per *account*, on the
-    // user's first ever onboarding completion. Completion is stamped per
-    // membership (a user can belong to several orgs), so a per-membership gate
-    // would re-fire every time the same person finishes onboarding in a new
-    // team — that's not a new signup. The account-level "never completed
-    // anywhere" signal is: no membership carries a completion stamp AND the
-    // legacy top-level stamp is empty (older /me payloads). trackEvent
-    // self-gates to the production host, so dev / StrictMode re-invokes can't
-    // pollute GA either way.
-    const firstCompletion = !onboardingCompletedAt && memberships.every((m) => !m.onboardingCompletedAt);
     setOnboardingCompletedAt((prev) => prev ?? optimistic);
     setOnboardingDismissedAt((prev) => prev ?? optimistic);
     patchMembershipOnboarding({
@@ -481,11 +470,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       onboardingSuppressedAt: currentMembership?.onboardingSuppressedAt ?? optimistic,
       onboardingSuppressedReason: "completed",
     });
-    if (firstCompletion) trackEvent("sign_up");
     await postOnboardingCompleted(organizationId ?? undefined);
   }, [
-    onboardingCompletedAt,
-    memberships,
     currentMembership?.onboardingCompletedAt,
     currentMembership?.onboardingSuppressedAt,
     currentMembership?.organizationId,

@@ -1,4 +1,4 @@
-import type { NormalizedScmEvent, ScmIngressContext } from "@first-tree/shared";
+import type { NormalizedScmEvent, ScmEntityObservation, ScmIngressContext } from "@first-tree/shared";
 import type { Database } from "../db/connection.js";
 import { createLogger } from "../observability/index.js";
 import { claimEvent, unclaimEvent } from "./event-dedup.js";
@@ -23,7 +23,9 @@ export type ScmProcessingResult<TDeliveryStats, TProviderResult> =
 type ProcessScmWebhookDeliveryInput<TTarget, TDeliveryStats, TProviderResult> = {
   db: Database;
   ingress: ScmIngressContext;
+  observation: ScmEntityObservation | null;
   event: NormalizedScmEvent | null;
+  applyObservation: (observation: ScmEntityObservation) => Promise<void>;
   /** Provider-owned work covered by the same whole-request claim. */
   runProviderWork: () => Promise<TProviderResult>;
   /** Provider-owned mapping and identity resolver. */
@@ -57,6 +59,23 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
 
   try {
     const providerResult = await input.runProviderWork();
+    if (input.observation) {
+      await input.applyObservation(input.observation).catch((err) => {
+        // Projection refresh is deliberately independent from notification
+        // delivery. A temporary projection failure must not suppress an
+        // otherwise valid card or make a provider retry duplicate it.
+        log.error(
+          {
+            err,
+            provider: input.ingress.provider,
+            organizationId: input.ingress.source.organizationId,
+            entityType: input.observation?.entity.type,
+            entityKey: input.observation?.entity.key,
+          },
+          "failed to apply SCM entity observation",
+        );
+      });
+    }
     if (!input.event) return { outcome: "provider_only", providerResult };
 
     const audience = await input.resolveAudience(input.event);

@@ -7,9 +7,8 @@ import { cn } from "../../lib/utils.js";
 /**
  * A status element that jumps to the agent's place in the timeline, with a
  * hover-revealed `→` so the affordance is discoverable (the bare
- * `cursor:pointer` alone read as plain text). Shared by the compose rail rows
- * and the AgentRow second-line status (pills / working chip) so the
- * "click a status → jump to its context" interaction is identical in both.
+ * `cursor:pointer` alone read as plain text). Used by the compose activity rail;
+ * the Participants roster intentionally keeps lifecycle labels static.
  *
  * `anchored` gates the affordance: only when the agent's timeline anchor is
  * actually mounted (see `useMountedAnchors`) is the element clickable and the

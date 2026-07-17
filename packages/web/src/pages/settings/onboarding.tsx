@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import { Navigate, useNavigate } from "react-router";
+import { reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
@@ -34,6 +35,7 @@ export function SettingsOnboardingPage() {
 
   const handleResume = async (): Promise<void> => {
     await restoreOnboarding();
+    void reportOnboardingEvent("resumed", { source: "settings" });
     navigate("/onboarding");
   };
 

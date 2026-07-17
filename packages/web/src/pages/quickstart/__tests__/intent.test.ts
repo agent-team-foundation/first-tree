@@ -116,11 +116,17 @@ describe("readCampaignHandoff", () => {
 
   it("returns null for an unknown campaign or a missing/invalid repo", () => {
     expect(readCampaignHandoff({ search: `?campaign=nope&repo=${REPO_ENC}`, hash: "" })).toBeNull();
-    expect(readCampaignHandoff({ search: `?campaign=agent-readiness&repo=${REPO_ENC}`, hash: "" })).toBeNull();
     expect(readCampaignHandoff({ search: "?campaign=production-scan", hash: "" })).toBeNull();
     expect(
       readCampaignHandoff({ search: "?campaign=production-scan&repo=https://gitlab.com/x/y", hash: "" }),
     ).toBeNull();
+  });
+
+  it("reads the agent-readiness campaign from the shared active registry", () => {
+    expect(readCampaignHandoff({ search: `?campaign=agent-readiness&repo=${REPO_ENC}`, hash: "" })).toEqual({
+      ...INTENT,
+      campaign: "agent-readiness",
+    });
   });
 });
 
@@ -224,6 +230,17 @@ describe("readCampaignActionHandoff", () => {
         hash: "",
       }),
     ).toMatchObject({ campaign: "production-scan", action: "fix", repoSlug: "acme/backend" });
+    expect(
+      readCampaignActionHandoff({
+        search: `?campaign=agent-readiness&repo=${REPO_ENC}&action=fix&report=acme-backend-20260716-abcdef12`,
+        hash: "",
+      }),
+    ).toMatchObject({
+      campaign: "agent-readiness",
+      action: "fix",
+      repoSlug: "acme/backend",
+      reportKey: "acme-backend-20260716-abcdef12",
+    });
     expect(
       readCampaignActionHandoff({
         search: `?campaign=production-scan&repo=${REPO_ENC}&action=unknown`,

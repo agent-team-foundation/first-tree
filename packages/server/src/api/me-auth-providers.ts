@@ -12,9 +12,17 @@ import {
 } from "../services/auth-identity.js";
 import { buildAppAuthorizeUrl } from "../services/github-app.js";
 import { buildGoogleAuthorizeUrl } from "../services/google-oauth.js";
-import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../services/oauth-state.js";
+import { STATE_NONCE_COOKIE_NAME, STATE_NONCE_COOKIE_TTL_SECONDS, signOAuthState } from "../services/oauth-state.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { buildCookie, protectOAuthStateNonce } from "./auth/oauth-cookie.js";
+
+// OAuth link/unlink flows return the browser to the legacy /user-settings
+// path on purpose: rolling deploys keep pre-Account SPA builds (which have no
+// /settings/account route) in circulation, while the new SPA redirects
+// /user-settings -> /settings/account with the query string intact, so both
+// generations land on a working page. Switch this to /settings/account only
+// once pre-Account SPA builds are out of circulation.
+const ACCOUNT_RETURN_PATH = "/user-settings";
 
 export async function meAuthProviderRoutes(app: FastifyInstance): Promise<void> {
   app.get("/me/auth-providers", async (request) => {
@@ -140,7 +148,7 @@ async function startProviderAction(
   }
   const publicUrl = resolvePublicUrl(app, request);
   const oidcNonce = input.provider === "google" ? randomBytes(24).toString("base64url") : undefined;
-  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/user-settings", {
+  const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, ACCOUNT_RETURN_PATH, {
     ...input,
     oidcNonce,
   });
@@ -153,9 +161,9 @@ async function startProviderAction(
   reply.header(
     "Set-Cookie",
     buildCookie({
-      name: OAUTH_STATE_COOKIE,
+      name: STATE_NONCE_COOKIE_NAME,
       value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
-      maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
+      maxAge: STATE_NONCE_COOKIE_TTL_SECONDS,
       secure: process.env.NODE_ENV === "production",
     }),
   );

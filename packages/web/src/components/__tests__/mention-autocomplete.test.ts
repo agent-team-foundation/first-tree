@@ -8,6 +8,7 @@ import {
   fieldOutOfScrollport,
   groupAndSortCandidates,
   type MentionCandidate,
+  mentionOptionTitle,
   portalPanelPlacement,
   rankCandidates,
 } from "../mention-autocomplete.js";
@@ -428,5 +429,29 @@ describe("portalPanelPlacement", () => {
 
   it("dismisses (null) when there isn't room above the field for even one row", () => {
     expect(portalPanelPlacement({ field: { top: 30, bottom: 70 }, port, viewportTop: 0 })).toBeNull();
+  });
+});
+
+describe("mentionOptionTitle", () => {
+  it("combines display name and handle when they differ", () => {
+    expect(mentionOptionTitle(cand({ agentId: "a1", name: "codex-assistant", displayName: "白晓航的个人助理" }))).toBe(
+      "白晓航的个人助理 (@codex-assistant)",
+    );
+  });
+
+  it("collapses to the handle alone when the display name matches it", () => {
+    expect(mentionOptionTitle(cand({ agentId: "a1", name: "ux-expert", displayName: "ux-expert" }))).toBe("@ux-expert");
+  });
+
+  it("falls back to the handle when there is no display name", () => {
+    expect(mentionOptionTitle(cand({ agentId: "a1", name: "ux-expert", displayName: null }))).toBe("@ux-expert");
+  });
+
+  it("falls back to the display name when there is no handle", () => {
+    expect(mentionOptionTitle(cand({ agentId: "a1", name: null, displayName: "Soft Deleted" }))).toBe("Soft Deleted");
+  });
+
+  it("returns undefined when neither field is set", () => {
+    expect(mentionOptionTitle(cand({ agentId: "a1", name: null, displayName: null }))).toBeUndefined();
   });
 });

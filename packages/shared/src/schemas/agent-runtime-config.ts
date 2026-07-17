@@ -280,11 +280,19 @@ const cursorRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
   // `sandboxMode` / `approvalPolicy` either.
 });
 
+const kimiCodeRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("kimi-code"),
+  // No First Tree reasoning-effort field in V1. Kimi thinking configuration is
+  // provider-native; an empty model delegates to the operator's local Kimi
+  // configuration while a non-empty exact id is passed to the SDK.
+});
+
 const taggedPayloadUnion = z.discriminatedUnion("kind", [
   claudeRuntimeConfigPayloadShape,
   claudeCodeTuiRuntimeConfigPayloadShape,
   codexRuntimeConfigPayloadShape,
   cursorRuntimeConfigPayloadShape,
+  kimiCodeRuntimeConfigPayloadShape,
 ]);
 type TaggedPayload = z.infer<typeof taggedPayloadUnion>;
 
@@ -419,6 +427,17 @@ export const DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = 
   resourceSkills: [],
 };
 
+/** Default payload for Kimi Code. Empty model inherits ~/.kimi-code config. */
+export const DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "kimi-code",
+  prompt: { append: "" },
+  model: "",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+  resourceSkills: [],
+};
+
 /**
  * Default payload selector by runtime provider.
  */
@@ -430,6 +449,8 @@ export function defaultRuntimeConfigPayload(
       return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
     case "cursor":
       return { ...DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD };
+    case "kimi-code":
+      return { ...DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code-tui":
       return { ...DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD };
     case "claude-code":

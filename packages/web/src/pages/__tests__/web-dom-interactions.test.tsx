@@ -464,6 +464,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     activeStep,
     goNext: vi.fn(),
     goTo: vi.fn(),
+    reportStepFailure: vi.fn(),
     organizationId: "org-1",
     memberId: "member-self",
     role: path === "admin" ? "admin" : "member",
@@ -499,7 +500,9 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     setTreeUrl: vi.fn(),
     treeAutoDetectDone: true,
     markTreeAutoDetectDone: vi.fn(),
+    offerTeamAgentStart: false,
     completeAndEnterChat: vi.fn(async () => undefined),
+    skipAndEnterChat: vi.fn(async () => undefined),
     finishLater: vi.fn(async () => undefined),
   };
   return {
@@ -938,11 +941,13 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Nova", second.container);
     expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: "agent-1" });
     await click(second.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Design Critique", second.container);
+    await waitForText("Design Critique");
+    const participantPicker = document.body.querySelector<HTMLElement>("[data-participant-picker]");
+    expect(participantPicker?.parentElement).toBe(document.body);
+    expect(participantPicker?.style.position).toBe("fixed");
     await click(
-      [...second.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Design Critique"),
-      ) ?? null,
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent?.includes("Design Critique")) ??
+        null,
     );
     await waitForText("Design Critique", second.container);
     const groupTextarea = second.container.querySelector<HTMLTextAreaElement>("textarea");
@@ -1068,15 +1073,15 @@ describe("web DOM interaction coverage", () => {
     );
 
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Nova", rendered.container);
-    const search = rendered.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]');
+    await waitForText("Nova");
+    const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search agents"]');
     if (!search) throw new Error("Participant search missing");
     await setValue(search, "nobody");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
     });
     await flush();
-    await waitForText("No agents match", rendered.container);
+    await waitForText("No agents match");
     await setValue(search, "Nova");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1088,8 +1093,8 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Nova", rendered.container);
 
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
-    await waitForText("Design Critique", rendered.container);
-    const designButton = [...rendered.container.querySelectorAll("button")].find((button) =>
+    await waitForText("Design Critique");
+    const designButton = [...document.body.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Design Critique"),
     );
     await act(async () => {
@@ -1098,10 +1103,10 @@ describe("web DOM interaction coverage", () => {
     await click(designButton ?? null);
     await waitForText("Design Critique", rendered.container);
     await click(rendered.container.querySelector('button[aria-label="Add participant"]'));
-    expect(rendered.container.querySelector('[title*="already in this draft"]')).toBeTruthy();
-    expect(rendered.container.querySelector('[aria-label="Already in draft"]')).toBeTruthy();
+    expect(document.body.querySelector('[title*="already in this draft"]')).toBeTruthy();
+    expect(document.body.querySelector('[aria-label="Already in draft"]')).toBeTruthy();
     await keyDown(
-      rendered.container.querySelector<HTMLInputElement>('input[aria-label="Search agents"]') ?? search,
+      document.body.querySelector<HTMLInputElement>('input[aria-label="Search agents"]') ?? search,
       "Escape",
     );
 
@@ -1353,6 +1358,7 @@ describe("web DOM interaction coverage", () => {
 
   it("renders friendly copy for callback error fragments", async () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
     const replaceState = vi.fn();
     Object.defineProperty(window, "history", { configurable: true, value: { replaceState } });
 
@@ -1372,6 +1378,22 @@ describe("web DOM interaction coverage", () => {
     expect(back?.getAttribute("href")).toBe("/settings/github");
     await unmountRoot(expired.root);
 
+    // Provider cancellation closes the paired sign-in attempt with a fixed,
+    // user-readable reason instead of falling through as a setup landing.
+    beginAuthAttempt("github", "/");
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#error=provider-denied&next=/&callbackIntent=sign-in",
+        pathname: "/auth/github/complete",
+      },
+    });
+    const denied = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await waitForText("authorization was canceled", denied.container);
+    expect(window.sessionStorage.getItem("first-tree:auth-attempt")).toBeNull();
+    await unmountRoot(denied.root);
+
     // Install refused: start-chat admin's authority no longer holds.
     Object.defineProperty(window, "location", {
       configurable: true,
@@ -1386,6 +1408,7 @@ describe("web DOM interaction coverage", () => {
 
   it("activates the callback org only when the server pins it", async () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
     Object.defineProperty(window, "history", {
       configurable: true,
       value: { replaceState: vi.fn() },
@@ -1394,11 +1417,12 @@ describe("web DOM interaction coverage", () => {
     // A pinned destination (install-return keeps joinPath="returning" yet
     // names a specific org): the SPA must activate it, otherwise a concurrent
     // org switch would strand the Settings page on the user's last-used org.
+    const staleAttemptId = beginAuthAttempt("github", "/");
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
         ...window.location,
-        hash: "#access=a&refresh=r&next=/settings/github&joinPath=returning&org=org-b&orgPinned=1",
+        hash: "#access=a&refresh=r&next=/settings/github&joinPath=returning&org=org-b&orgPinned=1&callbackIntent=install",
         pathname: "/auth/github/complete",
       },
     });
@@ -1411,6 +1435,7 @@ describe("web DOM interaction coverage", () => {
     const pinned = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
     await flush();
     expect(pinnedSelect).toHaveBeenCalledWith("org-b");
+    expect(JSON.parse(window.sessionStorage.getItem("first-tree:auth-attempt") ?? "{}").id).toBe(staleAttemptId);
     await unmountRoot(pinned.root);
 
     // A plain returning sign-in carries no pin: the SPA keeps the user's own
@@ -1484,6 +1509,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(authMock.value.restoreOnboarding).toHaveBeenCalled();
+    expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith("resumed", { source: "settings" });
     await unmountRoot(dismissed.root);
 
     authMock.value = { ...authMock.value, onboardingCompletedAt: "2026-05-02T00:00:00.000Z" };
@@ -1541,6 +1567,7 @@ describe("web DOM interaction coverage", () => {
     // The avatar menu is account-only: no team rows, just Sign out.
     const account = await renderDom(<UserMenu />);
     await click(account.container.querySelector('button[aria-haspopup="menu"]'));
+    expect(account.container.textContent).toContain("Account settings");
     expect(account.container.textContent).not.toContain("Beta");
     expect(account.container.textContent).not.toContain("Create new team");
     await click(
@@ -1741,6 +1768,9 @@ describe("web DOM interaction coverage", () => {
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "admin required"));
     const adminForbidden = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Couldn't load your team's repos", adminForbidden.container);
+    expect(adminForbidden.flow.reportStepFailure).toHaveBeenCalledWith("github_repo_list_failed", {
+      step: "connect-code",
+    });
     await unmountRoot(adminForbidden.root);
 
     // A 502 (upstream) / 503 (no_installation|suspended) failure shows the same
@@ -1761,6 +1791,9 @@ describe("web DOM interaction coverage", () => {
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(503, "no installation"));
     const loadFailed = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Couldn't load your team's repos", loadFailed.container);
+    expect(loadFailed.flow.reportStepFailure).toHaveBeenCalledWith("github_repo_list_failed", {
+      step: "connect-code",
+    });
     await unmountRoot(loadFailed.root);
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
@@ -1772,6 +1805,10 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     await waitForText("Couldn't connect a repo here right now", notConfigured.container);
+    expect(notConfigured.flow.reportStepFailure).toHaveBeenCalledWith("github_install_not_configured", {
+      step: "connect-code",
+      retryable: false,
+    });
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Skip for now"),
@@ -2307,6 +2344,7 @@ describe("web DOM interaction coverage", () => {
     expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
     expect(chatApiMocks.createAgentChat).not.toHaveBeenCalled();
     expect(view.flow.completeAndEnterChat).not.toHaveBeenCalled();
+    expect(view.flow.reportStepFailure).toHaveBeenCalledWith("repo_access_check_failed", { step: "start-chat" });
     await unmountRoot(view.root);
   });
 

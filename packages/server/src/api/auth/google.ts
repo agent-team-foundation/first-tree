@@ -18,13 +18,21 @@ import {
 import { buildGoogleAuthorizeUrl, exchangeGoogleCode } from "../../services/google-oauth.js";
 import { completeExternalAccountBootstrap, OAuthBootstrapError } from "../../services/oauth-bootstrap.js";
 import {
-  OAUTH_STATE_COOKIE,
-  OAUTH_STATE_COOKIE_MAX_AGE_S,
+  STATE_NONCE_COOKIE_NAME,
+  STATE_NONCE_COOKIE_TTL_SECONDS,
   signOAuthState,
   verifyOAuthState,
 } from "../../services/oauth-state.js";
 import { resolvePublicUrl } from "../../utils/public-url.js";
 import { buildCookie, protectOAuthStateNonce, readOAuthStateNonce } from "./oauth-cookie.js";
+
+// OAuth link/unlink flows return the browser to the legacy /user-settings
+// path on purpose: rolling deploys keep pre-Account SPA builds (which have no
+// /settings/account route) in circulation, while the new SPA redirects
+// /user-settings -> /settings/account with the query string intact, so both
+// generations land on a working page. Switch this to /settings/account only
+// once pre-Account SPA builds are out of circulation.
+const ACCOUNT_RETURN_PATH = "/user-settings";
 
 export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/start", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
@@ -41,9 +49,8 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     // cookie; the callback also accepts legacy plaintext nonce cookies.
     // The value is a nonce-only CSRF token, not an access credential or
     // provider identity; it is short-lived, HttpOnly, SameSite=Lax, and Secure
-    // in production. CodeQL otherwise treats the Set-Cookie sink as storage.
-    // codeql[js/clear-text-storage-of-sensitive-data]
-    reply.header("Set-Cookie", stateCookie(nonce, OAUTH_STATE_COOKIE_MAX_AGE_S, app.config.secrets.encryptionKey));
+    // in production.
+    reply.header("Set-Cookie", stateCookie(nonce, STATE_NONCE_COOKIE_TTL_SECONDS, app.config.secrets.encryptionKey));
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/google/callback`;
     app.log.info({ event: "oauth.start", provider: "google", intent: "sign-in" }, "OAuth flow started");
     return reply.redirect(
@@ -60,7 +67,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     if (!code || !state) return redirectError(reply, "provider-exchange-failed");
     const cookieNonce = readOAuthStateNonce(
       request.headers.cookie,
-      OAUTH_STATE_COOKIE,
+      STATE_NONCE_COOKIE_NAME,
       app.config.secrets.encryptionKey,
     );
     let verified: Awaited<ReturnType<typeof verifyOAuthState>>;
@@ -75,7 +82,6 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       return redirectError(reply, "state-expired", verified.next);
     }
     // Clear the single-use OAuth state cookie after validating it.
-    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
@@ -95,12 +101,12 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (verified.intent === "link" || verified.intent === "unlink") {
-      if (!verified.userId) return redirectError(reply, "state-expired", "/user-settings");
+      if (!verified.userId) return redirectError(reply, "state-expired", ACCOUNT_RETURN_PATH);
       try {
         if (verified.intent === "link") {
           await linkExternalIdentity(app.db, verified.userId, profile);
           app.log.info({ event: "identity.linked", provider: "google", userId: verified.userId }, "Identity linked");
-          return reply.redirect("/user-settings?connection=google-linked", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=google-linked`, 302);
         }
         await unlinkExternalIdentity(
           app.db,
@@ -114,13 +120,14 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
           verified.targetIdentityId ?? "",
         );
         app.log.info({ event: "identity.unlinked", provider: "google", userId: verified.userId }, "Identity unlinked");
-        return reply.redirect("/user-settings?connection=google-unlinked", 302);
+        return reply.redirect(`${ACCOUNT_RETURN_PATH}?connection=google-unlinked`, 302);
       } catch (error) {
         if (error instanceof IdentityConflictError)
-          return reply.redirect("/user-settings?error=identity-conflict", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-conflict`, 302);
         if (error instanceof IdentityMismatchError)
-          return reply.redirect("/user-settings?error=identity-mismatch", 302);
-        if (error instanceof LastIdentityError) return reply.redirect("/user-settings?error=last-provider", 302);
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=identity-mismatch`, 302);
+        if (error instanceof LastIdentityError)
+          return reply.redirect(`${ACCOUNT_RETURN_PATH}?error=last-provider`, 302);
         throw error;
       }
     }
@@ -146,7 +153,11 @@ async function completeGoogleSignIn(
       userAgent: request.headers["user-agent"] ?? null,
     });
   } catch (error) {
-    if (error instanceof OAuthBootstrapError) return redirectError(reply, error.code, next);
+    if (error instanceof OAuthBootstrapError)
+      return redirectError(reply, error.code, next, {
+        callbackIntent: "sign-in",
+        accountCreated: account.created,
+      });
     throw error;
   }
   if (bootstrap.teamCreated) {
@@ -167,6 +178,8 @@ async function completeGoogleSignIn(
     refresh: tokens.refreshToken,
     next: bootstrap.next,
     joinPath: bootstrap.joinPath,
+    accountCreated: account.created ? "1" : "0",
+    callbackIntent: "sign-in",
     org: bootstrap.organizationId,
     ...(bootstrap.orgPinned ? { orgPinned: "1" } : {}),
   }).toString();
@@ -183,14 +196,24 @@ async function completeGoogleSignIn(
 
 function stateCookie(value: string, maxAge: number, encryptionKey: string): string {
   return buildCookie({
-    name: OAUTH_STATE_COOKIE,
+    name: STATE_NONCE_COOKIE_NAME,
     value: maxAge > 0 ? protectOAuthStateNonce(value, encryptionKey) : "",
     maxAge,
     secure: process.env.NODE_ENV === "production",
   });
 }
 
-function redirectError(reply: FastifyReply, code: string, next = "/") {
-  const fragment = new URLSearchParams({ error: code, next }).toString();
+function redirectError(
+  reply: FastifyReply,
+  code: string,
+  next = "/",
+  metadata: { callbackIntent?: "sign-in"; accountCreated?: boolean } = {},
+) {
+  const fragment = new URLSearchParams({
+    error: code,
+    next,
+    ...(metadata.callbackIntent ? { callbackIntent: metadata.callbackIntent } : {}),
+    ...(metadata.accountCreated !== undefined ? { accountCreated: metadata.accountCreated ? "1" : "0" } : {}),
+  }).toString();
   return reply.redirect(`/auth/complete#${fragment}`, 302);
 }

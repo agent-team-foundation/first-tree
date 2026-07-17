@@ -93,6 +93,35 @@ async function insertGitlabConnection(db: Database, input: GitlabConnectionInput
   return connectionId;
 }
 
+/**
+ * Serialize current-connection work with create/replace/delete using the
+ * canonical organization -> connection lock order.
+ */
+export async function withCurrentGitlabConnectionFence<T>(
+  db: Database,
+  input: { organizationId: string; expectedConnectionId?: string },
+  callback: (tx: Database, connection: typeof gitlabConnections.$inferSelect) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    await lockOrganization(tx, input.organizationId);
+    const [connection] = await tx
+      .select()
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.organizationId, input.organizationId))
+      .for("update")
+      .limit(1);
+    if (!connection || (input.expectedConnectionId && connection.id !== input.expectedConnectionId)) {
+      throw new NotFoundError(
+        input.expectedConnectionId
+          ? "GitLab connection not found"
+          : "GitLab connection is not configured for this Team",
+      );
+    }
+    return callback(tx, connection);
+  });
+}
+
 export async function createGitlabConnection(
   db: Database,
   input: GitlabConnectionInput,
@@ -235,6 +264,27 @@ export async function withGitlabIngressFence<T>(
       .limit(1);
     if (!connection || connection.tokenHash !== tokenHash) throw new NotFoundError("GitLab webhook endpoint not found");
     return callback(tx, connection);
+  });
+}
+
+/**
+ * Serialize one-time maintenance against both current-connection writes and
+ * inbound webhook writes. Both live paths lock this same connection row.
+ */
+export async function withGitlabConnectionMaintenanceFence<T>(
+  db: Database,
+  connectionId: string,
+  callback: (tx: Database, connection: typeof gitlabConnections.$inferSelect) => Promise<T>,
+): Promise<T | null> {
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    const [connection] = await tx
+      .select()
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.id, connectionId))
+      .for("update")
+      .limit(1);
+    return connection ? callback(tx, connection) : null;
   });
 }
 

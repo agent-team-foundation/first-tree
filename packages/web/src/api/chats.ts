@@ -4,6 +4,7 @@ import type {
   ChatDetail,
   ChatEngagementStatus,
   ChatGithubEntityListResponse,
+  ChatGitlabEntityListResponse,
   ChatTokenUsage,
   Message,
   RequestResolution,
@@ -50,6 +51,21 @@ export function getChatTokenUsage(chatId: string): Promise<ChatTokenUsage> {
  */
 export function listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
   return api.get<ChatGithubEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/github-entities`);
+}
+
+/**
+ * List every GitLab entity bound to this chat, including an automatic
+ * personnel-routing binding on a webhook-created chat.
+ */
+export function listChatGitlabEntities(chatId: string): Promise<ChatGitlabEntityListResponse> {
+  return api.get<ChatGitlabEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/gitlab-entities`);
+}
+
+/** Canonical human/Web unfollow contract; legacy mapping-id deletion stays server-only. */
+export function unfollowChatGitlabEntity(chatId: string, entityUrl: string): Promise<{ removed: number }> {
+  return api.delete<{ removed: number }>(
+    `/chats/${encodeURIComponent(chatId)}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
+  );
 }
 
 export function renameChat(chatId: string, topic: string | null): Promise<Chat> {

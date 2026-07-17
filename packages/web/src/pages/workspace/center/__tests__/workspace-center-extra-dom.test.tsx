@@ -5,8 +5,10 @@ import {
   type Agent,
   type ChatDetail,
   type ChatParticipantDetail,
+  type ListMeChatsResponse,
+  type MeChatRow,
 } from "@first-tree/shared";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { type InfiniteData, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router";
@@ -252,6 +254,42 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
     firstMessagePreview: overrides.firstMessagePreview ?? "Please review the launch checklist.",
     engagementStatus: overrides.engagementStatus ?? "active",
     viewerMembershipKind: overrides.viewerMembershipKind ?? "participant",
+  };
+}
+
+function meChatRow(overrides: Partial<MeChatRow> & { chatId: string; title: string }): MeChatRow {
+  return {
+    chatId: overrides.chatId,
+    type: overrides.type ?? "group",
+    membershipKind: overrides.membershipKind ?? "participant",
+    createdByMe: overrides.createdByMe ?? false,
+    source: overrides.source ?? "manual",
+    entityType: overrides.entityType ?? null,
+    title: overrides.title,
+    topic: overrides.topic ?? overrides.title,
+    description: overrides.description ?? null,
+    participants:
+      overrides.participants ??
+      PARTICIPANTS.map(({ agentId, displayName, type, avatarColorToken, avatarImageUrl }) => ({
+        agentId,
+        displayName,
+        type,
+        avatarColorToken,
+        avatarImageUrl,
+      })),
+    participantCount: overrides.participantCount ?? PARTICIPANTS.length,
+    lastMessageAt: overrides.lastMessageAt ?? NOW,
+    lastMessagePreview: overrides.lastMessagePreview ?? "Latest update",
+    unreadMentionCount: overrides.unreadMentionCount ?? 0,
+    openRequestCount: overrides.openRequestCount ?? 0,
+    canReply: overrides.canReply ?? true,
+    engagementStatus: overrides.engagementStatus ?? "active",
+    liveActivity: overrides.liveActivity ?? null,
+    failedAgentIds: overrides.failedAgentIds ?? [],
+    busyAgentIds: overrides.busyAgentIds ?? [],
+    chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
+    pinnedAt: overrides.pinnedAt ?? null,
+    activityAt: overrides.activityAt ?? null,
   };
 }
 
@@ -601,6 +639,125 @@ describe("ChatView extra DOM branches", () => {
     await click(buttonByTitle(container, "Save"));
     await waitForCondition(() => chatMocks.renameChat.mock.calls.length === 1, "Expected blank rename commit");
     expect(chatMocks.renameChat).toHaveBeenCalledWith("chat-1", null);
+
+    await act(async () => root.unmount());
+  });
+
+  it("updates only the persisted chat title across list caches without changing row order", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const renamedDetail = chatDetail({ topic: "Renamed launch", title: "Renamed launch" });
+    chatMocks.renameChat.mockResolvedValueOnce(renamedDetail);
+
+    const otherBefore = meChatRow({
+      chatId: "chat-before",
+      title: "Earlier chat",
+      activityAt: "2026-05-28T12:02:00.000Z",
+    });
+    const renamedRow = meChatRow({
+      chatId: "chat-1",
+      title: "Launch planning",
+      activityAt: "2026-05-28T12:01:00.000Z",
+      pinnedAt: "2026-05-28T12:03:00.000Z",
+    });
+    const otherAfter = meChatRow({
+      chatId: "chat-after",
+      title: "Later chat",
+      activityAt: "2026-05-28T12:00:00.000Z",
+    });
+    const rows = [otherBefore, renamedRow, otherAfter];
+    const desktopKey = ["me", "chats", "all", "active", false, null, null] as const;
+    const paletteKey = ["me", "chats", "palette"] as const;
+    const desktop: InfiniteData<ListMeChatsResponse> = {
+      pages: [
+        {
+          rows,
+          priorityRows: { attention: [], pinned: [renamedRow] },
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    };
+    const palette: ListMeChatsResponse = {
+      rows,
+      priorityRows: { attention: [], pinned: [] },
+      nextCursor: null,
+    };
+
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => {
+        client.setQueryData(desktopKey, desktop);
+        client.setQueryData(paletteKey, palette);
+      },
+    );
+
+    await waitForText(container, "Launch planning");
+    chatMocks.getChat.mockResolvedValue(renamedDetail);
+    await click(buttonByTitle(container, "Click to rename"));
+    const input = container.querySelector<HTMLInputElement>("input");
+    if (!input) throw new Error("Rename input missing");
+    await setValue(input, "Renamed launch");
+    await click(buttonByTitle(container, "Save"));
+
+    await waitForCondition(
+      () => buttonByTitle(container, "Click to rename")?.textContent?.includes("Renamed launch") === true,
+      "Expected the detail title to update after the persisted rename",
+    );
+    const patchedDesktop = queryClient.getQueryData<InfiniteData<ListMeChatsResponse>>(desktopKey);
+    const patchedRows = patchedDesktop?.pages[0]?.rows ?? [];
+    expect(patchedRows.map((row) => row.chatId)).toEqual(["chat-before", "chat-1", "chat-after"]);
+    expect(patchedRows.find((row) => row.chatId === "chat-1")).toMatchObject({
+      topic: "Renamed launch",
+      title: "Renamed launch",
+      activityAt: "2026-05-28T12:01:00.000Z",
+    });
+    expect(patchedRows.find((row) => row.chatId === "chat-before")).toBe(otherBefore);
+    expect(patchedRows.find((row) => row.chatId === "chat-after")).toBe(otherAfter);
+    expect(patchedDesktop?.pages[0]?.priorityRows.pinned[0]).toMatchObject({
+      chatId: "chat-1",
+      title: "Renamed launch",
+    });
+    expect(queryClient.getQueryData<ListMeChatsResponse>(paletteKey)?.rows.map((row) => row.title)).toEqual([
+      "Earlier chat",
+      "Renamed launch",
+      "Later chat",
+    ]);
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps list titles unchanged and shows the failure when rename persistence fails", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    chatMocks.renameChat.mockRejectedValueOnce(new Error("rename failed"));
+    const originalRow = meChatRow({ chatId: "chat-1", title: "Launch planning" });
+    const listKey = ["me", "chats", "all", "active", false, null, null] as const;
+    const originalCache: InfiniteData<ListMeChatsResponse> = {
+      pages: [
+        {
+          rows: [originalRow],
+          priorityRows: { attention: [], pinned: [] },
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    };
+    const { container, queryClient, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (client) =>
+      client.setQueryData(listKey, originalCache),
+    );
+
+    await waitForText(container, "Launch planning");
+    await click(buttonByTitle(container, "Click to rename"));
+    const input = container.querySelector<HTMLInputElement>("input");
+    if (!input) throw new Error("Rename input missing");
+    await setValue(input, "Unsaved title");
+    await click(buttonByTitle(container, "Save"));
+
+    await waitForText(container, "Couldn't rename chat");
+    expect(container.textContent).toContain("rename failed");
+    expect(input.value).toBe("Unsaved title");
+    expect(buttonByTitle(container, "Save")).not.toBeNull();
+    expect(queryClient.getQueryData(listKey)).toBe(originalCache);
+    expect(queryClient.getQueryData<ChatDetail>(["chat-detail", "chat-1"])?.title).toBe("Launch planning");
 
     await act(async () => root.unmount());
   });

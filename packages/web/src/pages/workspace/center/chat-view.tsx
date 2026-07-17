@@ -6,6 +6,7 @@ import {
   type ChatDetail,
   type ChatParticipantDetail,
   COMPOSER_ACCEPT_ATTRIBUTE,
+  chatMetadataSchema,
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
@@ -129,6 +130,7 @@ import { FileChip } from "../../../components/ui/file-chip.js";
 import { ImageLightbox, type LightboxImage } from "../../../components/ui/image-lightbox.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
+import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
@@ -153,6 +155,7 @@ import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
+import { applyPersistedChatRename } from "../chat-title-cache.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ParticipantsSection } from "../right-sidebar/participants-section.js";
 import { ChatSummary } from "./chat-summary.js";
@@ -569,7 +572,7 @@ type MessageRowProps = {
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
   /** Trial surface: render sender avatar/name as plain identity, without the
-   *  AgentHovercard whose actions ("Open details" → /agents/:id, "Chat" →
+   *  AgentHovercard whose actions ("View profile" → /agents/:id, "New chat" →
    *  /?c=draft) would navigate out of the controlled trial conversation. */
   isTrial: boolean;
 };
@@ -1437,10 +1440,9 @@ const ChatTimeline = memo(function ChatTimeline({
 });
 
 /**
- * Renders a small "↗ View on GitHub" link beside the chat title when the chat
- * was created by the GitHub webhook router. Reads `metadata.entityUrl` (set by
- * `services/github-entity-chat.ts::createEntityChat`); shows nothing if the
- * chat has no entity metadata or the URL is missing.
+ * Renders the provider entity link beside an SCM-owned chat title. The URL is
+ * persisted only after the provider ingress authority validates its origin;
+ * manual/follow-only chats carry no provider anchor metadata and render none.
  *
  * Defensive parsing: `metadata` is typed `Record<string, unknown>` on the
  * wire, so we narrow inline rather than trust the shape. A schema parse would
@@ -1448,15 +1450,17 @@ const ChatTimeline = memo(function ChatTimeline({
  * 2-field check isn't worth it.
  */
 function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefined }) {
-  if (!metadata || metadata.source !== "github") return null;
-  const url = typeof metadata.entityUrl === "string" ? metadata.entityUrl : null;
+  const parsed = chatMetadataSchema.safeParse(metadata);
+  if (!parsed.success || (parsed.data.source !== "github" && parsed.data.source !== "gitlab")) return null;
+  const url = parsed.data.entityUrl ?? null;
   if (!url) return null;
+  const provider = parsed.data.source === "github" ? "GitHub" : "GitLab";
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      title="View on GitHub"
+      title={`View on ${provider}`}
       className="inline-flex items-center"
       style={{ color: "var(--fg-3)", padding: "0 var(--sp-1)", textDecoration: "none" }}
     >
@@ -1519,6 +1523,7 @@ export function ChatView({
   onShowConversations?: (() => void) | null;
 }) {
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const agentName = useAgentNameMap();
   const agentIdentity = useAgentIdentityMap();
@@ -2399,11 +2404,22 @@ export function ChatView({
   }, [renaming]);
   const renameMut = useMutation({
     mutationFn: (topic: string | null) => renameChat(chatId, topic),
-    onSuccess: () => {
+    onSuccess: (updatedChat) => {
+      // The write has succeeded, so project the persisted title into the hot
+      // detail + list caches synchronously. The trailing invalidations reconcile
+      // the full server projection without leaving the rail on the old title.
+      applyPersistedChatRename(queryClient, updatedChat);
       setRenaming(false);
+      queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       queryClient.invalidateQueries({ queryKey: ["agent-sessions", agentId] });
       queryClient.invalidateQueries({ queryKey: ["session", agentId, chatId] });
+    },
+    onError: (error) => {
+      addToast({
+        title: "Couldn't rename chat",
+        description: error instanceof Error ? error.message : "The title wasn't saved. Try again.",
+      });
     },
   });
   const commitRename = () => {

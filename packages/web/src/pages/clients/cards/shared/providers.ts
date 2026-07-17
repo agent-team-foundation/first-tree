@@ -20,6 +20,7 @@ export const PROVIDER_ORDER: RuntimeProvider[] = [
   RUNTIME_PROVIDERS.CLAUDE_CODE_TUI,
   RUNTIME_PROVIDERS.CODEX,
   RUNTIME_PROVIDERS.CURSOR,
+  RUNTIME_PROVIDERS.KIMI_CODE,
 ].filter((p) => isRuntimeProviderEnabled(p));
 
 export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
@@ -27,6 +28,7 @@ export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code-tui": "Claude Code CLI",
   codex: "Codex",
   cursor: "Cursor",
+  "kimi-code": "Kimi Code",
 };
 
 const KNOWN_RUNTIME_PROVIDERS: readonly string[] = Object.values(RUNTIME_PROVIDERS);
@@ -66,6 +68,9 @@ export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string | null> = {
   // Cursor is not distributed via npm — its official installer script is the
   // only supported install path (see CURSOR_INSTALL_COMMAND).
   cursor: null,
+  // Runtime execution is bundled, but the official CLI remains the supported
+  // operator login/recovery surface for the shared ~/.kimi-code credential.
+  "kimi-code": "@moonshot-ai/kimi-code",
 };
 
 /**
@@ -89,6 +94,7 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
   "claude-code-tui": "claude auth login",
   codex: "codex login",
   cursor: "cursor-agent login",
+  "kimi-code": "kimi # then run /login",
 };
 
 /**
@@ -207,6 +213,9 @@ export function providerInstallHint(
   }
   if (provider === "cursor") {
     return `Run \`${CURSOR_INSTALL_COMMAND}\` on this ${device} (official Cursor installer).`;
+  }
+  if (provider === "kimi-code") {
+    return `Kimi's engine is bundled with First Tree. For login recovery, install \`@moonshot-ai/kimi-code\` on this ${device}, run \`kimi\`, then \`/login\`.`;
   }
   return `Install the OpenAI Codex CLI on this ${device}.`;
 }

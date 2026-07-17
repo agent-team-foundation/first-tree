@@ -111,6 +111,7 @@ export {
   DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD,
   type DryRunAgentRuntimeConfig,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -252,6 +253,26 @@ export {
   type UnfollowGithubEntityResponse,
   unfollowGithubEntityResponseSchema,
 } from "./schemas/chat-github-entities.js";
+export {
+  type ChatGitlabEntity,
+  type ChatGitlabEntityBoundVia,
+  type ChatGitlabEntityListResponse,
+  type ChatGitlabEntityStatus,
+  type ChatGitlabEntityType,
+  chatGitlabEntityBoundViaSchema,
+  chatGitlabEntityListResponseSchema,
+  chatGitlabEntitySchema,
+  chatGitlabEntityStatusSchema,
+  chatGitlabEntityTypeSchema,
+  type FollowChatGitlabEntityConflict,
+  type FollowChatGitlabEntityRequest,
+  type FollowChatGitlabEntityResponse,
+  followChatGitlabEntityConflictSchema,
+  followChatGitlabEntityRequestSchema,
+  followChatGitlabEntityResponseSchema,
+  type UnfollowChatGitlabEntityResponse,
+  unfollowChatGitlabEntityResponseSchema,
+} from "./schemas/chat-gitlab-entities.js";
 export {
   type AgentChatMetadata,
   agentChatMetadataSchema,
@@ -737,6 +758,14 @@ export {
   type NormalizedScmEvent,
   normalizedEventKindSchema,
   normalizedScmEventSchema,
+  normalizeScmEntityState,
+  SCM_ENTITY_STATES,
+  type ScmEntityObservation,
+  type ScmEntityState,
+  type ScmNormalizedWebhook,
+  scmEntityObservationSchema,
+  scmEntityStateSchema,
+  scmNormalizedWebhookSchema,
 } from "./schemas/normalized-event.js";
 export {
   NOTIFICATION_SEVERITIES,
@@ -967,6 +996,16 @@ export {
   type RuntimeProvider,
   runtimeProviderSchema,
 } from "./schemas/runtime-provider.js";
+export {
+  type ScmAttentionLine,
+  type ScmAttentionProvenance,
+  type ScmAudienceEntry,
+  type ScmLegacyRoute,
+  scmAttentionLineSchema,
+  scmAttentionProvenanceSchema,
+  scmAudienceEntrySchema,
+  scmLegacyRouteSchema,
+} from "./schemas/scm-attention.js";
 export {
   SCM_INGRESS_AUTHORITIES,
   SCM_PROVIDERS,

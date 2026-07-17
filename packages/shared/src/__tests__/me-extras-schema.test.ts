@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kickoffOnboardingSchema, treeSetupKickoffSchema } from "../schemas/me-extras.js";
+import { kickoffOnboardingSchema, onboardingEventSchema, treeSetupKickoffSchema } from "../schemas/me-extras.js";
 
 describe("kickoffOnboardingSchema", () => {
   it("accepts a natural onboarding kickoff without an internal kind discriminator", () => {
@@ -14,6 +14,27 @@ describe("kickoffOnboardingSchema", () => {
     expect(parsed).not.toHaveProperty("kind");
     expect(parsed.topic).toBe("Get started with First Tree");
     expect(parsed.complete).toBe(false);
+  });
+
+  it("accepts the stamp variants alongside the older complete boolean", () => {
+    for (const stamp of ["completed", "invitee_skip", "none"] as const) {
+      const parsed = kickoffOnboardingSchema.parse({
+        agentUuid: "agent-1",
+        bootstrap: "First Tree is getting the agent up to speed.",
+        stamp,
+      });
+      expect(parsed.stamp).toBe(stamp);
+    }
+  });
+
+  it("rejects an unknown stamp value", () => {
+    const parsed = kickoffOnboardingSchema.safeParse({
+      agentUuid: "agent-1",
+      bootstrap: "First Tree is getting the agent up to speed.",
+      stamp: "dismissed",
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it("rejects the retired kickoff kind field", () => {
@@ -51,6 +72,21 @@ describe("kickoffOnboardingSchema", () => {
         scanFixRepoSlug: "acme/api",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("onboardingEventSchema", () => {
+  it("accepts a classified step failure and rejects arbitrary event names", () => {
+    expect(
+      onboardingEventSchema.parse({
+        event: "step_failed",
+        attrs: { step: "create-agent", reasonCode: "agent_create_failed", retryable: true },
+      }),
+    ).toEqual({
+      event: "step_failed",
+      attrs: { step: "create-agent", reasonCode: "agent_create_failed", retryable: true },
+    });
+    expect(onboardingEventSchema.safeParse({ event: "raw_exception" }).success).toBe(false);
   });
 });
 

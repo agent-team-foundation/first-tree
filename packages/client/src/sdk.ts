@@ -10,6 +10,7 @@ import {
   type Chat,
   type ChatDetail,
   type ChatGithubEntityListResponse,
+  type ChatGitlabEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
   type ContextReviewSubmitRequest,
@@ -21,6 +22,8 @@ import {
   type DocStatus,
   type DocSummary,
   type DocWithVersion,
+  type FollowChatGitlabEntityRequest,
+  type FollowChatGitlabEntityResponse,
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
@@ -31,6 +34,7 @@ import {
   type PublishDocResponse,
   type RuntimeProvider,
   type SendMessage,
+  type UnfollowChatGitlabEntityResponse,
   type UnfollowGithubEntityResponse,
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
@@ -445,6 +449,30 @@ export class FirstTreeHubSDK {
   /** List the GitHub entities currently wired into a chat. */
   async listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
     return this.requestJson<ChatGithubEntityListResponse>(`/api/v1/agent/chats/${chatId}/github-entities`);
+  }
+
+  /** Record a local, pending-capable GitLab Issue/MR declaration without provider egress. */
+  async followGitlabEntity(
+    chatId: string,
+    body: FollowChatGitlabEntityRequest,
+  ): Promise<FollowChatGitlabEntityResponse> {
+    return this.requestJson<FollowChatGitlabEntityResponse>(`/api/v1/agent/chats/${chatId}/gitlab-entities`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** List automatic and manual GitLab bindings for this chat from the local webhook projection. */
+  async listChatGitlabEntities(chatId: string): Promise<ChatGitlabEntityListResponse> {
+    return this.requestJson<ChatGitlabEntityListResponse>(`/api/v1/agent/chats/${chatId}/gitlab-entities`);
+  }
+
+  /** Remove every automatic or manual binding for this entity in this chat. Idempotent. */
+  async unfollowGitlabEntity(chatId: string, entityUrl: string): Promise<UnfollowChatGitlabEntityResponse> {
+    return this.requestJson<UnfollowChatGitlabEntityResponse>(
+      `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
+      { method: "DELETE" },
+    );
   }
 
   /** Submit one server-authored Context Reviewer run for App publication. */

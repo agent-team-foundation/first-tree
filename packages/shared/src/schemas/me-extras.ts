@@ -65,6 +65,17 @@ export const kickoffOnboardingSchema = z
     bootstrap: z.string().min(1),
     topic: z.string().trim().min(1).max(120).optional(),
     complete: z.boolean().optional(),
+    // How the membership's onboarding state is stamped once the kickoff chat
+    // exists. Takes precedence over the older boolean `complete` when both are
+    // present:
+    //   - "completed"    — terminal completion (same as `complete: true`).
+    //   - "invitee_skip" — team-agent start: the member begins in a teammate's
+    //     org-visible agent chat WITHOUT their own runtime. Writes only the
+    //     auto-open suppressor (reason="invitee_skip"), never the completion
+    //     stamp, so the standard connect-computer → create-agent journey stays
+    //     pending and resumable from the workspace.
+    //   - "none"         — stamp nothing (same as `complete: false`).
+    stamp: z.enum(["completed", "invitee_skip", "none"]).optional(),
     // Trusted landing-campaign action context. Direct and onboarding paths use
     // the same server-composed idempotency key for this campaign + repo.
     campaignAction: landingCampaignActionContextSchema.optional(),
@@ -116,6 +127,11 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  *   - `dismissed`              — when PATCH /me/onboarding flips dismissed
  *
  * Web reports:
+ *   - `step_viewed`            — a visible standalone onboarding step mounted
+ *   - `step_completed`         — the user satisfied a visible step and advanced
+ *   - `step_failed`            — a visible step hit a classified, user-impacting failure
+ *   - `step_paused`            — the user chose "finish later" from a step
+ *   - `resumed`                — the user resumed guided setup from Settings
  *   - `team_renamed`           — Step 1 user changed the auto-named team
  *   - `agent_created`          — Step 2 successfully created the agent
  *   - `kickoff_chat_started`   — a first-chat or tree-setup kickoff was created
@@ -123,6 +139,11 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  *   - `tree_intro_dismissed`   — Step 3 [I'll do it later] clicked
  */
 export const onboardingEventNameSchema = z.enum([
+  "step_viewed",
+  "step_completed",
+  "step_failed",
+  "step_paused",
+  "resumed",
   "team_renamed",
   "agent_created",
   "kickoff_chat_started",

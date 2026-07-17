@@ -28,13 +28,22 @@
 // flow populates `selectedRepoUrls`, so the repo-aware branches downstream
 // (e.g. the `hasRepos` path in step-start-chat.tsx) stay dormant by design.
 export const ADMIN_STEPS = ["create-team", "connect-computer", "create-agent", "start-chat"] as const;
-export const INVITEE_STEPS = ["join-team", "connect-computer", "create-agent", "start-chat"] as const;
+// `get-started` is the invitee fork: after joining, a member of a team that
+// already runs org-visible agents chooses between the standard setup (connect
+// a computer, create their own agent) and an install-free quick start in a
+// team agent's chat. The step self-skips when `canOfferTeamAgentStart` is
+// false, so a member of a team with no shareable agent never sees it and the
+// admin sequence is untouched.
+export const INVITEE_STEPS = ["join-team", "get-started", "connect-computer", "create-agent", "start-chat"] as const;
 
 /**
  * Prominent setup progress intentionally stops at agent readiness. `start-chat`
  * remains a real flow state because it creates the first chat and stamps
  * completion, but it is the payoff screen after setup rather than a fourth
- * configuration chore in the progress bar.
+ * configuration chore in the progress bar. `get-started` is likewise excluded:
+ * it is a decision screen (own agent vs team-agent quick start), not a
+ * configuration chore, so the three-milestone journey stays identical for both
+ * paths.
  */
 export const ADMIN_PROGRESS_STEPS = ["create-team", "connect-computer", "create-agent"] as const;
 export const INVITEE_PROGRESS_STEPS = ["join-team", "connect-computer", "create-agent"] as const;
@@ -220,6 +229,30 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
   if (facts.onboardingStep === "connect" || facts.onboardingStep === null) return false;
   if (!facts.currentOrgHasPersonalAgent) return false;
   return facts.onboardingCompletedAt !== null;
+}
+
+/**
+ * Whether the invitee `get-started` fork appears: choose between the standard
+ * setup and an install-free team-agent start — begin working in a teammate's
+ * org-visible agent chat now, and finish the standard connect-computer →
+ * create-agent setup later (Settings → Setup keeps the Resume path).
+ *
+ * Offered only while BOTH hold:
+ *   - the selected org has a usable agent this member did not create
+ *     (`currentOrgHasUsableAgent` can include org-visible agents owned by
+ *     another member — a fresh solo team never qualifies), and
+ *   - this membership still has no personal agent (once it does, the standard
+ *     journey is nearly done and the shortcut would only confuse).
+ *
+ * Deliberately not path-gated: the admin creating a brand-new team can never
+ * satisfy the usable-agent condition, so the predicate self-selects joining
+ * members without hard-coding path.
+ */
+export function canOfferTeamAgentStart(facts: {
+  currentOrgHasUsableAgent: boolean;
+  currentOrgHasPersonalAgent: boolean;
+}): boolean {
+  return facts.currentOrgHasUsableAgent && !facts.currentOrgHasPersonalAgent;
 }
 
 /**

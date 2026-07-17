@@ -14,6 +14,7 @@ export {
 // Handlers
 export { detectStreamApiError, StreamApiTransientError } from "./handlers/claude-code.js";
 export { registerBuiltinHandlers } from "./handlers/index.js";
+export { createKimiCodeHandler, formatKimiCodeError, kimiToolIsReadOnly } from "./handlers/kimi-code.js";
 export {
   applyClientLoggerConfig,
   captureClientException,

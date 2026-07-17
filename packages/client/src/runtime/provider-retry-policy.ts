@@ -419,7 +419,7 @@ function isCredential(
     base.reasonCode.includes("auth") ||
     base.reasonCode.includes("unauthorized") ||
     AUTH_HTTP_CODE_RE.test(text) ||
-    /unauthorized|forbidden|invalid api key|invalid_api_key|authentication|login required|not authenticated|oauth_org_not_allowed/.test(
+    /unauthorized|forbidden|invalid api key|invalid_api_key|authentication|login required|not authenticated|oauth_org_not_allowed|auth\.(?:login_required|provisioning_required|token_missing|token_unauthorized|model_not_resolved)|provider\.auth_error/.test(
       text,
     )
   ) {
@@ -448,6 +448,7 @@ function isConfiguration(text: string, base: Classification, provider: RuntimePr
   ) {
     return true;
   }
+  if (provider === "kimi-code" && /model\.not_configured|model\.config_invalid/.test(text)) return true;
   // Cursor CLI literal invalid-model / explicit-deny / trust-wall phrasings
   // (captured in Phase 0). Gated to the cursor provider: this classifier is
   // shared and configuration wins over capacity in the classify chain, so an
@@ -487,7 +488,7 @@ function isCapacity(text: string, base: Classification, retryAfterMs: number | u
 function isTransportText(text: string): boolean {
   return (
     TRANSIENT_HTTP_CODE_RE.test(text) ||
-    /server error|server_error|unavailable|timed out|timeout|fetch failed|network|unable to connect|connection refused|connectionrefused|econnreset|econnrefused|etimedout|epipe/.test(
+    /server error|server_error|unavailable|timed out|timeout|fetch failed|network|unable to connect|provider\.connection_error|connection refused|connectionrefused|econnreset|econnrefused|etimedout|epipe/.test(
       text,
     )
   );

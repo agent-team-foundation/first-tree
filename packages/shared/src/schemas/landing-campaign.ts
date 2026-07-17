@@ -8,7 +8,7 @@ export const landingCampaignSlugSchema = z
   .regex(/^[a-z0-9][a-z0-9-]*$/u, "Campaign must be a kebab-case slug.");
 
 /** Campaigns that the current Cloud build can actively launch or hand off. */
-export const KNOWN_LANDING_CAMPAIGN_SLUGS = ["production-scan"] as const;
+export const KNOWN_LANDING_CAMPAIGN_SLUGS = ["production-scan", "agent-readiness"] as const;
 export const knownLandingCampaignSlugSchema = z.enum(KNOWN_LANDING_CAMPAIGN_SLUGS);
 export type KnownLandingCampaignSlug = z.infer<typeof knownLandingCampaignSlugSchema>;
 

@@ -305,6 +305,7 @@ describe("shared setup hooks", () => {
 
   it("mints connect commands, surfaces final token failures, and retries manually", async () => {
     const latest = { current: null as ComputerConnection | null };
+    const onTokenMintFailed = vi.fn();
     activityMocks.listClients.mockResolvedValue([]);
     clientMocks.api.post
       .mockResolvedValueOnce({
@@ -328,7 +329,7 @@ describe("shared setup hooks", () => {
       });
 
     function Probe() {
-      latest.current = useComputerConnection(true);
+      latest.current = useComputerConnection(true, { onTokenMintFailed });
       return <div>{latest.current.cliCommand ?? latest.current.tokenError ?? "pending"}</div>;
     }
 
@@ -344,6 +345,7 @@ describe("shared setup hooks", () => {
     });
 
     expect(expectHookValue(latest.current).tokenError).toBe("token failed");
+    expect(onTokenMintFailed).toHaveBeenCalledTimes(1);
 
     await act(async () => expectHookValue(latest.current).retry());
     await flush();
