@@ -84,6 +84,7 @@ vi.mock("../pages/settings.js", async () => {
   };
 });
 vi.mock("../pages/settings/computers.js", () => ({ SettingsComputersPage: () => <div>settings computers</div> }));
+vi.mock("../pages/settings/account.js", () => ({ SettingsAccountPage: () => <div>settings account</div> }));
 vi.mock("../pages/settings/context-tree.js", async () => {
   const { Navigate } = await import("react-router");
   return { SettingsContextTreePage: () => <Navigate to="/settings/repositories#context-tree" replace /> };
@@ -237,6 +238,17 @@ describe("App routes", () => {
     await resetRenderedApp();
 
     expect(await renderAppAt("/agents/agent-1/tools")).toContain("profile tab");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings")).toContain("settings account");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/settings/account")).toContain("settings account");
+    await resetRenderedApp();
+
+    expect(await renderAppAt("/user-settings?connection=google-linked")).toContain("settings account");
+    expect(window.location.pathname).toBe("/settings/account");
+    expect(window.location.search).toBe("?connection=google-linked");
     await resetRenderedApp();
 
     expect(await renderAppAt("/settings/github")).toContain("settings github");

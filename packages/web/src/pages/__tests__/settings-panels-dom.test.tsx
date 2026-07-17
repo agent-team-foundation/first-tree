@@ -151,6 +151,7 @@ async function renderDom(
         <QueryClientProvider client={createClient()}>
           <Routes>
             <Route path="/settings/*" element={element}>
+              <Route path="account" element={<div>Account child</div>} />
               <Route path="context" element={<div>Settings child</div>} />
               <Route path="repositories" element={<div>Repositories child</div>} />
               <Route path="integrations/*" element={<div>Integrations child</div>} />
@@ -325,8 +326,11 @@ describe("settings panels", () => {
     const { SettingsLayout } = await import("../settings.js");
 
     const desktop = await renderDom(<SettingsLayout />, "/settings/integrations/github");
+    expect(desktop.container.textContent).toContain("PERSONAL");
+    expect(desktop.container.textContent).toContain("Account");
     expect(desktop.container.textContent).toContain("Computers");
     expect(desktop.container.textContent).toContain("Repositories");
+    expect(desktop.container.textContent).toContain("TEAM");
     expect(desktop.container.textContent).toContain("Integrations");
     // The onboarding nav entry is labelled "Setup" (renamed from "Onboarding"
     // so the sidebar label and the page heading no longer drift).
@@ -334,12 +338,19 @@ describe("settings panels", () => {
     expect(desktop.container.textContent).toContain("Integrations child");
     await act(async () => desktop.root.unmount());
 
+    const account = await renderDom(<SettingsLayout />, "/settings/account");
+    expect(account.container.textContent).toContain("Manage your profile and sign-in methods.");
+    expect(account.container.textContent).toContain("Account child");
+    await act(async () => account.root.unmount());
+
     authMock.value = { ...authMock.value, role: "member", onboardingCompletedAt: NOW };
     viewportMock.value = "narrow";
     const narrow = await renderDom(<SettingsLayout />);
     expect(narrow.container.querySelector("aside")).toBeNull();
+    expect(narrow.container.textContent).toContain("PERSONAL");
     expect(narrow.container.textContent).toContain("Computers");
     expect(narrow.container.textContent).toContain("Repositories");
+    expect(narrow.container.textContent).toContain("TEAM");
     expect(narrow.container.textContent).toContain("Integrations");
     expect(narrow.container.textContent).not.toContain("Setup");
     await act(async () => narrow.root.unmount());
@@ -357,6 +368,43 @@ describe("settings panels", () => {
     expect(pageHeading?.classList.contains("sr-only")).toBe(true);
     expect(repositories.container.textContent).toContain("Repositories child");
     await act(async () => repositories.root.unmount());
+  });
+
+  it("uses the preview pathname override for desktop and narrow navigation state", async () => {
+    const { SettingsLayout } = await import("../settings.js");
+
+    const desktop = await renderDom(
+      <SettingsLayout activePathname="/settings/repositories" />,
+      "/settings/integrations",
+    );
+    const desktopRepositories = desktop.container.querySelector<HTMLSpanElement>(
+      'aside a[href="/settings/repositories"] span',
+    );
+    const desktopIntegrations = desktop.container.querySelector<HTMLSpanElement>(
+      'aside a[href="/settings/integrations"] span',
+    );
+    expect(desktopRepositories?.classList.contains("font-medium")).toBe(true);
+    expect(desktopRepositories?.style.background).toBe("var(--bg-hover)");
+    expect(desktopIntegrations?.classList.contains("font-medium")).toBe(false);
+    expect(desktopIntegrations?.style.background).toBe("transparent");
+    await act(async () => desktop.root.unmount());
+
+    viewportMock.value = "narrow";
+    const narrow = await renderDom(
+      <SettingsLayout activePathname="/settings/repositories" />,
+      "/settings/integrations",
+    );
+    const narrowRepositories = narrow.container.querySelector<HTMLSpanElement>(
+      'nav a[href="/settings/repositories"] span',
+    );
+    const narrowIntegrations = narrow.container.querySelector<HTMLSpanElement>(
+      'nav a[href="/settings/integrations"] span',
+    );
+    expect(narrowRepositories?.classList.contains("font-medium")).toBe(true);
+    expect(narrowRepositories?.style.background).toBe("var(--bg-hover)");
+    expect(narrowIntegrations?.classList.contains("font-medium")).toBe(false);
+    expect(narrowIntegrations?.style.background).toBe("transparent");
+    await act(async () => narrow.root.unmount());
   });
 
   it("renders Context Tree binding configuration and keeps manual editing hidden by default", async () => {

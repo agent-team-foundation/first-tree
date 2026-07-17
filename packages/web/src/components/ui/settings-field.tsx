@@ -36,6 +36,7 @@ export function SettingsField({
   rightSlot,
   readOnly = false,
   pattern,
+  maxLength,
 }: {
   label: string;
   hint?: string;
@@ -48,6 +49,7 @@ export function SettingsField({
   rightSlot?: ReactNode;
   readOnly?: boolean;
   pattern?: string;
+  maxLength?: number;
 }) {
   const inputId = useId();
   const inputClass = `flex-1 min-w-0 outline-none text-body focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-sunken)] ${mono ? "mono" : ""}`;
@@ -78,6 +80,7 @@ export function SettingsField({
             id={inputId}
             value={value}
             readOnly
+            maxLength={maxLength}
             className={inputClass}
             style={{ ...inputStyle, color: "var(--fg-2)" }}
           />
@@ -89,6 +92,7 @@ export function SettingsField({
             type={type}
             placeholder={placeholder}
             pattern={pattern}
+            maxLength={maxLength}
             className={inputClass}
             style={inputStyle}
           />
