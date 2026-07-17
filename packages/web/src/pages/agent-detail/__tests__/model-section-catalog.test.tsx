@@ -257,4 +257,28 @@ describe("ModelSection — daemon catalog", () => {
     expect(el.querySelector('input[aria-label="Model"]')).toBeNull();
     expect(el.querySelector('button[aria-label="Model"]')?.textContent).toContain("opus");
   });
+
+  it("saves the empty value when DEFAULT (unset — inherits local) is picked", async () => {
+    providerModelsMocks.getProviderModels.mockResolvedValue(CURSOR_CATALOG);
+    const saved: string[] = [];
+    const el = await renderWithQuery(
+      <ModelSection value="composer-1" onChange={(v) => saved.push(v)} provider="cursor" clientId="c1" />,
+    );
+
+    await flushUntil(() => {
+      const b = el.querySelector<HTMLButtonElement>('button[aria-label="Model"]');
+      return !!b && !b.disabled;
+    });
+    await act(async () => {
+      el.querySelector('button[aria-label="Model"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const unset = Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="option"]')).find((b) =>
+      b.textContent?.includes("(unset — inherits local)"),
+    );
+    await act(async () => {
+      unset?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    // Empty string = no override → the host provider's local default applies.
+    expect(saved).toEqual([""]);
+  });
 });
