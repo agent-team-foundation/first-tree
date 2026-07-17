@@ -12,6 +12,7 @@ import {
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
   inboxRecoverFrameSchema,
+  PROVIDER_MODELS_LIST_TYPE,
   PROVIDER_MODELS_RESULT_TYPE,
   providerModelsResultFrameSchema,
   runtimeStateMessageSchema,
@@ -56,6 +57,7 @@ import * as landingCampaignChatStateService from "../../services/landing-campaig
 import * as notificationService from "../../services/notification.js";
 import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
+import { readModelCatalogRpcResult, storeModelCatalogRpcResult } from "../../services/provider-models-rpc.js";
 import * as runtimeLivenessService from "../../services/runtime-liveness.js";
 import * as sessionEventService from "../../services/session-event.js";
 
@@ -293,6 +295,29 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         return;
       }
       connectionManager.sendToClient(payload.targetClientId, frame.data);
+    });
+
+    // Cross-replica reverse commands: only the replica that owns the daemon
+    // WebSocket can deliver; others no-op on sendToClient.
+    notifier.onDaemonClientCommand((payload) => {
+      if (payload.type !== PROVIDER_MODELS_LIST_TYPE) return;
+      connectionManager.sendToClient(payload.clientId, {
+        type: PROVIDER_MODELS_LIST_TYPE,
+        provider: payload.provider,
+        ref: payload.ref,
+      });
+    });
+
+    // Cross-replica result wake: catalog is in clients.metadata; resolve any
+    // local HTTP waiter that registered waitForClientReply for this ref.
+    notifier.onDaemonClientCommandResult((payload) => {
+      void (async () => {
+        const catalog = await readModelCatalogRpcResult(app.db, payload.clientId, payload.ref);
+        if (!catalog) return;
+        connectionManager.resolveClientReply(payload.clientId, payload.ref, catalog);
+      })().catch((err) => {
+        app.log.debug({ err, clientId: payload.clientId, ref: payload.ref }, "provider-models result wake failed");
+      });
     });
 
     // WS upgrade is excluded from HTTP tracing in app.ts via the autotelic
@@ -1769,11 +1794,15 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 socket.send(JSON.stringify({ type: "error", message: "Malformed provider-models:result frame" }));
                 return;
               }
+              // Durable rendezvous first so another replica's HTTP waiter can
+              // load the catalog after the tiny result-wake NOTIFY.
+              await storeModelCatalogRpcResult(app.db, clientId, result.data.ref, result.data.catalog);
               const resolved = connectionManager.resolveClientReply(clientId, result.data.ref, result.data.catalog);
+              await notifier.notifyDaemonClientCommandResult({ clientId, ref: result.data.ref });
               if (!resolved) {
                 app.log.debug(
                   { clientId, ref: result.data.ref },
-                  "provider-models:result matched no pending HTTP waiter",
+                  "provider-models:result matched no pending HTTP waiter on this replica",
                 );
               }
             }
