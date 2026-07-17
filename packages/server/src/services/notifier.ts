@@ -116,6 +116,8 @@ export type DaemonClientCommandPayload = {
   clientId: string;
   provider: string;
   ref: string;
+  /** DB-authoritative `clients.instance_id` — only that replica may deliver. */
+  targetInstanceId: string;
 };
 export type DaemonClientCommandHandler = (payload: DaemonClientCommandPayload) => void;
 
@@ -675,7 +677,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
             typeof parsed.type !== "string" ||
             typeof parsed.clientId !== "string" ||
             typeof parsed.provider !== "string" ||
-            typeof parsed.ref !== "string"
+            typeof parsed.ref !== "string" ||
+            typeof parsed.targetInstanceId !== "string"
           ) {
             return;
           }

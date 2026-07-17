@@ -297,10 +297,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       connectionManager.sendToClient(payload.targetClientId, frame.data);
     });
 
-    // Cross-replica reverse commands: only the replica that owns the daemon
-    // WebSocket can deliver; others no-op on sendToClient.
+    // Cross-replica reverse commands: only the DB-authoritative instance may
+    // deliver. A stale open socket on a previous replica must not receive the
+    // same ref after reconnect/takeover.
     notifier.onDaemonClientCommand((payload) => {
       if (payload.type !== PROVIDER_MODELS_LIST_TYPE) return;
+      if (payload.targetInstanceId !== instanceId) return;
       connectionManager.sendToClient(payload.clientId, {
         type: PROVIDER_MODELS_LIST_TYPE,
         provider: payload.provider,
@@ -1792,6 +1794,20 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               const result = providerModelsResultFrameSchema.safeParse(msg);
               if (!result.success) {
                 socket.send(JSON.stringify({ type: "error", message: "Malformed provider-models:result frame" }));
+                return;
+              }
+              // Only the DB-authoritative instance accepts results — a replaced
+              // connection on a prior replica must not win the rendezvous.
+              const [owner] = await app.db
+                .select({ instanceId: clients.instanceId })
+                .from(clients)
+                .where(eq(clients.id, clientId))
+                .limit(1);
+              if (!owner || owner.instanceId !== instanceId) {
+                app.log.debug(
+                  { clientId, ref: result.data.ref, instanceId, ownerInstanceId: owner?.instanceId ?? null },
+                  "ignoring provider-models:result from non-authoritative instance",
+                );
                 return;
               }
               // Durable rendezvous first so another replica's HTTP waiter can

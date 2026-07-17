@@ -241,12 +241,19 @@ type PendingClientReply = {
 
 const pendingClientReplies = new Map<string, PendingClientReply>();
 
-const DEFAULT_CLIENT_REPLY_TIMEOUT_MS = 25_000;
+export const DEFAULT_CLIENT_REPLY_TIMEOUT_MS = 25_000;
+
+let clientReplyTimeoutMsForTests: number | null = null;
+
+/** Test seam: shorten HTTP↔daemon reply waits without changing production default. */
+export function setClientReplyTimeoutMsForTests(timeoutMs: number | null): void {
+  clientReplyTimeoutMsForTests = timeoutMs;
+}
 
 export function waitForClientReply(
   clientId: string,
   ref: string,
-  timeoutMs: number = DEFAULT_CLIENT_REPLY_TIMEOUT_MS,
+  timeoutMs: number = clientReplyTimeoutMsForTests ?? DEFAULT_CLIENT_REPLY_TIMEOUT_MS,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (pendingClientReplies.has(ref)) {
