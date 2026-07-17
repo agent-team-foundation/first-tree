@@ -107,6 +107,7 @@ describe("createNotifier", () => {
       clientId: "client_1",
       provider: "cursor",
       ref: "ref_1",
+      targetInstanceId: "instance_1",
     });
     await notifier.notifyDaemonClientCommandResult({ clientId: "client_1", ref: "ref_1" });
 
@@ -143,6 +144,7 @@ describe("createNotifier", () => {
         clientId: "client_1",
         provider: "cursor",
         ref: "ref_1",
+        targetInstanceId: "instance_1",
       }),
     ).resolves.toBeUndefined();
     await expect(
@@ -244,6 +246,7 @@ describe("createNotifier", () => {
         clientId: "client_1",
         provider: "cursor",
         ref: "ref_1",
+        targetInstanceId: "instance_1",
       }),
     );
     listeners.get("daemon_client_commands")?.("{not json");
@@ -293,6 +296,7 @@ describe("createNotifier", () => {
       clientId: "client_1",
       provider: "cursor",
       ref: "ref_1",
+      targetInstanceId: "instance_1",
     });
     expect(daemonResultSecond).toHaveBeenCalledWith({ clientId: "client_1", ref: "ref_1" });
 
