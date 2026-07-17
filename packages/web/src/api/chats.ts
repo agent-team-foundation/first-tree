@@ -61,6 +61,13 @@ export function listChatGitlabEntities(chatId: string): Promise<ChatGitlabEntity
   return api.get<ChatGitlabEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/gitlab-entities`);
 }
 
+/** Canonical human/Web unfollow contract; legacy mapping-id deletion stays server-only. */
+export function unfollowChatGitlabEntity(chatId: string, entityUrl: string): Promise<{ removed: number }> {
+  return api.delete<{ removed: number }>(
+    `/chats/${encodeURIComponent(chatId)}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
+  );
+}
+
 export function renameChat(chatId: string, topic: string | null): Promise<Chat> {
   return api.patch<Chat>(`/chats/${encodeURIComponent(chatId)}`, { topic });
 }

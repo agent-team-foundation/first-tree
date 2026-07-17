@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { scmEntityStateSchema } from "./normalized-event.js";
 
 export const chatGitlabEntityTypeSchema = z.enum(["issue", "pull_request"]);
 export type ChatGitlabEntityType = z.infer<typeof chatGitlabEntityTypeSchema>;
@@ -24,7 +25,7 @@ export const chatGitlabEntitySchema = z.object({
   projectPath: z.string().min(1),
   entityIid: z.number().int().positive(),
   title: z.string().nullable(),
-  state: z.string().min(1).nullable(),
+  state: scmEntityStateSchema.nullable(),
   status: chatGitlabEntityStatusSchema,
   boundVia: chatGitlabEntityBoundViaSchema,
 });
@@ -39,15 +40,26 @@ export type ChatGitlabEntityListResponse = z.infer<typeof chatGitlabEntityListRe
 export const followChatGitlabEntityRequestSchema = z
   .object({
     entityUrl: z.string().url().max(2048),
+    rebind: z.boolean().default(false),
   })
   .strict();
-export type FollowChatGitlabEntityRequest = z.infer<typeof followChatGitlabEntityRequestSchema>;
+export type FollowChatGitlabEntityRequest = z.input<typeof followChatGitlabEntityRequestSchema>;
 
 export const followChatGitlabEntityResponseSchema = z.object({
-  status: z.enum(["created", "already_following"]),
+  status: z.enum(["created", "already_following", "rebound"]),
   entity: chatGitlabEntitySchema,
 });
 export type FollowChatGitlabEntityResponse = z.infer<typeof followChatGitlabEntityResponseSchema>;
+
+export const followChatGitlabEntityConflictSchema = z.object({
+  error: z.literal("ENTITY_FOLLOWED_ELSEWHERE"),
+  message: z.string().min(1),
+  conflict: z.object({
+    chatId: z.string().min(1),
+    topic: z.string().nullable(),
+  }),
+});
+export type FollowChatGitlabEntityConflict = z.infer<typeof followChatGitlabEntityConflictSchema>;
 
 export const unfollowChatGitlabEntityResponseSchema = z.object({
   removed: z.number().int().min(0),

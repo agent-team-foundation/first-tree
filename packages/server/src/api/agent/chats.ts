@@ -28,6 +28,7 @@ import {
 } from "../../services/gitlab-entity-follow.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { resolveAgentScmBindingPair } from "../../services/scm-attention-line.js";
 import { sendFollowResult } from "../github-entity-reply.js";
 
 const log = createLogger("AgentChatsRoute");
@@ -312,13 +313,32 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
       const body = followChatGitlabEntityRequestSchema.parse(request.body);
+      const pair = await resolveAgentScmBindingPair(app.db, request.params.chatId, identity.uuid);
+      if (!pair) {
+        throw new BadRequestError(
+          "No eligible (human, wake-agent) attention pair: following from an agent session needs an active " +
+            "non-human caller and at least one active human speaker in the chat.",
+        );
+      }
       const result = await declareCurrentGitlabEntityFollow(app.db, {
-        organizationId: identity.organizationId,
+        organizationId: pair.organizationId,
         chatId: request.params.chatId,
         declaredByAgentId: identity.uuid,
+        humanAgentId: pair.humanAgentId,
+        delegateAgentId: pair.wakeAgentId,
         entityUrl: body.entityUrl,
+        rebind: body.rebind,
       });
-      return reply.status(result.status === "created" ? 201 : 200).send(result);
+      if (result.outcome === "conflict") {
+        return reply.status(409).send({
+          error: "ENTITY_FOLLOWED_ELSEWHERE",
+          message:
+            `This GitLab attention line already lives in chat ${result.conflict.chatId}. ` +
+            "Work there, or re-issue with rebind to move it into this chat.",
+          conflict: result.conflict,
+        });
+      }
+      return reply.status(result.response.status === "already_following" ? 200 : 201).send(result.response);
     },
   );
 

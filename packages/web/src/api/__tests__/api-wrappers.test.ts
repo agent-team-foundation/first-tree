@@ -196,6 +196,8 @@ describe("api wrapper paths", () => {
     await chats.listChats({ limit: 3, cursor: "next" });
     await chats.getChat("chat/id");
     await chats.listChatGithubEntities("chat/id");
+    await chats.listChatGitlabEntities("chat/id");
+    await chats.unfollowChatGitlabEntity("chat/id", "https://gitlab.example/acme/api/-/merge_requests/42");
     await chats.renameChat("chat/id", "Topic");
     await chats.patchChatEngagement("chat/id", "archived");
     await chats.sendChatMessage("chat/id", "hello", ["agent-1"]);
@@ -286,6 +288,12 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/all?limit=5&cursor=older");
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/skills");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/names/name%20with%20spaces/availability");
+    expect(apiMock.get).toHaveBeenCalledWith("/chats/chat%2Fid/gitlab-entities");
+    expect(apiMock.delete).toHaveBeenCalledWith(
+      `/chats/chat%2Fid/gitlab-entities?entity=${encodeURIComponent(
+        "https://gitlab.example/acme/api/-/merge_requests/42",
+      )}`,
+    );
     expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
       format: "text",
       content: "hello",

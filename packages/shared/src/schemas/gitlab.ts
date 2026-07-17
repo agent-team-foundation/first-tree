@@ -69,5 +69,6 @@ export type GitlabIdentityLinkSummary = z.infer<typeof gitlabIdentityLinkSummary
 export const followGitlabEntitySchema = z.object({
   connectionId: z.string().min(1),
   entityUrl: z.url(),
+  rebind: z.boolean().default(false),
 });
 export type FollowGitlabEntity = z.infer<typeof followGitlabEntitySchema>;

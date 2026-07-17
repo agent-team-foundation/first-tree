@@ -748,6 +748,69 @@ afterEach(() => {
 });
 
 describe("ChatView", () => {
+  it("renders typed GitHub/GitLab header links only for anchored provider chats", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const cases = [
+      {
+        id: "chat-github-link",
+        metadata: {
+          source: "github",
+          entityType: "pull_request",
+          entityKey: "acme/web#42",
+          entityUrl: "https://github.com/acme/web/pull/42",
+        },
+        title: "View on GitHub",
+        href: "https://github.com/acme/web/pull/42",
+      },
+      {
+        id: "chat-gitlab-link",
+        metadata: {
+          source: "gitlab",
+          entityType: "pull_request",
+          entityKey: "501:pull_request:42",
+          entityUrl: "https://gitlab.internal/acme/web/-/merge_requests/42",
+        },
+        title: "View on GitLab",
+        href: "https://gitlab.internal/acme/web/-/merge_requests/42",
+      },
+      {
+        id: "chat-gitlab-no-url",
+        metadata: {
+          source: "gitlab",
+          entityType: "pull_request",
+          entityKey: "501:pull_request:43",
+        },
+        title: null,
+        href: null,
+      },
+      { id: "chat-manual-link", metadata: {}, title: null, href: null },
+    ] as const;
+
+    for (const entry of cases) {
+      const detail = chatDetail({
+        id: entry.id,
+        title: `Header ${entry.id}`,
+        topic: `Header ${entry.id}`,
+        metadata: entry.metadata,
+      });
+      const { container, root } = await renderDom(
+        <ChatView agentId="agent-1" chatId={entry.id} initialChatDetail={detail} />,
+        undefined,
+        "/",
+      );
+      await waitForText(container, `Header ${entry.id}`);
+      const link = entry.title ? container.querySelector<HTMLAnchorElement>(`a[title="${entry.title}"]`) : null;
+      if (entry.href) {
+        expect(link?.href).toBe(entry.href);
+        expect(link?.target).toBe("_blank");
+        expect(link?.rel).toBe("noopener noreferrer");
+      } else {
+        expect(container.querySelector('a[title^="View on "]')).toBeNull();
+      }
+      await act(async () => root.unmount());
+    }
+  });
+
   it("hides chat-management affordances on the trial surface even when read-only (route-scoped)", async () => {
     const { ChatView } = await import("../chat-view.js");
     // A persisted-open sidebar must NOT re-appear on the trial surface.

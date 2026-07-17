@@ -64,7 +64,8 @@ Capture a redacted generated briefing and command trace showing:
   terminal success, and explains that a later directed personnel event may
   create a new route;
 - the `gitlab` namespace exposes only `follow`, `following`, and `unfollow`,
-  with no `--rebind`, `--connection`, `--mapping-id`, or `context-review`;
+  with `--rebind` available only on `follow` and no `--connection`,
+  `--mapping-id`, or `context-review`;
 - no GitHub App installation request is emitted for GitLab chat attention.
 
 ## Expected Result

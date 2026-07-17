@@ -10,6 +10,8 @@ import {
   compareScmDeliveryEntries,
   planScmChatDeliveries,
   type ScmAudienceTarget,
+  scmTargetHumanAgentId,
+  scmTargetWakeAgentId,
   scmWakeAgentIds,
   selectScmCardContext,
   selectScmSenderId,
@@ -69,15 +71,35 @@ export async function deliverGithubEvent(
 
   // Phase 1 — shared SCM planner owns echo pruning and one-delivery-per-chat.
   const planned = await planScmChatDeliveries({
-    targets: audience.map((target) => ({
-      senderAgentId: target.humanAgentId,
-      humanAgentId: target.humanAgentId,
-      wakeAgentId: target.delegateAgentId,
-      kind: target.kind,
-      chatId: target.chatId,
-      involveReason: target.involveReason,
-      involveLogin: target.involveLogin,
-    })),
+    targets: audience.map(
+      (target): ScmAudienceTarget =>
+        target.kind === "existing"
+          ? {
+              entry: {
+                kind: "existing_line",
+                line: {
+                  kind: "attention_line",
+                  humanAgentId: target.humanAgentId,
+                  wakeAgentId: target.delegateAgentId,
+                  chatId: target.chatId as string,
+                  provenance: target.provenance ?? "identity_target",
+                },
+              },
+              directedContext:
+                target.involveReason && target.involveLogin
+                  ? { reason: target.involveReason, externalUsername: target.involveLogin }
+                  : null,
+            }
+          : {
+              entry: {
+                kind: "personnel_target",
+                reason: target.involveReason as InvolveReason,
+                humanAgentId: target.humanAgentId,
+                wakeAgentId: target.delegateAgentId,
+                externalUsername: target.involveLogin as string,
+              },
+            },
+    ),
     actorHumanId,
     resolveChat: (target) => resolveChatFor(app, event, target, options),
     onTargetError: (target, err) => {
@@ -86,8 +108,8 @@ export async function deliverGithubEvent(
           err,
           metric: "github_delivery_failed_total",
           errorClass: err instanceof Error ? err.name : "Unknown",
-          humanAgent: target.humanAgentId,
-          delegateAgent: target.wakeAgentId,
+          humanAgent: scmTargetHumanAgentId(target),
+          delegateAgent: scmTargetWakeAgentId(target),
           entityType: event.entity.type,
           entityKey: event.entity.key,
           eventType: event.eventType,
@@ -99,8 +121,8 @@ export async function deliverGithubEvent(
     onTargetDropped: (target) => {
       log.info(
         {
-          humanAgent: target.humanAgentId,
-          delegateAgent: target.wakeAgentId,
+          humanAgent: scmTargetHumanAgentId(target),
+          delegateAgent: scmTargetWakeAgentId(target),
           entityType: event.entity.type,
           entityKey: event.entity.key,
           eventType: event.eventType,
@@ -242,15 +264,14 @@ async function resolveChatFor(
   target: ScmAudienceTarget,
   options: DeliveryOptions,
 ): Promise<ResolvedChat | null> {
-  if (target.kind === "existing") {
-    if (!target.chatId) {
-      throw new Error("audience target kind=existing must carry chatId");
-    }
-    return { chatId: target.chatId, created: false };
+  if (target.entry.kind === "existing_line") {
+    return { chatId: target.entry.line.chatId, created: false };
   }
-  if (!target.humanAgentId || !target.wakeAgentId) {
-    throw new Error("new GitHub audience target must carry human and delegate agents");
+  if (target.entry.kind === "legacy_route") {
+    return { chatId: target.entry.route.chatId, created: false };
   }
+  const humanAgentId = target.entry.humanAgentId;
+  const wakeAgentId = target.entry.wakeAgentId;
   const entity: GithubEntity = {
     type: event.entity.type,
     key: event.entity.key,
@@ -265,13 +286,13 @@ async function resolveChatFor(
   // `mentioned` / `assigned` involves are deliberately NOT reused: a mention is
   // a directed call that must mint a fresh chat (S5 — mentions pierce into a
   // new chat, never back into an existing/unfollowed one).
-  if (target.involveReason === "review_requested") {
+  if (target.entry.reason === "review_requested") {
     const reuseChatId = await findReuseChatForInvolved(
       app.db,
       event.source.organizationId,
       entity,
-      target.humanAgentId,
-      target.wakeAgentId,
+      humanAgentId,
+      wakeAgentId,
     );
     if (reuseChatId) return { chatId: reuseChatId, created: false };
   }
@@ -282,8 +303,8 @@ async function resolveChatFor(
   }));
   const resolved = await resolveTargetChat(app.db, {
     organizationId: event.source.organizationId,
-    humanAgentId: target.humanAgentId,
-    delegateAgentId: target.wakeAgentId,
+    humanAgentId,
+    delegateAgentId: wakeAgentId,
     entity,
     relatedEntities,
     eventType: event.eventType,

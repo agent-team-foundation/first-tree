@@ -156,18 +156,16 @@ describe("github binding invariants", () => {
       expect(pair?.delegateAgentId).toBe(delegate);
     });
 
-    it("falls back to the id-sorted-first active human when no delegateMention links the caller", async () => {
+    it("rejects an ambiguous owner when no delegateMention links the caller", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const delegate = await seedAgent(app, { orgId: admin.organizationId, memberId: admin.memberId, type: "agent" });
       const humanA = await seedAgent(app, { orgId: admin.organizationId, memberId: admin.memberId, type: "human" });
       const humanB = await seedAgent(app, { orgId: admin.organizationId, memberId: admin.memberId, type: "human" });
-      const smallerHuman = humanA < humanB ? humanA : humanB;
-
       const chatId = await seedChat(app, admin.organizationId, [humanA, humanB, delegate]);
       const pair = await resolveBindingPair(app.db, chatId, delegate);
 
-      expect(pair?.humanAgentId).toBe(smallerHuman);
+      expect(pair).toBeNull();
     });
 
     it("returns null when the caller is not a chat member, or is itself human", async () => {

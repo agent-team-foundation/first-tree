@@ -625,6 +625,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(gitlab).toContain("first-tree gitlab follow <url>");
     expect(gitlab).toContain("pending and inbound-only");
     expect(gitlab).toContain("without calling GitLab");
+    expect(gitlab).toContain("gitlab follow <url> --rebind");
     expect(gitlab).toContain("does not invalidate an entity that was already created");
     expect(gitlab).toContain("only when the human explicitly asks for personal-account notifications");
     expect(gitlab).toContain("only when the human explicitly asks this chat");

@@ -18,6 +18,13 @@ export function handleGitlabSdkError(error: unknown): never {
         1,
       );
     }
+    if (error.statusCode === 409) {
+      fail(
+        "GITLAB_FOLLOW_CONFLICT",
+        `${error.message} Default to the existing chat, or retry with --rebind to move this attention line.`,
+        1,
+      );
+    }
   }
   handleSdkError(error);
 }
