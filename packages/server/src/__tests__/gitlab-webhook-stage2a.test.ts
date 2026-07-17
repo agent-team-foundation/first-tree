@@ -19,6 +19,7 @@ import {
   markGitlabInboundSeen,
   regenerateGitlabConnectionBearer,
   replaceGitlabConnection,
+  withCurrentGitlabConnectionFence,
   withGitlabIngressFence,
 } from "../services/gitlab-connections.js";
 import { declareGitlabEntityFollow, observeGitlabEntityAndResolveFollowers } from "../services/gitlab-entity-follow.js";
@@ -597,6 +598,47 @@ describe("GitLab Stage 2A backend", () => {
     await replacing;
     await expect(declaring).rejects.toThrow("not found");
     expect((await postWebhook(app, first.bearer, issuePayload())).statusCode).toBe(404);
+  });
+
+  it("serializes replacement behind the organization-first fence used by follow declarations", async () => {
+    const app = getApp();
+    const first = await connection(app, { isolatedOrg: true });
+    let enterFence!: () => void;
+    let releaseFence!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enterFence = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseFence = resolve;
+    });
+    const followFence = withCurrentGitlabConnectionFence(
+      app.db,
+      { organizationId: first.admin.organizationId, expectedConnectionId: first.connectionId },
+      async () => {
+        enterFence();
+        await release;
+      },
+    );
+    await entered;
+
+    let replaceSettled = false;
+    const replacing = replaceGitlabConnection(app.db, {
+      expectedConnectionId: first.connectionId,
+      organizationId: first.admin.organizationId,
+      memberId: first.admin.memberId,
+      displayName: "Replacement after follow fence",
+      instanceOrigin: "https://gitlab.replacement",
+    }).then((value) => {
+      replaceSettled = true;
+      return value;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(replaceSettled).toBe(false);
+
+    releaseFence();
+    await followFence;
+    const replacement = await replacing;
+    expect(replacement.connectionId).not.toBe(first.connectionId);
   });
 
   it("does not persist an unfollowed webhook and resolves later pending follows on the next event", async () => {

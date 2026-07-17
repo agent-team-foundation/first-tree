@@ -93,6 +93,35 @@ async function insertGitlabConnection(db: Database, input: GitlabConnectionInput
   return connectionId;
 }
 
+/**
+ * Serialize current-connection work with create/replace/delete using the
+ * canonical organization -> connection lock order.
+ */
+export async function withCurrentGitlabConnectionFence<T>(
+  db: Database,
+  input: { organizationId: string; expectedConnectionId?: string },
+  callback: (tx: Database, connection: typeof gitlabConnections.$inferSelect) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    await lockOrganization(tx, input.organizationId);
+    const [connection] = await tx
+      .select()
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.organizationId, input.organizationId))
+      .for("update")
+      .limit(1);
+    if (!connection || (input.expectedConnectionId && connection.id !== input.expectedConnectionId)) {
+      throw new NotFoundError(
+        input.expectedConnectionId
+          ? "GitLab connection not found"
+          : "GitLab connection is not configured for this Team",
+      );
+    }
+    return callback(tx, connection);
+  });
+}
+
 export async function createGitlabConnection(
   db: Database,
   input: GitlabConnectionInput,

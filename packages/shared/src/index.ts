@@ -253,6 +253,24 @@ export {
   unfollowGithubEntityResponseSchema,
 } from "./schemas/chat-github-entities.js";
 export {
+  type ChatGitlabEntity,
+  type ChatGitlabEntityBoundVia,
+  type ChatGitlabEntityListResponse,
+  type ChatGitlabEntityStatus,
+  type ChatGitlabEntityType,
+  chatGitlabEntityBoundViaSchema,
+  chatGitlabEntityListResponseSchema,
+  chatGitlabEntitySchema,
+  chatGitlabEntityStatusSchema,
+  chatGitlabEntityTypeSchema,
+  type FollowChatGitlabEntityRequest,
+  type FollowChatGitlabEntityResponse,
+  followChatGitlabEntityRequestSchema,
+  followChatGitlabEntityResponseSchema,
+  type UnfollowChatGitlabEntityResponse,
+  unfollowChatGitlabEntityResponseSchema,
+} from "./schemas/chat-gitlab-entities.js";
+export {
   type AgentChatMetadata,
   agentChatMetadataSchema,
   CHAT_SOURCES,

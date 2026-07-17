@@ -224,8 +224,9 @@ For upstream-dependency follows, `409` / `--rebind`, and full flags, see
 
 ## GitLab Entity Attention
 
-- After creating an issue or merge request for this task, subscribe by default; skip an unrelated entity or one the user explicitly does not want notifications for. A subscription failure means only that GitLab notifications are missing; it does not invalidate the entity that was created.
-- Stop GitLab notifications only when a human explicitly asks, never automatically when an issue closes, an MR merges, or the task finishes. Inspect `glab issue --help`, `glab mr --help`, and their subcommand help on demand for exact native subscribe/unsubscribe forms, repository disambiguation, and failure handling.
+- **Default: follow what you create.** After creating a GitLab Issue or Merge Request for this task, wire its inbound webhook activity into the current chat with `<%- bin %> gitlab follow <url>`. Skip only when the entity is clearly unrelated to this chat or the human explicitly does not want it tracked. A follow failure does not invalidate an entity that was already created; report only the First Tree chat attention gap.
+- GitLab follow is pending and inbound-only: First Tree records the declaration without calling GitLab, then activates it when the next matching valid webhook arrives. It is independent of the current account's native GitLab notifications. Use native `glab` subscribe/unsubscribe only when the human explicitly asks for personal-account notifications.
+- Run `<%- bin %> gitlab unfollow <url>` only when the human explicitly asks this chat to stop its manual follow, never automatically when an Issue closes, an MR merges, or the task finishes. Unfollow removes explicit declarations only; reviewer, assignee, or mention identity routing remains eligible. Use the current URL shown by `<%- bin %> gitlab following` after a project rename. Full flags and pending/active output live under `<%- bin %> gitlab follow --help`, `<%- bin %> gitlab following --help`, and `<%- bin %> gitlab unfollow --help`.
 
 ## Asking Humans
 
@@ -289,7 +290,7 @@ and `Commit repo@sha` unchanged; the owner still maintains the description.
 
 ## CLI Overview
 
-Use `<%- bin %> chat …` for messaging, `<%- bin %> agent …` for self-introspection, `<%- bin %> daemon …` for read-only daemon status/doctor, `<%- bin %> github …` for follow/unfollow/following, `<%- bin %> tree verify` for Context Tree validation, and `<%- bin %> tree tree` for hierarchy browsing.
+Use `<%- bin %> chat …` for messaging, `<%- bin %> agent …` for self-introspection, `<%- bin %> daemon …` for read-only daemon status/doctor, `<%- bin %> github …` and `<%- bin %> gitlab …` for provider-specific entity attention, `<%- bin %> tree verify` for Context Tree validation, and `<%- bin %> tree tree` for hierarchy browsing.
 Operator-only commands (`login`, `daemon install`, `agent create / bind`) run from the web console or a human terminal — **never from inside a running agent**. Context Tree binding is operator-owned too, with one sanctioned in-agent exception: on a **build / set up the Context Tree** task, load `first-tree-seed` and run its `tree init` path directly. The command validates admin/auth and fails closed; do not pre-confirm admin or ask who will bind. Surface the exact gap only if the command actually fails. Full surface: `docs/cli-reference.md`.
 
 # Context Tree (First Tree Managed)

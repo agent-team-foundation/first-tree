@@ -64,6 +64,8 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── doc ...                  Org document library (publish, comments, reply, resolve, status)
+├── github ...               GitHub entity attention and context review
+├── gitlab ...               GitLab Issue/MR entity attention
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
@@ -602,6 +604,53 @@ A `409` means the same (human, delegate) line already lives in another chat
 — `--rebind` MOVES it here (a line is never duplicated). `unfollow` is
 idempotent: `removed: 0` is success, not an error. Requires the org's
 GitHub App installation to cover the repo (`422` otherwise).
+
+---
+
+## gitlab
+
+GitLab Issue and Merge Request attention for the current chat. The commands
+operate entirely on First Tree's local webhook projection: they never call the
+GitLab API, validate an entity live, or use the current `glab` account.
+
+```
+first-tree gitlab
+├── follow <issue-or-mr-url> [--chat <chatId>] [--agent <name>]
+├── following [--chat <chatId>] [--agent <name>]
+└── unfollow <issue-or-mr-url> [--chat <chatId>] [--agent <name>]
+```
+
+```bash
+# Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
+first-tree gitlab follow https://gitlab.example/acme/api/-/issues/42
+first-tree gitlab follow https://gitlab.example/acme/api/-/merge_requests/42
+first-tree gitlab following
+first-tree gitlab unfollow https://gitlab.example/acme/api/-/issues/42
+```
+
+`follow` accepts only a full Issue or Merge Request URL from the Team's one
+configured GitLab instance. It records a pending declaration without provider
+egress; the next matching valid webhook supplies numeric project identity and
+activates the declaration. Repeating a follow in the same chat is idempotent,
+and the same entity may be followed independently by multiple chats. A pending
+declaration reports `state: null` because First Tree has not verified provider
+state. There is no GitHub-style `--rebind` or `context-review` command.
+
+`following` returns only explicit `agent_declared` / `human_declared` rows as a
+stable public projection, including `pending` or `active` status. Internal
+connection, organization, mapping, actor, and normalized-path identifiers are
+not returned.
+
+`unfollow` is URL-based and idempotent: `removed: 0` is terminal success. It
+removes the current chat's explicit declarations only. Independent reviewer,
+assignee, and mention-based identity routing remains eligible for later
+webhooks. After a project rename, use the current URL returned by `following`;
+the inbound-only service cannot resolve an arbitrary old path back to a numeric
+project identity.
+
+These commands control First Tree chat attention. Native GitLab
+subscribe/unsubscribe operations control only the authenticated GitLab
+account's personal notifications and are not a replacement for chat follow.
 
 ---
 
