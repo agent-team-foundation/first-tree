@@ -70,14 +70,15 @@ describe("cursor provider — setup card surfaces", () => {
   });
 });
 
-describe("cursor provider — DEFAULT + custom model id fallback", () => {
-  it("renders a custom model id input and commits the exact id on blur", async () => {
+describe("cursor provider — free-form model input", () => {
+  it("renders a text input with the auto hint and commits the exact id on blur", async () => {
     const saved: string[] = [];
     const el = await render(<ModelSection value="" onChange={(v) => saved.push(v)} provider="cursor" />);
 
-    const input = el.querySelector<HTMLInputElement>('input[aria-label="Custom model id"]');
+    const input = el.querySelector<HTMLInputElement>('input[aria-label="Model"]');
     expect(input).not.toBeNull();
     if (!input) throw new Error("unreachable");
+    expect(input.placeholder).toContain("auto");
 
     await act(async () => {
       // React tracks the value setter — go through the native prototype setter
@@ -119,6 +120,6 @@ describe("cursor provider — DEFAULT + custom model id fallback", () => {
 
   it("keeps the dropdown for claude/codex providers (no free-form regression)", async () => {
     const el = await render(<ModelSection value="opus" onChange={() => {}} provider="claude-code" />);
-    expect(el.querySelector('input[aria-label="Custom model id"]')).toBeNull();
+    expect(el.querySelector('input[aria-label="Model"]')).toBeNull();
   });
 });
