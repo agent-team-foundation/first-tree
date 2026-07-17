@@ -4,6 +4,7 @@ import {
   createKeyedTaskChatSchema,
   createTaskChatSchema,
   createWebTaskChatSchema,
+  keyedTaskChatCreateResponseSchema,
   updateChatSchema,
 } from "../schemas/chat.js";
 
@@ -103,6 +104,19 @@ describe("chat write schemas", () => {
         initialMessage: { ...request.initialMessage, source: "cli" },
       }).success,
     ).toBe(false);
+  });
+
+  it("allows a reused keyed task to report the Chat's current null topic", () => {
+    expect(
+      keyedTaskChatCreateResponseSchema.parse({
+        chatId: "chat-1",
+        messageId: "message-1",
+        topic: null,
+        effectiveSenderId: "human-1",
+        reviewerAgentUuid: "reviewer-1",
+        outcome: "reused",
+      }).topic,
+    ).toBeNull();
   });
 
   it("requires update chat requests to change at least one field", () => {

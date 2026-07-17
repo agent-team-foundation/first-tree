@@ -48,6 +48,19 @@ describe("Context Review task metadata", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rechecks the serialized limit after packet defaults are materialized", () => {
+    const sparsePacket = { ...packet(), rationale: "x" };
+    delete (sparsePacket as Partial<typeof sparsePacket>).relevantContextRefs;
+    delete (sparsePacket as Partial<typeof sparsePacket>).unresolvedQuestions;
+    delete (sparsePacket as Partial<typeof sparsePacket>).evidence;
+    const metadata = { taskType: "context_tree_pr_review", reviewPacketV1: sparsePacket };
+    const initialBytes = new TextEncoder().encode(JSON.stringify(metadata)).byteLength;
+    sparsePacket.rationale = "x".repeat(CONTEXT_REVIEW_PACKET_MAX_BYTES - initialBytes + 1);
+    expect(new TextEncoder().encode(JSON.stringify(metadata)).byteLength).toBe(CONTEXT_REVIEW_PACKET_MAX_BYTES);
+
+    expect(contextReviewTaskMetadataSchema.safeParse(metadata).success).toBe(false);
+  });
+
   it("rejects structurally oversized metadata without throwing", () => {
     const metadata = {
       taskType: "context_tree_pr_review",

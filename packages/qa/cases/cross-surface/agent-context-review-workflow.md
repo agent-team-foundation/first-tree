@@ -27,8 +27,10 @@ GitHub, concurrency, and recovery behavior.
 - Bind a disposable Context Tree and create two active non-human Reviewer
   Agents, A and B. Assign A initially. Do not install the GitHub App for the
   primary path.
-- Log the CLI in as a human member with a linked GitHub identity. Do not create
-  or select a local Working Agent or Client for the Write/dispatch path.
+- Log the CLI in as a human member with a linked GitHub identity, retaining the
+  standard member credentials and `client.yaml`. Keep the Client Runtime and
+  daemon stopped, create no local Working Agent, and establish no active
+  Computer connection for the Write/dispatch path.
 - Give the Host GitHub identity only ordinary branch/PR write and merge access;
   configure a disposable check for waiting/failure cases.
 - Prepare a verified same-repository managed PR with the exact marker, immutable
@@ -42,11 +44,12 @@ GitHub, concurrency, and recovery behavior.
 
 ## Operate and Observe
 
-- Read `first-tree --json org context-tree review-config --as-member` with no
-  local Client, then read agent-scoped config as the assigned Reviewer and
-  another Agent. Confirm member selection fails closed when Team choice is
-  ambiguous, only the assigned Agent reports `Assigned`, repository/branch are
-  live, and no App is required.
+- Read `first-tree --json org context-tree review-config --as-member` from that
+  logged-in member state while the Client Runtime and daemon remain stopped,
+  with no local Agent or active Computer connection. Then read agent-scoped
+  config as the assigned Reviewer and another Agent. Confirm member selection
+  fails closed when Team choice is ambiguous, only the assigned Agent reports
+  `Assigned`, repository/branch are live, and no App is required.
 - Dispatch through the real CLI and confirm the signed-in human authored the
   immutable opening, the configured private Reviewer became a speaker, and one
   notify=true Inbox delivery exists. Retry concurrently and with a new head;
@@ -84,7 +87,12 @@ GitHub, concurrency, and recovery behavior.
   assignment to B and wake B in the same durable PR Chat. Confirm B sees the
   takeover/history but does not inherit A's marker, status, or `READY`; B must
   complete a fresh live-head review and publish a result identified by the same
-  Chat, B's Agent UUID, and the inspected head.
+  Chat, B's Agent UUID, and the inspected head. Confirm GitHub and Chat use the
+  exact marker `<!-- first-tree-context-review-result:v1 chat=<chat-uuid> reviewer=<reviewer-uuid> head=<head-sha> -->`
+  with lowercase canonical values, fixed field order, and the outcome outside
+  the identity marker. Require the terminal Chat row's `senderId` to equal B's
+  UUID. Have another speaker copy the marker and confirm forged or ambiguously
+  ordered candidates cannot establish ownership.
 - On that unchanged head, switch B back to A and wake A in the same Chat.
   Confirm A may reuse only A's own fresh same-head terminal result, never B's.
   Repeat delivery and interrupt assignee reconciliation to confirm retries
@@ -95,11 +103,29 @@ GitHub, concurrency, and recovery behavior.
   result. Confirm each prevents reuse and merge; A must fully review again or
   produce `NEEDS_HUMAN` for protected/ambiguous input. Confirm a pure duplicate
   wake or status reflection does not invalidate an otherwise fresh result.
+  Also edit a message created before `READY` after the terminal result and edit
+  the terminal result itself. Confirm complete-history `metadata.editedAt`
+  ordering makes both results stale or freshness-unproven even when the current
+  edited text appears benign. Separately edit the PR body and each GitHub
+  discussion type after `READY`; confirm `updatedAt`/`lastEditedAt` crossing the
+  boundary has the same fail-closed effect.
+- Add a human decision after the complete review but before GitHub projection,
+  and again after projection but before the terminal Chat result. Confirm the
+  Reviewer runs two stable complete-history passes, incorporates the first
+  decision before projection, and appends no terminal result for the second
+  until it has re-reviewed and updated the projection. Confirm the Reviewer's
+  own expected canonical comment/status write is accepted as the sole
+  post-projection delta, while any other GitHub or Chat input change fails
+  closed.
 - Put A's matching terminal result before the first 100-message history page,
   with both benign and invalidating messages after it. Restart the runtime and
-  confirm recovery follows every history cursor, attributes the result to A,
-  and reaches the same freshness decision without trusting the latest commit
-  status alone.
+  force multiple messages onto the same millisecond at one page boundary, and
+  confirm the real `first-tree chat history --cursor` path accepts each opaque
+  cursor without shell quoting and skips or duplicates no boundary message.
+  Append and edit messages while the first pass is paging; confirm the ordered
+  `(id, createdAt, editedAt)` digest changes, the scan restarts, two consecutive
+  passes eventually agree, and only then does recovery attribute the result to
+  A without trusting the latest commit status alone.
 - Move A to another Client or runtime provider through the existing
   runtime-switch flow without changing A's UUID. Confirm the PR Chat and result
   identity remain stable, the old route loses authority, and the replacement
@@ -126,8 +152,10 @@ force/bypass, or GitHub approval is used; App installation is required; or a
 managed PR receives a second App verdict; B reuses A's same-head result; A
 reuses B's result after ABA; Reviewer replacement creates another PR Chat; or a
 same-Agent runtime switch changes Reviewer identity; a stale/unproven result
-authorizes reuse or merge; recovery stops at the first history page; or a
-commit status is treated as sufficient proof of result ownership.
+authorizes reuse or merge; a terminal marker whose Chat `senderId` is not the
+current Reviewer establishes ownership; an unstable history scan is accepted;
+recovery stops at the first history page; or a commit status is treated as
+sufficient proof of result ownership.
 
 `BLOCKED`: the isolated cell cannot provide the full product surfaces,
 disposable GitHub repo, eligible runtime, task delivery, or controlled
@@ -143,6 +171,7 @@ timeline; predecessor/successor and merged SHAs; repair-scope diff; check and
 merge records; disabled/reassigned and race traces; the stable Chat id plus
 redacted A/B Agent UUIDs and result markers; assignee-reconciliation and
 runtime-switch traces; terminal-result boundary and complete-history cursors;
-freshness inputs and decisions; restart recovery; and proof that the managed PR
-received no App review. Never retain credentials, private sessions, hidden
-prompts, or unrelated content.
+freshness inputs, stable-scan digests, Chat `createdAt`/`metadata.editedAt`,
+GitHub edit timestamps, terminal sender ownership, and decisions; restart
+recovery; and proof that the managed PR received no App review. Never retain
+credentials, private sessions, hidden prompts, or unrelated content.

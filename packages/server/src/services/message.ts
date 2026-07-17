@@ -16,7 +16,7 @@ import {
   scanMentionTokens,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -63,12 +63,16 @@ function stripUntrustedMetadataKeys(
   const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;
   const shouldStripAddressedAgentIds = ADDRESSED_AGENT_IDS_METADATA_KEY in meta;
   const shouldStripCliBodyOrigin = CLI_BODY_ORIGIN_METADATA_KEY in meta;
-  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds && !shouldStripCliBodyOrigin) return meta;
+  const shouldStripEditedAt = "editedAt" in meta;
+  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds && !shouldStripCliBodyOrigin && !shouldStripEditedAt) {
+    return meta;
+  }
   return Object.fromEntries(
     Object.entries(meta).filter(
       ([key]) =>
         key !== ADDRESSED_AGENT_IDS_METADATA_KEY &&
         key !== CLI_BODY_ORIGIN_METADATA_KEY &&
+        key !== "editedAt" &&
         (options.allowSystemSender || key !== "systemSender"),
     ),
   );
@@ -1093,8 +1097,15 @@ export async function editMessage(
   if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
   if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
   if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
-  if (msg.metadata.contextTreeReviewer === true && typeof msg.metadata.contextReviewRunId === "string") {
-    throw new ForbiddenError("Server-authored Context Reviewer task messages cannot be edited");
+  const protectedContextReviewKey = Object.keys(msg.metadata).find(
+    (key) =>
+      key === "contextTreeReviewer" ||
+      key.startsWith("contextReview") ||
+      key === "reviewPacketV1" ||
+      (key === "taskType" && msg.metadata[key] === CONTEXT_REVIEW_TASK_TYPE),
+  );
+  if (protectedContextReviewKey) {
+    throw new ForbiddenError("Managed Context Review task history cannot be edited");
   }
 
   // The open-question counter (`open_request_count`) is maintained only on the
@@ -1145,23 +1156,60 @@ export async function editMessage(
   return updated;
 }
 
+/**
+ * Opaque message-history cursor. The base64url envelope is safe to copy into
+ * `chat history --cursor` without shell quoting; the id is the deterministic
+ * tie-breaker for messages that share one cursor millisecond.
+ */
+function parseMessageHistoryCursor(cursor: string): { date: Date; id: string } {
+  let decoded = "";
+  if (/^[A-Za-z0-9_-]+$/.test(cursor)) {
+    const bytes = Buffer.from(cursor, "base64url");
+    if (bytes.toString("base64url") === cursor) decoded = bytes.toString("utf8");
+  }
+  const [version, iso, id, ...extra] = decoded.split("|");
+  const date = new Date(iso ?? "");
+  if (version !== "v1" || Number.isNaN(date.getTime()) || !id || extra.length > 0) {
+    throw new BadRequestError("cursor must be the nextCursor value from a previous message-history page");
+  }
+  return { date, id };
+}
+
+export function messageHistoryWhere(chatId: string, cursor?: string) {
+  if (!cursor) return eq(messages.chatId, chatId);
+  const { date, id } = parseMessageHistoryCursor(cursor);
+  return and(
+    eq(messages.chatId, chatId),
+    sql`(date_trunc('milliseconds', ${messages.createdAt}), ${messages.id}) < (${date.toISOString()}::timestamptz, ${id}::text)`,
+  );
+}
+
+export function messageHistoryOrderBy() {
+  // Postgres preserves microseconds while JS Date/ISO retains milliseconds.
+  // Compare and order on the same truncated expression so a boundary cursor
+  // cannot skip rows whose raw timestamps differ inside one millisecond.
+  return [sql`date_trunc('milliseconds', ${messages.createdAt}) DESC`, desc(messages.id)] as const;
+}
+
+export function encodeMessageHistoryCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`v1|${createdAt.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+
 export async function listMessages(db: Database, chatId: string, limit: number, cursor?: string) {
-  const where = cursor
-    ? and(eq(messages.chatId, chatId), lt(messages.createdAt, new Date(cursor)))
-    : eq(messages.chatId, chatId);
+  const where = messageHistoryWhere(chatId, cursor);
 
   const query = db
     .select()
     .from(messages)
     .where(where)
-    .orderBy(desc(messages.createdAt))
+    .orderBy(...messageHistoryOrderBy())
     .limit(limit + 1);
 
   const rows = await query;
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
   const last = items[items.length - 1];
-  const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
+  const nextCursor = hasMore && last ? encodeMessageHistoryCursor(last.createdAt, last.id) : null;
 
   return { items, nextCursor };
 }

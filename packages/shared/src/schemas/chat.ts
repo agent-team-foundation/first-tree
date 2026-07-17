@@ -115,7 +115,7 @@ export type CreateKeyedTaskChat = z.infer<typeof createKeyedTaskChatSchema>;
 export const keyedTaskChatCreateResponseSchema = z.object({
   chatId: z.string().min(1),
   messageId: z.string().min(1),
-  topic: z.string().min(1),
+  topic: z.string().min(1).nullable(),
   effectiveSenderId: z.string().min(1),
   reviewerAgentUuid: z.string().min(1),
   outcome: z.enum(["created", "reused"]),

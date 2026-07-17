@@ -106,7 +106,7 @@ describe("org context-tree CLI", () => {
     });
   });
 
-  it("reads Reviewer configuration as the signed-in member without a local Agent or Client", async () => {
+  it("reads Reviewer configuration as the signed-in member without a running Client Runtime or local Agent", async () => {
     memberMocks.createMemberSdk.mockReturnValue({
       getMemberProfile: vi.fn(async () => ({
         memberships: [{ organizationId: "org-a" }, { organizationId: "org-b" }],

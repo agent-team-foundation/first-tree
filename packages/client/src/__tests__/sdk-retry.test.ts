@@ -267,6 +267,12 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://first-tree.example/api/v1/orgs/org-1/chats");
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(fetchMock.mock.calls[1]?.[1]?.body);
+    for (const [, init] of fetchMock.mock.calls) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer tok-test");
+      expect(headers.has(AGENT_SELECTOR_HEADER)).toBe(false);
+      expect(headers.has(AGENT_RUNTIME_SESSION_HEADER)).toBe(false);
+    }
     expect(result).toEqual({
       chatId: "chat-review",
       messageId: "msg-review",

@@ -133,42 +133,45 @@ const contextReviewTaskMetadataShape = z
   })
   .strict();
 
+function inspectTaskMetadataRefinement(value: unknown, ctx: z.RefinementCtx): void {
+  let inspection: TaskMetadataInspection;
+  try {
+    inspection = inspectTaskMetadata(value);
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Review task metadata could not be safely inspected",
+    });
+    return;
+  }
+  if (inspection.exceedsMaxDepth) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH} levels`,
+    });
+    return;
+  }
+  if (inspection.exceedsMaxNodes) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Context Review task metadata is too structurally complex",
+    });
+    return;
+  }
+  if (inspection.serializedBytes > CONTEXT_REVIEW_PACKET_MAX_BYTES) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_PACKET_MAX_BYTES} serialized UTF-8 bytes`,
+    });
+  }
+}
+
 /** Generic task metadata consumed by the Reviewer runtime. */
 export const contextReviewTaskMetadataSchema = z
   .unknown()
-  .superRefine((value, ctx) => {
-    let inspection: TaskMetadataInspection;
-    try {
-      inspection = inspectTaskMetadata(value);
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Context Review task metadata could not be safely inspected",
-      });
-      return;
-    }
-    if (inspection.exceedsMaxDepth) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH} levels`,
-      });
-      return;
-    }
-    if (inspection.exceedsMaxNodes) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Context Review task metadata is too structurally complex",
-      });
-      return;
-    }
-    if (inspection.serializedBytes > CONTEXT_REVIEW_PACKET_MAX_BYTES) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_PACKET_MAX_BYTES} serialized UTF-8 bytes`,
-      });
-    }
-  })
-  .pipe(contextReviewTaskMetadataShape);
+  .superRefine(inspectTaskMetadataRefinement)
+  .pipe(contextReviewTaskMetadataShape)
+  .superRefine(inspectTaskMetadataRefinement);
 export type ContextReviewTaskMetadata = z.infer<typeof contextReviewTaskMetadataSchema>;
 
 function isSortedUnique(values: readonly string[]): boolean {

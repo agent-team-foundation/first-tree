@@ -451,6 +451,13 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
             </div>
           ) : null}
 
+          {serverEnabled ? (
+            <div className="text-label" style={{ color: "var(--fg-3)" }}>
+              Changing the reviewer does not move open PRs immediately. Re-run the Context Tree write task for an
+              existing PR to hand it over in the same Chat.
+            </div>
+          ) : null}
+
           {featuresMutation.error instanceof Error ? (
             <div className="text-body" style={{ color: "var(--state-error)" }}>
               {featuresMutation.error.message}

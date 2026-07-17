@@ -171,7 +171,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(result.initialMessageCreated ? 201 : 200).send({
         chatId: result.chat.id,
         messageId: result.message.id,
-        topic: authority.topic,
+        topic: result.chat.topic,
         effectiveSenderId: result.effectiveSenderId,
         reviewerAgentUuid: authority.reviewerAgentUuid,
         outcome: result.initialMessageCreated ? "created" : "reused",

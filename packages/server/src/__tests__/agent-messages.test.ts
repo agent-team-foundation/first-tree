@@ -72,6 +72,26 @@ describe("Agent Messages API", () => {
     expect(editRes.json().createdAt).toEqual(expect.any(String));
   });
 
+  it("strips caller-supplied edit timestamps and lets only editMessage create them", async () => {
+    const app = getApp();
+    const { a1, a2, chatId } = await setupChat(app);
+
+    const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: "Original",
+      metadata: { mentions: [a2.agent.uuid], editedAt: "2099-01-01T00:00:00.000Z" },
+    });
+    expect(sendRes.statusCode).toBe(201);
+    expect(sendRes.json().metadata.editedAt).toBeUndefined();
+
+    const editRes = await a1.request("PATCH", `/api/v1/agent/chats/${chatId}/messages/${sendRes.json().id}`, {
+      content: "Edited",
+    });
+    expect(editRes.statusCode).toBe(200);
+    expect(editRes.json().metadata.editedAt).toEqual(expect.any(String));
+    expect(editRes.json().metadata.editedAt).not.toBe("2099-01-01T00:00:00.000Z");
+  });
+
   it("rejects agent edits that would persist escaped multiline markdown", async () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);

@@ -333,7 +333,7 @@ first-tree chat
 │     --topic <text> / --description <text>        #   initial chat self-description
 │     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
-│     --as-member [--org <orgId>]                  #   dedicated signed-in-member Agent Review keyed task; no local Agent/Client required
+│     --as-member [--org <orgId>]                  #   signed-in member; no running Client Runtime, local Agent, or active Computer connection required
 │     --metadata-file <path>                       #   strict context_tree_pr_review opening metadata; with --as-member + markdown
 ├── send <name> [message]                            # wake a participant — agent or human (a send to a human is informational only; a question the next step depends on goes through `chat ask`)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
@@ -680,7 +680,7 @@ first-tree org
 ├── bind-tree <url> [--org <orgId>] [--branch <branch>] # legacy caller-org binding write
 └── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
     ├── review-config [--agent <name>]                # read live binding + Reviewer assignment for a local Agent
-    │     --as-member [--org <orgId>]                 # read as the logged-in human; no local Agent/Client required
+    │     --as-member [--org <orgId>]                 # logged-in member; no running Client Runtime, local Agent, or active Computer connection required
     └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
 
@@ -778,9 +778,10 @@ With `--as-member`, it uses the existing member-readable `context_tree` and
 `context_tree_features` settings and `/me` Team selection. An explicit `--org`
 must be one of the caller's active memberships; otherwise the current default,
 then sole-membership fallback, is used, and ambiguous multi-Team state fails
-closed. This is the Write preflight path for a CLI-logged member with no local
-Agent, Client, or daemon. `--as-member` conflicts with `--agent`; `--org`
-requires `--as-member`.
+closed. This is the Write preflight path after standard CLI login: member
+credentials and `client.yaml` remain present, but no running Client Runtime or
+daemon, local First Tree Agent, or active Computer connection is required.
+`--as-member` conflicts with `--agent`; `--org` requires `--as-member`.
 
 The command contains no review mode, generation, governance, or merge-method
 setting: Agent Review uses the currently assigned Reviewer and current-state

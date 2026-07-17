@@ -111,9 +111,11 @@ Read the live binding and Reviewer assignment as the logged-in member:
 first-tree --json org context-tree review-config --as-member [--org <org-id>]
 ```
 
-This path requires a First Tree CLI login but no local First Tree Agent,
-Client, daemon, GitHub App, or online Reviewer Host. Before publish and again
-before dispatch, require all of the following:
+This path requires a standard First Tree CLI login with the member credentials
+and `client.yaml` retained. It does not require a running First Tree Client
+Runtime or daemon, a local First Tree Agent, an active Computer connection, a
+GitHub App, or an online Reviewer Host. Before publish and again before
+dispatch, require all of the following:
 
 - the bound repository and branch match the worktree upstream and PR base;
 - Agent Review is enabled with one assigned Reviewer UUID;
@@ -240,7 +242,7 @@ Reassigning A to B keeps the same PR task and Chat. On the next keyed dispatch,
 the Server atomically adds B as a speaker with silent history backfill, appends
 one server-authored takeover addressed only to B, removes A as Reviewer
 speaker, and recomputes watcher/audience state. The original human opening,
-packet, participants, and history remain unchanged. Repeating the same
+packet, human participants, and history remain unchanged. Repeating the same
 reconciliation is a no-op. B must fully review the live current head and cannot
 inherit A's result. With no configuration generation, disable then re-enable
 the same A uses current-state semantics; A → B → A still uses the same Chat,

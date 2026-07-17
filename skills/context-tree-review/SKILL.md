@@ -166,13 +166,24 @@ survives or recurs, or one repair leaves no net reduction in blocking keys.
 
 Use `FIRST_TREE_CHAT_ID` + `FIRST_TREE_AGENT_ID` + the inspected SHA as the
 result and idempotency identity. Upsert exactly one canonical PR comment for
-that identity and write the `first-tree/context-review` commit status. The
-hidden marker key is derived only from Chat id, Reviewer Agent UUID, and SHA;
-the outcome is mutable payload under that key, so a later complete re-review by
-the same Reviewer updates its own result instead of creating another identity.
-A replacement Reviewer uses a different marker and must not overwrite the
-predecessor's canonical comment. The single commit status is only the latest
-visible projection and never proves which Reviewer produced the result.
+that identity and write the `first-tree/context-review` commit status. Normalize
+the Chat id and Reviewer Agent UUID to lowercase canonical UUID text and the
+inspected head to lowercase 40-character hexadecimal. The exact hidden identity
+marker, with placeholders replaced and fields kept in this order, is:
+
+```text
+<!-- first-tree-context-review-result:v1 chat=<chat-uuid> reviewer=<reviewer-uuid> head=<head-sha> -->
+```
+
+Use exactly one ASCII space between fields and before `-->`; do not add the
+outcome, escape values, hash the tuple, or vary field names/order. If any value
+does not satisfy its canonical UUID/SHA shape, fail closed and publish nothing.
+The outcome is mutable payload outside this marker, so a later complete
+re-review by the same Reviewer updates its own result instead of creating
+another identity. A replacement Reviewer uses a different marker and must not
+overwrite the predecessor's canonical comment. The single commit status is
+only the latest visible projection and never proves which Reviewer produced
+the result.
 
 - while reviewing or boundedly waiting for checks, set the SHA status to
   `pending`;
@@ -191,29 +202,69 @@ status is historical evidence only and cannot authorize reuse or merge. Never
 submit another Reviewer's result as current. Never submit GitHub `APPROVE`,
 call the App publication command, or use the GitHub review API on this path.
 
+Immediately before the GitHub projection, perform the stable complete-history
+scan defined under Result freshness and incorporate every observed Chat and
+GitHub input into the completed review. Do not project a result from an earlier
+history snapshot.
+
 After the GitHub projection is confirmed, append one addressed terminal-result
 message to the PR Chat with the same hidden identity marker, outcome, findings,
-and verification summary. If that send returns an unknown result, page Chat
-history and reconcile the matching result before retrying; never blindly append
-a duplicate. A result is reusable or merge-authorizing only when the canonical
-GitHub marker and the latest matching terminal-result message agree.
+and verification summary. Immediately before appending, repeat the stable
+complete-history scan and live GitHub read. Require every review input to match
+the pre-projection snapshot. The Reviewer's own just-written canonical comment
+and status are the sole expected delta: require both to equal the intended
+projection exactly. Any other change means append no terminal result;
+incorporate the new input, re-review, and update the projection first. If the
+send returns an unknown result, page Chat history and reconcile the matching
+result before retrying; never blindly append a duplicate.
+
+The terminal Chat row is the ownership anchor. Require its authoritative
+`senderId` to equal the marker's Reviewer UUID and the current
+`FIRST_TREE_AGENT_ID`; marker text cannot self-assert authorship. A matching
+marker sent by another speaker, or an ordering/payload ambiguity among matching
+candidates, makes ownership unproven. Earlier unambiguously ordered results
+from the same Reviewer are historical; the latest same-Reviewer result must
+agree with the canonical GitHub marker. Only that agreement can make a result
+reusable or merge-authorizing.
 
 ### Result freshness
 
 Before reusing any same-head terminal result, and again immediately before
 merge, page the complete PR Chat history with `first-tree chat history` using
-the maximum page size and every returned cursor. Locate the latest terminal
-result for this exact Chat, Reviewer Agent UUID, and SHA, then inspect every
-later message together with the current PR body, managed declaration, repair
-scope, discussion, and checks.
+the maximum page size and every returned opaque cursor. A scan is stable only
+when two consecutive complete-history passes have the same ordered
+`(id, createdAt, metadata.editedAt)` digest. Restart the scan when the digest
+changes; if two passes cannot converge, freshness is unproven. This rule also
+applies immediately before the GitHub projection and again before appending its
+terminal Chat result. After each stable scan, reread live GitHub state.
+
+Locate the latest terminal result for this exact Chat, Reviewer Agent UUID, and
+SHA under the sender/ambiguity rules above. Inspect every later message and
+inspect `metadata.editedAt` on every message in the complete history, including
+messages created before the terminal result. Any edit whose server timestamp is
+later than the terminal result's `createdAt` crosses the freshness boundary;
+because the prior content is no longer recoverable, treat the result as stale
+or unproven. Absence of the `editedAt` key means unedited. When the key is
+present, require a valid server timestamp and provable ordering; a malformed or
+ambiguously ordered edit timestamp makes freshness unproven.
+
+Request and inspect creation plus edit/update timestamps for the PR body and
+every GitHub discussion item (`createdAt` and `updatedAt`/`lastEditedAt`, as the
+surface exposes them). Any in-place GitHub edit after the terminal boundary is
+stale or freshness-unproven because the prior body is not recoverable. Missing,
+malformed, or cross-system ambiguously ordered timestamps also make freshness
+unproven. Then inspect the current managed declaration, repair scope,
+discussion, checks, and head.
 
 The result remains fresh only when nothing after that terminal result adds new
 substantive evidence, a blocking finding, a human decision, or a managed
 declaration/repair-scope change. Pure delivery retries, duplicate task wakes,
 runtime-switch notices, and status or merge-progress reflections do not make a
 result stale when they add no review input. A failed check is a blocker, not a
-benign status reflection. If ordering or significance is ambiguous, treat
-freshness as unproven.
+benign status reflection. Those benign categories apply only to append-only
+messages: an in-place edit after the terminal boundary is freshness-unproven
+even when its current text appears benign. If ordering or significance is
+ambiguous, treat freshness as unproven.
 
 A stale or unproven result cannot be reused and cannot authorize merge. Restart
 the complete live-head review, or publish `NEEDS_HUMAN` when the new input is a

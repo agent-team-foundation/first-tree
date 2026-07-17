@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -28,7 +29,7 @@ type MemberContext = {
 type DispatchResponse = {
   chatId: string;
   messageId: string;
-  topic: string;
+  topic: string | null;
   effectiveSenderId: string;
   reviewerAgentUuid: string;
   outcome: "created" | "reused";
@@ -267,6 +268,57 @@ describe("member Agent Review task dispatch", () => {
     expect((rows[0]?.metadata.reviewPacketV1 as { expectedHead?: string }).expectedHead).toBe("a".repeat(40));
   });
 
+  it("rejects sender edits to the managed opening and takeover history", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    const secondReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+
+    const first = await dispatch(app, admin, requester, dispatchPayload());
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json<DispatchResponse>();
+    const editOpening = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/agent/chats/${firstBody.chatId}/messages/${firstBody.messageId}`,
+      headers: {
+        authorization: `Bearer ${requester.accessToken}`,
+        [AGENT_SELECTOR_HEADER]: requester.humanAgentUuid,
+      },
+      payload: { content: "Rewritten opening" },
+    });
+    expect(editOpening.statusCode).toBe(403);
+    expect(editOpening.body).toContain("cannot be edited");
+
+    await configureReview(app, admin, secondReviewer.uuid);
+    const reassigned = await dispatch(app, admin, requester, dispatchPayload());
+    expect(reassigned.statusCode).toBe(200);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    const takeover = chatMessages.find((message) => message.id !== firstBody.messageId);
+    expect(takeover).toBeDefined();
+
+    const editTakeover = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/agent/chats/${firstBody.chatId}/messages/${takeover?.id ?? "missing"}`,
+      headers: {
+        authorization: `Bearer ${requester.accessToken}`,
+        [AGENT_SELECTOR_HEADER]: requester.humanAgentUuid,
+      },
+      payload: { content: "Rewritten takeover" },
+    });
+    expect(editTakeover.statusCode).toBe(403);
+    expect(editTakeover.body).toContain("cannot be edited");
+
+    const unchangedMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(unchangedMessages.find((message) => message.id === firstBody.messageId)?.content).toBe(
+      "Please review this Context Tree PR.",
+    );
+    expect(unchangedMessages.find((message) => message.id === takeover?.id)?.content).toContain(
+      "First Tree reassigned this Agent Review",
+    );
+  });
+
   it("returns a non-leaking conflict when another member owns the same PR task", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
@@ -381,6 +433,58 @@ describe("member Agent Review task dispatch", () => {
     expect(backfilledOpening).toEqual(
       expect.arrayContaining([expect.objectContaining({ inboxId: secondReviewer.inboxId, notify: false })]),
     );
+  });
+
+  it("keeps mutable Chat topic outside task identity during A to B takeover", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    const secondReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+
+    const first = await dispatch(app, admin, requester, dispatchPayload());
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json<DispatchResponse>();
+
+    const rename = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/chats/${firstBody.chatId}`,
+      headers: { authorization: `Bearer ${requester.accessToken}` },
+      payload: { topic: "Human-maintained review topic" },
+    });
+    expect(rename.statusCode).toBe(200);
+
+    await configureReview(app, admin, secondReviewer.uuid);
+    const reassigned = await dispatch(app, admin, requester, dispatchPayload());
+    expect(reassigned.statusCode).toBe(200);
+    expect(reassigned.json<DispatchResponse>()).toMatchObject({
+      chatId: firstBody.chatId,
+      messageId: firstBody.messageId,
+      topic: "Human-maintained review topic",
+      reviewerAgentUuid: secondReviewer.uuid,
+      outcome: "reused",
+    });
+
+    const [storedChat] = await app.db
+      .select({ topic: chats.topic })
+      .from(chats)
+      .where(eq(chats.id, firstBody.chatId))
+      .limit(1);
+    expect(storedChat?.topic).toBe("Human-maintained review topic");
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId))).toHaveLength(2);
+
+    const clearTopic = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/chats/${firstBody.chatId}`,
+      headers: { authorization: `Bearer ${requester.accessToken}` },
+      payload: { topic: null },
+    });
+    expect(clearTopic.statusCode).toBe(200);
+    const retry = await dispatch(app, admin, requester, dispatchPayload());
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json<DispatchResponse>()).toMatchObject({ chatId: firstBody.chatId, topic: null, outcome: "reused" });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId))).toHaveLength(2);
   });
 
   it("converges concurrent A to B retries and an ABA reassignment without duplicate takeover", async () => {
@@ -504,6 +608,73 @@ describe("member Agent Review task dispatch", () => {
       .from(chatMembership)
       .where(eq(chatMembership.chatId, firstBody.chatId));
     expect(memberships.map((row) => row.agentId)).not.toContain(nextReviewer.uuid);
+  });
+
+  it("does not guess a lone unrelated Agent speaker is the previous Reviewer", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    const unrelatedAgent = await createReviewer(app, admin);
+    const nextReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+
+    const first = await dispatch(app, admin, requester, dispatchPayload());
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json<DispatchResponse>();
+    await addChatParticipants(app.db, firstBody.chatId, [{ agentId: unrelatedAgent.uuid }]);
+    await app.db
+      .delete(chatMembership)
+      .where(and(eq(chatMembership.chatId, firstBody.chatId), eq(chatMembership.agentId, firstReviewer.uuid)));
+    await configureReview(app, admin, nextReviewer.uuid);
+
+    const response = await dispatch(app, admin, requester, dispatchPayload());
+    expect(response.statusCode).toBe(409);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId))).toHaveLength(1);
+    const memberships = await app.db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(eq(chatMembership.chatId, firstBody.chatId));
+    expect(memberships.map((row) => row.agentId)).toContain(unrelatedAgent.uuid);
+    expect(memberships.map((row) => row.agentId)).not.toContain(nextReviewer.uuid);
+  });
+
+  it("fails closed when protected takeover history does not continue from the recorded Reviewer", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    const nextReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+
+    const first = await dispatch(app, admin, requester, dispatchPayload());
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json<DispatchResponse>();
+    await app.db.insert(messages).values({
+      id: randomUUID(),
+      chatId: firstBody.chatId,
+      senderId: requester.humanAgentUuid,
+      format: "markdown",
+      content: "Inconsistent takeover history fixture.",
+      metadata: {
+        contextReviewTakeoverV1: {
+          schemaVersion: 1,
+          reviewerAgentUuid: nextReviewer.uuid,
+          previousReviewerAgentUuid: randomUUID(),
+        },
+      },
+      source: "api",
+    });
+    await configureReview(app, admin, nextReviewer.uuid);
+
+    const response = await dispatch(app, admin, requester, dispatchPayload());
+    expect(response.statusCode).toBe(409);
+    const speakers = await app.db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, firstBody.chatId), eq(chatMembership.accessMode, "speaker")));
+    expect(speakers.map((row) => row.agentId)).toContain(firstReviewer.uuid);
+    expect(speakers.map((row) => row.agentId)).not.toContain(nextReviewer.uuid);
   });
 
   it("blocks formal review envelopes on ordinary Chat creation and follow-up paths", async () => {

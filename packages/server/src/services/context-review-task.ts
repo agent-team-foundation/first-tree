@@ -7,14 +7,14 @@ import {
   canonicalGitRepoUrl,
   contextReviewTaskCreateMetadataSchema,
 } from "@first-tree/shared";
-import { and, eq, sql } from "drizzle-orm";
-import { ZodError } from "zod";
+import { and, asc, eq, sql } from "drizzle-orm";
+import { ZodError, z } from "zod";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import type { chats } from "../db/schema/chats.js";
-import type { messages } from "../db/schema/messages.js";
+import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import type { TaskChatReuseActivity } from "./chat.js";
@@ -80,13 +80,59 @@ function assertMatchingStoredTask(input: {
     !storedEnvelope.success ||
     storedRepository !== authority.repository ||
     storedEnvelope.data.reviewPacketV1.pullRequest !== metadata.reviewPacketV1.pullRequest ||
-    chat.topic !== authority.topic ||
     !Array.isArray(storedMentions) ||
     storedMentions.length !== 1 ||
     typeof storedMentions[0] !== "string"
   ) {
     throw new ConflictError("Agent Review task reservation conflicts with an existing task");
   }
+}
+
+async function resolveRecordedReviewerAgentUuid(
+  db: Database,
+  input: {
+    chatId: string;
+    openingMessage: typeof messages.$inferSelect;
+    requesterAgentUuid: string;
+  },
+): Promise<string> {
+  const initialMentions = input.openingMessage.metadata.mentions;
+  const initialReviewerAgentUuid =
+    Array.isArray(initialMentions) && initialMentions.length === 1 && typeof initialMentions[0] === "string"
+      ? initialMentions[0]
+      : null;
+  if (!initialReviewerAgentUuid) {
+    throw new ConflictError("Agent Review task opening has ambiguous Reviewer history");
+  }
+
+  const takeoverRows = await db
+    .select({ senderId: messages.senderId, metadata: messages.metadata })
+    .from(messages)
+    .where(and(eq(messages.chatId, input.chatId), sql`${messages.metadata} ? 'contextReviewTakeoverV1'`))
+    .orderBy(asc(messages.createdAt), asc(messages.id));
+
+  let recordedReviewerAgentUuid = initialReviewerAgentUuid;
+  for (const row of takeoverRows) {
+    const takeover = z
+      .object({
+        schemaVersion: z.literal(1),
+        reviewerAgentUuid: z.string().min(1),
+        previousReviewerAgentUuid: z.string().min(1).nullable(),
+      })
+      .strict()
+      .safeParse(row.metadata.contextReviewTakeoverV1);
+    if (row.senderId !== input.requesterAgentUuid || !takeover.success) {
+      throw new ConflictError("Agent Review task has ambiguous takeover history");
+    }
+    const continuesAssignment = takeover.data.previousReviewerAgentUuid === recordedReviewerAgentUuid;
+    const restoresRecordedMembership =
+      takeover.data.previousReviewerAgentUuid === null && takeover.data.reviewerAgentUuid === recordedReviewerAgentUuid;
+    if (!continuesAssignment && !restoresRecordedMembership) {
+      throw new ConflictError("Agent Review task has ambiguous takeover history");
+    }
+    recordedReviewerAgentUuid = takeover.data.reviewerAgentUuid;
+  }
+  return recordedReviewerAgentUuid;
 }
 
 /**
@@ -124,23 +170,34 @@ export async function reconcileContextReviewTaskReuse(
   }
 
   const reviewerAgentUuid = input.authority.reviewerAgentUuid;
-  const staleReviewerIds = speakerRows
-    .filter((speaker) => speaker.type !== AGENT_TYPES.HUMAN && speaker.agentId !== reviewerAgentUuid)
+  const recordedReviewerAgentUuid = await resolveRecordedReviewerAgentUuid(db, {
+    chatId: input.chat.id,
+    openingMessage: input.openingMessage,
+    requesterAgentUuid: input.requesterAgentUuid,
+  });
+  const nonHumanSpeakerIds = speakerRows
+    .filter((speaker) => speaker.type !== AGENT_TYPES.HUMAN)
     .map((speaker) => speaker.agentId);
-  if (staleReviewerIds.length > 1) {
+  const unexpectedAgentIds = nonHumanSpeakerIds.filter(
+    (agentId) => agentId !== reviewerAgentUuid && agentId !== recordedReviewerAgentUuid,
+  );
+  if (unexpectedAgentIds.length > 0) {
     throw new ConflictError("Agent Review task has ambiguous Reviewer participants");
   }
 
   const currentReviewerIsSpeaker = speakerRows.some((speaker) => speaker.agentId === reviewerAgentUuid);
-  if (currentReviewerIsSpeaker && staleReviewerIds.length === 0) return null;
+  if (currentReviewerIsSpeaker && recordedReviewerAgentUuid === reviewerAgentUuid && nonHumanSpeakerIds.length === 1) {
+    return null;
+  }
 
   await addChatParticipants(db, input.chat.id, [{ agentId: reviewerAgentUuid }], {
     onConflictDoNothing: true,
     upgradeWatcherToSpeaker: true,
   });
 
-  const previousReviewerAgentUuid = staleReviewerIds[0] ?? null;
-  if (previousReviewerAgentUuid) {
+  const recordedReviewerIsSpeaker = speakerRows.some((speaker) => speaker.agentId === recordedReviewerAgentUuid);
+  const previousReviewerAgentUuid = recordedReviewerAgentUuid !== reviewerAgentUuid ? recordedReviewerAgentUuid : null;
+  if (previousReviewerAgentUuid && recordedReviewerIsSpeaker) {
     await db
       .delete(chatMembership)
       .where(

@@ -616,6 +616,8 @@ describe("settings panels", () => {
     await waitForText(container, "Automatic PR review");
 
     await waitForText(container, "Beta Reviewer");
+    expect(container.textContent).toContain("does not move open PRs immediately");
+    expect(container.textContent).toContain("Re-run the Context Tree write task");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
     const reviewerMetadata = buttonByText(container, "Reviewer agent · Beta Reviewer");
     expect(reviewerMetadata).not.toBeNull();
@@ -739,6 +741,7 @@ describe("settings panels", () => {
     await waitForText(container, "Context Reviewer Bot");
     expect(container.textContent).toContain("Automatic PR review");
     expect(container.textContent).toContain("On");
+    expect(container.textContent).toContain("does not move open PRs immediately");
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
