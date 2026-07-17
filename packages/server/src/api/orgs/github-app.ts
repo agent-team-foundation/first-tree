@@ -19,7 +19,7 @@ import {
   listConnectPanelInstallations,
 } from "../../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
-import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../../services/oauth-state.js";
+import { STATE_NONCE_COOKIE_NAME, STATE_NONCE_COOKIE_TTL_SECONDS, signOAuthState } from "../../services/oauth-state.js";
 import { buildCookie } from "../auth/oauth-cookie.js";
 
 /**
@@ -256,9 +256,9 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
     reply.header(
       "Set-Cookie",
       buildCookie({
-        name: OAUTH_STATE_COOKIE,
+        name: STATE_NONCE_COOKIE_NAME,
         value: nonce,
-        maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
+        maxAge: STATE_NONCE_COOKIE_TTL_SECONDS,
         secure: process.env.NODE_ENV === "production",
       }),
     );

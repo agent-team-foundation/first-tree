@@ -18,8 +18,8 @@ import {
 import { buildGoogleAuthorizeUrl, exchangeGoogleCode } from "../../services/google-oauth.js";
 import { completeExternalAccountBootstrap, OAuthBootstrapError } from "../../services/oauth-bootstrap.js";
 import {
-  OAUTH_STATE_COOKIE,
-  OAUTH_STATE_COOKIE_MAX_AGE_S,
+  STATE_NONCE_COOKIE_NAME,
+  STATE_NONCE_COOKIE_TTL_SECONDS,
   signOAuthState,
   verifyOAuthState,
 } from "../../services/oauth-state.js";
@@ -49,9 +49,8 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     // cookie; the callback also accepts legacy plaintext nonce cookies.
     // The value is a nonce-only CSRF token, not an access credential or
     // provider identity; it is short-lived, HttpOnly, SameSite=Lax, and Secure
-    // in production. CodeQL otherwise treats the Set-Cookie sink as storage.
-    // codeql[js/clear-text-storage-of-sensitive-data]
-    reply.header("Set-Cookie", stateCookie(nonce, OAUTH_STATE_COOKIE_MAX_AGE_S, app.config.secrets.encryptionKey));
+    // in production.
+    reply.header("Set-Cookie", stateCookie(nonce, STATE_NONCE_COOKIE_TTL_SECONDS, app.config.secrets.encryptionKey));
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/google/callback`;
     app.log.info({ event: "oauth.start", provider: "google", intent: "sign-in" }, "OAuth flow started");
     return reply.redirect(
@@ -68,7 +67,7 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
     if (!code || !state) return redirectError(reply, "provider-exchange-failed");
     const cookieNonce = readOAuthStateNonce(
       request.headers.cookie,
-      OAUTH_STATE_COOKIE,
+      STATE_NONCE_COOKIE_NAME,
       app.config.secrets.encryptionKey,
     );
     let verified: Awaited<ReturnType<typeof verifyOAuthState>>;
@@ -83,7 +82,6 @@ export async function googleOauthRoutes(app: FastifyInstance): Promise<void> {
       return redirectError(reply, "state-expired", verified.next);
     }
     // Clear the single-use OAuth state cookie after validating it.
-    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookie("", 0, app.config.secrets.encryptionKey));
     if (!verified.oidcNonce) return redirectError(reply, "state-expired");
 
@@ -198,7 +196,7 @@ async function completeGoogleSignIn(
 
 function stateCookie(value: string, maxAge: number, encryptionKey: string): string {
   return buildCookie({
-    name: OAUTH_STATE_COOKIE,
+    name: STATE_NONCE_COOKIE_NAME,
     value: maxAge > 0 ? protectOAuthStateNonce(value, encryptionKey) : "",
     maxAge,
     secure: process.env.NODE_ENV === "production",

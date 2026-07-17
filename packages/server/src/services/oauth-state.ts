@@ -20,8 +20,8 @@ import { jwtVerify, SignJWT } from "jose";
 
 const STATE_EXPIRY = "10m";
 const NONCE_BYTES = 24;
-export const OAUTH_STATE_COOKIE = "oauth_state_nonce";
-export const OAUTH_STATE_COOKIE_MAX_AGE_S = 10 * 60;
+export const STATE_NONCE_COOKIE_NAME = "oauth_state_nonce";
+export const STATE_NONCE_COOKIE_TTL_SECONDS = 10 * 60;
 
 type StatePayload = {
   /** Random nonce; must match the cookie's value. */

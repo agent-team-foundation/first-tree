@@ -23,8 +23,8 @@ import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../ser
 import { findActiveMembership } from "../../services/membership.js";
 import { completeExternalAccountBootstrap, OAuthBootstrapError } from "../../services/oauth-bootstrap.js";
 import {
-  OAUTH_STATE_COOKIE,
-  OAUTH_STATE_COOKIE_MAX_AGE_S,
+  STATE_NONCE_COOKIE_NAME,
+  STATE_NONCE_COOKIE_TTL_SECONDS,
   signOAuthState,
   verifyOAuthState,
 } from "../../services/oauth-state.js";
@@ -93,15 +93,13 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     });
     const isProd = process.env.NODE_ENV === "production";
     // The cookie stores only an application-key-encrypted, short-lived CSRF
-    // nonce, not a provider credential or identity. CodeQL otherwise treats
-    // the Set-Cookie sink itself as clear-text storage.
+    // nonce, not a provider credential or identity.
     const stateCookieHeader = buildCookie({
-      name: OAUTH_STATE_COOKIE,
+      name: STATE_NONCE_COOKIE_NAME,
       value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
-      maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
+      maxAge: STATE_NONCE_COOKIE_TTL_SECONDS,
       secure: isProd,
     });
-    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", stateCookieHeader);
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
@@ -140,7 +138,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     const cookieNonce = readOAuthStateNonce(
       request.headers.cookie,
-      OAUTH_STATE_COOKIE,
+      STATE_NONCE_COOKIE_NAME,
       app.config.secrets.encryptionKey,
     );
 
@@ -175,12 +173,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // This Set-Cookie value is intentionally empty and expires the nonce; it
     // does not persist the verified state or any other sensitive value.
     const expiredStateCookieHeader = buildCookie({
-      name: OAUTH_STATE_COOKIE,
+      name: STATE_NONCE_COOKIE_NAME,
       value: "",
       maxAge: 0,
       secure: process.env.NODE_ENV === "production",
     });
-    // codeql[js/clear-text-storage-of-sensitive-data]
     reply.header("Set-Cookie", expiredStateCookieHeader);
 
     if (verified.provider && verified.provider !== "github") {
