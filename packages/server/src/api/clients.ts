@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   PROVIDER_MODELS_LIST_TYPE,
-  RUNTIME_AUTH_START_TYPE,
   providerModelCatalogSchema,
+  RUNTIME_AUTH_START_TYPE,
   runtimeAuthStartRequestSchema,
   runtimeProviderSchema,
   updateClientCapabilitiesSchema,
@@ -14,7 +14,12 @@ import { stampClientResource } from "../observability/request-context.js";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";
 import * as clientService from "../services/client.js";
-import { forceDisconnectClient, rejectPendingRepliesForClient, sendToClient, waitForClientReply } from "../services/connection-manager.js";
+import {
+  forceDisconnectClient,
+  rejectPendingRepliesForClient,
+  sendToClient,
+  waitForClientReply,
+} from "../services/connection-manager.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
 

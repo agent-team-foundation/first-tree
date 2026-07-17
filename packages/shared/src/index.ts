@@ -915,6 +915,20 @@ export {
   sessionStateSchema,
 } from "./schemas/presence.js";
 export {
+  PROVIDER_MODELS_LIST_TYPE,
+  PROVIDER_MODELS_RESULT_TYPE,
+  type ProviderModelCatalog,
+  type ProviderModelCatalogSource,
+  type ProviderModelOption,
+  type ProviderModelsListCommand,
+  type ProviderModelsResultFrame,
+  providerModelCatalogSchema,
+  providerModelCatalogSourceSchema,
+  providerModelOptionSchema,
+  providerModelsListCommandSchema,
+  providerModelsResultFrameSchema,
+} from "./schemas/provider-models.js";
+export {
   type AgentStatusReason,
   agentStatusReasonSchema,
   encodeProviderRetryEventMessage,
@@ -1002,20 +1016,6 @@ export {
   runtimeAuthStartRequestSchema,
   runtimeAuthStartResponseSchema,
 } from "./schemas/runtime-auth.js";
-export {
-  PROVIDER_MODELS_LIST_TYPE,
-  PROVIDER_MODELS_RESULT_TYPE,
-  type ProviderModelCatalog,
-  type ProviderModelCatalogSource,
-  type ProviderModelOption,
-  type ProviderModelsListCommand,
-  type ProviderModelsResultFrame,
-  providerModelCatalogSchema,
-  providerModelCatalogSourceSchema,
-  providerModelOptionSchema,
-  providerModelsListCommandSchema,
-  providerModelsResultFrameSchema,
-} from "./schemas/provider-models.js";
 export {
   DEFAULT_RUNTIME_PROVIDER,
   DISABLED_RUNTIME_PROVIDERS,

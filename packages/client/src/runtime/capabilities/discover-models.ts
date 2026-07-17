@@ -1,6 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
 import type { ProviderModelCatalog, ProviderModelOption, RuntimeProvider } from "@first-tree/shared";
 import { findCursorExecutableOnPath } from "../cursor-binary.js";
 import { runCommand } from "./launch-probe.js";
@@ -12,7 +12,10 @@ export type DiscoverModelsDeps = {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   findCursorBinary?: (env?: Record<string, string | undefined>) => string | null;
-  runCursorModels?: (binary: string, env: NodeJS.ProcessEnv) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+  runCursorModels?: (
+    binary: string,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
   readKimiConfig?: () => Promise<string | null>;
   kimiConfigPath?: string;
 };
@@ -37,6 +40,9 @@ function unavailable(provider: RuntimeProvider, error: string, deps: DiscoverMod
  *   Available models
  *   auto - Auto (default)
  *   gpt-5.2 - GPT-5.2
+ *
+ * Uses indexOf/slice instead of `\s+` / `.+` regexes so CodeQL does not flag
+ * polynomial-time matching on CLI stdout.
  */
 export function parseCursorModelsOutput(stdout: string): {
   models: ProviderModelOption[];
@@ -46,16 +52,24 @@ export function parseCursorModelsOutput(stdout: string): {
   let defaultModelId: string | null = null;
   for (const rawLine of stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line || /^available models$/i.test(line)) continue;
-    const match = /^(\S+)\s+-\s+(.+)$/.exec(line);
-    if (!match) continue;
-    const id = match[1]!;
-    const label = match[2]!.trim();
-    const isDefault = /\(default\)/i.test(label);
-    if (isDefault) defaultModelId = id;
+    if (!line) continue;
+    if (line.toLowerCase() === "available models") continue;
+    const sep = line.indexOf(" - ");
+    if (sep <= 0) continue;
+    const id = line.slice(0, sep);
+    // Model ids are single tokens (`auto`, `gpt-5.2`); reject spaced ids.
+    if (!id || id.includes(" ") || id.includes("\t")) continue;
+    let label = line.slice(sep + 3).trim();
+    const defaultMarker = "(default)";
+    const defaultAt = label.toLowerCase().indexOf(defaultMarker);
+    const isDefault = defaultAt >= 0;
+    if (isDefault) {
+      defaultModelId = id;
+      label = `${label.slice(0, defaultAt)}${label.slice(defaultAt + defaultMarker.length)}`.trim();
+    }
     models.push({
       id,
-      label: label.replace(/\s*\(default\)\s*/i, "").trim() || id,
+      label: label || id,
       ...(isDefault ? { isDefault: true, hint: "default" } : {}),
     });
   }
@@ -75,24 +89,59 @@ export function parseKimiConfigModels(toml: string): {
   models: ProviderModelOption[];
   defaultModelId: string | null;
 } {
-  const defaultMatch = /^default_model\s*=\s*"([^"]+)"/m.exec(toml);
-  const defaultModelId = defaultMatch?.[1] ?? null;
-
+  let defaultModelId: string | null = null;
   const models: ProviderModelOption[] = [];
-  const sectionRe = /^\[models\."([^"]+)"\]\s*$/gm;
   const sections: Array<{ id: string; headerStart: number; bodyStart: number }> = [];
-  for (const match of toml.matchAll(sectionRe)) {
-    sections.push({
-      id: match[1]!,
-      headerStart: match.index!,
-      bodyStart: match.index! + match[0].length,
-    });
+
+  // Line-oriented scan avoids `\s*` / `.+` regexes that CodeQL flags as
+  // polynomial on untrusted host config text.
+  let cursor = 0;
+  while (cursor <= toml.length) {
+    const nextNl = toml.indexOf("\n", cursor);
+    const lineEnd = nextNl === -1 ? toml.length : nextNl;
+    const line = toml.slice(cursor, lineEnd).replace(/\r$/, "");
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("default_model")) {
+      const eq = trimmed.indexOf("=");
+      if (eq > 0) {
+        const raw = trimmed.slice(eq + 1).trim();
+        if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+          defaultModelId = raw.slice(1, -1);
+        }
+      }
+    }
+
+    if (trimmed.startsWith('[models."') && trimmed.endsWith('"]')) {
+      const id = trimmed.slice('[models."'.length, -'"]'.length);
+      if (id.length > 0) {
+        const bodyStart = nextNl === -1 ? toml.length : nextNl + 1;
+        sections.push({ id, headerStart: cursor, bodyStart });
+      }
+    }
+
+    if (nextNl === -1) break;
+    cursor = nextNl + 1;
   }
+
   for (let i = 0; i < sections.length; i++) {
-    const section = sections[i]!;
-    const bodyEnd = i + 1 < sections.length ? sections[i + 1]!.headerStart : toml.length;
+    const section = sections[i];
+    if (!section) continue;
+    const next = sections[i + 1];
+    const bodyEnd = next ? next.headerStart : toml.length;
     const body = toml.slice(section.bodyStart, bodyEnd);
-    const displayName = /^display_name\s*=\s*"([^"]+)"/m.exec(body)?.[1];
+    let displayName: string | undefined;
+    for (const bodyLine of body.split("\n")) {
+      const t = bodyLine.replace(/\r$/, "").trim();
+      if (!t.startsWith("display_name")) continue;
+      const eq = t.indexOf("=");
+      if (eq <= 0) continue;
+      const raw = t.slice(eq + 1).trim();
+      if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+        displayName = raw.slice(1, -1);
+      }
+      break;
+    }
     const isDefault = defaultModelId === section.id;
     models.push({
       id: section.id,
@@ -159,7 +208,7 @@ async function discoverKimiModels(deps: DiscoverModelsDeps): Promise<ProviderMod
   }
   const parsed = parseKimiConfigModels(toml);
   if (parsed.models.length === 0) {
-    return unavailable("kimi-code", "Kimi config has no [models.\".\"] entries", deps);
+    return unavailable("kimi-code", 'Kimi config has no [models."."] entries', deps);
   }
   return {
     provider: "kimi-code",
@@ -188,11 +237,7 @@ export async function discoverProviderModels(
     case "claude-code":
     case "claude-code-tui":
     case "codex":
-      return unavailable(
-        provider,
-        `Host-local model discovery for ${provider} lands in a later phase`,
-        deps,
-      );
+      return unavailable(provider, `Host-local model discovery for ${provider} lands in a later phase`, deps);
     default: {
       const _exhaustive: never = provider;
       return unavailable(_exhaustive, `Unknown provider: ${String(provider)}`, deps);

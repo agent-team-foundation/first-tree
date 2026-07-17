@@ -5,7 +5,6 @@ import {
   AUTH_RETRYABLE_CODES,
   type AuthRejectedCode,
   type AuthRetryableCode,
-  PROVIDER_MODELS_RESULT_TYPE,
   agentBindRequestSchema,
   agentPinnedMessageSchema,
   clientRegisterSchema,
@@ -13,6 +12,7 @@ import {
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
   inboxRecoverFrameSchema,
+  PROVIDER_MODELS_RESULT_TYPE,
   providerModelsResultFrameSchema,
   runtimeStateMessageSchema,
   sessionEventMessageSchema,
@@ -1769,11 +1769,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 socket.send(JSON.stringify({ type: "error", message: "Malformed provider-models:result frame" }));
                 return;
               }
-              const resolved = connectionManager.resolveClientReply(
-                clientId,
-                result.data.ref,
-                result.data.catalog,
-              );
+              const resolved = connectionManager.resolveClientReply(clientId, result.data.ref, result.data.catalog);
               if (!resolved) {
                 app.log.debug(
                   { clientId, ref: result.data.ref },

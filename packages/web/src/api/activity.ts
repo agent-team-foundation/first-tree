@@ -136,9 +136,7 @@ export function startRuntimeAuth(
  * this provider (Cursor `agent models`, Kimi `~/.kimi-code/config.toml`, …).
  */
 export function getProviderModels(clientId: string, provider: RuntimeProvider): Promise<ProviderModelCatalog> {
-  return api.get(
-    `/clients/${encodeURIComponent(clientId)}/providers/${encodeURIComponent(provider)}/models`,
-  );
+  return api.get(`/clients/${encodeURIComponent(clientId)}/providers/${encodeURIComponent(provider)}/models`);
 }
 
 export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }> {
