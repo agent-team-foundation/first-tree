@@ -136,6 +136,21 @@ describe("classifyProviderFailure", () => {
     }
   });
 
+  it("classifies Kimi's stable SDK error codes without depending on prose", () => {
+    const classifyKimi = (code: string) =>
+      classifyProviderFailure(Object.assign(new Error("provider stopped"), { code }), {
+        provider: "kimi-code",
+        scope: "provider_turn",
+        source: "sdk",
+      });
+
+    expect(classifyKimi("auth.login_required")).toMatchObject({ category: "credential" });
+    expect(classifyKimi("provider.rate_limit")).toMatchObject({ category: "provider_capacity" });
+    expect(classifyKimi("provider.connection_error")).toMatchObject({ category: "transient_transport" });
+    expect(classifyKimi("model.not_configured")).toMatchObject({ category: "configuration" });
+    expect(classifyKimi("model.config_invalid")).toMatchObject({ category: "configuration" });
+  });
+
   it("a transient codex --version verify flake is retried at session start, NOT a terminal capability failure", () => {
     const err = new Error(
       "codex --version smoke check did not complete (transient host condition); will retry. Detail: `codex --version` timed out",

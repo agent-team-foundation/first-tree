@@ -5,6 +5,7 @@ import { createClaudeCodeTuiHandler } from "./claude-code-tui/index.js";
 import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "./claude-executable.js";
 import { createCodexHandler } from "./codex/index.js";
 import { createCursorHandler } from "./cursor/index.js";
+import { createKimiCodeHandler } from "./kimi-code.js";
 
 /** Injectable seam so tests can force a Claude-executable resolution (no real PATH / shell spawn). */
 export type RegisterBuiltinHandlersDeps = {
@@ -49,4 +50,7 @@ export function registerBuiltinHandlers(deps: RegisterBuiltinHandlersDeps = {}):
   // handler resolves `cursor-agent` / `agent` lazily at session start (with
   // the login-shell probe) and spawns one CLI process per provider turn.
   registerHandler("cursor", (config) => createCursorHandler(config));
+  // Kimi Code is driven through the bundled Node SDK. It reuses the host's
+  // ~/.kimi-code credential/config and does not add a First Tree login flow.
+  registerHandler("kimi-code", (config) => createKimiCodeHandler(config));
 }

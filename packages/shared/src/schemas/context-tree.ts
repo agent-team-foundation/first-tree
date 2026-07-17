@@ -187,6 +187,8 @@ export const contextTreeIoSourceSchema = z.enum([
   "codex_file_change",
   "cursor_read_tool",
   "cursor_write_tool",
+  "kimi_read_tool",
+  "kimi_write_tool",
   "shell_command",
   "git_status_delta",
 ]);

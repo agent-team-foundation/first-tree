@@ -454,6 +454,55 @@ describe("context-tree IO service", () => {
     ).toEqual({ recordable: false, reason: "unsupported_tool" });
   });
 
+  it("derives Kimi Read/Write IO and gates the shared capitalized names by provider", async () => {
+    const read = {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "kimi-read",
+        name: "Read",
+        args: { path: "/tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    };
+    const write = {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "kimi-write",
+        name: "Write",
+        args: { path: "/tmp/context-tree/system/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "system/NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    };
+
+    expect(
+      explainContextTreeIoDecision({ runtimeProvider: "kimi-code", sessionEvent: read, bindingRepo: TREE_REPO }),
+    ).toEqual({ recordable: true });
+    expect(
+      explainContextTreeIoDecision({ runtimeProvider: "kimi-code", sessionEvent: write, bindingRepo: TREE_REPO }),
+    ).toEqual({ recordable: true });
+    expect(
+      explainContextTreeIoDecision({ runtimeProvider: "codex", sessionEvent: read, bindingRepo: TREE_REPO }),
+    ).toEqual({ recordable: false, reason: "unsupported_tool" });
+  });
+
   it("end-to-end regression: a real-shaped completed cursor shell event lands as a repo-qualified read", async () => {
     // The exact event shape the cursor handler emits after client enrichment
     // for a tree read via shell (`cat <tree>/NODE.md`) — the path the old

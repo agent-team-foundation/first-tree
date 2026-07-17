@@ -7,7 +7,7 @@ export function registerAgentConfigSetReasoningEffortCommand(config: Command): v
   config
     .command("set-reasoning-effort <agent> <level>")
     .description(
-      'Set reasoning effort. claude-code: "" (inherit local) | low | medium | high | max. codex: low | medium | high | xhigh | max | ultra (model-dependent).',
+      'Set reasoning effort. claude-code: "" (inherit local) | low | medium | high | max. codex: low | medium | high | xhigh | max | ultra (model-dependent). Cursor and Kimi Code have no separate effort field.',
     )
     .action(async (agentName: string, level: string) => {
       const serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);

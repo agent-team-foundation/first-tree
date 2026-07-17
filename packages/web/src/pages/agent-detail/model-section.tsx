@@ -64,6 +64,7 @@ const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
   // is large and shifting, so the control is a free-form exact-id input (see
   // ModelSection) and First Tree does not maintain a model matrix.
   cursor: [],
+  "kimi-code": [],
 };
 
 const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
@@ -72,6 +73,7 @@ const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
   codex: "Applies to new sessions immediately. Unset lets the CLI pick by auth mode.",
   cursor:
     "Exact Cursor model id, passed through verbatim on the next turn. Leave empty for the Cursor default (auto). An id your account can't use fails visibly — no silent fallback.",
+  "kimi-code": "Exact Kimi model id, passed to new sessions. Leave empty to use the model configured in ~/.kimi-code.",
 };
 
 export type ModelSectionProps = {
@@ -95,10 +97,10 @@ export function ModelSection({ value, onChange, disabled, provider = "claude-cod
     return list;
   }, [presetOptions, value]);
 
-  if (provider === "cursor") {
+  if (provider === "cursor" || provider === "kimi-code") {
     return (
       <ConfigRow label="Model" helpText={MODEL_HELP_BY_PROVIDER[provider]}>
-        <FreeFormModelInput value={value} onChange={onChange} disabled={disabled} />
+        <FreeFormModelInput value={value} onChange={onChange} disabled={disabled} provider={provider} />
       </ConfigRow>
     );
   }
@@ -119,10 +121,12 @@ function FreeFormModelInput({
   value,
   onChange,
   disabled,
+  provider,
 }: {
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
+  provider: "cursor" | "kimi-code";
 }) {
   const [draft, setDraft] = useState(value);
   // Latch scoped to ONE Enter→blur sequence: Enter followed by the immediate
@@ -156,7 +160,7 @@ function FreeFormModelInput({
         if (e.key === "Enter") commit();
       }}
       disabled={disabled}
-      placeholder="auto (Cursor default)"
+      placeholder={provider === "kimi-code" ? "local Kimi default" : "auto (Cursor default)"}
       className="font-mono"
       aria-label="Model"
     />
