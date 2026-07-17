@@ -155,7 +155,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.textContent).toBe("");
   });
 
-  it("renders a working lead, expands full narration, and closes it on Escape", async () => {
+  it("keeps the collapsed snapshot concise and opens one live activity inspector", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -171,24 +171,28 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await waitForSettled(h, () => {
       expect(h.container.textContent).toContain("Nova");
+      expect(h.container.textContent).toContain("Working");
       expect(h.container.textContent).toContain("Write extra DOM tests");
+      expect(h.container.textContent).toContain("Activity (1)");
+    });
+    expect(h.container.textContent).not.toContain("Bash");
+    expect(h.container.textContent).not.toContain("Cover the status rail.");
+
+    await click(h, h.container.querySelector('button[aria-label="Open live activity"]'));
+    await waitForSettled(h, () => {
+      expect(h.container.querySelector('section[aria-label="Live activity"]')).not.toBeNull();
+      expect(h.container.textContent).toContain("Live activity · 1 agent");
       expect(h.container.textContent).toContain("Bash");
       expect(h.container.textContent).toContain("doc-page.tsx");
     });
-
-    await click(h, h.container.querySelector('button[aria-label="Expand full narration"]'));
-    await waitForSettled(h, () => {
-      expect(h.container.querySelector('section[aria-label*="full narration"]')).not.toBeNull();
-      expect(h.container.textContent).toContain("Cover the status rail.");
-    });
+    // `turnTextFull` is timeline evidence, not duplicated into the live snapshot.
+    expect(h.container.textContent).not.toContain("Cover the status rail.");
 
     await keyDown(h, document, "Escape");
-    await waitForSettled(h, () =>
-      expect(h.container.querySelector('section[aria-label*="full narration"]')).toBeNull(),
-    );
+    await waitForSettled(h, () => expect(h.container.querySelector('section[aria-label="Live activity"]')).toBeNull());
   });
 
-  it("shows status reasons and suppresses the narration expander for reason rows", async () => {
+  it("shows a current reason in the strip and its detail inside the inspector", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-waiting", {
         statusReason: {
@@ -207,11 +211,14 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     h.render(withProviders(<ComposeStatusBar chatId="chat-1" agents={[agent("agent-waiting", "Beacon")]} />));
 
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Waiting for provider capacity"));
+    expect(h.container.textContent).toContain("Waiting");
+    await click(h, h.container.querySelector('button[aria-label="Open live activity"]'));
+    await waitForSettled(h, () => expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull());
     expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull();
-    expect(h.container.querySelector('button[aria-label="Expand full narration"]')).toBeNull();
+    expect(h.container.querySelector('button[aria-label*="timeline"]')).toBeNull();
   });
 
-  it("expands the secondary rows without duplicating the lead row", async () => {
+  it("opens all agents in one lightly divided inspector without duplicating the lead", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-atlas", { errored: true }),
       status("agent-nova", {
@@ -232,11 +239,44 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       expect(h.container.textContent).not.toContain("Nova");
     });
 
-    await click(h, h.container.querySelector('button[aria-label="Expand activity"]'));
+    await click(h, h.container.querySelector('button[aria-label="Open live activity"]'));
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Nova"));
 
-    const atlasCount = h.container.textContent?.match(/Atlas/g)?.length ?? 0;
+    const inspector = h.container.querySelector("[data-live-activity-inspector]");
+    const atlasCount = inspector?.textContent?.match(/Atlas/g)?.length ?? 0;
     expect(atlasCount).toBe(1);
+    expect(h.container.querySelectorAll("[data-live-activity-inspector]")).toHaveLength(1);
+    expect(h.container.querySelectorAll("[data-live-activity-agent]")).toHaveLength(2);
+  });
+
+  it("makes the whole anchored agent item close the inspector and jump to evidence", async () => {
+    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
+      status("agent-nova", {
+        working: true,
+        engagement: "active",
+        activity: activity("agent-nova", { turnText: "Run the focused suite" }),
+      }),
+    ]);
+
+    h.render(
+      withProviders(
+        <>
+          <div data-working-agent="agent-nova" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />
+        </>,
+      ),
+    );
+
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
+    await click(h, h.container.querySelector('button[aria-label="Open live activity"]'));
+    await waitForSettled(h, () =>
+      expect(h.container.querySelector('button[aria-label="View Nova in the timeline"]')).not.toBeNull(),
+    );
+
+    await click(h, h.container.querySelector('button[aria-label="View Nova in the timeline"]'));
+
+    expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-nova", "working", { focus: true });
+    expect(h.container.querySelector("[data-live-activity-inspector]")).toBeNull();
   });
 });
 

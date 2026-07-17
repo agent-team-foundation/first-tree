@@ -11,24 +11,21 @@ import { chatAgentStatusQueryKey } from "../api/agent-status.js";
 import { ComposeStatusBar } from "../components/chat/compose-status-bar.js";
 
 /**
- * DEV-only visual review for `ComposeStatusBar` — the working / failed rail
- * above the composer.
+ * DEV-only visual review for the stable composer activity strip and its shared
+ * live-activity inspector.
  *
  * The rail is `useQuery`-driven (the shared `/agent-status` query), so each
  * variant primes its own entry in a local `QueryClient` cache keyed by a unique
  * `chatId`; the production component is then rendered against it inside a box
  * that mimics the real composer column width, so spacing, truncation, and the
- * goal → means → ticker order are faithful to prod. No backend / no auth — same
+ * snapshot → Activity entry structure is faithful to prod. No backend / no auth — same
  * gating as `/preview/chat-row-avatar` (DEV-only in `app.tsx`).
  *
- * Covers the spec acceptance: goal-first working line, live-action means with a
- * per-kind icon, markdown stripped, long goal truncates while means + ticker
- * survive, no-prose fallback (means leads), path-arg basename, failed, and the
- * multi-agent +N fold.
+ * Covers concise narration, tool-only fallback, markdown stripping, long
+ * narration, failure/reason priority, and multiple agents inside one panel.
  */
 
-/** ISO timestamp `secondsAgo` in the past — drives the live elapsed ticker so a
- *  screenshot reads e.g. "· 12s" instead of "· 0s". */
+/** ISO timestamp `secondsAgo` in the past — keeps multi-agent priority realistic. */
 function ago(secondsAgo: number): string {
   return new Date(Date.now() - secondsAgo * 1000).toISOString();
 }
@@ -77,8 +74,8 @@ type Variant = {
 
 const VARIANTS: Variant[] = [
   {
-    name: "working · goal + tool (the ideal line)",
-    subtitle: "goal leads, live tool follows with a 🔧 icon, ticker last",
+    name: "working · narration + tool",
+    subtitle: "collapsed strip shows narration; Activity opens the current tool as secondary context",
     chatId: "v-goal-tool",
     agents: [DEV],
     statuses: [
@@ -92,7 +89,7 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · markdown in goal (stripped)",
+    name: "working · markdown in narration (stripped)",
     subtitle: "raw turnText `issue 669` / **hex-color** renders as plain text",
     chatId: "v-markdown",
     agents: [DEV],
@@ -107,9 +104,8 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · long goal, clipped by width (offers expand)",
-    subtitle:
-      "no server turnTextFull, but the goal is clipped by the rail width → the ⇕ appears and clicking anywhere on the row shows the full line",
+    name: "working · long narration",
+    subtitle: "the strip truncates; the inspector clamps the latest update to two visual lines",
     chatId: "v-long",
     agents: [DEV],
     statuses: [
@@ -124,8 +120,9 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · long multi-line goal (expand card)",
-    subtitle: "server sent turnTextFull; click anywhere on the row (⇕) opens the full multi-line card (click to test)",
+    name: "working · full narration stays in timeline",
+    subtitle:
+      "turnTextFull is deliberately not copied into the inspector; Activity shows only the latest concise snapshot",
     chatId: "v-expand",
     agents: [DEV],
     statuses: [
@@ -141,15 +138,15 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · no prose yet (means leads)",
-    subtitle: "turnText absent (opened with a tool) → tool leads, line not blank",
+    name: "working · no narration yet",
+    subtitle: "when a turn opens with a tool, the tool becomes the concise fallback summary",
     chatId: "v-no-goal",
     agents: [DEV],
     statuses: [working("agent-dev", { kind: "tool_call", label: "Read", detail: "src/app.tsx", startedAt: ago(2) })],
   },
   {
     name: "working · thinking",
-    subtitle: "goal + 🧠 Thinking",
+    subtitle: "narration in the strip; Thinking appears as the current action in Activity",
     chatId: "v-thinking",
     agents: [NOVA],
     statuses: [
@@ -163,7 +160,7 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "working · writing prose (no redundant 'Writing')",
-    subtitle: "the prose IS the goal — the means segment is suppressed",
+    subtitle: "the prose is already the update, so a redundant Writing row is suppressed",
     chatId: "v-writing",
     agents: [NOVA],
     statuses: [
@@ -193,14 +190,14 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "failed",
-    subtitle: "red dot + 'failed'; the row jumps to the timeline ErrorRow",
+    subtitle: "failure leads the strip; an anchored inspector item jumps to timeline evidence",
     chatId: "v-failed",
     agents: [RESEARCH],
     statuses: [build({ agentId: "agent-res", errored: true })],
   },
   {
-    name: "multi-agent · failed lead + working others (+N)",
-    subtitle: "failure preempts the lead; others fold behind +N",
+    name: "multi-agent · one shared inspector",
+    subtitle: "failure leads the stable strip; Activity (3) opens one container with lightly divided agent items",
     chatId: "v-multi",
     agents: [DEV, NOVA, RESEARCH],
     statuses: [
@@ -254,7 +251,7 @@ export function ComposeStatusBarPreviewPage() {
       <div style={{ background: "var(--bg)", minHeight: "100vh", padding: "var(--sp-6)" }}>
         <div style={{ maxWidth: 980, margin: "0 auto" }}>
           <h1 className="text-title" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1)" }}>
-            ComposeStatusBar — working / failed rail
+            ComposeStatusBar — stable strip + live activity inspector
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-6)" }}>
             DEV preview. Each card mimics the composer column; the real component renders against a primed status

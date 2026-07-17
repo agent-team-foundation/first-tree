@@ -900,6 +900,31 @@
   }
 }
 
+/* A status-inspector jump should leave a short visual breadcrumb on the exact
+   timeline evidence it opened. The attribute is applied and removed by
+   scroll-to-agent-timeline; reduced-motion users get the same emphasis without
+   interpolation. */
+@keyframes timeline-jump-highlight {
+  0% {
+    background-color: var(--bg-info-soft);
+    box-shadow: inset 0 0 0 var(--hairline) var(--fg-info-strong);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 var(--hairline) transparent;
+  }
+}
+[data-timeline-jump-highlight="true"] {
+  animation: timeline-jump-highlight 1600ms ease-out;
+  border-radius: var(--radius-input);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-timeline-jump-highlight="true"] {
+    animation: none;
+    box-shadow: inset 0 0 0 var(--hairline) var(--fg-info-strong);
+  }
+}
+
 /* Group-mention tip bubble: entrance rises toward the send button it points at;
    exit reverses. See chat-view's `mentionTip` state machine. */
 @keyframes mention-tip-in {
@@ -2386,6 +2411,15 @@ tr[data-interactive]:hover {
   --composer-font-size: var(--text-subtitle);
 }
 
+.compose-status-activity-trigger {
+  min-height: 32px;
+}
+
+.compose-status-inspector-close {
+  width: 32px;
+  height: 32px;
+}
+
 @media (max-width: 47.999rem) {
   input,
   textarea,
@@ -2394,5 +2428,29 @@ tr[data-interactive]:hover {
   }
   :root {
     --composer-font-size: 16px;
+  }
+  .compose-status-agent-name {
+    max-width: 6.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .compose-status-state {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .compose-status-activity-trigger {
+    min-height: 44px;
+  }
+  .compose-status-inspector-close {
+    width: 40px;
+    height: 40px;
   }
 }

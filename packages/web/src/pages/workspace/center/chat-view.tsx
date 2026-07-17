@@ -4018,6 +4018,13 @@ export function ChatView({
               }}
             >
               <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+                {/* Live activity is view-only awareness, so watchers keep the
+                    same stable “what are agents doing?” entry as participants.
+                    Reply controls below remain gated by `readOnly`. */}
+                <ComposeStatusBar
+                  chatId={chatId}
+                  agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                />
                 {readOnly ? (
                   <div
                     className="flex items-center"
@@ -4068,10 +4075,6 @@ export function ChatView({
                         {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
                       </div>
                     ) : null}
-                    <ComposeStatusBar
-                      chatId={chatId}
-                      agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                    />
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
                         the composer. */}

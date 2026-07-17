@@ -953,6 +953,7 @@ describe("ChatView", () => {
       />,
     );
     await waitForText(readOnly.container, "watching");
+    expect(readOnly.container.querySelector("[data-compose-status-bar]")).not.toBeNull();
     await waitForText(readOnly.container, "Join failed");
     await click(buttonByText(readOnly.container, "Join to reply"));
     expect(onJoin).toHaveBeenCalledTimes(1);
