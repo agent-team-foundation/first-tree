@@ -78,6 +78,7 @@ export function RuntimeTab() {
               onChange={(v) => configSave.save({ model: v }, { field: "model" })}
               disabled={editsDisabled}
               provider={ctx.setupRuntimeProvider}
+              clientId={ctx.clientStatus?.clientId ?? ctx.agent.clientId}
             />
             {/* Cursor has no separate reasoning-effort channel — effort/fast
                 variants live in the provider-native model id, so the control

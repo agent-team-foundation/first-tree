@@ -42,13 +42,13 @@ describe("Kimi Code provider surfaces", () => {
     expect(providerInstallHint("kimi-code", "darwin")).toContain("bundled with First Tree");
   });
 
-  it("uses the free-form model field with a local-Kimi default hint", async () => {
+  it("uses the free-form custom model field when no computer catalog is bound", async () => {
     const saved: string[] = [];
     const element = await render(
       <ModelSection value="" onChange={(value) => saved.push(value)} provider="kimi-code" />,
     );
-    const input = element.querySelector<HTMLInputElement>('input[aria-label="Model"]');
-    expect(input?.placeholder).toContain("local Kimi default");
+    const input = element.querySelector<HTMLInputElement>('input[aria-label="Custom model id"]');
+    expect(input).not.toBeNull();
     if (!input) throw new Error("model input missing");
 
     await act(async () => {

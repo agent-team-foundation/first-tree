@@ -5,6 +5,7 @@ import {
   AUTH_RETRYABLE_CODES,
   type AuthRejectedCode,
   type AuthRetryableCode,
+  PROVIDER_MODELS_RESULT_TYPE,
   agentBindRequestSchema,
   agentPinnedMessageSchema,
   clientRegisterSchema,
@@ -12,6 +13,7 @@ import {
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
   inboxRecoverFrameSchema,
+  providerModelsResultFrameSchema,
   runtimeStateMessageSchema,
   sessionEventMessageSchema,
   sessionEventRejectedReasonSchema,
@@ -1757,6 +1759,27 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 await reconcilePinnedAgentsForClient();
               }
               socket.send(JSON.stringify({ type: "heartbeat:ack" }));
+            } else if (type === PROVIDER_MODELS_RESULT_TYPE) {
+              if (!clientId) {
+                socket.send(JSON.stringify({ type: "error", message: "Must register client first" }));
+                return;
+              }
+              const result = providerModelsResultFrameSchema.safeParse(msg);
+              if (!result.success) {
+                socket.send(JSON.stringify({ type: "error", message: "Malformed provider-models:result frame" }));
+                return;
+              }
+              const resolved = connectionManager.resolveClientReply(
+                clientId,
+                result.data.ref,
+                result.data.catalog,
+              );
+              if (!resolved) {
+                app.log.debug(
+                  { clientId, ref: result.data.ref },
+                  "provider-models:result matched no pending HTTP waiter",
+                );
+              }
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : "Internal error";
