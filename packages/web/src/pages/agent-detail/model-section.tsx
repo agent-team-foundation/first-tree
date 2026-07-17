@@ -128,14 +128,7 @@ export function ModelSection({
 
   return (
     <ConfigRow label="Model" helpText={MODEL_HELP_BY_PROVIDER[provider]}>
-      <Select
-        options={curatedItems}
-        value={value}
-        onChange={onChange}
-        disabled={disabled}
-        mono
-        aria-label="Model"
-      />
+      <Select options={curatedItems} value={value} onChange={onChange} disabled={disabled} mono aria-label="Model" />
     </ConfigRow>
   );
 }
@@ -343,9 +336,7 @@ function FreeFormModelInput({
         if (e.key === "Enter") commit();
       }}
       disabled={disabled}
-      placeholder={
-        placeholder ?? (provider === "kimi-code" ? "local Kimi default" : "auto (Cursor default)")
-      }
+      placeholder={placeholder ?? (provider === "kimi-code" ? "local Kimi default" : "auto (Cursor default)")}
       className="font-mono"
       aria-label="Custom model id"
     />
