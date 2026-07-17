@@ -71,6 +71,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  queryClient.clear();
   h.cleanup();
 });
 
@@ -218,7 +219,10 @@ describe("AgentHovercard", () => {
 
   it("navigates to agent details from the View profile link", async () => {
     seedPassA("chat-1", [AGENT_PARTICIPANT], []);
-    mocks.getAgent.mockResolvedValue(AGENT_DTO);
+    // This case verifies routing, not the lazy permission probe covered by the
+    // surrounding tests. Seed Pass B so unrelated query scheduling cannot
+    // hide the link before the click assertion runs.
+    queryClient.setQueryData(["agent", "a1"], AGENT_DTO);
     render(
       <AgentHovercard agentId="a1" chatId="chat-1" name="Aria">
         <span>Aria</span>

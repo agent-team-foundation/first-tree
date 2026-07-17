@@ -27,9 +27,11 @@ import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat, updateChatMetadata } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
 import {
-  declareGitlabEntityFollow,
+  declareGitlabEntityFollowWithStatus,
   listChatGitlabEntities,
   listVisibleChatGitlabEntities,
+  projectChatGitlabEntity,
+  removeCurrentGitlabEntityFollow,
   removeGitlabEntityFollow,
 } from "../services/gitlab-entity-follow.js";
 import {
@@ -50,6 +52,7 @@ import {
 import { listOpenRequestsForViewer, sendMessage } from "../services/message.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
+import { resolveHumanScmBindingPair } from "../services/scm-attention-line.js";
 import { extractSummary } from "../services/session.js";
 import { summarizeChatTokenUsage } from "../services/session-event.js";
 import { sendFollowResult } from "./github-entity-reply.js";
@@ -272,36 +275,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const { chat, scope } = await requireChatAccess(request, app.db);
       const body = followGithubEntityRequestSchema.parse(request.body);
 
-      const [human] = await app.db
-        .select({ delegateMention: agents.delegateMention })
-        .from(agents)
-        .where(eq(agents.uuid, scope.humanAgentId))
-        .limit(1);
-      if (!human?.delegateMention) {
+      const pair = await resolveHumanScmBindingPair(app.db, chat.id, scope.humanAgentId);
+      if (!pair) {
         throw new BadRequestError(
-          "Following needs a delegate agent to receive the entity's events, and your account has no " +
-            "delegate_mention configured. Set one in your member settings, then retry.",
-        );
-      }
-
-      const [delegate] = await app.db
-        .select({ agentId: chatMembership.agentId })
-        .from(chatMembership)
-        .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-        .where(
-          and(
-            eq(chatMembership.chatId, chat.id),
-            eq(chatMembership.agentId, human.delegateMention),
-            eq(chatMembership.accessMode, "speaker"),
-            eq(agents.status, "active"),
-          ),
-        )
-        .limit(1);
-      if (!delegate) {
-        throw new BadRequestError(
-          "Your delegate agent is not an active speaker of this chat, so the entity's events could never wake " +
-            "it here. Invite the delegate into this chat (chat invite) — or follow from the chat where it " +
-            "already speaks — then retry.",
+          "Following needs delegate_mention to identify an active delegate speaker in this chat; the configured " +
+            "delegate is not an active speaker. Invite that delegate into the chat, then retry.",
         );
       }
 
@@ -310,9 +288,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         { appCredentials: app.config.oauth?.githubApp },
         {
           chatId: chat.id,
-          organizationId: scope.organizationId,
-          humanAgentId: scope.humanAgentId,
-          delegateAgentId: human.delegateMention,
+          organizationId: pair.organizationId,
+          humanAgentId: pair.humanAgentId,
+          delegateAgentId: pair.wakeAgentId,
           boundVia: "human_declared",
           entity: body.entity,
           rebind: body.rebind,
@@ -355,25 +333,64 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const { chat, scope } = await requireChatAccess(request, app.db);
       await requireDirectHumanChatMembership(chat.id, scope.humanAgentId);
       const body = followGitlabEntitySchema.parse(request.body);
-      const entity = await declareGitlabEntityFollow(app.db, {
-        organizationId: scope.organizationId,
+      const pair = await resolveHumanScmBindingPair(app.db, chat.id, scope.humanAgentId);
+      if (!pair) {
+        throw new BadRequestError(
+          "Following needs delegate_mention to identify an active delegate speaker in this chat; the configured " +
+            "delegate is not an active speaker. Invite that delegate into the chat, then retry.",
+        );
+      }
+      const result = await declareGitlabEntityFollowWithStatus(app.db, {
+        organizationId: pair.organizationId,
         connectionId: body.connectionId,
         chatId: chat.id,
         declaredByAgentId: scope.humanAgentId,
+        humanAgentId: pair.humanAgentId,
+        delegateAgentId: pair.wakeAgentId,
         boundVia: "human_declared",
         entityUrl: body.entityUrl,
+        rebind: body.rebind,
       });
-      return reply.status(201).send({ entity });
+      if (result.outcome === "conflict") {
+        return reply.status(409).send({
+          error: "ENTITY_FOLLOWED_ELSEWHERE",
+          message:
+            `This GitLab attention line already lives in chat ${result.conflict.chatId}. ` +
+            "Work there, or re-issue with rebind to move it into this chat.",
+          conflict: result.conflict,
+        });
+      }
+      return reply.status(result.outcome === "already_following" ? 200 : 201).send({
+        status: result.outcome,
+        entity: projectChatGitlabEntity(result.row),
+      });
     },
   );
 
-  app.delete<{ Params: { chatId: string }; Querystring: { mappingId?: string } }>(
+  app.delete<{ Params: { chatId: string }; Querystring: { entity?: string; mappingId?: string } }>(
     "/:chatId/gitlab-entities",
     async (request) => {
       const { chat, scope } = await requireChatAccess(request, app.db);
       await requireDirectHumanChatMembership(chat.id, scope.humanAgentId);
-      if (!request.query.mappingId) throw new BadRequestError("Pass ?mappingId=<GitLab follow id> to unfollow.");
-      return { removed: await removeGitlabEntityFollow(app.db, chat.id, request.query.mappingId) };
+      if (request.query.entity) {
+        return removeCurrentGitlabEntityFollow(app.db, {
+          organizationId: scope.organizationId,
+          chatId: chat.id,
+          entityUrl: request.query.entity,
+        });
+      }
+      if (!request.query.mappingId) {
+        throw new BadRequestError(
+          "Pass ?entity=<GitLab Issue or Merge Request URL> to unfollow. Legacy clients may pass ?mappingId=<id>.",
+        );
+      }
+      return {
+        removed: await removeGitlabEntityFollow(app.db, {
+          organizationId: scope.organizationId,
+          chatId: chat.id,
+          mappingId: request.query.mappingId,
+        }),
+      };
     },
   );
 

@@ -523,6 +523,15 @@ describe("GitLabSection extra DOM behavior", () => {
           state: "open",
           boundVia: "identity_target",
         }),
+        gitlabEntity({
+          entityType: "pull_request",
+          entityUrl: "https://gitlab.internal/Acme/Reviews/-/merge_requests/18",
+          projectPath: "Acme/Reviews",
+          entityIid: 18,
+          title: "Draft change",
+          state: "draft",
+          boundVia: "identity_target",
+        }),
       ],
     });
 
@@ -530,10 +539,15 @@ describe("GitLabSection extra DOM behavior", () => {
     await waitForText(rendered.container, "Review this change");
 
     const hrefs = [...rendered.container.querySelectorAll<HTMLAnchorElement>("a")].map((anchor) => anchor.href);
-    expect(hrefs).toEqual([mergeRequestUrl, "https://gitlab.internal/Acme/Reviews/-/issues/8"]);
-    expect(rendered.container.textContent).toContain("GitLab · 2");
+    expect(hrefs).toEqual([
+      mergeRequestUrl,
+      "https://gitlab.internal/Acme/Reviews/-/merge_requests/18",
+      "https://gitlab.internal/Acme/Reviews/-/issues/8",
+    ]);
+    expect(rendered.container.textContent).toContain("GitLab · 3");
     expect(rendered.container.textContent).toContain("Reviews!17");
     expect(rendered.container.textContent).toContain("Open");
+    expect(rendered.container.textContent).toContain("Draft");
     expect(rendered.container.textContent).toContain("Closed");
     await act(async () => rendered.root.unmount());
   });

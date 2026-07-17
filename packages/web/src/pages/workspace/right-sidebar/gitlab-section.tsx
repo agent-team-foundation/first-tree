@@ -119,13 +119,14 @@ function GitLabRow({ entity }: { entity: ChatGitlabEntity }) {
   );
 }
 
-function iconColor(state: string | null): string {
+function iconColor(state: ChatGitlabEntity["state"]): string {
   switch (state) {
     case "merged":
       return "oklch(0.42 0.18 295)";
     case "closed":
       return "var(--fg-3)";
     case "open":
+    case "draft":
       return "var(--fg-success-strong)";
     default:
       return "var(--fg-3)";
@@ -133,13 +134,15 @@ function iconColor(state: string | null): string {
 }
 
 function viewForState(
-  state: string | null,
+  state: ChatGitlabEntity["state"],
   status: ChatGitlabEntity["status"],
 ): { label: string; tone: DenseBadgeTone } | null {
   if (status === "pending") return { label: "Pending", tone: "outline" };
   switch (state) {
     case "open":
       return { label: "Open", tone: "accent" };
+    case "draft":
+      return { label: "Draft", tone: "outline" };
     case "closed":
       return { label: "Closed", tone: "neutral" };
     case "merged":

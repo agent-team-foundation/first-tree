@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
+import type { OnboardingFailureReason } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { CommunityChannels } from "../../../components/community-channels.js";
 import { Button } from "../../../components/ui/button.js";
@@ -68,6 +69,7 @@ function AdminStartChat() {
     treeAutoDetectDone,
     markTreeAutoDetectDone,
     completeAndEnterChat,
+    reportStepFailure,
   } = useOnboardingFlow();
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"form" | "starting">("form");
@@ -113,6 +115,7 @@ function AdminStartChat() {
   const handleStart = async (): Promise<void> => {
     setError(null);
     setPhase("starting");
+    let failureReason: OnboardingFailureReason = "start_chat_failed";
     try {
       if (!hasRepos) {
         await runStartChat({
@@ -158,6 +161,7 @@ function AdminStartChat() {
       // clicking Start again retries.
       let repos = selectedRepoUrls;
       if (organizationId) {
+        failureReason = "repo_access_check_failed";
         const granted = await queryClient
           .fetchQuery({
             queryKey: ["onboarding", "org-github-repos", organizationId],
@@ -202,8 +206,10 @@ function AdminStartChat() {
       const useBoundTree = treeBindingPlan === "useBoundTree";
       const resolvedTreeBindingPlan = useBoundTree ? "useBoundTree" : "none";
       const agent = await resolveOnboardingAgent(organizationId);
+      failureReason = "repo_resource_sync_failed";
       await ensureStartChatRepos(organizationId, repos);
 
+      failureReason = "start_chat_failed";
       const workChatId = await startOnboardingChat({
         agent,
         bootstrap: buildValueFirstBootstrap(repos, {
@@ -220,6 +226,7 @@ function AdminStartChat() {
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("form");
+      reportStepFailure(failureReason, { step: "start-chat" });
     }
   };
 
@@ -365,7 +372,7 @@ function InviteeStartChat() {
  * pure launch into a real chat. An invitee never mutates team config.
  */
 function InviteeReady() {
-  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
+  const { organizationId, completeAndEnterChat, reportStepFailure } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -393,6 +400,7 @@ function InviteeReady() {
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
+      reportStepFailure("start_chat_failed", { step: "start-chat" });
     }
   };
 
@@ -431,7 +439,7 @@ function InviteeReady() {
  * in a real chat WITH the agent, instead of dropping them into an empty workspace.
  */
 function InviteeNotReady() {
-  const { organizationId, completeAndEnterChat } = useOnboardingFlow();
+  const { organizationId, completeAndEnterChat, reportStepFailure } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -456,6 +464,7 @@ function InviteeNotReady() {
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
+      reportStepFailure("start_chat_failed", { step: "start-chat" });
     }
   };
 

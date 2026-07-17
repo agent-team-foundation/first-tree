@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildClaimReadyGitlabDeliveryId } from "../services/gitlab-connections.js";
 import {
+  applyGitlabPersonnelEvidence,
   extractStableGitlabDeliveryId,
   MAX_GITLAB_PERSONNEL_TARGETS,
   normalizeGitlabWebhook,
@@ -85,6 +86,7 @@ describe("GitLab webhook normalization", () => {
       entity: { type: "issue" },
     });
     expect(note.personnel.mentions).toEqual(["Reviewer.One"]);
+    expect(note.observation?.state).toBeNull();
 
     const editedNote = normalizeGitlabWebhook({
       ...base,
@@ -103,6 +105,112 @@ describe("GitLab webhook normalization", () => {
       },
     });
     expect(editedNote.event).toMatchObject({ kind: "edited", surface: { body: "edited comment" } });
+  });
+
+  it("separates MR observation from semantic delivery and preserves actionable deltas", () => {
+    const normalizeMr = (objectAttributes: Record<string, unknown>, changes?: Record<string, unknown>) =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Merge Request Hook",
+        body: {
+          object_kind: "merge_request",
+          project: project(),
+          user: { username: "alice" },
+          reviewers: [{ username: "Reviewer.One" }],
+          assignees: [],
+          object_attributes: {
+            iid: 27,
+            title: "Envelope",
+            description: "Resolves #12 and `fixes #99`",
+            url: "https://gitlab.internal/Acme/API/-/merge_requests/27",
+            ...objectAttributes,
+          },
+          ...(changes ? { changes } : {}),
+        },
+      });
+
+    const synchronized = normalizeMr({ action: "update", oldrev: "abc123", state: "opened" });
+    expect(synchronized).toMatchObject({
+      observation: { state: "open", entity: { key: "99:pull_request:27" } },
+      event: { kind: "synchronized" },
+    });
+
+    const metadataOnly = normalizeMr(
+      { action: "update", state: "opened" },
+      { labels: { previous: [], current: [{ title: "backend" }] } },
+    );
+    expect(metadataOnly.observation?.state).toBe("open");
+    expect(metadataOnly.event).toBeNull();
+
+    const closed = normalizeMr({ action: "close", state: "closed" });
+    expect(closed.observation?.state).toBe("closed");
+    expect(closed.event).toBeNull();
+
+    const merged = normalizeMr({ action: "merge", state: "merged" });
+    expect(merged.observation?.state).toBe("merged");
+    expect(merged.event).toBeNull();
+
+    const ready = normalizeMr(
+      { action: "update", draft: false, state: "opened" },
+      { draft: { previous: true, current: false } },
+    );
+    expect(ready.observation?.state).toBe("open");
+    expect(ready.event?.kind).toBe("review_requested");
+    expect(applyGitlabPersonnelEvidence(ready, "reviewers").event?.targets).toEqual([
+      { externalUsername: "Reviewer.One", reason: "review_requested" },
+    ]);
+
+    const description = normalizeMr(
+      {
+        action: "update",
+        description: "Fixes #12, closes #12, resolves group/other#8 and ping @Target.One",
+      },
+      {
+        description: {
+          previous: "old",
+          current: "Fixes #12, closes #12, resolves group/other#8 and ping @Target.One",
+        },
+      },
+    );
+    expect(description.event).toMatchObject({
+      kind: "edited",
+      relatedRefs: [{ type: "issue", key: "99:issue:12" }],
+    });
+    expect(description.personnel.mentions).toEqual(["Target.One"]);
+  });
+
+  it("normalizes Issue lifecycle while dropping metadata-only updates", () => {
+    const normalizeIssue = (action: string, changes?: Record<string, unknown>) =>
+      normalizeGitlabWebhook({
+        ...base,
+        eventHeader: "Issue Hook",
+        body: {
+          object_kind: "issue",
+          project: project(),
+          user: { username: "alice" },
+          object_attributes: {
+            iid: 31,
+            action,
+            title: "Issue envelope",
+            description: "hello",
+            url: "https://gitlab.internal/Acme/API/-/issues/31",
+          },
+          ...(changes ? { changes } : {}),
+        },
+      });
+
+    expect(normalizeIssue("open")).toMatchObject({ observation: { state: "open" }, event: { kind: "opened" } });
+    expect(normalizeIssue("close")).toMatchObject({
+      observation: { state: "closed" },
+      event: { kind: "closed" },
+    });
+    expect(normalizeIssue("reopen")).toMatchObject({
+      observation: { state: "open" },
+      event: { kind: "reopened" },
+    });
+    const labelOnly = normalizeIssue("update", { labels: { previous: [], current: [] } });
+    expect(labelOnly.observation?.state).toBe("open");
+    expect(labelOnly.event).toBeNull();
   });
 
   it("extracts personnel targets only from open and update actions", () => {

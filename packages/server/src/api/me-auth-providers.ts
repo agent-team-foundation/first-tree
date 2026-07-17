@@ -12,7 +12,7 @@ import {
 } from "../services/auth-identity.js";
 import { buildAppAuthorizeUrl } from "../services/github-app.js";
 import { buildGoogleAuthorizeUrl } from "../services/google-oauth.js";
-import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../services/oauth-state.js";
+import { STATE_NONCE_COOKIE_NAME, STATE_NONCE_COOKIE_TTL_SECONDS, signOAuthState } from "../services/oauth-state.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { buildCookie, protectOAuthStateNonce } from "./auth/oauth-cookie.js";
 
@@ -161,9 +161,9 @@ async function startProviderAction(
   reply.header(
     "Set-Cookie",
     buildCookie({
-      name: OAUTH_STATE_COOKIE,
+      name: STATE_NONCE_COOKIE_NAME,
       value: protectOAuthStateNonce(nonce, app.config.secrets.encryptionKey),
-      maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
+      maxAge: STATE_NONCE_COOKIE_TTL_SECONDS,
       secure: process.env.NODE_ENV === "production",
     }),
   );

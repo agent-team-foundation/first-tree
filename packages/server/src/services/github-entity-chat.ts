@@ -3,8 +3,6 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { formatEntityTitle, refreshEntityTitle } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
-import { agents } from "../db/schema/agents.js";
-import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { createLogger } from "../observability/index.js";
@@ -15,6 +13,8 @@ import {
   githubEntityKeysEquivalent,
 } from "./github-entity-key.js";
 import type { EntityState, EntityStateSeed } from "./github-entity-state.js";
+import { resolveAgentScmBindingPair } from "./scm-attention-line.js";
+import { decideScmPersonnelTargetChat } from "./scm-target-chat-policy.js";
 
 const log = createLogger("GithubEntityChat");
 
@@ -99,23 +99,13 @@ export async function findReuseChatForInvolved(
     );
   if (boundChats.length === 0) return null;
 
-  const reusable: string[] = [];
-  for (const { chatId } of boundChats) {
-    const speakerRows = await db
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(
-        and(
-          eq(chatMembership.chatId, chatId),
-          eq(chatMembership.accessMode, "speaker"),
-          inArray(chatMembership.agentId, [humanAgentId, delegateAgentId]),
-        ),
-      );
-    const ids = new Set(speakerRows.map((r) => r.agentId));
-    if (ids.has(humanAgentId) && ids.has(delegateAgentId)) reusable.push(chatId);
-    if (reusable.length > 1) break;
-  }
-  return reusable.length === 1 ? (reusable[0] ?? null) : null;
+  const decision = await decideScmPersonnelTargetChat(db, {
+    reason: "review_requested",
+    candidateChatIds: boundChats.map((row) => row.chatId),
+    humanAgentId,
+    wakeAgentId: delegateAgentId,
+  });
+  return decision.kind === "reuse" ? decision.chatId : null;
 }
 
 /**
@@ -451,56 +441,12 @@ export async function resolveBindingPair(
   humanAgentId: string;
   delegateAgentId: string;
 } | null> {
-  const rows = await db
-    .select({
-      chatOrganizationId: chats.organizationId,
-      agentId: chatMembership.agentId,
-      agentOrganizationId: agents.organizationId,
-      agentType: agents.type,
-      agentStatus: agents.status,
-      delegateMention: agents.delegateMention,
-    })
-    .from(chatMembership)
-    .innerJoin(chats, eq(chatMembership.chatId, chats.id))
-    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .where(eq(chatMembership.chatId, chatId))
-    .orderBy(asc(chatMembership.agentId));
-
-  if (rows.length === 0) return null;
-
-  const reporter = rows.find((r) => r.agentId === reporterAgentId);
-  if (!reporter) return null;
-  if (reporter.agentType === "human") return null;
-
-  // Defense-in-depth: `createChat` enforces same-org participants, but
-  // grandfathered cross-org chat_membership rows or admin-override paths
-  // can sneak through. If the reporter is from org A and the chat is in
-  // org B, writing the mapping under org B would orphan it from org A's
-  // installation webhooks (audience scopes by org). Refuse the binding
-  // rather than write a row that will silently fail to route. See #508.
-  if (reporter.agentOrganizationId !== reporter.chatOrganizationId) {
-    log.warn(
-      {
-        chatId,
-        reporterAgentId,
-        reporterOrg: reporter.agentOrganizationId,
-        chatOrg: reporter.chatOrganizationId,
-      },
-      "agent_binding skipped: reporter/chat organization mismatch",
-    );
-    return null;
-  }
-
-  const humans = rows.filter((r) => r.agentType === "human" && r.agentStatus === "active");
-  if (humans.length === 0) return null;
-
-  const linkedHuman = humans.find((h) => h.delegateMention === reporterAgentId);
-  const representative = linkedHuman ?? humans[0];
-  if (!representative) return null;
+  const pair = await resolveAgentScmBindingPair(db, chatId, reporterAgentId);
+  if (!pair) return null;
   return {
-    organizationId: representative.chatOrganizationId,
-    humanAgentId: representative.agentId,
-    delegateAgentId: reporterAgentId,
+    organizationId: pair.organizationId,
+    humanAgentId: pair.humanAgentId,
+    delegateAgentId: pair.wakeAgentId,
   };
 }
 

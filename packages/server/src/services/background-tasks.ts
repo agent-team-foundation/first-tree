@@ -65,7 +65,7 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
 
       // Chat auto-archive sweeper — cadence comes from runtime config so
       // ops can tune (or zero-disable) without touching code. See
-      // services/chat-archive.ts for the GitHub-source archive policy and
+      // services/chat-archive.ts for the SCM-source archive policy and
       // idle threshold (default: 1h).
       const archiveSweepSeconds = app.config.runtime.archiveSweepIntervalSeconds;
       if (archiveSweepSeconds > 0) {

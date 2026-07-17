@@ -7,7 +7,7 @@ import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { findInstallationByGithubId, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { ensureMembership } from "../services/membership.js";
-import { OAUTH_STATE_COOKIE, signOAuthState } from "../services/oauth-state.js";
+import { STATE_NONCE_COOKIE_NAME, signOAuthState } from "../services/oauth-state.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -159,6 +159,8 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       .where(eq(members.id, orgBMember.id));
 
     const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      intent: "install",
+      provider: "github",
       targetOrganizationId: orgBId,
       kickoffUserId: admin.userId,
     });
@@ -167,7 +169,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       expect(res.statusCode).toBe(302);
       const params = new URLSearchParams(res.headers.location?.split("#")[1] ?? "");
@@ -179,6 +181,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       // the target org instead of restoring the user's last-used one.
       expect(params.get("org")).toBe(orgBId);
       expect(params.get("orgPinned")).toBe("1");
+      expect(params.get("callbackIntent")).toBe("install");
     } finally {
       restore();
     }
@@ -229,7 +232,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       // Browser-facing refusal: friendly SPA error page, not raw JSON.
       expect(res.statusCode).toBe(302);
@@ -275,7 +278,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       // Sign-in succeeds (302) — only the install bind is refused.
       expect(res.statusCode).toBe(302);
@@ -319,7 +322,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       // Error surface, no session token issued for the stranger identity.
       expect(res.statusCode).toBe(302);
@@ -378,7 +381,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain("error=install-not-verified");
@@ -417,7 +420,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain("/auth/github/complete#");
@@ -455,7 +458,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       // Refusal is correct — but it must land on the SPA's friendly error
       // surface, not a raw JSON body at the API URL.
@@ -493,13 +496,15 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     // panel), whose polling picks the installation up once approved.
     const app = getApp();
     const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      intent: "install",
+      provider: "github",
       targetOrganizationId: uuidv7(),
       kickoffUserId: uuidv7(),
     });
     const res = await app.inject({
       method: "GET",
       url: `/api/v1/auth/github/callback?state=${token}&setup_action=request`,
-      headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+      headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
     });
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe("/settings/github");
@@ -535,7 +540,7 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       const res = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
-        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+        headers: { cookie: `${STATE_NONCE_COOKIE_NAME}=${nonce}` },
       });
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain("/auth/github/complete#");

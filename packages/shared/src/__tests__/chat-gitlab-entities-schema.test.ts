@@ -21,7 +21,7 @@ describe("chat GitLab entity schemas", () => {
     expect(chatGitlabEntitySchema.parse(pendingEntity)).toEqual(pendingEntity);
     expect(
       chatGitlabEntityListResponseSchema.parse({
-        items: [{ ...pendingEntity, title: "Ship it", status: "active", state: "opened" }],
+        items: [{ ...pendingEntity, title: "Ship it", status: "active", state: "open" }],
       }),
     ).toMatchObject({ items: [{ status: "active", title: "Ship it" }] });
     expect(followChatGitlabEntityResponseSchema.parse({ status: "created", entity: pendingEntity })).toMatchObject({

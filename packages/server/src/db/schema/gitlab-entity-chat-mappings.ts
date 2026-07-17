@@ -26,6 +26,8 @@ export const gitlabEntityChatMappings = pgTable(
     identityLinkId: text("identity_link_id").references(() => gitlabIdentityLinks.id, { onDelete: "cascade" }),
     humanAgentId: text("human_agent_id").references(() => agents.uuid, { onDelete: "cascade" }),
     delegateAgentId: text("delegate_agent_id").references(() => agents.uuid, { onDelete: "cascade" }),
+    attentionMode: text("attention_mode").notNull().default("legacy_route_only"),
+    attentionBackfillVersion: integer("attention_backfill_version").notNull().default(0),
     active: boolean("active").notNull().default(true),
     entityType: text("entity_type").notNull(),
     entityIid: integer("entity_iid").notNull(),
@@ -39,12 +41,40 @@ export const gitlabEntityChatMappings = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("uq_gitlab_entity_pending_chat")
+    uniqueIndex("uq_gitlab_entity_pending_pair")
+      .on(
+        table.connectionId,
+        table.humanAgentId,
+        table.delegateAgentId,
+        table.projectPathNormalized,
+        table.entityType,
+        table.entityIid,
+      )
+      .where(
+        sql`${table.projectId} IS NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target' AND ${table.humanAgentId} IS NOT NULL AND ${table.delegateAgentId} IS NOT NULL`,
+      ),
+    uniqueIndex("uq_gitlab_entity_observed_pair")
+      .on(
+        table.connectionId,
+        table.humanAgentId,
+        table.delegateAgentId,
+        table.projectId,
+        table.entityType,
+        table.entityIid,
+      )
+      .where(
+        sql`${table.projectId} IS NOT NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target' AND ${table.humanAgentId} IS NOT NULL AND ${table.delegateAgentId} IS NOT NULL`,
+      ),
+    uniqueIndex("uq_gitlab_entity_pending_legacy_chat")
       .on(table.connectionId, table.chatId, table.projectPathNormalized, table.entityType, table.entityIid)
-      .where(sql`${table.projectId} IS NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target'`),
-    uniqueIndex("uq_gitlab_entity_observed_chat")
+      .where(
+        sql`${table.projectId} IS NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target' AND ${table.humanAgentId} IS NULL AND ${table.delegateAgentId} IS NULL`,
+      ),
+    uniqueIndex("uq_gitlab_entity_observed_legacy_chat")
       .on(table.connectionId, table.chatId, table.projectId, table.entityType, table.entityIid)
-      .where(sql`${table.projectId} IS NOT NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target'`),
+      .where(
+        sql`${table.projectId} IS NOT NULL AND ${table.active} AND ${table.boundVia} <> 'identity_target' AND ${table.humanAgentId} IS NULL AND ${table.delegateAgentId} IS NULL`,
+      ),
     uniqueIndex("uq_gitlab_entity_identity_target")
       .on(table.connectionId, table.identityLinkId, table.projectId, table.entityType, table.entityIid)
       .where(sql`${table.projectId} IS NOT NULL AND ${table.active} AND ${table.boundVia} = 'identity_target'`),
@@ -67,5 +97,10 @@ export const gitlabEntityChatMappings = pgTable(
       "ck_gitlab_entity_identity_owner",
       sql`${table.boundVia} <> 'identity_target' OR (${table.identityLinkId} IS NOT NULL AND ${table.humanAgentId} IS NOT NULL AND ${table.delegateAgentId} IS NOT NULL AND ${table.projectId} IS NOT NULL)`,
     ),
+    check(
+      "ck_gitlab_entity_attention_pair",
+      sql`(${table.humanAgentId} IS NULL AND ${table.delegateAgentId} IS NULL) OR (${table.humanAgentId} IS NOT NULL AND ${table.delegateAgentId} IS NOT NULL)`,
+    ),
+    check("ck_gitlab_entity_attention_mode", sql`${table.attentionMode} IN ('paired', 'legacy_route_only')`),
   ],
 );

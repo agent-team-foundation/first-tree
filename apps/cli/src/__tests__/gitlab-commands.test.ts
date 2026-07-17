@@ -38,14 +38,14 @@ afterEach(() => {
 });
 
 describe("gitlab entity attention commands", () => {
-  it("registers only follow, following, and unfollow without GitHub-only flags", async () => {
+  it("registers follow, following, and unfollow with pair-aware rebind", async () => {
     const { registerGitlabCommands } = await import("../commands/gitlab/index.js");
     const root = new Command();
     registerGitlabCommands(root);
 
     const gitlab = command(root, "gitlab");
     expect(gitlab.commands.map((entry) => entry.name()).sort()).toEqual(["follow", "following", "unfollow"]);
-    expect(command(gitlab, "follow").options.map((option) => option.long)).toEqual(["--chat", "--agent"]);
+    expect(command(gitlab, "follow").options.map((option) => option.long)).toEqual(["--chat", "--agent", "--rebind"]);
     expect(gitlab.commands.some((entry) => entry.name() === "context-review")).toBe(false);
   });
 
@@ -75,7 +75,7 @@ describe("gitlab entity attention commands", () => {
     const followRoot = new Command();
     registerGitlabFollowCommand(followRoot);
     await command(followRoot, "follow").parseAsync([entity.entityUrl, "--agent", "builder"], { from: "user" });
-    expect(sdk.followGitlabEntity).toHaveBeenCalledWith("chat-env", { entityUrl: entity.entityUrl });
+    expect(sdk.followGitlabEntity).toHaveBeenCalledWith("chat-env", { entityUrl: entity.entityUrl, rebind: false });
     expect(localAgentMocks.createSdk).toHaveBeenCalledWith("builder");
     expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("remains pending");
     expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("has not called GitLab");
@@ -83,7 +83,10 @@ describe("gitlab entity attention commands", () => {
     await command(followRoot, "follow").parseAsync([entity.entityUrl, "--chat", "chat-explicit"], {
       from: "user",
     });
-    expect(sdk.followGitlabEntity).toHaveBeenLastCalledWith("chat-explicit", { entityUrl: entity.entityUrl });
+    expect(sdk.followGitlabEntity).toHaveBeenLastCalledWith("chat-explicit", {
+      entityUrl: entity.entityUrl,
+      rebind: false,
+    });
     expect(String(outputMocks.success.mock.calls.at(-1)?.[0].hint)).toContain("Already pending");
 
     const { registerGitlabFollowingCommand } = await import("../commands/gitlab/following.js");
@@ -112,6 +115,7 @@ describe("gitlab entity attention commands", () => {
     expect(() => handleGitlabSdkError(new SdkError(404, "GitLab connection is not configured"))).toThrow(
       "NO_GITLAB_CONNECTION",
     );
+    expect(() => handleGitlabSdkError(new SdkError(409, "line lives elsewhere"))).toThrow("GITLAB_FOLLOW_CONFLICT");
     const generic = new Error("server unavailable");
     expect(() => handleGitlabSdkError(generic)).toThrow("server unavailable");
     expect(localAgentMocks.handleSdkError).toHaveBeenLastCalledWith(generic);

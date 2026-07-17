@@ -539,10 +539,12 @@ describe("POST /me/onboarding/events", () => {
         url: "/api/v1/me/onboarding/events",
         headers: { authorization: `Bearer ${admin.accessToken}` },
         payload: {
-          event: "agent_created",
+          event: "step_viewed",
           attrs: {
             event: "onboarding.fake_forged_event",
             userId: "attacker-controlled-user-id",
+            step: "connect-computer",
+            path: "admin",
             extra: "legit-attr-keeps-working",
           },
         },
@@ -555,8 +557,10 @@ describe("POST /me/onboarding/events", () => {
     // Find the funnel line and confirm server-controlled fields stand.
     const funnelEntry = captured.find((c) => typeof c.event === "string" && String(c.event).startsWith("onboarding."));
     expect(funnelEntry).toBeDefined();
-    expect(funnelEntry?.event).toBe("onboarding.agent_created");
+    expect(funnelEntry?.event).toBe("onboarding.step_viewed");
     expect(funnelEntry?.userId).toBe(admin.userId);
+    expect(funnelEntry?.step).toBe("connect-computer");
+    expect(funnelEntry?.path).toBe("admin");
     // Non-conflicting attrs keys must still flow through — the schema lets
     // callers attach arbitrary primitives for funnel context.
     expect(funnelEntry?.extra).toBe("legit-attr-keeps-working");

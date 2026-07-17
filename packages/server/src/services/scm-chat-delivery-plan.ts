@@ -1,13 +1,11 @@
-import type { InvolveReason } from "@first-tree/shared";
+import type { InvolveReason, ScmAudienceEntry } from "@first-tree/shared";
 
 export type ScmAudienceTarget = {
-  senderAgentId: string;
-  humanAgentId: string | null;
-  wakeAgentId: string | null;
-  kind: "existing" | "new";
-  chatId: string | null;
-  involveReason: InvolveReason | null;
-  involveLogin: string | null;
+  entry: ScmAudienceEntry;
+  directedContext?: {
+    reason: InvolveReason;
+    externalUsername: string;
+  } | null;
 };
 
 export type ScmDeliveryEntry = {
@@ -45,8 +43,9 @@ export async function planScmChatDeliveries(input: {
   const deliveries = new Map<string, ScmPlannedChatDelivery>();
   let failed = 0;
   for (const target of input.targets) {
-    const freshDirectedSelfInvolve = target.kind === "new" && target.involveReason !== null;
-    if (input.actorHumanId && target.humanAgentId === input.actorHumanId && !freshDirectedSelfInvolve) {
+    const humanAgentId = scmTargetHumanAgentId(target);
+    const freshDirectedSelfInvolve = target.entry.kind === "personnel_target";
+    if (input.actorHumanId && humanAgentId === input.actorHumanId && !freshDirectedSelfInvolve) {
       continue;
     }
 
@@ -75,30 +74,72 @@ export async function planScmChatDeliveries(input: {
 }
 
 function addScmDeliveryEntry(delivery: ScmPlannedChatDelivery, target: ScmAudienceTarget): void {
-  const key = `${target.senderAgentId}:${target.humanAgentId ?? "-"}:${target.wakeAgentId ?? "-"}`;
+  const senderAgentId = scmTargetSenderAgentId(target);
+  const humanAgentId = scmTargetHumanAgentId(target);
+  const wakeAgentId = scmTargetWakeAgentId(target);
+  const involveReason =
+    target.entry.kind === "personnel_target" ? target.entry.reason : (target.directedContext?.reason ?? null);
+  const involveLogin =
+    target.entry.kind === "personnel_target"
+      ? target.entry.externalUsername
+      : (target.directedContext?.externalUsername ?? null);
+  const key = `${senderAgentId}:${humanAgentId ?? "-"}:${wakeAgentId ?? "-"}`;
   const reasons = new Set<"follow" | InvolveReason>();
-  if (target.kind === "existing") reasons.add("follow");
-  if (target.involveReason) reasons.add(target.involveReason);
+  if (target.entry.kind !== "personnel_target") reasons.add("follow");
+  if (involveReason) reasons.add(involveReason);
   const existing = delivery.entries.get(key);
   if (existing) {
     for (const reason of reasons) existing.reasons.add(reason);
     if (
-      target.involveReason &&
-      (!existing.involveReason || involveReasonRank(target.involveReason) < involveReasonRank(existing.involveReason))
+      involveReason &&
+      (!existing.involveReason || involveReasonRank(involveReason) < involveReasonRank(existing.involveReason))
     ) {
-      existing.involveReason = target.involveReason;
-      existing.involveLogin = target.involveLogin;
+      existing.involveReason = involveReason;
+      existing.involveLogin = involveLogin;
     }
     return;
   }
   delivery.entries.set(key, {
-    senderAgentId: target.senderAgentId,
-    humanAgentId: target.humanAgentId,
-    wakeAgentId: target.wakeAgentId,
+    senderAgentId,
+    humanAgentId,
+    wakeAgentId,
     reasons,
-    involveReason: target.involveReason,
-    involveLogin: target.involveLogin,
+    involveReason,
+    involveLogin,
   });
+}
+
+export function scmTargetHumanAgentId(target: ScmAudienceTarget): string | null {
+  switch (target.entry.kind) {
+    case "existing_line":
+      return target.entry.line.humanAgentId;
+    case "personnel_target":
+      return target.entry.humanAgentId;
+    case "legacy_route":
+      return null;
+  }
+}
+
+export function scmTargetWakeAgentId(target: ScmAudienceTarget): string | null {
+  switch (target.entry.kind) {
+    case "existing_line":
+      return target.entry.line.wakeAgentId;
+    case "personnel_target":
+      return target.entry.wakeAgentId;
+    case "legacy_route":
+      return null;
+  }
+}
+
+export function scmTargetSenderAgentId(target: ScmAudienceTarget): string {
+  switch (target.entry.kind) {
+    case "existing_line":
+      return target.entry.line.humanAgentId;
+    case "personnel_target":
+      return target.entry.humanAgentId;
+    case "legacy_route":
+      return target.entry.route.senderAgentId;
+  }
 }
 
 export function compareScmDeliveryEntries(a: ScmDeliveryEntry, b: ScmDeliveryEntry): number {

@@ -615,7 +615,7 @@ GitLab API, validate an entity live, or use the current `glab` account.
 
 ```
 first-tree gitlab
-├── follow <issue-or-mr-url> [--chat <chatId>] [--agent <name>]
+├── follow <issue-or-mr-url> [--chat <chatId>] [--agent <name>] [--rebind]
 ├── following [--chat <chatId>] [--agent <name>]
 └── unfollow <issue-or-mr-url> [--chat <chatId>] [--agent <name>]
 ```
@@ -623,7 +623,7 @@ first-tree gitlab
 ```bash
 # Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
 first-tree gitlab follow https://gitlab.example/acme/api/-/issues/42
-first-tree gitlab follow https://gitlab.example/acme/api/-/merge_requests/42
+first-tree gitlab follow https://gitlab.example/acme/api/-/merge_requests/42 --rebind
 first-tree gitlab following
 first-tree gitlab unfollow https://gitlab.example/acme/api/-/issues/42
 ```
@@ -631,10 +631,13 @@ first-tree gitlab unfollow https://gitlab.example/acme/api/-/issues/42
 `follow` accepts only a full Issue or Merge Request URL from the Team's one
 configured GitLab instance. It records a pending declaration without provider
 egress; the next matching valid webhook supplies numeric project identity and
-activates the declaration. Repeating a follow in the same chat is idempotent,
-and the same entity may be followed independently by multiple chats. A pending
+activates the declaration. Repeating a follow by the same human/delegate pair
+in the same chat is idempotent. The same pair cannot follow the entity from a
+second chat: the command reports the existing room, and `--rebind` atomically
+moves that line when the task context intentionally changes. Different pairs
+remain independent. A pending
 declaration reports `state: null` because First Tree has not verified provider
-state. There is no GitHub-style `--rebind` or `context-review` command.
+state. There is no GitLab `context-review` command.
 
 `following` returns every active binding in the chat as a stable public
 projection, including automatic reviewer / assignee / mention routing and
@@ -1272,9 +1275,10 @@ Old per-route rate-limit env vars are no longer read.
 | `FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS` | `300` (set `0` to disable) |
 | `FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` | `3600` |
 
-`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the GitHub-source archive idle
-threshold. Mapped chats also require all bound entities to be closed/merged;
-source=github chats with no mapping use the same idle threshold.
+`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the SCM-source archive idle
+threshold. Mapped GitHub/GitLab chats also require all bound entities to be
+closed/merged; provider-owned chats with no mapping use the same idle
+threshold.
 
 **Observability:**
 
