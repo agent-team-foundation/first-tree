@@ -27,8 +27,12 @@
       (() => {
         if (window.location.hostname !== "cloud.first-tree.ai") return;
         window.dataLayer = window.dataLayer || [];
-        window.gtag = (...args) => {
-          window.dataLayer.push(args);
+        // Keep the official gtag queue shape. gtag.js consumes the function's
+        // Arguments object; pushing the rest-parameter Array leaves commands
+        // queued without producing GA collect requests in production.
+        window.gtag = function gtag() {
+          // biome-ignore lint/complexity/noArguments: the official gtag.js queue contract uses Arguments.
+          window.dataLayer.push(arguments);
         };
         const tag = document.createElement("script");
         tag.async = true;

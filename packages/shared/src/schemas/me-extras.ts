@@ -127,6 +127,10 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  *   - `dismissed`              — when PATCH /me/onboarding flips dismissed
  *
  * Web reports:
+ *   - `step_viewed`            — a visible standalone onboarding step mounted
+ *   - `step_completed`         — the user satisfied a visible step and advanced
+ *   - `step_paused`            — the user chose "finish later" from a step
+ *   - `resumed`                — the user resumed guided setup from Settings
  *   - `team_renamed`           — Step 1 user changed the auto-named team
  *   - `agent_created`          — Step 2 successfully created the agent
  *   - `kickoff_chat_started`   — a first-chat or tree-setup kickoff was created
@@ -134,6 +138,10 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  *   - `tree_intro_dismissed`   — Step 3 [I'll do it later] clicked
  */
 export const onboardingEventNameSchema = z.enum([
+  "step_viewed",
+  "step_completed",
+  "step_paused",
+  "resumed",
   "team_renamed",
   "agent_created",
   "kickoff_chat_started",

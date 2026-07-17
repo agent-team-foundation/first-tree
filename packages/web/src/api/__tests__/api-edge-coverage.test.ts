@@ -9,6 +9,9 @@ const apiMock = vi.hoisted(() => ({
 }));
 
 const rawMock = vi.hoisted(() => vi.fn());
+const analyticsMock = vi.hoisted(() => ({ trackEvent: vi.fn() }));
+
+vi.mock("../../analytics.js", () => analyticsMock);
 
 vi.mock("../client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../client.js")>();
@@ -25,6 +28,7 @@ beforeEach(() => {
   apiMock.get.mockReset();
   apiMock.post.mockReset();
   rawMock.mockReset();
+  analyticsMock.trackEvent.mockReset();
   apiMock.get.mockResolvedValue({});
   apiMock.post.mockResolvedValue({});
 });
@@ -176,7 +180,13 @@ describe("onboarding and campaign API wrappers", () => {
     apiMock.get.mockResolvedValueOnce({ needsTreeSetup: true, hasTreeBinding: false, hasTreeSetupKickoff: true });
     const onboarding = await import("../onboarding-events.js");
 
-    await expect(onboarding.reportOnboardingEvent("team_renamed", { step: "connect-code" })).resolves.toBeUndefined();
+    await expect(
+      onboarding.reportOnboardingEvent("team_renamed", {
+        step: "connect-code",
+        organizationId: "org-1",
+        chatId: "chat-1",
+      }),
+    ).resolves.toBeUndefined();
     await expect(onboarding.markOnboardingCompleted("org/id")).resolves.toBeUndefined();
     await expect(
       onboarding.postOnboardingStartChat({ agentUuid: "agent-1", bootstrap: "start", complete: true }),
@@ -192,8 +202,9 @@ describe("onboarding and campaign API wrappers", () => {
 
     expect(apiMock.post).toHaveBeenNthCalledWith(1, "/me/onboarding/events", {
       event: "team_renamed",
-      attrs: { step: "connect-code" },
+      attrs: { step: "connect-code", organizationId: "org-1", chatId: "chat-1" },
     });
+    expect(analyticsMock.trackEvent).toHaveBeenCalledWith("onboarding_team_renamed", { step: "connect-code" });
     expect(apiMock.post).toHaveBeenNthCalledWith(2, "/me/onboarding-completed", { organizationId: "org/id" });
     expect(apiMock.post).toHaveBeenNthCalledWith(3, "/me/onboarding/kickoff", {
       agentUuid: "agent-1",

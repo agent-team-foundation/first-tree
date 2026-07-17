@@ -1488,6 +1488,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(authMock.value.restoreOnboarding).toHaveBeenCalled();
+    expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith("resumed", { source: "settings" });
     await unmountRoot(dismissed.root);
 
     authMock.value = { ...authMock.value, onboardingCompletedAt: "2026-05-02T00:00:00.000Z" };
