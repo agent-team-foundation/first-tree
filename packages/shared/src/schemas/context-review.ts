@@ -171,6 +171,56 @@ export const contextReviewTaskMetadataSchema = z
   .pipe(contextReviewTaskMetadataShape);
 export type ContextReviewTaskMetadata = z.infer<typeof contextReviewTaskMetadataSchema>;
 
+function isSortedUnique(values: readonly string[]): boolean {
+  return values.every((value, index) => index === 0 || (values[index - 1] ?? "") < value);
+}
+
+/**
+ * Stricter producer admission for a Write-created Agent Review task. The
+ * Phase 2 consumer intentionally accepts failed/not-run verification packets;
+ * dispatch only accepts a verified, deterministic file set.
+ */
+export const contextReviewTaskCreateMetadataSchema = contextReviewTaskMetadataSchema.superRefine((value, ctx) => {
+  const packet = value.reviewPacketV1;
+  if (packet.verify.status !== "passed") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reviewPacketV1", "verify", "status"],
+      message: "Agent Review dispatch requires Context Tree verification to pass",
+    });
+  }
+  if (packet.targetPaths.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reviewPacketV1", "targetPaths"],
+      message: "Agent Review dispatch requires at least one target path",
+    });
+  }
+  if (!isSortedUnique(packet.targetPaths)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reviewPacketV1", "targetPaths"],
+      message: "Agent Review target paths must be sorted and unique",
+    });
+  }
+  if (!isSortedUnique(packet.repairScope)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reviewPacketV1", "repairScope"],
+      message: "Agent Review repair scope must be sorted and unique",
+    });
+  }
+  const repairScope = new Set(packet.repairScope);
+  if (packet.targetPaths.some((path) => !repairScope.has(path))) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reviewPacketV1", "targetPaths"],
+      message: "Agent Review target paths must be contained in repair scope",
+    });
+  }
+});
+export type ContextReviewTaskCreateMetadata = z.infer<typeof contextReviewTaskCreateMetadataSchema>;
+
 export const CONTEXT_REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const;
 export const CONTEXT_REVIEW_BODY_MAX_BYTES = 64 * 1024;
 

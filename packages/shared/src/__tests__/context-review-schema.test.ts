@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONTEXT_REVIEW_PACKET_MAX_BYTES,
   CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH,
+  contextReviewTaskCreateMetadataSchema,
   contextReviewTaskMetadataSchema,
   reviewPacketV1Schema,
 } from "../schemas/context-review.js";
@@ -69,6 +70,29 @@ describe("Context Review task metadata", () => {
       contextReviewTaskMetadataSchema.safeParse({
         taskType: "context_tree_pr_review",
         reviewPacketV1: nested,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("admits only verified deterministic Write packets for dispatch", () => {
+    const valid = { taskType: "context_tree_pr_review", reviewPacketV1: packet() };
+    expect(contextReviewTaskCreateMetadataSchema.safeParse(valid).success).toBe(true);
+    expect(
+      contextReviewTaskCreateMetadataSchema.safeParse({
+        ...valid,
+        reviewPacketV1: { ...packet(), verify: { status: "failed", summary: "verify failed" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      contextReviewTaskCreateMetadataSchema.safeParse({
+        ...valid,
+        reviewPacketV1: { ...packet(), targetPaths: ["z.md", "a.md"], repairScope: ["a.md", "z.md"] },
+      }).success,
+    ).toBe(false);
+    expect(
+      contextReviewTaskCreateMetadataSchema.safeParse({
+        ...valid,
+        reviewPacketV1: { ...packet(), targetPaths: ["outside.md"] },
       }).success,
     ).toBe(false);
   });

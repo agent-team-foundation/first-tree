@@ -9,7 +9,7 @@ import {
   parseLandingCampaignTrialChatMetadata,
   type SendMessage,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, lt, type SQL, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -23,9 +23,11 @@ import { resolveAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
 import {
+  type DeferredSendMessagePostCommitEffects,
   preflightMessageSendIntent,
   runDeferredSendMessagePostCommitEffects,
   type SendIntentParticipant,
+  type SendMessageResult,
   sendMessage,
 } from "./message.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
@@ -40,6 +42,15 @@ type LandingCampaignTrialCreateOptions = {
   allowLandingCampaignTrial?: boolean;
 };
 
+export type TaskChatReuseContext = {
+  chat: typeof chats.$inferSelect;
+  openingMessage: typeof messages.$inferSelect;
+};
+
+export type TaskChatReuseActivity = SendMessageResult & {
+  deferredPostCommitEffects: DeferredSendMessagePostCommitEffects;
+};
+
 export type CreateTaskChatInput = {
   mode: "task";
   initiatorAgentId: string;
@@ -50,6 +61,10 @@ export type CreateTaskChatInput = {
   description?: string | null;
   onboardingKickoffKey?: string;
   beforeInitialMessage?: () => Promise<void>;
+  /** Runs inside every keyed resolution transaction, including reuse. */
+  beforeTaskResult?: (db: Database) => Promise<void>;
+  /** Reconciles live task state inside the locked keyed-Chat reuse transaction. */
+  onTaskReuse?: (db: Database, context: TaskChatReuseContext) => Promise<TaskChatReuseActivity | null>;
   initialMessage: SendMessage;
   /** Trusted internal capability forwarded only for Context Reviewer bootstrap. */
   allowContextReviewRun?: boolean;
@@ -91,6 +106,8 @@ export type CreateTaskChatResult = {
   message: typeof messages.$inferSelect;
   participants: (typeof chatMembership.$inferSelect)[];
   recipients: string[];
+  /** Message whose notify=true inbox rows should be signaled after commit. */
+  notificationMessageId: string | null;
   initialMessageCreated: boolean;
   effectiveSenderId: string;
   initialRecipientAgentIds: string[];
@@ -358,6 +375,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     participants: allSpeakerRows,
     requireActive: true,
     allowLandingCampaignTrial: input.allowLandingCampaignTrial,
+    allowContextReviewRun: input.allowContextReviewRun,
   });
 
   const effectiveSender = byId.get(effectiveSenderId);
@@ -397,8 +415,15 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
   if (!kickoffKey && input.beforeInitialMessage) {
     throw new Error("Task chat beforeInitialMessage requires an onboardingKickoffKey");
   }
+  if (!kickoffKey && input.beforeTaskResult) {
+    throw new Error("Task chat beforeTaskResult requires an onboardingKickoffKey");
+  }
+  if (!kickoffKey && input.onTaskReuse) {
+    throw new Error("Task chat onTaskReuse requires an onboardingKickoffKey");
+  }
   if (kickoffKey) {
     const result = await db.transaction(async (tx) => {
+      if (input.beforeTaskResult) await input.beforeTaskResult(tx as unknown as Database);
       const initialDescription = input.description && input.description.length > 0 ? input.description : null;
       const values = {
         id: chatId,
@@ -432,7 +457,12 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         );
       }
 
-      const [existingMessage] = await tx.select().from(messages).where(eq(messages.chatId, activeChat.id)).limit(1);
+      const [existingMessage] = await tx
+        .select()
+        .from(messages)
+        .where(eq(messages.chatId, activeChat.id))
+        .orderBy(asc(messages.createdAt), asc(messages.id))
+        .limit(1);
       if (!inserted && !existingMessage) {
         await addChatParticipants(
           tx,
@@ -445,22 +475,33 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         );
       }
 
-      const participants = await tx
-        .select()
-        .from(chatMembership)
-        .where(and(eq(chatMembership.chatId, activeChat.id), eq(chatMembership.accessMode, "speaker")));
       if (existingMessage) {
+        const reuseActivity = input.onTaskReuse
+          ? await input.onTaskReuse(tx as unknown as Database, {
+              chat: activeChat,
+              openingMessage: existingMessage,
+            })
+          : null;
+        const participants = await tx
+          .select()
+          .from(chatMembership)
+          .where(and(eq(chatMembership.chatId, activeChat.id), eq(chatMembership.accessMode, "speaker")));
         return {
           chat: activeChat,
           message: existingMessage,
           participants,
-          recipients: [] as string[],
+          recipients: reuseActivity?.recipients ?? ([] as string[]),
+          notificationMessageId: reuseActivity?.message.id ?? null,
           initialMessageCreated: false,
-          postCommitEffects: null,
+          postCommitEffects: reuseActivity?.deferredPostCommitEffects ?? null,
         };
       }
 
       if (input.beforeInitialMessage) await input.beforeInitialMessage();
+      const participants = await tx
+        .select()
+        .from(chatMembership)
+        .where(and(eq(chatMembership.chatId, activeChat.id), eq(chatMembership.accessMode, "speaker")));
       invalidateChatAudience(activeChat.id);
       const sent = await sendMessage(tx as unknown as Database, activeChat.id, effectiveSenderId, initialMessage, {
         deferPostCommitEffects: true,
@@ -475,6 +516,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         message: sent.message,
         participants,
         recipients: sent.recipients,
+        notificationMessageId: sent.message.id,
         initialMessageCreated: true,
         postCommitEffects: sent.deferredPostCommitEffects,
       };
@@ -536,6 +578,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     message,
     participants,
     recipients,
+    notificationMessageId: message.id,
     initialMessageCreated: true,
     effectiveSenderId,
     initialRecipientAgentIds,
@@ -607,6 +650,7 @@ function validateCreateParticipants(input: {
   participants: readonly AgentIdentityForCreate[];
   requireActive: boolean;
   allowLandingCampaignTrial?: boolean;
+  allowContextReviewRun?: boolean;
 }): void {
   const crossOrg = input.participants.filter((a) => a.organizationId !== input.organizationId);
   if (crossOrg.length > 0) {
@@ -637,7 +681,7 @@ function validateCreateParticipants(input: {
       .filter((a) => a.id !== input.caller.id)
       .map((a) => ({ uuid: a.id, visibility: a.visibility, managerId: a.managerId })),
   );
-  if (rejectedTargets.length > 0) {
+  if (rejectedTargets.length > 0 && !input.allowContextReviewRun) {
     throw new ForbiddenError(
       `Only the owner can add a private agent to a chat: ${rejectedTargets.map((t) => t.uuid).join(", ")}`,
     );

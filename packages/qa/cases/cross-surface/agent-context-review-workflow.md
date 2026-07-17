@@ -1,6 +1,6 @@
 ---
 id: agent-context-review-workflow
-description: Validate that one assigned Reviewer Agent owns a managed Context Tree PR from task packet through repair, complete successor review, and exact-head squash merge.
+description: Validate one stable managed PR task Chat from member Write dispatch through Reviewer replacement, repair, successor review, and exact-head squash merge.
 areas: [cross-surface]
 surfaces: [cli, client, server, github, runtime]
 ---
@@ -27,22 +27,37 @@ GitHub, concurrency, and recovery behavior.
 - Bind a disposable Context Tree and create two active non-human Reviewer
   Agents, A and B. Assign A initially. Do not install the GitHub App for the
   primary path.
+- Log the CLI in as a human member with a linked GitHub identity. Do not create
+  or select a local Working Agent or Client for the Write/dispatch path.
 - Give the Host GitHub identity only ordinary branch/PR write and merge access;
   configure a disposable check for waiting/failure cases.
-- Until the Write producer ships, create an ordinary task Chat and inject the
-  exact `taskType = context_tree_pr_review` plus `reviewPacketV1` metadata that
-  the producer contract defines. Do not use a private endpoint or another
-  packet shape.
+- Prepare a verified same-repository managed PR with the exact marker, immutable
+  repair scope, and strict `taskType = context_tree_pr_review` plus
+  `reviewPacketV1` metadata file. Dispatch only through member
+  `chat create --as-member`; do not use a private endpoint, caller-supplied
+  Reviewer/task key/topic, or another packet shape.
 - Prepare clean, repairable, protected/out-of-scope, stale-head, author-race,
   malformed-packet, and disabled/reassigned fixtures.
 - Store redacted evidence outside the repository.
 
 ## Operate and Observe
 
-- Read `first-tree org context-tree review-config --json` as the assigned
-  Reviewer and another Agent. Confirm only the assigned Agent reports
-  `Assigned`, the repository/branch come from the same response, and no App is
-  required.
+- Read `first-tree --json org context-tree review-config --as-member` with no
+  local Client, then read agent-scoped config as the assigned Reviewer and
+  another Agent. Confirm member selection fails closed when Team choice is
+  ambiguous, only the assigned Agent reports `Assigned`, repository/branch are
+  live, and no App is required.
+- Dispatch through the real CLI and confirm the signed-in human authored the
+  immutable opening, the configured private Reviewer became a speaker, and one
+  notify=true Inbox delivery exists. Retry concurrently and with a new head;
+  confirm the stable Team + task type + canonical repository + PR identity
+  returns the same Chat/opening without duplicate wake or packet replacement.
+- Reassign A to B and retry the same dispatch. Confirm the same Chat atomically
+  backfills B, appends one server-authored takeover addressed only to B,
+  removes A as Reviewer speaker, and recomputes watcher/audience state without
+  changing human participants or history. Repeat the retry, disable/re-enable
+  A, and exercise A → B → A; confirm no duplicate takeover/wake and no Reviewer
+  inherits another Reviewer's same-head result.
 - Deliver a valid task and confirm the client renders an explicitly untrusted
   task context. Confirm the Reviewer checks live binding, assignment, PR
   author/head/refs, managed marker, and repair scope before every mutation.

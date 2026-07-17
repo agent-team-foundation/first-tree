@@ -132,6 +132,7 @@ export type {
   AccessTokenProvider,
   ContextReviewRuntimeConfig,
   ContextTreeConfig,
+  MemberProfile,
   PaginatedResult,
   RegisterResult,
   SdkConfig,

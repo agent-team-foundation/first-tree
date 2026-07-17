@@ -6,11 +6,20 @@ import { setJsonMode } from "../core/output.js";
 
 const localAgentMocks = vi.hoisted(() => ({
   createSdk: vi.fn(),
+  handleSdkError: vi.fn((error: unknown) => {
+    throw error;
+  }),
+}));
+
+const memberMocks = vi.hoisted(() => ({
+  createMemberSdk: vi.fn(),
 }));
 
 vi.mock("../commands/_shared/local-agent.js", () => ({
   createSdk: localAgentMocks.createSdk,
+  handleSdkError: localAgentMocks.handleSdkError,
 }));
+vi.mock("../commands/_shared/member.js", () => memberMocks);
 
 class ProcessExit extends Error {
   constructor(readonly exitCode: number) {
@@ -94,6 +103,35 @@ describe("org context-tree CLI", () => {
         assigned: true,
         agentUuid: "reviewer-1",
       },
+    });
+  });
+
+  it("reads Reviewer configuration as the signed-in member without a local Agent or Client", async () => {
+    memberMocks.createMemberSdk.mockReturnValue({
+      getMemberProfile: vi.fn(async () => ({
+        memberships: [{ organizationId: "org-a" }, { organizationId: "org-b" }],
+        defaultOrganizationId: "org-b",
+      })),
+      getMemberContextTreeSetting: vi.fn(async () => ({
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "main",
+      })),
+      getMemberContextTreeFeatures: vi.fn(async () => ({
+        contextReviewer: {
+          enabled: true,
+          agentUuid: "private-reviewer",
+          reviewerAgent: { uuid: "private-reviewer", name: null, displayName: "Reviewer" },
+        },
+      })),
+    });
+
+    await buildProgram().parseAsync(["context-tree", "review-config", "--as-member"], { from: "user" });
+
+    expect(localAgentMocks.createSdk).not.toHaveBeenCalled();
+    expect(stderr).toContain("Reviewer             private-reviewer");
+    expect(successEnvelope()).toMatchObject({
+      ok: true,
+      data: { enabled: true, assigned: true, agentUuid: "private-reviewer" },
     });
   });
 

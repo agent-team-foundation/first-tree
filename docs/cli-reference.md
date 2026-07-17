@@ -328,11 +328,13 @@ Day-to-day messaging.
 ```
 first-tree chat
 ├── create [message]                               # create a separate task chat and write its first message
-│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
+│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required unless --as-member
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
 │     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
+│     --as-member [--org <orgId>]                  #   dedicated signed-in-member Agent Review keyed task; no local Agent/Client required
+│     --metadata-file <path>                       #   strict context_tree_pr_review opening metadata; with --as-member + markdown
 ├── send <name> [message]                            # wake a participant — agent or human (a send to a human is informational only; a question the next step depends on goes through `chat ask`)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
 │     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
@@ -363,6 +365,12 @@ first-tree chat
 first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent \
   --topic "rollout review" \
   --description "reviewing rollout plan; waiting on code-agent"
+
+# Dedicated Agent Review producer. Recipient, topic, human sender, provenance,
+# and the internal stable PR task key are all derived by the Server from live Team
+# configuration; callers cannot supply them. This mode is safe to retry.
+first-tree chat create --as-member --format markdown \
+  --metadata-file /tmp/review-packet.json < /tmp/review-opening.md
 
 # Start a new task chat with a tracked question. The first request must target
 # exactly one human. The message body IS the ask and must be
@@ -513,10 +521,19 @@ you want to add a non-member to the current chat before sending there. A
 same-task handoff, such as architect to developer or developer to reviewer,
 stays in the current chat; invite the next agent and send the handoff there.
 
-Task creation is intentionally not idempotent. There is no operation id, and
-the CLI does not automatically retry a create request. If the command reports
-an unknown result after a network/server failure, check `chat list` or the Web
-UI before running it again; the chat may already exist.
+Ordinary task creation is intentionally not idempotent. There is no operation
+id, and the CLI does not automatically retry it. If an ordinary create reports
+an unknown result, check `chat list` or the Web UI before running it again.
+
+The narrow `--as-member` mode is the exception: it accepts only a Markdown
+opening plus strict `context_tree_pr_review` metadata. The Server derives the
+current configured Reviewer and a stable Team + task type + repository + PR
+key, then atomically creates or reuses one Chat and opening. Changing Reviewer
+keeps that Chat and reconciles its current Reviewer on the next retry. The SDK
+retries transient failures; a caller may also rerun the exact command.
+`--as-member` rejects `--to`,
+`--with`, `--topic`, `--description`, inline `--metadata`, `--agent`, and
+request-option flags. `--org` and `--metadata-file` are invalid without it.
 
 If a non-human agent includes itself in `chat create --to`, the server records
 the originating agent in metadata and uses that agent's manager human as the
@@ -662,7 +679,8 @@ account's personal notifications and are not a replacement for chat follow.
 first-tree org
 ├── bind-tree <url> [--org <orgId>] [--branch <branch>] # legacy caller-org binding write
 └── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
-    ├── review-config [--agent <name>]                # read live binding + Reviewer assignment
+    ├── review-config [--agent <name>]                # read live binding + Reviewer assignment for a local Agent
+    │     --as-member [--org <orgId>]                 # read as the logged-in human; no local Agent/Client required
     └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
 
@@ -749,15 +767,24 @@ retain exit code `2` and their existing error envelopes.
 
 ```bash
 first-tree org context-tree review-config [--agent <name>]
+first-tree org context-tree review-config --as-member [--org <orgId>]
 ```
 
-`review-config` reads the bound repository/branch and the Context Reviewer
-assignment from the same agent-scoped server response. It reports `Off`,
-`Assigned`, or `Not assigned` for the selected runtime Agent. Managed review
-tasks rerun this command before every repair, GitHub projection, and merge
-mutation; an unbound Tree, disabled feature, or different assigned Agent fails
-closed. The command contains no review mode or merge-method setting: managed
-Context Review always uses the assigned Reviewer Agent and exact-head squash.
+Without `--as-member`, `review-config` reads the bound repository/branch and
+Context Reviewer assignment from the same agent-scoped server response. It
+reports `Off`, `Assigned`, or `Not assigned` for the selected runtime Agent.
+
+With `--as-member`, it uses the existing member-readable `context_tree` and
+`context_tree_features` settings and `/me` Team selection. An explicit `--org`
+must be one of the caller's active memberships; otherwise the current default,
+then sole-membership fallback, is used, and ambiguous multi-Team state fails
+closed. This is the Write preflight path for a CLI-logged member with no local
+Agent, Client, or daemon. `--as-member` conflicts with `--agent`; `--org`
+requires `--as-member`.
+
+The command contains no review mode, generation, governance, or merge-method
+setting: Agent Review uses the currently assigned Reviewer and current-state
+configuration semantics.
 
 ### org context-tree set
 

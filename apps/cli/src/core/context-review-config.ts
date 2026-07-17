@@ -1,8 +1,17 @@
-import { orgContextTreeFeaturesStorageSchema } from "@first-tree/shared";
+import {
+  orgContextTreeFeaturesOutputSchema,
+  orgContextTreeFeaturesStorageSchema,
+  orgContextTreeOutputSchema,
+} from "@first-tree/shared";
 
 export type ContextReviewConfigReader = {
   readonly agentId?: string;
   getAgentContextReviewConfig(): Promise<unknown>;
+};
+
+export type MemberContextReviewConfigReader = {
+  getMemberContextTreeSetting(organizationId: string): Promise<unknown>;
+  getMemberContextTreeFeatures(organizationId: string): Promise<unknown>;
 };
 
 export type ContextReviewConfigResult = {
@@ -43,4 +52,28 @@ export function normalizeContextReviewConfig(
 
 export async function readContextReviewConfig(sdk: ContextReviewConfigReader): Promise<ContextReviewConfigResult> {
   return normalizeContextReviewConfig(await sdk.getAgentContextReviewConfig(), sdk.agentId);
+}
+
+/** Read the same configuration through member-readable generic settings. */
+export async function readMemberContextReviewConfig(
+  sdk: MemberContextReviewConfigReader,
+  organizationId: string,
+): Promise<ContextReviewConfigResult> {
+  const [rawBinding, rawFeatures] = await Promise.all([
+    sdk.getMemberContextTreeSetting(organizationId),
+    sdk.getMemberContextTreeFeatures(organizationId),
+  ]);
+  const binding = orgContextTreeOutputSchema.safeParse(rawBinding);
+  const features = orgContextTreeFeaturesOutputSchema.safeParse(rawFeatures);
+  if (!binding.success || !features.success) {
+    throw new SyntaxError("The server returned an invalid Context Review configuration");
+  }
+  const reviewer = features.data.contextReviewer;
+  return {
+    repo: binding.data.repo ?? null,
+    branch: binding.data.branch ?? null,
+    enabled: reviewer.enabled,
+    assigned: reviewer.enabled && reviewer.agentUuid !== null,
+    agentUuid: reviewer.agentUuid,
+  };
 }

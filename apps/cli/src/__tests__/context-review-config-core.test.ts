@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeContextReviewConfig, readContextReviewConfig } from "../core/context-review-config.js";
+import {
+  normalizeContextReviewConfig,
+  readContextReviewConfig,
+  readMemberContextReviewConfig,
+} from "../core/context-review-config.js";
 
 describe("Context Review config", () => {
   it("normalizes one live binding and assignment tuple", () => {
@@ -59,5 +63,31 @@ describe("Context Review config", () => {
       readContextReviewConfig({ agentId: "reviewer-1", getAgentContextReviewConfig }),
     ).resolves.toMatchObject({ assigned: true });
     expect(getAgentContextReviewConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("combines the two existing member-readable settings without requiring a local Agent", async () => {
+    const getMemberContextTreeSetting = vi.fn(async () => ({
+      repo: "https://github.com/acme/context-tree.git",
+      branch: "main",
+    }));
+    const getMemberContextTreeFeatures = vi.fn(async () => ({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: "reviewer-private",
+        reviewerAgent: { uuid: "reviewer-private", name: "reviewer", displayName: "Reviewer" },
+      },
+    }));
+
+    await expect(
+      readMemberContextReviewConfig({ getMemberContextTreeSetting, getMemberContextTreeFeatures }, "org-1"),
+    ).resolves.toEqual({
+      repo: "https://github.com/acme/context-tree.git",
+      branch: "main",
+      enabled: true,
+      assigned: true,
+      agentUuid: "reviewer-private",
+    });
+    expect(getMemberContextTreeSetting).toHaveBeenCalledWith("org-1");
+    expect(getMemberContextTreeFeatures).toHaveBeenCalledWith("org-1");
   });
 });

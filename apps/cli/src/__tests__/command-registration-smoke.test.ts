@@ -140,7 +140,7 @@ describe("CLI command registration", () => {
     expect(contextTree.commands.map((entry) => entry.name())).toEqual(["set", "review-config"]);
     expect(optionNames(contextTree)).toEqual(["--agent"]);
     expect(optionNames(set)).toEqual(["--agent", "--branch"]);
-    expect(optionNames(reviewConfig)).toEqual(["--agent"]);
+    expect(optionNames(reviewConfig)).toEqual(["--agent", "--as-member", "--org"]);
     expect(set.registeredArguments.map((argument) => argument.name())).toEqual(["repo"]);
   });
 

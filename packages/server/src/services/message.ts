@@ -3,6 +3,7 @@ import {
   attachmentRefsFromMetadata,
   CLI_BODY_ORIGIN_METADATA_KEY,
   CLI_BODY_ORIGINS,
+  CONTEXT_REVIEW_TASK_TYPE,
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
@@ -48,7 +49,11 @@ function stripUntrustedMetadataKeys(
   options: SendMessageOptions,
 ): Record<string, unknown> {
   const contextReviewKey = Object.keys(meta).find(
-    (key) => key === "contextTreeReviewer" || key.startsWith("contextReview"),
+    (key) =>
+      key === "contextTreeReviewer" ||
+      key.startsWith("contextReview") ||
+      key === "reviewPacketV1" ||
+      (key === "taskType" && meta[key] === CONTEXT_REVIEW_TASK_TYPE),
   );
   if (contextReviewKey && !options.allowContextReviewRun) {
     throw new BadRequestError(
@@ -323,7 +328,8 @@ export type SendMessageOptions = {
    * Trusted-internal capability for creating a Context Reviewer run message.
    * The `contextTreeReviewer` and `contextReview*` metadata namespace carries
    * publication authority and is rejected at every ordinary message boundary.
-   * Only the GitHub webhook Context Reviewer dispatcher may set this option.
+   * Only the GitHub webhook compatibility dispatcher and the server-derived
+   * member keyed-task path may set this option.
    */
   allowContextReviewRun?: boolean;
   /**
