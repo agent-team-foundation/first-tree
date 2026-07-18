@@ -52,4 +52,15 @@ describe("Markdown long-token wrapping", () => {
     expect(wrapper?.className).toContain("prose-pre:overflow-x-auto");
     expect(container.querySelector("pre code")?.textContent).toContain("first-tree-staging tree verify");
   });
+
+  it("bounds GFM tables in their own horizontal scroller", () => {
+    renderMarkdown(`| Name | Long value |\n| --- | --- |\n| mobile | ${"wide-column-content".repeat(20)} |`);
+
+    const table = container.querySelector("table");
+    const tableScroller = table?.parentElement;
+    expect(table).not.toBeNull();
+    expect(tableScroller?.className).toContain("max-w-full");
+    expect(tableScroller?.className).toContain("overflow-x-auto");
+    expect(table?.className).toContain("min-w-full");
+  });
 });

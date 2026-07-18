@@ -185,6 +185,17 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
               </a>
             );
           },
+          table: ({ node, className: tableClassName, ...props }) => {
+            void node;
+            // Keep a wide GFM table's intrinsic column width behind a local
+            // scroll boundary. Otherwise its overflow reaches the timeline's
+            // vertical scroller and widens the entire chat on phone screens.
+            return (
+              <div className="my-2 min-w-0 max-w-full overflow-x-auto overscroll-x-contain">
+                <table {...props} className={cn("my-0 min-w-full", tableClassName)} />
+              </div>
+            );
+          },
           ...components,
         }}
       >
