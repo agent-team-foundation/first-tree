@@ -169,7 +169,7 @@ describe("ModelSection — daemon catalog", () => {
     expect(saved).toEqual(["some-other-sku"]);
   });
 
-  it("keeps DEFAULT + Custom usable with a note when the catalog request fails", async () => {
+  it("keeps DEFAULT + Custom usable with a note when the catalog request resolves null", async () => {
     providerModelsMocks.getProviderModels.mockResolvedValue(null);
     const el = await renderWithQuery(<ModelSection value="" onChange={() => {}} provider="cursor" clientId="c1" />);
 
@@ -188,12 +188,45 @@ describe("ModelSection — daemon catalog", () => {
     expect(el.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain(
       "Couldn't read this computer's model list",
     );
+    expect(el.querySelector('[role="alert"]')).toBeNull();
     await act(async () => {
       trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     const body = document.body.textContent ?? "";
     expect(body).toContain("(unset — inherits local)");
     expect(body).toContain("Custom model id…");
+  });
+
+  it("surfaces a rejected catalog request with retry instead of the silent unavailable note", async () => {
+    providerModelsMocks.getProviderModels.mockRejectedValue(new Error("503 service unavailable"));
+    const el = await renderWithQuery(<ModelSection value="" onChange={() => {}} provider="cursor" clientId="c1" />);
+
+    await flushUntil(() => (el.querySelector('[role="alert"]')?.textContent ?? "").includes("Failed to load"));
+    const alert = el.querySelector('[role="alert"]');
+    expect(alert).not.toBeNull();
+    expect(alert?.textContent ?? "").toContain("Failed to load this computer's model list");
+    expect(alert?.textContent ?? "").toContain("Retry");
+    // Must not look like the mapped-null silent degrade path.
+    expect(el.querySelector('[role="img"]')?.getAttribute("aria-label") ?? "").not.toContain(
+      "Couldn't read this computer's model list",
+    );
+
+    const trigger = el.querySelector<HTMLButtonElement>('button[aria-label="Model"]');
+    expect(trigger?.disabled).toBe(false);
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain("(unset — inherits local)");
+    expect(document.body.textContent).toContain("Custom model id…");
+
+    providerModelsMocks.getProviderModels.mockResolvedValue(CURSOR_CATALOG);
+    const retry = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "Retry");
+    expect(retry).not.toBeNull();
+    await act(async () => {
+      retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushUntil(() => el.querySelector('[role="alert"]') === null);
+    expect(el.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("keeps DEFAULT + Custom when discovery reports unavailable", async () => {

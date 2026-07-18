@@ -1,6 +1,6 @@
 import type { ProviderModelCatalog, RuntimeProvider } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { getProviderModels } from "../../api/provider-models.js";
 import { Input } from "../../components/ui/input.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
@@ -94,8 +94,11 @@ const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
     "Options come from this computer's ~/.kimi-code config when reachable. Passed to new sessions. Unset uses the model configured in ~/.kimi-code.",
 };
 
-/** Extra note for the free-form fallback when a catalog was expected but missing. */
+/** Extra note when discovery is unsupported / offline / timed out (`null` from the API helper). */
 const CATALOG_UNAVAILABLE_HELP = "Couldn't read this computer's model list — enter the exact id.";
+
+/** Visible row note when the catalog request rejects outside the silent-degrade set. */
+const CATALOG_LOAD_ERROR_PREFIX = "Failed to load this computer's model list.";
 
 export const UNSET_OPTION: ModelOption = { value: "", label: "(unset — inherits local)" };
 
@@ -148,7 +151,10 @@ function CatalogModelSection({
     queryKey: ["provider-models", clientId, provider],
     queryFn: () => getProviderModels(clientId, provider),
     staleTime: 5 * 60 * 1000,
-    retry: 1,
+    // Mapped degrade statuses return null (no throw). Real failures should
+    // surface immediately so the user can Retry — do not auto-retry into a
+    // silent unavailable lookalike.
+    retry: false,
   });
 
   // While discovery is in flight, DEFAULT + Custom must stay usable for
@@ -171,11 +177,50 @@ function CatalogModelSection({
     return <FallbackModelControl value={value} onChange={onChange} disabled={disabled} provider={provider} />;
   }
 
+  // Rejected queries (401/403/500/503, …) must not reuse the silent
+  // unavailable fallback — only getProviderModels' mapped null statuses do.
+  if (catalogQuery.isError) {
+    const description = (
+      <span role="alert" style={{ color: "var(--state-error)" }}>
+        {CATALOG_LOAD_ERROR_PREFIX}{" "}
+        <button
+          type="button"
+          onClick={() => void catalogQuery.refetch()}
+          className="cursor-pointer underline"
+          style={{ color: "inherit" }}
+        >
+          Retry
+        </button>
+      </span>
+    );
+    if (MODEL_OPTIONS_BY_PROVIDER[provider].length === 0) {
+      return (
+        <CatalogModelPicker
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          provider={provider}
+          catalog={emptyUnavailableCatalog(provider)}
+          description={description}
+        />
+      );
+    }
+    return (
+      <FallbackModelControl
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        provider={provider}
+        description={description}
+      />
+    );
+  }
+
   const catalog = catalogQuery.data ?? null;
   const models = catalog && catalog.source !== "unavailable" ? catalog.models : [];
   if (!catalog || models.length === 0) {
-    // Discovery unsupported / failed / empty — keep DEFAULT + Custom for
-    // Cursor/Kimi; curated Claude/Codex lists stay on the pre-catalog path.
+    // Mapped null / empty / source:unavailable — silent degrade; keep
+    // DEFAULT + Custom for Cursor/Kimi; curated lists for Claude/Codex.
     if (MODEL_OPTIONS_BY_PROVIDER[provider].length === 0) {
       return (
         <CatalogModelPicker
@@ -245,6 +290,7 @@ function CatalogModelPicker({
   provider,
   catalog,
   helpSuffix,
+  description,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -252,6 +298,7 @@ function CatalogModelPicker({
   provider: RuntimeProvider;
   catalog: Pick<ProviderModelCatalog, "models" | "defaultModelId">;
   helpSuffix?: string;
+  description?: ReactNode;
 }) {
   const [customMode, setCustomMode] = useState(false);
   const items = useMemo(() => buildCatalogModelOptions(catalog, value), [catalog, value]);
@@ -259,7 +306,7 @@ function CatalogModelPicker({
 
   if (customMode) {
     return (
-      <ConfigRow label="Model" helpText={helpText}>
+      <ConfigRow label="Model" helpText={helpText} description={description}>
         <div className="flex items-center gap-2">
           <FreeFormModelInput
             value={value}
@@ -284,7 +331,7 @@ function CatalogModelPicker({
   }
 
   return (
-    <ConfigRow label="Model" helpText={helpText}>
+    <ConfigRow label="Model" helpText={helpText} description={description}>
       <Select
         options={items}
         value={value}
@@ -314,12 +361,14 @@ function FallbackModelControl({
   disabled,
   provider,
   catalogMissed = false,
+  description,
 }: {
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
   provider: RuntimeProvider;
   catalogMissed?: boolean;
+  description?: ReactNode;
 }) {
   const presetOptions = MODEL_OPTIONS_BY_PROVIDER[provider];
 
@@ -342,12 +391,13 @@ function FallbackModelControl({
         provider={provider}
         catalog={emptyUnavailableCatalog(provider)}
         helpSuffix={catalogMissed ? CATALOG_UNAVAILABLE_HELP : undefined}
+        description={description}
       />
     );
   }
 
   return (
-    <ConfigRow label="Model" helpText={MODEL_HELP_BY_PROVIDER[provider]}>
+    <ConfigRow label="Model" helpText={MODEL_HELP_BY_PROVIDER[provider]} description={description}>
       <Select options={items} value={value} onChange={onChange} disabled={disabled} mono aria-label="Model" />
     </ConfigRow>
   );

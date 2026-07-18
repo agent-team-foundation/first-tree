@@ -9,9 +9,10 @@ import { ApiError, api } from "./client.js";
  * Returns `null` when the catalog cannot be produced at all — an older
  * server without the route (404), an older daemon that doesn't answer the
  * models command (501), or the computer being unreachable (502/504). The
- * picker degrades to its free-form / curated fallback in every one of those
- * cases, so none of them is surfaced as an error banner. Check
- * `ApiError.status` (never the message text) for this mapping, mirroring
+ * picker degrades silently for those mapped statuses only. Any other failure
+ * (401/403/500/503, …) is rethrown so the UI can show an explicit error/retry
+ * instead of masking it as ordinary unavailability. Check `ApiError.status`
+ * (never the message text) for the silent mapping, mirroring
  * `getGithubAppInstallation`.
  */
 export async function getProviderModels(
