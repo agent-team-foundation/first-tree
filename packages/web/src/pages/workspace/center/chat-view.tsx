@@ -156,6 +156,7 @@ import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
 import { applyPersistedChatRename } from "../chat-title-cache.js";
+import { GitHubSection } from "../right-sidebar/github-section.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ParticipantsSection } from "../right-sidebar/participants-section.js";
 import { ChatSummary } from "./chat-summary.js";
@@ -3865,10 +3866,26 @@ export function ChatView({
                   <button
                     type="button"
                     onClick={toggleSidebar}
-                    aria-label={detailsOpen ? "Hide chat options" : "Show chat options"}
+                    aria-label={
+                      detailsOpen
+                        ? useMobileDetailsSheet
+                          ? "Hide chat details"
+                          : "Hide chat options"
+                        : useMobileDetailsSheet
+                          ? "Show chat details"
+                          : "Show chat options"
+                    }
                     aria-expanded={detailsOpen}
                     aria-pressed={detailsOpen}
-                    title={detailsOpen ? "Hide chat options" : "Show chat options"}
+                    title={
+                      detailsOpen
+                        ? useMobileDetailsSheet
+                          ? "Hide chat details"
+                          : "Hide chat options"
+                        : useMobileDetailsSheet
+                          ? "Show chat details"
+                          : "Show chat options"
+                    }
                     className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                     style={{
                       width: 32,
@@ -4717,7 +4734,7 @@ export function ChatView({
         {detailsOpen && !isTrial ? (
           narrow ? (
             useMobileDetailsSheet ? (
-              <MobileParticipantsSheet
+              <MobileChatDetailsSheet
                 chatId={chatId}
                 participants={chatDetail?.participants ?? []}
                 participantsLoading={chatDetailLoading}
@@ -4765,7 +4782,7 @@ export function ChatView({
   return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
 }
 
-function MobileParticipantsSheet({
+function MobileChatDetailsSheet({
   chatId,
   participants,
   participantsLoading,
@@ -4782,20 +4799,56 @@ function MobileParticipantsSheet({
   readOnly: boolean;
   onDismiss: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => previousFocus?.focus();
+  }, []);
+
+  const onDialogKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onDismiss();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable.item(0);
+      const last = focusable.item(focusable.length - 1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
+    [onDismiss],
+  );
+
   return (
-    <div className="absolute inset-0 z-30 flex items-end" data-mobile-participants-sheet-root>
+    <div className="absolute inset-0 z-30 flex items-end" data-mobile-chat-details-sheet-root>
       <button
         type="button"
-        aria-label="Close participants"
+        aria-label="Close chat details"
         onClick={onDismiss}
         className="absolute inset-0"
         style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
       />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="mobile-participants-sheet-title"
-        data-mobile-participants-sheet="true"
+        aria-labelledby="mobile-chat-details-sheet-title"
+        data-mobile-chat-details-sheet="true"
+        onKeyDown={onDialogKeyDown}
         className="relative z-10 w-full overflow-hidden border-t shadow-[var(--shadow-md)] animate-in fade-in slide-in-from-bottom-4 duration-150"
         style={{
           maxHeight: "82vh",
@@ -4814,13 +4867,14 @@ function MobileParticipantsSheet({
           }}
         >
           <div className="min-w-0" style={{ flex: 1 }}>
-            <h2 id="mobile-participants-sheet-title" className="text-mobile-title" style={{ margin: 0 }}>
-              Participants
+            <h2 id="mobile-chat-details-sheet-title" className="text-mobile-title" style={{ margin: 0 }}>
+              Chat details
             </h2>
           </div>
           <button
+            ref={closeRef}
             type="button"
-            aria-label="Close participants"
+            aria-label="Close chat details"
             onClick={onDismiss}
             className="inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-input)] border transition-colors hover:bg-[var(--bg-hover)]"
             style={{ borderColor: "var(--border)", color: "var(--fg-3)" }}
@@ -4837,6 +4891,7 @@ function MobileParticipantsSheet({
             onAdded={onAdded}
             readOnly={readOnly}
           />
+          <GitHubSection chatId={chatId} variant="mobile" />
         </div>
       </div>
     </div>
