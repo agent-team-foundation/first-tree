@@ -8,6 +8,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { MobileAskSheet } from "./ask-sheet.js";
+import { MobileChatActionsSheet } from "./chat-actions-sheet.js";
 import { MobilePage, MobileSignalChip, MobileSystemState, mobileAccentColor, mobileCardStyle } from "./components.js";
 import {
   formatMobileAge,
@@ -17,11 +18,13 @@ import {
   mobileRowsFromList,
   sortMobileChats,
 } from "./data.js";
+import { useLongPress } from "./use-long-press.js";
 
 export function MobileNowPage() {
   const { agentId } = useAuth();
   const navigate = useNavigate();
   const [answeringChatId, setAnsweringChatId] = useState<string | null>(null);
+  const [actionsRow, setActionsRow] = useState<MeChatRow | null>(null);
   const chatsQuery = useQuery({
     // Nested under ["me", "chats"] so the shared realtime invalidation
     // (useAdminWs WS events + chat send / ask-answer / new-chat mutations)
@@ -72,12 +75,14 @@ export function MobileNowPage() {
                 selfAgentId={agentId ?? ""}
                 onOpenChat={(chatId) => navigate(`/m/chat?c=${encodeURIComponent(chatId)}`)}
                 onOpenAnswer={setAnsweringChatId}
+                onOpenActions={setActionsRow}
               />
             ))}
           </div>
         )}
       </MobilePage>
       {answeringChatId ? <MobileAskSheet chatId={answeringChatId} onClose={() => setAnsweringChatId(null)} /> : null}
+      {actionsRow ? <MobileChatActionsSheet row={actionsRow} onClose={() => setActionsRow(null)} /> : null}
     </>
   );
 }
@@ -87,11 +92,13 @@ function MobileAttentionCard({
   selfAgentId,
   onOpenChat,
   onOpenAnswer,
+  onOpenActions,
 }: {
   row: MeChatRow;
   selfAgentId: string;
   onOpenChat: (chatId: string) => void;
   onOpenAnswer: (chatId: string) => void;
+  onOpenActions: (row: MeChatRow) => void;
 }) {
   const signal = mobileChatSignal(row);
   const preview = mobileChatPreview(row);
@@ -105,6 +112,10 @@ function MobileAttentionCard({
     // replacing the avatar red mark + chip + colored button triple-encoding.
     ...(accent ? { boxShadow: `inset var(--hairline-bold) 0 0 0 ${accent}` } : {}),
   };
+  const longPress = useLongPress(
+    () => onOpenActions(row),
+    () => onOpenChat(row.chatId),
+  );
   const content = (
     <div className="relative flex h-full flex-col" style={{ gap: "var(--sp-3)", zIndex: 1, pointerEvents: "none" }}>
       <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
@@ -183,9 +194,9 @@ function MobileAttentionCard({
       <button
         type="button"
         aria-label={`Open ${row.title}`}
-        onClick={() => onOpenChat(row.chatId)}
+        {...longPress}
         className="absolute inset-0 cursor-pointer border-0 bg-transparent"
-        style={{ zIndex: 0 }}
+        style={{ zIndex: 0, ...longPress.style }}
       />
       {content}
     </article>
