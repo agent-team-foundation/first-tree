@@ -70,6 +70,8 @@ describe("context-tree-review floor", () => {
     expect(skill).toContain("Immediately before the GitHub projection");
     expect(skill).toContain("own just-written canonical comment\nand status are the sole expected delta");
     expect(skill).toContain("substantive evidence, a blocking finding, a human decision, or a managed");
+    expect(skill).toContain("A later protected `contextReviewManagedEventV1` message is only a GitHub");
+    expect(skill).toContain("matching authoritative terminal Chat row exists, an exact reflection may be");
     expect(skill).toContain("A stale or unproven result cannot be reused and cannot authorize merge");
     expect(skill).toContain("Another Reviewer's result never authorizes merge");
     expect(skill).toContain("Immediately before each edit, commit, push, GitHub comment/status write, and");

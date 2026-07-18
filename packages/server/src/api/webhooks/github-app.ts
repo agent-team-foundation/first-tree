@@ -3,7 +3,7 @@ import { githubAppInstallationPermissionsSchema, type ScmIngressContext } from "
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
+import { handleContextReviewerPrEvent, isContextReviewerCandidateEvent } from "../../services/context-reviewer-pr.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
   deleteInstallationByGithubId,
@@ -109,15 +109,6 @@ function pullRequestStateFromIssuePayload(issue: Record<string, unknown>, action
     return readString(pr?.merged_at) ? "merged" : "closed";
   }
   return issue.draft === true ? "draft" : "open";
-}
-
-function isContextReviewerCandidateEvent(eventType: string, action: string | null): boolean {
-  if (eventType === "pull_request") {
-    return action === "opened" || action === "synchronize" || action === "ready_for_review";
-  }
-  if (eventType === "issue_comment") return action === "created";
-  if (eventType === "pull_request_review_comment") return action === "created" || action === "edited";
-  return false;
 }
 
 /**
@@ -402,7 +393,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
 
     const rawAction = isRecord(payload) ? readString(payload.action) : null;
     const event = normalizeGithubEvent(eventType, payload, ingress);
-    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction);
+    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction, payload);
     if (!event && !shouldRunContextReviewer) {
       log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
       return reply.status(200).send({ ok: true, event: eventType, handled: false });
@@ -418,6 +409,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
               eventType,
               payload,
               organizationId,
+              deliveryId: ingress.stableDeliveryId,
             })
           : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
       resolveAudience: (normalizedEvent) => resolveGithubAudience(app.db, normalizedEvent),

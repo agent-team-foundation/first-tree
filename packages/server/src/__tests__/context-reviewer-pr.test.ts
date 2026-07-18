@@ -362,7 +362,7 @@ describe("handleContextReviewerPrEvent", () => {
         payload,
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "managed_agent_review" });
+    ).resolves.toEqual({ handled: false, reason: "managed_task_missing" });
     await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 

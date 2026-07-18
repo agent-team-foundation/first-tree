@@ -7,10 +7,26 @@ describe("Context Reviewer PR internals", () => {
   });
 
   it("classifies supported and unsupported PR webhook triggers", async () => {
-    const { contextReviewerPrTestInternals } = await import("../services/context-reviewer-pr.js");
+    const { contextReviewerPrTestInternals, isContextReviewerCandidateEvent } = await import(
+      "../services/context-reviewer-pr.js"
+    );
 
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "opened")).toBe(true);
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "closed")).toBe(false);
+    expect(isContextReviewerCandidateEvent("pull_request", "reopened", { action: "reopened" })).toBe(true);
+    expect(
+      isContextReviewerCandidateEvent("pull_request", "edited", {
+        action: "edited",
+        changes: { body: { from: "old" } },
+      }),
+    ).toBe(true);
+    expect(
+      isContextReviewerCandidateEvent("pull_request", "edited", {
+        action: "edited",
+        changes: { title: { from: "old" } },
+      }),
+    ).toBe(false);
+    expect(isContextReviewerCandidateEvent("issue_comment", "edited", { action: "edited" })).toBe(true);
   });
 
   it("fails clearly when the prompt template is missing from every runtime layout", async () => {

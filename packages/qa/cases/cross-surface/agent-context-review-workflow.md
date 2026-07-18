@@ -131,9 +131,35 @@ GitHub, concurrency, and recovery behavior.
   identity remain stable, the old route loses authority, and the replacement
   runtime may recover A's own same-head result after fresh live checks rather
   than being forced into a synthetic Reviewer reassignment.
-- With an App installed only for a comparison fixture, deliver a webhook for a
-  managed PR and confirm no App review run or second verdict appears. Confirm a
-  pre-existing unmanaged PR may still complete the read-only App path.
+- With an App installed for a comparison fixture, first create the managed task
+  through the same member Write dispatch. Confirm delayed `pull_request.opened`
+  appends no managed trigger, while synchronize, ready/reopen,
+  PR-body/repair-scope edits, and human issue/review-comment create/edit events
+  append to that one task Chat and wake only the live Reviewer. Confirm delivery
+  retries deduplicate through the existing webhook claim, a missing task never
+  creates an App-owned task, and title/label/non-human comment noise appends no
+  managed trigger and causes no managed Reviewer wake.
+- Force generic audience delivery to fail after the managed trigger commits,
+  then retry the same GitHub delivery id after the outer claim is released.
+  Confirm the task still contains one protected event and one Inbox wake. If
+  the live Reviewer changed meanwhile, confirm the retry adds only the unique
+  takeover wake and silently backfills the already-recorded event.
+- Change A to B before one App follow-up. Confirm the event transaction performs
+  silent history backfill, removes A, recomputes watcher/audience state, and
+  combines the unique takeover plus GitHub trigger into one B-only active wake.
+  Remove the managed marker in a PR-body edit and confirm the stable task key
+  still routes that scope change and later comments to the same Chat.
+- Publish A's canonical result comment. Confirm an exact body whose marker
+  matches an already authoritative A terminal Chat row is a silent projection
+  reflection, while a copied marker, changed body, different Reviewer/head, or
+  pre-terminal reflection is preserved as new input. Confirm the App creates no
+  review run, GitHub approval, merge, or second verdict. A pre-existing
+  unmanaged PR may still complete the legacy read-only App path.
+- Explicitly follow the same PR from another collaboration Chat and repeat a
+  meaningful event. Confirm the managed task receives its protected trigger
+  while the followed Chat still receives its ordinary GitHub card. This is not
+  a second managed task or verdict; generic entity binding remains an
+  independent, decision-locked delivery surface.
 
 ## Expected Result
 

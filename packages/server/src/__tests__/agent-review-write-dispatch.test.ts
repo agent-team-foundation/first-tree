@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
+import { AGENT_SELECTOR_HEADER, CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import postgres from "postgres";
@@ -12,6 +12,8 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
+import { handleContextReviewerPrEvent } from "../services/context-reviewer-pr.js";
+import { sendMessage } from "../services/message.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { addChatParticipants } from "../services/participant-mode.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
@@ -174,6 +176,80 @@ async function dispatch(app: App, admin: Admin, member: MemberContext, payload: 
   });
 }
 
+function managedPullRequestPayload(
+  options: {
+    action?: "opened" | "synchronize" | "ready_for_review" | "reopened" | "edited";
+    body?: string;
+    headSha?: string;
+    changes?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    action: options.action ?? "synchronize",
+    pull_request: {
+      number: 749,
+      title: "Agent Review contract",
+      html_url: "https://github.com/owner/context-tree/pull/749",
+      body: options.body ?? `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`,
+      base: { ref: "main" },
+      head: { ref: "agent-review-contract", sha: options.headSha ?? "b".repeat(40) },
+      draft: false,
+      user: { login: "writer", type: "User" },
+    },
+    ...(options.changes ? { changes: options.changes } : {}),
+    repository: { full_name: "owner/context-tree" },
+    sender: { login: "writer", type: "User" },
+  };
+}
+
+function managedIssueCommentPayload(
+  commentBody: string,
+  options: { action?: "created" | "edited"; prBody?: string; authorLogin?: string; authorType?: string } = {},
+) {
+  const authorLogin = options.authorLogin ?? "review-input";
+  return {
+    action: options.action ?? "created",
+    issue: {
+      number: 749,
+      title: "Agent Review contract",
+      html_url: "https://github.com/owner/context-tree/issues/749",
+      body: options.prBody ?? `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`,
+      user: { login: "writer", type: "User" },
+      pull_request: { html_url: "https://github.com/owner/context-tree/pull/749" },
+    },
+    comment: {
+      html_url: "https://github.com/owner/context-tree/pull/749#issuecomment-1",
+      user: { login: authorLogin, type: options.authorType ?? "User" },
+      body: commentBody,
+    },
+    repository: { full_name: "owner/context-tree" },
+    sender: { login: authorLogin, type: options.authorType ?? "User" },
+  };
+}
+
+function managedReviewCommentPayload(commentBody: string, action: "created" | "edited") {
+  return {
+    action,
+    pull_request: {
+      number: 749,
+      title: "Agent Review contract",
+      html_url: "https://github.com/owner/context-tree/pull/749",
+      body: `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`,
+      base: { ref: "main" },
+      head: { ref: "agent-review-contract", sha: "b".repeat(40) },
+      draft: false,
+      user: { login: "writer", type: "User" },
+    },
+    comment: {
+      html_url: "https://github.com/owner/context-tree/pull/749#discussion_r1",
+      user: { login: "review-input", type: "User" },
+      body: commentBody,
+    },
+    repository: { full_name: "owner/context-tree" },
+    sender: { login: "review-input", type: "User" },
+  };
+}
+
 async function waitForBlockedRequesterMembershipLock(
   observer: ReturnType<typeof postgres>,
   blockerPid: number,
@@ -241,6 +317,413 @@ describe("member Agent Review task dispatch", () => {
     const deliveries = await app.db.select().from(inboxEntries).where(eq(inboxEntries.messageId, body.messageId));
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]?.inboxId).toBe(reviewer.inboxId);
+  });
+
+  it("routes meaningful GitHub App follow-ups into the existing managed task Chat", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    expect(created.statusCode).toBe(201);
+    const task = created.json<DispatchResponse>();
+    const followUp = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({ action: "synchronize", headSha: "b".repeat(40) }),
+      organizationId: admin.organizationId,
+    });
+    expect(followUp).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+
+    let chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    expect(chatMessages).toHaveLength(2);
+    const eventMessage = chatMessages.find((message) => message.id !== task.messageId);
+    expect(eventMessage).toMatchObject({
+      senderId: requester.humanAgentUuid,
+      source: "github",
+      content: expect.stringContaining("Treat this webhook only as a trigger"),
+    });
+    expect(eventMessage?.metadata).toMatchObject({
+      systemSender: "github",
+      addressedAgentIds: [reviewer.uuid],
+      contextReviewManagedEventV1: {
+        schemaVersion: 1,
+        eventType: "pull_request",
+        action: "synchronize",
+        triggerEvent: "pull_request.synchronize",
+        repository: "owner/context-tree",
+        pullRequest: 749,
+        headSha: "b".repeat(40),
+      },
+    });
+    const eventDeliveries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, eventMessage?.id ?? "missing"));
+    expect(eventDeliveries).toEqual([expect.objectContaining({ inboxId: reviewer.inboxId, notify: true })]);
+
+    const delayedOpened = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({ action: "opened" }),
+      organizationId: admin.organizationId,
+    });
+    expect(delayedOpened).toEqual({
+      handled: true,
+      chatId: task.chatId,
+      messageId: task.messageId,
+      reused: true,
+      suppressed: true,
+    });
+    const botNoise = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload("Automated status reflection", { authorType: "Bot" }),
+      organizationId: admin.organizationId,
+    });
+    expect(botNoise).toEqual({
+      handled: true,
+      chatId: task.chatId,
+      messageId: task.messageId,
+      reused: true,
+      suppressed: true,
+    });
+    const unknownActorNoise = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload("Migrated account reflection", { authorType: "Mannequin" }),
+      organizationId: admin.organizationId,
+    });
+    expect(unknownActorNoise).toEqual({
+      handled: true,
+      chatId: task.chatId,
+      messageId: task.messageId,
+      reused: true,
+      suppressed: true,
+    });
+    chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    expect(chatMessages).toHaveLength(2);
+    expect(await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId))).toHaveLength(1);
+  });
+
+  it("combines a lazy A to B takeover and GitHub event into one atomic wake", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    const secondReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+
+    await configureReview(app, admin, secondReviewer.uuid);
+    const followUp = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload("Please re-review the live PR."),
+      organizationId: admin.organizationId,
+    });
+    expect(followUp).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    expect(chatMessages).toHaveLength(2);
+    const takeoverEvent = chatMessages.find((message) => message.id !== task.messageId);
+    expect(takeoverEvent?.metadata).toMatchObject({
+      addressedAgentIds: [secondReviewer.uuid],
+      contextReviewManagedEventV1: { triggerEvent: "issue_comment.created" },
+      contextReviewTakeoverV1: {
+        schemaVersion: 1,
+        reviewerAgentUuid: secondReviewer.uuid,
+        previousReviewerAgentUuid: firstReviewer.uuid,
+      },
+    });
+    expect(takeoverEvent?.content).toContain("reassigned this Agent Review");
+
+    const speakers = await app.db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, task.chatId), eq(chatMembership.accessMode, "speaker")));
+    expect(speakers.map((speaker) => speaker.agentId)).toEqual(
+      expect.arrayContaining([requester.humanAgentUuid, secondReviewer.uuid]),
+    );
+    expect(speakers.map((speaker) => speaker.agentId)).not.toContain(firstReviewer.uuid);
+    const deliveries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, takeoverEvent?.id ?? "missing"));
+    expect(deliveries).toEqual([expect.objectContaining({ inboxId: secondReviewer.inboxId, notify: true })]);
+    const backfilledOpening = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.messageId, task.messageId), eq(inboxEntries.inboxId, secondReviewer.inboxId)));
+    expect(backfilledOpening).toEqual([expect.objectContaining({ notify: false })]);
+  });
+
+  it("deduplicates a delivery replay while reconciling one A to B takeover", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    const secondReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+    const deliveryId = randomUUID();
+    const event = {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({ action: "synchronize" }),
+      organizationId: admin.organizationId,
+      deliveryId,
+    };
+
+    await expect(handleContextReviewerPrEvent(app, event)).resolves.toMatchObject({
+      handled: true,
+      chatId: task.chatId,
+      reused: true,
+    });
+    await configureReview(app, admin, secondReviewer.uuid);
+    const reassignedReplay = await handleContextReviewerPrEvent(app, event);
+    expect(reassignedReplay).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(reassignedReplay).not.toMatchObject({ suppressed: true });
+
+    let chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    expect(chatMessages).toHaveLength(3);
+    expect(chatMessages.filter((message) => message.metadata.contextReviewManagedEventV1)).toHaveLength(1);
+    const takeovers = chatMessages.filter((message) => message.metadata.contextReviewTakeoverV1);
+    expect(takeovers).toHaveLength(1);
+    expect(takeovers[0]?.metadata).toMatchObject({
+      addressedAgentIds: [secondReviewer.uuid],
+      contextReviewTakeoverV1: {
+        reviewerAgentUuid: secondReviewer.uuid,
+        previousReviewerAgentUuid: firstReviewer.uuid,
+      },
+    });
+
+    const settledReplay = await handleContextReviewerPrEvent(app, event);
+    expect(settledReplay).toMatchObject({
+      handled: true,
+      chatId: task.chatId,
+      reused: true,
+      suppressed: true,
+    });
+    chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    expect(chatMessages).toHaveLength(3);
+  });
+
+  it("keeps task identity after managed-marker removal and ignores title-only edits", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+    const priorBody = `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`;
+
+    const declarationEdit = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({
+        action: "edited",
+        body: "Managed declaration removed pending correction.",
+        changes: { body: { from: priorBody } },
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(declarationEdit).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+
+    const commentAfterRemoval = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload("The declaration removal was intentional.", {
+        action: "edited",
+        prBody: "Managed declaration removed pending correction.",
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(commentAfterRemoval).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+
+    const titleOnly = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({
+        action: "edited",
+        changes: { title: { from: "Old title" } },
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(titleOnly).toEqual({ handled: false, reason: "unsupported_event" });
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    expect(chatMessages).toHaveLength(3);
+    expect(
+      chatMessages.map(
+        (message) =>
+          (message.metadata.contextReviewManagedEventV1 as { triggerEvent?: string } | undefined)?.triggerEvent,
+      ),
+    ).toEqual(expect.arrayContaining(["pull_request.edited", "issue_comment.edited"]));
+  });
+
+  it("routes every agreed managed PR and review-comment follow-up branch", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+
+    const events = [
+      {
+        eventType: "pull_request",
+        payload: managedPullRequestPayload({ action: "ready_for_review" }),
+      },
+      { eventType: "pull_request", payload: managedPullRequestPayload({ action: "reopened" }) },
+      {
+        eventType: "pull_request_review_comment",
+        payload: managedReviewCommentPayload("Please clarify this decision.", "created"),
+      },
+      {
+        eventType: "pull_request_review_comment",
+        payload: managedReviewCommentPayload("Updated clarification request.", "edited"),
+      },
+    ];
+    for (const event of events) {
+      await expect(
+        handleContextReviewerPrEvent(app, { ...event, organizationId: admin.organizationId }),
+      ).resolves.toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    }
+
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    expect(chatMessages).toHaveLength(5);
+    const triggerEvents = chatMessages.flatMap((message) => {
+      const event = message.metadata.contextReviewManagedEventV1 as { triggerEvent?: string } | undefined;
+      return event?.triggerEvent ? [event.triggerEvent] : [];
+    });
+    expect(new Set(triggerEvents)).toEqual(
+      new Set([
+        "pull_request.ready_for_review",
+        "pull_request.reopened",
+        "pull_request_review_comment.created",
+        "pull_request_review_comment.edited",
+      ]),
+    );
+  });
+
+  it("suppresses only an exact authoritative Reviewer result projection", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    await app.db.insert(authIdentities).values({
+      id: randomUUID(),
+      userId: admin.userId,
+      provider: "github",
+      identifier: `github-${randomUUID()}`,
+      email: null,
+      verifiedAt: new Date(),
+      metadata: { login: "review-input" },
+    });
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+    const marker = `<!-- first-tree-context-review-result:v1 chat=${task.chatId} reviewer=${reviewer.uuid} head=${"a".repeat(40)} -->`;
+    const canonicalProjection = `${marker}\n\nREADY\n\nAll managed checks passed.`;
+
+    const preTerminalReflection = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection),
+      organizationId: admin.organizationId,
+    });
+    expect(preTerminalReflection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(preTerminalReflection).not.toMatchObject({ suppressed: true });
+
+    const terminal = await sendMessage(
+      app.db,
+      task.chatId,
+      reviewer.uuid,
+      {
+        format: "markdown",
+        content: canonicalProjection,
+        metadata: { mentions: [requester.humanAgentUuid] },
+        source: "api",
+      },
+      { addressedToAgentIds: [requester.humanAgentUuid] },
+    );
+
+    const reflected = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection),
+      organizationId: admin.organizationId,
+    });
+    expect(reflected).toEqual({
+      handled: true,
+      chatId: task.chatId,
+      messageId: terminal.message.id,
+      reused: true,
+      suppressed: true,
+    });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(3);
+
+    const copiedProjection = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection, { authorLogin: "result-copier" }),
+      organizationId: admin.organizationId,
+    });
+    expect(copiedProjection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(copiedProjection).not.toMatchObject({ suppressed: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(4);
+
+    await app.db
+      .update(messages)
+      .set({ metadata: { ...terminal.message.metadata, editedAt: new Date().toISOString() } })
+      .where(eq(messages.id, terminal.message.id));
+    const editedTerminalProjection = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection),
+      organizationId: admin.organizationId,
+    });
+    expect(editedTerminalProjection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(editedTerminalProjection).not.toMatchObject({ suppressed: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(5);
+
+    const editedProjection = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection, { action: "edited" }),
+      organizationId: admin.organizationId,
+    });
+    expect(editedProjection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(editedProjection).not.toMatchObject({ suppressed: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(6);
+
+    const copiedMarkerWithNewInput = `${marker}\n\nNEEDS_HUMAN\n\nThe owner changed the decision.`;
+    const newInput = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(copiedMarkerWithNewInput),
+      organizationId: admin.organizationId,
+    });
+    expect(newInput).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(newInput).not.toMatchObject({ suppressed: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(7);
+  });
+
+  it("fails closed without partial webhook activity after requester removal", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+    const messagesBefore = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+    const membershipBefore = await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, task.chatId));
+    await app.db.update(members).set({ status: "removed" }).where(eq(members.id, requester.memberId));
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, requester.humanAgentUuid));
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: managedPullRequestPayload({ action: "synchronize" }),
+        organizationId: admin.organizationId,
+      }),
+    ).rejects.toThrow("active Team membership");
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toEqual(messagesBefore);
+    expect(await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, task.chatId))).toEqual(
+      membershipBefore,
+    );
   });
 
   it("converges concurrent retries to one Chat, one opening, and one delivery", async () => {
