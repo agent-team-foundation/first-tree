@@ -868,7 +868,7 @@ describe("ChatView", () => {
     await waitForText(container, "Preview image for");
     expect(container.querySelector<HTMLElement>("[data-error-header]")?.style.overflowWrap).toBe("anywhere");
     expect(container.querySelector<HTMLElement>("[data-error-message]")?.style.overflowWrap).toBe("anywhere");
-    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).toBeNull();
     expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
     expect(container.textContent).toContain("GitHub");
     expect(container.querySelector('button[aria-label$="Open participants."]')).toBeNull();
@@ -888,7 +888,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("uses a participants-only sheet for mobile chat detail", async () => {
+  it("uses a mobile chat details sheet with participants and read-only GitHub follows", async () => {
     const { ChatView } = await import("../chat-view.js");
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
     const onShowConversations = vi.fn();
@@ -905,7 +905,7 @@ describe("ChatView", () => {
     );
 
     await waitForText(container, "Launch planning");
-    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).toBeNull();
     expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
     // Mobile presentation keeps the header context-only: no click-to-rename.
     expect(buttonByTitle(container, "Click to rename")).toBeNull();
@@ -913,15 +913,18 @@ describe("ChatView", () => {
     expect(container.querySelector('button[aria-label="Back to conversations"]')).not.toBeNull();
     expect(container.querySelector('button[aria-label="Show conversations"]')).toBeNull();
 
-    await click(container.querySelector('button[aria-label="Show chat options"]'));
+    await click(container.querySelector('button[aria-label="Show chat details"]'));
     await waitForText(container, "Participants · 4");
-    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).not.toBeNull();
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).not.toBeNull();
     expect(container.querySelector('aside[aria-label="Chat details"]')).toBeNull();
     expect(container.textContent).toContain("Add");
-    expect(container.textContent).not.toContain("GitHub");
+    expect(container.textContent).toContain("GitHub");
+    expect(container.textContent).toContain("Following in this chat");
+    expect(container.textContent).toContain("Release checklist");
+    expect(container.querySelector('[data-mobile-github-section="true"] a[target="_blank"]')).not.toBeNull();
 
-    await click(container.querySelector('button[aria-label="Close participants"]'));
-    expect(container.querySelector('[data-mobile-participants-sheet="true"]')).toBeNull();
+    await click(container.querySelector('button[aria-label="Close chat details"]'));
+    expect(container.querySelector('[data-mobile-chat-details-sheet="true"]')).toBeNull();
 
     await act(async () => root.unmount());
   });
