@@ -64,7 +64,7 @@ export type ManagedContextReviewWebhookEvent = {
 export type ManagedContextReviewWebhookResult =
   | { outcome: "task_missing" }
   | {
-      outcome: "opened_noop" | "non_human_comment_noop" | "projection_reflection" | "delivery_replay";
+      outcome: "opened_noop" | "projection_reflection" | "delivery_replay";
       chatId: string;
       messageId: string;
     }
@@ -614,12 +614,6 @@ async function findMatchingManagedProjectionMessageId(
   return null;
 }
 
-function isNonHumanManagedComment(input: ManagedContextReviewWebhookEvent): boolean {
-  if (input.eventType !== "issue_comment" && input.eventType !== "pull_request_review_comment") return false;
-  const actorType = (input.commentAuthorType ?? input.senderType)?.trim().toLowerCase();
-  return actorType !== "user";
-}
-
 async function findManagedWebhookDeliveryMessageId(
   db: Database,
   input: { chatId: string; deliveryId: string | null },
@@ -736,9 +730,6 @@ export async function dispatchManagedContextReviewWebhookEvent(
   if (!seed) return { outcome: "task_missing" };
   if (input.eventType === "pull_request" && input.action === "opened") {
     return { outcome: "opened_noop", chatId: seed.chatId, messageId: seed.openingMessageId };
-  }
-  if (isNonHumanManagedComment(input)) {
-    return { outcome: "non_human_comment_noop", chatId: seed.chatId, messageId: seed.openingMessageId };
   }
 
   const result = await db.transaction(async (tx): Promise<ManagedContextReviewWebhookTransactionResult> => {

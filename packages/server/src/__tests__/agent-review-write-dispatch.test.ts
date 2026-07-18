@@ -204,9 +204,13 @@ function managedPullRequestPayload(
 
 function managedIssueCommentPayload(
   commentBody: string,
-  options: { action?: "created" | "edited"; prBody?: string; authorLogin?: string; authorType?: string } = {},
+  options: { action?: "created" | "edited"; prBody?: string; authorLogin?: string; authorType?: string | null } = {},
 ) {
   const authorLogin = options.authorLogin ?? "review-input";
+  const author = {
+    login: authorLogin,
+    ...(options.authorType === null ? {} : { type: options.authorType ?? "User" }),
+  };
   return {
     action: options.action ?? "created",
     issue: {
@@ -219,11 +223,11 @@ function managedIssueCommentPayload(
     },
     comment: {
       html_url: "https://github.com/owner/context-tree/pull/749#issuecomment-1",
-      user: { login: authorLogin, type: options.authorType ?? "User" },
+      user: author,
       body: commentBody,
     },
     repository: { full_name: "owner/context-tree" },
-    sender: { login: authorLogin, type: options.authorType ?? "User" },
+    sender: author,
   };
 }
 
@@ -375,32 +379,24 @@ describe("member Agent Review task dispatch", () => {
       reused: true,
       suppressed: true,
     });
-    const botNoise = await handleContextReviewerPrEvent(app, {
-      eventType: "issue_comment",
-      payload: managedIssueCommentPayload("Automated status reflection", { authorType: "Bot" }),
-      organizationId: admin.organizationId,
-    });
-    expect(botNoise).toEqual({
-      handled: true,
-      chatId: task.chatId,
-      messageId: task.messageId,
-      reused: true,
-      suppressed: true,
-    });
-    const unknownActorNoise = await handleContextReviewerPrEvent(app, {
-      eventType: "issue_comment",
-      payload: managedIssueCommentPayload("Migrated account reflection", { authorType: "Mannequin" }),
-      organizationId: admin.organizationId,
-    });
-    expect(unknownActorNoise).toEqual({
-      handled: true,
-      chatId: task.chatId,
-      messageId: task.messageId,
-      reused: true,
-      suppressed: true,
-    });
+    for (const [body, authorType] of [
+      ["Automated analyzer found a blocking issue.", "Bot"],
+      ["Migrated account supplied review evidence.", "Mannequin"],
+      ["Actor type is absent but this comment may be substantive.", null],
+    ] as const) {
+      const comment = await handleContextReviewerPrEvent(app, {
+        eventType: "issue_comment",
+        payload: managedIssueCommentPayload(body, { authorType }),
+        organizationId: admin.organizationId,
+      });
+      expect(comment).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+      expect(comment).not.toMatchObject({ suppressed: true });
+    }
     chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
-    expect(chatMessages).toHaveLength(2);
+    expect(chatMessages).toHaveLength(5);
+    expect(
+      chatMessages.filter((message) => Object.hasOwn(message.metadata, "contextReviewManagedEventV1")),
+    ).toHaveLength(4);
     expect(await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId))).toHaveLength(1);
   });
 
@@ -700,7 +696,7 @@ describe("member Agent Review task dispatch", () => {
     expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(7);
   });
 
-  it("fails closed without partial webhook activity after requester removal", async () => {
+  it("fails the managed surface closed without partial webhook activity after requester removal", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const requester = await createMember(app, admin, "writer");
@@ -719,7 +715,7 @@ describe("member Agent Review task dispatch", () => {
         payload: managedPullRequestPayload({ action: "synchronize" }),
         organizationId: admin.organizationId,
       }),
-    ).rejects.toThrow("active Team membership");
+    ).resolves.toEqual({ handled: false, reason: "managed_task_unavailable" });
     expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toEqual(messagesBefore);
     expect(await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, task.chatId))).toEqual(
       membershipBefore,

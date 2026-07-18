@@ -1800,6 +1800,40 @@ describe("POST /webhooks/github-app", () => {
     ).toHaveLength(1);
     const followedMessages = await app.db.select().from(messages).where(eq(messages.chatId, followedChatId));
     expect(followedMessages).toHaveLength(2);
+
+    const [activeReviewerManager] = await app.db
+      .select({ id: members.id })
+      .from(members)
+      .where(eq(members.agentId, followedHuman))
+      .limit(1);
+    if (!activeReviewerManager) throw new Error("followed human member missing");
+    await app.db.update(agents).set({ managerId: activeReviewerManager.id }).where(eq(agents.uuid, reviewer));
+    await app.db.update(members).set({ status: "removed" }).where(eq(members.id, admin.memberId));
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, admin.humanAgentUuid));
+    const revokedRequesterPayload = contextPullRequestPayload(installationId);
+    revokedRequesterPayload.action = "synchronize";
+    revokedRequesterPayload.pull_request.body = `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`;
+    (revokedRequesterPayload.pull_request.head as { ref: string; sha?: string }).sha = "c".repeat(40);
+    const revokedDeliveryId = randomUUID();
+
+    const revokedRequester = await postWebhook(app, "pull_request", revokedRequesterPayload, {
+      deliveryId: revokedDeliveryId,
+    });
+    expect(revokedRequester.statusCode).toBe(200);
+    expect(revokedRequester.json()).toMatchObject({
+      delivered: 1,
+      contextReviewer: { handled: false, reason: "managed_task_unavailable" },
+    });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(2);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(3);
+
+    const revokedReplay = await postWebhook(app, "pull_request", revokedRequesterPayload, {
+      deliveryId: revokedDeliveryId,
+    });
+    expect(revokedReplay.statusCode).toBe(200);
+    expect(revokedReplay.json()).toMatchObject({ ok: true, deduped: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(2);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(3);
   });
 
   it("pull_request.opened on the bound context repo creates a Context Reviewer task message", async () => {

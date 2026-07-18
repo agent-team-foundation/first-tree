@@ -134,11 +134,13 @@ GitHub, concurrency, and recovery behavior.
 - With an App installed for a comparison fixture, first create the managed task
   through the same member Write dispatch. Confirm delayed `pull_request.opened`
   appends no managed trigger, while synchronize, ready/reopen,
-  PR-body/repair-scope edits, and human issue/review-comment create/edit events
+  PR-body/repair-scope edits, and issue/review-comment create/edit events
   append to that one task Chat and wake only the live Reviewer. Confirm delivery
   retries deduplicate through the existing webhook claim, a missing task never
-  creates an App-owned task, and title/label/non-human comment noise appends no
-  managed trigger and causes no managed Reviewer wake.
+  creates an App-owned task, and title/label noise appends no managed trigger.
+  Confirm substantive Bot/Mannequin comments and comments with missing or
+  unknown actor type remain protected review input; actor type alone never
+  suppresses them.
 - Force generic audience delivery to fail after the managed trigger commits,
   then retry the same GitHub delivery id after the outer claim is released.
   Confirm the task still contains one protected event and one Inbox wake. If
@@ -160,6 +162,12 @@ GitHub, concurrency, and recovery behavior.
   while the followed Chat still receives its ordinary GitHub card. This is not
   a second managed task or verdict; generic entity binding remains an
   independent, decision-locked delivery surface.
+- Revoke the managed task requester's membership, then deliver another event
+  for a separately followed Chat. Confirm the managed task remains unchanged
+  and reports fail-closed unavailability, while the ordinary followed Chat
+  receives exactly one GitHub card. Replay the same delivery id and confirm
+  neither surface duplicates work. Unexpected/transient managed failures still
+  release the whole delivery claim for GitHub retry.
 
 ## Expected Result
 

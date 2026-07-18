@@ -13,6 +13,7 @@ import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { AppError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import { createChat } from "./chat.js";
@@ -69,6 +70,7 @@ export type ContextReviewerPrSkipReason =
   | "repo_mismatch"
   | "managed_agent_review"
   | "managed_task_missing"
+  | "managed_task_unavailable"
   | "feature_disabled"
   | "reviewer_agent_missing"
   | "reviewer_agent_invalid";
@@ -257,10 +259,33 @@ export async function handleContextReviewerPrEvent(
     return { handled: false, reason: "reviewer_agent_invalid" };
   }
 
-  const managedResult = await dispatchManagedContextReviewWebhookEvent(
-    app.db,
-    managedContextReviewWebhookEvent(info, webhookRepo, input.deliveryId ?? null),
-  );
+  let managedResult: Awaited<ReturnType<typeof dispatchManagedContextReviewWebhookEvent>>;
+  try {
+    managedResult = await dispatchManagedContextReviewWebhookEvent(
+      app.db,
+      managedContextReviewWebhookEvent(info, webhookRepo, input.deliveryId ?? null),
+    );
+  } catch (error) {
+    // A 4xx here means the stable managed task was found but its live
+    // authority or stored invariants now fail closed (for example requester
+    // removal or ambiguous history). Do not mutate that task and do not let
+    // its permanent admission failure starve the independent generic GitHub
+    // followed-chat surface. Unexpected/transient failures still propagate so
+    // the whole-delivery claim is released and GitHub can retry.
+    if (error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500) {
+      log.warn(
+        {
+          organizationId: input.organizationId,
+          entityKey: info.entityKey,
+          errorClass: error.name,
+          statusCode: error.statusCode,
+        },
+        "managed Agent Review task unavailable; generic GitHub delivery may continue",
+      );
+      return { handled: false, reason: "managed_task_unavailable" };
+    }
+    throw error;
+  }
   if (managedResult.outcome !== "task_missing") {
     if (managedResult.outcome === "delivered") {
       notifyRecipients(app.notifier, managedResult.recipients, managedResult.messageId);
