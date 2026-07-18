@@ -1249,7 +1249,7 @@ describe("page SSR smoke coverage", () => {
       <ChatView agentId="agent-1" chatId="chat-1" narrow presentation="mobile" />,
       createClient(),
     );
-    expect(mobileRendered).toContain("Show chat options");
+    expect(mobileRendered).toContain("Show chat details");
     expect(mobileRendered).not.toContain("Participants");
   });
 

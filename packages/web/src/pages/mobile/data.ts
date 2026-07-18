@@ -108,15 +108,15 @@ export function formatMobileAge(iso: string | null): string {
 }
 
 /**
- * Materialize the server's complete attention projection for Now and tab
- * badges. Mobile does not expose pinning, so priority-only pinned rows do not
- * enter its finite lists; the additive recency page still supplies ordinary
- * rows and the result is de-duplicated by chat id.
+ * Materialize the server's complete attention and pinned projections for
+ * mobile lists and tab badges. Priority rows can sit beyond the finite recency
+ * page, so both groups must enter before the additive rows and be de-duplicated
+ * by chat id.
  */
 export function mobileRowsFromList(data: ListMeChatsResponse | undefined): MeChatRow[] {
   if (!data) return [];
   const seen = new Set<string>();
-  return [...data.priorityRows.attention, ...data.rows].filter((row) => {
+  return [...data.priorityRows.attention, ...data.priorityRows.pinned, ...data.rows].filter((row) => {
     if (seen.has(row.chatId)) return false;
     seen.add(row.chatId);
     return true;
@@ -127,8 +127,16 @@ export function sortMobileChats(rows: readonly MeChatRow[]): MeChatRow[] {
   return [...rows].sort((a, b) => {
     const signalA = mobileChatSignal(a);
     const signalB = mobileChatSignal(b);
+    const bucketA = signalA.attention ? 0 : a.pinnedAt ? 1 : 2;
+    const bucketB = signalB.attention ? 0 : b.pinnedAt ? 1 : 2;
+    const bucketDelta = bucketA - bucketB;
+    if (bucketDelta !== 0) return bucketDelta;
     const signalDelta = signalA.rank - signalB.rank;
     if (signalDelta !== 0) return signalDelta;
+    if (bucketA === 1) {
+      const pinDelta = timestampValue(b.pinnedAt) - timestampValue(a.pinnedAt);
+      if (pinDelta !== 0) return pinDelta;
+    }
     return timestampValue(b.activityAt ?? b.lastMessageAt) - timestampValue(a.activityAt ?? a.lastMessageAt);
   });
 }

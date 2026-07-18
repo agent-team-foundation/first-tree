@@ -1,6 +1,6 @@
 import type { MeChatRow } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Archive, ArrowLeft, Plus } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { listMeChats } from "../../api/me-chats.js";
@@ -11,6 +11,7 @@ import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { Button } from "../../components/ui/button.js";
 import { formatRowTime } from "../../lib/utils.js";
 import { CenterPanel } from "../workspace/center/index.js";
+import { MobileChatActionsSheet } from "./chat-actions-sheet.js";
 import {
   MobilePage,
   MobileSegmentedControl,
@@ -19,8 +20,9 @@ import {
   mobileCardStyle,
 } from "./components.js";
 import { mobileChatListSignal, mobileChatPreview, mobileRowsFromList, sortMobileChats } from "./data.js";
+import { useLongPress } from "./use-long-press.js";
 
-type MobileChatView = "all" | "unread" | "watching";
+type MobileChatView = "all" | "unread" | "watching" | "archived";
 
 export function MobileChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -74,6 +76,7 @@ export function MobileChatPage() {
 function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => void }) {
   const { agentId } = useAuth();
   const [view, setView] = useState<MobileChatView>("all");
+  const [actionsRow, setActionsRow] = useState<MeChatRow | null>(null);
   const chatsQuery = useQuery({
     // Nested under ["me", "chats"] so the shared realtime invalidation keeps
     // the mobile chat list live instead of poll-only.
@@ -81,7 +84,7 @@ function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
     queryFn: () =>
       listMeChats({
         limit: 80,
-        engagement: "active",
+        engagement: view === "archived" ? "archived" : "active",
         filter: view === "unread" ? "unread" : "all",
         watching: view === "watching" ? true : undefined,
       }),
@@ -90,40 +93,81 @@ function MobileChatList({ onSelectChat }: { onSelectChat: (chatId: string) => vo
   const rows = sortMobileChats(mobileRowsFromList(chatsQuery.data));
 
   return (
-    <MobilePage className="flex flex-col" padded>
-      <div className="flex items-center" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}>
-        <MobileSegmentedControl
-          value={view}
-          onChange={setView}
-          options={[
-            { value: "all", label: "All" },
-            { value: "unread", label: "Unread" },
-            { value: "watching", label: "Watching" },
-          ]}
-        />
-        <span style={{ marginLeft: "auto" }} />
-        <Button asChild variant="cta" size="sm">
-          <Link to="/m/chat?c=draft">
-            <Plus className="h-3.5 w-3.5" />
-            New
-          </Link>
-        </Button>
-      </div>
-
-      {chatsQuery.isLoading && rows.length === 0 ? (
-        <MobileSystemState title="Loading chats" />
-      ) : chatsQuery.error ? (
-        <MobileSystemState title="Failed to load chats" detail={formatError(chatsQuery.error)} tone="error" />
-      ) : rows.length === 0 ? (
-        <MobileSystemState title="No chats" detail={view === "all" ? "Start a new chat." : "Nothing in this view."} />
-      ) : (
-        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-          {rows.map((row) => (
-            <MobileChatRow key={row.chatId} row={row} selfAgentId={agentId ?? ""} onSelect={onSelectChat} />
-          ))}
+    <>
+      <MobilePage className="flex flex-col" padded>
+        <div className="flex items-center" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}>
+          {view === "archived" ? (
+            <>
+              <button
+                type="button"
+                aria-label="Back to chats"
+                onClick={() => setView("all")}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)]"
+                style={{ border: 0, background: "transparent", color: "var(--fg-3)" }}
+              >
+                <ArrowLeft aria-hidden className="h-4 w-4" />
+              </button>
+              <h1 className="text-mobile-title" style={{ color: "var(--fg)", margin: 0 }}>
+                Archived
+              </h1>
+            </>
+          ) : (
+            <MobileSegmentedControl
+              value={view}
+              onChange={setView}
+              options={[
+                { value: "all", label: "All" },
+                { value: "unread", label: "Unread" },
+                { value: "watching", label: "Watching" },
+              ]}
+            />
+          )}
+          <span style={{ marginLeft: "auto" }} />
+          {view !== "archived" ? (
+            <button
+              type="button"
+              aria-label="View archived chats"
+              title="Archived"
+              onClick={() => setView("archived")}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)]"
+              style={{ border: 0, background: "transparent", color: "var(--fg-3)" }}
+            >
+              <Archive aria-hidden className="h-4 w-4" />
+            </button>
+          ) : null}
+          <Button asChild variant="cta" size="sm">
+            <Link to="/m/chat?c=draft">
+              <Plus className="h-3.5 w-3.5" />
+              New
+            </Link>
+          </Button>
         </div>
-      )}
-    </MobilePage>
+
+        {chatsQuery.isLoading && rows.length === 0 ? (
+          <MobileSystemState title="Loading chats" />
+        ) : chatsQuery.error ? (
+          <MobileSystemState title="Failed to load chats" detail={formatError(chatsQuery.error)} tone="error" />
+        ) : rows.length === 0 ? (
+          <MobileSystemState
+            title={view === "archived" ? "No archived chats" : "No chats"}
+            detail={view === "all" ? "Start a new chat." : "Nothing in this view."}
+          />
+        ) : (
+          <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+            {rows.map((row) => (
+              <MobileChatRow
+                key={row.chatId}
+                row={row}
+                selfAgentId={agentId ?? ""}
+                onSelect={onSelectChat}
+                onActions={setActionsRow}
+              />
+            ))}
+          </div>
+        )}
+      </MobilePage>
+      {actionsRow ? <MobileChatActionsSheet row={actionsRow} onClose={() => setActionsRow(null)} /> : null}
+    </>
   );
 }
 
@@ -131,18 +175,24 @@ function MobileChatRow({
   row,
   selfAgentId,
   onSelect,
+  onActions,
 }: {
   row: MeChatRow;
   selfAgentId: string;
   onSelect: (chatId: string) => void;
+  onActions: (row: MeChatRow) => void;
 }) {
   const signal = mobileChatListSignal(row);
+  const longPress = useLongPress(
+    () => onActions(row),
+    () => onSelect(row.chatId),
+  );
   return (
     <button
       type="button"
-      onClick={() => onSelect(row.chatId)}
+      {...longPress}
       className="w-full text-left transition-colors hover:bg-[var(--bg-hover)]"
-      style={mobileCardStyle("list")}
+      style={{ ...mobileCardStyle("list"), ...longPress.style }}
       data-mobile-card="list"
     >
       <div className="flex items-start" style={{ gap: "var(--sp-3)" }}>

@@ -12,6 +12,9 @@ import { MobileNowPage } from "../now.js";
 
 const meChatMocks = vi.hoisted(() => ({
   listMeChats: vi.fn(),
+  markMeChatRead: vi.fn(),
+  markMeChatUnread: vi.fn(),
+  pinMeChat: vi.fn(),
 }));
 const chatMocks = vi.hoisted(() => ({
   getChat: vi.fn(),
@@ -19,6 +22,7 @@ const chatMocks = vi.hoisted(() => ({
   readFileAsBase64: vi.fn(),
   sendChatMessage: vi.fn(),
   sendFileMessageBatch: vi.fn(),
+  patchChatEngagement: vi.fn(),
 }));
 
 vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => ({ agentId: "human-agent-self" }) }));
@@ -170,6 +174,40 @@ async function click(element: Element | null): Promise<void> {
   });
 }
 
+async function longPress(element: Element | null, moveBy = 0): Promise<void> {
+  if (!element) throw new Error("Missing long-press target");
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      element.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 20, clientY: 20 }),
+      );
+      if (moveBy > 0) {
+        element.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            clientX: 20 + moveBy,
+            clientY: 20,
+          }),
+        );
+      }
+      await vi.advanceTimersByTimeAsync(500);
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+function buttonWithText(text: string): HTMLButtonElement | null {
+  return (
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === text,
+    ) ?? null
+  );
+}
+
 describe("mobile card behavior", () => {
   let harness: DomHarness;
 
@@ -189,11 +227,18 @@ describe("mobile card behavior", () => {
     chatMocks.getChat.mockResolvedValue(detail);
     chatMocks.sendChatMessage.mockResolvedValue({ ...request, id: "answer-1", format: "text", content: "Ship now" });
     chatMocks.sendFileMessageBatch.mockResolvedValue({ ...request, id: "answer-file-1", format: "file" });
+    chatMocks.patchChatEngagement.mockImplementation(async (chatId: string, engagementStatus: string) => ({
+      chatId,
+      engagementStatus,
+    }));
+    meChatMocks.markMeChatRead.mockResolvedValue({ chatId: row.chatId, unreadMentionCount: 0 });
+    meChatMocks.markMeChatUnread.mockResolvedValue({ chatId: row.chatId, unreadMentionCount: 1 });
+    meChatMocks.pinMeChat.mockResolvedValue({ chatId: row.chatId, pinnedAt: "2026-07-18T00:00:00.000Z" });
   });
 
   afterEach(() => harness.cleanup());
 
-  it("keeps Now cards free of management menus and swipe actions", async () => {
+  it("keeps Now cards free of visible overflow and swipe actions", async () => {
     renderPage(harness, "now");
     await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
 
@@ -201,6 +246,9 @@ describe("mobile card behavior", () => {
     expect(card?.querySelector("[data-mobile-card-menu]")).toBeNull();
     expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(card?.querySelector('[aria-haspopup="dialog"]')?.getAttribute("aria-description")).toBe(
+      "Long press for chat actions",
+    );
   });
 
   it("keeps Chat rows as direct detail links without Now actions or swipe wrappers", async () => {
@@ -217,6 +265,106 @@ describe("mobile card behavior", () => {
     expect(card?.getAttribute("style")).toContain("min-height: calc(var(--sp-16) + var(--sp-6))");
     expect(card?.querySelector("[data-mobile-card-menu]")).toBeNull();
     expect(harness.container.querySelector("[data-mobile-swipe-surface]")).toBeNull();
+    expect(card?.getAttribute("aria-haspopup")).toBe("dialog");
+  });
+
+  it("opens contextual triage on a Now long press and blocks archive while judgment is unresolved", async () => {
+    renderPage(harness, "now");
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+
+    await longPress(harness.container.querySelector('[data-mobile-card="feed"] > button'));
+
+    expect(currentLocation).toBe("/m/now");
+    const actionsSheet = document.body.querySelector("[data-mobile-chat-actions]");
+    expect(actionsSheet).not.toBeNull();
+    expect(actionsSheet?.getAttribute("aria-label")).toBe(`Actions for ${row.title}`);
+    expect(actionsSheet?.getAttribute("aria-labelledby")).toBeNull();
+    expect(actionsSheet?.textContent).not.toContain("Chat actions");
+    expect(actionsSheet?.textContent).not.toContain(row.title);
+    expect(buttonWithText("Pin")).not.toBeNull();
+    expect(buttonWithText("Mark as unread")).not.toBeNull();
+    expect(buttonWithText("Archive")?.disabled).toBe(true);
+    expect(document.body.textContent).toContain("Answer or skip the open question before archiving.");
+    expect(buttonWithText("Delete")).toBeNull();
+  });
+
+  it("cancels long press after movement and preserves the card's normal click", async () => {
+    renderPage(harness, "chat");
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+    const card = harness.container.querySelector('[data-mobile-card="list"]');
+
+    await longPress(card, 12);
+    expect(document.body.querySelector("[data-mobile-chat-actions]")).toBeNull();
+
+    await click(card);
+    expect(currentLocation).toBe(`/m/chat?c=${row.chatId}`);
+  });
+
+  it("opens Chat actions from the keyboard and archives only a settled chat with Undo", async () => {
+    const settled = { ...row, openRequestCount: 0 };
+    listResponse = { rows: [settled], priorityRows: { attention: [], pinned: [] }, nextCursor: null };
+    renderPage(harness, "chat");
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+    const card = harness.container.querySelector('[data-mobile-card="list"]');
+
+    await act(async () => {
+      card?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "F10", shiftKey: true }),
+      );
+    });
+    expect(document.body.querySelector("[data-mobile-chat-actions]")).not.toBeNull();
+    expect(buttonWithText("Archive")?.disabled).toBe(false);
+
+    await click(buttonWithText("Archive"));
+    await harness.waitFor(() => expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith(row.chatId, "archived"));
+    expect(document.body.querySelector("[data-mobile-chat-actions]")).toBeNull();
+    await harness.waitFor(() => expect(buttonWithText("Undo")).not.toBeNull());
+
+    await click(buttonWithText("Undo"));
+    await harness.waitFor(() => expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith(row.chatId, "active"));
+  });
+
+  it("offers the inverse read action through the non-touch context-menu path", async () => {
+    const unread = { ...row, openRequestCount: 0, unreadMentionCount: 2 };
+    listResponse = { rows: [unread], priorityRows: { attention: [], pinned: [] }, nextCursor: null };
+    renderPage(harness, "chat");
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+    const card = harness.container.querySelector('[data-mobile-card="list"]');
+
+    await act(async () => {
+      card?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+    });
+    expect(buttonWithText("Mark as read")).not.toBeNull();
+    await click(buttonWithText("Mark as read"));
+
+    await harness.waitFor(() => expect(meChatMocks.markMeChatRead).toHaveBeenCalledWith(row.chatId));
+    expect(currentLocation).toBe("/m/chat");
+  });
+
+  it("provides an Archived recovery view whose long-press actions only restore or pin", async () => {
+    const archived = { ...row, openRequestCount: 0, engagementStatus: "archived" as const };
+    listResponse = { rows: [archived], priorityRows: { attention: [], pinned: [] }, nextCursor: null };
+    meChatMocks.listMeChats.mockResolvedValue(listResponse);
+    const queryClient = renderPage(harness, "chat");
+
+    await click(harness.container.querySelector('button[aria-label="View archived chats"]'));
+    await harness.waitFor(() =>
+      expect(meChatMocks.listMeChats).toHaveBeenCalledWith(expect.objectContaining({ engagement: "archived" })),
+    );
+    await harness.waitFor(() =>
+      expect(queryClient.getQueryData(["me", "chats", "mobile", "chats", "archived"])).toEqual(listResponse),
+    );
+    await harness.waitFor(() => expect(harness.container.textContent).toContain(row.title));
+    const card = harness.container.querySelector('[data-mobile-card="list"]');
+    await longPress(card);
+
+    expect(buttonWithText("Unarchive")).not.toBeNull();
+    expect(buttonWithText("Pin")).not.toBeNull();
+    expect(buttonWithText("Archive")).toBeNull();
+    expect(buttonWithText("Mark as unread")).toBeNull();
+
+    await click(buttonWithText("Unarchive"));
+    await harness.waitFor(() => expect(chatMocks.patchChatEngagement).toHaveBeenCalledWith(row.chatId, "active"));
   });
 
   it("opens the question over Now, sends the answer, and never navigates into detail", async () => {
