@@ -75,7 +75,7 @@ describe("mobile chat projection", () => {
     ]);
   });
 
-  it("includes complete attention, ignores priority-only pins, and de-duplicates additive rows", () => {
+  it("includes complete attention and pins, then de-duplicates additive rows", () => {
     const failed = chatRow({ chatId: "failed", failedAgentIds: ["agent-1"] });
     const pinnedOnly = chatRow({
       chatId: "pinned-only",
@@ -96,9 +96,8 @@ describe("mobile chat projection", () => {
     };
 
     const rows = sortMobileChats(mobileRowsFromList(response));
-    expect(rows.map((row) => row.chatId)).toEqual(["failed", "newer", "pinned-only"]);
-    expect(rows.find((row) => row.chatId === "pinned-only")?.title).toBe("Wrong additive copy");
-    expect(rows.some((row) => row.chatId === olderPin.chatId)).toBe(false);
+    expect(rows.map((row) => row.chatId)).toEqual(["failed", "pinned-only", "older-pin", "newer"]);
+    expect(rows.find((row) => row.chatId === "pinned-only")?.title).toBe("Launch planning");
   });
 
   it("keeps Chat's quiet labels while real-work activity advances recency", () => {
