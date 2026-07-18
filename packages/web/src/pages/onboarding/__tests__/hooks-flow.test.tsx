@@ -289,13 +289,14 @@ describe("onboarding hooks and flow", () => {
   it("handles create errors, blank names, retry, and timeout", async () => {
     vi.useFakeTimers();
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };
+    const onFailure = vi.fn();
     clientMocks.api.post
       .mockRejectedValueOnce(new Error("create failed"))
       .mockResolvedValueOnce({ uuid: "agent-slow" });
     agentConfigMocks.getAgentClientStatus.mockResolvedValue({ online: false });
 
     function Probe() {
-      latest.current = useAgentCreation();
+      latest.current = useAgentCreation({ onFailure });
       return <div>{latest.current.phase}</div>;
     }
 
@@ -322,6 +323,7 @@ describe("onboarding hooks and flow", () => {
     });
     expect(expectHookValue(latest.current).error).toBe("create failed");
     expect(expectHookValue(latest.current).phase).toBe("idle");
+    expect(onFailure).toHaveBeenCalledWith({ reasonCode: "agent_create_failed", retryable: true });
 
     const slowCreate = act(async () => {
       const promise = expectHookValue(latest.current).create({
@@ -337,6 +339,7 @@ describe("onboarding hooks and flow", () => {
     });
     await slowCreate;
     expect(expectHookValue(latest.current).phase).toBe("timeout");
+    expect(onFailure).toHaveBeenCalledWith({ reasonCode: "agent_runtime_timeout", retryable: true });
 
     const retry = act(async () => {
       const promise = expectHookValue(latest.current).retry();
@@ -346,11 +349,14 @@ describe("onboarding hooks and flow", () => {
     });
     await retry;
     expect(expectHookValue(latest.current).phase).toBe("timeout");
+    expect(onFailure).toHaveBeenCalledTimes(3);
   });
 
   it("wires onboarding-specific agent side effects in the onboarding provider", async () => {
     const latest = { current: null as OnboardingFlowValue | null };
-    clientMocks.api.post.mockResolvedValueOnce({ uuid: "agent-onboarding" });
+    // The create-agent step also enables the computer hook, which can mint a
+    // connect token through the same mocked API before the agent POST.
+    clientMocks.api.post.mockResolvedValue({ uuid: "agent-onboarding" });
     agentConfigMocks.getAgentClientStatus
       .mockResolvedValueOnce({ online: false })
       .mockResolvedValueOnce({ online: true });
@@ -368,6 +374,8 @@ describe("onboarding hooks and flow", () => {
     }
 
     await renderProbe(<Probe />);
+    await act(async () => expectHookValue(latest.current).goTo(2));
+    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
     await act(async () => {
       await expectHookValue(latest.current).createAgent({
         displayName: "Onboarding Bot",
@@ -379,9 +387,19 @@ describe("onboarding hooks and flow", () => {
     });
 
     expect(sessionStorage.getItem("onboarding:agentUuid")).toBe("agent-onboarding");
-    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("agent_created", { runtimeProvider: "codex" });
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("agent_created", {
+      runtimeProvider: "codex",
+      path: "admin",
+      organizationId: "org-1",
+    });
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_completed", {
+      step: "create-agent",
+      path: "admin",
+      organizationId: "org-1",
+      nextStep: "start-chat",
+    });
     expect(authMock.value.refreshMe).toHaveBeenCalled();
-    expect(expectHookValue(latest.current).activeStep).toBe("connect-computer");
+    expect(expectHookValue(latest.current).activeStep).toBe("start-chat");
   });
 
   it("persists flow progress and navigates on finish actions", async () => {
@@ -401,19 +419,60 @@ describe("onboarding hooks and flow", () => {
 
     const host = await renderProbe(<Probe />);
     expect(host.textContent).toContain("team");
-    await act(async () => expectHookValue(latest.current).goTo(1));
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_viewed", {
+      step: "create-team",
+      path: "admin",
+      organizationId: "org-1",
+    });
+
+    expectHookValue(latest.current).reportStepFailure("team_load_failed", {
+      step: "create-team",
+      retryable: false,
+    });
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_failed", {
+      step: "create-team",
+      path: "admin",
+      organizationId: "org-1",
+      reasonCode: "team_load_failed",
+      retryable: false,
+    });
+
+    await act(async () => expectHookValue(latest.current).goNext());
     expect(expectHookValue(latest.current).activeStep).toBe("connect-computer");
     expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBe("1");
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_completed", {
+      step: "create-team",
+      path: "admin",
+      organizationId: "org-1",
+      nextStep: "connect-computer",
+    });
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_viewed", {
+      step: "connect-computer",
+      path: "admin",
+      organizationId: "org-1",
+    });
 
     await act(async () => expectHookValue(latest.current).finishLater());
     expect(authMock.value.dismissOnboarding).toHaveBeenCalled();
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_paused", {
+      step: "connect-computer",
+      path: "admin",
+      organizationId: "org-1",
+    });
 
+    await act(async () => expectHookValue(latest.current).goTo(3));
     await act(async () => expectHookValue(latest.current).completeAndEnterChat("chat 1"));
     // Completing must stamp completed WITHOUT dismissing: the account-level
     // dismissal would short-circuit shouldEnterOnboarding's org-level gate
     // forever, so only the explicit finishLater above may have called it.
     expect(authMock.value.dismissOnboarding).toHaveBeenCalledTimes(1);
     expect(authMock.value.markOnboardingCompleted).toHaveBeenCalled();
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("step_completed", {
+      step: "start-chat",
+      path: "admin",
+      organizationId: "org-1",
+      outcome: "chat_started",
+    });
     expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBeNull();
   });
 
@@ -574,5 +633,10 @@ describe("onboarding hooks and flow", () => {
     await rerender();
     expect(expectHookValue(latest.current).activeStep).toBe("create-team");
     expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-B")).not.toBe("3");
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenLastCalledWith("step_viewed", {
+      step: "create-team",
+      path: "admin",
+      organizationId: "org-B",
+    });
   });
 });

@@ -110,6 +110,7 @@ describe("scan campaign export routes", () => {
     const chatCreatedAt = new Date("2026-07-10T10:00:00.000Z");
     const humanMessageAt = new Date("2026-07-10T10:01:30.000Z");
     const agentMessageAt = new Date("2026-07-10T10:05:00.000Z");
+    const attemptId = crypto.randomUUID();
 
     await app.db
       .update(agents)
@@ -134,6 +135,8 @@ describe("scan campaign export routes", () => {
           skillSetId: "production-scan",
           skillSetVersion: "test",
           repo: { url: "https://github.com/acme/api", canonicalKey: "github.com/acme/api" },
+          attribution: { attemptId, variant: "control" },
+          actionConversion: { chatId: "action-chat-1", recordedAt: "2026-07-10T10:06:00.000Z" },
           state: "completed",
           inputLocked: true,
           maxAgentTurns: 2,
@@ -238,11 +241,11 @@ describe("scan campaign export routes", () => {
       },
     ]);
 
-    return { app, admin, agent, agentName, chatId };
+    return { app, admin, agent, agentName, chatId, attemptId };
   }
 
   it("exports trial, summary, and redacted message NDJSON for a client campaign", async () => {
-    const { app, admin, agent, agentName, chatId } = await seedTrialHistory();
+    const { app, admin, agent, agentName, chatId, attemptId } = await seedTrialHistory();
 
     const create = await app.inject({
       method: "POST",
@@ -260,6 +263,7 @@ describe("scan campaign export routes", () => {
 
     expect(create.statusCode).toBe(200);
     const body = create.json();
+    expect(body.manifest.schemaVersion).toBe(2);
     expect(body.manifest.counts).toEqual({ trials: 1, chats: 1, messages: 2, exportedMessages: 2 });
     const trials = body.files["trials.ndjson"].trim().split("\n").map(JSON.parse);
     const summaries = body.files["summaries.ndjson"].trim().split("\n").map(JSON.parse);
@@ -280,6 +284,11 @@ describe("scan campaign export routes", () => {
       firstHumanResponseSeconds: 90,
       durationSeconds: 300,
       hasLikelyReportLink: true,
+      attemptId,
+      variant: "control",
+      actionConverted: true,
+      actionChatId: "action-chat-1",
+      actionRecordedAt: "2026-07-10T10:06:00.000Z",
     });
     expect(exportedMessages[0]).toMatchObject({
       chatId,

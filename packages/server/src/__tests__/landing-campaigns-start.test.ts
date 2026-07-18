@@ -1,4 +1,5 @@
 import {
+  type LandingCampaignAttribution,
   MESSAGE_FORMATS,
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
@@ -110,8 +111,9 @@ async function startProductionScan(
   app: ReturnType<ReturnType<typeof useTestApp>>,
   admin: Awaited<ReturnType<typeof createTestAdmin>>,
   repoUrl = "https://github.com/acme/backend",
+  attribution?: LandingCampaignAttribution,
 ) {
-  return startCampaign(app, admin, "production-scan", repoUrl);
+  return startCampaign(app, admin, "production-scan", repoUrl, attribution);
 }
 
 async function startProductionScanInOrg(
@@ -128,8 +130,9 @@ async function startCampaign(
   admin: Awaited<ReturnType<typeof createTestAdmin>>,
   campaign: string,
   repoUrl = "https://github.com/acme/backend",
+  attribution?: LandingCampaignAttribution,
 ) {
-  return startCampaignInOrg(app, admin, admin.organizationId, campaign, repoUrl);
+  return startCampaignInOrg(app, admin, admin.organizationId, campaign, repoUrl, attribution);
 }
 
 async function startCampaignInOrg(
@@ -138,12 +141,13 @@ async function startCampaignInOrg(
   organizationId: string,
   campaign: string,
   repoUrl = "https://github.com/acme/backend",
+  attribution?: LandingCampaignAttribution,
 ) {
   return app.inject({
     method: "POST",
     url: START_URL,
     headers: { authorization: `Bearer ${admin.accessToken}` },
-    payload: { organizationId, campaign, repoUrl },
+    payload: { organizationId, campaign, repoUrl, ...(attribution ? { attribution } : {}) },
   });
 }
 
@@ -526,7 +530,8 @@ describe("POST /me/landing-campaigns/start", () => {
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
 
-    const res = await startProductionScan(app, admin);
+    const attribution = { attemptId: crypto.randomUUID(), variant: "control" };
+    const res = await startProductionScan(app, admin, "https://github.com/acme/backend", attribution);
 
     expect(res.statusCode).toBe(200);
     const body = res.json<{ chatId: string; agentUuid: string; campaign: string; repoCanonicalKey: string }>();
@@ -622,6 +627,7 @@ describe("POST /me/landing-campaigns/start", () => {
       campaign: "production-scan",
       agentId: body.agentUuid,
       repo: { canonicalKey: "github.com/acme/backend" },
+      attribution,
       state: "running",
       inputLocked: false,
       maxAgentTurns: 1,

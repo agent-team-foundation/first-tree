@@ -1,7 +1,7 @@
 import type { GithubAppInstallationOutput } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Building2, Check, Github, User } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../../../api/client.js";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
@@ -41,7 +41,8 @@ const INSTALL_ATTEMPT_KEY = "onboarding:connect-code:install-attempt";
  * a way forward (never a dead end).
  */
 export function StepConnectCode() {
-  const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls, hasRepoDraft } = useOnboardingFlow();
+  const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls, hasRepoDraft, reportStepFailure } =
+    useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   // Whether the user has actually kicked off an install (this tab). We only
@@ -90,6 +91,12 @@ export function StepConnectCode() {
   // effectively unreachable; a "reconnect GitHub" wouldn't fix it anyway.
   const loadFailed = !!reposQuery.error;
   const hasPickableRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
+  const reportedRepoLoadFailureRef = useRef(false);
+  useEffect(() => {
+    if (!loadFailed || reportedRepoLoadFailureRef.current) return;
+    reportedRepoLoadFailureRef.current = true;
+    reportStepFailure("github_repo_list_failed", { step: "connect-code" });
+  }, [loadFailed, reportStepFailure]);
 
   // Default to NONE selected: the user actively picks which repos to share
   // (paired with the "Skip for now" out + the no-repo consequence hint). When
@@ -124,9 +131,16 @@ export function StepConnectCode() {
     } catch (err) {
       installTab?.close();
       setRedirecting(false);
-      if (err instanceof ApiError && err.status === 503) setInstallError("not_configured");
-      else if (err instanceof ApiError && err.status === 403) setInstallError("not_admin");
-      else setInstallError("generic");
+      if (err instanceof ApiError && err.status === 503) {
+        setInstallError("not_configured");
+        reportStepFailure("github_install_not_configured", { step: "connect-code", retryable: false });
+      } else if (err instanceof ApiError && err.status === 403) {
+        setInstallError("not_admin");
+        reportStepFailure("github_install_forbidden", { step: "connect-code", retryable: false });
+      } else {
+        setInstallError("generic");
+        reportStepFailure("github_install_url_failed", { step: "connect-code" });
+      }
     }
   };
 

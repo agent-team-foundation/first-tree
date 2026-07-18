@@ -72,7 +72,11 @@ describe("GitLab entity attention agent routes", () => {
     const secondChatFollow = await runtime.request("POST", `/api/v1/agent/chats/${second.chatId}/gitlab-entities`, {
       entityUrl,
     });
-    expect(secondChatFollow.statusCode).toBe(201);
+    expect(secondChatFollow.statusCode).toBe(409);
+    expect(secondChatFollow.json()).toMatchObject({
+      error: "ENTITY_FOLLOWED_ELSEWHERE",
+      conflict: { chatId },
+    });
 
     const pendingList = await runtime.request("GET", `/api/v1/agent/chats/${chatId}/gitlab-entities`);
     expect(pendingList.statusCode).toBe(200);
@@ -117,11 +121,11 @@ describe("GitLab entity attention agent routes", () => {
       projectPath: "Acme/API",
       entityUrl,
       title: "Ship GitLab attention",
-      entityState: "opened",
+      entityState: "open",
     });
     const activeList = await runtime.request("GET", `/api/v1/agent/chats/${chatId}/gitlab-entities`);
     expect(activeList.json()).toMatchObject({
-      items: [{ status: "active", title: "Ship GitLab attention", state: "opened" }],
+      items: [{ status: "active", title: "Ship GitLab attention", state: "open" }],
     });
 
     const identity = await createGitlabIdentityLink(app.db, {
@@ -158,7 +162,7 @@ describe("GitLab entity attention agent routes", () => {
           projectPath: "Acme/API",
           entityIid: 42,
           title: "Ship GitLab attention",
-          state: "opened",
+          state: "open",
           status: "active",
         },
       ],
@@ -216,6 +220,21 @@ describe("GitLab entity attention agent routes", () => {
     );
     expect(removed.statusCode).toBe(200);
     expect(removed.json()).toEqual({ removed: 2 });
+
+    const rebindSourceUrl = "https://gitlab.internal/Acme/API/-/issues/99";
+    expect(
+      (
+        await runtime.request("POST", `/api/v1/agent/chats/${chatId}/gitlab-entities`, {
+          entityUrl: rebindSourceUrl,
+        })
+      ).statusCode,
+    ).toBe(201);
+    const rebound = await runtime.request("POST", `/api/v1/agent/chats/${second.chatId}/gitlab-entities`, {
+      entityUrl: rebindSourceUrl,
+      rebind: true,
+    });
+    expect(rebound.statusCode).toBe(201);
+    expect(rebound.json()).toMatchObject({ status: "rebound", entity: { entityIid: 99 } });
     const repeatedRemoval = await runtime.request(
       "DELETE",
       `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,

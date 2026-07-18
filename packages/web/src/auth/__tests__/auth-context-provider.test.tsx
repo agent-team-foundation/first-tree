@@ -19,7 +19,6 @@ const apiMocks = vi.hoisted(() => ({
 
 const loginMock = vi.hoisted(() => vi.fn());
 const onboardingCompletedMock = vi.hoisted(() => vi.fn());
-const trackEventMock = vi.hoisted(() => vi.fn());
 const flagsMocks = vi.hoisted(() => ({
   clearOnboardingJoinPath: vi.fn(),
   clearOnboardingSessionFlags: vi.fn(),
@@ -43,10 +42,6 @@ vi.mock("../../api/auth.js", () => ({
 
 vi.mock("../../api/onboarding-events.js", () => ({
   markOnboardingCompleted: onboardingCompletedMock,
-}));
-
-vi.mock("../../analytics.js", () => ({
-  trackEvent: trackEventMock,
 }));
 
 vi.mock("../../utils/onboarding-flags.js", () => flagsMocks);
@@ -385,58 +380,6 @@ describe("AuthProvider", () => {
     });
     expect(onboardingCompletedMock).toHaveBeenCalled();
     expect(latestAuth?.onboardingCompletedAt).toBeTruthy();
-  });
-
-  it("fires the sign_up conversion exactly once when a fresh user first completes onboarding", async () => {
-    // Authenticated fresh signup: stored tokens present so fetchMe runs and
-    // populates memberships, and /me reports onboarding not yet completed in
-    // any membership.
-    apiMocks.getStoredTokens.mockReturnValue({ accessToken: "a", refreshToken: "r" });
-    apiMocks.apiGet.mockResolvedValue({
-      user: { id: "user-1", username: "gandy", displayName: "Gandy", avatarUrl: null },
-      memberships: MEMBERSHIPS, // both fixtures carry onboardingCompletedAt: null
-      defaultOrganizationId: "org-1",
-      onboarding: { step: "create_agent", dismissedAt: null, completedAt: null },
-    });
-    await renderAuth();
-
-    await act(async () => {
-      await latestAuth?.markOnboardingCompleted();
-    });
-    expect(trackEventMock).toHaveBeenCalledWith("sign_up");
-    expect(trackEventMock.mock.calls.filter(([name]) => name === "sign_up")).toHaveLength(1);
-
-    // A second completion (e.g. a stray re-trigger) does not re-fire: the
-    // optimistic patch has now stamped the membership, so the account-level
-    // "never completed anywhere" guard is false.
-    trackEventMock.mockClear();
-    await act(async () => {
-      await latestAuth?.markOnboardingCompleted();
-    });
-    expect(trackEventMock).not.toHaveBeenCalledWith("sign_up");
-  });
-
-  it("does NOT fire sign_up when a returning user completes onboarding in a second org", async () => {
-    // Account-level conversion: this user already finished onboarding in org-1
-    // (membership stamp set), and is now completing in a freshly-joined org-2.
-    // Joining a second team is not a new signup, so sign_up must not re-fire.
-    apiMocks.getStoredTokens.mockReturnValue({ accessToken: "a", refreshToken: "r" });
-    apiMocks.apiGet.mockResolvedValue({
-      user: { id: "user-1", username: "gandy", displayName: "Gandy", avatarUrl: null },
-      memberships: [
-        { ...MEMBERSHIPS[0], onboardingCompletedAt: "2026-05-01T00:00:00.000Z" },
-        { ...MEMBERSHIPS[1], onboardingCompletedAt: null },
-      ],
-      defaultOrganizationId: "org-2",
-      onboarding: { step: "create_agent", dismissedAt: null, completedAt: null },
-    });
-    await renderAuth();
-
-    await act(async () => {
-      await latestAuth?.markOnboardingCompleted();
-    });
-    expect(onboardingCompletedMock).toHaveBeenCalled();
-    expect(trackEventMock).not.toHaveBeenCalledWith("sign_up");
   });
 
   it("adopts external token pairs and falls back when /me fails", async () => {

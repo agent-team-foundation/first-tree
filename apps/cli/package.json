@@ -1,6 +1,6 @@
 {
   "name": "first-tree-dev",
-  "version": "0.5.15",
+  "version": "0.5.16",
   "type": "module",
   "description": "First Tree — unified CLI for Context Tree onboarding, agent management, and team messaging. (Source-tree dev build; CI rewrites `name` and `bin` for prod / staging publishes — see docs/local-dev-isolation.md.)",
   "keywords": [
@@ -39,7 +39,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk && node ../../scripts/copy-client-runtime-templates.mjs apps/cli && node ../../scripts/copy-cli-tree-templates.mjs",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @botiverse/kimi-code-sdk --external @openai/codex-sdk && node ../../scripts/copy-client-runtime-templates.mjs apps/cli && node ../../scripts/copy-cli-tree-templates.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-vitest-batches.mjs",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
@@ -58,6 +58,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.187",
+    "@botiverse/kimi-code-sdk": "0.26.0-botiverse.2",
     "@inquirer/prompts": "^8.3.0",
     "@openai/codex-sdk": "^0.144.1",
     "commander": "^13.1.0",

@@ -98,6 +98,13 @@ export const githubCallbackQuerySchema = z.object({
    */
   state: z.string().min(1).optional(),
   /**
+   * Provider-side cancellation / denial. GitHub returns this instead of a
+   * code when the user closes or rejects the authorization prompt. Keep the
+   * raw value bounded at the schema edge; the route collapses every value to
+   * one fixed, low-cardinality failure reason before it reaches analytics.
+   */
+  error: z.string().min(1).max(128).optional(),
+  /**
    * GitHub App installation ID. Present when the user landed in callback
    * via the install flow ("first install of the App by this user / org").
    * Returning users who already had the App installed get `code` + `state`

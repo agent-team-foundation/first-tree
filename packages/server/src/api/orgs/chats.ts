@@ -20,7 +20,11 @@ import {
 import { assertNoLandingCampaignTrialAgents } from "../../services/landing-campaigns/guards.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { campaignActionKickoffKey, resolveCampaignActionContext } from "../../services/onboarding-kickoff.js";
+import {
+  campaignActionKickoffKey,
+  recordCampaignActionConversion,
+  resolveCampaignActionContext,
+} from "../../services/onboarding-kickoff.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -216,6 +220,21 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
           ? { onboardingKickoffKey: campaignActionKickoffKey(scope.humanAgentId, campaignAction) }
           : {}),
       });
+      if (campaignAction) {
+        try {
+          await recordCampaignActionConversion(app.db, {
+            humanAgentId: scope.humanAgentId,
+            organizationId: scope.organizationId,
+            action: campaignAction,
+            actionChatId: result.chat.id,
+          });
+        } catch (err) {
+          app.log.warn(
+            { err, campaign: campaignAction.campaign, actionChatId: result.chat.id },
+            "landing campaign action conversion could not be recorded",
+          );
+        }
+      }
       notifyRecipients(app.notifier, result.recipients, result.message.id);
       return reply.status(201).send({
         chatId: result.chat.id,

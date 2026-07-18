@@ -267,6 +267,27 @@ export async function withGitlabIngressFence<T>(
   });
 }
 
+/**
+ * Serialize one-time maintenance against both current-connection writes and
+ * inbound webhook writes. Both live paths lock this same connection row.
+ */
+export async function withGitlabConnectionMaintenanceFence<T>(
+  db: Database,
+  connectionId: string,
+  callback: (tx: Database, connection: typeof gitlabConnections.$inferSelect) => Promise<T>,
+): Promise<T | null> {
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    const [connection] = await tx
+      .select()
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.id, connectionId))
+      .for("update")
+      .limit(1);
+    return connection ? callback(tx, connection) : null;
+  });
+}
+
 export async function markGitlabInboundSeen(db: Database, connectionId: string, tokenHash: string): Promise<void> {
   const now = new Date();
   await db

@@ -746,6 +746,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     activeStep,
     goNext: () => undefined,
     goTo: () => undefined,
+    reportStepFailure: () => undefined,
     organizationId: "org-1",
     memberId: "member-self",
     role: path === "admin" ? "admin" : "member",

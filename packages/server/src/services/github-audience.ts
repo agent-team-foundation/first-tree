@@ -81,6 +81,7 @@ export type AudienceTarget = {
    * reason.
    */
   involveLogin: string | null;
+  provenance?: "explicit" | "identity_target" | "related_entity";
 };
 
 export type AudienceResolution = {
@@ -184,6 +185,11 @@ export async function resolveGithubAudience(db: Database, event: NormalizedScmEv
     chatId: row.chatId,
     involveReason: null,
     involveLogin: null,
+    provenance: isDeclaredBoundVia(row.boundVia)
+      ? "explicit"
+      : row.boundVia === "fixes_link"
+        ? "related_entity"
+        : "identity_target",
   }));
 
   const subscribedByHuman = new Map<string, AudienceTarget[]>();

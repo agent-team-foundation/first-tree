@@ -8,6 +8,7 @@ import { handleGitlabSdkError } from "./_shared.js";
 type FollowOptions = {
   chat?: string;
   agent?: string;
+  rebind?: boolean;
 };
 
 export function registerGitlabFollowCommand(gitlab: Command): void {
@@ -19,18 +20,21 @@ export function registerGitlabFollowCommand(gitlab: Command): void {
     )
     .option("--chat <chatId>", "Target chat (default: the session's FIRST_TREE_CHAT_ID)")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
+    .option("--rebind", "Move this agent's existing attention line from another chat into the target chat")
     .action(async (entityUrl: string, options: FollowOptions) => {
       try {
         const chatId = resolveTargetChatId(options.chat);
         const sdk = createSdk(options.agent);
-        const result = await sdk.followGitlabEntity(chatId, { entityUrl });
+        const result = await sdk.followGitlabEntity(chatId, { entityUrl, rebind: options.rebind ?? false });
         const hint =
           result.status === "created"
             ? "Declaration recorded locally. It remains pending until the next matching valid GitLab webhook; " +
               "First Tree has not called GitLab or verified that the entity exists."
-            : result.entity.status === "pending"
-              ? "Already pending in this chat — idempotent success. Wait for a matching valid webhook; do not retry."
-              : "Already active in this chat — idempotent success, do not retry.";
+            : result.status === "rebound"
+              ? "Attention line moved into this chat. A pending line activates on the next matching valid webhook."
+              : result.entity.status === "pending"
+                ? "Already pending in this chat — idempotent success. Wait for a matching valid webhook; do not retry."
+                : "Already active in this chat — idempotent success, do not retry.";
         success({
           ...result,
           hint:

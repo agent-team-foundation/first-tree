@@ -12,6 +12,10 @@ import {
   withGitlabIngressFence,
 } from "../../services/gitlab-connections.js";
 import {
+  observeGitlabEntityAndResolveFollowers,
+  refreshGitlabChatTopics,
+} from "../../services/gitlab-entity-follow.js";
+import {
   applyGitlabPersonnelEvidence,
   deliverGitlabCards,
   extractStableGitlabDeliveryId,
@@ -106,10 +110,21 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
               reviewerField: normalized.personnel.reviewerField,
             });
             const applied = applyGitlabPersonnelEvidence(normalized, reviewerMode);
+            let observedFollowers: Awaited<ReturnType<typeof observeGitlabEntityAndResolveFollowers>> = [];
             const processed = await processScmWebhookDelivery({
               db: tx,
               ingress: normalized.ingress,
+              observation: normalized.observation,
               event: applied.event,
+              applyObservation: async () => {
+                if (!normalized.entityIdentity) return;
+                observedFollowers = await observeGitlabEntityAndResolveFollowers(
+                  tx,
+                  fencedConnection.id,
+                  normalized.entityIdentity,
+                );
+                await refreshGitlabChatTopics(tx, fencedConnection.id, normalized.entityIdentity);
+              },
               runProviderWork: async () => {
                 await markGitlabInboundSeen(tx, endpoint.connection.id, endpoint.connection.tokenHash);
                 if (normalized.ingress.stableDeliveryId) {
@@ -134,6 +149,7 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
                   connectionId: fencedConnection.id,
                   event,
                   entityIdentity: normalized.entityIdentity,
+                  followers: observedFollowers,
                 });
               },
               deliver: async (event, audience) => {

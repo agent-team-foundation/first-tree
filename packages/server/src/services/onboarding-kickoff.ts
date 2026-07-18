@@ -1,5 +1,9 @@
-import type { LandingCampaignActionContext, SendMessage } from "@first-tree/shared";
-import { and, desc, eq, isNull, like, or } from "drizzle-orm";
+import {
+  type LandingCampaignActionContext,
+  parseLandingCampaignTrialChatMetadata,
+  type SendMessage,
+} from "@first-tree/shared";
+import { and, desc, eq, isNull, like, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
@@ -27,6 +31,72 @@ export function resolveCampaignActionContext(
 ): LandingCampaignActionContext | null {
   if (action) return action;
   return legacyScanFixRepoSlug ? { campaign: "production-scan", repoSlug: legacyScanFixRepoSlug } : null;
+}
+
+/**
+ * Attach a campaign action conversion to the caller's matching trial chat.
+ *
+ * The analytics export is intentionally limited to valid trial rows. Recording
+ * the conversion on that row keeps the export inside its existing trust
+ * boundary and avoids exporting ordinary task-chat content. A shared report
+ * opened by somebody who did not run the trial simply has no matching row and
+ * is left unattributed without blocking their task chat.
+ */
+export async function recordCampaignActionConversion(
+  db: Database,
+  input: {
+    humanAgentId: string;
+    organizationId: string;
+    action: LandingCampaignActionContext;
+    actionChatId: string;
+  },
+): Promise<boolean> {
+  const canonicalRepoKey = `github.com/${input.action.repoSlug.toLowerCase()}`;
+
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ id: chats.id, metadata: chats.metadata })
+      .from(chats)
+      .innerJoin(
+        chatMembership,
+        and(
+          eq(chatMembership.chatId, chats.id),
+          eq(chatMembership.agentId, input.humanAgentId),
+          eq(chatMembership.accessMode, "speaker"),
+        ),
+      )
+      .where(
+        and(
+          eq(chats.organizationId, input.organizationId),
+          sql`${chats.metadata}->'landingCampaignTrial'->>'campaign' = ${input.action.campaign}`,
+          sql`lower(${chats.metadata}->'landingCampaignTrial'->'repo'->>'canonicalKey') = ${canonicalRepoKey}`,
+        ),
+      )
+      .orderBy(desc(chats.createdAt))
+      .for("update")
+      .limit(1);
+    const trial = parseLandingCampaignTrialChatMetadata(row?.metadata);
+    if (!row || !trial) return false;
+    if (trial.actionConversion?.chatId === input.actionChatId) return true;
+
+    await tx
+      .update(chats)
+      .set({
+        metadata: {
+          ...row.metadata,
+          landingCampaignTrial: {
+            ...trial,
+            actionConversion: {
+              chatId: input.actionChatId,
+              recordedAt: new Date().toISOString(),
+            },
+          },
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(chats.id, row.id));
+    return true;
+  });
 }
 
 export type KickoffOnboardingArgs = {

@@ -5,7 +5,7 @@ import { readOAuthStateNonce } from "../api/auth/oauth-cookie.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { signTokensForUser } from "../services/auth.js";
-import { OAUTH_STATE_COOKIE, verifyOAuthState } from "../services/oauth-state.js";
+import { STATE_NONCE_COOKIE_NAME, verifyOAuthState } from "../services/oauth-state.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestApp, useTestApp } from "./helpers.js";
 
@@ -142,7 +142,7 @@ describe("user authentication provider management", () => {
     const state = new URL(response.json().redirectUrl).searchParams.get("state") ?? "";
     const cookieNonce = readOAuthStateNonce(
       response.headers["set-cookie"],
-      OAUTH_STATE_COOKIE,
+      STATE_NONCE_COOKIE_NAME,
       app.config.secrets.encryptionKey,
     );
     const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);

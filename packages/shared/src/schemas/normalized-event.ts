@@ -89,6 +89,36 @@ export const normalizedScmEventSchema = scmIngressContextSchema.extend({
 });
 export type NormalizedScmEvent = z.infer<typeof normalizedScmEventSchema>;
 
+export const SCM_ENTITY_STATES = ["open", "draft", "closed", "merged"] as const;
+export const scmEntityStateSchema = z.enum(SCM_ENTITY_STATES);
+export type ScmEntityState = z.infer<typeof scmEntityStateSchema>;
+
+/** Normalize provider/legacy storage spellings at the projection boundary. */
+export function normalizeScmEntityState(value: unknown): ScmEntityState | null {
+  if (value === "opened") return "open";
+  const parsed = scmEntityStateSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+export const scmEntityObservationSchema = z.object({
+  entity: normalizedScmEntitySchema,
+  state: scmEntityStateSchema.nullable(),
+  observedAt: z.string().datetime(),
+});
+export type ScmEntityObservation = z.infer<typeof scmEntityObservationSchema>;
+
+/**
+ * Provider adapters always return one envelope. Observation is independent
+ * from semantic notification: metadata-only and terminal MR events can update
+ * the local projection while carrying `event: null`.
+ */
+export const scmNormalizedWebhookSchema = z.object({
+  ingress: scmIngressContextSchema,
+  observation: scmEntityObservationSchema.nullable(),
+  event: normalizedScmEventSchema.nullable(),
+});
+export type ScmNormalizedWebhook = z.infer<typeof scmNormalizedWebhookSchema>;
+
 /**
  * Why the recipient is being told about this event. `subscribed` covers
  * the persistent-subscription path (DP1); `mentioned` / `review_requested`

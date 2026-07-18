@@ -160,6 +160,8 @@ describe("GitLab identity authority fencing", () => {
       connectionId: fixture.connection.connectionId,
       chatId: chat.id,
       declaredByAgentId: boundVia === "human_declared" ? fixture.admin.humanAgentUuid : fixture.delegate.uuid,
+      humanAgentId: fixture.admin.humanAgentUuid,
+      delegateAgentId: fixture.delegate.uuid,
       boundVia,
       entityUrl: `https://gitlab.internal/Acme/Fenced/-/merge_requests/${iid}`,
     });

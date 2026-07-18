@@ -1,5 +1,47 @@
 import type { LandingCampaignActionContext, OnboardingEvent, OnboardingEventName } from "@first-tree/shared";
+import { trackEvent } from "../analytics.js";
 import { api } from "./client.js";
+
+const GA_ONBOARDING_ATTRS = new Set([
+  "step",
+  "path",
+  "nextStep",
+  "outcome",
+  "reasonCode",
+  "retryable",
+  "runtimeProvider",
+  "treeBindingPlan",
+  "startChatType",
+  "joinPath",
+  "source",
+]);
+
+/**
+ * Stable, low-cardinality causes for user-visible onboarding failures. Keep
+ * raw exception text, URLs, repo names, and internal IDs out of this list: the
+ * same value is mirrored to GA and must stay safe to aggregate.
+ */
+export type OnboardingFailureReason =
+  | "team_load_failed"
+  | "team_rename_failed"
+  | "connect_token_mint_failed"
+  | "runtime_unavailable"
+  | "agent_create_failed"
+  | "agent_runtime_timeout"
+  | "github_install_not_configured"
+  | "github_install_forbidden"
+  | "github_install_url_failed"
+  | "github_repo_list_failed"
+  | "team_agent_list_failed"
+  | "repo_access_check_failed"
+  | "repo_resource_sync_failed"
+  | "start_chat_failed";
+
+function analyticsAttrs(attrs: OnboardingEvent["attrs"]): OnboardingEvent["attrs"] {
+  if (!attrs) return undefined;
+  const safe = Object.fromEntries(Object.entries(attrs).filter(([key]) => GA_ONBOARDING_ATTRS.has(key)));
+  return Object.keys(safe).length > 0 ? safe : undefined;
+}
 
 export type StartOnboardingChatArgs = {
   organizationId?: string;
@@ -35,6 +77,10 @@ export async function reportOnboardingEvent(
   event: OnboardingEventName,
   attrs?: OnboardingEvent["attrs"],
 ): Promise<void> {
+  // Mirror the same small, validated event vocabulary into GA so campaign
+  // sessions can be analyzed without maintaining a second client taxonomy.
+  // Keep high-cardinality internal IDs in the server log only.
+  trackEvent(`onboarding_${event}`, analyticsAttrs(attrs));
   try {
     await api.post<void>("/me/onboarding/events", { event, attrs });
   } catch {

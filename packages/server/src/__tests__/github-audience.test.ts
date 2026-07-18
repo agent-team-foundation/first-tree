@@ -239,6 +239,7 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
+        provenance: "identity_target",
       },
     ]);
   });
@@ -288,6 +289,7 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
+        provenance: "identity_target",
       },
     ]);
   });

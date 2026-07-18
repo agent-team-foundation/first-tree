@@ -46,7 +46,9 @@ describe("processScmWebhookDelivery", () => {
     const first = await processScmWebhookDelivery({
       db: app.db,
       ingress,
+      observation: null,
       event,
+      applyObservation: async () => undefined,
       runProviderWork,
       resolveAudience,
       deliver,
@@ -54,7 +56,9 @@ describe("processScmWebhookDelivery", () => {
     const duplicate = await processScmWebhookDelivery({
       db: app.db,
       ingress,
+      observation: null,
       event,
+      applyObservation: async () => undefined,
       runProviderWork,
       resolveAudience,
       deliver,
@@ -78,7 +82,9 @@ describe("processScmWebhookDelivery", () => {
     const input = {
       db: app.db,
       ingress,
+      observation: null,
       event,
+      applyObservation: async () => undefined,
       runProviderWork: async () => null,
       resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
       deliver,
@@ -87,6 +93,66 @@ describe("processScmWebhookDelivery", () => {
     expect((await processScmWebhookDelivery(input)).outcome).toBe("delivered");
     expect((await processScmWebhookDelivery(input)).outcome).toBe("delivered");
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies an observation without resolving audience or delivering a card", async () => {
+    const app = getApp();
+    const ingress = makeIngress(null);
+    const applyObservation = vi.fn(async () => undefined);
+    const resolveAudience = vi.fn(async () => ({ targets: ["unexpected"], actorHumanId: null }));
+    const deliver = vi.fn(async () => ({ delivered: 1 }));
+
+    const result = await processScmWebhookDelivery({
+      db: app.db,
+      ingress,
+      observation: {
+        entity: {
+          type: "pull_request",
+          projectKey: "owner/repo",
+          key: "owner/repo#2",
+          title: "Silent lifecycle update",
+        },
+        state: "merged",
+        observedAt: new Date().toISOString(),
+      },
+      event: null,
+      applyObservation,
+      runProviderWork: async () => "provider-result",
+      resolveAudience,
+      deliver,
+    });
+
+    expect(result).toEqual({ outcome: "provider_only", providerResult: "provider-result" });
+    expect(applyObservation).toHaveBeenCalledOnce();
+    expect(resolveAudience).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress semantic delivery when projection refresh fails", async () => {
+    const app = getApp();
+    const ingress = makeIngress(null);
+    const event = makeEvent(ingress);
+    const deliver = vi.fn(async () => ({ delivered: 1 }));
+
+    await expect(
+      processScmWebhookDelivery({
+        db: app.db,
+        ingress,
+        observation: {
+          entity: event.entity,
+          state: "open",
+          observedAt: new Date().toISOString(),
+        },
+        event,
+        applyObservation: async () => {
+          throw new Error("projection unavailable");
+        },
+        runProviderWork: async () => null,
+        resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+        deliver,
+      }),
+    ).resolves.toMatchObject({ outcome: "delivered" });
+    expect(deliver).toHaveBeenCalledOnce();
   });
 
   it("best-effort unclaims a stable delivery after an uncaught top-level failure", async () => {
@@ -98,7 +164,9 @@ describe("processScmWebhookDelivery", () => {
       processScmWebhookDelivery({
         db: app.db,
         ingress,
+        observation: null,
         event,
+        applyObservation: async () => undefined,
         runProviderWork: async () => null,
         resolveAudience: async () => {
           throw new Error("audience unavailable");
@@ -110,7 +178,9 @@ describe("processScmWebhookDelivery", () => {
     const retried = await processScmWebhookDelivery({
       db: app.db,
       ingress,
+      observation: null,
       event,
+      applyObservation: async () => undefined,
       runProviderWork: async () => null,
       resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
       deliver: async () => ({ delivered: 1 }),
@@ -125,7 +195,9 @@ describe("processScmWebhookDelivery", () => {
     const input = {
       db: app.db,
       ingress,
+      observation: null,
       event,
+      applyObservation: async () => undefined,
       runProviderWork: async () => null,
       resolveAudience: async () => ({ targets: ["chat-a", "chat-b"], actorHumanId: null }),
       deliver: async () => ({ delivered: 1, failed: 1 }),
@@ -147,7 +219,9 @@ describe("processScmWebhookDelivery", () => {
       processScmWebhookDelivery({
         db: app.db,
         ingress,
+        observation: null,
         event,
+        applyObservation: async () => undefined,
         runProviderWork: async () => null,
         resolveAudience: async () => ({ targets: [], actorHumanId: null }),
         deliver: async () => ({ delivered: 0 }),

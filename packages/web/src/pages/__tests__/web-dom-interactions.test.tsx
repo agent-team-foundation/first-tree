@@ -464,6 +464,7 @@ function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
     activeStep,
     goNext: vi.fn(),
     goTo: vi.fn(),
+    reportStepFailure: vi.fn(),
     organizationId: "org-1",
     memberId: "member-self",
     role: path === "admin" ? "admin" : "member",
@@ -1357,6 +1358,7 @@ describe("web DOM interaction coverage", () => {
 
   it("renders friendly copy for callback error fragments", async () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
     const replaceState = vi.fn();
     Object.defineProperty(window, "history", { configurable: true, value: { replaceState } });
 
@@ -1376,6 +1378,22 @@ describe("web DOM interaction coverage", () => {
     expect(back?.getAttribute("href")).toBe("/settings/github");
     await unmountRoot(expired.root);
 
+    // Provider cancellation closes the paired sign-in attempt with a fixed,
+    // user-readable reason instead of falling through as a setup landing.
+    beginAuthAttempt("github", "/");
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#error=provider-denied&next=/&callbackIntent=sign-in",
+        pathname: "/auth/github/complete",
+      },
+    });
+    const denied = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await waitForText("authorization was canceled", denied.container);
+    expect(window.sessionStorage.getItem("first-tree:auth-attempt")).toBeNull();
+    await unmountRoot(denied.root);
+
     // Install refused: start-chat admin's authority no longer holds.
     Object.defineProperty(window, "location", {
       configurable: true,
@@ -1390,6 +1408,7 @@ describe("web DOM interaction coverage", () => {
 
   it("activates the callback org only when the server pins it", async () => {
     const { OAuthCompletePage } = await import("../oauth-complete.js");
+    const { beginAuthAttempt } = await import("../../auth/auth-analytics.js");
     Object.defineProperty(window, "history", {
       configurable: true,
       value: { replaceState: vi.fn() },
@@ -1398,11 +1417,12 @@ describe("web DOM interaction coverage", () => {
     // A pinned destination (install-return keeps joinPath="returning" yet
     // names a specific org): the SPA must activate it, otherwise a concurrent
     // org switch would strand the Settings page on the user's last-used org.
+    const staleAttemptId = beginAuthAttempt("github", "/");
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
         ...window.location,
-        hash: "#access=a&refresh=r&next=/settings/github&joinPath=returning&org=org-b&orgPinned=1",
+        hash: "#access=a&refresh=r&next=/settings/github&joinPath=returning&org=org-b&orgPinned=1&callbackIntent=install",
         pathname: "/auth/github/complete",
       },
     });
@@ -1415,6 +1435,7 @@ describe("web DOM interaction coverage", () => {
     const pinned = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
     await flush();
     expect(pinnedSelect).toHaveBeenCalledWith("org-b");
+    expect(JSON.parse(window.sessionStorage.getItem("first-tree:auth-attempt") ?? "{}").id).toBe(staleAttemptId);
     await unmountRoot(pinned.root);
 
     // A plain returning sign-in carries no pin: the SPA keeps the user's own
@@ -1488,6 +1509,7 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(authMock.value.restoreOnboarding).toHaveBeenCalled();
+    expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith("resumed", { source: "settings" });
     await unmountRoot(dismissed.root);
 
     authMock.value = { ...authMock.value, onboardingCompletedAt: "2026-05-02T00:00:00.000Z" };
@@ -1746,6 +1768,9 @@ describe("web DOM interaction coverage", () => {
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(403, "admin required"));
     const adminForbidden = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Couldn't load your team's repos", adminForbidden.container);
+    expect(adminForbidden.flow.reportStepFailure).toHaveBeenCalledWith("github_repo_list_failed", {
+      step: "connect-code",
+    });
     await unmountRoot(adminForbidden.root);
 
     // A 502 (upstream) / 503 (no_installation|suspended) failure shows the same
@@ -1766,6 +1791,9 @@ describe("web DOM interaction coverage", () => {
     githubMocks.listOrgGithubRepos.mockRejectedValueOnce(new ApiError(503, "no installation"));
     const loadFailed = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
     await waitForText("Couldn't load your team's repos", loadFailed.container);
+    expect(loadFailed.flow.reportStepFailure).toHaveBeenCalledWith("github_repo_list_failed", {
+      step: "connect-code",
+    });
     await unmountRoot(loadFailed.root);
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
@@ -1777,6 +1805,10 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     await waitForText("Couldn't connect a repo here right now", notConfigured.container);
+    expect(notConfigured.flow.reportStepFailure).toHaveBeenCalledWith("github_install_not_configured", {
+      step: "connect-code",
+      retryable: false,
+    });
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Skip for now"),
@@ -2312,6 +2344,7 @@ describe("web DOM interaction coverage", () => {
     expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
     expect(chatApiMocks.createAgentChat).not.toHaveBeenCalled();
     expect(view.flow.completeAndEnterChat).not.toHaveBeenCalled();
+    expect(view.flow.reportStepFailure).toHaveBeenCalledWith("repo_access_check_failed", { step: "start-chat" });
     await unmountRoot(view.root);
   });
 

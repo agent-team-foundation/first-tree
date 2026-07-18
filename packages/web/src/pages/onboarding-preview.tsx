@@ -921,6 +921,7 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
     activeStep: sequence[0] as StepId,
     goNext: NOOP,
     goTo: NOOP,
+    reportStepFailure: NOOP,
     organizationId: ORG_ID,
     memberId: "mem-preview",
     role: path === "admin" ? "admin" : "member",

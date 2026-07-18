@@ -6,6 +6,7 @@ import {
   type ChatDetail,
   type ChatParticipantDetail,
   COMPOSER_ACCEPT_ATTRIBUTE,
+  chatMetadataSchema,
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
@@ -1439,10 +1440,9 @@ const ChatTimeline = memo(function ChatTimeline({
 });
 
 /**
- * Renders a small "↗ View on GitHub" link beside the chat title when the chat
- * was created by the GitHub webhook router. Reads `metadata.entityUrl` (set by
- * `services/github-entity-chat.ts::createEntityChat`); shows nothing if the
- * chat has no entity metadata or the URL is missing.
+ * Renders the provider entity link beside an SCM-owned chat title. The URL is
+ * persisted only after the provider ingress authority validates its origin;
+ * manual/follow-only chats carry no provider anchor metadata and render none.
  *
  * Defensive parsing: `metadata` is typed `Record<string, unknown>` on the
  * wire, so we narrow inline rather than trust the shape. A schema parse would
@@ -1450,15 +1450,17 @@ const ChatTimeline = memo(function ChatTimeline({
  * 2-field check isn't worth it.
  */
 function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefined }) {
-  if (!metadata || metadata.source !== "github") return null;
-  const url = typeof metadata.entityUrl === "string" ? metadata.entityUrl : null;
+  const parsed = chatMetadataSchema.safeParse(metadata);
+  if (!parsed.success || (parsed.data.source !== "github" && parsed.data.source !== "gitlab")) return null;
+  const url = parsed.data.entityUrl ?? null;
   if (!url) return null;
+  const provider = parsed.data.source === "github" ? "GitHub" : "GitLab";
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      title="View on GitHub"
+      title={`View on ${provider}`}
       className="inline-flex items-center"
       style={{ color: "var(--fg-3)", padding: "0 var(--sp-1)", textDecoration: "none" }}
     >

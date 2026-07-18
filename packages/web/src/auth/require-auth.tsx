@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { isKnownCampaign } from "../pages/quickstart/campaigns.js";
+import { beginAuthAttempt } from "./auth-analytics.js";
 import { useAuth } from "./auth-context.js";
 
 /**
@@ -46,7 +47,11 @@ export function scanCampaignOAuthNext(loc: { pathname: string; search: string })
  * `<Navigate>`. Renders the neutral landing fallback while the browser leaves.
  */
 function OAuthStartRedirect({ next }: { next: string }) {
+  const startedRef = useRef(false);
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    beginAuthAttempt("github", next);
     window.location.replace(`/api/v1/auth/github/start?next=${encodeURIComponent(next)}`);
   }, [next]);
   return <LandingFallback />;

@@ -108,6 +108,7 @@ export function QuickstartPage() {
         ...(organizationId ? { organizationId } : {}),
         campaign: intent.campaign,
         repoUrl: intent.url,
+        ...(intent.attribution ? { attribution: intent.attribution } : {}),
       });
       clearCampaignIntent();
       await refreshMe();

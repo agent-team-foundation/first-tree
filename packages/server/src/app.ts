@@ -95,6 +95,7 @@ import { invalidateChatAudienceLocal, registerChatAudienceDispatcher } from "./s
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
+import { backfillGitlabAttentionPairs } from "./services/gitlab-attention-backfill.js";
 import { repairMembershipHumanMirrors } from "./services/membership.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
@@ -693,6 +694,10 @@ export async function buildApp(config: Config) {
     await backfillResourcesPhase1(db).catch((err) => {
       app.log.warn({ err }, "resources phase1 backfill failed");
     });
+    const gitlabAttentionBackfill = await backfillGitlabAttentionPairs(db);
+    if (gitlabAttentionBackfill.paired > 0 || gitlabAttentionBackfill.legacyRouteOnly > 0) {
+      app.log.info(gitlabAttentionBackfill, "gitlab attention pair backfill complete");
+    }
     await notifier.start();
     backgroundTasks.start();
     pulseAggregator.start();

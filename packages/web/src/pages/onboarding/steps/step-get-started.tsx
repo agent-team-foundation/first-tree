@@ -153,7 +153,7 @@ function ChoiceCard({
 
 function PickTeamAgent({ onBack, onContinueSetup }: { onBack: () => void; onContinueSetup: () => void }) {
   const g = COPY.getStarted;
-  const { organizationId, memberId, skipAndEnterChat } = useOnboardingFlow();
+  const { organizationId, memberId, skipAndEnterChat, reportStepFailure } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -167,6 +167,12 @@ function PickTeamAgent({ onBack, onContinueSetup }: { onBack: () => void; onCont
     queryFn: () => listAllNonHumanAddressableAgents(),
     staleTime: 30_000,
   });
+  const reportedAgentListFailureRef = useRef(false);
+  useEffect(() => {
+    if (!agentsQuery.isError || reportedAgentListFailureRef.current) return;
+    reportedAgentListFailureRef.current = true;
+    reportStepFailure("team_agent_list_failed", { step: "get-started" });
+  }, [agentsQuery.isError, reportStepFailure]);
   // Owner names for the "Run by X" tag. Member-readable route; cheap and
   // rarely-changing, so no polling.
   const membersQuery = useQuery({ queryKey: ["members"], queryFn: listMembers, staleTime: 60_000 });
@@ -197,6 +203,7 @@ function PickTeamAgent({ onBack, onContinueSetup }: { onBack: () => void; onCont
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
+      reportStepFailure("start_chat_failed", { step: "get-started" });
     }
   };
 

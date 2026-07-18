@@ -103,6 +103,7 @@ describe("GitHub OAuth onboarding flow", () => {
     const params = new URLSearchParams(fragment);
     expect(params.get("next")).toBe("/");
     expect(params.get("joinPath")).toBe("solo");
+    expect(params.get("accountCreated")).toBe("1");
 
     // Auth identity is recorded.
     const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "42"));
@@ -228,14 +229,18 @@ describe("GitHub OAuth onboarding flow", () => {
 
   it("second sign-in for same github id reuses the user", async () => {
     const app = getApp();
-    await app.inject({
+    const first = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/dev-callback?githubId=99&login=alice",
     });
-    await app.inject({
+    const firstParams = new URLSearchParams(first.headers.location?.split("#")[1] ?? "");
+    expect(firstParams.get("accountCreated")).toBe("1");
+    const second = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/dev-callback?githubId=99&login=alice",
     });
+    const secondParams = new URLSearchParams(second.headers.location?.split("#")[1] ?? "");
+    expect(secondParams.get("accountCreated")).toBe("0");
     const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "99"));
     expect(ids).toHaveLength(1);
   });
@@ -569,23 +574,66 @@ describe("OAuth callback rejects malformed state", () => {
     }
   });
 
-  it("redirects live callback invalid invites to the SPA error surface", async () => {
+  it("closes a denied GitHub sign-in with a fixed failure reason", async () => {
     const app = getApp();
     const { signOAuthState } = await import("../services/oauth-state.js");
-    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/invite/missing-token");
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/welcome", {
+      intent: "sign-in",
+      provider: "github",
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/callback?error=access_denied&state=${token}`,
+      headers: { cookie: `oauth_state_nonce=${nonce}` },
+    });
+
+    expect(res.statusCode).toBe(302);
+    const params = new URLSearchParams(res.headers.location?.split("#")[1] ?? "");
+    expect(params.get("error")).toBe("provider-denied");
+    expect(params.get("callbackIntent")).toBe("sign-in");
+    expect(params.get("next")).toBe("/welcome");
+    expect(params.get("access")).toBeNull();
+  });
+
+  it("carries committed account creation through bootstrap failure and reuses it on retry", async () => {
+    const app = getApp();
+    const { signOAuthState } = await import("../services/oauth-state.js");
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, "/invite/missing-token", {
+      intent: "sign-in",
+      provider: "github",
+    });
     const restore = stubGithubAppOauth({ githubId: 77_123_001, login: "missinginvite" });
     try {
-      const res = await app.inject({
+      const first = await app.inject({
         method: "GET",
         url: `/api/v1/auth/github/callback?code=ok-code&state=${token}`,
         headers: { cookie: `oauth_state_nonce=${nonce}` },
       });
 
-      expect(res.statusCode).toBe(302);
-      const location = res.headers.location ?? "";
-      expect(location).toContain("/auth/github/complete#");
-      expect(location).toContain("error=invite-invalid");
-      expect(location).not.toContain("access=");
+      expect(first.statusCode).toBe(302);
+      const firstParams = new URLSearchParams(first.headers.location?.split("#")[1] ?? "");
+      expect(firstParams.get("error")).toBe("invite-invalid");
+      expect(firstParams.get("accountCreated")).toBe("1");
+      expect(firstParams.get("callbackIntent")).toBe("sign-in");
+      expect(firstParams.get("access")).toBeNull();
+
+      const retryState = await signOAuthState(app.config.secrets.jwtSecret, "/", {
+        intent: "sign-in",
+        provider: "github",
+      });
+      const retry = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=retry-code&state=${retryState.token}`,
+        headers: { cookie: `oauth_state_nonce=${retryState.nonce}` },
+      });
+      expect(retry.statusCode).toBe(302);
+      const retryParams = new URLSearchParams(retry.headers.location?.split("#")[1] ?? "");
+      expect(retryParams.get("accountCreated")).toBe("0");
+      expect(retryParams.get("joinPath")).toBe("solo");
+      expect(retryParams.get("access")).toBeTruthy();
+
+      const identities = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "77123001"));
+      expect(identities).toHaveLength(1);
     } finally {
       restore();
     }

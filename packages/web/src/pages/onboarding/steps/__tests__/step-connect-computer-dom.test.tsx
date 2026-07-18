@@ -37,6 +37,7 @@ function flow(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue
     activeStep: "connect-computer",
     goNext: vi.fn(),
     goTo: vi.fn(),
+    reportStepFailure: vi.fn(),
     organizationId: "org-1",
     memberId: "member-1",
     role: "admin",

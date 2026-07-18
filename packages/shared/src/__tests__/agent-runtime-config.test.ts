@@ -8,6 +8,7 @@ import {
   DEFAULT_CLAUDE_CODE_TUI_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CURSOR_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
   deriveRepoShortLabel,
@@ -171,6 +172,24 @@ describe("agent runtime config — cursor variant", () => {
     // Zod object schemas drop unknown keys — a stale writer cannot smuggle an
     // effort field into a provider that has no effort channel.
     const parsed = agentRuntimeConfigPayloadSchema.parse({ kind: "cursor", reasoningEffort: "high" });
+    expect("reasoningEffort" in parsed).toBe(false);
+  });
+});
+
+describe("agent runtime config — kimi-code variant", () => {
+  it("defaults to the local Kimi model and has no reasoning-effort field", () => {
+    expect(DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD).toMatchObject({ kind: "kimi-code", model: "" });
+    expect("reasoningEffort" in DEFAULT_KIMI_CODE_RUNTIME_CONFIG_PAYLOAD).toBe(false);
+    expect(defaultRuntimeConfigPayload("kimi-code")).toMatchObject({ kind: "kimi-code", model: "" });
+  });
+
+  it("passes through an exact model id and strips a stray reasoning-effort field", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "kimi-code",
+      model: "kimi-for-coding",
+      reasoningEffort: "high",
+    });
+    expect(parsed.model).toBe("kimi-for-coding");
     expect("reasoningEffort" in parsed).toBe(false);
   });
 });

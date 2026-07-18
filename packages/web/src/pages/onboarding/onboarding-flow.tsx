@@ -1,7 +1,7 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { reportOnboardingEvent } from "../../api/onboarding-events.js";
+import { type OnboardingFailureReason, reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
 import {
   type AgentCreationPhase,
@@ -35,6 +35,7 @@ import {
  *   a fallback; no longer the default build path.
  */
 export type TreeBindingPlan = "agentSeed" | "useBoundTree" | "createBinding";
+type OnboardingAnalyticsStep = StepId | "connect-code";
 
 export type OnboardingFlowValue = {
   path: OnboardingPath;
@@ -43,6 +44,11 @@ export type OnboardingFlowValue = {
   activeStep: StepId;
   goNext: () => void;
   goTo: (index: number) => void;
+  /** Report a classified failure without exposing raw error text to GA. */
+  reportStepFailure: (
+    reasonCode: OnboardingFailureReason,
+    options?: { step?: OnboardingAnalyticsStep; retryable?: boolean },
+  ) => void;
 
   organizationId: string | null;
   memberId: string | null;
@@ -230,30 +236,108 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     writePersistedStep(path, organizationId, activeIndex);
   }, [path, organizationId, activeIndex]);
 
-  const goTo = useCallback((index: number) => setActiveIndex(clampStepIndex(path, index)), [path]);
-  const goNext = useCallback(() => setActiveIndex((i) => clampStepIndex(path, i + 1)), [path]);
-
   const activeStep = sequence[clampStepIndex(path, activeIndex)] as StepId;
+  const offerTeamAgentStart = canOfferTeamAgentStart({ currentOrgHasUsableAgent, currentOrgHasPersonalAgent });
+  // Two steps can mount only long enough to redirect themselves. Do not count
+  // those implementation-only states as pages the user actually saw.
+  const activeStepIsVisible =
+    !(activeStep === "get-started" && !offerTeamAgentStart) &&
+    !(activeStep === "create-agent" && currentOrgHasPersonalAgent);
+
+  const reportStepEvent = useCallback(
+    (
+      event: "step_viewed" | "step_completed" | "step_paused",
+      step: StepId,
+      attrs: Record<string, string | number | boolean | null> = {},
+    ): void => {
+      void reportOnboardingEvent(event, {
+        ...attrs,
+        step,
+        path,
+        organizationId: organizationId ?? null,
+      });
+    },
+    [organizationId, path],
+  );
+
+  const reportStepFailure = useCallback(
+    (
+      reasonCode: OnboardingFailureReason,
+      options: { step?: OnboardingAnalyticsStep; retryable?: boolean } = {},
+    ): void => {
+      void reportOnboardingEvent("step_failed", {
+        step: options.step ?? activeStep,
+        path,
+        organizationId: organizationId ?? null,
+        reasonCode,
+        retryable: options.retryable ?? true,
+      });
+    },
+    [activeStep, organizationId, path],
+  );
+
+  const lastViewedStepRef = useRef<string | null>(null);
+  useEffect(() => {
+    const viewKey = `${organizationId ?? "none"}:${path}:${activeStep}`;
+    if (!activeStepIsVisible || lastViewedStepRef.current === viewKey) return;
+    lastViewedStepRef.current = viewKey;
+    reportStepEvent("step_viewed", activeStep);
+  }, [activeStep, activeStepIsVisible, organizationId, path, reportStepEvent]);
+
+  const goTo = useCallback((index: number) => setActiveIndex(clampStepIndex(path, index)), [path]);
+  const goNext = useCallback(() => {
+    const nextIndex = clampStepIndex(path, activeIndex + 1);
+    if (activeStepIsVisible && nextIndex !== activeIndex) {
+      reportStepEvent("step_completed", activeStep, { nextStep: sequence[nextIndex] as StepId });
+    }
+    setActiveIndex(nextIndex);
+  }, [activeIndex, activeStep, activeStepIsVisible, path, reportStepEvent, sequence]);
 
   // The computer poll only needs to run on the two steps that depend on it.
   const computerEnabled = activeStep === "connect-computer" || activeStep === "create-agent";
-  const computer = useComputerConnection(computerEnabled);
+  const computer = useComputerConnection(computerEnabled, {
+    onTokenMintFailed: () => reportStepFailure("connect_token_mint_failed", { step: "connect-computer" }),
+  });
+
+  // A connected computer with a completed capability report but no usable
+  // runtime is a real blocker, not merely a slow poll. Report once per client
+  // so repeated capability refreshes do not inflate the failure count.
+  const runtimeUnavailableClientRef = useRef<string | null>(null);
+  useEffect(() => {
+    const clientId = computer.connectedClient?.id ?? null;
+    if (!clientId || !computer.capabilitiesLoaded || computer.okRuntimes.length > 0) return;
+    if (runtimeUnavailableClientRef.current === clientId) return;
+    runtimeUnavailableClientRef.current = clientId;
+    reportStepFailure("runtime_unavailable", { step: "connect-computer" });
+  }, [computer.capabilitiesLoaded, computer.connectedClient?.id, computer.okRuntimes.length, reportStepFailure]);
 
   const onAgentOnline = useCallback(() => {
     void refreshMe();
+    reportStepEvent("step_completed", "create-agent", { nextStep: "start-chat" });
     setActiveIndex((i) => clampStepIndex(path, i + 1));
-  }, [refreshMe, path]);
-  const onAgentCreated = useCallback((info: CreatedAgentInfo) => {
-    writeOnboardingAgentUuid(info.agentUuid);
-    void reportOnboardingEvent("agent_created", { runtimeProvider: info.args.runtimeProvider });
-  }, []);
+  }, [path, refreshMe, reportStepEvent]);
+  const onAgentCreated = useCallback(
+    (info: CreatedAgentInfo) => {
+      writeOnboardingAgentUuid(info.agentUuid);
+      void reportOnboardingEvent("agent_created", {
+        runtimeProvider: info.args.runtimeProvider,
+        path,
+        organizationId: organizationId ?? null,
+      });
+    },
+    [organizationId, path],
+  );
   const {
     phase: agentPhase,
     error: agentError,
     create: createAgent,
     retry: retryAgent,
     createdUuid: createdAgentUuid,
-  } = useAgentCreation({ onCreated: onAgentCreated, onOnline: onAgentOnline });
+  } = useAgentCreation({
+    onCreated: onAgentCreated,
+    onOnline: onAgentOnline,
+    onFailure: ({ reasonCode, retryable }) => reportStepFailure(reasonCode, { step: "create-agent", retryable }),
+  });
 
   const [agentDisplayName, setAgentDisplayName] = useState<string>(() =>
     user?.username ? `${user.username} assistant` : "Assistant",
@@ -332,9 +416,10 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
         // keep the always-navigate invariant local to this flow rather than
         // depending on a callee's error handling.
       }
+      reportStepEvent("step_completed", "start-chat", { outcome: "chat_started" });
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     },
-    [path, organizationId, markOnboardingCompleted, navigate],
+    [path, organizationId, markOnboardingCompleted, navigate, reportStepEvent],
   );
 
   const skipAndEnterChat = useCallback(
@@ -350,15 +435,17 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // workspace gate reads it, and navigating with stale state would bounce
       // the user straight back into onboarding.
       await refreshMe();
+      reportStepEvent("step_completed", "get-started", { outcome: "team_agent_quick_start" });
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     },
-    [path, organizationId, refreshMe, navigate],
+    [path, organizationId, refreshMe, navigate, reportStepEvent],
   );
 
   const finishLater = useCallback(async () => {
+    reportStepEvent("step_paused", activeStep);
     await dismissOnboarding();
     navigate("/");
-  }, [dismissOnboarding, navigate]);
+  }, [activeStep, dismissOnboarding, navigate, reportStepEvent]);
 
   const value = useMemo<OnboardingFlowValue>(
     () => ({
@@ -368,6 +455,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       activeStep,
       goNext,
       goTo,
+      reportStepFailure,
       organizationId,
       memberId,
       role,
@@ -385,7 +473,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       retryAgent,
       createdAgentUuid,
       hasAgent: orgStep === "completed" || createdAgentUuid !== null,
-      offerTeamAgentStart: canOfferTeamAgentStart({ currentOrgHasUsableAgent, currentOrgHasPersonalAgent }),
+      offerTeamAgentStart,
       selectedRepoUrls,
       setSelectedRepoUrls,
       hasRepoDraft,
@@ -406,6 +494,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       activeStep,
       goNext,
       goTo,
+      reportStepFailure,
       organizationId,
       memberId,
       role,
@@ -421,8 +510,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       retryAgent,
       createdAgentUuid,
       orgStep,
-      currentOrgHasUsableAgent,
-      currentOrgHasPersonalAgent,
+      offerTeamAgentStart,
       selectedRepoUrls,
       setSelectedRepoUrls,
       hasRepoDraft,

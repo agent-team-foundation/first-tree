@@ -3,6 +3,7 @@ import { ArrowLeft, Github, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client.js";
+import { type AuthProvider, beginAuthAttempt } from "../auth/auth-analytics.js";
 import { useAuth } from "../auth/auth-context.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
@@ -117,6 +118,7 @@ export function InviteAcceptPage() {
         googleAvailable={providers.google}
         githubAvailable={providers.github}
         providersSettled={providersSettled}
+        onAuthStart={(provider) => beginAuthAttempt(provider, `/invite/${token}`)}
       />
     </InviteAcceptShell>
   );
@@ -152,6 +154,7 @@ export function InviteAcceptCard({
   googleAvailable = true,
   githubAvailable = true,
   providersSettled = true,
+  onAuthStart,
 }: {
   preview: InvitationPreview;
   isAuthenticated: boolean;
@@ -163,6 +166,7 @@ export function InviteAcceptCard({
   googleAvailable?: boolean;
   githubAvailable?: boolean;
   providersSettled?: boolean;
+  onAuthStart?: (provider: AuthProvider) => void;
 }) {
   const switchingTeam = isAuthenticated && currentTeamName && currentTeamName !== preview.organizationDisplayName;
   const expiresHint = formatExpiresHint(preview.expiresAt);
@@ -207,7 +211,7 @@ export function InviteAcceptCard({
               <>
                 {googleAvailable && (
                   <Button asChild className="w-full">
-                    <a href={googleOauthHref ?? oauthHref}>
+                    <a href={googleOauthHref ?? oauthHref} onClick={() => onAuthStart?.("google")}>
                       <span className="flex h-4 w-4 items-center justify-center font-semibold">G</span>
                       Continue with Google to join
                     </a>
@@ -215,7 +219,7 @@ export function InviteAcceptCard({
                 )}
                 {githubAvailable && (
                   <Button asChild variant="outline" className="w-full">
-                    <a href={oauthHref}>
+                    <a href={oauthHref} onClick={() => onAuthStart?.("github")}>
                       <Github className="h-4 w-4" />
                       Continue with GitHub to join
                     </a>
