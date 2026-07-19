@@ -125,7 +125,7 @@ describe("CLI command registration", () => {
     // `verify` survived the 2026-06 cleanup, `tree` is the narrow hierarchy
     // browser added back for agents and scripted consumers, and `init` was
     // reintroduced in 2026-07 as the agent/local-`gh` tree-repo creation path.
-    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "tree", "verify"]);
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "read", "tree", "verify"]);
   });
 
   it("registers Context Tree set and review-config without changing the parent read options", () => {
@@ -166,6 +166,7 @@ describe("CLI command registration", () => {
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
     expect(optionNames(command(command(root, "org"), "bind-tree"))).toEqual(["--branch", "--org"]);
     expect(optionNames(command(command(root, "org"), "context-tree"))).toEqual(["--agent"]);
+    expect(optionNames(command(command(root, "tree"), "read"))).toEqual(["--snapshot", "--team"]);
     expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--no-pull", "--pattern"]);
   });
 
@@ -178,5 +179,16 @@ describe("CLI command registration", () => {
     expect(help).toContain("Browse Context Tree nodes as a hierarchy.");
     expect(help).toContain("--level <depth>");
     expect(help).toContain("--pattern <pattern>");
+  });
+
+  it("exposes read-only help for strict task-scoped Read activation", () => {
+    const root = new Command();
+    registerTreeCommands(root);
+
+    const help = command(command(root, "tree"), "read").helpInformation();
+
+    expect(help).toContain("Activate a strict task-scoped Context Tree read snapshot.");
+    expect(help).toContain("--team <team-id>");
+    expect(help).toContain("--snapshot <directory>");
   });
 });

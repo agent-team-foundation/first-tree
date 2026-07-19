@@ -439,9 +439,14 @@ export class FirstTreeHubSDK {
   }
 
   /** Member-readable Context Tree binding from the existing generic settings API. */
-  async getMemberContextTreeSetting(organizationId: string): Promise<OrgContextTreeOutput> {
+  async getMemberContextTreeSetting(
+    organizationId: string,
+    options: { retry?: boolean } = {},
+  ): Promise<OrgContextTreeOutput> {
     const response = await this.requestJson<unknown>(
       `/api/v1/orgs/${encodeURIComponent(organizationId)}/settings/context_tree`,
+      undefined,
+      { retry: options.retry ?? true },
     );
     return orgContextTreeOutputSchema.parse(response);
   }

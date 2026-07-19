@@ -2,8 +2,9 @@ import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
-export type WorkspaceKind = "blank" | "context-tree";
+export type WorkspaceKind = "blank" | "byo-context-tree" | "context-tree";
 export type BriefingMode = "minimal" | "runtime-generated";
+export type ReadMode = "byo" | "managed";
 
 export type FirstTreeReadEvalCase = {
   briefingMode?: BriefingMode;
@@ -13,6 +14,7 @@ export type FirstTreeReadEvalCase = {
   id: string;
   prompt: string;
   promptAlternates: readonly string[];
+  readMode: ReadMode;
   workspaceKind: WorkspaceKind;
 };
 
@@ -49,7 +51,14 @@ export type EvalMetrics = {
   helpCalls: number;
   helpExitCodes: readonly number[];
   helpSucceeded: boolean;
+  byoReadSequenceOk: boolean;
+  byoSelectorsNoPull: boolean;
+  byoSnapshotDetached: boolean;
+  byoSnapshotExactHeadConsistent: boolean;
   modelFirstTreeCommandsOk: boolean;
+  readActivationCalls: number;
+  readActivationSucceeded: boolean;
+  readHelpSucceeded: boolean;
   runnerExitCode: number | null;
   selectionSucceeded: boolean;
   skillFileReadObserved: boolean;
@@ -67,6 +76,7 @@ export type CaseRunSummary = {
   metrics: EvalMetrics;
   passed: boolean;
   prompt: string;
+  readMode: ReadMode;
   runRoot: string;
   startedAt: string;
   summaryJsonPath: string;

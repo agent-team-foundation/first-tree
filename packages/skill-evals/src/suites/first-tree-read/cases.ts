@@ -14,6 +14,7 @@ export const FIRST_TREE_READ_CASES: readonly FirstTreeReadEvalCase[] = [
     id: "blank-casual-no-trigger",
     prompt: "Please explain the Pomodoro technique in one sentence.",
     promptAlternates: ["How is your day going?"],
+    readMode: "managed",
     workspaceKind: "blank",
   },
   {
@@ -23,7 +24,21 @@ export const FIRST_TREE_READ_CASES: readonly FirstTreeReadEvalCase[] = [
     id: "tree-software-trigger",
     prompt: "For this project, what constraints should JWT auth routes follow?",
     promptAlternates: ["Analyze server route naming and multi-org permission boundaries for this project."],
+    readMode: "managed",
     workspaceKind: "context-tree",
+  },
+  {
+    description: "Explicit-Team BYO task that must activate one exact read snapshot before discovery.",
+    expectedFacts: JWT_AUTH_EXPECTED_FACTS,
+    expectedTrigger: true,
+    id: "byo-explicit-team-trigger",
+    prompt:
+      "For this BYO Context Tree task, use the explicit First Tree Team id `team-byo-read-eval` and answer: what constraints should JWT auth routes follow?",
+    promptAlternates: [
+      "Team `team-byo-read-eval` is the explicit target for this BYO task. Read its current Context Tree once, then explain multi-org JWT route constraints.",
+    ],
+    readMode: "byo",
+    workspaceKind: "byo-context-tree",
   },
   {
     description: "Context Tree workspace with a non-software prompt.",
@@ -32,6 +47,7 @@ export const FIRST_TREE_READ_CASES: readonly FirstTreeReadEvalCase[] = [
     id: "tree-nonsoftware-no-trigger",
     prompt: "Recommend a weekend cooking menu.",
     promptAlternates: ["Write a short poem about summer."],
+    readMode: "managed",
     workspaceKind: "context-tree",
   },
 ];
@@ -46,6 +62,7 @@ export const FIRST_TREE_READ_PERIODIC_CASES: readonly FirstTreeReadEvalCase[] = 
     prompt:
       "Use this workspace's current Context Tree to answer: what constraints should JWT auth routes follow for this project?",
     promptAlternates: ["Use the current Context Tree before answering: how should multi-org JWT route scopes work?"],
+    readMode: "managed",
     workspaceKind: "context-tree",
   },
 ];

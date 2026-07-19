@@ -692,6 +692,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(overview).toContain("first-tree gitlab …");
     expect(overview).toContain("first-tree tree verify");
     expect(overview).toContain("first-tree tree tree");
+    expect(overview).toContain("first-tree tree read");
     expect(overview).not.toContain("github scan");
     expect(overview).not.toContain("first-tree tree …");
 
@@ -706,7 +707,6 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
       "review",
       "automation",
       "skill",
-      "read",
       "write",
       "publish",
     ]) {

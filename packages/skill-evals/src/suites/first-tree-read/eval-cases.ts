@@ -13,7 +13,7 @@ export const FIRST_TREE_READ_EVAL_CASES: readonly SkillEvalCase[] = [
     },
     fixture: {
       caseIds: FIRST_TREE_READ_CASES.map((evalCase) => evalCase.id),
-      workspaceKinds: ["blank", "context-tree"],
+      workspaceKinds: ["blank", "byo-context-tree", "context-tree"],
     },
     id: FLOOR_CASE_ID,
     skill: "first-tree-read",
@@ -26,6 +26,7 @@ export const FIRST_TREE_READ_EVAL_CASES: readonly SkillEvalCase[] = [
       expected: {
         expectedFacts: evalCase.expectedFacts,
         expectedTrigger: evalCase.expectedTrigger,
+        readMode: evalCase.readMode,
       },
       fixture: {
         workspaceKind: evalCase.workspaceKind,
@@ -80,8 +81,12 @@ function validateFirstTreeReadFloor(cases: readonly SkillEvalCase[]): readonly s
   if (!Array.isArray(fixture.caseIds) || fixture.caseIds.length !== FIRST_TREE_READ_CASES.length) {
     errors.push(`${FLOOR_CASE_ID}: fixture must list all first-tree-read case ids.`);
   }
-  if (!Array.isArray(fixture.workspaceKinds) || !fixture.workspaceKinds.includes("context-tree")) {
-    errors.push(`${FLOOR_CASE_ID}: fixture must include context-tree workspace kind.`);
+  if (
+    !Array.isArray(fixture.workspaceKinds) ||
+    !fixture.workspaceKinds.includes("context-tree") ||
+    !fixture.workspaceKinds.includes("byo-context-tree")
+  ) {
+    errors.push(`${FLOOR_CASE_ID}: fixture must include managed and BYO Context Tree workspace kinds.`);
   }
 
   return errors;
@@ -100,7 +105,7 @@ export const FIRST_TREE_READ_SUITE: SkillEvalSuiteDefinition = {
       },
       {
         caseIds: FIRST_TREE_READ_CASES.map((evalCase) => evalCase.id),
-        description: "Run the existing three live read cases through the migrated suite.",
+        description: "Run managed, explicit-Team BYO, and non-trigger read cases through the live gate suite.",
         status: "implemented",
         tier: "gate",
       },

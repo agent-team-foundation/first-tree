@@ -1,7 +1,8 @@
 // Drift guard for the `first-tree tree` namespace deletion (2026-06).
 //
 // PR #848 retired everything under `first-tree tree` except `verify`; the
-// narrow hierarchy browser later returned as `tree tree`.
+// narrow hierarchy browser later returned as `tree tree`, followed by the
+// explicit-Team BYO task snapshot activator as `tree read`.
 // Agents pick up CLI instructions from two places at session start:
 //
 //   1. The runtime briefing emitted by `buildAgentBriefing()` —
@@ -269,6 +270,7 @@ describe("retired tree subcommand drift guard", () => {
 
     expect(overview).toContain("tree verify");
     expect(overview).toContain("tree tree");
+    expect(overview).toContain("tree read");
     for (const sub of RETIRED_TREE_SUBCOMMANDS) {
       // Word-boundary regex (not `.toContain`) so prose like
       // "workspace ↔ tree binding" doesn't false-positive on `tree bind`.

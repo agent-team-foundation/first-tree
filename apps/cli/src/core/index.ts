@@ -81,6 +81,21 @@ export {
   setAgentContextTreeBinding,
   validateContextTreeBindingInput,
 } from "./context-tree-binding-write.js";
+export type {
+  ActivateContextTreeReadInput,
+  ContextTreeReadActivation,
+  ContextTreeReadActivationErrorCode,
+  ContextTreeReadAuthorityReader,
+  ContextTreeReadGitRunner,
+  ContextTreeReadSnapshotIdentity,
+  ContextTreeReadStage,
+} from "./context-tree-read.js";
+export {
+  activateContextTreeRead,
+  ContextTreeReadActivationError,
+  InvalidContextTreeReadSnapshotError,
+  readContextTreeReadSnapshotIdentity,
+} from "./context-tree-read.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Document review (docloop) CLI helpers

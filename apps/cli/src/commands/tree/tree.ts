@@ -3,6 +3,11 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
+import {
+  type ContextTreeReadSnapshotIdentity,
+  InvalidContextTreeReadSnapshotError,
+  readContextTreeReadSnapshotIdentity,
+} from "../../core/context-tree-read.js";
 import { isJsonMode, print } from "../../core/output.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { classifyContextContent } from "./content-class.js";
@@ -48,6 +53,7 @@ type ContextTreeBranchInfo = {
 
 type ContextTreeCommandData = ContextTreeSnapshot & {
   branch: ContextTreeBranchInfo;
+  readSnapshot: ContextTreeReadSnapshotIdentity | null;
 };
 
 type ParsedTreeTreeOptions = {
@@ -481,7 +487,18 @@ function readCurrentBranchName(root: string): string {
   return "unknown";
 }
 
-function readContextTreeBranch(root: string): ContextTreeBranchInfo {
+function readContextTreeBranch(
+  root: string,
+  readSnapshot: ContextTreeReadSnapshotIdentity | null,
+): ContextTreeBranchInfo {
+  if (readSnapshot !== null) {
+    return {
+      name: `snapshot:${readSnapshot.commit.slice(0, 12)}`,
+      isMainline: false,
+      warning: null,
+    };
+  }
+
   const name = readCurrentBranchName(root);
   const isMainline = MAINLINE_BRANCHES.has(name);
 
@@ -614,6 +631,12 @@ function renderContextTreeCommandData(data: ContextTreeCommandData): string {
     lines.push(data.branch.warning);
   }
 
+  if (data.readSnapshot !== null) {
+    lines.push(`Team: ${data.readSnapshot.teamId}`);
+    lines.push(`Binding: ${data.readSnapshot.binding.repo}#${data.readSnapshot.binding.branch}`);
+    lines.push(`Exact commit: ${data.readSnapshot.commit}`);
+  }
+
   lines.push(renderContextTreeSnapshot(data));
   return lines.join("\n");
 }
@@ -646,10 +669,12 @@ export function runTreeTreeCommand(context: CommandContext): void {
     const options = context.command.opts<Record<string, unknown>>();
     const parsedOptions = parseTreeTreeOptions(options, context.command.args);
     const resolvedTarget = resolveTreeTarget(process.cwd(), parsedOptions.path);
+    const readSnapshot = readContextTreeReadSnapshotIdentity(resolvedTarget.repoRoot);
     // Refresh the tree before reading it (hard freshness guarantee), unless
-    // the caller opted out with --no-pull. Best-effort: failures degrade to
-    // the local copy with a stderr warning (see pullContextTreeRepo).
-    if (parsedOptions.pull) {
+    // the caller opted out with --no-pull. An activated BYO task snapshot is
+    // already pinned to an exact commit and must never refresh per selector.
+    // Managed checkouts retain their existing best-effort stale fallback.
+    if (parsedOptions.pull && readSnapshot === null) {
       pullContextTreeRepo(resolvedTarget.repoRoot);
     }
     const snapshot = readContextTreeSnapshot(resolvedTarget.repoRoot, {
@@ -660,7 +685,8 @@ export function runTreeTreeCommand(context: CommandContext): void {
     });
     const data: ContextTreeCommandData = {
       ...snapshot,
-      branch: readContextTreeBranch(resolvedTarget.repoRoot),
+      branch: readContextTreeBranch(resolvedTarget.repoRoot, readSnapshot),
+      readSnapshot,
     };
 
     if (context.options.json || isJsonMode()) {
@@ -674,9 +700,11 @@ export function runTreeTreeCommand(context: CommandContext): void {
     const code =
       error instanceof TreeTreeCommandError
         ? error.code
-        : message.startsWith("Invalid --level")
-          ? TREE_TREE_INVALID_LEVEL
-          : TREE_TREE_FAILED;
+        : error instanceof InvalidContextTreeReadSnapshotError
+          ? error.code
+          : message.startsWith("Invalid --level")
+            ? TREE_TREE_INVALID_LEVEL
+            : TREE_TREE_FAILED;
     print.fail(code, message);
   }
 }

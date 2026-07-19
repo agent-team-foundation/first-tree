@@ -2130,6 +2130,46 @@ describe("org-settings API (admin gating + masking)", () => {
     }
   });
 
+  it("rechecks active membership for each explicit-Team Context Tree binding read", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const otherTeamId = await attachOrg(app, admin.userId);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const binding = { repo: "https://github.com/example/byo-read-tree.git", branch: "main" };
+    await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", binding, {
+      updatedBy: admin.userId,
+    });
+
+    const active = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(active.statusCode).toBe(200);
+    expect(active.json()).toEqual(binding);
+
+    const wrongTeam = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${otherTeamId}/settings/context_tree`,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(wrongTeam.statusCode).toBe(403);
+
+    for (const status of ["left", "removed"] as const) {
+      await app.db
+        .update(members)
+        .set({ status })
+        .where(and(eq(members.userId, member.userId), eq(members.organizationId, admin.organizationId)));
+      const inactive = await app.inject({
+        method: "GET",
+        url,
+        headers: { authorization: `Bearer ${member.accessToken}` },
+      });
+      expect(inactive.statusCode, `${status} membership must fail closed`).toBe(403);
+      expect(inactive.body).not.toContain(binding.repo);
+    }
+  });
+
   it("member can GET context_tree_features but cannot PUT or DELETE", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);

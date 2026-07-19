@@ -966,8 +966,9 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree creation, structural validation, and hierarchy browsing. The
-`tree` namespace carries `verify`, `tree`, and `init`; the rest (`migrate` /
+Context Tree task-read activation, creation, structural validation, and
+hierarchy browsing. The `tree` namespace carries `read`, `verify`, `tree`, and
+`init`; the rest (`migrate` /
 `upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
 `automation` / `skill` groups) was retired in the 2026-06 cleanup because the
 cloud now owns workspace + tree provisioning and the client runtime inlines its
@@ -976,9 +977,52 @@ own skill payload install (see PR following #844).
 ```
 first-tree tree
 ├── init [options]                           # create a new team Context Tree repo with local gh
+├── read --team ID --snapshot DIR            # activate one exact task read snapshot
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
+
+`first-tree tree read` is the BYO Working Agent activation boundary for one
+task. Both `--team <team-id>` and `--snapshot <new-directory>` are required.
+The Team is always explicit: the command does not read a Web selection, the
+account's default organization, a local Agent, or a prior task receipt.
+
+Activation performs one member-authenticated Server request to
+`GET /api/v1/orgs/:orgId/settings/context_tree`. That Class B route resolves
+the URL Team's current active membership and current safe Context Tree binding;
+the activation disables transport retries so this authority check is not
+repeated after a transient response.
+Only after it succeeds does the CLI create staging state, execute one strict
+`git fetch` for the bound branch, resolve the fetched ref to an exact commit,
+and atomically publish a detached snapshot at the requested path. The final
+snapshot has no mutable Git remote and carries local Git metadata identifying
+the Team, binding, and commit. The destination must not already exist; the
+command never overwrites or reuses a prior task snapshot.
+
+Authority, invalid/unbound binding, fetch, commit resolution, and snapshot
+failures are distinct fail-closed stages. None falls back to cached content, a
+managed workspace checkout, a stale local branch, or another Team. Error
+messages and JSON envelopes do not include access credentials or raw upstream
+responses. Stable failure codes are:
+
+- `CONTEXT_TREE_READ_INVALID_INPUT`
+- `CONTEXT_TREE_READ_AUTHORITY_FAILED`
+- `CONTEXT_TREE_READ_BINDING_INVALID`
+- `CONTEXT_TREE_READ_UNBOUND`
+- `CONTEXT_TREE_READ_FETCH_FAILED`
+- `CONTEXT_TREE_READ_COMMIT_FAILED`
+- `CONTEXT_TREE_READ_SNAPSHOT_FAILED`
+
+If a later hierarchy read detects a removed marker, changed HEAD, or dirty
+worktree, it fails before returning content with
+`CONTEXT_TREE_READ_SNAPSHOT_INVALID`.
+
+With global `--json`, success returns one envelope whose `data` is
+`{ teamId, binding: { repo, branch }, commit, snapshotPath }`. Human output
+reports the same identity. For the rest of the task, run hierarchy selectors
+inside `snapshotPath` and read Markdown only from that root. A new task uses a
+new path and a new activation so membership, binding, and branch movement are
+observed.
 
 `first-tree tree init` creates a brand-new team Context Tree repository with the
 user's local `gh`: it creates the repo (one path for user- and org-owned repos),
@@ -1105,6 +1149,14 @@ Branch: feature/stale-tree
 Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.
 ```
 
+An exact snapshot created by `tree read` is recognized through its local Git
+metadata. For that checkout, `tree tree` never pulls, even when `--no-pull` is
+omitted; it verifies that HEAD still equals the activated exact commit before
+returning content. Human output reports `snapshot:<short-sha>`, Team, binding,
+and the full exact commit with no stale-branch warning. Managed workspace
+checkouts retain the existing pull-before-selector and stale-local fallback
+semantics.
+
 The rendered tree's node labels use:
 
 ```text
@@ -1130,7 +1182,9 @@ effective `path`. `data.branch` reports the current tree checkout as
 `{ name, isMainline, warning }`; `warning` is `null` for `main`, `master`,
 and `origin/main`, including detached HEAD checkouts that match
 `refs/remotes/origin/main`; otherwise it contains the same stale-tree warning
-string shown in human mode. `data.tree` contains the same filtered hierarchy as
+string shown in human mode. `data.readSnapshot` is `null` for a managed
+checkout and contains the activated `{ teamId, binding, commit, snapshotPath }`
+identity for a BYO task snapshot. `data.tree` contains the same filtered hierarchy as
 structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
 `hasNode`, and `children` fields; `metadata` includes `title`, optional
 `description`, and `owners`. Human tree text and branch warnings are not

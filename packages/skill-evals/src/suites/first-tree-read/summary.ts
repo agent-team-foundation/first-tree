@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 
 import { evidence, gradingMarkdownRows, riskFlag, writeGradingJson } from "../../core/grading.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
-import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation } from "./types.js";
+import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation, ReadMode } from "./types.js";
 
 const HELP_ARGV = ["tree", "tree", "--help"];
 
@@ -39,7 +39,11 @@ function formatCommand(argv: readonly string[]): string {
   return argv.map(formatArg).join(" ");
 }
 
-export function driftNote(metrics: EvalMetrics, expectedTrigger: boolean): string | null {
+export function driftNote(
+  metrics: EvalMetrics,
+  expectedTrigger: boolean,
+  readMode: ReadMode = "managed",
+): string | null {
   const notes: string[] = [];
   const nonZeroResults = metrics.firstTreeCommandResults.filter((result) => result.exitCode !== 0);
   const selectorCallCount = metrics.firstTreeArgv.filter(isTreeSelectorArgv).length;
@@ -74,6 +78,20 @@ export function driftNote(metrics: EvalMetrics, expectedTrigger: boolean): strin
     }
   }
 
+  if (expectedTrigger && readMode === "byo") {
+    if (!metrics.readHelpSucceeded) notes.push("Required first-tree tree read --help command did not succeed.");
+    if (!metrics.readActivationSucceeded) {
+      notes.push(`BYO Read required exactly one successful activation; observed calls=${metrics.readActivationCalls}.`);
+    }
+    if (!metrics.byoReadSequenceOk) {
+      notes.push("BYO Read commands did not follow read help → activation → hierarchy help → selector order.");
+    }
+    if (!metrics.byoSelectorsNoPull) notes.push("Every BYO hierarchy selector must include --no-pull.");
+    if (!metrics.byoSnapshotDetached || !metrics.byoSnapshotExactHeadConsistent) {
+      notes.push("BYO selectors did not all observe the activation's exact detached snapshot head.");
+    }
+  }
+
   if (expectedTrigger && !metrics.expectedFactsObserved) {
     notes.push(
       "Expected Context Tree facts were not surfaced in the model output; inspect events.jsonl for the final assistant messages.",
@@ -92,16 +110,26 @@ export function buildGrading(
   metrics: EvalMetrics,
   expectedTrigger: boolean,
   passed: boolean,
+  readMode: ReadMode = "managed",
 ): SkillCaseGrading {
   const unexpectedReadUse =
     metrics.skillHit || metrics.firstTreeCalls > 0 || metrics.firstTreeCommandResults.length > 0;
   const routingPass = expectedTrigger ? metrics.skillFileReadObserved : !unexpectedReadUse;
+  const byoProcessPassed =
+    readMode === "managed" ||
+    (metrics.readHelpSucceeded &&
+      metrics.readActivationSucceeded &&
+      metrics.byoReadSequenceOk &&
+      metrics.byoSelectorsNoPull &&
+      metrics.byoSnapshotDetached &&
+      metrics.byoSnapshotExactHeadConsistent);
   const processPass = expectedTrigger
     ? metrics.fixtureValidationOk &&
       metrics.runnerExitCode === 0 &&
       metrics.helpSucceeded &&
       metrics.selectionSucceeded &&
-      metrics.modelFirstTreeCommandsOk
+      metrics.modelFirstTreeCommandsOk &&
+      byoProcessPassed
     : metrics.fixtureValidationOk &&
       metrics.runnerExitCode === 0 &&
       metrics.firstTreeCalls === 0 &&
@@ -123,7 +151,7 @@ export function buildGrading(
       evidence(
         "process_pass",
         expectedTrigger
-          ? `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; help succeeded=${metrics.helpSucceeded}; selector succeeded=${metrics.selectionSucceeded}; first-tree commands ok=${metrics.modelFirstTreeCommandsOk}`
+          ? `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; read mode=${readMode}; read help succeeded=${metrics.readHelpSucceeded}; activation calls=${metrics.readActivationCalls}; activation succeeded=${metrics.readActivationSucceeded}; sequence ok=${metrics.byoReadSequenceOk}; selectors no-pull=${metrics.byoSelectorsNoPull}; detached=${metrics.byoSnapshotDetached}; exact head consistent=${metrics.byoSnapshotExactHeadConsistent}; hierarchy help succeeded=${metrics.helpSucceeded}; selector succeeded=${metrics.selectionSucceeded}; first-tree commands ok=${metrics.modelFirstTreeCommandsOk}`
           : `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; model first-tree calls=${metrics.firstTreeCalls}; first-tree results=${metrics.firstTreeCommandResults.length}`,
       ),
       evidence(
@@ -188,11 +216,19 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 
 - passed: ${markdownBool(summary.passed)}
 - expectedTrigger: ${markdownBool(summary.expectedTrigger)}
+- readMode: ${summary.readMode}
 - skillHit: ${markdownBool(summary.metrics.skillHit)}
 - skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
 - expectedFactsObserved: ${markdownBool(summary.metrics.expectedFactsObserved)}
 - helpSucceeded: ${markdownBool(summary.metrics.helpSucceeded)}
 - selectionSucceeded: ${markdownBool(summary.metrics.selectionSucceeded)}
+- readHelpSucceeded: ${markdownBool(summary.metrics.readHelpSucceeded)}
+- readActivationCalls: ${summary.metrics.readActivationCalls}
+- readActivationSucceeded: ${markdownBool(summary.metrics.readActivationSucceeded)}
+- byoReadSequenceOk: ${markdownBool(summary.metrics.byoReadSequenceOk)}
+- byoSelectorsNoPull: ${markdownBool(summary.metrics.byoSelectorsNoPull)}
+- byoSnapshotDetached: ${markdownBool(summary.metrics.byoSnapshotDetached)}
+- byoSnapshotExactHeadConsistent: ${markdownBool(summary.metrics.byoSnapshotExactHeadConsistent)}
 - modelFirstTreeCommandsOk: ${markdownBool(summary.metrics.modelFirstTreeCommandsOk)}
 - firstTreeCalls: ${summary.metrics.firstTreeCalls}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
