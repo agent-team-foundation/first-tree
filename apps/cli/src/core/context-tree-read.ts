@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { SdkError } from "@first-tree/client";
 import { contextTreeActiveBindingSchema } from "@first-tree/shared";
@@ -54,6 +54,9 @@ const SNAPSHOT_BRANCH_KEY = "first-tree-read.binding-branch";
 const SNAPSHOT_COMMIT_KEY = "first-tree-read.commit";
 const SNAPSHOT_REF = "refs/first-tree-read/snapshot";
 const EXACT_COMMIT_RE = /^[0-9a-f]{40,64}$/u;
+const GIT_INDEX_ENTRY_RE = /^([0-7]{6}) [0-9a-f]{40,64} [0-3]\t([\s\S]+)$/u;
+const GIT_SYMLINK_MODE = "120000";
+const GIT_REGULAR_FILE_MODES = new Set(["100644", "100755"]);
 
 export class ContextTreeReadActivationError extends Error {
   readonly status = "failed";
@@ -157,6 +160,7 @@ export async function activateContextTreeRead(
       if (checkedOutCommit !== commit) {
         throw new Error("Checked-out commit did not match the fetched commit");
       }
+      assertContextTreeReadSymlinkSafety(stagingPath, runGit);
       if (!statSync(join(stagingPath, "NODE.md")).isFile()) {
         throw new Error("Context Tree root NODE.md is missing");
       }
@@ -248,6 +252,7 @@ export function readContextTreeReadSnapshotIdentity(
     if (!EXACT_COMMIT_RE.test(commit) || markerCommit !== commit || head !== commit || worktreeStatus !== "") {
       throw new InvalidContextTreeReadSnapshotError();
     }
+    assertContextTreeReadSymlinkSafety(snapshotPath, runGit);
 
     return {
       teamId,
@@ -420,6 +425,67 @@ function hasStringProperty(value: unknown, property: string): boolean {
 
 function hasProperty(value: unknown, property: string): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && Reflect.has(value, property);
+}
+
+function readTrackedContextTreeEntries(root: string, runGit: ContextTreeReadGitRunner): Map<string, string> {
+  const entries = new Map<string, string>();
+  const output = runGit(root, ["ls-files", "--stage", "-z"]);
+
+  for (const record of output.split("\0")) {
+    if (record.length === 0) {
+      continue;
+    }
+    const match = record.match(GIT_INDEX_ENTRY_RE);
+    if (match === null) {
+      throw new Error("Could not inspect tracked Context Tree entries");
+    }
+    entries.set(match[2], match[1]);
+  }
+
+  return entries;
+}
+
+function pathIsInside(root: string, target: string): boolean {
+  const relativePath = relative(root, target);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+/**
+ * A clean Git worktree fixes a symlink blob, not the content at its target.
+ * Keep safe in-tree aliases working, but require their final content to be a
+ * regular file tracked by the same exact commit. This prevents hierarchy,
+ * soft-link, and native Markdown reads from escaping the task snapshot.
+ */
+function assertContextTreeReadSymlinkSafety(root: string, runGit: ContextTreeReadGitRunner): void {
+  const entries = readTrackedContextTreeEntries(root, runGit);
+  const canonicalRoot = realpathSync(root);
+
+  for (const [trackedPath, mode] of entries) {
+    if (mode !== GIT_SYMLINK_MODE) {
+      continue;
+    }
+
+    const linkPath = resolve(canonicalRoot, ...trackedPath.split("/"));
+    if (!pathIsInside(canonicalRoot, linkPath)) {
+      throw new Error("Tracked symbolic link path is outside the snapshot");
+    }
+
+    const linkEntry = lstatSync(linkPath);
+    if (!linkEntry.isSymbolicLink() || isAbsolute(readlinkSync(linkPath))) {
+      throw new Error("Tracked symbolic link is not a safe relative link");
+    }
+
+    const canonicalTarget = realpathSync(linkPath);
+    if (!pathIsInside(canonicalRoot, canonicalTarget) || !statSync(canonicalTarget).isFile()) {
+      throw new Error("Tracked symbolic link target is outside the snapshot or is not a regular file");
+    }
+
+    const targetPath = relative(canonicalRoot, canonicalTarget).replace(/\\/gu, "/");
+    const targetMode = entries.get(targetPath);
+    if (targetMode === undefined || !GIT_REGULAR_FILE_MODES.has(targetMode)) {
+      throw new Error("Tracked symbolic link target is not fixed by the snapshot commit");
+    }
+  }
 }
 
 function isPublishedSnapshotValid(path: string, runGit: ContextTreeReadGitRunner): boolean {

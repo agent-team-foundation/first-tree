@@ -997,7 +997,10 @@ Only after it succeeds does the CLI create staging state, execute one strict
 and atomically publish a detached snapshot at the requested path. The final
 snapshot has no mutable Git remote and carries local Git metadata identifying
 the Team, binding, and commit. The destination must not already exist; the
-command never overwrites or reuses a prior task snapshot.
+command never overwrites or reuses a prior task snapshot. Tracked symbolic
+links are accepted only when a relative link resolves inside the snapshot to a
+regular file tracked by the same exact commit; directory, absolute, dangling,
+escaping, or untracked-target links fail before content is returned.
 
 Authority, invalid/unbound binding, fetch, commit resolution, and snapshot
 failures are distinct fail-closed stages. None falls back to cached content, a

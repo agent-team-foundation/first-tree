@@ -91,6 +91,13 @@ function pushNode(remote: RemoteFixture, relativePath: string, title: string): s
   return git(remote.seed, "rev-parse", "HEAD");
 }
 
+function pushFixtureChange(remote: RemoteFixture, message: string): string {
+  git(remote.seed, "add", "--all");
+  git(remote.seed, "commit", "-m", message);
+  git(remote.seed, "push", "origin", "main");
+  return git(remote.seed, "rev-parse", "HEAD");
+}
+
 function createRealGitRunner(
   remotes: RemoteFixture[],
   events: string[][],
@@ -232,6 +239,75 @@ describe("task-scoped BYO Context Tree Read activation", () => {
     expect(output.data.readSnapshot).toEqual(activation);
     expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join("")).not.toContain("pull --ff-only");
     expect(events.filter((args) => args[0] === "fetch")).toHaveLength(1);
+  });
+
+  it.each([
+    "root NODE.md",
+    "nested NODE.md",
+    "soft-link leaf",
+  ] as const)("rejects a tracked %s symlink that escapes the exact snapshot", async (fixtureKind) => {
+    const root = tempRoot("ft-byo-read-symlink-escape-");
+    const remote = createRemoteFixture(root, "team-a", "security");
+    const outsideNode = join(root, `outside-${fixtureKind.replaceAll(" ", "-")}.md`);
+    writeNode(outsideNode, "External mutable node", "outside the selected Team snapshot");
+
+    if (fixtureKind === "root NODE.md") {
+      rmSync(join(remote.seed, "NODE.md"));
+      symlinkSync(outsideNode, join(remote.seed, "NODE.md"));
+    } else if (fixtureKind === "nested NODE.md") {
+      rmSync(join(remote.seed, "security", "NODE.md"));
+      symlinkSync(outsideNode, join(remote.seed, "security", "NODE.md"));
+    } else {
+      symlinkSync(outsideNode, join(remote.seed, "security", "external-contract.md"));
+      writeFileSync(
+        join(remote.seed, "security", "contract.md"),
+        '---\ntitle: "Team contract"\nowners: [owner]\nsoft_links: ["/security/external-contract.md"]\n---\n\n# Team contract\n',
+      );
+    }
+    pushFixtureChange(remote, `add escaping ${fixtureKind} symlink`);
+
+    const events: string[][] = [];
+    const runGit = createRealGitRunner([remote], events);
+    const { reader, read } = readerFor({
+      "team-a": { repo: remote.bindingRepo, branch: "main" },
+    });
+    const snapshotPath = join(root, "snapshots", "unsafe-task");
+
+    await expect(activateContextTreeRead(reader, { teamId: "team-a", snapshotPath }, runGit)).rejects.toMatchObject({
+      code: "CONTEXT_TREE_READ_SNAPSHOT_FAILED",
+      stage: "snapshot",
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expectOnlyOneFetch(events);
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect(existsSync(join(root, "snapshots")) ? readFileNames(join(root, "snapshots")) : []).toEqual([]);
+  });
+
+  it("keeps relative in-snapshot symlinks only when their final file is fixed by the exact commit", async () => {
+    const root = tempRoot("ft-byo-read-safe-symlink-");
+    const remote = createRemoteFixture(root, "team-a", "security");
+    writeNode(join(remote.seed, "root-source.md"), "Contained root", "tracked by the same commit");
+    rmSync(join(remote.seed, "NODE.md"));
+    symlinkSync("root-source.md", join(remote.seed, "NODE.md"));
+    symlinkSync("NODE.md", join(remote.seed, "README.md"));
+    const commit = pushFixtureChange(remote, "use contained tracked Markdown symlinks");
+
+    const events: string[][] = [];
+    const runGit = createRealGitRunner([remote], events);
+    const { reader } = readerFor({
+      "team-a": { repo: remote.bindingRepo, branch: "main" },
+    });
+    const activation = await activateContextTreeRead(
+      reader,
+      { teamId: "team-a", snapshotPath: join(root, "snapshot") },
+      runGit,
+    );
+
+    expect(activation.commit).toBe(commit);
+    expect(readContextTreeSnapshot(activation.snapshotPath).tree.metadata.title).toBe("Contained root");
+    expect(readFileSync(join(activation.snapshotPath, "README.md"), "utf8")).toContain("tracked by the same commit");
+    expect(readContextTreeReadSnapshotIdentity(activation.snapshotPath, runGit)).toEqual(activation);
+    expectOnlyOneFetch(events);
   });
 
   it("keeps a task fixed when the remote advances and refreshes on the next task", async () => {
