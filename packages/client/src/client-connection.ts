@@ -16,6 +16,10 @@ import {
   inboxDeliverFrameSchema,
   inboxRecoverAcceptedFrameSchema,
   inboxRecoverRejectedFrameSchema,
+  PROVIDER_MODELS_LIST_TYPE,
+  PROVIDER_MODELS_RESULT_TYPE,
+  type ProviderModelCatalog,
+  providerModelsListCommandSchema,
   RUNTIME_AUTH_START_TYPE,
   type RuntimeAuthMethod,
   type RuntimeProvider,
@@ -164,6 +168,12 @@ export type RuntimeAuthCommand = {
   ref: string;
 };
 
+/** Server→client command to discover host-local provider models. */
+export type ProviderModelsListCommand = {
+  provider: RuntimeProvider;
+  ref: string;
+};
+
 /**
  * Welcome frame received after `auth:ok`. `isReconnect` is true for every
  * occurrence after the first welcome in the lifetime of this `ClientConnection`
@@ -199,6 +209,7 @@ type ClientConnectionEvents = {
   "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
   "runtime-auth:start": [command: RuntimeAuthCommand];
+  "provider-models:list": [command: ProviderModelsListCommand];
   "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
   /**
@@ -1082,6 +1093,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "session:reconcile", agentId, chatIds }));
   }
 
+  /** Reply to a `provider-models:list` reverse command with the host catalog. */
+  sendProviderModelsResult(ref: string, catalog: ProviderModelCatalog): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: PROVIDER_MODELS_RESULT_TYPE, ref, catalog }));
+  }
+
   async disconnect(): Promise<void> {
     this.closing = true;
     this.connectAbort?.abort();
@@ -1575,6 +1592,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       if (parsed.success) {
         const { provider, method, ref } = parsed.data;
         this.emit("runtime-auth:start", { provider, method, ref });
+      }
+      return;
+    }
+
+    if (type === PROVIDER_MODELS_LIST_TYPE) {
+      const parsed = providerModelsListCommandSchema.safeParse(msg);
+      if (parsed.success) {
+        const { provider, ref } = parsed.data;
+        this.emit("provider-models:list", { provider, ref });
       }
       return;
     }

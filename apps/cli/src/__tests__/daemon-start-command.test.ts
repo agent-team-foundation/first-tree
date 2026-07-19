@@ -83,6 +83,7 @@ vi.mock("../cli/output.js", () => ({
 const originalHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
 const originalServiceMode = process.env.FIRST_TREE_SERVICE_MODE;
+const originalClientId = process.env.FIRST_TREE_CLIENT_ID;
 const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null | undefined) => {
   throw Object.assign(new Error(`process.exit ${code}`), { exitCode: code });
@@ -97,6 +98,8 @@ let runtimeInstance: {
   watchAgentsDir: ReturnType<typeof vi.fn>;
   onReconnect: ReturnType<typeof vi.fn>;
   onRuntimeAuthStart: ReturnType<typeof vi.fn>;
+  onProviderModelsList: ReturnType<typeof vi.fn>;
+  sendProviderModelsResult: ReturnType<typeof vi.fn>;
   emitConnectionResilienceEvent: ReturnType<typeof vi.fn>;
 };
 let refresherInstance: {
@@ -121,6 +124,9 @@ beforeEach(() => {
   process.env.FIRST_TREE_HOME = home;
   delete process.env.FIRST_TREE_SERVER_URL;
   delete process.env.FIRST_TREE_SERVICE_MODE;
+  // Host agent / portable installs inject FIRST_TREE_CLIENT_ID; it must not
+  // override the fixture client.yaml id used by these assertions.
+  delete process.env.FIRST_TREE_CLIENT_ID;
 
   for (const mock of Object.values(clientMocks)) mock.mockReset();
   for (const mock of Object.values(coreMocks)) mock.mockReset();
@@ -199,6 +205,8 @@ beforeEach(() => {
     }),
     onReconnect: vi.fn(),
     onRuntimeAuthStart: vi.fn(),
+    onProviderModelsList: vi.fn(),
+    sendProviderModelsResult: vi.fn(),
     emitConnectionResilienceEvent: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
@@ -224,6 +232,8 @@ afterEach(() => {
   else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
   if (originalServiceMode === undefined) delete process.env.FIRST_TREE_SERVICE_MODE;
   else process.env.FIRST_TREE_SERVICE_MODE = originalServiceMode;
+  if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
+  else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
 });
 
 async function runStart(args: string[] = []): Promise<unknown> {
@@ -506,6 +516,7 @@ describe("daemon start command", () => {
     );
     expect(coreMocks.CapabilityRefresher.mock.calls[0]?.[0]).not.toHaveProperty("initial");
     expect(runtimeInstance.onReconnect).toHaveBeenCalledWith(expect.any(Function));
+    expect(runtimeInstance.onProviderModelsList).toHaveBeenCalledWith(expect.any(Function));
     expect(refresherInstance.start).toHaveBeenCalled();
     expect(coreMocks.listPinnedAgents).toHaveBeenCalledWith({
       serverUrl: "https://first-tree.example",

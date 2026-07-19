@@ -346,9 +346,20 @@ export async function updateClientCapabilities(
   if (existingCapabilities.success && stableJson(existingCapabilities.data) === stableJson(parsed.data)) {
     return;
   }
-  const merged = { ...baseMetadata, capabilities: parsed.data };
 
-  await db.update(clients).set({ metadata: merged }).where(eq(clients.id, clientId));
+  // Atomic key update so concurrent modelCatalogRpc refs (and other metadata
+  // writers) are not erased by a whole-object metadata replace.
+  await db
+    .update(clients)
+    .set({
+      metadata: sql`jsonb_set(
+        COALESCE(${clients.metadata}, '{}'::jsonb),
+        '{capabilities}',
+        ${JSON.stringify(parsed.data)}::jsonb,
+        true
+      )`,
+    })
+    .where(eq(clients.id, clientId));
 }
 
 /**

@@ -1,6 +1,7 @@
 export type {
   BoundAgent,
   ClientConnectionConfig,
+  ProviderModelsListCommand,
   RuntimeAuthCommand,
   ServerWelcome,
   SessionCommand,
@@ -43,6 +44,12 @@ export {
 } from "./runtime/capabilities/codex.js";
 export { probeCursorCapability } from "./runtime/capabilities/cursor.js";
 export {
+  type DiscoverModelsDeps,
+  discoverProviderModels,
+  parseCursorModelsOutput,
+  parseKimiConfigModels,
+} from "./runtime/capabilities/discover-models.js";
+export {
   CAPABILITY_REFRESH_BASE_MS,
   CAPABILITY_REFRESH_MAX_MS,
   hasNonOkProvider,
@@ -54,6 +61,7 @@ export {
   revalidateCapabilities,
   shouldFullReprobe,
 } from "./runtime/capabilities/index.js";
+
 export type {
   AdoptOptions,
   ChildCategory,
@@ -129,5 +137,13 @@ export {
   INIT_COMPLETE_SENTINEL_REL,
   markWorkspaceInitComplete,
 } from "./runtime/workspace.js";
-export type { AccessTokenProvider, ContextTreeConfig, PaginatedResult, RegisterResult, SdkConfig } from "./sdk.js";
+export type {
+  AccessTokenProvider,
+  ContextReviewRuntimeConfig,
+  ContextTreeConfig,
+  MemberProfile,
+  PaginatedResult,
+  RegisterResult,
+  SdkConfig,
+} from "./sdk.js";
 export { FirstTreeHubSDK, FirstTreeHubSDK as FirstTreeSDK, SdkError } from "./sdk.js";

@@ -11,7 +11,7 @@ import {
   sendMessageSchema,
   updateChatSchema,
 } from "@first-tree/shared";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -49,7 +49,13 @@ import {
   resolveChatTitle,
   setChatEngagement,
 } from "../services/me-chat.js";
-import { listOpenRequestsForViewer, sendMessage } from "../services/message.js";
+import {
+  encodeMessageHistoryCursor,
+  listOpenRequestsForViewer,
+  messageHistoryOrderBy,
+  messageHistoryWhere,
+  sendMessage,
+} from "../services/message.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { resolveHumanScmBindingPair } from "../services/scm-attention-line.js";
@@ -428,9 +434,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     await requireChatAccess(request, app.db);
     const query = paginationQuerySchema.parse(request.query);
 
-    const where = query.cursor
-      ? and(eq(messages.chatId, request.params.chatId), lt(messages.createdAt, new Date(query.cursor)))
-      : eq(messages.chatId, request.params.chatId);
+    const where = messageHistoryWhere(request.params.chatId, query.cursor);
 
     const rows = await app.db
       .select({
@@ -454,13 +458,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       })
       .from(messages)
       .where(where)
-      .orderBy(desc(messages.createdAt))
+      .orderBy(...messageHistoryOrderBy())
       .limit(query.limit + 1);
 
     const hasMore = rows.length > query.limit;
     const items = hasMore ? rows.slice(0, query.limit) : rows;
     const last = items[items.length - 1];
-    const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
+    const nextCursor = hasMore && last ? encodeMessageHistoryCursor(last.createdAt, last.id) : null;
 
     return {
       items: items.map((m) => ({

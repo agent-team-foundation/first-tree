@@ -7,6 +7,18 @@ import type { EvalMetrics, FixtureValidation } from "../types.js";
 
 const HELP_ARGV = ["tree", "tree", "--help"];
 const SELECTOR_ARGV = ["tree", "tree", "/domains/payments"];
+const BYO_READ_HELP_ARGV = ["tree", "read", "--help"];
+const BYO_ACTIVATION_ARGV = [
+  "--json",
+  "tree",
+  "read",
+  "--team",
+  "team-byo-read-eval",
+  "--snapshot",
+  "/tmp/read-task/context-tree",
+];
+const BYO_SELECTOR_ARGV = ["tree", "tree", "--no-pull", "systems/server/auth"];
+const EXACT_COMMIT = "a".repeat(40);
 const EXPECTED_FACT = "payments runbook anchor";
 const JWT_EXPECTED_FACTS = [
   "User JWT auth is the unified authorization surface.",
@@ -51,12 +63,13 @@ function firstTreeCall(argv: readonly string[]): unknown {
   };
 }
 
-function firstTreeResult(argv: readonly string[], exitCode: number): unknown {
+function firstTreeResult(argv: readonly string[], exitCode: number, extra: Record<string, unknown> = {}): unknown {
   return {
     argv: [...argv],
     exitCode,
     phase: "model",
     type: "first_tree_result",
+    ...extra,
   };
 }
 
@@ -81,6 +94,53 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(result.selectionSucceeded).toBe(true);
     expect(result.modelFirstTreeCommandsOk).toBe(true);
     expect(casePassed(true, result)).toBe(true);
+  });
+
+  it("passes explicit-Team BYO cases only for one ordered activation and exact detached no-pull selectors", () => {
+    const result = metrics([
+      skillReadEvent(),
+      firstTreeCall(BYO_READ_HELP_ARGV),
+      firstTreeResult(BYO_READ_HELP_ARGV, 0),
+      firstTreeCall(BYO_ACTIVATION_ARGV),
+      firstTreeResult(BYO_ACTIVATION_ARGV, 0, { exactCommit: EXACT_COMMIT }),
+      firstTreeCall(HELP_ARGV),
+      firstTreeResult(HELP_ARGV, 0),
+      firstTreeCall(BYO_SELECTOR_ARGV),
+      firstTreeResult(BYO_SELECTOR_ARGV, 0, { actualHead: EXACT_COMMIT, detachedHead: true }),
+      assistantTextEvent(`The tree says ${EXPECTED_FACT}.`),
+    ]);
+
+    expect(result.readHelpSucceeded).toBe(true);
+    expect(result.readActivationCalls).toBe(1);
+    expect(result.readActivationSucceeded).toBe(true);
+    expect(result.byoReadSequenceOk).toBe(true);
+    expect(result.byoSelectorsNoPull).toBe(true);
+    expect(result.byoSnapshotDetached).toBe(true);
+    expect(result.byoSnapshotExactHeadConsistent).toBe(true);
+    expect(casePassed(true, result, "byo")).toBe(true);
+  });
+
+  it("fails BYO cases when activation is repeated or selectors can refresh", () => {
+    const mutableSelector = ["tree", "tree", "systems/server/auth"];
+    const result = metrics([
+      skillReadEvent(),
+      firstTreeCall(BYO_READ_HELP_ARGV),
+      firstTreeResult(BYO_READ_HELP_ARGV, 0),
+      firstTreeCall(BYO_ACTIVATION_ARGV),
+      firstTreeResult(BYO_ACTIVATION_ARGV, 0, { exactCommit: EXACT_COMMIT }),
+      firstTreeCall(BYO_ACTIVATION_ARGV),
+      firstTreeResult(BYO_ACTIVATION_ARGV, 0, { exactCommit: EXACT_COMMIT }),
+      firstTreeCall(HELP_ARGV),
+      firstTreeResult(HELP_ARGV, 0),
+      firstTreeCall(mutableSelector),
+      firstTreeResult(mutableSelector, 0, { actualHead: EXACT_COMMIT, detachedHead: true }),
+      assistantTextEvent(`The tree says ${EXPECTED_FACT}.`),
+    ]);
+
+    expect(result.readActivationCalls).toBe(2);
+    expect(result.readActivationSucceeded).toBe(false);
+    expect(result.byoSelectorsNoPull).toBe(false);
+    expect(casePassed(true, result, "byo")).toBe(false);
   });
 
   it("fails trigger cases when facts are present but help is missing", () => {
@@ -166,6 +226,28 @@ describe("first-tree-read metrics pass criteria", () => {
 - Use user JWT auth as the single authorization surface.
 - Check route scopes against live organization membership before cross-org actions.
 - Follow docs/development/http-path-conventions.md before auth or multi-org route changes.`),
+      ],
+      VALID_FIXTURE,
+      0,
+      JWT_EXPECTED_FACTS,
+    );
+
+    expect(result.expectedFactHits).toEqual([...JWT_EXPECTED_FACTS]);
+    expect(result.expectedFactsObserved).toBe(true);
+  });
+
+  it("recognizes the natural unified user JWT authorization surface word order", () => {
+    const result = deriveMetrics(
+      [
+        skillReadEvent(),
+        firstTreeCall(HELP_ARGV),
+        firstTreeResult(HELP_ARGV, 0),
+        firstTreeCall(["tree", "tree", "systems/server/auth"]),
+        firstTreeResult(["tree", "tree", "systems/server/auth"], 0),
+        assistantTextEvent(`JWT auth routes should:
+- Use the unified user JWT authorization surface.
+- Check route scopes against live organization membership before cross-org actions.
+- Follow the repository's HTTP path conventions before auth or multi-org route changes.`),
       ],
       VALID_FIXTURE,
       0,

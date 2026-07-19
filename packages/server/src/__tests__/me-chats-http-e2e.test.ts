@@ -1,5 +1,6 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
 import { createMeChat, pinMeChat } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
@@ -241,20 +242,28 @@ describe("GET/POST /chats/:chatId resource routes", () => {
     const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peerA.uuid],
     });
-    await sendMessage(
+    const firstMessage = await sendMessage(
       app.db,
       chatId,
       admin.humanAgentUuid,
       { source: "api", format: "text", content: "first route message" },
       { allowRecipientlessSend: true },
     );
-    await sendMessage(
+    const secondMessage = await sendMessage(
       app.db,
       chatId,
       admin.humanAgentUuid,
       { source: "api", format: "text", content: "second route message" },
       { allowRecipientlessSend: true },
     );
+    await app.db
+      .update(messages)
+      .set({ createdAt: sql`${"2026-07-17T09:00:00.123900Z"}::timestamptz` })
+      .where(eq(messages.id, firstMessage.message.id));
+    await app.db
+      .update(messages)
+      .set({ createdAt: sql`${"2026-07-17T09:00:00.123800Z"}::timestamptz` })
+      .where(eq(messages.id, secondMessage.message.id));
 
     const headers = { authorization: `Bearer ${admin.accessToken}` };
     const tokenUsage = await app.inject({ method: "GET", url: `/api/v1/chats/${chatId}/token-usage`, headers });
@@ -302,7 +311,9 @@ describe("GET/POST /chats/:chatId resource routes", () => {
       headers,
     });
     expect(page2.statusCode).toBe(200);
-    expect(page2.json<{ items: unknown[] }>().items).toHaveLength(1);
+    const page2Body = page2.json<{ items: Array<{ id: string }> }>();
+    expect(page2Body.items).toHaveLength(1);
+    expect(page2Body.items[0]?.id).not.toBe(page1Body.items[0]?.id);
 
     const leave = await app.inject({ method: "POST", url: `/api/v1/chats/${chatId}/workspace-leave`, headers });
     expect(leave.statusCode).toBe(200);

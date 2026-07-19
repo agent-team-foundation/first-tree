@@ -46,6 +46,16 @@ export {
   switchLocalClientForLogin,
 } from "./client-switch.js";
 export type {
+  ContextReviewConfigReader,
+  ContextReviewConfigResult,
+  MemberContextReviewConfigReader,
+} from "./context-review-config.js";
+export {
+  normalizeContextReviewConfig,
+  readContextReviewConfig,
+  readMemberContextReviewConfig,
+} from "./context-review-config.js";
+export type {
   ContextTreeBindingResult,
   ContextTreeConfigReader,
   ContextTreeReadLogger,
@@ -71,6 +81,21 @@ export {
   setAgentContextTreeBinding,
   validateContextTreeBindingInput,
 } from "./context-tree-binding-write.js";
+export type {
+  ActivateContextTreeReadInput,
+  ContextTreeReadActivation,
+  ContextTreeReadActivationErrorCode,
+  ContextTreeReadAuthorityReader,
+  ContextTreeReadGitRunner,
+  ContextTreeReadSnapshotIdentity,
+  ContextTreeReadStage,
+} from "./context-tree-read.js";
+export {
+  activateContextTreeRead,
+  ContextTreeReadActivationError,
+  InvalidContextTreeReadSnapshotError,
+  readContextTreeReadSnapshotIdentity,
+} from "./context-tree-read.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Document review (docloop) CLI helpers
@@ -93,6 +118,19 @@ export type { InstallClaudeResult } from "./install-claude-runtime.js";
 export { installClaudeRuntime } from "./install-claude-runtime.js";
 export type { InstallCodexResult } from "./install-codex-runtime.js";
 export { installCodexRuntime } from "./install-codex-runtime.js";
+export {
+  type MemberOrganizationProfile,
+  type MemberOrganizationResolutionCode,
+  MemberOrganizationResolutionError,
+  resolveMemberOrganizationId,
+} from "./member-org.js";
+export {
+  dispatchMemberReviewTask,
+  type MemberReviewTaskClient,
+  MemberReviewTaskInputError,
+  type MemberReviewTaskInputErrorCode,
+  readMemberReviewTaskMetadata,
+} from "./member-review-task.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationLog, AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";

@@ -33,6 +33,7 @@ function gitStatus(contextTreePath: string): DirtyPath[] | null {
       ["-C", contextTreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
       {
         maxBuffer: GIT_STATUS_MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "pipe"],
         timeout: GIT_STATUS_TIMEOUT_MS,
       },
     );

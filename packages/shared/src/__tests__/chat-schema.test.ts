@@ -1,14 +1,39 @@
 import { describe, expect, it } from "vitest";
 import {
   addParticipantSchema,
+  createKeyedTaskChatSchema,
   createTaskChatSchema,
   createWebTaskChatSchema,
+  keyedTaskChatCreateResponseSchema,
   updateChatSchema,
 } from "../schemas/chat.js";
 
 const initialMessage = {
   content: "Start the task.",
   source: "web",
+};
+
+const reviewMetadata = {
+  taskType: "context_tree_pr_review" as const,
+  reviewPacketV1: {
+    schemaVersion: 1 as const,
+    repository: "acme/context-tree",
+    pullRequest: 42,
+    expectedHead: "a".repeat(40),
+    baseRef: "main",
+    sourceRef: "context/update",
+    requesterGithubLogin: "alice",
+    goal: "Record the approved decision",
+    source: { label: "Decision", reference: "https://example.test/decision" },
+    decisionSummary: "Use the assigned Reviewer",
+    rationale: "Keep one authority path",
+    targetPaths: ["system/reviewer.md"],
+    repairScope: ["system/reviewer.md"],
+    relevantContextRefs: [],
+    unresolvedQuestions: [],
+    verify: { status: "passed" as const, summary: "tree verify passed" },
+    evidence: [],
+  },
 };
 
 describe("chat write schemas", () => {
@@ -63,6 +88,35 @@ describe("chat write schemas", () => {
         scanFixRepoSlug: "acme/api",
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps member keyed dispatch strict and server-derived", () => {
+    const request = {
+      mode: "keyed_task" as const,
+      initialMessage: { format: "markdown" as const, content: "Review this Tree PR.", metadata: reviewMetadata },
+    };
+    expect(createKeyedTaskChatSchema.parse(request)).toEqual(request);
+    expect(createKeyedTaskChatSchema.safeParse({ ...request, taskKey: "caller-key" }).success).toBe(false);
+    expect(createKeyedTaskChatSchema.safeParse({ ...request, topic: "caller topic" }).success).toBe(false);
+    expect(
+      createKeyedTaskChatSchema.safeParse({
+        ...request,
+        initialMessage: { ...request.initialMessage, source: "cli" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("allows a reused keyed task to report the Chat's current null topic", () => {
+    expect(
+      keyedTaskChatCreateResponseSchema.parse({
+        chatId: "chat-1",
+        messageId: "message-1",
+        topic: null,
+        effectiveSenderId: "human-1",
+        reviewerAgentUuid: "reviewer-1",
+        outcome: "reused",
+      }).topic,
+    ).toBeNull();
   });
 
   it("requires update chat requests to change at least one field", () => {

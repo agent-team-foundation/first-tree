@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { registerSubcommands } from "../groups.js";
 import type { CommandModule } from "../types.js";
 import { initCommand } from "./init.js";
+import { treeReadCommand } from "./read.js";
 import { treeTreeCommand } from "./tree.js";
 import { verifyCommand } from "./verify.js";
 
@@ -11,6 +12,8 @@ import { verifyCommand } from "./verify.js";
  *   by hand still need a structure validator.
  * - `tree`, because agents and scripted consumers need a lightweight
  *   Context Tree hierarchy browser.
+ * - `read`, because BYO working agents need one strict Team authority check,
+ *   one fetch, and one exact task snapshot before hierarchy or file reads.
  *
  * `init` was reintroduced in 2026-07 in a different shape than the deleted
  * one: instead of onboarding a local workspace root, it creates a new team
@@ -30,17 +33,17 @@ export function registerTreeCommands(program: Command): void {
 
 export const treeCommand: CommandModule = {
   name: "tree",
-  description: "Validate or browse a Context Tree.",
+  description: "Activate, validate, or browse a Context Tree.",
   register(program: Command): void {
     const command = program
       .command("tree")
-      .description("Validate or browse a Context Tree.")
+      .description("Activate, validate, or browse a Context Tree.")
       .helpCommand(false)
       .allowExcessArguments(false)
       .action(() => {
         command.outputHelp();
       });
 
-    registerSubcommands(command, [verifyCommand, treeTreeCommand, initCommand]);
+    registerSubcommands(command, [verifyCommand, treeTreeCommand, treeReadCommand, initCommand]);
   },
 };

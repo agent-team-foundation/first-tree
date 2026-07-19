@@ -328,11 +328,13 @@ Day-to-day messaging.
 ```
 first-tree chat
 ├── create [message]                               # create a separate task chat and write its first message
-│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
+│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required unless --as-member
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
 │     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
+│     --as-member [--org <orgId>]                  #   signed-in member; no running Client Runtime, local Agent, or active Computer connection required
+│     --metadata-file <path>                       #   strict context_tree_pr_review opening metadata; with --as-member + markdown
 ├── send <name> [message]                            # wake a participant — agent or human (a send to a human is informational only; a question the next step depends on goes through `chat ask`)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
 │     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
@@ -363,6 +365,12 @@ first-tree chat
 first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent \
   --topic "rollout review" \
   --description "reviewing rollout plan; waiting on code-agent"
+
+# Dedicated Agent Review producer. Recipient, topic, human sender, provenance,
+# and the internal stable PR task key are all derived by the Server from live Team
+# configuration; callers cannot supply them. This mode is safe to retry.
+first-tree chat create --as-member --format markdown \
+  --metadata-file /tmp/review-packet.json < /tmp/review-opening.md
 
 # Start a new task chat with a tracked question. The first request must target
 # exactly one human. The message body IS the ask and must be
@@ -513,10 +521,19 @@ you want to add a non-member to the current chat before sending there. A
 same-task handoff, such as architect to developer or developer to reviewer,
 stays in the current chat; invite the next agent and send the handoff there.
 
-Task creation is intentionally not idempotent. There is no operation id, and
-the CLI does not automatically retry a create request. If the command reports
-an unknown result after a network/server failure, check `chat list` or the Web
-UI before running it again; the chat may already exist.
+Ordinary task creation is intentionally not idempotent. There is no operation
+id, and the CLI does not automatically retry it. If an ordinary create reports
+an unknown result, check `chat list` or the Web UI before running it again.
+
+The narrow `--as-member` mode is the exception: it accepts only a Markdown
+opening plus strict `context_tree_pr_review` metadata. The Server derives the
+current configured Reviewer and a stable Team + task type + repository + PR
+key, then atomically creates or reuses one Chat and opening. Changing Reviewer
+keeps that Chat and reconciles its current Reviewer on the next retry. The SDK
+retries transient failures; a caller may also rerun the exact command.
+`--as-member` rejects `--to`,
+`--with`, `--topic`, `--description`, inline `--metadata`, `--agent`, and
+request-option flags. `--org` and `--metadata-file` are invalid without it.
 
 If a non-human agent includes itself in `chat create --to`, the server records
 the originating agent in metadata and uses that agent's manager human as the
@@ -622,20 +639,23 @@ first-tree gitlab
 
 ```bash
 # Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
-first-tree gitlab follow https://gitlab.example/acme/api/-/issues/42
+first-tree gitlab follow https://gitlab.example/acme/api/issues/42
 first-tree gitlab follow https://gitlab.example/acme/api/-/merge_requests/42 --rebind
 first-tree gitlab following
-first-tree gitlab unfollow https://gitlab.example/acme/api/-/issues/42
+first-tree gitlab unfollow https://gitlab.example/acme/api/issues/42
 ```
 
 `follow` accepts only a full Issue or Merge Request URL from the Team's one
-configured GitLab instance. It records a pending declaration without provider
-egress; the next matching valid webhook supplies numeric project identity and
-activates the declaration. Repeating a follow by the same human/delegate pair
-in the same chat is idempotent. The same pair cannot follow the entity from a
-second chat: the command reports the existing room, and `--rebind` atomically
-moves that line when the task context intentionally changes. Different pairs
-remain independent. A pending
+configured GitLab instance. Both GitLab route shapes—with or without the `/-/`
+segment—are accepted, and the submitted URL is preserved for user-facing
+links. Repeating a follow for the same entity in the same chat refreshes that
+link to the latest submitted URL while remaining idempotent. The command
+records a pending declaration without provider egress; the next matching valid
+webhook supplies numeric project identity and activates the declaration. The
+same human/delegate pair cannot follow the entity from a second chat: the
+command reports the existing room, and `--rebind` atomically moves that line
+when the task context intentionally changes. Different pairs remain
+independent. A pending
 declaration reports `state: null` because First Tree has not verified provider
 state. There is no GitLab `context-review` command.
 
@@ -665,6 +685,8 @@ account's personal notifications and are not a replacement for chat follow.
 first-tree org
 ├── bind-tree <url> [--org <orgId>] [--branch <branch>] # legacy caller-org binding write
 └── context-tree [--agent <name>]                    # read the current agent org's Context Tree binding
+    ├── review-config [--agent <name>]                # read live binding + Reviewer assignment for a local Agent
+    │     --as-member [--org <orgId>]                 # logged-in member; no running Client Runtime, local Agent, or active Computer connection required
     └── set <repo> [--branch <branch>] [--agent <name>] # set the selected agent org binding
 ```
 
@@ -746,6 +768,30 @@ code:
 Authentication failures exit `3`; connection and timeout failures exit `6`;
 other remote or invalid-response failures exit `1`. Agent-selection failures
 retain exit code `2` and their existing error envelopes.
+
+### org context-tree review-config
+
+```bash
+first-tree org context-tree review-config [--agent <name>]
+first-tree org context-tree review-config --as-member [--org <orgId>]
+```
+
+Without `--as-member`, `review-config` reads the bound repository/branch and
+Context Reviewer assignment from the same agent-scoped server response. It
+reports `Off`, `Assigned`, or `Not assigned` for the selected runtime Agent.
+
+With `--as-member`, it uses the existing member-readable `context_tree` and
+`context_tree_features` settings and `/me` Team selection. An explicit `--org`
+must be one of the caller's active memberships; otherwise the current default,
+then sole-membership fallback, is used, and ambiguous multi-Team state fails
+closed. This is the Write preflight path after standard CLI login: member
+credentials and `client.yaml` remain present, but no running Client Runtime or
+daemon, local First Tree Agent, or active Computer connection is required.
+`--as-member` conflicts with `--agent`; `--org` requires `--as-member`.
+
+The command contains no review mode, generation, governance, or merge-method
+setting: Agent Review uses the currently assigned Reviewer and current-state
+configuration semantics.
 
 ### org context-tree set
 
@@ -923,8 +969,9 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree creation, structural validation, and hierarchy browsing. The
-`tree` namespace carries `verify`, `tree`, and `init`; the rest (`migrate` /
+Context Tree task-read activation, creation, structural validation, and
+hierarchy browsing. The `tree` namespace carries `read`, `verify`, `tree`, and
+`init`; the rest (`migrate` /
 `upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
 `automation` / `skill` groups) was retired in the 2026-06 cleanup because the
 cloud now owns workspace + tree provisioning and the client runtime inlines its
@@ -933,9 +980,59 @@ own skill payload install (see PR following #844).
 ```
 first-tree tree
 ├── init [options]                           # create a new team Context Tree repo with local gh
+├── read --team ID --snapshot DIR            # activate one exact task read snapshot
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
+
+`first-tree tree read` is the BYO Working Agent activation boundary for one
+task. Both `--team <team-id>` and `--snapshot <new-directory>` are required.
+The Team is always explicit: the command does not read a Web selection, the
+account's default organization, a local Agent, or a prior task receipt.
+
+Activation performs one member-authenticated Server request to
+`GET /api/v1/orgs/:orgId/settings/context_tree`. That Class B route resolves
+the URL Team's current active membership and current safe Context Tree binding;
+the activation disables transport retries so this authority check is not
+repeated after a transient response.
+Only after it succeeds does the CLI create staging state, execute one strict
+`git fetch` for the bound branch, resolve the fetched ref to an exact commit,
+and atomically publish a detached snapshot at the requested path. The final
+snapshot has no mutable Git remote and carries local Git metadata identifying
+the Team, binding, and commit. The destination must not already exist; the
+command never overwrites or reuses a prior task snapshot. Tracked symbolic
+links materialized as filesystem links are accepted only when a relative link
+resolves inside the snapshot to a regular file tracked by the same exact
+commit; directory, absolute, dangling, escaping, or untracked-target links
+fail before content is returned. When Git uses `core.symlinks=false`, an index
+symlink is instead a regular file containing the link blob. The snapshot
+accepts that file only when its raw object id still equals the exact index
+entry and treats it as opaque content rather than following it as an alias.
+
+Authority, invalid/unbound binding, fetch, commit resolution, and snapshot
+failures are distinct fail-closed stages. None falls back to cached content, a
+managed workspace checkout, a stale local branch, or another Team. Error
+messages and JSON envelopes do not include access credentials or raw upstream
+responses. Stable failure codes are:
+
+- `CONTEXT_TREE_READ_INVALID_INPUT`
+- `CONTEXT_TREE_READ_AUTHORITY_FAILED`
+- `CONTEXT_TREE_READ_BINDING_INVALID`
+- `CONTEXT_TREE_READ_UNBOUND`
+- `CONTEXT_TREE_READ_FETCH_FAILED`
+- `CONTEXT_TREE_READ_COMMIT_FAILED`
+- `CONTEXT_TREE_READ_SNAPSHOT_FAILED`
+
+If a later hierarchy read detects a removed marker, changed HEAD, or dirty
+worktree, it fails before returning content with
+`CONTEXT_TREE_READ_SNAPSHOT_INVALID`.
+
+With global `--json`, success returns one envelope whose `data` is
+`{ teamId, binding: { repo, branch }, commit, snapshotPath }`. Human output
+reports the same identity. For the rest of the task, run hierarchy selectors
+inside `snapshotPath` and read Markdown only from that root. A new task uses a
+new path and a new activation so membership, binding, and branch movement are
+observed.
 
 `first-tree tree init` creates a brand-new team Context Tree repository with the
 user's local `gh`: it creates the repo (one path for user- and org-owned repos),
@@ -1062,6 +1159,14 @@ Branch: feature/stale-tree
 Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.
 ```
 
+An exact snapshot created by `tree read` is recognized through its local Git
+metadata. For that checkout, `tree tree` never pulls, even when `--no-pull` is
+omitted; it verifies that HEAD still equals the activated exact commit before
+returning content. Human output reports `snapshot:<short-sha>`, Team, binding,
+and the full exact commit with no stale-branch warning. Managed workspace
+checkouts retain the existing pull-before-selector and stale-local fallback
+semantics.
+
 The rendered tree's node labels use:
 
 ```text
@@ -1087,7 +1192,9 @@ effective `path`. `data.branch` reports the current tree checkout as
 `{ name, isMainline, warning }`; `warning` is `null` for `main`, `master`,
 and `origin/main`, including detached HEAD checkouts that match
 `refs/remotes/origin/main`; otherwise it contains the same stale-tree warning
-string shown in human mode. `data.tree` contains the same filtered hierarchy as
+string shown in human mode. `data.readSnapshot` is `null` for a managed
+checkout and contains the activated `{ teamId, binding, commit, snapshotPath }`
+identity for a BYO task snapshot. `data.tree` contains the same filtered hierarchy as
 structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
 `hasNode`, and `children` fields; `metadata` includes `title`, optional
 `description`, and `owners`. Human tree text and branch warnings are not

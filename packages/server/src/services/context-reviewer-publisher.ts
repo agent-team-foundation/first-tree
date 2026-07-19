@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  CONTEXT_REVIEW_MANAGED_MARKER,
   type ContextReviewEvent,
   type ContextReviewSubmitRequest,
   type ContextReviewSubmitResponse,
@@ -759,9 +760,16 @@ async function reconcileUnknownSubmission(input: {
 }
 
 function assertPullRequestReviewable(
-  pullRequest: { state: string; merged: boolean; draft: boolean; headSha: string },
+  pullRequest: { state: string; merged: boolean; draft: boolean; headSha: string; body: string | null },
   request: ContextReviewSubmitRequest,
 ): void {
+  if (pullRequest.body?.includes(CONTEXT_REVIEW_MANAGED_MARKER)) {
+    throw new ContextReviewPublisherError(
+      409,
+      "CONTEXT_REVIEW_RUN_FORBIDDEN",
+      "Managed Context Review PRs are owned by the assigned Reviewer Agent, not the legacy App publisher.",
+    );
+  }
   if (pullRequest.state !== "open" || pullRequest.merged || (request.event === "APPROVE" && pullRequest.draft)) {
     throw new ContextReviewPublisherError(
       422,

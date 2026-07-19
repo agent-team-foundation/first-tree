@@ -1,5 +1,10 @@
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
+import {
+  type ContextReviewConfigResult,
+  readContextReviewConfig,
+  readMemberContextReviewConfig,
+} from "../../core/context-review-config.js";
 import { ContextTreeUnreadableError, readAgentContextTreeBinding } from "../../core/context-tree-binding.js";
 import {
   type ContextTreeBindingInput,
@@ -8,8 +13,10 @@ import {
   setAgentContextTreeBinding,
   validateContextTreeBindingInput,
 } from "../../core/context-tree-binding-write.js";
+import { MemberOrganizationResolutionError, resolveMemberOrganizationId } from "../../core/member-org.js";
 import { print } from "../../core/output.js";
-import { createSdk } from "../_shared/local-agent.js";
+import { createSdk, handleSdkError } from "../_shared/local-agent.js";
+import { createMemberSdk } from "../_shared/member.js";
 
 type ContextTreeOptions = {
   agent?: string;
@@ -17,6 +24,11 @@ type ContextTreeOptions = {
 
 type SetContextTreeOptions = ContextTreeOptions & {
   branch?: string;
+};
+
+type ReviewConfigOptions = ContextTreeOptions & {
+  asMember?: boolean;
+  org?: string;
 };
 
 export function registerOrgContextTreeCommand(org: Command): void {
@@ -90,5 +102,43 @@ export function registerOrgContextTreeCommand(org: Command): void {
         }
         throw error;
       }
+    });
+
+  const reviewConfig = contextTree
+    .command("review-config")
+    .description("Read the live Context Tree binding and Reviewer assignment")
+    .option("--agent <name>", "Agent name on this client (default: environment or the only configured agent)")
+    .option("--as-member", "Read as the signed-in human member without requiring a local Agent or Client")
+    .option("--org <orgId>", "Team for --as-member; defaults to your current /me selection")
+    .action(async () => {
+      const options = reviewConfig.optsWithGlobals<ReviewConfigOptions>();
+      let config: ContextReviewConfigResult;
+      if (options.asMember) {
+        if (options.agent) {
+          fail("CONFLICTING_ARGS", "--as-member cannot be combined with --agent", 2);
+        }
+        const sdk = createMemberSdk();
+        try {
+          const organizationId = resolveMemberOrganizationId(await sdk.getMemberProfile(), options.org);
+          config = await readMemberContextReviewConfig(sdk, organizationId);
+        } catch (error) {
+          if (error instanceof MemberOrganizationResolutionError) {
+            fail(error.code, error.message, 2);
+          }
+          handleSdkError(error);
+        }
+      } else {
+        if (options.org) {
+          fail("ORG_REQUIRES_MEMBER", "--org is only valid with --as-member", 2);
+        }
+        const sdk = createSdk(options.agent);
+        config = await readContextReviewConfig(sdk);
+      }
+
+      print.status("Context Review", config.enabled ? (config.assigned ? "Assigned" : "Not assigned") : "Off");
+      print.status("Reviewer", config.agentUuid ?? "Not assigned");
+      print.status("Repository", config.repo ?? "Unbound");
+      print.status("Branch", config.branch ?? "Unbound");
+      success(config);
     });
 }

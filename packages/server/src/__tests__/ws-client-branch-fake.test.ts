@@ -72,6 +72,10 @@ function routeHarness(db: unknown): { handler: WsHandler; notifier: Record<strin
   let handler: WsHandler | null = null;
   const notifier = {
     onAgentRouteChange: vi.fn(),
+    onDaemonClientCommand: vi.fn(),
+    onDaemonClientCommandResult: vi.fn(),
+    notifyDaemonClientCommand: vi.fn(async () => {}),
+    notifyDaemonClientCommandResult: vi.fn(async () => {}),
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
   };

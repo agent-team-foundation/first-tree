@@ -87,16 +87,6 @@ export function useServerChannelState(): { channel: ChannelName | null; settled:
 }
 
 /**
- * The release channel this server speaks (`dev` | `staging` | `prod`), or null
- * while loading / when the server does not report one. Gates channel-scoped UI
- * such as the staging-only "hide agent final text" view toggle; for a gate that
- * must distinguish loading from unknown, use {@link useServerChannelState}.
- */
-export function useServerChannel(): ChannelName | null {
-  return useServerChannelState().channel;
-}
-
-/**
  * Whether growth landing pages are explicitly enabled by the server. This is
  * independent from release channel: unknown / older servers and fetch errors
  * fail closed to `false`, while `settled` lets redirecting callers avoid a

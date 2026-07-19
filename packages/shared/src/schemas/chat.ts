@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { optionalChatMetadataSchema } from "./chat-metadata.js";
+import { contextReviewTaskCreateMetadataSchema } from "./context-review.js";
 import { landingCampaignActionContextSchema, landingCampaignRepoSlugSchema } from "./landing-campaign.js";
 import { sendMessageSchema } from "./message.js";
 
@@ -91,6 +92,35 @@ export const createWebTaskChatSchema = z
     message: "task chat creation requires at least one initial recipient",
   });
 export type CreateWebTaskChat = z.infer<typeof createWebTaskChatSchema>;
+
+/**
+ * Member-authenticated Agent Review dispatch accepted by the existing org
+ * chat collection. Recipient, topic, sender, provenance, and idempotency key
+ * are server-derived and therefore absent from this strict request.
+ */
+export const createKeyedTaskChatSchema = z
+  .object({
+    mode: z.literal("keyed_task"),
+    initialMessage: z
+      .object({
+        format: z.literal("markdown"),
+        content: z.string().trim().min(1),
+        metadata: contextReviewTaskCreateMetadataSchema,
+      })
+      .strict(),
+  })
+  .strict();
+export type CreateKeyedTaskChat = z.infer<typeof createKeyedTaskChatSchema>;
+
+export const keyedTaskChatCreateResponseSchema = z.object({
+  chatId: z.string().min(1),
+  messageId: z.string().min(1),
+  topic: z.string().min(1).nullable(),
+  effectiveSenderId: z.string().min(1),
+  reviewerAgentUuid: z.string().min(1),
+  outcome: z.enum(["created", "reused"]),
+});
+export type KeyedTaskChatCreateResponse = z.infer<typeof keyedTaskChatCreateResponseSchema>;
 
 export const createChatSchema = z.union([createTaskChatSchema, legacyCreateChatSchema]);
 export type CreateChat = z.infer<typeof createChatSchema>;

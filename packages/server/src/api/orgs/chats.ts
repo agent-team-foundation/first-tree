@@ -1,4 +1,5 @@
 import {
+  createKeyedTaskChatSchema,
   createMeChatSchema,
   createWebTaskChatSchema,
   listMeChatSourceCountsQuerySchema,
@@ -12,6 +13,10 @@ import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { assertAllAgentsVisibleInOrg } from "../../scope/require-resource.js";
 import { createChat, listChatsForMember, resolveAgentIdsByNameInOrg } from "../../services/chat.js";
+import {
+  reconcileContextReviewTaskReuse,
+  resolveContextReviewTaskAuthority,
+} from "../../services/context-review-task.js";
 import { assertNoLandingCampaignTrialAgents } from "../../services/landing-campaigns/guards.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 import { notifyRecipients } from "../../services/notifier.js";
@@ -114,14 +119,86 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     return listMeChatSourceCounts(app.db, scope.humanAgentId, scope.organizationId, query);
   });
 
+  const createChatRouteOptions = {
+    // `undefined` intentionally preserves @fastify/rate-limit's global shared
+    // bucket while exposing that policy to CodeQL's Fastify route model.
+    config: { otelRecordBody: false, rateLimit: undefined },
+  };
+
   /**
    * POST /orgs/:orgId/chats — create a new chat. The :orgId path param
    * makes the org explicit; visibility of every requested participant is
    * verified before the service layer touches the DB.
+   *
+   * Rate limiting is the global actor-aware `@fastify/rate-limit` guard
+   * registered in `app.ts`; this authenticated route intentionally does not
+   * duplicate the shared safety policy with a lower per-route cap.
    */
-  app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request, reply) => {
+  app.post<{ Params: { orgId: string } }>("/", createChatRouteOptions, async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
     const rawBody = request.body;
+    if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody && rawBody.mode === "keyed_task") {
+      const body = createKeyedTaskChatSchema.parse(rawBody);
+      const authority = await resolveContextReviewTaskAuthority(app.db, {
+        organizationId: scope.organizationId,
+        requester: {
+          userId: scope.userId,
+          memberId: scope.memberId,
+          humanAgentUuid: scope.humanAgentId,
+        },
+        metadata: body.initialMessage.metadata,
+      });
+      const result = await createChat(app.db, {
+        mode: "task",
+        initiatorAgentId: scope.humanAgentId,
+        organizationId: scope.organizationId,
+        initialRecipientAgentIds: [authority.reviewerAgentUuid],
+        contextParticipantAgentIds: [],
+        topic: authority.topic,
+        onboardingKickoffKey: authority.reservationKey,
+        initialMessage: {
+          format: "markdown",
+          content: body.initialMessage.content,
+          metadata: body.initialMessage.metadata,
+          source: "api",
+        },
+        source: "manual",
+        allowContextReviewRun: true,
+        beforeTaskResult: async (tx) => {
+          await resolveContextReviewTaskAuthority(tx, {
+            organizationId: scope.organizationId,
+            requester: {
+              userId: scope.userId,
+              memberId: scope.memberId,
+              humanAgentUuid: scope.humanAgentId,
+            },
+            metadata: body.initialMessage.metadata,
+            expectedReviewerAgentUuid: authority.reviewerAgentUuid,
+            lock: true,
+          });
+        },
+        onTaskReuse: async (tx, context) =>
+          reconcileContextReviewTaskReuse(tx, {
+            ...context,
+            organizationId: scope.organizationId,
+            requesterAgentUuid: scope.humanAgentId,
+            authority,
+            metadata: body.initialMessage.metadata,
+          }),
+      });
+
+      if (result.notificationMessageId) {
+        notifyRecipients(app.notifier, result.recipients, result.notificationMessageId);
+      }
+      return reply.status(result.initialMessageCreated ? 201 : 200).send({
+        chatId: result.chat.id,
+        messageId: result.message.id,
+        topic: result.chat.topic,
+        effectiveSenderId: result.effectiveSenderId,
+        reviewerAgentUuid: authority.reviewerAgentUuid,
+        outcome: result.initialMessageCreated ? "created" : "reused",
+      });
+    }
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {
       const body = createWebTaskChatSchema.parse(rawBody);
       const initialRecipientAgentIds = [

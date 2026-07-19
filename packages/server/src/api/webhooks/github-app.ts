@@ -3,7 +3,7 @@ import { githubAppInstallationPermissionsSchema, type ScmIngressContext } from "
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
+import { handleContextReviewerPrEvent, isContextReviewerCandidateEvent } from "../../services/context-reviewer-pr.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
   deleteInstallationByGithubId,
@@ -87,15 +87,6 @@ function parseInstallationMetadata(installation: Record<string, unknown>): AppIn
     events,
     suspendedAt,
   };
-}
-
-function isContextReviewerCandidateEvent(eventType: string, action: string | null): boolean {
-  if (eventType === "pull_request") {
-    return action === "opened" || action === "synchronize" || action === "ready_for_review";
-  }
-  if (eventType === "issue_comment") return action === "created";
-  if (eventType === "pull_request_review_comment") return action === "created" || action === "edited";
-  return false;
 }
 
 async function handleInstallationLifecycle(app: FastifyInstance, eventType: string, payload: unknown): Promise<string> {
@@ -256,7 +247,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
 
     const rawAction = isRecord(payload) ? readString(payload.action) : null;
     const normalized = normalizeGithubWebhook(eventType, payload, ingress);
-    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction);
+    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction, payload);
     if (!normalized.event && !shouldRunContextReviewer && !normalized.observation) {
       log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
       return reply.status(200).send({ ok: true, event: eventType, handled: false });
@@ -291,6 +282,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
               eventType,
               payload,
               organizationId,
+              deliveryId: ingress.stableDeliveryId,
             })
           : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
       resolveAudience: (normalizedEvent) => resolveGithubAudience(app.db, normalizedEvent),

@@ -1,6 +1,6 @@
 ---
 name: first-tree-read
-description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files from the bound context repo. Do not use for a Context Tree PR review or an explicit broad audit of stored tree content; `context-tree-review` and `context-tree-audit` exclusively own those snapshots. Always inspect `first-tree tree tree --help` in the context repo first, then use `first-tree tree tree` filtering options to select candidate files; read the selected file contents with the agent's native file-reading capability.
+description: Read the current repo's Context Tree before acting. Use when the user provides a task, topic, file path, feature name, bug, error, repo area, owner, or other signal and Codex needs to locate and read the relevant context files. Supports an explicit-Team BYO activation with one online authority check, one strict fetch, and one exact task snapshot, while preserving managed-workspace compatibility. Do not use for a Context Tree PR review or an explicit broad audit of stored tree content; `context-tree-review` and `context-tree-audit` exclusively own those snapshots.
 ---
 
 # First Tree Read
@@ -10,7 +10,9 @@ description: Read the current repo's Context Tree before acting. Use when the us
 Read the Context Tree for the current repo before acting. This skill is
 read-only: it uses `first-tree tree tree` to find relevant tree files, then
 uses the agent's native file-reading capability to read their content and
-summarize the constraints that matter for the user's task.
+summarize the constraints that matter for the user's task. A BYO task first
+activates one exact-commit snapshot; all selectors, soft-link traversal, and
+file reads for that task stay inside it.
 
 Use `first-tree-write` for tree writes from a source artifact. An explicit
 request to audit stored normal content on the default branch belongs to
@@ -41,7 +43,63 @@ drift rule.
 
 ## Workflow
 
-### 1. Resolve the context repo
+### 1. Choose the activation path
+
+Use the **BYO task snapshot** path only when the task handoff or user input
+names an explicit First Tree Team id. The Team id is required task input: do
+not infer it from a Web selection, `/me` default, cached role, prior task, or
+account-global current state. If a BYO Read is requested without that explicit
+Team id, stop before reading Tree content and request it.
+
+Otherwise retain the **managed workspace** path below. A workspace manifest is
+the managed compatibility anchor; its presence is not a substitute for an
+explicit Team in the BYO path.
+
+### 2A. Activate one BYO task snapshot
+
+Choose a new task-owned directory that does not already exist, then run exactly
+one activation:
+
+```bash
+first-tree tree read --help
+byo_read_root="$(mktemp -d)"
+first-tree --json tree read --team "<team-id>" --snapshot "$byo_read_root/context-tree"
+```
+
+The command performs the fixed sequence: selected-Team active-membership plus
+current-binding check through the Server, one strict Git fetch, exact commit
+resolution, then an atomic detached snapshot. Its success receipt reports the
+Team, binding repository and branch, exact commit, and absolute snapshot path.
+Treat that receipt as the task's read identity.
+
+Authority, binding, fetch, commit, or snapshot failure is fail-closed. Do not
+read another checkout, retry against cached content, use a mutable branch, or
+fall back to a managed workspace clone. Returned errors identify the failed
+stage without exposing credentials.
+
+Run hierarchy help from inside the activated snapshot before any selector:
+
+```bash
+cd "$byo_read_root/context-tree"
+first-tree tree tree --help
+```
+
+Then use `first-tree tree tree --no-pull` for every hierarchy selector. The
+snapshot marker also makes the hierarchy command suppress refresh, but the
+flag keeps the task's no-network intent explicit. Read Markdown files with the
+agent's native file-reading capability only from the receipt's snapshot path.
+Resolve soft-links against that same root. Do not run another Server request,
+fetch, pull, clone, or activation for the rest of the task.
+
+Remote branch or Team binding movement does not change the active task. A new
+task creates a new directory and performs a new activation so current
+membership, binding, and commit are visible. Never reuse a snapshot across
+Teams or tasks.
+
+Continue at **Build the read query** below, using the activated snapshot as the
+context repo.
+
+### 2B. Resolve the managed workspace context repo
 
 Find the workspace binding from the current working directory:
 
@@ -78,7 +136,7 @@ context repo for you (a built-in freshness guarantee), degrading to the
 local copy with a warning if the remote is unreachable. Pass `--no-pull`
 only when you deliberately want a stable snapshot or are working offline.
 
-### 2. Inspect the reader command every time
+### 3. Inspect the managed reader command every time
 
 Run the help command from inside the context repo before using any
 `tree tree` selector:
@@ -92,7 +150,7 @@ Treat this help output as the source of truth for flags and filtering modes.
 Do not invent flags from memory. Note `first-tree tree tree` refreshes the
 repo with `git pull --ff-only` before listing (use `--no-pull` to skip).
 
-### 3. Build the read query from the user's signal
+### 4. Build the read query from the user's signal
 
 Extract concrete selectors from the request:
 
@@ -110,7 +168,7 @@ matter. Prefer reading:
 - `soft_links` targets from matched files when they affect the task
 - member content only when ownership or review scope matters
 
-### 4. Use `first-tree tree tree` to select files
+### 5. Use `first-tree tree tree` to select files
 
 Use the filtering options shown by `first-tree tree tree --help` to list
 candidate files. The exact flags may change; choose them from the fresh help
@@ -120,6 +178,9 @@ Operational rules:
 
 - Use `first-tree tree tree` for tree discovery and filtering instead of
   raw `find` / ad hoc grep when the command can identify the needed files.
+- For a BYO task, include `--no-pull` on every selector and keep every selected
+  path inside the activated snapshot. For a managed workspace, retain the
+  command's existing pull-before-selector behavior.
 - First list candidates, then read content only for the relevant files with
   the agent's native file-reading capability.
 - If a query returns no results, widen once using parent domain terms and once
@@ -129,7 +190,7 @@ Operational rules:
 - If the command fails, report the failure, cwd, and attempted selector. Do not
   silently bypass the CLI filtering requirement.
 
-### 5. Apply what was read
+### 6. Apply what was read
 
 Before acting on the user's task, state the context files read when useful and
 separate durable tree facts from your own inference.
@@ -145,6 +206,8 @@ Keep the user-facing result concise:
 - list the relevant context paths only when it helps traceability
 - summarize the durable decisions, constraints, ownership, and cross-domain
   relationships that affect the task
+- for BYO Read, report the selected Team, binding, and exact commit when it
+  helps the user verify which task snapshot governed the answer
 - avoid restating every node; carry forward only what changes how you act
 
 Never modify tree files with this skill.

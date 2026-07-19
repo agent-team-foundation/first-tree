@@ -70,10 +70,28 @@ describe("cursor provider — setup card surfaces", () => {
   });
 });
 
-describe("cursor provider — free-form model input", () => {
-  it("renders a text input with the auto hint and commits the exact id on blur", async () => {
+describe("cursor provider — DEFAULT + Custom model picker", () => {
+  it("exposes unset + custom entry and commits an exact id via Custom", async () => {
     const saved: string[] = [];
     const el = await render(<ModelSection value="" onChange={(v) => saved.push(v)} provider="cursor" />);
+
+    const trigger = el.querySelector<HTMLButtonElement>('button[aria-label="Model"]');
+    expect(trigger).not.toBeNull();
+    expect(el.querySelector('input[aria-label="Model"]')).toBeNull();
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("(unset — inherits local)");
+    expect(body).toContain("Custom model id…");
+
+    const custom = Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="option"]')).find((b) =>
+      b.textContent?.includes("Custom model id…"),
+    );
+    await act(async () => {
+      custom?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(saved).toEqual([]);
 
     const input = el.querySelector<HTMLInputElement>('input[aria-label="Model"]');
     expect(input).not.toBeNull();
@@ -95,27 +113,9 @@ describe("cursor provider — free-form model input", () => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
 
-    // Trimmed exact id, committed once.
+    // Trimmed exact id, committed once; custom mode then returns to the Select.
     expect(saved).toEqual(["gpt-5.3-codex-high"]);
-
-    // Immediate blur after Enter must NOT double-submit (the value prop has
-    // not advanced yet — a duplicate PATCH would carry a stale version).
-    // React 19 delegates onBlur via the bubbling `focusout` at the root.
-    await act(async () => {
-      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-    });
-    expect(saved).toEqual(["gpt-5.3-codex-high"]);
-
-    // A FAILED save stays retryable with the same value: refocusing (React
-    // onFocus ← bubbling `focusin`) expires the duplicate-submit latch, so
-    // Enter fires the save again.
-    await act(async () => {
-      input.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-    });
-    await act(async () => {
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    });
-    expect(saved).toEqual(["gpt-5.3-codex-high", "gpt-5.3-codex-high"]);
+    expect(el.querySelector('button[aria-label="Model"]')).not.toBeNull();
   });
 
   it("keeps the dropdown for claude/codex providers (no free-form regression)", async () => {

@@ -788,25 +788,22 @@ describe("org-settings service", () => {
     expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
   });
 
-  it("context_tree_features requires an active installation with Pull requests write before enabling", async () => {
+  it("context_tree_features can enable the assigned Reviewer without a GitHub App installation", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, {
       clientId: admin.clientId,
       managerId: admin.memberId,
     });
-    const enable = () =>
+    await expect(
       orgSettingsService.putOrgSetting(
         app.db,
         admin.organizationId,
         "context_tree_features",
         { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
         { updatedBy: admin.userId, memberId: admin.memberId },
-      );
-
-    await expect(enable()).rejects.toThrow(/Connect this team's GitHub App installation/);
-    await seedReviewerInstallation(app, admin.organizationId, { pullRequests: "read" });
-    await expect(enable()).rejects.toThrow(/accept Pull requests: write/);
+      ),
+    ).resolves.toMatchObject({ contextReviewer: { enabled: true, agentUuid: reviewer.uuid } });
   });
 
   it("context_tree_features rejects enabled reviewer input without agentUuid", async () => {
@@ -2130,6 +2127,46 @@ describe("org-settings API (admin gating + masking)", () => {
         headers: { authorization: `Bearer ${member.accessToken}` },
       });
       expect(del.statusCode, `DELETE ${ns} should be 403 for member`).toBe(403);
+    }
+  });
+
+  it("rechecks active membership for each explicit-Team Context Tree binding read", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const otherTeamId = await attachOrg(app, admin.userId);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
+    const binding = { repo: "https://github.com/example/byo-read-tree.git", branch: "main" };
+    await orgSettingsService.putOrgSetting(app.db, admin.organizationId, "context_tree", binding, {
+      updatedBy: admin.userId,
+    });
+
+    const active = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(active.statusCode).toBe(200);
+    expect(active.json()).toEqual(binding);
+
+    const wrongTeam = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${otherTeamId}/settings/context_tree`,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(wrongTeam.statusCode).toBe(403);
+
+    for (const status of ["left", "removed"] as const) {
+      await app.db
+        .update(members)
+        .set({ status })
+        .where(and(eq(members.userId, member.userId), eq(members.organizationId, admin.organizationId)));
+      const inactive = await app.inject({
+        method: "GET",
+        url,
+        headers: { authorization: `Bearer ${member.accessToken}` },
+      });
+      expect(inactive.statusCode, `${status} membership must fail closed`).toBe(403);
+      expect(inactive.body).not.toContain(binding.repo);
     }
   });
 

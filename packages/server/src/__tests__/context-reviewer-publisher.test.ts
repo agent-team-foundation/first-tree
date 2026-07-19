@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
-import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
+import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER, CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -103,6 +103,28 @@ describe("Context Reviewer App publisher", () => {
     ).rejects.toMatchObject({
       code: "CONTEXT_REVIEW_STALE_HEAD",
     });
+    expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/reviews") && init?.method === "POST")).toBe(
+      false,
+    );
+  });
+
+  it("refuses legacy App publication when the live PR has become managed", async () => {
+    const fixture = await createRunFixture(getApp());
+    const fetcher = successfulGithubFetcher({ body: CONTEXT_REVIEW_MANAGED_MARKER });
+
+    await expect(
+      submitContextReviewOutcome({
+        db: fixture.app.db,
+        chatId: fixture.chatId,
+        runId: fixture.runId,
+        callerAgentUuid: fixture.reviewer.uuid,
+        callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
+        request: { reviewedHead: "a".repeat(40), event: "APPROVE", body: "Approved" },
+        appCredentials: fixture.app.config.oauth?.githubApp,
+        fetcher,
+      }),
+    ).rejects.toMatchObject({ code: "CONTEXT_REVIEW_RUN_FORBIDDEN" });
     expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/reviews") && init?.method === "POST")).toBe(
       false,
     );
@@ -871,7 +893,7 @@ async function createFollowUpRun(fixture: Awaited<ReturnType<typeof createRunFix
 }
 
 function successfulGithubFetcher(
-  overrides: { headSha?: string; beforePullRequestResponse?: () => Promise<void> } = {},
+  overrides: { headSha?: string; body?: string; beforePullRequestResponse?: () => Promise<void> } = {},
 ) {
   let preflightHookRan = false;
   return vi.fn<typeof fetch>(async (url, init) => {
@@ -901,6 +923,7 @@ function successfulGithubFetcher(
           merged_at: null,
           head: { sha: overrides.headSha ?? "a".repeat(40) },
           html_url: "https://github.com/owner/context-tree/pull/123",
+          body: overrides.body ?? "",
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );

@@ -502,7 +502,7 @@ describe("GitHubSection extra DOM behavior", () => {
 describe("GitLabSection extra DOM behavior", () => {
   it("renders an automatic merge-request binding and sorts it before issues", async () => {
     const { GitLabSection } = await import("../right-sidebar/gitlab-section.js");
-    const mergeRequestUrl = "https://gitlab.internal/Acme/Reviews/-/merge_requests/17";
+    const mergeRequestUrl = "https://gitlab.internal/Acme/Reviews/merge_requests/17";
     chatMocks.listChatGitlabEntities.mockResolvedValueOnce({
       items: [
         gitlabEntity({

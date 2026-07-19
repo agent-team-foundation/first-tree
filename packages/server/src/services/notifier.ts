@@ -39,6 +39,18 @@ const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
 const CHAT_UPDATED_CHANNEL = "chat_updated_events";
 const AGENT_ROUTE_CHANNEL = "agent_route_events";
 /**
+ * Cross-replica reverse command to a connected daemon (e.g. provider-models:list).
+ * Payload is small JSON: `{ type, clientId, provider, ref }`. The replica that
+ * owns the client's WebSocket delivers it via `sendToClient`; others no-op.
+ */
+const DAEMON_CLIENT_COMMAND_CHANNEL = "daemon_client_commands";
+/**
+ * Cross-replica wake that a daemon command result is ready. Payload is
+ * `{ clientId, ref }` only — the catalog lives in `clients.metadata` so large
+ * Cursor lists stay under the PG NOTIFY 8KB limit.
+ */
+const DAEMON_CLIENT_COMMAND_RESULT_CHANNEL = "daemon_client_command_results";
+/**
  * A viewer's PRIVATE me-chats projection changed (currently: they pinned or
  * unpinned a chat). Carries `<humanAgentId>:<organizationId>` so the WS layer
  * can fan a bare `me-chats:changed` invalidation to ONLY that user's own
@@ -97,6 +109,24 @@ export type AgentRouteChangePayload = {
   reason: string;
 };
 export type AgentRouteChangeHandler = (payload: AgentRouteChangePayload) => void;
+
+/** Small reverse-command frame fan-out for host-local daemon RPCs. */
+export type DaemonClientCommandPayload = {
+  type: string;
+  clientId: string;
+  provider: string;
+  ref: string;
+  /** DB-authoritative `clients.instance_id` — only that replica may deliver. */
+  targetInstanceId: string;
+};
+export type DaemonClientCommandHandler = (payload: DaemonClientCommandPayload) => void;
+
+/** Wake waiters that a correlated daemon RPC result is stored in client metadata. */
+export type DaemonClientCommandResultPayload = {
+  clientId: string;
+  ref: string;
+};
+export type DaemonClientCommandResultHandler = (payload: DaemonClientCommandResultPayload) => void;
 export type MeChatsChangedHandler = (payload: { humanAgentId: string; organizationId: string }) => void;
 
 /**
@@ -147,6 +177,17 @@ export type Notifier = {
   /** Agent runtime route changed: fan local WS detach/pin handling to every server replica. */
   notifyAgentRouteChange(payload: AgentRouteChangePayload): Promise<void>;
   /**
+   * Fan a small reverse-command frame to every replica so the process that
+   * owns the daemon WebSocket can `sendToClient`. Payload must stay tiny
+   * (no catalog bodies).
+   */
+  notifyDaemonClientCommand(payload: DaemonClientCommandPayload): Promise<void>;
+  /**
+   * Wake waiters that a correlated daemon RPC result is durable in
+   * `clients.metadata` (catalog bodies are too large for NOTIFY).
+   */
+  notifyDaemonClientCommandResult(payload: DaemonClientCommandResultPayload): Promise<void>;
+  /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
    * across PG NOTIFY — used for payloads that are too large for NOTIFY
@@ -174,6 +215,10 @@ export type Notifier = {
   onMeChatsChanged(handler: MeChatsChangedHandler): void;
   /** Register a handler for agent runtime route changes. */
   onAgentRouteChange(handler: AgentRouteChangeHandler): void;
+  /** Register a handler for cross-replica daemon reverse commands. */
+  onDaemonClientCommand(handler: DaemonClientCommandHandler): void;
+  /** Register a handler for cross-replica daemon RPC result wakes. */
+  onDaemonClientCommandResult(handler: DaemonClientCommandResultHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -192,6 +237,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const chatUpdatedHandlers: ChatUpdatedChangeHandler[] = [];
   const meChatsChangedHandlers: MeChatsChangedHandler[] = [];
   const agentRouteHandlers: AgentRouteChangeHandler[] = [];
+  const daemonClientCommandHandlers: DaemonClientCommandHandler[] = [];
+  const daemonClientCommandResultHandlers: DaemonClientCommandResultHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
@@ -203,6 +250,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   let unlistenChatUpdatedFn: (() => Promise<void>) | null = null;
   let unlistenMeChatsChangedFn: (() => Promise<void>) | null = null;
   let unlistenAgentRouteFn: (() => Promise<void>) | null = null;
+  let unlistenDaemonClientCommandFn: (() => Promise<void>) | null = null;
+  let unlistenDaemonClientCommandResultFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -344,6 +393,22 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifyDaemonClientCommand(payload: DaemonClientCommandPayload) {
+      try {
+        await listenClient`SELECT pg_notify(${DAEMON_CLIENT_COMMAND_CHANNEL}, ${JSON.stringify(payload)})`;
+      } catch {
+        // fire-and-forget — HTTP waiter timeout is the durable fallback.
+      }
+    },
+
+    async notifyDaemonClientCommandResult(payload: DaemonClientCommandResultPayload) {
+      try {
+        await listenClient`SELECT pg_notify(${DAEMON_CLIENT_COMMAND_RESULT_CHANNEL}, ${JSON.stringify(payload)})`;
+      } catch {
+        // fire-and-forget — HTTP waiter timeout is the durable fallback.
+      }
+    },
+
     async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
       const map = subscriptions.get(inboxId);
       if (!map) return 0;
@@ -402,6 +467,14 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onAgentRouteChange(handler: AgentRouteChangeHandler) {
       agentRouteHandlers.push(handler);
+    },
+
+    onDaemonClientCommand(handler: DaemonClientCommandHandler) {
+      daemonClientCommandHandlers.push(handler);
+    },
+
+    onDaemonClientCommandResult(handler: DaemonClientCommandResultHandler) {
+      daemonClientCommandResultHandlers.push(handler);
     },
 
     async start() {
@@ -595,6 +668,55 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenAgentRouteFn = agentRouteResult.unlisten;
+
+      const daemonClientCommandResult = await listenClient.listen(DAEMON_CLIENT_COMMAND_CHANNEL, (payload) => {
+        if (!payload) return;
+        try {
+          const parsed = JSON.parse(payload) as Partial<DaemonClientCommandPayload>;
+          if (
+            typeof parsed.type !== "string" ||
+            typeof parsed.clientId !== "string" ||
+            typeof parsed.provider !== "string" ||
+            typeof parsed.ref !== "string" ||
+            typeof parsed.targetInstanceId !== "string"
+          ) {
+            return;
+          }
+          for (const handler of daemonClientCommandHandlers) {
+            try {
+              handler(parsed as DaemonClientCommandPayload);
+            } catch {
+              // swallow — handler errors must not poison fan-out
+            }
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      });
+      unlistenDaemonClientCommandFn = daemonClientCommandResult.unlisten;
+
+      const daemonClientCommandResultWake = await listenClient.listen(
+        DAEMON_CLIENT_COMMAND_RESULT_CHANNEL,
+        (payload) => {
+          if (!payload) return;
+          try {
+            const parsed = JSON.parse(payload) as Partial<DaemonClientCommandResultPayload>;
+            if (typeof parsed.clientId !== "string" || typeof parsed.ref !== "string") {
+              return;
+            }
+            for (const handler of daemonClientCommandResultHandlers) {
+              try {
+                handler(parsed as DaemonClientCommandResultPayload);
+              } catch {
+                // swallow — handler errors must not poison fan-out
+              }
+            }
+          } catch {
+            // ignore malformed payloads
+          }
+        },
+      );
+      unlistenDaemonClientCommandResultFn = daemonClientCommandResultWake.unlisten;
     },
 
     async stop() {
@@ -641,6 +763,14 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenAgentRouteFn) {
         await unlistenAgentRouteFn();
         unlistenAgentRouteFn = null;
+      }
+      if (unlistenDaemonClientCommandFn) {
+        await unlistenDaemonClientCommandFn();
+        unlistenDaemonClientCommandFn = null;
+      }
+      if (unlistenDaemonClientCommandResultFn) {
+        await unlistenDaemonClientCommandResultFn();
+        unlistenDaemonClientCommandResultFn = null;
       }
     },
   };

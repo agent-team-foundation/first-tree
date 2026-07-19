@@ -29,6 +29,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -44,6 +45,7 @@ const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyH
 const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
+const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
 
 function preview(value) {
   if (!value) return "";
@@ -98,6 +100,124 @@ function optionValueWithEquals(argv, name) {
   const prefix = name + "=";
   const value = argv.find((arg) => arg.startsWith(prefix));
   return value ? value.slice(prefix.length) : null;
+}
+
+function commandIndex(argv, command, subcommand) {
+  const index = argv.indexOf(command);
+  return index >= 0 && argv[index + 1] === subcommand ? index : -1;
+}
+
+function runTreeRead(argv, phase) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    finish(
+      argv,
+      phase,
+      0,
+      "Usage: first-tree tree read [options]\\n\\nActivate one exact Context Tree snapshot for an explicit Team.\\n\\nOptions:\\n  --team <team-id>       explicit First Tree Team id\\n  --snapshot <directory> new task-owned snapshot directory\\n  -h, --help             display help for command\\n",
+      "",
+      { shimmedByEval: true },
+    );
+  }
+
+  const teamId = optionValue(argv, "--team");
+  const snapshotOption = optionValue(argv, "--snapshot");
+  if ((process.env.FIRST_TREE_EVAL_CASE_ID || "") !== "byo-explicit-team-trigger") {
+    finish(argv, phase, 1, "", "BYO read activation is unavailable for this eval case.\\n", {
+      blockedByEval: true,
+    });
+  }
+  if (teamId !== "team-byo-read-eval" || !snapshotOption) {
+    finish(argv, phase, 2, "", "Explicit Team and new snapshot path are required.\\n", {
+      authorityChecks: teamId ? 1 : 0,
+      shimmedByEval: true,
+    });
+  }
+
+  const snapshotPath = resolve(process.cwd(), snapshotOption);
+  if (existsSync(snapshotPath)) {
+    finish(argv, phase, 2, "", "Snapshot path already exists.\\n", {
+      authorityChecks: 0,
+      shimmedByEval: true,
+    });
+  }
+
+  mkdirSync(snapshotPath, { recursive: false });
+  const commands = [
+    ["init", "--initial-branch=main"],
+    ["remote", "add", "origin", BYO_READ_ORIGIN_PATH],
+    ["fetch", "--no-tags", "--prune", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+  ];
+  for (const gitArgv of commands) {
+    const result = spawnSync("git", gitArgv, { cwd: snapshotPath, encoding: "utf8" });
+    if (result.status !== 0) {
+      rmSync(snapshotPath, { force: true, recursive: true });
+      finish(argv, phase, 1, "", "Strict snapshot fetch failed.\\n", {
+        authorityChecks: 1,
+        shimmedByEval: true,
+        strictFetches: gitArgv[0] === "fetch" ? 1 : 0,
+      });
+    }
+  }
+
+  const resolved = spawnSync("git", ["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"], {
+    cwd: snapshotPath,
+    encoding: "utf8",
+  });
+  const exactCommit = resolved.status === 0 ? resolved.stdout.trim() : "";
+  const checkout = exactCommit
+    ? spawnSync("git", ["checkout", "--detach", exactCommit], { cwd: snapshotPath, encoding: "utf8" })
+    : null;
+  if (!exactCommit || checkout?.status !== 0 || !existsSync(join(snapshotPath, "NODE.md"))) {
+    rmSync(snapshotPath, { force: true, recursive: true });
+    finish(argv, phase, 1, "", "Exact snapshot checkout failed.\\n", {
+      authorityChecks: 1,
+      shimmedByEval: true,
+      strictFetches: 1,
+    });
+  }
+
+  const metadataCommands = [
+    ["config", "first-tree-read.snapshot", "true"],
+    ["config", "first-tree-read.team-id", teamId],
+    ["config", "first-tree-read.binding-repo", "https://git.example.invalid/teams/team-byo-read-eval/context-tree.git"],
+    ["config", "first-tree-read.binding-branch", "main"],
+    ["config", "first-tree-read.commit", exactCommit],
+    ["update-ref", "refs/first-tree-read/snapshot", exactCommit],
+    ["remote", "remove", "origin"],
+  ];
+  for (const gitArgv of metadataCommands) {
+    const result = spawnSync("git", gitArgv, { cwd: snapshotPath, encoding: "utf8" });
+    if (result.status !== 0) {
+      rmSync(snapshotPath, { force: true, recursive: true });
+      finish(argv, phase, 1, "", "Snapshot finalization failed.\\n", {
+        authorityChecks: 1,
+        shimmedByEval: true,
+        strictFetches: 1,
+      });
+    }
+  }
+
+  const bindingRepository = "https://git.example.invalid/teams/team-byo-read-eval/context-tree.git";
+  const stdout =
+    JSON.stringify({
+      ok: true,
+      data: {
+        binding: { branch: "main", repo: bindingRepository },
+        commit: exactCommit,
+        snapshotPath,
+        teamId,
+      },
+    }) + "\\n";
+  finish(argv, phase, 0, stdout, "", {
+    authorityChecks: 1,
+    bindingBranch: "main",
+    bindingRepository,
+    exactCommit,
+    shimmedByEval: true,
+    snapshotPath,
+    strictFetches: 1,
+    teamId,
+  });
 }
 
 function governanceEvalCaseId() {
@@ -397,6 +517,10 @@ if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "")) {
   });
   trace("first-tree result: exit=0 recorded-only chat " + argv[1]);
   process.exit(exitCode);
+}
+
+if (commandIndex(argv, "tree", "read") >= 0) {
+  runTreeRead(argv, phase);
 }
 
 if (argv[0] === "tree" && argv[1] === "tree") {

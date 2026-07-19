@@ -44,6 +44,52 @@ function makeCreateOkResponse(): Response {
   );
 }
 
+function makeKeyedCreateOkResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      chatId: "chat-review",
+      messageId: "msg-review",
+      topic: "Agent Review: owner/context-tree#749",
+      effectiveSenderId: "human-1",
+      reviewerAgentUuid: "reviewer-1",
+      outcome: "reused",
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+function keyedTaskPayload() {
+  return {
+    mode: "keyed_task" as const,
+    initialMessage: {
+      format: "markdown" as const,
+      content: "Please review this Context Tree PR.",
+      metadata: {
+        taskType: "context_tree_pr_review" as const,
+        reviewPacketV1: {
+          schemaVersion: 1 as const,
+          repository: "owner/context-tree",
+          pullRequest: 749,
+          expectedHead: "a".repeat(40),
+          baseRef: "main",
+          sourceRef: "agent-review-contract",
+          requesterGithubLogin: "writer",
+          goal: "Record the approved Agent Review contract.",
+          source: { label: "Architecture discussion", reference: "first-tree-chat:agent-review-contract" },
+          decisionSummary: "Use the existing member task Chat.",
+          rationale: "This preserves the normal Chat and Inbox boundary.",
+          targetPaths: ["system/context-tree-pr-reviewer.md"],
+          repairScope: ["system/context-tree-pr-reviewer.md"],
+          relevantContextRefs: [],
+          unresolvedQuestions: [],
+          verify: { status: "passed" as const, summary: "first-tree tree verify passed" },
+          evidence: [],
+        },
+      },
+    },
+  };
+}
+
 function makeFetchFailed(): TypeError {
   // Real undici shape: top-level `TypeError("fetch failed")` with `cause`
   // pointing at the underlying socket error. We don't need a real cause
@@ -210,6 +256,31 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
       ),
     ).rejects.toThrow(/fetch failed/);
     expect(networkFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("safely retries member keyed task creation and returns the converged result", async () => {
+    const fetchMock = buildFetchMock([makeStatusResponse(500, "result unknown"), makeKeyedCreateOkResponse()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await flush(makeSdk().createMemberKeyedTaskChat("org-1", keyedTaskPayload()));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://first-tree.example/api/v1/orgs/org-1/chats");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(fetchMock.mock.calls[1]?.[1]?.body);
+    for (const [, init] of fetchMock.mock.calls) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer tok-test");
+      expect(headers.has(AGENT_SELECTOR_HEADER)).toBe(false);
+      expect(headers.has(AGENT_RUNTIME_SESSION_HEADER)).toBe(false);
+    }
+    expect(result).toEqual({
+      chatId: "chat-review",
+      messageId: "msg-review",
+      topic: "Agent Review: owner/context-tree#749",
+      effectiveSenderId: "human-1",
+      reviewerAgentUuid: "reviewer-1",
+      outcome: "reused",
+    });
   });
 
   it("retries on HTTP 500 and succeeds on the second attempt", async () => {

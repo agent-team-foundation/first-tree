@@ -141,7 +141,12 @@ describe("FirstTreeHubSDK public surface", () => {
       jsonResponse({ items: [{ id: "m1" }], nextCursor: null }),
       jsonResponse([{ agentId: "agent-1", name: "agent", displayName: "Agent" }]),
       jsonResponse([{ agentId: "agent-2", name: "peer", displayName: "Peer" }]),
-      jsonResponse({ repo: null, branch: null }),
+      jsonResponse({ repo: null, branch: null, contextReviewer: { enabled: false, agentUuid: null } }),
+      jsonResponse({
+        repo: "https://github.com/acme/context-tree.git",
+        branch: "main",
+        contextReviewer: { enabled: true, agentUuid: "agent-1" },
+      }),
     ];
     const fetchMock = makeFetchMock(responses);
     const sdk = makeSdk();
@@ -157,6 +162,11 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(sdk.listChatParticipants("chat-1")).resolves.toHaveLength(1);
     await expect(sdk.addChatParticipant("chat-1", { agentName: "peer" })).resolves.toHaveLength(1);
     await expect(sdk.getAgentContextTreeConfig()).resolves.toEqual({ repo: null, branch: null });
+    await expect(sdk.getAgentContextReviewConfig()).resolves.toEqual({
+      repo: "https://github.com/acme/context-tree.git",
+      branch: "main",
+      contextReviewer: { enabled: true, agentUuid: "agent-1" },
+    });
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       "https://first-tree.example/api/v1/context-tree/info",
@@ -167,6 +177,7 @@ describe("FirstTreeHubSDK public surface", () => {
       "https://first-tree.example/api/v1/agent/chats/chat-1/messages?limit=10&cursor=m0",
       "https://first-tree.example/api/v1/agent/chats/chat-1/participants",
       "https://first-tree.example/api/v1/agent/chats/chat-1/participants",
+      "https://first-tree.example/api/v1/agent/context-tree/info",
       "https://first-tree.example/api/v1/agent/context-tree/info",
     ]);
   });

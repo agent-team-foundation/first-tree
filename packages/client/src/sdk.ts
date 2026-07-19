@@ -16,6 +16,7 @@ import {
   type ContextReviewSubmitRequest,
   type ContextReviewSubmitResponse,
   type CreateDocCommentRequest,
+  type CreateKeyedTaskChat,
   type CreateTaskChat,
   type DocComment,
   type DocCommentStatus,
@@ -27,9 +28,16 @@ import {
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
+  type KeyedTaskChatCreateResponse,
+  keyedTaskChatCreateResponseSchema,
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
+  type OrgContextTreeFeaturesOutput,
+  type OrgContextTreeFeaturesStorage,
+  type OrgContextTreeOutput,
+  orgContextTreeFeaturesOutputSchema,
+  orgContextTreeOutputSchema,
   type PublishDocRequest,
   type PublishDocResponse,
   type RuntimeProvider,
@@ -110,6 +118,15 @@ export type RegisterResult = {
 export type ContextTreeConfig = {
   repo: string | null;
   branch: string | null;
+};
+
+export type ContextReviewRuntimeConfig = ContextTreeConfig & {
+  contextReviewer: OrgContextTreeFeaturesStorage["contextReviewer"];
+};
+
+export type MemberProfile = {
+  memberships: Array<{ organizationId: string }>;
+  defaultOrganizationId: string | null;
 };
 
 export type PaginatedResult<T> = {
@@ -367,6 +384,81 @@ export class FirstTreeHubSDK {
     );
   }
 
+  /**
+   * Create or recover the member-authenticated Agent Review task for a PR.
+   * The strict request carries no recipient, topic, sender, or idempotency
+   * key; the server derives all authority-bearing fields from live state.
+   */
+  async createMemberKeyedTaskChat(
+    organizationId: string,
+    data: CreateKeyedTaskChat,
+  ): Promise<KeyedTaskChatCreateResponse> {
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/chats`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+      { retry: true },
+    );
+    return keyedTaskChatCreateResponseSchema.parse(response);
+  }
+
+  /** Read the signed-in member's Team memberships for explicit org selection. */
+  async getMemberProfile(): Promise<MemberProfile> {
+    const response = await this.requestJson<unknown>("/api/v1/me");
+    if (typeof response !== "object" || response === null) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me");
+    }
+    const value = response as { memberships?: unknown; defaultOrganizationId?: unknown };
+    if (!Array.isArray(value.memberships)) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me: memberships must be an array");
+    }
+    const memberships = value.memberships;
+    if (
+      !memberships.every(
+        (membership) =>
+          typeof membership === "object" &&
+          membership !== null &&
+          typeof (membership as { organizationId?: unknown }).organizationId === "string",
+      )
+    ) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me: membership organizationId is required");
+    }
+    if (
+      value.defaultOrganizationId !== undefined &&
+      value.defaultOrganizationId !== null &&
+      typeof value.defaultOrganizationId !== "string"
+    ) {
+      throw new SyntaxError("Invalid response from GET /api/v1/me: defaultOrganizationId must be a string or null");
+    }
+    return {
+      memberships,
+      defaultOrganizationId: value.defaultOrganizationId ?? null,
+    };
+  }
+
+  /** Member-readable Context Tree binding from the existing generic settings API. */
+  async getMemberContextTreeSetting(
+    organizationId: string,
+    options: { retry?: boolean } = {},
+  ): Promise<OrgContextTreeOutput> {
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/settings/context_tree`,
+      undefined,
+      { retry: options.retry ?? true },
+    );
+    return orgContextTreeOutputSchema.parse(response);
+  }
+
+  /** Member-readable Reviewer assignment from the existing generic settings API. */
+  async getMemberContextTreeFeatures(organizationId: string): Promise<OrgContextTreeFeaturesOutput> {
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/settings/context_tree_features`,
+    );
+    return orgContextTreeFeaturesOutputSchema.parse(response);
+  }
+
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
   }
@@ -538,7 +630,13 @@ export class FirstTreeHubSDK {
 
   /** Fetch Context Tree configuration for this SDK's authenticated agent. */
   async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
-    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+    const info = await this.requestJson<ContextReviewRuntimeConfig>("/api/v1/agent/context-tree/info");
+    return { repo: info.repo, branch: info.branch };
+  }
+
+  /** Read the live bound Tree plus Reviewer assignment as one runtime tuple. */
+  async getAgentContextReviewConfig(): Promise<ContextReviewRuntimeConfig> {
+    return this.requestJson<ContextReviewRuntimeConfig>("/api/v1/agent/context-tree/info");
   }
 
   /** Bind Context Tree configuration for this SDK's authenticated agent organization. */
