@@ -48,7 +48,9 @@ export function parseGitlabEntityUrl(
   if (url.username || url.password || url.search || url.hash) {
     throw new BadRequestError("GitLab entity URL must not include credentials, query, or fragment");
   }
-  const match = /^\/(.+)\/-\/(issues|merge_requests)\/(\d+)\/?$/.exec(url.pathname);
+  // GitLab instances and clients emit both route shapes. Treat them as the
+  // same identity, but preserve the submitted shape for the user-facing link.
+  const match = /^\/(.+?)\/(?:-\/)?(issues|merge_requests)\/(\d+)\/?$/.exec(url.pathname);
   if (!match) throw new BadRequestError("GitLab entity URL must point to an issue or merge request");
   let projectPath: string;
   try {
@@ -241,7 +243,21 @@ export async function declareGitlabEntityFollowWithStatus(
           },
         },
       });
-      return result.outcome === "conflict" ? result : { outcome: result.outcome, row: result.record };
+      if (result.outcome === "conflict") return result;
+      if (result.record.entityUrl !== parsed.entityUrl) {
+        const [updated] = await rawTx
+          .update(gitlabEntityChatMappings)
+          .set({
+            projectPath: parsed.projectPath,
+            projectPathNormalized: normalizedPath,
+            entityUrl: parsed.entityUrl,
+            updatedAt: new Date(),
+          })
+          .where(eq(gitlabEntityChatMappings.id, result.record.id))
+          .returning();
+        if (updated) return { outcome: result.outcome, row: updated };
+      }
+      return { outcome: result.outcome, row: result.record };
     },
   );
 }
