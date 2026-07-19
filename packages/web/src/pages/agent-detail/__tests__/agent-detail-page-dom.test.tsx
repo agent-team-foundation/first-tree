@@ -93,6 +93,13 @@ vi.mock("../../../auth/auth-context.js", () => ({
 
 vi.mock("../../../api/org-settings.js", () => orgSettingsMocks);
 
+// The RuntimeTab's model picker asks the bound computer's daemon for a model
+// catalog; `null` keeps these page tests on the curated-fallback control they
+// exercise (catalog rendering is covered in model-section-catalog.test.tsx).
+vi.mock("../../../api/provider-models.js", () => ({
+  getProviderModels: vi.fn(async () => null),
+}));
+
 const NOW = "2026-05-28T12:00:00.000Z";
 
 type EffectivePromptRow = AgentResourcesOutput["effective"]["prompts"][number];
@@ -861,6 +868,12 @@ describe("AgentDetailPage", () => {
     const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
     await waitForText(container, "Model settings");
 
+    // Catalog fetch is mocked null → curated Claude fallback once settled.
+    // Wait for the loaded control (enabled) before picking opus.
+    await waitForCondition(() => {
+      const b = container.querySelector<HTMLButtonElement>('button[aria-label="Model"]');
+      return !!b && !b.disabled;
+    }, "Expected the model picker to finish loading");
     // Changing the model saves right away (no draft, no Save bar).
     await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
     await waitForCondition(
@@ -882,6 +895,10 @@ describe("AgentDetailPage", () => {
     const { RuntimeTab } = await import("../runtime-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
     await waitForText(container, "Model settings");
+    await waitForCondition(() => {
+      const b = container.querySelector<HTMLButtonElement>('button[aria-label="Model"]');
+      return !!b && !b.disabled;
+    }, "Expected the model picker to finish loading");
     await chooseSelectOption(container.querySelector('button[aria-label="Model"]'), "opus");
     await waitForCondition(
       () => agentConfigMocks.updateAgentConfig.mock.calls.length > 0,

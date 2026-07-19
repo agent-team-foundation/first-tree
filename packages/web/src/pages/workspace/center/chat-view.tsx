@@ -28,7 +28,6 @@ import {
   Download,
   ExternalLink,
   Eye,
-  EyeOff,
   Menu,
   MessageSquare,
   PanelRight,
@@ -134,7 +133,6 @@ import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
-import { useServerChannel } from "../../../hooks/use-server-channel.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
@@ -148,7 +146,6 @@ import { useImageSrc } from "../../../lib/use-image-src.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
-import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js";
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
@@ -187,36 +184,6 @@ function saveSidebarOpen(open: boolean): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, open ? "1" : "0");
-  } catch {
-    // localStorage may be unavailable (private mode); ignore.
-  }
-}
-
-/**
- * Temporary, staging-only preference: hide messages stamped
- * `purpose: "agent-final-text"`. The per-turn final-text mirror that used to
- * auto-produce these is RETIRED (the runtime no longer auto-forwards a turn's
- * output to chat); the purpose now only carries deliberate runtime notices
- * (e.g. the codex usage-limit notice). This toggle is legacy from the mirror
- * era — a pure view filter, nothing is deleted — and only applies on non-prod
- * channels (hidden on prod; see `finalTextToggleEnabled`). Cleanup is a noted
- * follow-up; defaults to OFF (show everything).
- */
-const HIDE_AGENT_FINAL_TEXT_STORAGE_KEY = "first-tree:chat:hide-agent-final-text:v1";
-
-function loadHideAgentFinalText(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(HIDE_AGENT_FINAL_TEXT_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function saveHideAgentFinalText(hide: boolean): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HIDE_AGENT_FINAL_TEXT_STORAGE_KEY, hide ? "1" : "0");
   } catch {
     // localStorage may be unavailable (private mode); ignore.
   }
@@ -1677,21 +1644,6 @@ export function ChatView({
     [useMobileDetailsSheet],
   );
 
-  // Temporary, staging-only view filter: hide agent final-text mirrors. The
-  // toggle renders only on non-prod channels (`finalTextToggleEnabled`), and
-  // the filter is additionally gated on that flag so a stale localStorage
-  // preference can never hide messages on prod. Default OFF (show everything).
-  const serverChannel = useServerChannel();
-  const finalTextToggleEnabled = serverChannel === "dev" || serverChannel === "staging";
-  const [hideAgentFinalText, setHideAgentFinalText] = useState<boolean>(loadHideAgentFinalText);
-  const toggleHideAgentFinalText = useCallback(() => {
-    setHideAgentFinalText((prev) => {
-      const next = !prev;
-      saveHideAgentFinalText(next);
-      return next;
-    });
-  }, []);
-  const hideFinalTextActive = finalTextToggleEnabled && hideAgentFinalText;
   // The chat id the description-driven rail default was last applied for.
   // Doc-preview opens to the right of chat-view (mounted at workspace level);
   // we render two right rails on the same row, so when the user clicks a doc
@@ -2461,17 +2413,8 @@ export function ChatView({
     for (const m of fromCache) byId.set(m.id, m);
     for (const m of fromServer) byId.set(m.id, m);
     const sorted = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    // Staging-only view filter applied at THE single source feeding the
-    // timeline AND every read-state projection derived from it (pill,
-    // high-water, divider, scroll anchor, useReadTracker's `messages`). Doing
-    // it here — not just at the rendered `items` — keeps the DOM and those
-    // projections from diverging: a hidden row has no DOM node, so it must
-    // also be absent from pill/anchor math or it drives an un-clearable "N
-    // new" pill. The IDB/server caches keep the full set, so toggling off
-    // restores the rows; the read-tracker derives its writes from the visible
-    // DOM (see use-read-tracker), so durable read-state stays coherent.
-    return selectVisibleMessages(sorted, hideFinalTextActive);
-  }, [cachedMessages, messagesData, hideFinalTextActive]);
+    return sorted;
+  }, [cachedMessages, messagesData]);
 
   const gapAfterMessageId = useMemo<string | null>(
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
@@ -3934,36 +3877,6 @@ export function ChatView({
                         participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
                         onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
                       />
-                    )}
-                    {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
-              (gated on `finalTextToggleEnabled`). Filters the per-turn
-              final-text mirrors out of the timeline so a human watcher sees
-              only deliberate sends + human messages. Eye / EyeOff conveys the
-              show/hide state; pressed styling marks "currently hiding". */}
-                    {finalTextToggleEnabled && (
-                      <button
-                        type="button"
-                        onClick={toggleHideAgentFinalText}
-                        aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                        aria-pressed={hideAgentFinalText}
-                        title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                        className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                        style={{
-                          width: 28,
-                          height: 28,
-                          border: 0,
-                          background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
-                          borderRadius: "var(--radius-input)",
-                          color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {hideAgentFinalText ? (
-                          <EyeOff size={16} strokeWidth={2.25} />
-                        ) : (
-                          <Eye size={16} strokeWidth={2.25} />
-                        )}
-                      </button>
                     )}
                     {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,

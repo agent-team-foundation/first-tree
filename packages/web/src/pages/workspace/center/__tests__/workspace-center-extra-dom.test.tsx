@@ -79,10 +79,6 @@ const authMock = vi.hoisted(() => ({
   },
 }));
 
-const serverChannelMock = vi.hoisted(() => ({
-  value: "dev" as "dev" | "staging" | "prod",
-}));
-
 vi.mock("../../../../api/activity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/activity.js")>()),
   getClient: activityMocks.getClient,
@@ -127,10 +123,6 @@ vi.mock("../../../../components/add-participant-dropdown.js", () => ({
       Add participant ({variant})
     </button>
   ),
-}));
-
-vi.mock("../../../../hooks/use-server-channel.js", () => ({
-  useServerChannel: () => serverChannelMock.value,
 }));
 
 vi.mock("../../../../lib/use-agent-name-map.js", () => ({
@@ -530,7 +522,6 @@ beforeEach(() => {
   installBrowserStubs();
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  serverChannelMock.value = "dev";
   authMock.value = {
     agentId: "human-agent-self",
     memberId: "member-self",
@@ -825,7 +816,7 @@ describe("ChatView extra DOM branches", () => {
     await act(async () => root.unmount());
   });
 
-  it("renders image fallbacks, read receipts, and the dev final-text visibility toggle", async () => {
+  it("renders image fallbacks and read receipts without the retired final-text visibility toggle", async () => {
     const { ChatView } = await import("../chat-view.js");
     attachmentMocks.fetchAttachmentBase64.mockRejectedValueOnce(new Error("deleted"));
     const page = messages([
@@ -853,7 +844,7 @@ describe("ChatView extra DOM branches", () => {
       message({
         id: "msg-final",
         senderId: "agent-1",
-        content: "Hidden final mirror row",
+        content: "Persisted agent final text remains visible",
         metadata: { [AGENT_FINAL_TEXT_METADATA_KEY]: true },
         source: "api",
         createdAt: "2026-05-28T12:03:00.000Z",
@@ -867,15 +858,8 @@ describe("ChatView extra DOM branches", () => {
     expect(container.textContent).toContain("✓ sent");
     expect(container.textContent).toContain("✓✓");
     await waitForText(container, '[Image "missing.png" failed to load]');
-    await waitForText(container, "Hidden final mirror row");
-
-    await click(container.querySelector('button[aria-label="Hide agent final messages"]'));
-    await waitForCondition(
-      () => !container.textContent?.includes("Hidden final mirror row"),
-      "Expected final-text row to be hidden",
-    );
-    expect(localStorage.getItem("first-tree:chat:hide-agent-final-text:v1")).toBe("1");
-    expect(container.querySelector('button[aria-label="Show agent final messages"]')).not.toBeNull();
+    await waitForText(container, "Persisted agent final text remains visible");
+    expect(container.querySelector('button[aria-label$="agent final messages"]')).toBeNull();
 
     await act(async () => root.unmount());
   });

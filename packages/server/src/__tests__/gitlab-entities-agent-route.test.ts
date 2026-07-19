@@ -36,6 +36,57 @@ describe("GitLab entity attention agent routes", () => {
     ).toHaveLength(0);
   });
 
+  it("accepts both GitLab route shapes and preserves the latest explicitly followed URL", async () => {
+    const { app, runtime, chatId } = await createRuntimeChat();
+    await createGitlabConnection(app.db, {
+      organizationId: runtime.organizationId,
+      memberId: runtime.memberId,
+      displayName: "Private GitLab",
+      instanceOrigin: "https://gitlab.internal",
+    });
+    const dashedIssueUrl = "https://gitlab.internal/Acme/API/-/issues/41";
+    const workingIssueUrl = "https://gitlab.internal/Acme/API/issues/41";
+
+    const initial = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/gitlab-entities`, {
+      entityUrl: dashedIssueUrl,
+    });
+    expect(initial.statusCode).toBe(201);
+    expect(initial.json()).toMatchObject({ status: "created", entity: { entityUrl: dashedIssueUrl } });
+
+    const corrected = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/gitlab-entities`, {
+      entityUrl: workingIssueUrl,
+    });
+    expect(corrected.statusCode).toBe(200);
+    expect(corrected.json()).toMatchObject({
+      status: "already_following",
+      entity: {
+        entityType: "issue",
+        entityIid: 41,
+        projectPath: "Acme/API",
+        entityUrl: workingIssueUrl,
+      },
+    });
+    expect((await runtime.request("GET", `/api/v1/agent/chats/${chatId}/gitlab-entities`)).json()).toMatchObject({
+      items: [{ entityUrl: workingIssueUrl }],
+    });
+
+    const removedByAlias = await runtime.request(
+      "DELETE",
+      `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(dashedIssueUrl)}`,
+    );
+    expect(removedByAlias.json()).toEqual({ removed: 1 });
+
+    const workingMergeRequestUrl = "https://gitlab.internal/Acme/API/merge_requests/42";
+    const fresh = await runtime.request("POST", `/api/v1/agent/chats/${chatId}/gitlab-entities`, {
+      entityUrl: workingMergeRequestUrl,
+    });
+    expect(fresh.statusCode).toBe(201);
+    expect(fresh.json()).toMatchObject({
+      status: "created",
+      entity: { entityType: "pull_request", entityIid: 42, entityUrl: workingMergeRequestUrl },
+    });
+  });
+
   it("follows, projects, activates, multi-follows, and URL-unfollows without leaking internal fields", async () => {
     const { app, runtime, chatId } = await createRuntimeChat();
     const second = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {

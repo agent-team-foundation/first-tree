@@ -33,6 +33,8 @@ function makeMockNotifier(): {
     notifyChatUpdated: vi.fn(async () => {}),
     notifyMeChatsChanged: vi.fn(async () => {}),
     notifyAgentRouteChange: vi.fn(async () => {}),
+    notifyDaemonClientCommand: vi.fn(async () => {}),
+    notifyDaemonClientCommandResult: vi.fn(async () => {}),
     notifySessionEvent: vi.fn(async () => {}),
     pushFrameToInbox: vi.fn(async () => 0),
     onConfigChange: vi.fn(),
@@ -47,6 +49,8 @@ function makeMockNotifier(): {
     onChatUpdated: vi.fn(),
     onMeChatsChanged: vi.fn(),
     onAgentRouteChange: vi.fn(),
+    onDaemonClientCommand: vi.fn(),
+    onDaemonClientCommandResult: vi.fn(),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
   } satisfies Notifier;

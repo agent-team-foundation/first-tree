@@ -12,6 +12,9 @@ import {
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
   inboxRecoverFrameSchema,
+  PROVIDER_MODELS_LIST_TYPE,
+  PROVIDER_MODELS_RESULT_TYPE,
+  providerModelsResultFrameSchema,
   runtimeStateMessageSchema,
   sessionEventMessageSchema,
   sessionEventRejectedReasonSchema,
@@ -54,6 +57,7 @@ import * as landingCampaignChatStateService from "../../services/landing-campaig
 import * as notificationService from "../../services/notification.js";
 import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
+import { readModelCatalogRpcResult, storeModelCatalogRpcResult } from "../../services/provider-models-rpc.js";
 import * as runtimeLivenessService from "../../services/runtime-liveness.js";
 import * as sessionEventService from "../../services/session-event.js";
 
@@ -291,6 +295,31 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         return;
       }
       connectionManager.sendToClient(payload.targetClientId, frame.data);
+    });
+
+    // Cross-replica reverse commands: only the DB-authoritative instance may
+    // deliver. A stale open socket on a previous replica must not receive the
+    // same ref after reconnect/takeover.
+    notifier.onDaemonClientCommand((payload) => {
+      if (payload.type !== PROVIDER_MODELS_LIST_TYPE) return;
+      if (payload.targetInstanceId !== instanceId) return;
+      connectionManager.sendToClient(payload.clientId, {
+        type: PROVIDER_MODELS_LIST_TYPE,
+        provider: payload.provider,
+        ref: payload.ref,
+      });
+    });
+
+    // Cross-replica result wake: catalog is in clients.metadata; resolve any
+    // local HTTP waiter that registered waitForClientReply for this ref.
+    notifier.onDaemonClientCommandResult((payload) => {
+      void (async () => {
+        const catalog = await readModelCatalogRpcResult(app.db, payload.clientId, payload.ref);
+        if (!catalog) return;
+        connectionManager.resolveClientReply(payload.clientId, payload.ref, catalog);
+      })().catch((err) => {
+        app.log.debug({ err, clientId: payload.clientId, ref: payload.ref }, "provider-models result wake failed");
+      });
     });
 
     // WS upgrade is excluded from HTTP tracing in app.ts via the autotelic
@@ -1757,6 +1786,48 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 await reconcilePinnedAgentsForClient();
               }
               socket.send(JSON.stringify({ type: "heartbeat:ack" }));
+            } else if (type === PROVIDER_MODELS_RESULT_TYPE) {
+              if (!clientId) {
+                socket.send(JSON.stringify({ type: "error", message: "Must register client first" }));
+                return;
+              }
+              const result = providerModelsResultFrameSchema.safeParse(msg);
+              if (!result.success) {
+                socket.send(JSON.stringify({ type: "error", message: "Malformed provider-models:result frame" }));
+                return;
+              }
+              // Reject a locally replaced socket before touching durable state.
+              if (!connectionManager.isActiveClientConnection(clientId, socket)) {
+                app.log.debug(
+                  { clientId, ref: result.data.ref },
+                  "ignoring provider-models:result from replaced local socket",
+                );
+                return;
+              }
+              // Ownership + persist are one UPDATE (`id` AND `instance_id`); a
+              // takeover between a prior SELECT and write cannot land a catalog.
+              const stored = await storeModelCatalogRpcResult(
+                app.db,
+                clientId,
+                result.data.ref,
+                result.data.catalog,
+                instanceId,
+              );
+              if (!stored) {
+                app.log.debug(
+                  { clientId, ref: result.data.ref, instanceId },
+                  "ignoring provider-models:result; client ownership moved before durable write",
+                );
+                return;
+              }
+              const resolved = connectionManager.resolveClientReply(clientId, result.data.ref, result.data.catalog);
+              await notifier.notifyDaemonClientCommandResult({ clientId, ref: result.data.ref });
+              if (!resolved) {
+                app.log.debug(
+                  { clientId, ref: result.data.ref },
+                  "provider-models:result matched no pending HTTP waiter on this replica",
+                );
+              }
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : "Internal error";

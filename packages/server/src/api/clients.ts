@@ -1,17 +1,26 @@
 import { randomUUID } from "node:crypto";
 import {
+  PROVIDER_MODELS_LIST_TYPE,
+  providerModelCatalogSchema,
   RUNTIME_AUTH_START_TYPE,
   runtimeAuthStartRequestSchema,
+  runtimeProviderSchema,
   updateClientCapabilitiesSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
-import { ServiceUnavailableError } from "../errors.js";
+import { BadGatewayError, GatewayTimeoutError, ServiceUnavailableError } from "../errors.js";
 import { stampClientResource } from "../observability/request-context.js";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";
 import * as clientService from "../services/client.js";
-import { forceDisconnectClient, sendToClient } from "../services/connection-manager.js";
+import {
+  forceDisconnectClient,
+  rejectPendingRepliesForClient,
+  sendToClient,
+  waitForClientReply,
+} from "../services/connection-manager.js";
+import { isClientConnectedSomewhere, readModelCatalogRpcResult } from "../services/provider-models-rpc.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
 
@@ -90,6 +99,76 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     }
     return { ref, started: true as const };
   });
+
+  // Host-local model catalog: ask the connected daemon to discover models from
+  // the real provider on that computer, wait for the correlated reply, and
+  // return the catalog to the web. Delivery is scoped to the DB-authoritative
+  // `clients.instance_id` (local send or PG NOTIFY fan-out). Results are stored
+  // in clients.metadata; on waiter timeout we still read that durable copy so a
+  // lost NOTIFY does not false-fail. Computer offline → 502; reply timeout → 504
+  // (web picker maps both to silent degrade; avoid 503 which triggers retry).
+  app.get<{ Params: { clientId: string; provider: string } }>(
+    "/:clientId/providers/:provider/models",
+    async (request) => {
+      const { userId } = requireUser(request);
+      const { clientId, provider: rawProvider } = request.params;
+      stampClientResource(request, clientId);
+      await clientService.assertClientOwner(app.db, clientId, { userId });
+      await clientService.assertClientNotRetired(app.db, clientId);
+      const provider = runtimeProviderSchema.parse(rawProvider);
+      const client = await clientService.getClient(app.db, clientId);
+      if (!client || !isClientConnectedSomewhere(client) || !client.instanceId) {
+        throw new BadGatewayError(
+          "Could not list models because this computer is not connected. Make sure the daemon is running, then retry.",
+        );
+      }
+      const targetInstanceId = client.instanceId;
+      const ref = randomUUID();
+      const replyPromise = waitForClientReply(clientId, ref);
+      const daemonFrame = {
+        type: PROVIDER_MODELS_LIST_TYPE,
+        provider,
+        ref,
+      };
+      if (targetInstanceId === app.config.instanceId) {
+        const delivered = sendToClient(clientId, daemonFrame);
+        if (!delivered) {
+          rejectPendingRepliesForClient(clientId, new Error("Computer not connected"));
+          await replyPromise.catch(() => undefined);
+          throw new BadGatewayError(
+            "Could not list models because this computer is not connected. Make sure the daemon is running, then retry.",
+          );
+        }
+      } else {
+        await app.notifier.notifyDaemonClientCommand({
+          type: PROVIDER_MODELS_LIST_TYPE,
+          clientId,
+          provider,
+          ref,
+          targetInstanceId,
+        });
+      }
+      try {
+        const raw = await replyPromise;
+        return providerModelCatalogSchema.parse(raw);
+      } catch (err) {
+        // Race-safe fallback: catalog may already be durable while the wake was lost.
+        const stored = await readModelCatalogRpcResult(app.db, clientId, ref);
+        if (stored) return stored;
+        const timedOut = err instanceof Error && err.message.toLowerCase().includes("timed out");
+        if (timedOut) {
+          throw new GatewayTimeoutError(
+            err instanceof Error ? err.message : "Timed out waiting for this computer to list models.",
+          );
+        }
+        throw new BadGatewayError(
+          err instanceof Error
+            ? err.message
+            : "Could not list models from this computer. Retry after the daemon is connected.",
+        );
+      }
+    },
+  );
 
   app.post<{ Params: { clientId: string } }>("/:clientId/disconnect", async (request) => {
     const { userId } = requireUser(request);

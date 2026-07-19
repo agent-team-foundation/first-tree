@@ -8,6 +8,7 @@ import {
   configureClientLoggerForService,
   createLogger,
   discoverClaudeCodeSkills,
+  discoverProviderModels,
   flushClientSentry,
   initClientSentry,
 } from "@first-tree/client";
@@ -364,6 +365,28 @@ export function registerDaemonStartCommand(daemon: Command): void {
             setProviderEntry: (provider, entry) => capabilityRefresher.setProviderEntry(provider, entry),
             log: (symbol, msg) => writeStatus(symbol, msg),
           }).finally(() => capabilityRefresher.endInteractive(command.provider));
+        });
+
+        // Host-local model catalog: web opens Model settings → server asks this
+        // daemon → we discover from the real provider and reply on the WS.
+        runtime.onProviderModelsList((command) => {
+          void (async () => {
+            try {
+              const catalog = await discoverProviderModels(command.provider);
+              runtime.sendProviderModelsResult(command.ref, catalog);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              writeStatus("⚠️", `provider-models:list failed for ${command.provider}: ${message}`);
+              runtime.sendProviderModelsResult(command.ref, {
+                provider: command.provider,
+                models: [],
+                defaultModelId: null,
+                fetchedAt: new Date().toISOString(),
+                source: "unavailable",
+                error: message,
+              });
+            }
+          })();
         });
 
         await runtime.start();

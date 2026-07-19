@@ -639,20 +639,23 @@ first-tree gitlab
 
 ```bash
 # Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
-first-tree gitlab follow https://gitlab.example/acme/api/-/issues/42
+first-tree gitlab follow https://gitlab.example/acme/api/issues/42
 first-tree gitlab follow https://gitlab.example/acme/api/-/merge_requests/42 --rebind
 first-tree gitlab following
-first-tree gitlab unfollow https://gitlab.example/acme/api/-/issues/42
+first-tree gitlab unfollow https://gitlab.example/acme/api/issues/42
 ```
 
 `follow` accepts only a full Issue or Merge Request URL from the Team's one
-configured GitLab instance. It records a pending declaration without provider
-egress; the next matching valid webhook supplies numeric project identity and
-activates the declaration. Repeating a follow by the same human/delegate pair
-in the same chat is idempotent. The same pair cannot follow the entity from a
-second chat: the command reports the existing room, and `--rebind` atomically
-moves that line when the task context intentionally changes. Different pairs
-remain independent. A pending
+configured GitLab instance. Both GitLab route shapes—with or without the `/-/`
+segment—are accepted, and the submitted URL is preserved for user-facing
+links. Repeating a follow for the same entity in the same chat refreshes that
+link to the latest submitted URL while remaining idempotent. The command
+records a pending declaration without provider egress; the next matching valid
+webhook supplies numeric project identity and activates the declaration. The
+same human/delegate pair cannot follow the entity from a second chat: the
+command reports the existing room, and `--rebind` atomically moves that line
+when the task context intentionally changes. Different pairs remain
+independent. A pending
 declaration reports `state: null` because First Tree has not verified provider
 state. There is no GitLab `context-review` command.
 
