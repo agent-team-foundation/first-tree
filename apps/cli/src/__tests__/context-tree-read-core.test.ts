@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -309,6 +310,39 @@ describe("task-scoped BYO Context Tree Read activation", () => {
     expect(activation.commit).toBe(commit);
     expect(readContextTreeSnapshot(activation.snapshotPath).tree.metadata.title).toBe("Contained root");
     expect(readFileSync(join(activation.snapshotPath, "README.md"), "utf8")).toContain("tracked by the same commit");
+    expect(readContextTreeReadSnapshotIdentity(activation.snapshotPath, runGit)).toEqual(activation);
+    expectOnlyOneFetch(events);
+  });
+
+  it("accepts an exact opaque symlink placeholder when Git checks it out with core.symlinks=false", async () => {
+    const root = tempRoot("ft-byo-read-symlink-placeholder-");
+    const remote = createRemoteFixture(root, "team-a", "security");
+    symlinkSync("NODE.md", join(remote.seed, "README.md"));
+    const commit = pushFixtureChange(remote, "add safe root alias");
+
+    const events: string[][] = [];
+    const baseRunGit = createRealGitRunner([remote], events);
+    const runGit: ContextTreeReadGitRunner = (cwd, args) => {
+      const output = baseRunGit(cwd, args);
+      if (args[0] === "init") {
+        git(cwd, "config", "core.symlinks", "false");
+      }
+      return output;
+    };
+    const { reader } = readerFor({
+      "team-a": { repo: remote.bindingRepo, branch: "main" },
+    });
+
+    const activation = await activateContextTreeRead(
+      reader,
+      { teamId: "team-a", snapshotPath: join(root, "snapshot") },
+      runGit,
+    );
+
+    expect(activation.commit).toBe(commit);
+    expect(lstatSync(join(activation.snapshotPath, "README.md")).isFile()).toBe(true);
+    expect(readFileSync(join(activation.snapshotPath, "README.md"), "utf8")).toBe("NODE.md");
+    expect(readContextTreeSnapshot(activation.snapshotPath).tree.metadata.title).toBe("Context Tree");
     expect(readContextTreeReadSnapshotIdentity(activation.snapshotPath, runGit)).toEqual(activation);
     expectOnlyOneFetch(events);
   });

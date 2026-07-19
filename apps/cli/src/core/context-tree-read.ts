@@ -54,9 +54,14 @@ const SNAPSHOT_BRANCH_KEY = "first-tree-read.binding-branch";
 const SNAPSHOT_COMMIT_KEY = "first-tree-read.commit";
 const SNAPSHOT_REF = "refs/first-tree-read/snapshot";
 const EXACT_COMMIT_RE = /^[0-9a-f]{40,64}$/u;
-const GIT_INDEX_ENTRY_RE = /^([0-7]{6}) [0-9a-f]{40,64} [0-3]\t([\s\S]+)$/u;
+const GIT_INDEX_ENTRY_RE = /^([0-7]{6}) ([0-9a-f]{40,64}) [0-3]\t([\s\S]+)$/u;
 const GIT_SYMLINK_MODE = "120000";
 const GIT_REGULAR_FILE_MODES = new Set(["100644", "100755"]);
+
+type TrackedContextTreeEntry = {
+  mode: string;
+  objectId: string;
+};
 
 export class ContextTreeReadActivationError extends Error {
   readonly status = "failed";
@@ -427,8 +432,11 @@ function hasProperty(value: unknown, property: string): value is Record<string, 
   return typeof value === "object" && value !== null && Reflect.has(value, property);
 }
 
-function readTrackedContextTreeEntries(root: string, runGit: ContextTreeReadGitRunner): Map<string, string> {
-  const entries = new Map<string, string>();
+function readTrackedContextTreeEntries(
+  root: string,
+  runGit: ContextTreeReadGitRunner,
+): Map<string, TrackedContextTreeEntry> {
+  const entries = new Map<string, TrackedContextTreeEntry>();
   const output = runGit(root, ["ls-files", "--stage", "-z"]);
 
   for (const record of output.split("\0")) {
@@ -439,7 +447,7 @@ function readTrackedContextTreeEntries(root: string, runGit: ContextTreeReadGitR
     if (match === null) {
       throw new Error("Could not inspect tracked Context Tree entries");
     }
-    entries.set(match[2], match[1]);
+    entries.set(match[3], { mode: match[1], objectId: match[2] });
   }
 
   return entries;
@@ -453,15 +461,18 @@ function pathIsInside(root: string, target: string): boolean {
 /**
  * A clean Git worktree fixes a symlink blob, not the content at its target.
  * Keep safe in-tree aliases working, but require their final content to be a
- * regular file tracked by the same exact commit. This prevents hierarchy,
- * soft-link, and native Markdown reads from escaping the task snapshot.
+ * regular file tracked by the same exact commit. Git platforms with
+ * core.symlinks=false materialize a symlink blob as an ordinary file; accept
+ * that exact opaque placeholder without ever interpreting it as an alias.
+ * This prevents hierarchy, soft-link, and native Markdown reads from escaping
+ * the task snapshot without making a safe Windows checkout unusable.
  */
 function assertContextTreeReadSymlinkSafety(root: string, runGit: ContextTreeReadGitRunner): void {
   const entries = readTrackedContextTreeEntries(root, runGit);
   const canonicalRoot = realpathSync(root);
 
-  for (const [trackedPath, mode] of entries) {
-    if (mode !== GIT_SYMLINK_MODE) {
+  for (const [trackedPath, entry] of entries) {
+    if (entry.mode !== GIT_SYMLINK_MODE) {
       continue;
     }
 
@@ -471,8 +482,18 @@ function assertContextTreeReadSymlinkSafety(root: string, runGit: ContextTreeRea
     }
 
     const linkEntry = lstatSync(linkPath);
+    if (!linkEntry.isSymbolicLink()) {
+      const placeholderObjectId = linkEntry.isFile()
+        ? runGit(root, ["hash-object", "--no-filters", "--", trackedPath]).toLowerCase()
+        : null;
+      if (placeholderObjectId !== entry.objectId) {
+        throw new Error("Tracked symbolic link is not an exact filesystem link or opaque placeholder");
+      }
+      continue;
+    }
+
     const linkTarget = readlinkSync(linkPath);
-    if (!linkEntry.isSymbolicLink() || isAbsolute(linkTarget)) {
+    if (isAbsolute(linkTarget)) {
       throw new Error("Tracked symbolic link is not a safe relative link");
     }
 
@@ -487,8 +508,8 @@ function assertContextTreeReadSymlinkSafety(root: string, runGit: ContextTreeRea
     }
 
     const targetPath = relative(canonicalRoot, canonicalTarget).replace(/\\/gu, "/");
-    const targetMode = entries.get(targetPath);
-    if (targetMode === undefined || !GIT_REGULAR_FILE_MODES.has(targetMode)) {
+    const targetEntry = entries.get(targetPath);
+    if (targetEntry === undefined || !GIT_REGULAR_FILE_MODES.has(targetEntry.mode)) {
       throw new Error("Tracked symbolic link target is not fixed by the snapshot commit");
     }
   }
