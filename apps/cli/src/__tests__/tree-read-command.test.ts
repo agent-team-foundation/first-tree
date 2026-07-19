@@ -13,12 +13,14 @@ const outputMocks = vi.hoisted(() => ({
   fail: vi.fn((code: string, message: string, exitCode: number, metadata?: { status?: string }) => {
     throw Object.assign(new Error(message), { code, exitCode, metadata });
   }),
+  isJsonMode: vi.fn(() => false),
   result: vi.fn(),
   status: vi.fn(),
 }));
 
 vi.mock("../commands/_shared/member.js", () => memberMocks);
 vi.mock("../core/output.js", () => ({
+  isJsonMode: outputMocks.isJsonMode,
   print: {
     fail: outputMocks.fail,
     result: outputMocks.result,
@@ -32,6 +34,7 @@ const originalGitEnv = new Map(gitEnvKeys.map((key) => [key, process.env[key]]))
 
 beforeEach(() => {
   vi.clearAllMocks();
+  outputMocks.isJsonMode.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -103,18 +106,38 @@ describe("tree read command action", () => {
     expect(memberMocks.createMemberSdk).toHaveBeenCalledTimes(1);
     expect(getMemberContextTreeSetting).toHaveBeenCalledTimes(1);
     expect(getMemberContextTreeSetting).toHaveBeenCalledWith("team-command", { retry: false });
-    expect(outputMocks.status.mock.calls).toEqual([
-      ["Team", "team-command"],
-      ["Binding", `${remote.bindingRepo}#main`],
-      ["Exact commit", remote.commit],
-      ["Snapshot", realpathSync(snapshotPath)],
-    ]);
+    expect(outputMocks.status).not.toHaveBeenCalled();
     expect(outputMocks.result).toHaveBeenCalledWith({
       teamId: "team-command",
       binding: { repo: remote.bindingRepo, branch: "main" },
       commit: remote.commit,
       snapshotPath: realpathSync(snapshotPath),
     });
+  });
+
+  it("keeps human output readable without appending a JSON result envelope", async () => {
+    const remote = createRemote();
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = `url.${pathToFileURL(remote.origin).href}.insteadOf`;
+    process.env.GIT_CONFIG_VALUE_0 = remote.bindingRepo;
+    memberMocks.createMemberSdk.mockReturnValue({
+      getMemberContextTreeSetting: vi.fn(async () => ({ repo: remote.bindingRepo, branch: "main" })),
+    });
+    const snapshotPath = join(cleanupRoots[0] ?? "", "human-snapshot");
+    const { runTreeReadCommand } = await import("../commands/tree/read.js");
+
+    await runTreeReadCommand({
+      command: commandWith({ snapshot: snapshotPath, team: "team-command" }),
+      options: { debug: false, json: false, quiet: false },
+    });
+
+    expect(outputMocks.status.mock.calls).toEqual([
+      ["Team", "team-command"],
+      ["Binding", `${remote.bindingRepo}#main`],
+      ["Exact commit", remote.commit],
+      ["Snapshot", realpathSync(snapshotPath)],
+    ]);
+    expect(outputMocks.result).not.toHaveBeenCalled();
   });
 
   it("maps authority denial to a stable stage without exposing the upstream response", async () => {
