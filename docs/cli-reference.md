@@ -969,9 +969,9 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree task-read activation, creation, structural validation, and
-hierarchy browsing. The `tree` namespace carries `read`, `verify`, `tree`, and
-`init`; the rest (`migrate` /
+Context Tree task-read activation, source-backed write preflight, creation,
+structural validation, and hierarchy browsing. The `tree` namespace carries
+`read`, `write`, `verify`, `tree`, and `init`; the rest (`migrate` /
 `upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
 `automation` / `skill` groups) was retired in the 2026-06 cleanup because the
 cloud now owns workspace + tree provisioning and the client runtime inlines its
