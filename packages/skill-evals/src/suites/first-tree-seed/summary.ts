@@ -38,6 +38,25 @@ function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   return !metrics.directBareSourceContentReadObserved;
 }
 
+function seedAuthorityProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
+  if (evalCase.fixture.invocationMode !== "portable") return metrics.workspaceManifestReadObserved;
+  if (metrics.workspaceManifestReadObserved || !metrics.seedPreflightObserved) return false;
+  if (evalCase.fixture.seedAuthority === "member") {
+    return (
+      metrics.seedNeedsAdminObserved &&
+      !metrics.seedPreflightSucceeded &&
+      !metrics.treeStrictFetchObserved &&
+      !metrics.progressReadObserved
+    );
+  }
+  if (!metrics.seedPreflightSucceeded) return false;
+  if (evalCase.fixture.seedBindingState === "different") {
+    return !metrics.treeStrictFetchObserved && !metrics.progressReadObserved;
+  }
+  if (!metrics.treeStrictFetchObserved) return false;
+  return evalCase.fixture.treeState !== "phase1-approved" || metrics.progressReadObserved;
+}
+
 function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
   if (!metrics.expectedResponseObserved) return false;
   if (
@@ -51,6 +70,12 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
   }
   if (evalCase.expected.action === "report_missing_source") {
     return !metrics.skeletonObserved;
+  }
+  if (evalCase.expected.action === "report_needs_admin") {
+    return metrics.seedNeedsAdminObserved && !metrics.skeletonObserved;
+  }
+  if (evalCase.expected.action === "refuse_phase2_recovery") {
+    return metrics.phase2RefusalObserved && !metrics.phase2ContinuationObserved && !metrics.skeletonObserved;
   }
   if (evalCase.expected.action === "create_tree_via_init") {
     return (
@@ -74,7 +99,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
   const processPass =
     metrics.fixtureValidationOk &&
     metrics.runnerExitCode === 0 &&
-    metrics.workspaceManifestReadObserved &&
+    seedAuthorityProcessPass(evalCase, metrics) &&
     sourceProcessPass(evalCase, metrics);
   const riskFlags = [
     ...(metrics.contextTreeChanged && !expectedContextTreeCreation
@@ -103,7 +128,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "process_pass",
-        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; require chat history=${Boolean(evalCase.expected.requireChatHistoryRead)}; chat history read=${metrics.chatHistoryReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; worktree materialized=${metrics.sourceWorktreeMaterializedObserved}; worktree access=${metrics.sourceWorktreeAccessObserved}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; seed preflight=${metrics.seedPreflightObserved}; seed preflight succeeded=${metrics.seedPreflightSucceeded}; needs admin=${metrics.seedNeedsAdminObserved}; strict tree fetch=${metrics.treeStrictFetchObserved}; durable progress read=${metrics.progressReadObserved}; require chat history=${Boolean(evalCase.expected.requireChatHistoryRead)}; chat history read=${metrics.chatHistoryReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; worktree materialized=${metrics.sourceWorktreeMaterializedObserved}; worktree access=${metrics.sourceWorktreeAccessObserved}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
       ),
       evidence(
         "outcome_pass",

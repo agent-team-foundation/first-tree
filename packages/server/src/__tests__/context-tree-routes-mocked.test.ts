@@ -217,6 +217,80 @@ describe("org context tree routes with mocked service edges", () => {
     });
   });
 
+  it("returns the explicit Admin Team's current unbound Seed state without mutation", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      state: { status: "unbound", branch: "main" },
+    });
+    expect(ctx.mocks.requireOrgMembership).toHaveBeenCalledTimes(1);
+    expect(ctx.mocks.getOrgContextTreeSettingState).toHaveBeenCalledWith(ctx.app.db, ctx.scope.organizationId);
+    expect(ctx.mocks.ensureInstallationOwnedContextTreeRepo).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
+  });
+
+  it("returns Server current bound state for an Admin Seed retry", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getOrgContextTreeSettingState.mockResolvedValueOnce({
+      kind: "bound",
+      binding: { repo: ctx.repo.cloneUrl, branch: "release" },
+    });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      state: { status: "bound", binding: { repo: ctx.repo.cloneUrl, branch: "release" } },
+    });
+  });
+
+  it("returns stable Needs Admin for an active ordinary member before reading binding state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.requireOrgMembership.mockResolvedValueOnce({ ...ctx.scope, role: "member" });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({
+      error: "Context Tree Seed requires an active Team Admin.",
+      code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+    });
+    expect(ctx.mocks.getOrgContextTreeSettingState).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on invalid historical Seed binding state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getOrgContextTreeSettingState.mockResolvedValueOnce({ kind: "invalid", issues: [] });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
+      code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
+    });
+  });
+
+  it("rejects caller-selected Seed authority fields", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/seed-preflight",
+      payload: { role: "admin", binding: null },
+    });
+
+    // The production app maps ZodError to 400; this route-only Fastify harness
+    // intentionally omits the global error handler, so it surfaces as 500 here.
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(ctx.mocks.requireOrgMembership).not.toHaveBeenCalled();
+  });
+
   it("returns no_installation when minting unexpectedly succeeds without an installation row", async () => {
     const ctx = await setupRoute();
     ctx.mocks.findInstallationByOrg.mockResolvedValueOnce(null);

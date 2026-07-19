@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree — Seed"
   short_description: "Bootstrap a team's Context Tree from readable source repos"
-  default_prompt: "Use $first-tree-seed to set up the team's Context Tree from readable sources — declared workspace repos, or a local Git repo / remote repository URL supplied in the setup chat. Treat GitHub and GitLab URLs as supported examples. Create + bind it if none exists, otherwise fill a bound-but-empty tree; propose the initial domains for approval, then complete the two-phase seed in this chat."
+  default_prompt: "Use $first-tree-seed with an explicit Team, Tree path, and readable source inputs to create or continue the team's two-phase Context Tree Seed; recover Phase 2 from merged durable progress instead of prior chat history."

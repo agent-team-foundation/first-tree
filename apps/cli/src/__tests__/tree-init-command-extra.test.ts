@@ -151,6 +151,8 @@ describe("tree init command action", () => {
       withWorkflow: true,
     });
     expect(summary.coverage).toBeNull();
+    expect(summary).not.toHaveProperty("outcome");
+    expect(summary).not.toHaveProperty("teamId");
   });
 
   it("canonicalizes a case-variant owner before creating the remote", async () => {
@@ -1444,5 +1446,383 @@ describe("tree init command action", () => {
       appSettingsUrl: "https://github.com/settings/installations/789",
       status: "suspended",
     });
+  });
+
+  it("initializes one explicit Team without consulting /me or managed default-Team state", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    const fetchMock = vi.fn(async (input: FetchInput, init?: FetchInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/orgs/team_1/context-tree/seed-preflight") && init?.method === "POST") {
+        seedReads++;
+        return response({ organizationId: "team_1", state: { status: "unbound", branch: "main" } });
+      }
+      if (url.endsWith("/api/v1/orgs/team_1/context-tree/installation")) {
+        return response({ code: "no_installation" }, { status: 404 });
+      }
+      if (url.endsWith("/api/v1/orgs/team_1/settings/context_tree/initialize") && init?.method === "POST") {
+        return bindingResponse(init);
+      }
+      throw new Error(`unexpected explicit-Team request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await initCommand.action(context(commandWithOptions({ bind: true, team: "team_1", title: "Portable Team" }), true));
+
+    expect(process.exitCode).toBeUndefined();
+    expect(seedReads).toBe(3);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/v1/me"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/settings/context_tree/raw"))).toBe(false);
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({
+      outcome: "created",
+      teamId: "team_1",
+      bound: true,
+      htmlUrl: "https://github.com/octocat/portable-team-context-tree",
+    });
+  });
+
+  it.each([
+    {
+      options: { bind: true, org: "legacy_org", team: "team_1" },
+      message: "Pass exactly one Team selector",
+    },
+    {
+      options: { bind: false, team: "team_1" },
+      message: "--team cannot be combined with --no-bind",
+    },
+    {
+      options: { bind: true, rebind: true, team: "team_1" },
+      message: "--team cannot be combined with --rebind",
+    },
+  ])("rejects incompatible explicit-Team init options before admission: $message", async ({ options, message }) => {
+    const { initCommand } = await import("../commands/tree/init.js");
+
+    await initCommand.action(context(commandWithOptions(options), true));
+
+    expect(process.exitCode).toBe(1);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain(message);
+    expect(treeSharedMocks.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("returns the same Server binding on an explicit-Team repeat before checking local tools", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        if (String(input).endsWith("/api/v1/orgs/team_repeat/context-tree/seed-preflight") && init?.method === "POST") {
+          return response({
+            organizationId: "team_repeat",
+            state: {
+              status: "bound",
+              binding: { repo: "git@github.com:acme/live-tree.git", branch: "release" },
+            },
+          });
+        }
+        throw new Error(`unexpected repeat request: ${String(input)}`);
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, team: "team_repeat" }), true));
+
+    expect(process.exitCode).toBeUndefined();
+    expect(treeSharedMocks.runCommand).not.toHaveBeenCalled();
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toEqual({
+      outcome: "existing",
+      teamId: "team_repeat",
+      repo: "git@github.com:acme/live-tree.git",
+      branch: "release",
+      bound: true,
+    });
+  });
+
+  it("returns stable Needs Admin for an ordinary member before any local or remote mutation", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response(
+          {
+            error: "Context Tree Seed requires an active Team Admin.",
+            code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+          },
+          { status: 403 },
+        ),
+      ),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, team: "team_member" }), true));
+
+    expect(process.exitCode).toBe(3);
+    expect(treeSharedMocks.runCommand).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain(
+      "needs an active Admin of the selected Team",
+    );
+  });
+
+  it("rechecks the explicit Team before GitHub creation and preserves a concurrent binding", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/orgs/team_race/context-tree/seed-preflight") && init?.method === "POST") {
+          seedReads++;
+          return seedReads === 1
+            ? response({ organizationId: "team_race", state: { status: "unbound", branch: "main" } })
+            : response({
+                organizationId: "team_race",
+                state: {
+                  status: "bound",
+                  binding: { repo: "https://github.com/acme/winner-tree", branch: "main" },
+                },
+              });
+        }
+        if (url.endsWith("/api/v1/orgs/team_race/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        throw new Error(`unexpected race request: ${url}`);
+      }),
+    );
+
+    await initCommand.action(context(commandWithOptions({ bind: true, team: "team_race", title: "Race Team" }), true));
+
+    expect(process.exitCode).toBe(1);
+    expect(
+      treeSharedMocks.runCommand.mock.calls.some(
+        ([tool, args]) => tool === "gh" && args[0] === "repo" && args[1] === "create",
+      ),
+    ).toBe(false);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("became bound to https://github.com/acme/winner-tree#main");
+    expect(error).toContain("No remote mutation was attempted");
+  });
+
+  it("reconciles an uncertain finalization to the same explicit-Team binding", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/orgs/team_retry/context-tree/seed-preflight") && init?.method === "POST") {
+          seedReads++;
+          return seedReads < 4
+            ? response({ organizationId: "team_retry", state: { status: "unbound", branch: "main" } })
+            : response({
+                organizationId: "team_retry",
+                state: {
+                  status: "bound",
+                  binding: { repo: "git@github.com:octocat/retry-team-context-tree.git", branch: "main" },
+                },
+              });
+        }
+        if (url.endsWith("/api/v1/orgs/team_retry/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        if (url.endsWith("/api/v1/orgs/team_retry/settings/context_tree/initialize") && init?.method === "POST") {
+          throw new Error("response lost after commit");
+        }
+        throw new Error(`unexpected reconciliation request: ${url}`);
+      }),
+    );
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, team: "team_retry", title: "Retry Team" }), true),
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    expect(seedReads).toBe(4);
+    const summary = JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(summary).toMatchObject({ outcome: "converged", teamId: "team_retry", bound: true });
+  });
+
+  it("reports the created repo truthfully when Admin authority changes before binding", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/orgs/team_revoked/context-tree/seed-preflight") && init?.method === "POST") {
+          seedReads++;
+          if (seedReads < 3) {
+            return response({ organizationId: "team_revoked", state: { status: "unbound", branch: "main" } });
+          }
+          return response(
+            {
+              error: "Context Tree Seed requires an active Team Admin.",
+              code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+            },
+            { status: 403 },
+          );
+        }
+        if (url.endsWith("/api/v1/orgs/team_revoked/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        throw new Error(`unexpected revocation request: ${url}`);
+      }),
+    );
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, team: "team_revoked", title: "Revoked Team" }), true),
+    );
+
+    expect(process.exitCode).toBe(1);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("repo was created but not bound");
+    expect(error).toContain("https://github.com/octocat/revoked-team-context-tree");
+    expect(error).toContain("current Seed authority could not be revalidated");
+  });
+
+  it("stops with Needs Admin when authority changes before GitHub creation", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/orgs/team_revoked_early/context-tree/seed-preflight") && init?.method === "POST") {
+          seedReads++;
+          if (seedReads === 1) {
+            return response({
+              organizationId: "team_revoked_early",
+              state: { status: "unbound", branch: "main" },
+            });
+          }
+          return response(
+            {
+              code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+              error: "Context Tree Seed requires an active Team Admin.",
+            },
+            { status: 403 },
+          );
+        }
+        if (url.endsWith("/api/v1/orgs/team_revoked_early/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        throw new Error(`unexpected early revocation request: ${url}`);
+      }),
+    );
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, team: "team_revoked_early", title: "Early Revoked" }), true),
+    );
+
+    expect(process.exitCode).toBe(3);
+    expect(seedReads).toBe(2);
+    expect(
+      treeSharedMocks.runCommand.mock.calls.some(
+        ([tool, args]) => tool === "gh" && args[0] === "repo" && args[1] === "create",
+      ),
+    ).toBe(false);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain(
+      "needs an active Admin of the selected Team",
+    );
+  });
+
+  it("preserves a competing binding that appears after GitHub creation", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/orgs/team_late_race/context-tree/seed-preflight") && init?.method === "POST") {
+          seedReads++;
+          if (seedReads < 3) {
+            return response({
+              organizationId: "team_late_race",
+              state: { status: "unbound", branch: "main" },
+            });
+          }
+          return response({
+            organizationId: "team_late_race",
+            state: {
+              status: "bound",
+              binding: { repo: "https://github.com/acme/competing-tree", branch: "release" },
+            },
+          });
+        }
+        if (url.endsWith("/api/v1/orgs/team_late_race/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        throw new Error(`unexpected late race request: ${url}`);
+      }),
+    );
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, team: "team_late_race", title: "Late Race" }), true),
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(
+      treeSharedMocks.runCommand.mock.calls.some(
+        ([tool, args]) => tool === "gh" && args[0] === "repo" && args[1] === "create",
+      ),
+    ).toBe(true);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("repo was created but not bound");
+    expect(error).toContain("https://github.com/octocat/late-race-context-tree");
+    expect(error).toContain("became bound to https://github.com/acme/competing-tree#release");
+    expect(error).toContain("That current binding was preserved");
+  });
+
+  it("reports uncertain GitHub create truth without claiming rollback", async () => {
+    const { initCommand } = await import("../commands/tree/init.js");
+    const base = makeTempDir();
+    process.chdir(base);
+    let seedReads = 0;
+    treeSharedMocks.runCommand.mockImplementation((tool: string, args: string[]) => {
+      if (tool === "gh" && args[0] === "repo" && args[1] === "create") {
+        throw new Error("transport closed");
+      }
+      if (args[0] === "--version" || (tool === "gh" && args[0] === "auth" && args[1] === "status")) return "";
+      if (tool === "gh" && args[0] === "api" && args[1] === "user") return "octocat";
+      return "";
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: FetchInput, init?: FetchInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/orgs/team_transport/context-tree/seed-preflight") && init?.method === "POST") {
+          seedReads++;
+          return response({
+            organizationId: "team_transport",
+            state: { status: "unbound", branch: "main" },
+          });
+        }
+        if (url.endsWith("/api/v1/orgs/team_transport/context-tree/installation")) {
+          return response({ code: "no_installation" }, { status: 404 });
+        }
+        throw new Error(`unexpected transport request: ${url}`);
+      }),
+    );
+
+    await initCommand.action(
+      context(commandWithOptions({ bind: true, team: "team_transport", title: "Transport" }), true),
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(seedReads).toBe(3);
+    const error = String(vi.mocked(console.error).mock.calls.at(-1)?.[0]);
+    expect(error).toContain("GitHub create/push did not complete cleanly");
+    expect(error).toContain("remote repository may exist");
+    expect(error).toContain("no rollback is claimed");
+    expect(error).toContain("remains unbound at branch main");
   });
 });

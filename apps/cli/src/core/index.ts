@@ -97,6 +97,14 @@ export {
   readContextTreeReadSnapshotIdentity,
 } from "./context-tree-read.js";
 export type {
+  ContextTreeSeedAuthorityReader,
+  ContextTreeSeedPreflight,
+  ContextTreeSeedPreflightCliErrorCode,
+  ContextTreeSeedStage,
+  PreflightContextTreeSeedInput,
+} from "./context-tree-seed.js";
+export { ContextTreeSeedPreflightCliError, preflightContextTreeSeed } from "./context-tree-seed.js";
+export type {
   ContextTreeWriteAuthorityReader,
   ContextTreeWritePreflight,
   ContextTreeWritePreflightCliErrorCode,

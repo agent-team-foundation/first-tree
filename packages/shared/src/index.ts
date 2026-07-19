@@ -426,6 +426,17 @@ export {
   initializeContextTreeResponseSchema,
 } from "./schemas/context-tree.js";
 export {
+  CONTEXT_TREE_SEED_PREFLIGHT_ERROR_CODES,
+  type ContextTreeSeedPreflightErrorCode,
+  type ContextTreeSeedPreflightRequest,
+  type ContextTreeSeedPreflightResponse,
+  type ContextTreeSeedPreflightState,
+  contextTreeSeedPreflightErrorCodeSchema,
+  contextTreeSeedPreflightRequestSchema,
+  contextTreeSeedPreflightResponseSchema,
+  contextTreeSeedPreflightStateSchema,
+} from "./schemas/context-tree-seed.js";
+export {
   CONTEXT_TREE_WRITE_PREFLIGHT_ERROR_CODES,
   type ContextTreeWritePreflightErrorCode,
   type ContextTreeWritePreflightRequest,

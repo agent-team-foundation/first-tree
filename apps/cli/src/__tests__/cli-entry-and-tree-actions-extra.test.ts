@@ -144,6 +144,8 @@ describe("CLI entry and public exports", () => {
     expect(api.SdkError).toBe(clientMocks.SdkError);
     expect(api.HubUrlDerivationError).toBeDefined();
     expect(api.ClientRuntime).toBeDefined();
+    expect(api.ContextTreeSeedPreflightCliError).toBeDefined();
+    expect(api.preflightContextTreeSeed).toBeDefined();
     expect(api.ContextTreeWritePreflightCliError).toBeDefined();
     expect(api.preflightContextTreeWrite).toBeDefined();
     expect("rotateClientIdWithBackup" in api).toBe(false);

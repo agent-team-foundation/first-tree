@@ -15,11 +15,15 @@ import {
   type ClientCapabilities,
   type ContextReviewSubmitRequest,
   type ContextReviewSubmitResponse,
+  type ContextTreeSeedPreflightRequest,
+  type ContextTreeSeedPreflightResponse,
   type ContextTreeWritePreflightRequest,
   type ContextTreeWritePreflightResponse,
   type CreateDocCommentRequest,
   type CreateKeyedTaskChat,
   type CreateTaskChat,
+  contextTreeSeedPreflightRequestSchema,
+  contextTreeSeedPreflightResponseSchema,
   contextTreeWritePreflightRequestSchema,
   contextTreeWritePreflightResponseSchema,
   type DocComment,
@@ -428,6 +432,28 @@ export class FirstTreeHubSDK {
       { retry: options.retry ?? true },
     );
     return contextTreeWritePreflightResponseSchema.parse(response);
+  }
+
+  /**
+   * Member-scoped, stateless admission check for Context Tree Seed. The
+   * Server resolves the explicit Team's current role and binding on every
+   * call; this creates no repository, binding, branch, pull request, or Chat.
+   */
+  async preflightMemberContextTreeSeed(
+    organizationId: string,
+    data: ContextTreeSeedPreflightRequest,
+    options: { retry?: boolean } = {},
+  ): Promise<ContextTreeSeedPreflightResponse> {
+    const body = contextTreeSeedPreflightRequestSchema.parse(data);
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/context-tree/seed-preflight`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: options.retry ?? true },
+    );
+    return contextTreeSeedPreflightResponseSchema.parse(response);
   }
 
   /** Read the signed-in member's Team memberships for explicit org selection. */

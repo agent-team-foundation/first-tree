@@ -81,8 +81,8 @@ describe("first-tree-seed chat-first fixtures", () => {
     }
   }, 20_000);
 
-  it("materializes an approved Phase 1 skeleton without Phase 2 leaves", () => {
-    const evalCase = gateCase("same-chat-phase2-continuation");
+  it("materializes merged durable Phase 1 progress without a manifest or transcript", () => {
+    const evalCase = gateCase("durable-phase2-new-process-continuation");
     const paths = createRunPaths({ caseId: evalCase.id, packageRoot, startedAt: new Date().toISOString() });
 
     try {
@@ -103,12 +103,27 @@ describe("first-tree-seed chat-first fixtures", () => {
 
       expect(existsSync(join(contextTreePath, "product", "onboarding", "NODE.md"))).toBe(true);
       expect(existsSync(join(contextTreePath, "product", "onboarding", "flow.md"))).toBe(false);
-      const history = readFileSync(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"), "utf8");
-      expect(history).toContain("## Assistant — earlier turn");
-      expect(history).toContain("## User — earlier turn");
-      expect(history).toContain("Phase 1 proposal");
-      expect(history).toContain("Approved");
-      expect(history).toContain("Phase 1 PR handoff");
+      const progress = readFileSync(join(contextTreePath, ".first-tree", "progress.md"), "utf8");
+      expect(progress).toContain("<!-- first-tree-seed-progress:v1 -->");
+      expect(progress).toContain("- [x] Seed Phase 1 structure");
+      expect(progress).toContain("<!-- first-tree-seed-ledger:v1 -->");
+      expect(progress).toContain('"teamId":"team-seed-eval"');
+      expect(progress).toContain('"identity":"local:');
+      expect(progress).toMatch(/"commit":"[0-9a-f]{40,64}"/u);
+      const recordedSourceCommit = progress.match(/"commit":"([0-9a-f]{40,64})"/u)?.[1];
+      const currentSourceCommit = execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], {
+        cwd: join(paths.workspacePath, "source-repos", "source-repo"),
+        encoding: "utf8",
+      }).trim();
+      expect(recordedSourceCommit).toBeDefined();
+      expect(recordedSourceCommit).not.toBe(currentSourceCommit);
+      expect(
+        execFileSync("git", ["cat-file", "-e", [recordedSourceCommit, "^{commit}"].join("")], {
+          cwd: join(paths.workspacePath, "source-repos", "source-repo"),
+        }),
+      ).toBeInstanceOf(Buffer);
+      expect(existsSync(join(paths.workspacePath, ".first-tree", "workspace.json"))).toBe(false);
+      expect(existsSync(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"))).toBe(false);
       expect(remoteHead).toBe(localHead);
       expect(remoteDefault).toBe("refs/remotes/origin/main");
       expect(validateFixture(paths, contextTreePath, evalCase, false, reporter).ok).toBe(true);
@@ -117,8 +132,8 @@ describe("first-tree-seed chat-first fixtures", () => {
     }
   }, 20_000);
 
-  it("keeps the Phase-1-shaped negative sibling free of same-chat history", () => {
-    const evalCase = gateCase("phase1-shaped-tree-without-same-chat-history-refuses");
+  it("materializes the Phase-1-shaped negative sibling without a durable Seed marker", () => {
+    const evalCase = gateCase("phase1-shaped-tree-without-durable-progress-refuses");
     const paths = createRunPaths({ caseId: evalCase.id, packageRoot, startedAt: new Date().toISOString() });
 
     try {
@@ -127,6 +142,9 @@ describe("first-tree-seed chat-first fixtures", () => {
 
       expect(existsSync(join(contextTreePath, "product", "onboarding", "NODE.md"))).toBe(true);
       expect(existsSync(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"))).toBe(false);
+      expect(readFileSync(join(contextTreePath, ".first-tree", "progress.md"), "utf8")).not.toContain(
+        "first-tree-seed-progress:v1",
+      );
       expect(validateFixture(paths, contextTreePath, evalCase, false, reporter).ok).toBe(true);
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });

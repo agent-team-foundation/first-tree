@@ -570,7 +570,14 @@ describe("tree verify strict content policy", () => {
     const tree = program.commands.find((command) => command.name() === "tree");
     const verify = tree?.commands.find((command) => command.name() === "verify");
 
-    expect(tree?.commands.map((command) => command.name())).toEqual(["verify", "tree", "read", "write", "init"]);
+    expect(tree?.commands.map((command) => command.name())).toEqual([
+      "verify",
+      "tree",
+      "read",
+      "write",
+      "seed",
+      "init",
+    ]);
     expect(tree?.commands.some((command) => command.name() === "validate")).toBe(false);
     expect(verify?.options.some((option) => option.long === "--strict")).toBe(false);
     expect(VERIFY_USAGE).not.toContain("strict");

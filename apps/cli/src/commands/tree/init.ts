@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import {
+  type ContextTreeActiveBinding,
+  canonicalGitRepoUrl,
   classifyContextTreeSetting,
   contextTreeActiveBindingSchema,
   contextTreeInstallationInfoResponseSchema,
@@ -9,6 +11,13 @@ import {
 import type { Command } from "commander";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
+import {
+  type ContextTreeSeedAuthorityReader,
+  type ContextTreeSeedPreflight,
+  ContextTreeSeedPreflightCliError,
+  preflightContextTreeSeed,
+} from "../../core/context-tree-seed.js";
+import { createMemberSdk } from "../_shared/member.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import {
   memberNodeContent,
@@ -33,6 +42,7 @@ export type TreeInitOptions = {
   bind: boolean;
   rebind: boolean;
   org?: string;
+  team?: string;
 };
 
 export type ScaffoldFile = { relPath: string; content: string };
@@ -366,6 +376,12 @@ function createdButNotBoundGuidance(repoUrl: string): string {
   return `The repo was created but not bound: ${repoUrl}. If it is empty and you want to abandon this attempt, delete it manually; the CLI does not auto-delete created repositories by default.`;
 }
 
+function bindingsMatch(left: ContextTreeActiveBinding, repoUrl: string, branch: string): boolean {
+  const leftRepo = canonicalGitRepoUrl(left.repo);
+  const rightRepo = canonicalGitRepoUrl(repoUrl);
+  return leftRepo !== null && rightRepo !== null && leftRepo === rightRepo && left.branch === branch;
+}
+
 async function bindOrgToTree(args: {
   serverUrl: string;
   accessToken: string;
@@ -438,6 +454,8 @@ async function bindOrgToTree(args: {
 }
 
 type TreeInitSummary = {
+  outcome: "created" | "converged";
+  teamId: string | null;
   repo: string;
   htmlUrl: string;
   owner: string;
@@ -447,6 +465,14 @@ type TreeInitSummary = {
   withWorkflow: boolean;
   bound: boolean;
   coverage: CoverageResult | null;
+};
+
+type ExistingTreeInitSummary = {
+  outcome: "existing" | "converged";
+  teamId: string;
+  repo: string;
+  branch: string;
+  bound: true;
 };
 
 function readOptions(command: Command): TreeInitOptions {
@@ -460,6 +486,7 @@ function readOptions(command: Command): TreeInitOptions {
     bind?: boolean;
     rebind?: boolean;
     org?: string;
+    team?: string;
   };
   return {
     owner: raw.owner,
@@ -472,12 +499,50 @@ function readOptions(command: Command): TreeInitOptions {
     bind: raw.bind !== false,
     rebind: raw.rebind === true,
     org: raw.org,
+    team: raw.team,
   };
 }
 
 async function runInitCommand(context: CommandContext): Promise<void> {
   try {
     const options = readOptions(context.command);
+
+    const usesExplicitTeam = options.team !== undefined;
+    if (usesExplicitTeam && options.org !== undefined) {
+      throw new Error(
+        "Pass exactly one Team selector: use --team for portable Seed, or --org for the legacy managed path.",
+      );
+    }
+    if (usesExplicitTeam && !options.bind) {
+      throw new Error(
+        "--team cannot be combined with --no-bind because portable Seed must converge on that Team's binding.",
+      );
+    }
+    if (usesExplicitTeam && options.rebind) {
+      throw new Error(
+        "--team cannot be combined with --rebind; portable Seed never replaces an existing Team binding.",
+      );
+    }
+
+    let seedReader: ContextTreeSeedAuthorityReader | null = null;
+    let seedTeamId: string | null = null;
+    let initialSeedBranch: string | null = null;
+    if (usesExplicitTeam) {
+      seedReader = createMemberSdk();
+      const admission = await preflightContextTreeSeed(seedReader, { teamId: options.team ?? "" });
+      seedTeamId = admission.teamId;
+      if (admission.state.status === "bound") {
+        printExistingSummary(context, {
+          outcome: "existing",
+          teamId: admission.teamId,
+          repo: admission.state.binding.repo,
+          branch: admission.state.binding.branch,
+          bound: true,
+        });
+        return;
+      }
+      initialSeedBranch = admission.state.branch;
+    }
 
     ensureToolAvailable("git");
     ensureToolAvailable("gh");
@@ -499,23 +564,30 @@ async function runInitCommand(context: CommandContext): Promise<void> {
     if (options.bind) {
       const serverUrl = resolveServerUrl();
       const accessToken = await ensureFreshAccessToken();
-      const { orgId, isAdmin } = await resolveBindContext(serverUrl, accessToken, options.org);
-      if (!isAdmin) {
-        throw new Error(
-          `Binding the team Context Tree requires admin of org ${orgId}. Re-run with --no-bind to only create the repo, or have an admin bind it later with \`${channelConfig.binName} org bind-tree <url>\`.`,
-        );
-      }
-      const existing = await readContextTreeBinding(serverUrl, accessToken, orgId);
-      treeBranch = existing.branch;
-      if (existing.repo && !options.rebind) {
-        throw new Error(
-          `This team is already bound to a Context Tree (${existing.repo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
-        );
-      }
-      if (!options.rebind && !existing.supportsConditionalFinalize) {
-        throw new Error(
-          `Server support for conflict-safe tree init finalization is required for organization ${orgId}. Upgrade the server before retrying; no repository was created.`,
-        );
+      let orgId: string;
+      if (seedTeamId && initialSeedBranch) {
+        orgId = seedTeamId;
+        treeBranch = initialSeedBranch;
+      } else {
+        const resolved = await resolveBindContext(serverUrl, accessToken, options.org);
+        orgId = resolved.orgId;
+        if (!resolved.isAdmin) {
+          throw new Error(
+            `Binding the team Context Tree requires admin of org ${orgId}. Re-run with --no-bind to only create the repo, or have an admin bind it later with \`${channelConfig.binName} org bind-tree <url>\`.`,
+          );
+        }
+        const existing = await readContextTreeBinding(serverUrl, accessToken, orgId);
+        treeBranch = existing.branch;
+        if (existing.repo && !options.rebind) {
+          throw new Error(
+            `This team is already bound to a Context Tree (${existing.repo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
+          );
+        }
+        if (!options.rebind && !existing.supportsConditionalFinalize) {
+          throw new Error(
+            `Server support for conflict-safe tree init finalization is required for organization ${orgId}. Upgrade the server before retrying; no repository was created.`,
+          );
+        }
       }
       lookup = await fetchInstallation(serverUrl, accessToken, orgId);
       if (lookup.kind === "error") {
@@ -560,34 +632,142 @@ async function runInitCommand(context: CommandContext): Promise<void> {
     runCommand("git", ["add", "-A"], treeRoot);
     runCommand("git", ["commit", "-m", "chore: bootstrap context tree"], treeRoot);
 
+    const intendedRepoUrl = `https://github.com/${repoFullName}`;
+    if (seedReader && seedTeamId) {
+      const fresh = await preflightContextTreeSeed(seedReader, { teamId: seedTeamId });
+      if (fresh.state.status === "bound") {
+        if (bindingsMatch(fresh.state.binding, intendedRepoUrl, treeBranch)) {
+          printExistingSummary(context, {
+            outcome: "converged",
+            teamId: seedTeamId,
+            repo: fresh.state.binding.repo,
+            branch: fresh.state.binding.branch,
+            bound: true,
+          });
+          return;
+        }
+        throw new Error(
+          `Team ${seedTeamId} became bound to ${fresh.state.binding.repo}#${fresh.state.binding.branch} before GitHub creation. No remote mutation was attempted by this run, and that current binding was preserved.`,
+        );
+      }
+      if (fresh.state.branch !== treeBranch) {
+        throw new Error(
+          `Team ${seedTeamId}'s unbound branch changed from ${treeBranch} to ${fresh.state.branch} before GitHub creation. No remote mutation was attempted.`,
+        );
+      }
+    }
+
     // Irreversible remote write: create + push in one shot.
     const visibility = options.public ? "--public" : "--private";
-    runCommand(
-      "gh",
-      ["repo", "create", repoFullName, visibility, "--source", treeRoot, "--remote", "origin", "--push"],
-      treeRoot,
-    );
+    let htmlUrl: string;
+    try {
+      runCommand(
+        "gh",
+        ["repo", "create", repoFullName, visibility, "--source", treeRoot, "--remote", "origin", "--push"],
+        treeRoot,
+      );
 
-    const repo = ghApiJson(`repos/${repoFullName}`);
-    const htmlUrl = typeof repo.html_url === "string" ? repo.html_url : "";
-    if (htmlUrl !== `https://github.com/${repoFullName}`) {
-      throw new Error(`Repo created but GitHub did not confirm the expected URL for ${repoFullName}.`);
+      const repo = ghApiJson(`repos/${repoFullName}`);
+      htmlUrl = typeof repo.html_url === "string" ? repo.html_url : "";
+      if (htmlUrl !== intendedRepoUrl) {
+        throw new Error(`GitHub did not confirm the expected URL for ${repoFullName}.`);
+      }
+    } catch (error) {
+      if (!seedReader || !seedTeamId) throw error;
+      let current: ContextTreeSeedPreflight;
+      try {
+        current = await preflightContextTreeSeed(seedReader, { teamId: seedTeamId });
+      } catch {
+        throw new Error(
+          `GitHub create/push did not complete cleanly for ${intendedRepoUrl}, and Team ${seedTeamId}'s binding could not be read back. The remote repository may exist; no rollback is claimed. Inspect GitHub and the Server binding before retrying.`,
+        );
+      }
+      if (current.state.status === "bound" && bindingsMatch(current.state.binding, intendedRepoUrl, treeBranch)) {
+        printExistingSummary(context, {
+          outcome: "converged",
+          teamId: seedTeamId,
+          repo: current.state.binding.repo,
+          branch: current.state.binding.branch,
+          bound: true,
+        });
+        return;
+      }
+      if (current.state.status === "bound") {
+        throw new Error(
+          `GitHub create/push did not complete cleanly for ${intendedRepoUrl}. Team ${seedTeamId} is now bound to ${current.state.binding.repo}#${current.state.binding.branch}; that binding was preserved and no rollback is claimed.`,
+        );
+      }
+      throw new Error(
+        `GitHub create/push did not complete cleanly for ${intendedRepoUrl}. Team ${seedTeamId} remains unbound at branch ${current.state.branch}; the remote repository may exist and no rollback is claimed. Inspect that exact repository before retrying.`,
+      );
     }
 
     let bound = false;
+    let outcome: TreeInitSummary["outcome"] = "created";
     if (bindContext) {
-      await bindOrgToTree({
-        serverUrl: bindContext.serverUrl,
-        accessToken: bindContext.accessToken,
-        orgId: bindContext.orgId,
-        repoUrl: htmlUrl,
-        branch: treeBranch,
-        rebind: options.rebind,
-      });
+      let shouldBind = true;
+      if (seedReader && seedTeamId) {
+        let fresh: ContextTreeSeedPreflight;
+        try {
+          fresh = await preflightContextTreeSeed(seedReader, { teamId: seedTeamId });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `${createdButNotBoundGuidance(htmlUrl)} Team ${seedTeamId}'s current Seed authority could not be revalidated before binding: ${reason}`,
+          );
+        }
+        if (fresh.state.status === "bound") {
+          if (!bindingsMatch(fresh.state.binding, htmlUrl, treeBranch)) {
+            throw new Error(
+              `${createdButNotBoundGuidance(htmlUrl)} Team ${seedTeamId} became bound to ${fresh.state.binding.repo}#${fresh.state.binding.branch} before finalization. That current binding was preserved.`,
+            );
+          }
+          shouldBind = false;
+          outcome = "converged";
+        } else if (fresh.state.branch !== treeBranch) {
+          throw new Error(
+            `${createdButNotBoundGuidance(htmlUrl)} Team ${seedTeamId}'s unbound branch changed from ${treeBranch} to ${fresh.state.branch} before finalization.`,
+          );
+        }
+      }
+
+      if (shouldBind) {
+        try {
+          await bindOrgToTree({
+            serverUrl: bindContext.serverUrl,
+            accessToken: bindContext.accessToken,
+            orgId: bindContext.orgId,
+            repoUrl: htmlUrl,
+            branch: treeBranch,
+            rebind: options.rebind,
+          });
+        } catch (error) {
+          if (!seedReader || !seedTeamId) throw error;
+          let current: ContextTreeSeedPreflight;
+          try {
+            current = await preflightContextTreeSeed(seedReader, { teamId: seedTeamId });
+          } catch {
+            throw error;
+          }
+          if (current.state.status === "bound" && bindingsMatch(current.state.binding, htmlUrl, treeBranch)) {
+            outcome = "converged";
+          } else if (current.state.status === "bound") {
+            throw new Error(
+              `${createdButNotBoundGuidance(htmlUrl)} Team ${seedTeamId} is currently bound to ${current.state.binding.repo}#${current.state.binding.branch}; that binding was preserved.`,
+            );
+          } else {
+            throw new Error(
+              `${createdButNotBoundGuidance(htmlUrl)} Team ${seedTeamId} remains unbound at branch ${current.state.branch}; the failed finalization did not create a binding.`,
+            );
+          }
+        }
+      }
       bound = true;
     }
 
     printSummary(context, {
+      outcome,
+      teamId: seedTeamId,
       repo: htmlUrl,
       htmlUrl,
       owner: repoOwner,
@@ -600,13 +780,27 @@ async function runInitCommand(context: CommandContext): Promise<void> {
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
+    process.exitCode = error instanceof ContextTreeSeedPreflightCliError ? error.exitCode : 1;
   }
 }
 
 function printSummary(context: CommandContext, summary: TreeInitSummary): void {
   if (context.options.json) {
-    console.log(JSON.stringify(summary, null, 2));
+    const payload =
+      summary.teamId === null
+        ? {
+            repo: summary.repo,
+            htmlUrl: summary.htmlUrl,
+            owner: summary.owner,
+            name: summary.name,
+            treeRoot: summary.treeRoot,
+            branch: summary.branch,
+            withWorkflow: summary.withWorkflow,
+            bound: summary.bound,
+            coverage: summary.coverage,
+          }
+        : summary;
+    console.log(JSON.stringify(payload, null, 2));
     return;
   }
 
@@ -628,6 +822,23 @@ function printSummary(context: CommandContext, summary: TreeInitSummary): void {
   console.log(summary.bound ? "\nContext Tree created and bound." : "\nContext Tree created.");
 }
 
+function printExistingSummary(context: CommandContext, summary: ExistingTreeInitSummary): void {
+  if (context.options.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  console.log("Context Tree Init\n");
+  console.log(`  Team:         ${summary.teamId}`);
+  console.log(`  Binding:      ${summary.repo}`);
+  console.log(`  Branch:       ${summary.branch}`);
+  console.log(
+    summary.outcome === "existing"
+      ? "\nContext Tree is already bound; no local or remote mutation was attempted."
+      : "\nContext Tree init converged on the Server's current binding; no second binding was created.",
+  );
+}
+
 function configureInitCommand(command: Command): void {
   command
     .option(
@@ -641,7 +852,8 @@ function configureInitCommand(command: Command): void {
     .option("--with-workflow", "also seed .github/workflows/validate-tree.yml (needs gh `workflow` scope)")
     .option("--no-bind", "only create the repo: skip First Tree org binding and the installation-coverage check")
     .option("--rebind", "replace an existing team Context Tree binding (default: refuse if one exists)")
-    .option("--org <orgId>", "org to bind; defaults to your selected/default org via /me");
+    .option("--org <orgId>", "legacy managed org selector; defaults to your selected/default org via /me")
+    .option("--team <team-id>", "explicit Team for portable Seed; never falls back to default/current Team state");
 }
 
 export const initCommand: SubcommandModule = {

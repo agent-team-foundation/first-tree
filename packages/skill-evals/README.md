@@ -199,8 +199,14 @@ accepts the source row id as an alias.
   checkouts;
 - an empty manifest may use a readable local checkout supplied in chat without
   requiring GitHub App installation or team-resource registration;
-- an approved Phase 1 skeleton in the same visible setup chat routes to Phase 2
-  instead of being refused as an unrelated populated tree.
+- a clean portable invocation with no Workspace manifest admits only its
+  explicit Team, Tree path, and sources, while an ordinary member stops with
+  stable Needs Admin before source or Tree work;
+- a new process recovers an approved Phase 1 from the current bound branch,
+  merged durable Seed marker, and canonical exact-commit source ledger without
+  prior transcript or private cache state; and
+- missing durable progress, source identity mismatch, unreadable recorded
+  commit, or a changed binding each fail closed before Phase 2 mutation.
 
 `eval:quality -- --suite first-tree-seed` runs the `empty-tree-source-present`
 deterministic gate first. If that hard-rule gate passes, the quality judge

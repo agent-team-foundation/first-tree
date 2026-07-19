@@ -3,6 +3,7 @@ import { registerSubcommands } from "../groups.js";
 import type { CommandModule } from "../types.js";
 import { initCommand } from "./init.js";
 import { treeReadCommand } from "./read.js";
+import { treeSeedCommand } from "./seed.js";
 import { treeTreeCommand } from "./tree.js";
 import { verifyCommand } from "./verify.js";
 import { treeWriteCommand } from "./write.js";
@@ -18,6 +19,8 @@ import { treeWriteCommand } from "./write.js";
  * - `write`, because a clean source-backed writer must revalidate that exact
  *   snapshot against Server current Team, Reviewer, binding, and GitHub
  *   identity before authoring and immediately before its first remote write.
+ * - `seed`, because a clean setup agent needs a stateless read of one explicit
+ *   Team's current Admin authority and binding before every Seed mutation.
  *
  * `init` was reintroduced in 2026-07 in a different shape than the deleted
  * one: instead of onboarding a local workspace root, it creates a new team
@@ -48,6 +51,13 @@ export const treeCommand: CommandModule = {
         command.outputHelp();
       });
 
-    registerSubcommands(command, [verifyCommand, treeTreeCommand, treeReadCommand, treeWriteCommand, initCommand]);
+    registerSubcommands(command, [
+      verifyCommand,
+      treeTreeCommand,
+      treeReadCommand,
+      treeWriteCommand,
+      treeSeedCommand,
+      initCommand,
+    ]);
   },
 };

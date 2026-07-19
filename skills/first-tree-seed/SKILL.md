@@ -1,9 +1,9 @@
 ---
 name: first-tree-seed
-version: 0.3.0
+version: 0.4.0
 cliCompat:
-  first-tree: ">=0.5.0 <0.6.0"
-description: "Bootstrap a team's Context Tree from readable source repos — for an onboarding \"build / set up the Context Tree\" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Uses declared workspace sources when present, otherwise asks for a local Git repo or a GitHub/GitLab repository URL in the setup chat. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses an unrelated re-seed once the tree has domain structure, while allowing the same setup chat to continue Phase 2 after its Phase 1 PR/MR is merged."
+  first-tree: ">=0.5.16 <0.6.0"
+description: "Bootstrap a team's Context Tree from readable source repos — for an onboarding \"build / set up the Context Tree\" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Supports clean explicit-Team invocation without a Workspace manifest, managed briefing, or prior setup-chat transcript, while preserving managed-workspace compatibility. Proposes an initial top-level + second-level domain structure for approval, then drafts initial leaf content — each as a reviewable PR/MR. Refuses unrelated re-seeding once the tree has domain structure and recovers Phase 2 from durable merged Tree state plus the same explicit sources."
 ---
 
 # First Tree — Seed
@@ -29,8 +29,9 @@ not here.
 The skill is **single-shot per tree setup**: once the tree has domain
 structure, a new or unrelated seed request refuses and routes further work
 through `first-tree-write` or a focused maintenance task. The one exception is
-the verified Phase 2 continuation from this setup chat after its Phase 1 PR/MR
-was merged; that is completion of the same seed, not a second seed.
+a verified Phase 2 continuation recovered from the merged Tree's durable Seed
+progress and exact source ledger. It may run in a new process, agent, or chat;
+it is completion of the same seed, not a second seed.
 
 ## Policy Baseline
 
@@ -41,6 +42,51 @@ current truth, rationale, source-system boundary, Double Test, smallest correct
 edit, no implementation detail, no history, and no actionable future work in
 normal tree content.
 
+## Invocation modes and live authority
+
+Seed has two compatible entry modes:
+
+- **Portable / clean invocation.** The task supplies one explicit
+  `selectedTeamId`, one task-local `treePath`, and at least one explicit readable
+  source input. Do not require or reconstruct a Workspace manifest, managed
+  briefing, setup-chat transcript, Web selection, or account default/current
+  Team. If the Team or every source input is missing, ask only for the missing
+  input and stop before touching local or remote state.
+- **Managed workspace.** Keep using the generated workspace paths and declared
+  sources when they exist. A non-empty manifest source list remains
+  authoritative. Managed state is a path/source convenience, not authority for
+  role or binding, and no prior setup-chat transcript is required for recovery.
+
+When an explicit Team is available, start every invocation with this online,
+read-only admission check:
+
+```bash
+first-tree tree seed --team "<selectedTeamId>" --json
+```
+
+The response is the only current admission view: the Server resolves active
+membership, active Admin role, and that exact Team's current binding. Do not
+cache the Admin result or substitute an owner, prior task, local manifest, Web
+selection, or another Team. An ordinary active member receives stable
+`CONTEXT_TREE_SEED_NEEDS_ADMIN`; report the same selected Team and ask an active
+Admin of that Team to continue. Do not fall back to a default Team and do not
+run `gh`, create a branch/repo/PR, or change a binding.
+
+Repeat the same preflight immediately before every remote mutation: `tree init`,
+the Phase 1 push, Phase 1 PR/MR creation, the Phase 2 push, and Phase 2 PR/MR
+creation. `tree init --team` also repeats it internally before GitHub creation
+and before final binding. A failure before remote mutation creates no remote
+state. A failure after a branch, repository, binding, or PR/MR may exist must
+report and query that real state; never claim rollback. On retry, inspect the
+selected Team's current binding, the deterministic Seed branch, and any existing
+PR/MR by head branch before creating anything.
+
+Before authoring Phase 1 or evaluating any populated tree for Phase 2, read
+[`references/durable-progress.md`](references/durable-progress.md) completely.
+It owns the exact marker, canonical source-ledger shape, fixed-commit recovery
+algorithm, and fail-closed mismatch outcomes. Do not invent a second progress
+format in this file, chat, or local cache.
+
 ## Resolve the tree's state (three states; stop on refuse)
 
 This skill runs whenever a human or another agent invokes it — **the tree's
@@ -50,32 +96,44 @@ accordingly: create it when none exists, fill it when it is bound but empty,
 and refuse when it already has domain structure (state C below), routing
 that work to `first-tree-write` or a focused maintenance task.
 
-**Check for a Phase 2 continuation before classifying state C.** Continue the
-same seed into Phase 2 only when all of these are true:
+**Check durable Phase 2 recovery before classifying state C.** Continue the same
+Seed into Phase 2, including from a new process, agent, or chat, only when all of
+these are true:
 
-1. this setup chat's visible history contains the Phase 1 proposal, user
-   approval, and the Phase 1 PR/MR handoff;
-2. the current user message explicitly says that PR/MR was merged or asks to
-   continue after merging it; and
-3. a fresh fetch confirms the approved top-level structure exists on the tree
-   repo's default branch while Phase 2 has not already completed.
+1. a fresh Seed preflight says the selected Team is still bound, and a strict
+   fetch of that exact repo/branch succeeds;
+2. the fetched default branch contains `.first-tree/progress.md` with the exact
+   `<!-- first-tree-seed-progress:v1 -->` marker and checked Phase 1 item defined
+   in the durable-progress reference, but no checked Phase 2 item;
+3. the same file's canonical source ledger matches the freshly re-resolved
+   explicit source identities entry-for-entry, and every recorded exact commit
+   is still readable; and
+4. the approved Phase 1 top-level structure exists on that fetched branch.
 
-When all three hold, re-resolve the same readable sources and enter Phase 2
-through its trigger below even though domain directories now exist. Otherwise
-apply A/B/C normally. Never infer continuation from node names, a chat title,
-or a populated tree alone.
+When all four hold, enter Phase 2 through its trigger below even though domain
+directories now exist. The old Chat transcript and private local cache are
+irrelevant. A checked Phase 2 item means Seed is complete. A populated tree
+without the durable marker is state C, not a continuation. A missing source,
+identity mismatch, unreadable recorded commit, or changed binding fails closed
+and names the exact mismatch; it never starts another Seed.
 
-**A — No tree yet.** The workspace is not bound to a tree: either
-`<workspaceRoot>/.first-tree/workspace.json` has no non-empty `tree`
-field, or the team has no `context_tree` binding. This is the
-agent-driven creation path. First resolve readable sources using the section
-below and detect each source forge from its supplied URL or `origin` remote.
+**A — No tree yet.** In portable mode, the fresh Seed preflight says the
+explicit Team is unbound. In managed mode, the workspace manifest has no
+non-empty `tree` field and the compatible Team binding path is unbound. This is
+the agent-driven creation path. First resolve readable sources using the
+section below and detect each source forge from its supplied URL or `origin`.
 Source access may use `gh` for GitHub or `glab` for GitLab, but current
 `first-tree tree init` provisioning is GitHub-only and always uses local `gh`;
 do not substitute `glab` for this command:
 
 ```bash
-first-tree tree init --title "<team display name>" --owner "<tree-github-owner>" --dir "<workspaceRoot>/<manifest.tree>"
+# Portable / clean invocation
+first-tree tree init --team "<selectedTeamId>" --title "<team display name>" \
+  --owner "<tree-github-owner>" --dir "<treePath>"
+
+# Managed compatibility when no explicit Team was supplied
+first-tree tree init --title "<team display name>" \
+  --owner "<tree-github-owner>" --dir "<workspaceRoot>/<manifest.tree>"
 ```
 
 **Keep source identity separate from the tree host.** For each declared or
@@ -135,8 +193,10 @@ needs an authenticated `gh`; if the caller is not an org admin, or `gh` is
 unauthenticated, surface that exact gap and stop (binding a team tree is an
 admin action). A source repo may still use `glab`; that does not change
 `tree init`'s GitHub authentication requirement.
-Take the team display name from the chat context / `first-tree agent
-status`. After it succeeds the tree is bound and in state **B** — proceed.
+Take the Team display name from the explicit task handoff when available. In a
+managed workspace, `first-tree agent status` remains a compatible source. Do
+not infer a portable Team from that command; `--team` remains the explicit id.
+After init succeeds the tree is bound and in state **B** — proceed.
 
 **Run it directly — do not ask the human "who runs the bind?".** This create +
 bind is the sanctioned agent path (a general "tree binding is an operator
@@ -147,16 +207,13 @@ server-side (it fails closed for a non-admin or unauthenticated `gh`). So run
 it; only if it fails on that admin/authentication check do you surface the
 exact gap (not an admin / `gh` not authenticated) and stop.
 
-**Pin the local checkout with `--dir` — this is load-bearing.** `tree
-init` defaults its local clone to `<cwd>/<repo-name>`, but a managed
-workspace reads and writes the tree at `<workspaceRoot>/<manifest.tree>`
-(usually `context-tree`), and seed does **not** rewrite `workspace.json`.
-Without `--dir`, state A would create + bind `<workspaceRoot>/<team>-context-tree`
-while Phase 1 then operates on a missing/stale `<workspaceRoot>/<manifest.tree>`.
-Passing `--dir "<workspaceRoot>/<manifest.tree>"` puts the freshly created
-clone exactly where Phase 1 (and the runtime) expect it. If the manifest
-carries no tree name yet (a fully unbound workspace), use the conventional
-`<workspaceRoot>/context-tree`.
+**Pin the local checkout with `--dir` — this is load-bearing.** `tree init`
+defaults to `<cwd>/<repo-name>`. Portable Seed must pass its explicit
+`treePath`; managed Seed must pass `<workspaceRoot>/<manifest.tree>` (usually
+`context-tree`). Seed does not rewrite `workspace.json`. Without `--dir`, Phase
+1 can operate on a missing or stale checkout even though another repo was
+created and bound. If a managed manifest carries no tree name yet, use the
+conventional `<workspaceRoot>/context-tree`.
 
 **Configure GitHub branch rules after a newly created Context Repo.**
 This applies only in state A, only after `tree init` succeeds, and only when the
@@ -271,7 +328,8 @@ index and supporting trees rather than recreating them.
 
 **C — Already seeded.** Outside the verified Phase 2 continuation above, the
 tree has one or more **normal top-level domain
-directories** — any directory directly under `<workspaceRoot>/<manifest.tree>/`
+directories** — any directory directly under the explicit `<treePath>` in
+portable mode or `<workspaceRoot>/<manifest.tree>/` in managed mode
 other than `.git/`, `.first-tree/`, `.github/`, `members/`, `raw-context/`, and
 dotfile-prefixed dirs. Refuse with a one-line explanation pointing at
 `first-tree-write` for incremental source-driven writes, or ask for a
@@ -288,11 +346,11 @@ Use one ordered source-resolution rule and call its result
 `resolvedSources` throughout both phases:
 
 1. **A non-empty `manifest.sources` is authoritative.** Require every declared
-   source on disk. Do not let a URL or local path supplied in chat hide a
+   source on disk. Do not let a URL or local path supplied in the request hide a
    half-provisioned declared workspace.
 2. **An empty or absent `manifest.sources` is valid.** Use an explicit local
-   project folder or GitHub/GitLab repository URL already supplied in this
-   setup chat. If neither exists, ask the user for exactly one of them and stop
+   project folder or GitHub/GitLab repository URL supplied in the current
+   invocation or task handoff. If neither exists, ask the user for exactly one of them and stop
    until they answer. Do not send them to Settings and do not make GitHub App
    installation a prerequisite.
 3. **Validate before reading.** A local folder must exist, be readable, and be
@@ -307,8 +365,9 @@ Use `gh` for GitHub and `glab` for GitLab; use plain `git` for an unrecognized
 host unless the user supplies its supported CLI. Preserve the full GitLab
 namespace, including nested groups, in source identity and diagnostics.
 
-For a local non-bare repository, read it in place without modifying it. For a
-local bare repository, follow the worktree protocol below. For a GitHub or
+For a local non-bare repository, inspect its identity in place but materialize
+the evidence read at one exact commit. For a local bare repository, follow the
+worktree protocol below. For a GitHub or
 GitLab URL, clone/fetch it into task-local read storage, then read its default
 branch. Private URLs may rely on the user's existing `gh` / `glab` / git
 credentials; if access fails, report that exact credential/access gap rather
@@ -320,7 +379,9 @@ not be flattened or passed to `tree init`; for GitLab-only sources, ask which
 GitHub account should host the tree. If a local repo has no recognized forge
 remote, ask for the GitHub tree host separately and never guess from its
 directory name. Revalidate the same `resolvedSources` before Phase 2 so a later
-turn cannot silently switch inputs.
+process cannot silently switch inputs. Phase 1 records each canonical source
+identity and exact evidence commit in the durable ledger; Phase 2 must
+materialize those recorded commits, not newer default-branch tips.
 
 **For declared sources, require every clone on disk.** Each source
 clone lives at `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>`
@@ -560,6 +621,9 @@ After the user confirms, create on the seed branch:
 - For each approved second-level entry: a sub-`NODE.md` stub or a
   placeholder `.md` file, again with `title`, `owners`, and a
   one-paragraph charter — no leaf content yet.
+- `<tree>/.first-tree/progress.md` — the exact Phase 1 marker, checked Phase 1
+  line, Team id, canonical source ledger, and approved top-level list from
+  `references/durable-progress.md`. Do not add an unchecked Phase 2 item.
 
 ### Frontmatter shape
 
@@ -622,8 +686,12 @@ Notes on defaults:
   audit trail is `git log`.
 - Run `first-tree tree verify --tree-path <tree>` locally before
   opening the PR/MR. Non-zero exit blocks.
+- In portable mode, repeat `tree seed --team` immediately before the push and
+  again before PR/MR creation. Require current Admin plus the same canonical
+  binding repo and branch. Query the forge by the deterministic head branch
+  first; reuse an existing branch or PR/MR instead of duplicating it.
 - Stop after the PR/MR is open. Do **not** start Phase 2 work until the
-  user has explicitly merged PR/MR 1.
+  approved structure and durable progress record are merged.
 
 ---
 
@@ -636,31 +704,20 @@ extracted.
 
 ### Trigger
 
-The user **re-pings this setup chat** after merging PR/MR 1 — that ping is the
-only sanctioned start signal. The agent does **not** poll the remote,
-the inbox, or any other source between phases; the seed skill is not running
-between PR/MR 1 and PR/MR 2. This is the Phase 2 continuation checked before
-normal state C refusal. When the ping arrives, re-resolve the same sources and
-run a fresh self-check that PR/MR 1's structure is actually on the tree's
-default branch before dispatching sub-agents — protects against the case where
-the user pinged before merging, merged a different branch, or changed the source
-input between turns.
-Resolve the default branch name dynamically rather than hard-coding
-`main` (some tree repos use `master` / `trunk`):
+Any explicit request to resume Seed after PR/MR 1 may trigger recovery; it can
+arrive in a new process, agent, or chat. The agent does **not** poll the remote,
+inbox, or any other source between phases. Run the exact Phase 2 recovery
+algorithm in `references/durable-progress.md`: fresh explicit-Team preflight,
+strict bound-branch fetch, detached merged-state inspection, marker and Team
+validation, entry-for-entry source-identity comparison, recorded-commit
+readability checks, and source worktrees materialized at those commits.
 
-```bash
-git -C <tree> fetch origin
-DEFAULT=$(git -C <tree> symbolic-ref refs/remotes/origin/HEAD | sed 's|^refs/remotes/origin/||')
-git -C <tree> ls-tree "origin/$DEFAULT" -- <top-level>  # for each approved domain
-```
-
-That `ls-tree` check applies only to the Context Tree checkout. Before listing
-or reading any source content in Phase 2, materialize each declared bare source
-through the source Worktrees protocol and read the resulting checkout. Do not
-use `git ls-tree`, `git show`, `git grep`, or similar content reads directly
-against a source bare clone, even as a quick preflight. Removing the temporary
-source read worktree after the evidence read is complete is expected cleanup;
-the required proof is the materialize/read event, not a leftover checkout.
+The old transcript and any private setup cache are irrelevant. A current-message
+claim or familiar domain layout cannot replace the durable checks. `git ls-tree`
+may inspect the exact Context Tree commit, but do not use `git ls-tree`, `git
+show`, `git grep`, or similar content reads directly against a source bare clone.
+Removing a temporary source read worktree after its evidence read is expected;
+the proof is the materialize/read event, not a leftover checkout.
 
 ### Sub-agent allocation
 
@@ -919,6 +976,12 @@ After all sub-agents return:
   4. **Next steps** — point the user at `first-tree-write` for any
      follow-up source-driven writes and describe any broad maintenance
      gaps as focused follow-up tasks.
+- Add the exact checked `Seed Phase 2 content` line to
+  `.first-tree/progress.md` without changing its Team, source ledger, or
+  approved top-level list.
+- In portable mode, repeat the Seed preflight immediately before push and
+  before PR/MR creation; require the same Team and binding, and reuse an
+  existing deterministic branch or PR/MR by head.
 
 After PR/MR 2 opens, the seed skill is done. Subsequent writes are owned
 by `first-tree-write`; subsequent maintenance uses focused tasks with
@@ -926,13 +989,12 @@ explicit scope.
 
 ### Recovery path: PR/MR 1 merged, Phase 2 abandoned
 
-A user may merge PR/MR 1 and then never come back for Phase 2 (life
-happens, the team is busy, the kickoff agent crashed). The tree
-ends up with real structure but zero leaves. **This is not a new
-re-seed condition.** A later explicit continuation in the same setup chat can
-still complete Phase 2 after the three continuation checks pass. An unrelated
-future seed request sees an already-seeded tree (`<tree>/<domain>/NODE.md`
-files exist, state C) and refuses. For that unrelated path:
+A user may merge PR/MR 1 and then never come back for Phase 2. The tree ends up
+with real structure and a durable checked Phase 1 record but zero leaves. **This
+is not a new re-seed condition.** A later explicit continuation from any new
+process, agent, or chat can complete Phase 2 only after the durable recovery
+algorithm passes. A populated tree without that record remains state C and
+refuses. For that unrelated path:
 
 - Future writes go through `first-tree-write` one source at a
   time, exactly as they would on any other live tree.
@@ -965,6 +1027,10 @@ These apply the generated Context Tree Policy to the seed-specific surface.
   "Update 2026-XX-XX:".
 - **`first-tree tree verify` must pass before PR/MR 1 and PR/MR 2 land.**
   Non-zero exit blocks the commit.
+- **Remote failures preserve truth.** Recheck live Admin and binding before
+  every push and PR/MR creation. After a possible mutation, inspect the
+  repository, deterministic branch, PR/MR-by-head, and Server binding before
+  reporting; never claim rollback.
 - **Ownership changes go through humans.** Phase 1 sets `owners` to
   the workspace's primary owner as the default; reassignment is the
   user's job, not the agent's.
@@ -989,10 +1055,12 @@ These apply the generated Context Tree Policy to the seed-specific surface.
   domain has weak evidence and the user does not opt it in, leave it
   out.
 - Start a second seed on the same tree. Once the tree has domain structure,
-  only the verified same-setup-chat Phase 2 continuation remains in scope;
+  only the verified durable Phase 2 continuation remains in scope;
   other work hands off to `first-tree-write` or a focused maintenance task.
 
 ## References
 
 The generated `AGENTS.md` / `CLAUDE.md` briefing carries the shared Context
-Tree Policy. This skill carries only the empty-tree bootstrap workflow.
+Tree Policy. Read `references/durable-progress.md` only when writing Phase 1
+progress or evaluating/resuming Phase 2; it is the single detailed recovery
+contract.

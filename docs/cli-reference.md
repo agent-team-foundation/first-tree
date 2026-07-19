@@ -969,9 +969,9 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree task-read activation, source-backed write preflight, creation,
-structural validation, and hierarchy browsing. The `tree` namespace carries
-`read`, `write`, `verify`, `tree`, and `init`; the rest (`migrate` /
+Context Tree task-read activation, source-backed write and Seed preflight,
+creation, structural validation, and hierarchy browsing. The `tree` namespace
+carries `read`, `write`, `seed`, `verify`, `tree`, and `init`; the rest (`migrate` /
 `upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
 `automation` / `skill` groups) was retired in the 2026-06 cleanup because the
 cloud now owns workspace + tree provisioning and the client runtime inlines its
@@ -983,6 +983,7 @@ first-tree tree
 ├── read --team ID --snapshot DIR            # activate one exact task read snapshot
 ├── write --team ID --snapshot DIR \
 │        --github-login LOGIN                 # preflight clean source-backed authoring
+├── seed --team ID                            # preflight clean Team Seed authority/binding
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
@@ -1072,6 +1073,19 @@ Authoring happens in a separate task worktree/branch created from
 the existing member keyed Chat-create flow remains the sole task/Reviewer
 handoff authority and reuses the same stable PR Chat on retry.
 
+`first-tree tree seed --team <team-id>` is the stateless admission boundary for
+portable Context Tree setup. The Team is required and explicit; this command
+does not consult a Workspace manifest, managed briefing, prior setup Chat,
+Web selection, or account default/current Team. The Server resolves the signed-in
+member's active role and the selected Team's current binding on every call.
+An active Admin receives either the exact bound repo/branch or the current
+unbound branch. An active ordinary member receives the stable
+`CONTEXT_TREE_SEED_NEEDS_ADMIN` response with the selected Team as the recovery
+anchor. Invalid historical binding data fails closed. The preflight creates no
+repository, binding, branch, PR, Chat, review, or merge state and disables
+transport retries; setup agents repeat it explicitly immediately before each
+remote mutation.
+
 `first-tree tree init` creates a brand-new team Context Tree repository with the
 user's local `gh`: it creates the repo (one path for user- and org-owned repos),
 scaffolds a minimal valid tree (root `NODE.md` + members index + a creator member
@@ -1093,7 +1107,29 @@ reports the conflict rather than overwriting it. A non-`--rebind` invocation
 requires a Server with the raw repair/finalize surface during preflight; older
 Servers fail before any GitHub repository is created. Key options: `--owner`,
 `--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
-`--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
+`--rebind`, `--org`, `--team`. Run `first-tree tree init --help` for the full list.
+
+Portable Seed uses `tree init --team <team-id>`. In that mode `--team` cannot be
+combined with `--org`, `--no-bind`, or `--rebind`; an existing binding is an
+idempotent success returned before local tool checks, and the command never
+replaces it. For an unbound Team the CLI repeats the Server Seed preflight before
+GitHub create/push and again before final binding. A concurrent binding is
+preserved, an authority or branch change fails closed, and a lost finalization
+response is reconciled against the Server's current binding. Failures after
+GitHub mutation name the created or possibly-created repository and never claim
+that it was rolled back. The legacy managed `--org`/default-org path remains
+available for existing workflows.
+
+The Seed workflow records merged Phase 1 authority in
+`<tree>/.first-tree/progress.md`: one versioned Seed marker, the checked Phase 1
+line, the explicit Team id, sorted canonical source identities with the exact
+commits used for evidence, and the approved top-level domains. A later process
+or agent resumes Phase 2 only after a fresh `tree seed --team` result matches
+the Tree origin/branch, that exact branch is strictly fetched, the progress
+ledger matches the same explicit sources, and every recorded commit remains
+readable. Transcript text, private caches, a familiar directory shape, and the
+current source head are not recovery authority; any binding, role, source
+identity, or recorded-commit mismatch fails closed.
 
 Before any GitHub repository write, the bound path reads the admin-only raw
 Context Tree setting. An HTTP 404 from that endpoint identifies an older Server

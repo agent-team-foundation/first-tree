@@ -125,7 +125,14 @@ describe("CLI command registration", () => {
     // `verify` survived the 2026-06 cleanup, `tree` is the narrow hierarchy
     // browser added back for agents and scripted consumers, and `init` was
     // reintroduced in 2026-07 as the agent/local-`gh` tree-repo creation path.
-    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "read", "tree", "verify", "write"]);
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual([
+      "init",
+      "read",
+      "seed",
+      "tree",
+      "verify",
+      "write",
+    ]);
   });
 
   it("registers Context Tree set and review-config without changing the parent read options", () => {
