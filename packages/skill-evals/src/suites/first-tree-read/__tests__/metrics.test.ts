@@ -236,6 +236,28 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(result.expectedFactsObserved).toBe(true);
   });
 
+  it("recognizes the natural unified user JWT authorization surface word order", () => {
+    const result = deriveMetrics(
+      [
+        skillReadEvent(),
+        firstTreeCall(HELP_ARGV),
+        firstTreeResult(HELP_ARGV, 0),
+        firstTreeCall(["tree", "tree", "systems/server/auth"]),
+        firstTreeResult(["tree", "tree", "systems/server/auth"], 0),
+        assistantTextEvent(`JWT auth routes should:
+- Use the unified user JWT authorization surface.
+- Check route scopes against live organization membership before cross-org actions.
+- Follow the repository's HTTP path conventions before auth or multi-org route changes.`),
+      ],
+      VALID_FIXTURE,
+      0,
+      JWT_EXPECTED_FACTS,
+    );
+
+    expect(result.expectedFactHits).toEqual([...JWT_EXPECTED_FACTS]);
+    expect(result.expectedFactsObserved).toBe(true);
+  });
+
   it("does not count isolated terms as expected fact concepts", () => {
     const result = deriveMetrics(
       [

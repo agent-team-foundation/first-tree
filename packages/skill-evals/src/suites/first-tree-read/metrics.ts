@@ -14,7 +14,7 @@ const FACT_MATCHERS: readonly FactMatcher[] = [
   {
     all: [
       /user\s+jwt/iu,
-      /(unified authorization surface|single authorization surface|single authorization model|统一[^。\n]*授权|统一[^。\n]*身份模型)/iu,
+      /((?:unified(?:\s+user\s+jwt)?|single)\s+authorization surface|single authorization model|统一[^。\n]*授权|统一[^。\n]*身份模型)/iu,
     ],
     fact: "User JWT auth is the unified authorization surface.",
   },
