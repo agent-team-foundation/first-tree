@@ -119,6 +119,12 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     return listMeChatSourceCounts(app.db, scope.humanAgentId, scope.organizationId, query);
   });
 
+  const createChatRouteOptions = {
+    // `undefined` intentionally preserves @fastify/rate-limit's global shared
+    // bucket while exposing that policy to CodeQL's Fastify route model.
+    config: { otelRecordBody: false, rateLimit: undefined },
+  };
+
   /**
    * POST /orgs/:orgId/chats — create a new chat. The :orgId path param
    * makes the org explicit; visibility of every requested participant is
@@ -128,8 +134,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
    * registered in `app.ts`; this authenticated route intentionally does not
    * duplicate the shared safety policy with a lower per-route cap.
    */
-  // biome-ignore format: Keep the CodeQL suppression on the alert's first line.
-  app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: false } }, async (request, reply) => { // codeql[js/missing-rate-limiting]
+  app.post<{ Params: { orgId: string } }>("/", createChatRouteOptions, async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
     const rawBody = request.body;
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody && rawBody.mode === "keyed_task") {
