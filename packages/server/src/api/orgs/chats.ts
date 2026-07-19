@@ -128,8 +128,8 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
    * registered in `app.ts`; this authenticated route intentionally does not
    * duplicate the shared safety policy with a lower per-route cap.
    */
-  // codeql[js/missing-rate-limiting]
-  app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: false } }, async (request, reply) => {
+  // biome-ignore format: Keep the CodeQL suppression on the alert's first line.
+  app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: false } }, async (request, reply) => { // codeql[js/missing-rate-limiting]
     const scope = await requireOrgMembership(request, app.db);
     const rawBody = request.body;
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody && rawBody.mode === "keyed_task") {
