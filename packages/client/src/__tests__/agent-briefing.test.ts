@@ -693,6 +693,7 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     expect(overview).toContain("first-tree tree verify");
     expect(overview).toContain("first-tree tree tree");
     expect(overview).toContain("first-tree tree read");
+    expect(overview).toContain("first-tree tree write");
     expect(overview).not.toContain("github scan");
     expect(overview).not.toContain("first-tree tree …");
 
@@ -707,7 +708,6 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
       "review",
       "automation",
       "skill",
-      "write",
       "publish",
     ]) {
       const re = new RegExp(`\\b(?:first-tree|ft)\\s+tree\\s+${retired}\\b`, "u");

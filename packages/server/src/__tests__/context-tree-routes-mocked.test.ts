@@ -60,6 +60,17 @@ async function setupRoute() {
     }
   }
 
+  class ContextTreeWritePreflightError extends Error {
+    constructor(
+      public readonly code: string,
+      public readonly statusCode: 403 | 409,
+      message: string,
+    ) {
+      super(message);
+      this.name = "ContextTreeWritePreflightError";
+    }
+  }
+
   const requireOrgAdmin = vi.fn().mockResolvedValue(scope);
   const requireOrgMembership = vi.fn().mockResolvedValue(scope);
   const findInstallationByOrg = vi.fn().mockResolvedValue(installation);
@@ -76,11 +87,20 @@ async function setupRoute() {
   const getOrgContextTreeSettingState = vi.fn().mockResolvedValue({ kind: "unbound", branch: "main" });
   const putInitializedOrgContextTreeBinding = vi.fn().mockResolvedValue({ repo: repo.cloneUrl, branch: "main" });
   const getOrganization = vi.fn().mockResolvedValue({ id: scope.organizationId, name: "Acme", displayName: "Acme" });
+  const preflightContextTreeWriteAuthority = vi.fn().mockResolvedValue({
+    binding: { repo: repo.cloneUrl, branch: "main" },
+    reviewerAgentUuid: "reviewer-current",
+    requesterGithubLogin: "writer",
+  });
 
   vi.doMock("../scope/require-org.js", () => ({ requireOrgAdmin, requireOrgMembership }));
   vi.doMock("../services/context-tree-repo-provisioner.js", () => ({
     ContextTreeRepoProvisionError,
     ensureInstallationOwnedContextTreeRepo,
+  }));
+  vi.doMock("../services/context-review-task.js", () => ({
+    ContextTreeWritePreflightError,
+    preflightContextTreeWriteAuthority,
   }));
   vi.doMock("../services/github-app.js", () => ({
     GithubAppApiError,
@@ -113,7 +133,12 @@ async function setupRoute() {
     scope,
     installation,
     repo,
-    classes: { ContextTreeRepoProvisionError, GithubAppApiError, GithubUserTokenError },
+    classes: {
+      ContextTreeRepoProvisionError,
+      ContextTreeWritePreflightError,
+      GithubAppApiError,
+      GithubUserTokenError,
+    },
     mocks: {
       requireOrgAdmin,
       requireOrgMembership,
@@ -127,6 +152,7 @@ async function setupRoute() {
       getOrgContextTreeSettingState,
       putInitializedOrgContextTreeBinding,
       getOrganization,
+      preflightContextTreeWriteAuthority,
     },
   };
 }
@@ -140,6 +166,56 @@ describe("org context tree routes with mocked service edges", () => {
   async function initialize(ctx: RouteMocks) {
     return ctx.app.inject({ method: "POST", url: "/initialize", payload: {} });
   }
+
+  it("passes only the authenticated explicit Team tuple into Write preflight", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/write-preflight",
+      payload: { requesterGithubLogin: "writer" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(ctx.mocks.preflightContextTreeWriteAuthority).toHaveBeenCalledWith(ctx.app.db, {
+      organizationId: ctx.scope.organizationId,
+      requester: {
+        userId: ctx.scope.userId,
+        memberId: ctx.scope.memberId,
+        humanAgentUuid: ctx.scope.humanAgentId,
+      },
+      requesterGithubLogin: "writer",
+    });
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      binding: { repo: ctx.repo.cloneUrl, branch: "main" },
+      reviewerAgentUuid: "reviewer-current",
+      requesterGithubLogin: "writer",
+    });
+  });
+
+  it("preserves typed Write preflight failure state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.preflightContextTreeWriteAuthority.mockRejectedValueOnce(
+      new ctx.classes.ContextTreeWritePreflightError(
+        "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+        409,
+        "Agent Review is unavailable.",
+      ),
+    );
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/write-preflight",
+      payload: { requesterGithubLogin: "writer" },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: "Agent Review is unavailable.",
+      code: "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+    });
+  });
 
   it("returns no_installation when minting unexpectedly succeeds without an installation row", async () => {
     const ctx = await setupRoute();

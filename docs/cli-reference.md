@@ -981,6 +981,8 @@ own skill payload install (see PR following #844).
 first-tree tree
 ├── init [options]                           # create a new team Context Tree repo with local gh
 ├── read --team ID --snapshot DIR            # activate one exact task read snapshot
+├── write --team ID --snapshot DIR \
+│        --github-login LOGIN                 # preflight clean source-backed authoring
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
@@ -1033,6 +1035,42 @@ reports the same identity. For the rest of the task, run hierarchy selectors
 inside `snapshotPath` and read Markdown only from that root. A new task uses a
 new path and a new activation so membership, binding, and branch movement are
 observed.
+
+`first-tree tree write` is the stateless BYO Write preflight for a source-backed
+change. It requires the explicit Team, the existing exact snapshot created by
+`tree read`, and the current local `gh` login. It does not read a Workspace
+manifest, managed briefing, setup-chat transcript, Web selection, account
+default/current Team, local Agent, or prior task receipt.
+
+The command sends one member-authenticated request to
+`POST /api/v1/orgs/:orgId/context-tree/write-preflight`. The Server reads the
+live bound Tree and assigned Context Reviewer as one current tuple, verifies
+the requester's active Team/human identity and linked GitHub login, and checks
+that the Reviewer is an active non-human Agent. The request cannot select a
+Reviewer, task key, Chat, sender, topic, review, or merge authority.
+
+After Server admission, the CLI requires the current binding to match the
+snapshot identity (canonical repository plus exact branch), strictly fetches
+the bound branch into temporary state, and requires its remote tip to equal the
+snapshot commit. It then re-verifies that the snapshot is still clean and fixed
+at the same commit. The command removes temporary fetch state and performs no
+remote mutation. It is safe to run at activation and repeat immediately before
+the first push or PR creation; each run observes Server current Reviewer state.
+
+With global `--json`, success returns
+`{ teamId, binding, baseCommit, snapshotPath, reviewerAgentUuid,
+requesterGithubLogin }`. Human output reports the same tuple. Stable local and
+Server failure codes distinguish invalid input/snapshot, explicit-Team
+mismatch, authority or identity denial, unavailable/unsupported binding,
+invalid configuration, unavailable review/Reviewer, changed binding, fetch
+failure, and a stale snapshot base. Failure creates no PR or Agent Review task.
+The returned Reviewer UUID is diagnostic only: callers must not cache or route
+from it, because keyed dispatch resolves the Server current Reviewer again.
+
+Authoring happens in a separate task worktree/branch created from
+`baseCommit`; the exact read snapshot remains immutable. After a PR exists,
+the existing member keyed Chat-create flow remains the sole task/Reviewer
+handoff authority and reuses the same stable PR Chat on retry.
 
 `first-tree tree init` creates a brand-new team Context Tree repository with the
 user's local `gh`: it creates the repo (one path for user- and org-owned repos),

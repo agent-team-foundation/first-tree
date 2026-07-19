@@ -15,9 +15,13 @@ import {
   type ClientCapabilities,
   type ContextReviewSubmitRequest,
   type ContextReviewSubmitResponse,
+  type ContextTreeWritePreflightRequest,
+  type ContextTreeWritePreflightResponse,
   type CreateDocCommentRequest,
   type CreateKeyedTaskChat,
   type CreateTaskChat,
+  contextTreeWritePreflightRequestSchema,
+  contextTreeWritePreflightResponseSchema,
   type DocComment,
   type DocCommentStatus,
   type DocStatus,
@@ -402,6 +406,28 @@ export class FirstTreeHubSDK {
       { retry: true },
     );
     return keyedTaskChatCreateResponseSchema.parse(response);
+  }
+
+  /**
+   * Member-scoped, stateless admission check for a clean Context Tree Write.
+   * The explicit Team stays in the URL; Server live state supplies the
+   * binding and Reviewer. This call creates no task, Chat, PR, or review.
+   */
+  async preflightMemberContextTreeWrite(
+    organizationId: string,
+    data: ContextTreeWritePreflightRequest,
+    options: { retry?: boolean } = {},
+  ): Promise<ContextTreeWritePreflightResponse> {
+    const body = contextTreeWritePreflightRequestSchema.parse(data);
+    const response = await this.requestJson<unknown>(
+      `/api/v1/orgs/${encodeURIComponent(organizationId)}/context-tree/write-preflight`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: options.retry ?? true },
+    );
+    return contextTreeWritePreflightResponseSchema.parse(response);
   }
 
   /** Read the signed-in member's Team memberships for explicit org selection. */

@@ -4,6 +4,8 @@ import {
   type ContextTreeRecoveryAction,
   contextTreeActiveBindingSchema,
   contextTreeInstallationInfoResponseSchema,
+  contextTreeWritePreflightRequestSchema,
+  contextTreeWritePreflightResponseSchema,
   initializeContextTreeRequestSchema,
   initializeContextTreeResponseSchema,
   treeSetupKickoffSchema,
@@ -11,6 +13,10 @@ import {
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ConflictError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import {
+  ContextTreeWritePreflightError,
+  preflightContextTreeWriteAuthority,
+} from "../../services/context-review-task.js";
 import {
   ContextTreeRepoProvisionError,
   ensureInstallationOwnedContextTreeRepo,
@@ -158,6 +164,34 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         suspended: installation.suspendedAt !== null,
       }),
     );
+  });
+
+  app.post<{ Params: { orgId: string }; Body: unknown }>("/write-preflight", async (request, reply) => {
+    const body = contextTreeWritePreflightRequestSchema.parse(request.body ?? {});
+    const scope = await requireOrgMembership(request, app.db);
+
+    try {
+      const authority = await preflightContextTreeWriteAuthority(app.db, {
+        organizationId: scope.organizationId,
+        requester: {
+          userId: scope.userId,
+          memberId: scope.memberId,
+          humanAgentUuid: scope.humanAgentId,
+        },
+        requesterGithubLogin: body.requesterGithubLogin,
+      });
+      return reply.status(200).send(
+        contextTreeWritePreflightResponseSchema.parse({
+          organizationId: scope.organizationId,
+          ...authority,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ContextTreeWritePreflightError) {
+        return reply.status(error.statusCode).send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
   });
 
   app.post<{ Params: { orgId: string }; Body: unknown }>("/initialize", async (request, reply) => {

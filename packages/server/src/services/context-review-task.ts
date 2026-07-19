@@ -4,8 +4,11 @@ import {
   AGENT_TYPES,
   CONTEXT_REVIEW_TASK_TYPE,
   type ContextReviewTaskCreateMetadata,
+  type ContextTreeActiveBinding,
+  type ContextTreeWritePreflightErrorCode,
   canonicalGitRepoUrl,
   contextReviewTaskCreateMetadataSchema,
+  contextTreeActiveBindingSchema,
 } from "@first-tree/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { ZodError, z } from "zod";
@@ -40,6 +43,23 @@ export type ContextReviewTaskAuthority = {
   reservationKey: string;
   topic: string;
 };
+
+export type ContextTreeWritePreflightAuthority = {
+  binding: ContextTreeActiveBinding;
+  reviewerAgentUuid: string;
+  requesterGithubLogin: string;
+};
+
+export class ContextTreeWritePreflightError extends Error {
+  constructor(
+    readonly code: ContextTreeWritePreflightErrorCode,
+    readonly statusCode: 403 | 409,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ContextTreeWritePreflightError";
+  }
+}
 
 export type ManagedContextReviewWebhookEvent = {
   organizationId: string;
@@ -337,23 +357,51 @@ async function lockOrganization(db: Database, organizationId: string): Promise<v
   if (!organization) throw new NotFoundError(`Organization "${organizationId}" not found`);
 }
 
-async function requireMatchingGithubIdentity(
-  db: Database,
-  requester: RequesterIdentity,
-  packetLogin: string,
-): Promise<void> {
+async function readGithubIdentityLogin(db: Database, requester: RequesterIdentity): Promise<string | null> {
   const [identity] = await db
     .select({ login: sql<string | null>`${authIdentities.metadata}->>'login'` })
     .from(authIdentities)
     .where(and(eq(authIdentities.userId, requester.userId), eq(authIdentities.provider, "github")))
     .limit(1);
-  const login = identity?.login?.trim();
+  return identity?.login?.trim() || null;
+}
+
+async function requireMatchingGithubIdentity(
+  db: Database,
+  requester: RequesterIdentity,
+  packetLogin: string,
+): Promise<void> {
+  const login = await readGithubIdentityLogin(db, requester);
   if (!login) {
     throw new ForbiddenError("Connect your GitHub identity to First Tree before dispatching Agent Review");
   }
   if (login.toLowerCase() !== packetLogin.toLowerCase()) {
     throw new ForbiddenError("reviewPacketV1 requesterGithubLogin does not match the signed-in member");
   }
+}
+
+async function isActiveContextReviewer(
+  db: Database,
+  input: { organizationId: string; reviewerAgentUuid: string; lock: boolean },
+): Promise<boolean> {
+  const reviewerQuery = db
+    .select({
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      status: agents.status,
+    })
+    .from(agents)
+    .where(eq(agents.uuid, input.reviewerAgentUuid))
+    .limit(1);
+  const reviewerRows = input.lock ? await reviewerQuery.for("update") : await reviewerQuery;
+  const [reviewer] = reviewerRows;
+  return (
+    reviewer !== undefined &&
+    reviewer.organizationId === input.organizationId &&
+    reviewer.type !== AGENT_TYPES.HUMAN &&
+    reviewer.status === AGENT_STATUSES.ACTIVE
+  );
 }
 
 async function requireActiveRequesterMembership(
@@ -412,6 +460,111 @@ async function requireActiveRequesterMembership(
 }
 
 /**
+ * Check whether a clean BYO writer may start or continue local authoring.
+ * This is deliberately stateless: it creates no task key, Chat, PR, review,
+ * or merge authority. The keyed dispatch path below remains the only writer
+ * of those states and re-resolves this same live Team configuration.
+ */
+export async function preflightContextTreeWriteAuthority(
+  db: Database,
+  input: {
+    organizationId: string;
+    requester: RequesterIdentity;
+    requesterGithubLogin: string;
+  },
+): Promise<ContextTreeWritePreflightAuthority> {
+  try {
+    await requireActiveRequesterMembership(db, {
+      organizationId: input.organizationId,
+      requester: input.requester,
+      lock: false,
+    });
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      throw new ContextTreeWritePreflightError(
+        "CONTEXT_TREE_WRITE_AUTHORITY_FAILED",
+        403,
+        "Context Tree Write requires the requester's current active Team membership and human identity.",
+      );
+    }
+    throw error;
+  }
+
+  let runtime: Awaited<ReturnType<typeof getOrgContextReviewRuntime>>;
+  try {
+    runtime = await getOrgContextReviewRuntime(db, input.organizationId);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new ContextTreeWritePreflightError(
+        "CONTEXT_TREE_WRITE_CONFIGURATION_INVALID",
+        409,
+        "The selected Team's Context Tree Write configuration is invalid and must be repaired.",
+      );
+    }
+    throw error;
+  }
+
+  const binding = contextTreeActiveBindingSchema.safeParse({ repo: runtime.repo, branch: runtime.branch });
+  if (!binding.success) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_BINDING_UNAVAILABLE",
+      409,
+      "The selected Team does not have a valid current Context Tree binding.",
+    );
+  }
+  if (canonicalBoundGithubRepository(binding.data.repo) === null) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_BINDING_UNSUPPORTED",
+      409,
+      "Managed Agent Review currently requires the selected Team's Context Tree binding to be on GitHub.",
+    );
+  }
+  if (!runtime.contextReviewer.enabled || !runtime.contextReviewer.agentUuid) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+      409,
+      "The selected Team does not currently have Agent Review enabled with an assigned Reviewer.",
+    );
+  }
+
+  const reviewerAgentUuid = runtime.contextReviewer.agentUuid;
+  const reviewerActive = await isActiveContextReviewer(db, {
+    organizationId: input.organizationId,
+    reviewerAgentUuid,
+    lock: false,
+  });
+  if (!reviewerActive) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE",
+      409,
+      "The selected Team's current Reviewer is not an active non-human Agent in that Team.",
+    );
+  }
+
+  const linkedGithubLogin = await readGithubIdentityLogin(db, input.requester);
+  if (!linkedGithubLogin) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_REQUIRED",
+      403,
+      "Connect your GitHub identity to First Tree before starting Context Tree Write.",
+    );
+  }
+  if (linkedGithubLogin.toLowerCase() !== input.requesterGithubLogin.toLowerCase()) {
+    throw new ContextTreeWritePreflightError(
+      "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_MISMATCH",
+      403,
+      "The local GitHub login does not match the signed-in First Tree member.",
+    );
+  }
+
+  return {
+    binding: binding.data,
+    reviewerAgentUuid,
+    requesterGithubLogin: linkedGithubLogin,
+  };
+}
+
+/**
  * Resolve the only authority tuple that may receive a Write-created review
  * task. `lock=true` is used inside the keyed chat transaction: requester
  * membership and human-mirror locks serialize leave/removal, settings writes
@@ -467,24 +620,12 @@ export async function resolveContextReviewTaskAuthority(
     throw new ConflictError("The assigned Agent Review Reviewer changed during dispatch; retry the same request");
   }
 
-  const reviewerQuery = db
-    .select({
-      uuid: agents.uuid,
-      organizationId: agents.organizationId,
-      type: agents.type,
-      status: agents.status,
-    })
-    .from(agents)
-    .where(eq(agents.uuid, reviewerAgentUuid))
-    .limit(1);
-  const reviewerRows = input.lock ? await reviewerQuery.for("update") : await reviewerQuery;
-  const [reviewer] = reviewerRows;
-  if (
-    !reviewer ||
-    reviewer.organizationId !== input.organizationId ||
-    reviewer.type === AGENT_TYPES.HUMAN ||
-    reviewer.status !== AGENT_STATUSES.ACTIVE
-  ) {
+  const reviewerActive = await isActiveContextReviewer(db, {
+    organizationId: input.organizationId,
+    reviewerAgentUuid,
+    lock: input.lock === true,
+  });
+  if (!reviewerActive) {
     throw new ConflictError("The assigned Agent Review Reviewer is not an active non-human Agent in this Team");
   }
 

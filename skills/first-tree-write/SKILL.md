@@ -1,9 +1,9 @@
 ---
 name: first-tree-write
-version: 0.10.0
+version: 0.11.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
-description: Source-driven Context Tree write workflow. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. If no source artifact is available, there is no write task; ask the user for one.
+description: Source-driven Context Tree write workflow for managed workspaces and clean BYO invocations. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. A clean BYO write also requires an explicit Team, an exact tree-read snapshot, current source/target context, and write intent. If no source artifact is available, there is no write task; ask the user for one.
 ---
 
 # First Tree Write
@@ -55,6 +55,39 @@ fixtures, and one-off bug fixes stay in source repos unless the source also
 establishes a durable decision, constraint, ownership change, or cross-domain
 relationship.
 
+## Invocation Modes
+
+Choose one mode before target selection:
+
+- **Managed:** use the generated workspace binding and briefing when present;
+  the source gate and write policy below remain unchanged.
+- **BYO clean:** require the user's explicit Team id, the existing exact
+  snapshot created by `tree read`, a concrete source artifact and revision,
+  current source context, current target/parent/linked tree context, and the
+  user's write intent. Do not require or reconstruct a Workspace manifest,
+  managed briefing, setup-chat transcript, Web selection, default/current
+  Team, cached owner/role, or prior task.
+
+For BYO, obtain the current local `gh` login and run this at activation:
+
+```text
+first-tree --json tree write --team "<team-id>" \
+  --snapshot "<exact-snapshot>" --github-login "<gh-login>"
+```
+
+This stateless command verifies the snapshot identity, explicit Team, live
+binding, current Reviewer, linked GitHub identity, and remote branch tip. It
+creates no branch, PR, task key, or Chat. Keep the snapshot immutable; create a
+separate task worktree and branch from the returned exact base commit with
+standard Git. Re-run the identical command immediately before the first push
+or PR creation. A changed binding or advanced base requires a new exact
+snapshot and fresh authoring base; do not publish the stale diff.
+
+The returned Reviewer UUID is observability only, never local routing
+authority. Do not cache it, address the handoff from it, or compare it to an
+owner record; the keyed dispatch must resolve the Server current Reviewer
+again.
+
 ## Workflow
 
 1. **Read the source artifact.** If you authored the source in this chat and
@@ -72,7 +105,8 @@ relationship.
 4. **Read surrounding tree context.** Before drafting, read the target node,
    parent `NODE.md`, relevant `soft_links` targets, and ownership-adjacent
    member content when it affects the edit. You do not need to re-read nodes
-   already in working context; the requirement is no surprises.
+   already in working context; the requirement is no surprises. In BYO mode,
+   read these only from the exact snapshot before editing the separate worktree.
 5. **Draft the edit.** Capture current truth and present-tense rationale.
    Rewrite superseded claims in place; do not append timeline updates. Keep
    canonical content in one place and use normal-to-normal `soft_links` when a
@@ -105,11 +139,16 @@ PRs, and Audit-originated draft PRs/MRs keep the ordinary PR/MR path.
 
 ### Eligibility and identity
 
-Read the live binding and Reviewer assignment as the logged-in member:
+For a managed invocation, read the live binding and Reviewer assignment as the
+logged-in member:
 
 ```text
 first-tree --json org context-tree review-config --as-member [--org <org-id>]
 ```
+
+For BYO, the `tree write` activation above is the required single live
+preflight; do not replace it with separate settings reads. Every later BYO
+member command must pass the same explicit `--org "<team-id>"`.
 
 This path requires a standard First Tree CLI login with the member credentials
 and `client.yaml` retained. It does not require a running First Tree Client
@@ -165,6 +204,12 @@ Push without force. If push outcome is unknown, fetch the exact remote source
 ref and compare its full OID before retrying. If PR creation outcome is
 unknown, query open PRs by exact repository, base, source ref, and head; reuse
 one exact match and fail closed on zero or multiple matches.
+
+Before a PR exists, a failed preflight or remote operation creates no fake PR
+state and is safe to retry after checking the remote. Once a PR exists, never
+report it as rolled back or delete its recoverable local/remote state merely
+because handoff failed. Preserve its URL, branch, and exact head; retry the
+same keyed handoff for that PR after live revalidation.
 
 Immediately before dispatch, re-read config and `gh pr view`; re-check the
 repository, author, ready state, base/source refs, exact head, marker, repair
@@ -226,6 +271,9 @@ first-tree chat create --as-member [--org <org-id>] \
   --format markdown \
   --metadata-file <packet-file> < <opening-file>
 ```
+
+In BYO mode, replace the bracketed form with the required explicit
+`--org "<team-id>"`; never resolve the Team from `/me`, a default, or cache.
 
 The Server derives the exact Reviewer, human sender, topic, provenance, and
 stable task key. Its logical identity is Team + task type + canonical bound
@@ -435,15 +483,12 @@ readability. Substitute the channel-correct binary from AGENTS / current
 channel (`first-tree` on prod, `first-tree-staging` on staging,
 `first-tree-dev` on dev) before running them.
 
-The Context-management CLI you actually depend on while reading or
-writing is small. Today only one command is operationally required:
+The Context-management CLI you actually depend on while writing is small:
 
 - `first-tree tree verify` — validate frontmatter and node structure;
   the write gate that must pass before any commit.
+- `first-tree tree write` — in BYO mode, revalidate one explicit Team and
+  exact `tree read` snapshot before authoring and first remote mutation.
 
-A simplified CLI surface (a structural `list`, a `verify`, and an
-`upgrade`) is the design target; until that lands, map the tree with
-standard tooling (`ls`, `Read`, `Grep`) and rely on `tree verify` as
-the write gate. Everything else (opening PRs/MRs, fetching code, reading
-the workspace binding) goes through standard tools (`git`, `gh`,
-`glab`, `Read`, etc.).
+Everything else (worktrees, commits, PRs/MRs, and source reads) uses standard
+tools (`git`, `gh`, `glab`, `Read`, etc.).
