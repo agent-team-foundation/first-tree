@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { SdkError } from "@first-tree/client";
@@ -252,13 +252,16 @@ describe("task-scoped BYO Context Tree Read activation", () => {
     writeNode(outsideNode, "External mutable node", "outside the selected Team snapshot");
 
     if (fixtureKind === "root NODE.md") {
-      rmSync(join(remote.seed, "NODE.md"));
-      symlinkSync(outsideNode, join(remote.seed, "NODE.md"));
+      const linkPath = join(remote.seed, "NODE.md");
+      rmSync(linkPath);
+      symlinkSync(relative(dirname(linkPath), outsideNode), linkPath);
     } else if (fixtureKind === "nested NODE.md") {
-      rmSync(join(remote.seed, "security", "NODE.md"));
-      symlinkSync(outsideNode, join(remote.seed, "security", "NODE.md"));
+      const linkPath = join(remote.seed, "security", "NODE.md");
+      rmSync(linkPath);
+      symlinkSync(relative(dirname(linkPath), outsideNode), linkPath);
     } else {
-      symlinkSync(outsideNode, join(remote.seed, "security", "external-contract.md"));
+      const linkPath = join(remote.seed, "security", "external-contract.md");
+      symlinkSync(relative(dirname(linkPath), outsideNode), linkPath);
       writeFileSync(
         join(remote.seed, "security", "contract.md"),
         '---\ntitle: "Team contract"\nowners: [owner]\nsoft_links: ["/security/external-contract.md"]\n---\n\n# Team contract\n',

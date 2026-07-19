@@ -471,8 +471,14 @@ function assertContextTreeReadSymlinkSafety(root: string, runGit: ContextTreeRea
     }
 
     const linkEntry = lstatSync(linkPath);
-    if (!linkEntry.isSymbolicLink() || isAbsolute(readlinkSync(linkPath))) {
+    const linkTarget = readlinkSync(linkPath);
+    if (!linkEntry.isSymbolicLink() || isAbsolute(linkTarget)) {
       throw new Error("Tracked symbolic link is not a safe relative link");
+    }
+
+    const directTarget = resolve(dirname(linkPath), linkTarget);
+    if (!pathIsInside(canonicalRoot, directTarget)) {
+      throw new Error("Tracked symbolic link leaves the snapshot");
     }
 
     const canonicalTarget = realpathSync(linkPath);
