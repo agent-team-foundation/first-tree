@@ -123,7 +123,12 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
    * POST /orgs/:orgId/chats — create a new chat. The :orgId path param
    * makes the org explicit; visibility of every requested participant is
    * verified before the service layer touches the DB.
+   *
+   * Rate limiting is the global actor-aware `@fastify/rate-limit` guard
+   * registered in `app.ts`; this authenticated route intentionally does not
+   * duplicate the shared safety policy with a lower per-route cap.
    */
+  // codeql[js/missing-rate-limiting]
   app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: false } }, async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
     const rawBody = request.body;
