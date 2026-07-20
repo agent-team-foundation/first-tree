@@ -1,7 +1,8 @@
 import type { ToastInput } from "../components/ui/toast.js";
 
 type AddToast = (toast: ToastInput) => void;
-export type RetryLogout = () => undefined | boolean | Promise<boolean>;
+export type LogoutResult = "completed" | "incomplete" | "superseded";
+export type RetryLogout = () => undefined | LogoutResult | Promise<LogoutResult>;
 export const LOGOUT_INCOMPLETE_EVENT = "auth:logout-incomplete";
 
 export function publishLogoutIncomplete(retry: RetryLogout): void {
@@ -19,7 +20,9 @@ export function showLogoutIncompleteToast(addToast: AddToast, retry: RetryLogout
       onClick: () => {
         void Promise.resolve(retry())
           .then((completed) => {
-            if (completed !== true) showLogoutIncompleteToast(addToast, retry);
+            if (completed !== "completed" && completed !== "superseded") {
+              showLogoutIncompleteToast(addToast, retry);
+            }
           })
           .catch(() => showLogoutIncompleteToast(addToast, retry));
       },

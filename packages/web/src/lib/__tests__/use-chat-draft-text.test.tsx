@@ -3,6 +3,7 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDomHarness, type DomHarness } from "../../test-utils/dom-harness.js";
+import { setBrowserStorageUser } from "../browser-storage-scope.js";
 import { chatDraftScope, loadDraft, saveDraft } from "../draft-store.js";
 import { useChatDraftText } from "../use-chat-draft-text.js";
 
@@ -10,6 +11,8 @@ let h: DomHarness;
 
 beforeEach(() => {
   window.localStorage.clear();
+  setBrowserStorageUser(null);
+  setBrowserStorageUser("user-1");
   h = createDomHarness();
 });
 afterEach(() => h.cleanup());

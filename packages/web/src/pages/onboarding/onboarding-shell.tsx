@@ -31,7 +31,7 @@ import { StepProgress } from "./step-progress.js";
  */
 export function OnboardingShell({ children }: { children: ReactNode }) {
   const { activeStep, finishLater, hasAgent } = useOnboardingFlow();
-  const { logout, memberships } = useAuth();
+  const { logout, retryLogout, memberships } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
@@ -54,12 +54,18 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
     const departingScope = captureBrowserStorageScope();
     void Promise.resolve(logout({ scope: departingScope }))
       .then((completed) => {
-        if (!completed) {
-          showLogoutIncompleteToast(addToast, () => logout({ protectReplacementTokens: true, scope: departingScope }));
+        if (completed === "incomplete" || completed === undefined) {
+          showLogoutIncompleteToast(
+            addToast,
+            retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
+          );
         }
       })
       .catch(() =>
-        showLogoutIncompleteToast(addToast, () => logout({ protectReplacementTokens: true, scope: departingScope })),
+        showLogoutIncompleteToast(
+          addToast,
+          retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
+        ),
       );
   };
 

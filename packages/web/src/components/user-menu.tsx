@@ -21,7 +21,7 @@ const PARENT_URL = "https://first-tree.ai";
  * surfaces (team on the left, account on the right).
  */
 export function UserMenu() {
-  const { user, logout } = useAuth();
+  const { user, logout, retryLogout } = useAuth();
   const { addToast } = useOptionalToast();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -93,19 +93,21 @@ export function UserMenu() {
               onClick={() => {
                 setOpen(false);
                 void (async () => {
-                  let completed = false;
+                  let result: "completed" | "incomplete" | "superseded" | undefined;
                   const departingScope = captureBrowserStorageScope();
                   try {
-                    completed = (await Promise.resolve(logout({ scope: departingScope }))) === true;
+                    result = await Promise.resolve(logout({ scope: departingScope }));
                   } catch {
-                    completed = false;
+                    result = "incomplete";
                   }
-                  if (!completed) {
-                    showLogoutIncompleteToast(addToast, () =>
-                      logout({ protectReplacementTokens: true, scope: departingScope }),
+                  if (result === "incomplete" || result === undefined) {
+                    showLogoutIncompleteToast(
+                      addToast,
+                      retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
                     );
                     return;
                   }
+                  if (result === "superseded") return;
                   // Leave the app on the marketing site rather than an app
                   // route — `logout()` clears local auth state, so staying in
                   // the SPA would just redirect to the login page.

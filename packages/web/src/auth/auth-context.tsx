@@ -21,7 +21,7 @@ import {
   setBrowserStorageUser,
 } from "../lib/browser-storage-scope.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
-import { publishLogoutIncomplete } from "./logout-recovery.js";
+import { type LogoutResult, publishLogoutIncomplete } from "./logout-recovery.js";
 
 type MeUser = {
   id: string;
@@ -170,7 +170,8 @@ type AuthContextValue = {
   switchingOrg: OrgBrief | null;
   setSwitchingOrg: (org: OrgBrief | null) => void;
   refreshMe: () => Promise<void>;
-  logout: (options?: LogoutOptions) => undefined | Promise<boolean>;
+  logout: (options?: LogoutOptions) => undefined | Promise<LogoutResult>;
+  retryLogout?: () => Promise<LogoutResult>;
   logoutStatus?: "idle" | "purging" | "incomplete";
 };
 
@@ -179,6 +180,7 @@ export type LogoutOptions = {
   clearTokens?: boolean;
   recovery?: boolean;
   protectReplacementTokens?: boolean;
+  generation?: number;
   scope?: BrowserStorageScope;
 };
 
@@ -265,6 +267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (mounted in the layout) and the switcher (in the header) read one source.
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
   const [logoutStatus, setLogoutStatus] = useState<"idle" | "purging" | "incomplete">("idle");
+  const retryLogoutRef = useRef<(() => Promise<LogoutResult>) | null>(null);
 
   const commitLocalLogoutState = useCallback(() => {
     setApiSelectedOrganizationId(null);
@@ -284,35 +287,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const logout = useCallback(
-    async (options: LogoutOptions = {}): Promise<boolean> => {
+    async (options: LogoutOptions = {}): Promise<LogoutResult> => {
       const departingScope = options.scope ?? captureBrowserStorageScope();
       if (options.broadcast !== false) invalidateBrowserStorageScope(departingScope);
-      authGenerationRef.current += 1;
-      const logoutGeneration = authGenerationRef.current;
-      setLogoutStatus("purging");
+      const logoutGeneration = options.generation ?? authGenerationRef.current + 1;
+      const canFinalize = options.generation === undefined || options.generation === authGenerationRef.current;
+      if (options.generation === undefined) authGenerationRef.current = logoutGeneration;
+      const retry = () => logout({ ...options, generation: logoutGeneration, recovery: false, scope: departingScope });
+      retryLogoutRef.current = retry;
+      if (canFinalize) setLogoutStatus("purging");
       try {
         await clearPersistentBrowserStorage(departingScope);
       } catch {
-        if (authGenerationRef.current !== logoutGeneration) {
+        if (!canFinalize || authGenerationRef.current !== logoutGeneration) {
           setLogoutStatus("idle");
-          if (options.recovery) {
-            publishLogoutIncomplete(() => logout({ ...options, recovery: false, scope: departingScope }));
-          }
-          return false;
+          if (options.recovery) publishLogoutIncomplete(retry);
+          return "incomplete";
         }
         setLogoutStatus("incomplete");
         if (options.recovery) {
           commitLocalLogoutState();
-          publishLogoutIncomplete(() => logout({ ...options, recovery: false, scope: departingScope }));
+          publishLogoutIncomplete(retry);
         }
-        return false;
+        return "incomplete";
       }
       if (authGenerationRef.current !== logoutGeneration) {
         setLogoutStatus("idle");
-        if (options.recovery) {
-          publishLogoutIncomplete(() => logout({ ...options, recovery: false, scope: departingScope }));
-        }
-        return false;
+        if (options.recovery) publishLogoutIncomplete(retry);
+        return "superseded";
       }
       commitLocalLogoutState();
       // A different tab may have installed a replacement account while this
@@ -325,10 +327,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearStoredTokens();
       }
       setLogoutStatus("idle");
-      return true;
+      return "completed";
     },
     [commitLocalLogoutState],
   );
+
+  const retryLogout = useCallback(() => retryLogoutRef.current?.() ?? Promise.resolve("incomplete" as const), []);
 
   const fetchMe = useCallback(async () => {
     const generation = authGenerationRef.current;
@@ -627,6 +631,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSwitchingOrg,
         refreshMe: fetchMe,
         logout,
+        retryLogout,
         logoutStatus,
       }}
     >

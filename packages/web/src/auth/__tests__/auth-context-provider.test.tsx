@@ -421,9 +421,9 @@ describe("AuthProvider", () => {
       },
     });
 
-    let logoutResult: Promise<boolean> = Promise.resolve(false);
+    let logoutResult: Promise<"completed" | "incomplete" | "superseded"> = Promise.resolve("incomplete");
     await act(async () => {
-      logoutResult = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve(false);
+      logoutResult = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve("incomplete");
       await Promise.resolve();
     });
     expect(requests.length).toBeGreaterThan(0);
@@ -440,7 +440,20 @@ describe("AuthProvider", () => {
       await logoutResult;
     });
 
-    await expect(logoutResult).resolves.toBe(false);
+    await expect(logoutResult).resolves.toBe("superseded");
+    expect(latestAuth?.isAuthenticated).toBe(true);
+    const firstRequestCount = requests.length;
+    let retryResult: Promise<"completed" | "incomplete" | "superseded"> = Promise.resolve("incomplete");
+    await act(async () => {
+      retryResult = latestAuth?.retryLogout?.() ?? Promise.resolve("incomplete");
+      await Promise.resolve();
+    });
+    expect(requests.length).toBeGreaterThan(firstRequestCount);
+    await act(async () => {
+      for (const request of requests.slice(firstRequestCount)) request.onsuccess?.();
+      await retryResult;
+    });
+    await expect(retryResult).resolves.toBe("superseded");
     expect(latestAuth?.isAuthenticated).toBe(true);
     expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
@@ -464,9 +477,9 @@ describe("AuthProvider", () => {
       },
     });
 
-    let result: Promise<boolean> = Promise.resolve(false);
+    let result: Promise<"completed" | "incomplete" | "superseded"> = Promise.resolve("incomplete");
     await act(async () => {
-      result = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve(false);
+      result = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve("incomplete");
       await Promise.resolve();
     });
     await flush();

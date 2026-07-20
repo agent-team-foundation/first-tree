@@ -15,7 +15,7 @@ import { isStandalone } from "./install-guide-state.js";
 import { useInstallPrompt } from "./use-install-guide.js";
 
 export function MobileMePage() {
-  const { user, teamDisplayName, role, logout } = useAuth();
+  const { user, teamDisplayName, role, logout, retryLogout } = useAuth();
   const { addToast } = useOptionalToast();
   const displayName = user?.displayName ?? "Signed-in user";
   const username = user?.username ?? "";
@@ -77,15 +77,17 @@ export function MobileMePage() {
             const departingScope = captureBrowserStorageScope();
             void Promise.resolve(logout({ scope: departingScope }))
               .then((completed) => {
-                if (!completed) {
-                  showLogoutIncompleteToast(addToast, () =>
-                    logout({ protectReplacementTokens: true, scope: departingScope }),
+                if (completed === "incomplete" || completed === undefined) {
+                  showLogoutIncompleteToast(
+                    addToast,
+                    retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
                   );
                 }
               })
               .catch(() =>
-                showLogoutIncompleteToast(addToast, () =>
-                  logout({ protectReplacementTokens: true, scope: departingScope }),
+                showLogoutIncompleteToast(
+                  addToast,
+                  retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
                 ),
               );
           }}
