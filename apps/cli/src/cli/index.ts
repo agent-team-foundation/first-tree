@@ -26,7 +26,25 @@ import { registerTreeCommands } from "../commands/tree/index.js";
 import { registerUpgradeCommand } from "../commands/upgrade.js";
 import { channelConfig } from "../core/channel.js";
 import { setJsonMode } from "../core/output.js";
+import { retireLegacyGithubScanLaunchd } from "../core/retire-github-scan-launchd.js";
 import { COMMAND_VERSION } from "../core/version.js";
+
+function shouldRunFirstRunMigrations(args: string[]): boolean {
+  if (process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY === "1") return false;
+  if (args.length === 0) return false;
+  return !args.some((arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-V");
+}
+
+// This runs from the newly installed binary itself, which closes the portable
+// X -> Y adoption boundary after X has switched `current` but returned without
+// restarting a service. Help/version-only invocations remain read-only.
+if (shouldRunFirstRunMigrations(process.argv.slice(2))) {
+  try {
+    retireLegacyGithubScanLaunchd();
+  } catch {
+    // Startup migration is best-effort and must never block the requested CLI command.
+  }
+}
 
 const program = new Command();
 

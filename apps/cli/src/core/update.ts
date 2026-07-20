@@ -492,40 +492,6 @@ async function rewritePortableShims(root: string): Promise<void> {
   await Promise.all(binNames.map((name) => writePortableShim(join(shimDir, name), root)));
 }
 
-/** Run the newly installed portable artifact's cleanup-only migration hook. */
-function runPortableMigrationBootstrap(root: string): void {
-  const node = join(root, "node", "bin", "node");
-  const cli = join(root, "app", "cli", "index.mjs");
-  if (!existsSync(node) || !existsSync(cli)) return;
-
-  try {
-    const result = spawnSync(node, [cli, "daemon", "ensure-service"], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 15_000,
-      env: {
-        ...process.env,
-        FIRST_TREE_INSTALL_MODE: "portable",
-        FIRST_TREE_PORTABLE_ROOT: root,
-        FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY: "1",
-        FIRST_TREE_SERVICE_MODE: "",
-      },
-    });
-    if (result.status !== 0) {
-      const output = [String(result.stderr ?? "").trim(), String(result.stdout ?? "").trim()]
-        .filter(Boolean)
-        .join(" | ");
-      print.line(
-        `  warning: portable migration bootstrap exited with status ${result.status ?? "unknown"}${output ? `: ${output}` : ""}\n`,
-      );
-    }
-  } catch (err) {
-    print.line(
-      `  warning: portable migration bootstrap skipped: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
-  }
-}
-
 function portableInstallFailure(err: unknown, reasonCode = "portable_update_failed"): ExecuteUpdateResult {
   const message = err instanceof Error ? err.message : String(err);
   const classification = classify(new Error(message), { source: "update" });
@@ -578,7 +544,6 @@ async function installPortableMeta(
 
     await switchPortableCurrent(prefix, finalVersionDir);
     await rewritePortableShims(join(prefix, "current"));
-    runPortableMigrationBootstrap(join(prefix, "current"));
     return { ok: true, mode: "portable", installedVersion: meta.version };
   } catch (err) {
     return portableInstallFailure(err);
