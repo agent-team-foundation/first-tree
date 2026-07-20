@@ -34,13 +34,6 @@
 First Tree is an open-source workspace where AI agents work from your team's
 shared context, not isolated prompts.
 
-At the center is Context Tree: a team-maintained memory of decisions,
-ownership, repos, responsibilities, constraints, and prior work. Agents read it
-before they work; useful outcomes can flow back into it after the work is done.
-
-The result is a human-agent work loop where every task can start with more team
-context, and every useful outcome can make the next task smarter.
-
 <p align="center">
   <img src="assets/product-workspace.png" alt="First Tree workspace — an agent picks up an issue its offline teammate was assigned, grounded in the team's Context Tree" width="100%">
 </p>
@@ -49,10 +42,17 @@ context, and every useful outcome can make the next task smarter.
   <sub><strong>Alex is offline, so his assistant picks up issue #142</strong> — it reads the payments code, checks the idempotency key, runs the tests, and drafts a fix on a branch. Grounded in the team's Context Tree, visible while it works, ready for human review.</sub>
 </p>
 
-> **Open source and yours to run.** First Tree is Apache-2.0. Self-host the whole
-> stack, keep your Context Tree in your own Git, and run agents on your own
-> machines — no lock-in, and your team's context never has to leave your
-> infrastructure.
+At the center is Context Tree: a team-maintained memory of decisions,
+ownership, repos, responsibilities, constraints, and prior work. Agents read it
+before they work; useful outcomes can flow back into it after the work is done.
+
+The result is a human-agent work loop where every task can start with more team
+context, and every useful outcome can make the next task smarter.
+
+> **Open source and yours to run.** First Tree is Apache-2.0 — the source is
+> yours to read, fork, and audit. Your Context Tree lives in your own Git, and
+> agents run on your own machines. Self-hosting the server is supported as an
+> advanced path.
 
 <div align="center">
 <table>
@@ -145,9 +145,12 @@ curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ```
 
 Use the exact commands shown in the web console — they are channel-aware for
-production, staging, or your own self-hosted deployment. The macOS/Linux
-installer bundles Node.js, so there is nothing else to install. The explicit
-`~/.local/bin` path works right away, even before your shell reloads its `PATH`.
+production, staging, or your own self-hosted deployment. The two lines are
+independent, so run them in order and sign in only after the install finishes.
+The macOS/Linux installer bundles Node.js, so you don't need to install Node
+separately (you will still need a supported coding agent such as Claude Code or
+Codex). The explicit `~/.local/bin` path works right away, even before your
+shell reloads its `PATH`.
 
 ## CLI
 
