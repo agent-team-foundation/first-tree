@@ -474,9 +474,9 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS",
     }),
     /**
-     * Idle threshold for source=github chats. Mapped chats require every bound
-     * entity to be closed/merged; no-mapping source=github chats use this same
-     * threshold as an orphan/no-binding cleanup.
+     * Idle threshold for SCM-originated chats. Mapped chats require all GitHub
+     * mappings and active GitLab mappings to be closed/merged; no-mapping SCM
+     * chats use this same threshold as an orphan/no-binding cleanup.
      */
     archiveMappedIdleSeconds: field(
       z.coerce
