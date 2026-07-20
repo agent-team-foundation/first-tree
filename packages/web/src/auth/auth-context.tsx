@@ -21,6 +21,7 @@ import {
   setBrowserStorageUser,
 } from "../lib/browser-storage-scope.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
+import { publishLogoutIncomplete } from "./logout-recovery.js";
 
 type MeUser = {
   id: string;
@@ -176,6 +177,7 @@ type AuthContextValue = {
 type LogoutOptions = {
   broadcast?: boolean;
   clearTokens?: boolean;
+  recovery?: boolean;
   protectReplacementTokens?: boolean;
   scope?: BrowserStorageScope;
 };
@@ -264,6 +266,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
   const [logoutStatus, setLogoutStatus] = useState<"idle" | "purging" | "incomplete">("idle");
 
+  const commitLocalLogoutState = useCallback(() => {
+    setApiSelectedOrganizationId(null);
+    queryClient.clear();
+    clearOnboardingSessionFlags();
+    setBrowserStorageUser(null);
+    setIsAuthenticated(false);
+    setUser(null);
+    setMemberships([]);
+    setSelectedOrgId(null);
+    setOnboardingStep(null);
+    setOnboardingDismissedAt(null);
+    setOnboardingCompletedAt(null);
+    setDocsEnabled(false);
+    setMeLoaded(false);
+    setSwitchingOrg(null);
+  }, [queryClient]);
+
   const logout = useCallback(
     async (options: LogoutOptions = {}): Promise<boolean> => {
       const departingScope = options.scope ?? captureBrowserStorageScope();
@@ -274,16 +293,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await clearPersistentBrowserStorage(departingScope);
       } catch {
         setLogoutStatus("incomplete");
+        if (options.recovery) {
+          commitLocalLogoutState();
+          publishLogoutIncomplete(() => logout({ ...options, scope: departingScope }));
+        }
         return false;
       }
-      setApiSelectedOrganizationId(null);
-      queryClient.clear();
-      // Drop per-tab onboarding flags so the next login (different user, or
-      // same user post-DB-reset in dev) doesn't inherit a stale "Step 1
-      // confirmed" / "Step 3 dismissed" / agent uuid / draft from the prior
-      // identity.
-      clearOnboardingSessionFlags();
-      setBrowserStorageUser(null);
+      commitLocalLogoutState();
       // A different tab may have installed a replacement account while this
       // tab was purging the departing scope. Never clear that newer account's
       // credential as a side effect of the old logout.
@@ -293,20 +309,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (options.clearTokens !== false && canClearCredential) {
         clearStoredTokens();
       }
-      setIsAuthenticated(false);
-      setUser(null);
-      setMemberships([]);
-      setSelectedOrgId(null);
-      setOnboardingStep(null);
-      setOnboardingDismissedAt(null);
-      setOnboardingCompletedAt(null);
-      setDocsEnabled(false);
-      setMeLoaded(false);
-      setSwitchingOrg(null);
       setLogoutStatus("idle");
       return true;
     },
-    [queryClient],
+    [commitLocalLogoutState],
   );
 
   const fetchMe = useCallback(async () => {
@@ -561,7 +567,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Listen for auth failure dispatched by the API client
   useEffect(() => {
     const handler = () => {
-      void Promise.resolve(logout());
+      void Promise.resolve(logout({ recovery: true }));
     };
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
@@ -570,7 +576,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handler = (event: Event) => {
       const scope = (event as CustomEvent<{ scope?: BrowserStorageScope }>).detail?.scope;
-      void Promise.resolve(logout({ broadcast: false, protectReplacementTokens: true, scope }));
+      void Promise.resolve(logout({ broadcast: false, protectReplacementTokens: true, recovery: true, scope }));
     };
     window.addEventListener(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, handler);
     return () => window.removeEventListener(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, handler);

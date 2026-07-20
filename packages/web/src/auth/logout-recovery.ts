@@ -1,7 +1,14 @@
 import type { ToastInput } from "../components/ui/toast.js";
 
 type AddToast = (toast: ToastInput) => void;
-type RetryLogout = () => undefined | boolean | Promise<boolean>;
+export type RetryLogout = () => undefined | boolean | Promise<boolean>;
+export const LOGOUT_INCOMPLETE_EVENT = "auth:logout-incomplete";
+
+export function publishLogoutIncomplete(retry: RetryLogout): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(LOGOUT_INCOMPLETE_EVENT, { detail: { retry } }));
+  }
+}
 
 export function showLogoutIncompleteToast(addToast: AddToast, retry: RetryLogout): void {
   addToast({

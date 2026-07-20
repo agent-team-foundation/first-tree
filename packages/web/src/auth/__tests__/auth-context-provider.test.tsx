@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "../../components/ui/toast.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -137,9 +138,11 @@ async function renderAuth(children?: ReactNode): Promise<void> {
   await act(async () => {
     root?.render(
       <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <Probe />
-        </AuthProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <Probe />
+          </AuthProvider>
+        </ToastProvider>
       </QueryClientProvider>,
     );
   });
@@ -418,7 +421,7 @@ describe("AuthProvider", () => {
 
     let result: Promise<boolean> = Promise.resolve(false);
     await act(async () => {
-      result = latestAuth?.logout() ?? Promise.resolve(false);
+      result = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve(false);
       await Promise.resolve();
     });
     await flush();
@@ -429,6 +432,86 @@ describe("AuthProvider", () => {
     });
     expect(latestAuth?.isAuthenticated).toBe(true);
     expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
+    delete (globalThis as { indexedDB?: unknown }).indexedDB;
+  });
+
+  it("resets local state and shows recovery when an auth failure purge is blocked", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    await renderAuth();
+    const requests: Array<{ onblocked: (() => void) | null }> = [];
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      value: {
+        deleteDatabase: () => {
+          const request = { onblocked: null as (() => void) | null };
+          requests.push(request);
+          return request;
+        },
+      },
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("auth:logout"));
+      await Promise.resolve();
+    });
+    expect(requests.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const request of requests) request.onblocked?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(latestAuth?.logoutStatus).toBe("incomplete");
+    expect(document.body.textContent).toContain("Sign out incomplete");
+    delete (globalThis as { indexedDB?: unknown }).indexedDB;
+  });
+
+  it("resets stale local state while preserving replacement credentials on a blocked remote purge", async () => {
+    let currentTokens = {
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh-a",
+    };
+    apiMocks.getStoredTokens.mockImplementation(() => currentTokens);
+    await renderAuth();
+    const scope = await import("../../lib/browser-storage-scope.js");
+    const account = scope.captureBrowserStorageScope();
+    const requests: Array<{ onblocked: (() => void) | null }> = [];
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      value: {
+        deleteDatabase: () => {
+          const request = { onblocked: null as (() => void) | null };
+          requests.push(request);
+          return request;
+        },
+      },
+    });
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(scope.BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, { detail: { scope: account } }),
+      );
+      await Promise.resolve();
+    });
+    currentTokens = {
+      accessToken: tokenWithPayload({ sub: "user-2" }),
+      refreshToken: "refresh-b",
+    };
+    expect(requests.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const request of requests) request.onblocked?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(latestAuth?.logoutStatus).toBe("incomplete");
+    expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Sign out incomplete");
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
   });
 

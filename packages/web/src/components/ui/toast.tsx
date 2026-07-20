@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { LOGOUT_INCOMPLETE_EVENT, type RetryLogout, showLogoutIncompleteToast } from "../../auth/logout-recovery.js";
 
 /**
  * Minimal toast system — used for transient informational nudges (e.g.
@@ -49,6 +50,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value: ToastContextValue = { addToast };
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const retry = (event as CustomEvent<{ retry?: RetryLogout }>).detail?.retry;
+      if (retry) showLogoutIncompleteToast(addToast, retry);
+    };
+    window.addEventListener(LOGOUT_INCOMPLETE_EVENT, handler);
+    return () => window.removeEventListener(LOGOUT_INCOMPLETE_EVENT, handler);
+  }, [addToast]);
 
   return (
     <ToastContext.Provider value={value}>
