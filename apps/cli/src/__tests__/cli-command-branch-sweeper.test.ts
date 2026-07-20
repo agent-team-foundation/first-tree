@@ -85,6 +85,10 @@ describe("CLI command branch sweeper", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.FIRST_TREE_CHAT_ID;
+    // `agent create` routes on FIRST_TREE_AGENT_ID (issue #1885); pin the
+    // operator path so these branch cases are deterministic inside/outside an
+    // agent session.
+    delete process.env.FIRST_TREE_AGENT_ID;
     bootstrapMocks.resolveServerUrl.mockReturnValue("https://first-tree.example");
     bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("access-token");
     bootstrapMocks.saveAgentConfig.mockReturnValue("/tmp/agent-alpha");

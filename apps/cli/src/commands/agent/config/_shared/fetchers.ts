@@ -1,4 +1,6 @@
 import type {
+  AgentCapabilitiesView,
+  AgentCapability,
   AgentResourcesOutput,
   AgentRuntimeConfig,
   AgentRuntimeConfigPatch,
@@ -89,6 +91,30 @@ export async function patchAgentResources(
     method: "PATCH",
     adminToken,
     body: JSON.stringify(body),
+  });
+}
+
+export async function getCapabilities(
+  serverUrl: string,
+  adminToken: string,
+  agentId: string,
+): Promise<AgentCapabilitiesView> {
+  return adminFetch<AgentCapabilitiesView>(`${serverUrl}/api/v1/agents/${agentId}/capabilities`, {
+    method: "GET",
+    adminToken,
+  });
+}
+
+export async function patchCapabilities(
+  serverUrl: string,
+  adminToken: string,
+  agentId: string,
+  capabilities: AgentCapability[],
+): Promise<AgentCapabilitiesView> {
+  return adminFetch<AgentCapabilitiesView>(`${serverUrl}/api/v1/agents/${agentId}/capabilities`, {
+    method: "PATCH",
+    adminToken,
+    body: JSON.stringify({ capabilities }),
   });
 }
 

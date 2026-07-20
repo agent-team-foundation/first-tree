@@ -17,12 +17,14 @@ import { agentContextReviewRunRoutes } from "./api/agent/context-review-runs.js"
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
 import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
+import { agentManagedAgentRoutes } from "./api/agent/managed-agents.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes } from "./api/agent/messages.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { agentActivityRoutes } from "./api/agent-activity.js";
 import { agentUsageRoutes } from "./api/agent-usage.js";
 import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
+import { agentCapabilitiesRoutes } from "./api/agents-capabilities.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
 import { agentResourcesRoutes } from "./api/agents-resources.js";
 import { attachmentRoutes } from "./api/attachments.js";
@@ -581,6 +583,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("resourcesScope", async (scope) => {
           await scope.register(agentRoutes, { prefix: "/agents" });
+          await scope.register(agentCapabilitiesRoutes, { prefix: "/agents" });
           await scope.register(agentConfigRoutes, { prefix: "/agents" });
           await scope.register(agentResourcesRoutes, { prefix: "/agents" });
           await scope.register(agentActivityRoutes, { prefix: "/agents" });
@@ -608,6 +611,7 @@ export async function buildApp(config: Config) {
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
+          await scope.register(agentManagedAgentRoutes);
           await scope.register(agentContextTreeInfoRoutes);
           if (config.docs.enabled) {
             await scope.register(agentDocumentRoutes);

@@ -75,6 +75,10 @@ For the AgentRuntime process speaking as an agent. Parallels `/me` (user self) â
 
 Example: `GET /api/v1/agent/me`, `POST /api/v1/agent/chats/:chatId/messages`, `WS /api/v1/agent/ws`.
 
+**Actor-vs-target within Class D.** A Class D route may still create/act on *another* resource, as long as authorization derives from the acting agent (`request.agent`) and the target scope is forced from it, never trusted from the body. `POST /api/v1/agent/managed-agents` (issue #1885) is such a route: the acting agent provisions a *teammate* agent, but the new agent's org and manager are taken from `request.agent`, and a per-agent `provision-agents` capability (admin-granted; default-deny) gates it. The route name signals actor (`agent`) vs target (`managed-agents`) so it doesn't read as first-person self-mutation.
+
+The mirror operator route `POST /api/v1/orgs/:orgId/agents` (Class B) rejects any request carrying an `X-Agent-Id` header, funnelling SDK-mediated agents through the gated Class D path so the capability gate can't be sidestepped via the member route.
+
 ## Internal analytics exception
 
 | Path | Middleware | Auth |

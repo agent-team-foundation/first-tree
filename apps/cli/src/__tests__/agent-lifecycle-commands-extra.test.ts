@@ -119,6 +119,10 @@ async function runTopLevel(register: (program: Command) => void, args: string[])
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "ft-cli-agent-commands-"));
   vi.clearAllMocks();
+  // `agent create` routes on FIRST_TREE_AGENT_ID (issue #1885): these cases
+  // exercise the human-operator path, so pin operator context deterministically
+  // regardless of whether the suite runs inside an agent session.
+  delete process.env.FIRST_TREE_AGENT_ID;
   configMocks.defaultHome.mockReturnValue(tempDir);
   configMocks.defaultConfigDir.mockReturnValue(tempDir);
   configMocks.defaultDataDir.mockReturnValue(join(tempDir, "data"));
