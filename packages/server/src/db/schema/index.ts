@@ -1,6 +1,7 @@
 export { agentChatSessions } from "./agent-chat-sessions.js";
 export { agentConfigs } from "./agent-configs.js";
 export { agentPresence } from "./agent-presence.js";
+export { agentProvisioningAudit } from "./agent-provisioning-audit.js";
 export { agentResourceBindings } from "./agent-resource-bindings.js";
 export { agents } from "./agents.js";
 export { attachments } from "./attachments.js";

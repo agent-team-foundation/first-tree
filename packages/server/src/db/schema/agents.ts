@@ -1,4 +1,4 @@
-import { customType, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { boolean, customType, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { clients } from "./clients.js";
 import { organizations } from "./organizations.js";
 
@@ -45,6 +45,8 @@ export const agents = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     /** Member who manages this agent (NOT NULL after 0019 unified-user-token migration) */
     managerId: text("manager_id").notNull(),
+    /** Admin-granted standing capability for agent-executable provisioning. */
+    canProvisionAgents: boolean("can_provision_agents").notNull().default(false),
     /**
      * Physical client this agent is pinned to. Nullable for human agents (no
      * runtime). For non-human agents it is set once (NULL → ID, on creation or

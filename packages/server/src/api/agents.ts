@@ -1,4 +1,6 @@
 import {
+  AGENT_ACTOR_HEADER,
+  AGENT_SELECTOR_HEADER,
   agentPinnedMessageSchema,
   switchAgentRuntimeSchema,
   updateAgentSchema,
@@ -6,6 +8,7 @@ import {
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";
 import * as agentService from "../services/agent.js";
@@ -163,6 +166,25 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
     return serializeAgent(agent, userAvatarUrl);
   });
+
+  app.put<{ Params: { uuid: string } }>(
+    "/:uuid/provisioning-capability",
+    { config: { otelRecordBody: true } },
+    async (request) => {
+      if (request.headers[AGENT_ACTOR_HEADER] || request.headers[AGENT_SELECTOR_HEADER]) {
+        throw new ForbiddenError("Only a human organization administrator can grant or revoke this capability");
+      }
+      const { agent, scope } = await requireAgentAccess(request, app.db, "manage");
+      if (scope.role !== "admin") {
+        throw new ForbiddenError("Admin role required to grant or revoke agent provisioning capability");
+      }
+      assertMutableAgentIsNotLandingCampaignTrial(agent);
+      const { enabled } = z.object({ enabled: z.boolean() }).parse(request.body);
+      const updated = await agentService.setAgentProvisioningCapability(app.db, request.params.uuid, enabled);
+      const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, updated);
+      return serializeAgent(updated, userAvatarUrl);
+    },
+  );
 
   app.patch<{ Params: { uuid: string } }>("/:uuid", { config: { otelRecordBody: true } }, async (request) => {
     const { agent: existingAgent, scope } = await requireAgentAccess(request, app.db, "manage");

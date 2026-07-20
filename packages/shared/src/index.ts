@@ -908,6 +908,7 @@ export {
 export {
   type ActivityOverview,
   AGENT_BIND_REJECT_REASONS,
+  AGENT_ACTOR_HEADER,
   AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   type AgentBindRejectReason,

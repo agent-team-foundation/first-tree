@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { registerAgentAddCommand } from "./add.js";
 import { registerAgentBindCommands } from "./bind/index.js";
+import { registerAgentCapabilityCommands } from "./capability.js";
 import { registerAgentConfigCommands } from "./config/index.js";
 import { registerAgentCreateCommand } from "./create.js";
 import { registerAgentDebugCommands } from "./debug/index.js";
@@ -26,6 +27,7 @@ export function registerAgentCommands(program: Command): void {
 
   // Remote agent lifecycle.
   registerAgentCreateCommand(agent);
+  registerAgentCapabilityCommands(agent);
 
   // Workspace housekeeping.
   registerAgentWorkspaceCommands(agent);

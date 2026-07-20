@@ -31,6 +31,13 @@ const bootstrapMocks = vi.hoisted(() => ({
 }));
 
 const cliFetchMock = vi.hoisted(() => vi.fn());
+const provisioningEnvKeys = [
+  "FIRST_TREE_AGENT_ID",
+  "FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE",
+  "FIRST_TREE_CHAT_ID",
+  "FIRST_TREE_SESSION_ID",
+] as const;
+const originalProvisioningEnv = new Map(provisioningEnvKeys.map((key) => [key, process.env[key]]));
 
 const coreMocks = vi.hoisted(() => ({
   COMMAND_VERSION: "0.5.0",
@@ -117,6 +124,7 @@ async function runTopLevel(register: (program: Command) => void, args: string[])
 }
 
 beforeEach(() => {
+  for (const key of provisioningEnvKeys) delete process.env[key];
   tempDir = mkdtempSync(join(tmpdir(), "ft-cli-agent-commands-"));
   vi.clearAllMocks();
   configMocks.defaultHome.mockReturnValue(tempDir);
@@ -150,6 +158,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const key of provisioningEnvKeys) {
+    const value = originalProvisioningEnv.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   rmSync(tempDir, { force: true, recursive: true });
   process.exit = originalExit;
 });
@@ -189,14 +202,14 @@ describe("agent lifecycle CLI commands", () => {
     await runAgent([
       "create",
       "nova",
-      "--type",
-      "agent",
       "--client-id",
       "client-1",
       "--runtime",
       "codex",
       "--display-name",
       "Nova",
+      "--model",
+      "gpt-5.6-codex",
     ]);
 
     expect(cliFetchMock).toHaveBeenNthCalledWith(2, "https://hub.example/api/v1/orgs/org-1/agents", {
@@ -208,6 +221,7 @@ describe("agent lifecycle CLI commands", () => {
         clientId: "client-1",
         runtimeProvider: "codex",
         displayName: "Nova",
+        model: "gpt-5.6-codex",
       }),
       signal: expect.any(AbortSignal),
     });

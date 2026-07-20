@@ -122,6 +122,9 @@ export const AGENT_SELECTOR_HEADER = "x-agent-id";
 /** Header used on agent-scoped HTTP calls to prove the current runtime WS bind. */
 export const AGENT_RUNTIME_SESSION_HEADER = "x-agent-runtime-session";
 
+/** Header used by agent-executable provisioning calls to identify the acting agent. */
+export const AGENT_ACTOR_HEADER = "x-first-tree-acting-agent";
+
 // -- Extended Agent Presence --
 
 export const agentPresenceSchema = z.object({

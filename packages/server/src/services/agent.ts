@@ -24,6 +24,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { agentProvisioningAudit } from "../db/schema/agent-provisioning-audit.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
@@ -417,7 +418,16 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
 export async function createAgent(
   db: Database,
   data: CreateAgent & { managerId?: string },
-  options: { force?: boolean; adoptAsDelegateIfFirst?: boolean } = {},
+  options: {
+    force?: boolean;
+    adoptAsDelegateIfFirst?: boolean;
+    provisioningAudit?: {
+      actingAgentId: string;
+      managingMemberId: string;
+      chatId: string | null;
+      sessionId: string | null;
+    };
+  } = {},
 ) {
   const uuid = uuidv7();
   const name = data.name ?? null;
@@ -609,7 +619,10 @@ export async function createAgent(
 
       if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
 
-      const initialPayload = defaultRuntimeConfigPayload(runtimeProvider);
+      const initialPayload = {
+        ...defaultRuntimeConfigPayload(runtimeProvider),
+        ...(data.model ? { model: data.model } : {}),
+      };
       await tx
         .insert(agentConfigs)
         .values({
@@ -619,6 +632,18 @@ export async function createAgent(
           updatedBy: "system",
         })
         .onConflictDoNothing();
+
+      if (options.provisioningAudit) {
+        await tx.insert(agentProvisioningAudit).values({
+          id: uuidv7(),
+          organizationId: orgId,
+          actingAgentId: options.provisioningAudit.actingAgentId,
+          managingMemberId: options.provisioningAudit.managingMemberId,
+          createdAgentId: row.uuid,
+          chatId: options.provisioningAudit.chatId,
+          sessionId: options.provisioningAudit.sessionId,
+        });
+      }
 
       // First-agent → delegate adoption. When a member creates their FIRST
       // non-human agent and hasn't picked a delegate yet, adopt it as their
@@ -769,6 +794,20 @@ export async function getAgent(db: Database, uuid: string): Promise<AgentRowWith
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   return agent;
+}
+
+export async function setAgentProvisioningCapability(db: Database, uuid: string, enabled: boolean) {
+  const existing = await getAgent(db, uuid);
+  if (existing.type !== AGENT_TYPES.AGENT) {
+    throw new BadRequestError("Provisioning capability can only be granted to non-human agents");
+  }
+  const [updated] = await db
+    .update(agents)
+    .set({ canProvisionAgents: enabled, updatedAt: new Date() })
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .returning();
+  if (!updated) throw new NotFoundError(`Agent "${uuid}" not found`);
+  return updated;
 }
 
 export async function getAgentByName(db: Database, orgId: string, name: string) {

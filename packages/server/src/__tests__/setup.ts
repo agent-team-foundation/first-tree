@@ -72,6 +72,7 @@ const TRUNCATE_TABLES = [
   "resources",
   "agent_configs",
   "agent_presence",
+  "agent_provisioning_audit",
   "invitation_redemptions",
   "invitations",
   "auth_identities",
