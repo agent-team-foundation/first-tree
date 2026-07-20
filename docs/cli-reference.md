@@ -207,7 +207,7 @@ first-tree agent
 ├── list [--remote] [--org <id>]
 ├── add --agent-id <uuid>
 ├── create <name> --client-id <id> [--type <t>] [--runtime <r>] [--model <model>] [--display-name <s>] [--org <id>]
-├── capability grant|revoke <agent>
+├── capability grant|revoke <agent> [--org <id>]
 ├── remove <name>
 ├── prune [--yes] [--dry-run]
 ├── status [name]
@@ -239,9 +239,12 @@ needed if the daemon is already up. `--type` defaults to `agent`; `--model`
 sets the initial runtime configuration rather than requiring a follow-up edit.
 
 An organization admin can grant or revoke the standing agent-provisioning
-capability with `agent capability grant <agent>` and
-`agent capability revoke <agent>`. A capable agent running in a bound session
-can then execute `agent create` itself; the server still enforces the target
+capability with `agent capability grant <agent> [--org <id>]` and
+`agent capability revoke <agent> [--org <id>]`. The command resolves the
+target from the org-admin agent listing, so an admin can address an agent
+managed by another member. Pass `--org` when the signed-in user administers
+more than one organization. A capable agent running in a bound session can
+then execute `agent create` itself; the server still enforces the target
 organization, manager-owned client, organization quota, and audit record.
 
 ### agent add

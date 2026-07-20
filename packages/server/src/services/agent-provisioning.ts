@@ -14,6 +14,7 @@ export type ProvisioningAuditContext = {
   actingAgentId: string;
   managingMemberId: string;
   clientId: string;
+  /** Optional related-chat claim; never treated as proof of the initiating turn. */
   chatId: string | null;
 };
 
@@ -55,6 +56,7 @@ export async function requireProvisioningActor(
       ),
     );
 
+  const actorRow = actorId ? rows[0] : undefined;
   let row: (typeof rows)[number] | undefined;
   if (runtimeToken) {
     for (const candidate of rows) {
@@ -73,6 +75,9 @@ export async function requireProvisioningActor(
     }
   }
   if (!row || !row.clientId || !runtimeToken) {
+    if (actorId && actorRow && runtimeToken) {
+      throw new ForbiddenError("Agent provisioning requires an active runtime session");
+    }
     if (actorId) throw new ForbiddenError("This agent is not authorized to provision agents");
     throw new ForbiddenError("Agent provisioning requires an active runtime session");
   }

@@ -174,6 +174,10 @@ describe("CLI command registration", () => {
     ]);
     const capability = command(command(root, "agent"), "capability");
     expect(capability.commands.map((entry) => entry.name())).toEqual(["grant", "revoke"]);
+    expect(capability.commands.map((entry) => entry.options.map((option) => option.long))).toEqual([
+      ["--org"],
+      ["--org"],
+    ]);
     const createHelp = command(command(root, "agent"), "create").helpInformation();
     expect(createHelp).toContain("create [options] <name>");
     expect(createHelp).toContain("(required) Client");
