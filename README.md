@@ -41,6 +41,19 @@ before they work; useful outcomes can flow back into it after the work is done.
 The result is a human-agent work loop where every task can start with more team
 context, and every useful outcome can make the next task smarter.
 
+<p align="center">
+  <img src="assets/product-workspace.png" alt="First Tree workspace — an agent picks up an issue its offline teammate was assigned, grounded in the team's Context Tree" width="100%">
+</p>
+
+<p align="center">
+  <sub><strong>Alex is offline, so his assistant picks up issue #142</strong> — it reads the payments code, checks the idempotency key, runs the tests, and drafts a fix on a branch. Grounded in the team's Context Tree, visible while it works, ready for human review.</sub>
+</p>
+
+> **Open source and yours to run.** First Tree is Apache-2.0. Self-host the whole
+> stack, keep your Context Tree in your own Git, and run agents on your own
+> machines — no lock-in, and your team's context never has to leave your
+> infrastructure.
+
 <div align="center">
 <table>
   <tr>
@@ -131,14 +144,10 @@ curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ~/.local/bin/first-tree login <connect-code>
 ```
 
-Use the exact commands shown in the web console, especially for staging or a
-self-hosted deployment. The macOS/Linux installer bundles Node.js, so new
-users do not need to install Node separately. The two lines are intentionally
-independent and do not provide shell-level transaction protection: when pasted
-together, an install-line failure does not automatically prevent the login line
-from running, and POSIX `sh` does not guarantee that `curl | sh` preserves a
-`curl` failure status. The explicit `~/.local/bin` path works immediately, even
-before the shell reloads its `PATH`.
+Use the exact commands shown in the web console — they are channel-aware for
+production, staging, or your own self-hosted deployment. The macOS/Linux
+installer bundles Node.js, so there is nothing else to install. The explicit
+`~/.local/bin` path works right away, even before your shell reloads its `PATH`.
 
 ## CLI
 
@@ -200,6 +209,12 @@ pnpm coverage:summary                       # Summarize generated coverage
 See [AGENTS.md](AGENTS.md) for architecture, conventions, and the per-package
 development workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the PR
 workflow.
+
+## Community
+
+Questions, ideas, or want to show what you built? Join the
+[Discussions](https://github.com/agent-team-foundation/first-tree/discussions).
+If First Tree is useful to your team, a ⭐ helps others find it.
 
 ## License
 
