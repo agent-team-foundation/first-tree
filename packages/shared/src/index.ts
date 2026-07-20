@@ -1136,6 +1136,17 @@ export {
   statsSchema,
 } from "./schemas/stats.js";
 export {
+  isGithubEventCardContent,
+  isGithubSystemSenderMetadata,
+  isGitlabEventCardContent,
+  isTrustedGithubDispatcherMessage,
+  isTrustedGitlabDispatcherMessage,
+  resolveTrustedSystemSender,
+  TRUSTED_SYSTEM_SENDER_NAMES,
+  type TrustedSystemMessageShape,
+  type TrustedSystemSender,
+} from "./schemas/trusted-system-message.js";
+export {
   type UsageAgentSummary,
   type UsageByAgentResponse,
   type UsageByAgentRow,

@@ -263,8 +263,11 @@ export type ParticipantMode = z.infer<typeof participantModeSchema>;
  * attaches a list of these to the next active delivery in the chat so the
  * agent's prompt carries enough context to reply meaningfully.
  *
- * Smaller than `messageSchema` on purpose — drops fields that don't help the
- * LLM (replyTo envelopes, source) and aren't safe to leak across recipients.
+ * Smaller than `messageSchema` on purpose — drops reply envelopes and other
+ * fields that don't help the LLM. `source` is retained because trusted SCM
+ * attribution requires provenance together with the card shape and reserved
+ * metadata marker. It is optional for rolling compatibility with older
+ * servers that did not include it in preceding context.
  */
 export const precedingMessageSchema = z.object({
   id: z.string(),
@@ -272,6 +275,7 @@ export const precedingMessageSchema = z.object({
   format: z.string(),
   content: z.unknown(),
   metadata: z.record(z.string(), z.unknown()).default({}),
+  source: messageSourceSchema.nullable().catch(null).optional(),
   createdAt: z.string(),
 });
 export type PrecedingMessage = z.infer<typeof precedingMessageSchema>;

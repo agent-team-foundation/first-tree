@@ -1,15 +1,15 @@
 import {
-  contextReviewManagedMessageMetadataSchema,
   type GithubEntityType,
   type GithubEventCard,
-  githubEventCardSchema,
+  isGithubEventCardContent,
+  isGithubSystemSenderMetadata,
+  isTrustedGithubDispatcherMessage,
+  TRUSTED_SYSTEM_SENDER_NAMES,
 } from "@first-tree/shared";
 import { Github } from "lucide-react";
 import type { ReactNode } from "react";
 
-export function isGithubEventCardContent(content: unknown): content is GithubEventCard {
-  return githubEventCardSchema.safeParse(content).success;
-}
+export { isGithubEventCardContent, isGithubSystemSenderMetadata, isTrustedGithubDispatcherMessage };
 
 /**
  * The GitHub-dispatcher delivery path writes `systemSender: "github"` into
@@ -19,44 +19,7 @@ export function isGithubEventCardContent(content: unknown): content is GithubEve
  * next to the card so the metadata flag and the visual override stay in
  * lockstep.
  */
-export const GITHUB_SYSTEM_SENDER_NAME = "GitHub";
-
-export function isGithubSystemSenderMetadata(metadata: unknown): boolean {
-  if (typeof metadata !== "object" || metadata === null) return false;
-  return (metadata as { systemSender?: unknown }).systemSender === "github";
-}
-
-/**
- * Conjunctive trust gate for re-attributing a row to the synthetic
- * "GitHub" sender. Metadata alone is not sufficient — `sendMessageSchema`
- * accepts arbitrary `metadata`, so a malicious agent could otherwise post
- * a normal text message with `{ systemSender: "github" }` and have the UI
- * render it as if from GitHub (sender-impersonation / phishing surface
- * flagged in code review). The ordinary dispatcher path uniquely sets a
- * valid GitHub card plus the metadata marker. Managed Context Review wakes
- * are server-authored Markdown, so they instead require the complete
- * versioned managed-event metadata envelope. The message service reserves
- * `systemSender` and `contextReview*` keys, keeping both branches unavailable
- * to regular agent sends.
- */
-type TrustedGithubMessageShape = {
-  source: string | null | undefined;
-  format: string;
-  content: unknown;
-  metadata: unknown;
-};
-
-export function isTrustedGithubDispatcherMessage(msg: TrustedGithubMessageShape): boolean {
-  if (msg.source !== "github") return false;
-  if (msg.format === "card") {
-    return isGithubEventCardContent(msg.content) && isGithubSystemSenderMetadata(msg.metadata);
-  }
-  return (
-    msg.format === "markdown" &&
-    typeof msg.content === "string" &&
-    contextReviewManagedMessageMetadataSchema.safeParse(msg.metadata).success
-  );
-}
+export const GITHUB_SYSTEM_SENDER_NAME = TRUSTED_SYSTEM_SENDER_NAMES.github;
 
 export function GithubSystemAvatar({ size = 20 }: { size?: number }) {
   const dim = `${size}px`;
