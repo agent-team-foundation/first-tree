@@ -243,7 +243,7 @@ export const agentSchema = z.object({
   /** Physical client this agent is pinned to. NULL for human agents only. */
   clientId: z.string().nullable(),
   /** Admin-granted standing capability to provision additional agents. */
-  canProvisionAgents: z.boolean().default(false),
+  canProvisionAgents: z.boolean().optional(),
   /** Which runtime provider drives this agent. NOT NULL post-0026. */
   runtimeProvider: runtimeProviderSchema,
   /**
