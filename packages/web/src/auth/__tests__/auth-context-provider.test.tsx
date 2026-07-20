@@ -151,6 +151,7 @@ async function renderAuth(children?: ReactNode): Promise<void> {
 
 beforeEach(() => {
   vi.resetModules();
+  vi.stubGlobal("BroadcastChannel", undefined);
   setupDom();
   document.body.innerHTML = "";
   latestAuth = null;
@@ -178,6 +179,7 @@ afterEach(async () => {
     await act(async () => root?.unmount());
   }
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
 });
 
 describe("AuthProvider", () => {
@@ -401,6 +403,49 @@ describe("AuthProvider", () => {
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
   });
 
+  it("does not finalize an older local logout after adopting replacement credentials", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh-a",
+    });
+    await renderAuth();
+    const requests: Array<{ onsuccess: (() => void) | null }> = [];
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      value: {
+        deleteDatabase: () => {
+          const request = { onsuccess: null as (() => void) | null };
+          requests.push(request);
+          return request;
+        },
+      },
+    });
+
+    let logoutResult: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      logoutResult = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve(false);
+      await Promise.resolve();
+    });
+    expect(requests.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      await latestAuth?.adoptTokens({
+        accessToken: tokenWithPayload({ sub: "user-2" }),
+        refreshToken: "refresh-b",
+      });
+    });
+    expect(latestAuth?.isAuthenticated).toBe(true);
+    await act(async () => {
+      for (const request of requests) request.onsuccess?.();
+      await logoutResult;
+    });
+
+    await expect(logoutResult).resolves.toBe(false);
+    expect(latestAuth?.isAuthenticated).toBe(true);
+    expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
+    delete (globalThis as { indexedDB?: unknown }).indexedDB;
+  });
+
   it("keeps the session available for retry when logout purge is blocked", async () => {
     apiMocks.getStoredTokens.mockReturnValue({
       accessToken: tokenWithPayload({ sub: "user-1" }),
@@ -467,6 +512,19 @@ describe("AuthProvider", () => {
     expect(latestAuth?.isAuthenticated).toBe(false);
     expect(latestAuth?.logoutStatus).toBe("incomplete");
     expect(document.body.textContent).toContain("Sign out incomplete");
+    const firstRequestCount = requests.length;
+    const retry = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Retry"));
+    await act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+    expect(requests.length).toBeGreaterThan(firstRequestCount);
+    await act(async () => {
+      for (const request of requests.slice(firstRequestCount)) request.onblocked?.();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(container?.querySelectorAll('[role="status"]').length).toBe(1);
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
   });
 

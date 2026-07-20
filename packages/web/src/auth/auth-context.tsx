@@ -174,7 +174,7 @@ type AuthContextValue = {
   logoutStatus?: "idle" | "purging" | "incomplete";
 };
 
-type LogoutOptions = {
+export type LogoutOptions = {
   broadcast?: boolean;
   clearTokens?: boolean;
   recovery?: boolean;
@@ -288,14 +288,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const departingScope = options.scope ?? captureBrowserStorageScope();
       if (options.broadcast !== false) invalidateBrowserStorageScope(departingScope);
       authGenerationRef.current += 1;
+      const logoutGeneration = authGenerationRef.current;
       setLogoutStatus("purging");
       try {
         await clearPersistentBrowserStorage(departingScope);
       } catch {
+        if (authGenerationRef.current !== logoutGeneration) {
+          setLogoutStatus("idle");
+          if (options.recovery) {
+            publishLogoutIncomplete(() => logout({ ...options, recovery: false, scope: departingScope }));
+          }
+          return false;
+        }
         setLogoutStatus("incomplete");
         if (options.recovery) {
           commitLocalLogoutState();
-          publishLogoutIncomplete(() => logout({ ...options, scope: departingScope }));
+          publishLogoutIncomplete(() => logout({ ...options, recovery: false, scope: departingScope }));
+        }
+        return false;
+      }
+      if (authGenerationRef.current !== logoutGeneration) {
+        setLogoutStatus("idle");
+        if (options.recovery) {
+          publishLogoutIncomplete(() => logout({ ...options, recovery: false, scope: departingScope }));
         }
         return false;
       }

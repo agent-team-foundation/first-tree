@@ -7,6 +7,7 @@ import { Avatar } from "../../components/avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { ThemeToggle } from "../../components/ui/theme-toggle.js";
 import { useOptionalToast } from "../../components/ui/toast.js";
+import { captureBrowserStorageScope } from "../../lib/browser-storage-scope.js";
 import { DISCORD_INVITE_URL } from "../../lib/community.js";
 import { MobilePage, MobileSection, mobileCardStyle } from "./components.js";
 import { InstallGuideSheet } from "./install-guide-sheet.js";
@@ -73,11 +74,20 @@ export function MobileMePage() {
           variant="outline"
           className="min-h-11 justify-start"
           onClick={() => {
-            void Promise.resolve(logout())
+            const departingScope = captureBrowserStorageScope();
+            void Promise.resolve(logout({ scope: departingScope }))
               .then((completed) => {
-                if (!completed) showLogoutIncompleteToast(addToast, logout);
+                if (!completed) {
+                  showLogoutIncompleteToast(addToast, () =>
+                    logout({ protectReplacementTokens: true, scope: departingScope }),
+                  );
+                }
               })
-              .catch(() => showLogoutIncompleteToast(addToast, logout));
+              .catch(() =>
+                showLogoutIncompleteToast(addToast, () =>
+                  logout({ protectReplacementTokens: true, scope: departingScope }),
+                ),
+              );
           }}
         >
           <LogOut className="h-4 w-4" />

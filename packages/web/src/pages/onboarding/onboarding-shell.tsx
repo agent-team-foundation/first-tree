@@ -9,6 +9,7 @@ import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
 import { TeamSwitcher } from "../../components/team-switcher.js";
 import { Button } from "../../components/ui/button.js";
 import { useToast } from "../../components/ui/toast.js";
+import { captureBrowserStorageScope } from "../../lib/browser-storage-scope.js";
 import { COPY, STEP_COPY } from "./copy.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
 import { StepProgress } from "./step-progress.js";
@@ -50,11 +51,16 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
   // the menu's only destinations would fork them into a second team mid-setup.
   const isMultiTeam = memberships.length > 1;
   const signOut = () => {
-    void Promise.resolve(logout())
+    const departingScope = captureBrowserStorageScope();
+    void Promise.resolve(logout({ scope: departingScope }))
       .then((completed) => {
-        if (!completed) showLogoutIncompleteToast(addToast, logout);
+        if (!completed) {
+          showLogoutIncompleteToast(addToast, () => logout({ protectReplacementTokens: true, scope: departingScope }));
+        }
       })
-      .catch(() => showLogoutIncompleteToast(addToast, logout));
+      .catch(() =>
+        showLogoutIncompleteToast(addToast, () => logout({ protectReplacementTokens: true, scope: departingScope })),
+      );
   };
 
   return (

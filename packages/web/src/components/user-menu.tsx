@@ -2,6 +2,7 @@ import { LogOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/auth-context.js";
 import { showLogoutIncompleteToast } from "../auth/logout-recovery.js";
+import { captureBrowserStorageScope } from "../lib/browser-storage-scope.js";
 import { Avatar } from "./avatar.js";
 import { useOptionalToast } from "./ui/toast.js";
 
@@ -93,13 +94,16 @@ export function UserMenu() {
                 setOpen(false);
                 void (async () => {
                   let completed = false;
+                  const departingScope = captureBrowserStorageScope();
                   try {
-                    completed = (await Promise.resolve(logout())) === true;
+                    completed = (await Promise.resolve(logout({ scope: departingScope }))) === true;
                   } catch {
                     completed = false;
                   }
                   if (!completed) {
-                    showLogoutIncompleteToast(addToast, logout);
+                    showLogoutIncompleteToast(addToast, () =>
+                      logout({ protectReplacementTokens: true, scope: departingScope }),
+                    );
                     return;
                   }
                   // Leave the app on the marketing site rather than an app
