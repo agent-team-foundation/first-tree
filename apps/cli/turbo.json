@@ -6,6 +6,9 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"],
       "inputs": ["$TURBO_DEFAULT$", "../../skills/**"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
     }
   }
 }

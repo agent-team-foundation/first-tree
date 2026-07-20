@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONTEXT_REVIEW_PACKET_MAX_BYTES,
   CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH,
+  contextReviewManagedMessageMetadataSchema,
   contextReviewTaskCreateMetadataSchema,
   contextReviewTaskMetadataSchema,
   reviewPacketV1Schema,
@@ -108,5 +109,46 @@ describe("Context Review task metadata", () => {
         reviewPacketV1: { ...packet(), targetPaths: ["outside.md"] },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("managed Context Review event metadata", () => {
+  const metadata = {
+    source: "github",
+    systemSender: "github",
+    contextReviewManagedEventV1: {
+      schemaVersion: 1,
+      eventType: "issue_comment",
+      action: "edited",
+      triggerEvent: "issue_comment.edited",
+      repository: "acme/context",
+      pullRequest: 42,
+      senderLogin: "alice",
+      commentId: "5015744884",
+      commentAuthorLogin: "alice",
+      commentUrl: "https://github.com/acme/context/pull/42#issuecomment-5015744884",
+    },
+    addressedAgentIds: ["reviewer-id"],
+  };
+
+  it("accepts the complete server-authored envelope and passthrough delivery metadata", () => {
+    expect(contextReviewManagedMessageMetadataSchema.safeParse(metadata).success).toBe(true);
+  });
+
+  it("rejects incomplete, malformed, or non-GitHub envelopes", () => {
+    expect(contextReviewManagedMessageMetadataSchema.safeParse({ systemSender: "github" }).success).toBe(false);
+    expect(
+      contextReviewManagedMessageMetadataSchema.safeParse({
+        ...metadata,
+        contextReviewManagedEventV1: { ...metadata.contextReviewManagedEventV1, commentId: "not-numeric" },
+      }).success,
+    ).toBe(false);
+    expect(
+      contextReviewManagedMessageMetadataSchema.safeParse({
+        ...metadata,
+        contextReviewManagedEventV1: { ...metadata.contextReviewManagedEventV1, commentId: "0" },
+      }).success,
+    ).toBe(false);
+    expect(contextReviewManagedMessageMetadataSchema.safeParse({ ...metadata, source: "api" }).success).toBe(false);
   });
 });

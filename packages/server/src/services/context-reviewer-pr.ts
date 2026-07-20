@@ -86,6 +86,7 @@ type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   entityKey: string;
   headSha: string | null;
   senderType: string | null;
+  commentId: string | null;
   commentAuthorType: string | null;
   commentBody: string | null;
   prBody: string | null;
@@ -585,6 +586,7 @@ function extractPullRequestPayloadInfo(
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       headSha: normalizeCommitOid(readString(isRecord(pr?.head) ? pr.head.sha : null)),
       isDraft: readDraftStatus(pr),
+      commentId: null,
       commentUrl: null,
       commentAuthorLogin: null,
       commentAuthorType: null,
@@ -614,6 +616,7 @@ function extractPullRequestPayloadInfo(
       headRef: null,
       headSha: null,
       isDraft: null,
+      commentId: readGithubCommentId(comment?.id),
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
       commentAuthorType: commentAuthor.type ?? common.senderType,
@@ -642,6 +645,7 @@ function extractPullRequestPayloadInfo(
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       headSha: normalizeCommitOid(readString(isRecord(pr?.head) ? pr.head.sha : null)),
       isDraft: readDraftStatus(pr),
+      commentId: readGithubCommentId(comment?.id),
       commentUrl: readString(comment?.html_url),
       commentAuthorLogin: commentAuthor.login ?? senderLogin,
       commentAuthorType: commentAuthor.type ?? common.senderType,
@@ -674,6 +678,7 @@ function managedContextReviewWebhookEvent(
     senderType: info.senderType,
     headSha: info.headSha,
     isDraft: info.isDraft,
+    commentId: info.commentId,
     commentUrl: info.commentUrl,
     commentAuthorLogin: info.commentAuthorLogin,
     commentAuthorType: info.commentAuthorType,
@@ -684,6 +689,12 @@ function managedContextReviewWebhookEvent(
 function readDraftStatus(pr: Record<string, unknown> | null): boolean | null {
   if (!pr || typeof pr.draft !== "boolean") return null;
   return pr.draft;
+}
+
+function readGithubCommentId(value: unknown): string | null {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value)) return value;
+  return null;
 }
 
 function normalizeCommitOid(value: string | null): string | null {

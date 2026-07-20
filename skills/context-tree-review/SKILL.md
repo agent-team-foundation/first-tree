@@ -207,6 +207,15 @@ status is historical evidence only and cannot authorize reuse or merge. Never
 submit another Reviewer's result as current. Never submit GitHub `APPROVE`,
 call the App publication command, or use the GitHub review API on this path.
 
+The GitHub upsert must return or be followed by a live read of the canonical
+top-level comment's positive numeric comment id and URL. On creation, use the
+created comment response; on update or recovery, locate the one live comment
+whose result marker matches this exact Chat, Reviewer, and head, then require
+the returned id, URL, marker, and current body to agree with the intended
+projection. A marker-bearing comment observed only through an inbound webhook
+does not establish this identity. Missing, duplicated, malformed, or
+unconfirmed identity fails closed before the terminal Chat result is appended.
+
 Immediately before the GitHub projection, perform the stable complete-history
 scan defined under Result freshness and incorporate every observed Chat and
 GitHub input into the completed review. Do not project a result from an earlier
@@ -214,14 +223,33 @@ history snapshot.
 
 After the GitHub projection is confirmed, append one addressed terminal-result
 message to the PR Chat with the same hidden identity marker, outcome, findings,
-and verification summary. Immediately before appending, repeat the stable
+and verification summary, followed by exactly two newlines and this local-only
+receipt suffix with the confirmed positive numeric comment id and the same
+recipient name passed to `chat send <recipient>`:
+
+```text
+<!-- first-tree-context-review-comment:v2 id=<github-comment-id> to=@<recipient-agent-name> -->
+```
+
+The receipt is not part of the GitHub comment and must occur exactly once at
+the end of the terminal Chat body, followed by either no bytes or the one LF or
+CRLF file terminator preserved by `-F`/stdin. Its `to=@...` token is hidden
+transport framing: it must name the actual `chat send` recipient so the agent
+endpoint recognises the declared mention and does not prepend a routing prefix
+to the persisted content. Do not put the receipt on GitHub, add its fields to
+the result identity marker, accept an id from webhook prose, or trim or
+normalise either body. After removing only the permitted final line terminator
+and exact `\n\n` receipt suffix, the remaining Chat content must equal the
+GitHub comment body byte for byte.
+
+Immediately before appending, repeat the stable
 complete-history scan and live GitHub read. Require every review input to match
 the pre-projection snapshot. The Reviewer's own just-written canonical comment
-and status are the sole expected delta: require both to equal the intended
-projection exactly. Any other change means append no terminal result;
+and status are the sole expected delta: require the comment id and body plus the
+status to equal the intended projection exactly. Any other change means append no terminal result;
 incorporate the new input, re-review, and update the projection first. If the
 send returns an unknown result, page Chat history and reconcile the matching
-result before retrying; never blindly append a duplicate.
+result marker plus receipt before retrying; never blindly append a duplicate.
 
 The terminal Chat row is the ownership anchor. Require its authoritative
 `senderId` to equal the marker's Reviewer UUID and the current
@@ -229,8 +257,12 @@ The terminal Chat row is the ownership anchor. Require its authoritative
 marker sent by another speaker, or an ordering/payload ambiguity among matching
 candidates, makes ownership unproven. Earlier unambiguously ordered results
 from the same Reviewer are historical; the latest same-Reviewer result must
-agree with the canonical GitHub marker. Only that agreement can make a result
-reusable or merge-authorizing.
+agree with the canonical GitHub marker and, when present, its receipt must name
+that same live canonical comment id while the pre-receipt body equals the live
+comment exactly. A legacy terminal row without a receipt may retain its existing
+result-freshness semantics, but Cloud must not use it to suppress a webhook
+reflection. Only the applicable marker, ownership, freshness, and receipt rules
+can make a result reusable or merge-authorizing.
 
 ### Result freshness
 
@@ -279,8 +311,12 @@ equals the intended projection exactly and its marker matches this Chat,
 Reviewer Agent UUID, and head. The marker or webhook actor alone proves
 nothing: a copied marker, changed body, different Reviewer/head, or any other
 comment remains new review input and must wake a fresh evaluation. Once the
-matching authoritative terminal Chat row exists, an exact reflection may be
-silently deduplicated by Cloud.
+matching authoritative terminal Chat row exists, Cloud may silently deduplicate
+an exact reflection only when the webhook's immutable comment id equals the
+terminal receipt, the current GitHub body equals the terminal content before
+the receipt byte for byte, and all existing Reviewer/head/ownership checks
+still pass. A changed body from the same author, same comment id, and same
+marker is new review input and must wake a fresh evaluation.
 
 A stale or unproven result cannot be reused and cannot authorize merge. Restart
 the complete live-head review, or publish `NEEDS_HUMAN` when the new input is a

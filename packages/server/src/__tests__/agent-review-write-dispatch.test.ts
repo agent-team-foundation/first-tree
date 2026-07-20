@@ -213,9 +213,16 @@ function managedPullRequestPayload(
 
 function managedIssueCommentPayload(
   commentBody: string,
-  options: { action?: "created" | "edited"; prBody?: string; authorLogin?: string; authorType?: string | null } = {},
+  options: {
+    action?: "created" | "edited";
+    commentId?: number;
+    prBody?: string;
+    authorLogin?: string;
+    authorType?: string | null;
+  } = {},
 ) {
   const authorLogin = options.authorLogin ?? "review-input";
+  const commentId = options.commentId ?? 1;
   const author = {
     login: authorLogin,
     ...(options.authorType === null ? {} : { type: options.authorType ?? "User" }),
@@ -231,7 +238,8 @@ function managedIssueCommentPayload(
       pull_request: { html_url: "https://github.com/owner/context-tree/pull/749" },
     },
     comment: {
-      html_url: "https://github.com/owner/context-tree/pull/749#issuecomment-1",
+      id: commentId,
+      html_url: `https://github.com/owner/context-tree/pull/749#issuecomment-${commentId}`,
       user: author,
       body: commentBody,
     },
@@ -686,7 +694,7 @@ describe("member Agent Review task dispatch", () => {
     );
   });
 
-  it("suppresses only an exact authoritative Reviewer result projection", async () => {
+  it("suppresses only the exact canonical Reviewer result receipt and fails open on changed content", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const requester = await createMember(app, admin, "writer");
@@ -705,16 +713,18 @@ describe("member Agent Review task dispatch", () => {
     const task = created.json<DispatchResponse>();
     const marker = `<!-- first-tree-context-review-result:v1 chat=${task.chatId} reviewer=${reviewer.uuid} head=${"a".repeat(40)} -->`;
     const canonicalProjection = `${marker}\n\nREADY\n\nAll managed checks passed.`;
+    const canonicalCommentId = 101;
+    const receipt = `<!-- first-tree-context-review-comment:v2 id=${canonicalCommentId} to=@${requester.username} -->`;
 
     const preTerminalReflection = await handleContextReviewerPrEvent(app, {
       eventType: "issue_comment",
-      payload: managedIssueCommentPayload(canonicalProjection),
+      payload: managedIssueCommentPayload(canonicalProjection, { commentId: canonicalCommentId }),
       organizationId: admin.organizationId,
     });
     expect(preTerminalReflection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
     expect(preTerminalReflection).not.toMatchObject({ suppressed: true });
 
-    const terminal = await sendMessage(
+    await sendMessage(
       app.db,
       task.chatId,
       reviewer.uuid,
@@ -726,61 +736,205 @@ describe("member Agent Review task dispatch", () => {
       },
       { addressedToAgentIds: [requester.humanAgentUuid] },
     );
+    const legacyReflection = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection, { commentId: canonicalCommentId }),
+      organizationId: admin.organizationId,
+    });
+    expect(legacyReflection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(legacyReflection).not.toMatchObject({ suppressed: true });
+
+    const terminalResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${task.chatId}/messages`,
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        [AGENT_SELECTOR_HEADER]: reviewer.uuid,
+      },
+      payload: {
+        format: "markdown",
+        content: `${canonicalProjection}\n\n${receipt}\n`,
+        receiverNames: [requester.username],
+        source: "cli",
+      },
+    });
+    expect(terminalResponse.statusCode).toBe(201);
+    const terminal = terminalResponse.json<{ id: string; content: string; metadata: Record<string, unknown> }>();
+    expect(terminal.content).toBe(`${canonicalProjection}\n\n${receipt}\n`);
+    expect(terminal.content).not.toMatch(/^@[^\s]+ /);
+    expect(terminal.metadata.mentions).toEqual([requester.humanAgentUuid]);
 
     const reflected = await handleContextReviewerPrEvent(app, {
       eventType: "issue_comment",
-      payload: managedIssueCommentPayload(canonicalProjection),
+      payload: managedIssueCommentPayload(canonicalProjection, { commentId: canonicalCommentId }),
       organizationId: admin.organizationId,
     });
     expect(reflected).toEqual({
       handled: true,
       chatId: task.chatId,
-      messageId: terminal.message.id,
+      messageId: terminal.id,
       reused: true,
       suppressed: true,
     });
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(3);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(5);
 
-    const copiedProjection = await handleContextReviewerPrEvent(app, {
+    const exactEditedProjection = await handleContextReviewerPrEvent(app, {
       eventType: "issue_comment",
-      payload: managedIssueCommentPayload(canonicalProjection, { authorLogin: "result-copier" }),
+      payload: managedIssueCommentPayload(canonicalProjection, {
+        action: "edited",
+        commentId: canonicalCommentId,
+      }),
       organizationId: admin.organizationId,
     });
-    expect(copiedProjection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
-    expect(copiedProjection).not.toMatchObject({ suppressed: true });
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(4);
+    expect(exactEditedProjection).toEqual({
+      handled: true,
+      chatId: task.chatId,
+      messageId: terminal.id,
+      reused: true,
+      suppressed: true,
+    });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(5);
+
+    const humanEditedBody = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(`${canonicalProjection}\n\nThe owner added a new constraint.`, {
+        action: "edited",
+        commentId: canonicalCommentId,
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(humanEditedBody).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(humanEditedBody).not.toMatchObject({ suppressed: true });
+
+    const copiedComment = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection, {
+        commentId: 102,
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(copiedComment).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(copiedComment).not.toMatchObject({ suppressed: true });
+
+    const editedByAnotherAuthor = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection, {
+        action: "edited",
+        commentId: canonicalCommentId,
+        authorLogin: "result-copier",
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(editedByAnotherAuthor).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(editedByAnotherAuthor).not.toMatchObject({ suppressed: true });
+
+    const editedWithoutMarker = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload("Marker removed from this comment.", {
+        action: "edited",
+        commentId: canonicalCommentId,
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(editedWithoutMarker).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(editedWithoutMarker).not.toMatchObject({ suppressed: true });
+
+    const differentHeadMarker = `<!-- first-tree-context-review-result:v1 chat=${task.chatId} reviewer=${reviewer.uuid} head=${"c".repeat(40)} -->`;
+    const editedWithDifferentHead = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(`${differentHeadMarker}\n\nREADY`, {
+        action: "edited",
+        commentId: canonicalCommentId,
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(editedWithDifferentHead).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(editedWithDifferentHead).not.toMatchObject({ suppressed: true });
+
+    const differentReviewerMarker = `<!-- first-tree-context-review-result:v1 chat=${task.chatId} reviewer=${randomUUID()} head=${"a".repeat(40)} -->`;
+    const editedWithDifferentReviewer = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(`${differentReviewerMarker}\n\nREADY`, {
+        action: "edited",
+        commentId: canonicalCommentId,
+      }),
+      organizationId: admin.organizationId,
+    });
+    expect(editedWithDifferentReviewer).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(editedWithDifferentReviewer).not.toMatchObject({ suppressed: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(11);
 
     await app.db
       .update(messages)
-      .set({ metadata: { ...terminal.message.metadata, editedAt: new Date().toISOString() } })
-      .where(eq(messages.id, terminal.message.id));
+      .set({ metadata: { ...terminal.metadata, editedAt: new Date().toISOString() } })
+      .where(eq(messages.id, terminal.id));
     const editedTerminalProjection = await handleContextReviewerPrEvent(app, {
       eventType: "issue_comment",
-      payload: managedIssueCommentPayload(canonicalProjection),
+      payload: managedIssueCommentPayload(canonicalProjection, { commentId: canonicalCommentId }),
       organizationId: admin.organizationId,
     });
     expect(editedTerminalProjection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
     expect(editedTerminalProjection).not.toMatchObject({ suppressed: true });
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(5);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(12);
 
-    const editedProjection = await handleContextReviewerPrEvent(app, {
+    await app.db.update(messages).set({ metadata: terminal.metadata }).where(eq(messages.id, terminal.id));
+    const copiedChatMessage = await sendMessage(
+      app.db,
+      task.chatId,
+      requester.humanAgentUuid,
+      {
+        format: "markdown",
+        content: `${canonicalProjection}\n\n${receipt}`,
+        metadata: { mentions: [reviewer.uuid] },
+        source: "api",
+      },
+      { addressedToAgentIds: [reviewer.uuid] },
+    );
+    const copiedChatMarker = await handleContextReviewerPrEvent(app, {
       eventType: "issue_comment",
-      payload: managedIssueCommentPayload(canonicalProjection, { action: "edited" }),
+      payload: managedIssueCommentPayload(canonicalProjection, { commentId: canonicalCommentId }),
       organizationId: admin.organizationId,
     });
-    expect(editedProjection).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
-    expect(editedProjection).not.toMatchObject({ suppressed: true });
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(6);
+    expect(copiedChatMarker).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(copiedChatMarker).not.toMatchObject({ suppressed: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(14);
 
-    const copiedMarkerWithNewInput = `${marker}\n\nNEEDS_HUMAN\n\nThe owner changed the decision.`;
-    const newInput = await handleContextReviewerPrEvent(app, {
+    await app.db
+      .update(messages)
+      .set({ content: `${canonicalProjection}\n\n${receipt}\n\n${marker}` })
+      .where(eq(messages.id, copiedChatMessage.message.id));
+    const duplicatedCopiedMarker = await handleContextReviewerPrEvent(app, {
       eventType: "issue_comment",
-      payload: managedIssueCommentPayload(copiedMarkerWithNewInput),
+      payload: managedIssueCommentPayload(canonicalProjection, { commentId: canonicalCommentId }),
       organizationId: admin.organizationId,
     });
-    expect(newInput).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
-    expect(newInput).not.toMatchObject({ suppressed: true });
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(7);
+    expect(duplicatedCopiedMarker).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(duplicatedCopiedMarker).not.toMatchObject({ suppressed: true });
+
+    await app.db
+      .update(messages)
+      .set({ content: "Ordinary requester follow-up." })
+      .where(eq(messages.id, copiedChatMessage.message.id));
+    await sendMessage(
+      app.db,
+      task.chatId,
+      reviewer.uuid,
+      {
+        format: "markdown",
+        content: `${canonicalProjection}\n\n${differentHeadMarker}\n\n${receipt}`,
+        metadata: { mentions: [requester.humanAgentUuid] },
+        source: "api",
+      },
+      { addressedToAgentIds: [requester.humanAgentUuid] },
+    );
+    const ambiguousReviewerMarker = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: managedIssueCommentPayload(canonicalProjection, { commentId: canonicalCommentId }),
+      organizationId: admin.organizationId,
+    });
+    expect(ambiguousReviewerMarker).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    expect(ambiguousReviewerMarker).not.toMatchObject({ suppressed: true });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(17);
   });
 
   it("fails the managed surface closed without partial webhook activity after requester removal", async () => {

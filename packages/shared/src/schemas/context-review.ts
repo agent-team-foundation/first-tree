@@ -6,6 +6,48 @@ export const CONTEXT_REVIEW_PACKET_MAX_BYTES = 32 * 1024;
 export const CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH = 64;
 const CONTEXT_REVIEW_TASK_METADATA_MAX_NODES = 8 * 1024;
 
+export const contextReviewManagedEventSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    eventType: z.enum(["pull_request", "issue_comment", "pull_request_review_comment"]),
+    action: z.enum(["opened", "synchronize", "ready_for_review", "reopened", "edited", "created"]),
+    triggerEvent: z.string().trim().min(1),
+    repository: z
+      .string()
+      .trim()
+      .regex(/^[^\s/]+\/[^\s/]+$/),
+    pullRequest: z.number().int().positive(),
+    senderLogin: z.string().trim().min(1),
+    deliveryId: z.string().trim().min(1).optional(),
+    headSha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .optional(),
+    isDraft: z.boolean().optional(),
+    commentId: z
+      .string()
+      .regex(/^[1-9]\d*$/)
+      .optional(),
+    commentAuthorLogin: z.string().trim().min(1).optional(),
+    commentUrl: z.string().url().optional(),
+  })
+  .strict();
+export type ContextReviewManagedEvent = z.infer<typeof contextReviewManagedEventSchema>;
+
+/**
+ * Server-authored metadata for managed Context Review webhook messages. The
+ * message service reserves both `systemSender` and `contextReview*` keys, so
+ * clients may use this complete envelope as a synthetic-sender trust signal.
+ */
+export const contextReviewManagedMessageMetadataSchema = z
+  .object({
+    source: z.literal("github"),
+    systemSender: z.literal("github"),
+    contextReviewManagedEventV1: contextReviewManagedEventSchema,
+  })
+  .passthrough();
+export type ContextReviewManagedMessageMetadata = z.infer<typeof contextReviewManagedMessageMetadataSchema>;
+
 const githubRepositorySchema = z
   .string()
   .trim()

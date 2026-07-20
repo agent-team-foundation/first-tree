@@ -7,6 +7,7 @@ import {
   type ContextTreeActiveBinding,
   type ContextTreeWritePreflightErrorCode,
   canonicalGitRepoUrl,
+  contextReviewManagedMessageMetadataSchema,
   contextReviewTaskCreateMetadataSchema,
   contextTreeActiveBindingSchema,
 } from "@first-tree/shared";
@@ -75,6 +76,7 @@ export type ManagedContextReviewWebhookEvent = {
   senderType: string | null;
   headSha: string | null;
   isDraft: boolean | null;
+  commentId: string | null;
   commentUrl: string | null;
   commentAuthorLogin: string | null;
   commentAuthorType: string | null;
@@ -105,6 +107,8 @@ type ManagedContextReviewTaskSeed = {
 
 const CONTEXT_REVIEW_RESULT_MARKER_PATTERN =
   /<!-- first-tree-context-review-result:v1 chat=([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}) reviewer=([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}) head=([0-9a-f]{40}) -->/g;
+const CONTEXT_REVIEW_COMMENT_RECEIPT_PATTERN =
+  /<!-- first-tree-context-review-comment:v2 id=([1-9][0-9]*) to=@([A-Za-z0-9][A-Za-z0-9_-]{0,63}) -->/g;
 
 function canonicalGithubRepository(value: string): string | null {
   const canonical = canonicalGitRepoUrl(`https://github.com/${value}`)?.toLowerCase() ?? null;
@@ -694,16 +698,36 @@ async function loadManagedContextReviewTaskSeed(
   };
 }
 
-function parseContextReviewResultMarker(
-  value: string,
-): { chatId: string; reviewerAgentUuid: string; headSha: string } | null {
-  const matches = [...value.matchAll(CONTEXT_REVIEW_RESULT_MARKER_PATTERN)];
+type ContextReviewResultMarker = { chatId: string; reviewerAgentUuid: string; headSha: string };
+
+function findContextReviewResultMarkers(value: string): ContextReviewResultMarker[] {
+  return [...value.matchAll(CONTEXT_REVIEW_RESULT_MARKER_PATTERN)].flatMap((match) => {
+    const chatId = match[1];
+    const reviewerAgentUuid = match[2];
+    const headSha = match[3];
+    return chatId && reviewerAgentUuid && headSha ? [{ chatId, reviewerAgentUuid, headSha }] : [];
+  });
+}
+
+function parseContextReviewResultMarker(value: string): ContextReviewResultMarker | null {
+  const markers = findContextReviewResultMarkers(value);
+  return markers.length === 1 ? (markers[0] ?? null) : null;
+}
+
+function parseContextReviewCommentReceipt(value: string): { commentId: string; projectedBody: string } | null {
+  // `chat send -F` preserves a normal file's final line ending. Remove at
+  // most that one transport terminator; never trim the projected body.
+  const framedValue = value.endsWith("\r\n") ? value.slice(0, -2) : value.endsWith("\n") ? value.slice(0, -1) : value;
+  const matches = [...framedValue.matchAll(CONTEXT_REVIEW_COMMENT_RECEIPT_PATTERN)];
   if (matches.length !== 1) return null;
   const match = matches[0];
-  const chatId = match?.[1];
-  const reviewerAgentUuid = match?.[2];
-  const headSha = match?.[3];
-  return chatId && reviewerAgentUuid && headSha ? { chatId, reviewerAgentUuid, headSha } : null;
+  const commentId = match?.[1];
+  const recipientName = match?.[2];
+  if (!match || !commentId || !recipientName) return null;
+  const suffix = `\n\n${match[0]}`;
+  if (!framedValue.endsWith(suffix)) return null;
+  const projectedBody = framedValue.slice(0, -suffix.length);
+  return projectedBody ? { commentId, projectedBody } : null;
 }
 
 async function findMatchingManagedProjectionMessageId(
@@ -711,12 +735,13 @@ async function findMatchingManagedProjectionMessageId(
   input: {
     chatId: string;
     reviewerAgentUuid: string;
+    commentId: string | null;
     commentAuthorLogin: string | null;
     commentBody: string | null;
   },
 ): Promise<string | null> {
   const commentAuthorLogin = input.commentAuthorLogin?.trim().toLowerCase();
-  if (!commentAuthorLogin || !input.commentBody) return null;
+  if (!commentAuthorLogin || !input.commentId || !input.commentBody) return null;
 
   const reviewerManagerGithubIdentities = await db
     .select({ login: sql<string | null>`${authIdentities.metadata}->>'login'` })
@@ -733,26 +758,30 @@ async function findMatchingManagedProjectionMessageId(
     return null;
   }
 
-  const reviewerMessages = await db
-    .select({ id: messages.id, content: messages.content, metadata: messages.metadata })
+  const chatMessages = await db
+    .select({ id: messages.id, senderId: messages.senderId, content: messages.content, metadata: messages.metadata })
     .from(messages)
-    .where(and(eq(messages.chatId, input.chatId), eq(messages.senderId, input.reviewerAgentUuid)))
+    .where(eq(messages.chatId, input.chatId))
     .orderBy(desc(messages.createdAt), desc(messages.id));
-  for (const message of reviewerMessages) {
+  let authoritativeMessage: (Omit<(typeof chatMessages)[number], "content"> & { content: string }) | null = null;
+  for (const message of chatMessages) {
     if (typeof message.content !== "string") continue;
-    const candidate = parseContextReviewResultMarker(message.content);
-    if (
-      !candidate ||
-      candidate.chatId !== marker.chatId ||
-      candidate.reviewerAgentUuid !== marker.reviewerAgentUuid ||
-      candidate.headSha !== marker.headSha
-    ) {
-      continue;
-    }
-    if (Object.hasOwn(message.metadata, "editedAt")) return null;
-    return message.content === input.commentBody ? message.id : null;
+    const candidates = findContextReviewResultMarkers(message.content);
+    const matchesTarget = candidates.some(
+      (candidate) =>
+        candidate.chatId === marker.chatId &&
+        candidate.reviewerAgentUuid === marker.reviewerAgentUuid &&
+        candidate.headSha === marker.headSha,
+    );
+    if (!matchesTarget) continue;
+    if (message.senderId !== input.reviewerAgentUuid) return null;
+    if (candidates.length !== 1) return null;
+    authoritativeMessage ??= { ...message, content: message.content };
   }
-  return null;
+  if (!authoritativeMessage || Object.hasOwn(authoritativeMessage.metadata, "editedAt")) return null;
+  const receipt = parseContextReviewCommentReceipt(authoritativeMessage.content);
+  if (!receipt || receipt.commentId !== input.commentId) return null;
+  return receipt.projectedBody === input.commentBody ? authoritativeMessage.id : null;
 }
 
 async function findManagedWebhookDeliveryMessageId(
@@ -824,8 +853,9 @@ function managedContextReviewEventMetadata(
   if (input.isDraft !== null) event.isDraft = input.isDraft;
   if (input.commentAuthorLogin) event.commentAuthorLogin = input.commentAuthorLogin;
   if (input.commentUrl) event.commentUrl = input.commentUrl;
+  if (input.commentId) event.commentId = input.commentId;
 
-  return {
+  return contextReviewManagedMessageMetadataSchema.parse({
     source: "github",
     systemSender: "github",
     contextReviewManagedEventV1: event,
@@ -838,7 +868,7 @@ function managedContextReviewEventMetadata(
           },
         }
       : {}),
-  };
+  });
 }
 
 type ManagedContextReviewWebhookTransactionResult =
@@ -931,10 +961,15 @@ export async function dispatchManagedContextReviewWebhookEvent(
         effects: takeover.deferredPostCommitEffects,
       };
     }
-    if (!reconciliation.takeoverRequired && input.eventType === "issue_comment" && input.action === "created") {
+    if (
+      !reconciliation.takeoverRequired &&
+      input.eventType === "issue_comment" &&
+      (input.action === "created" || input.action === "edited")
+    ) {
       const reflectedMessageId = await findMatchingManagedProjectionMessageId(transactionDb, {
         chatId: chat.id,
         reviewerAgentUuid: reconciliation.reviewerAgentUuid,
+        commentId: input.commentId,
         commentAuthorLogin: input.commentAuthorLogin,
         commentBody: input.commentBody,
       });
