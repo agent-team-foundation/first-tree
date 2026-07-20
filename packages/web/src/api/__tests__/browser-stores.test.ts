@@ -123,6 +123,20 @@ describe("image-store", () => {
     await expect(getImage("missing")).resolves.toBeNull();
   });
 
+  it("does not expose one account's image cache to another account", async () => {
+    vi.resetModules();
+    globalThis.indexedDB = new IDBFactory();
+    const scope = await import("../../lib/browser-storage-scope.js");
+    scope.setBrowserStorageUser("user-1");
+    const { getImage, putImage } = await import("../image-store.js");
+
+    await putImage({ imageId: "shared-image-id", base64: "secret", mimeType: "image/png" });
+    scope.setBrowserStorageUser("user-2");
+    await expect(getImage("shared-image-id")).resolves.toBeNull();
+    scope.setBrowserStorageUser("user-1");
+    await expect(getImage("shared-image-id")).resolves.toEqual({ base64: "secret", mimeType: "image/png" });
+  });
+
   it("rejects writes and returns null when IndexedDB is unavailable", async () => {
     vi.resetModules();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;

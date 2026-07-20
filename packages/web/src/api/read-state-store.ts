@@ -29,6 +29,8 @@
  * 120.
  */
 
+import { getBrowserStorageRevision, scopedDatabaseName } from "../lib/browser-storage-scope.js";
+
 const DB_NAME = "first-tree-chat-cache";
 const DB_VERSION = 2;
 const MESSAGES_STORE = "messages";
@@ -64,15 +66,18 @@ export type ReadState = {
 };
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
+let dbRevision = -1;
 
 function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
+  const revision = getBrowserStorageRevision();
+  if (dbPromise && dbRevision === revision) return dbPromise;
+  dbRevision = revision;
   dbPromise = new Promise((resolve) => {
     if (typeof indexedDB === "undefined") {
       resolve(null);
       return;
     }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(scopedDatabaseName(DB_NAME), DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
@@ -83,7 +88,10 @@ function openDb(): Promise<IDBDatabase | null> {
         db.createObjectStore(READ_STATE_STORE, { keyPath: "chatId" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      req.result.onversionchange = () => req.result.close();
+      resolve(req.result);
+    };
     req.onerror = () => resolve(null);
     req.onblocked = () => resolve(null);
   });

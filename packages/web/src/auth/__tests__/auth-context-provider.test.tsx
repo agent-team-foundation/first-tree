@@ -308,30 +308,34 @@ describe("AuthProvider", () => {
     expect(latestAuth?.isAuthenticated).toBe(false);
   });
 
-  it("keeps the persisted org across logout so a returning sign-in lands back in the last-used org", async () => {
+  it("clears persisted browser data on logout before a returning sign-in", async () => {
     // /me's default (most-recent) is org-1, but the user last used org-2.
     localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");
+    localStorage.setItem("first-tree:chat-drafts:v1:chat-cache", JSON.stringify({ draft: "secret" }));
+    sessionStorage.setItem("first-tree:pending-image", "secret-image");
     apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
 
     await renderAuth();
     expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
 
-    // Logout must NOT wipe the persisted org — it's how a returning sign-in
-    // restores the last-used org instead of jumping to the most-recent one.
+    // Logout clears all browser-local app data; a returning sign-in starts
+    // from the server's current default rather than stale local state.
     await act(async () => {
       window.dispatchEvent(new CustomEvent("auth:logout"));
     });
     expect(latestAuth?.isAuthenticated).toBe(false);
-    expect(localStorage.getItem("first-tree:selectedOrganizationId:user-1")).toBe("org-2");
+    expect(localStorage.getItem("first-tree:selectedOrganizationId:user-1")).toBeNull();
+    expect(localStorage.getItem("first-tree:chat-drafts:v1:chat-cache")).toBeNull();
+    expect(sessionStorage.getItem("first-tree:pending-image")).toBeNull();
 
-    // Returning sign-in: fetchMe restores org-2, not the server default org-1.
+    // Returning sign-in uses the server default org-1.
     apiMocks.setApiSelectedOrganizationId.mockClear();
     await act(async () => {
       await latestAuth?.adoptTokens({ accessToken: "access-2", refreshToken: "refresh-2" });
     });
     await flush();
-    expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
-    expect(apiMocks.setApiSelectedOrganizationId).toHaveBeenLastCalledWith("org-2");
+    expect(latestAuth?.currentMembership?.organizationId).toBe("org-1");
+    expect(apiMocks.setApiSelectedOrganizationId).toHaveBeenLastCalledWith("org-1");
   });
 
   it("falls back to the server default when the persisted org is no longer a membership", async () => {

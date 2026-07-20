@@ -12,6 +12,7 @@ import {
   setStoredTokens,
 } from "../api/client.js";
 import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
+import { clearPersistentBrowserStorage, setBrowserStorageUser } from "../lib/browser-storage-scope.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
@@ -237,19 +238,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // below — RequireAuth only blocks the loading frame when the user IS
   // authenticated.
   const [meLoaded, setMeLoaded] = useState(false);
+  const authGenerationRef = useRef(0);
   // In-flight org-switch target (drives the switcher's optimistic anchor, the
   // row spinner, and the global transition veil). Lives here so the veil
   // (mounted in the layout) and the switcher (in the header) read one source.
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
 
   const logout = useCallback(() => {
+    authGenerationRef.current += 1;
+    setBrowserStorageUser(null);
     clearStoredTokens();
-    // Keep the persisted last-used org (no writeSelectedOrgId(null) here) so a
-    // returning sign-in lands back in the org this user left rather than their
-    // most-recently-joined one. It's stored per-user (keyed by the token's
-    // `sub`), so a different account on the same browser can never inherit it.
-    // Clear only the in-memory + API-client selection so nothing org-scoped
-    // fires before the next fetchMe reconciles.
     setApiSelectedOrganizationId(null);
     queryClient.clear();
     // Drop per-tab onboarding flags so the next login (different user, or
@@ -267,11 +265,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDocsEnabled(false);
     setMeLoaded(false);
     setSwitchingOrg(null);
+    void clearPersistentBrowserStorage();
   }, [queryClient]);
 
   const fetchMe = useCallback(async () => {
+    const generation = authGenerationRef.current;
     try {
       const data = await api.get<MeResponse>("/me");
+      if (generation !== authGenerationRef.current) return;
+      setBrowserStorageUser(data.user?.id ?? null);
       setUser(data.user ?? null);
       const ms = data.memberships ?? [];
       setMemberships(ms);
@@ -311,31 +313,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return fallback;
       });
     } catch {
+      if (generation !== authGenerationRef.current) return;
+      setBrowserStorageUser(null);
       // If /me fails, the UI falls back to hiding admin features.
     } finally {
-      // Always flip the gate — even on error — so RequireAuth doesn't hang
-      // the dashboard forever if /me is briefly unreachable.
-      setMeLoaded(true);
+      if (generation === authGenerationRef.current) {
+        // Always flip the gate — even on error — so RequireAuth doesn't hang
+        // the dashboard forever if /me is briefly unreachable.
+        setMeLoaded(true);
+      }
     }
   }, []);
 
   const login = useCallback(
     async (username: string, password: string) => {
       const tokens = await loginApi(username, password);
+      setBrowserStorageUser(null);
+      queryClient.clear();
       setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+      authGenerationRef.current += 1;
       setIsAuthenticated(true);
       await fetchMe();
     },
-    [fetchMe],
+    [fetchMe, queryClient],
   );
 
   const adoptTokens = useCallback(
     async (tokens: { accessToken: string; refreshToken: string }) => {
+      setBrowserStorageUser(null);
+      queryClient.clear();
       setStoredTokens(tokens);
+      authGenerationRef.current += 1;
       setIsAuthenticated(true);
       await fetchMe();
     },
-    [fetchMe],
+    [fetchMe, queryClient],
   );
 
   const selectOrganization = useCallback(
@@ -501,7 +513,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Listen for auth failure dispatched by the API client
   useEffect(() => {
-    const handler = () => logout();
+    const handler = () => {
+      void logout();
+    };
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
   }, [logout]);
