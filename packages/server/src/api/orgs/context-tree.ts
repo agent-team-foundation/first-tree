@@ -74,6 +74,11 @@ jobs:
 const REPO_SUFFIX = "-context-tree";
 const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 const TREE_SETUP_TOPIC = "Set up shared context";
+const writePreflightRouteOptions = {
+  // `undefined` intentionally preserves @fastify/rate-limit's global shared
+  // bucket while exposing that policy to CodeQL's Fastify route model.
+  config: { rateLimit: undefined },
+};
 const TREE_SETUP_BOOTSTRAP = [
   "Let's build or finish our team's Context Tree.",
   "",
@@ -197,33 +202,37 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
     );
   });
 
-  app.post<{ Params: { orgId: string }; Body: unknown }>("/write-preflight", async (request, reply) => {
-    const body = contextTreeWritePreflightRequestSchema.parse(request.body ?? {});
-    const scope = await requireOrgMembership(request, app.db);
+  app.post<{ Params: { orgId: string }; Body: unknown }>(
+    "/write-preflight",
+    writePreflightRouteOptions,
+    async (request, reply) => {
+      const body = contextTreeWritePreflightRequestSchema.parse(request.body ?? {});
+      const scope = await requireOrgMembership(request, app.db);
 
-    try {
-      const authority = await preflightContextTreeWriteAuthority(app.db, {
-        organizationId: scope.organizationId,
-        requester: {
-          userId: scope.userId,
-          memberId: scope.memberId,
-          humanAgentUuid: scope.humanAgentId,
-        },
-        requesterGithubLogin: body.requesterGithubLogin,
-      });
-      return reply.status(200).send(
-        contextTreeWritePreflightResponseSchema.parse({
+      try {
+        const authority = await preflightContextTreeWriteAuthority(app.db, {
           organizationId: scope.organizationId,
-          ...authority,
-        }),
-      );
-    } catch (error) {
-      if (error instanceof ContextTreeWritePreflightError) {
-        return reply.status(error.statusCode).send({ error: error.message, code: error.code });
+          requester: {
+            userId: scope.userId,
+            memberId: scope.memberId,
+            humanAgentUuid: scope.humanAgentId,
+          },
+          requesterGithubLogin: body.requesterGithubLogin,
+        });
+        return reply.status(200).send(
+          contextTreeWritePreflightResponseSchema.parse({
+            organizationId: scope.organizationId,
+            ...authority,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof ContextTreeWritePreflightError) {
+          return reply.status(error.statusCode).send({ error: error.message, code: error.code });
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    },
+  );
 
   app.post<{ Params: { orgId: string }; Body: unknown }>("/initialize", async (request, reply) => {
     initializeContextTreeRequestSchema.parse(request.body ?? {});

@@ -125,6 +125,14 @@ async function setupRoute() {
       secrets: { encryptionKey: "test-key" },
     },
   });
+  let writePreflightDeclaresInheritedRateLimit = false;
+  app.addHook("onRoute", (routeOptions) => {
+    if (routeOptions.url === "/write-preflight") {
+      const { config } = routeOptions;
+      writePreflightDeclaresInheritedRateLimit =
+        config !== undefined && Reflect.has(config, "rateLimit") && Reflect.get(config, "rateLimit") === undefined;
+    }
+  });
   await app.register(orgContextTreeRoutes);
   await app.ready();
 
@@ -133,6 +141,7 @@ async function setupRoute() {
     scope,
     installation,
     repo,
+    writePreflightDeclaresInheritedRateLimit,
     classes: {
       ContextTreeRepoProvisionError,
       ContextTreeWritePreflightError,
@@ -166,6 +175,12 @@ describe("org context tree routes with mocked service edges", () => {
   async function initialize(ctx: RouteMocks) {
     return ctx.app.inject({ method: "POST", url: "/initialize", payload: {} });
   }
+
+  it("declares the inherited global rate limit for Write preflight", async () => {
+    const ctx = await setupRoute();
+
+    expect(ctx.writePreflightDeclaresInheritedRateLimit).toBe(true);
+  });
 
   it("passes only the authenticated explicit Team tuple into Write preflight", async () => {
     const ctx = await setupRoute();
