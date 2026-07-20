@@ -65,6 +65,25 @@ describe("agent-executable provisioning", () => {
 
     const [config] = await app.db.select().from(agentConfigs).where(eq(agentConfigs.agentId, createdBody.uuid)).limit(1);
     expect(config?.payload.model).toBe("gpt-5.6-codex");
+    const resources = await app.inject({
+      method: "GET",
+      url: `/api/v1/agents/${createdBody.uuid}/resources`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(resources.statusCode).toBe(200);
+    const promptSet = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/agents/${createdBody.uuid}/resources`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        expectedVersion: resources.json<{ version: number }>().version,
+        bindings: [{ type: "prompt", mode: "include", resourceId: null, inlinePromptBody: "You are a reviewer." }],
+      },
+    });
+    expect(promptSet.statusCode).toBe(200);
+    expect(promptSet.json().bindings).toEqual([
+      expect.objectContaining({ type: "prompt", inlinePromptBody: "You are a reviewer." }),
+    ]);
     const [audit] = await app.db
       .select()
       .from(agentProvisioningAudit)
