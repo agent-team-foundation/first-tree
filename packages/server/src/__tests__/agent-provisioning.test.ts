@@ -2,8 +2,8 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentProvisioningAudit } from "../db/schema/agent-provisioning-audit.js";
-import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { createAgent } from "../services/agent.js";
+import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
 describe("agent-executable provisioning", () => {
@@ -63,7 +63,11 @@ describe("agent-executable provisioning", () => {
     const createdBody = created.json<{ uuid: string; managerId: string }>();
     expect(createdBody.managerId).toBe(admin.memberId);
 
-    const [config] = await app.db.select().from(agentConfigs).where(eq(agentConfigs.agentId, createdBody.uuid)).limit(1);
+    const [config] = await app.db
+      .select()
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, createdBody.uuid))
+      .limit(1);
     expect(config?.payload.model).toBe("gpt-5.6-codex");
     const resources = await app.inject({
       method: "GET",

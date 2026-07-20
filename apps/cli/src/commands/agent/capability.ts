@@ -5,9 +5,7 @@ import { provisioningActorHeaders } from "../../core/provisioning-actor.js";
 import { adminFetch, resolveAgentRecord } from "./config/_shared/fetchers.js";
 
 export function registerAgentCapabilityCommands(agent: Command): void {
-  const capability = agent
-    .command("capability")
-    .description("Admin-granted standing capabilities for teammate agents");
+  const capability = agent.command("capability").description("Admin-granted standing capabilities for teammate agents");
   for (const [command, enabled] of [
     ["grant", true],
     ["revoke", false],
