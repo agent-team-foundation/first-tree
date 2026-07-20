@@ -394,12 +394,18 @@ describe("AuthProvider", () => {
       refreshToken: "refresh-b",
     };
     await act(async () => {
+      await latestAuth?.adoptTokens({
+        accessToken: currentTokens.accessToken,
+        refreshToken: currentTokens.refreshToken,
+      });
+    });
+    await act(async () => {
       for (const request of requests) request.onsuccess?.();
       await Promise.resolve();
     });
 
     expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
-    expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(latestAuth?.isAuthenticated).toBe(true);
     expect(container?.querySelectorAll('[role="status"]').length).toBe(0);
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
   });
