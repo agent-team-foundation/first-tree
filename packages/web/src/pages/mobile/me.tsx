@@ -2,9 +2,11 @@ import type { MeMembership, OrgBrief } from "@first-tree/shared";
 import { ChevronRight, ExternalLink, HelpCircle, Loader2, LogOut, Palette, Smartphone, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../auth/auth-context.js";
+import { showLogoutIncompleteToast } from "../../auth/logout-recovery.js";
 import { Avatar } from "../../components/avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { ThemeToggle } from "../../components/ui/theme-toggle.js";
+import { useOptionalToast } from "../../components/ui/toast.js";
 import { DISCORD_INVITE_URL } from "../../lib/community.js";
 import { MobilePage, MobileSection, mobileCardStyle } from "./components.js";
 import { InstallGuideSheet } from "./install-guide-sheet.js";
@@ -13,6 +15,7 @@ import { useInstallPrompt } from "./use-install-guide.js";
 
 export function MobileMePage() {
   const { user, teamDisplayName, role, logout } = useAuth();
+  const { addToast } = useOptionalToast();
   const displayName = user?.displayName ?? "Signed-in user";
   const username = user?.username ?? "";
   const avatarSrc = user?.avatarUrl ?? null;
@@ -65,7 +68,18 @@ export function MobileMePage() {
           />
         </MobileSection>
 
-        <Button type="button" variant="outline" className="min-h-11 justify-start" onClick={() => void logout()}>
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-11 justify-start"
+          onClick={() => {
+            void Promise.resolve(logout())
+              .then((completed) => {
+                if (!completed) showLogoutIncompleteToast(addToast, logout);
+              })
+              .catch(() => showLogoutIncompleteToast(addToast, logout));
+          }}
+        >
           <LogOut className="h-4 w-4" />
           Sign out
         </Button>

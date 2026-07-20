@@ -64,6 +64,10 @@ export function useToast(): ToastContextValue {
   return ctx;
 }
 
+export function useOptionalToast(): ToastContextValue {
+  return useContext(ToastContext) ?? { addToast: () => undefined };
+}
+
 function Toaster({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
   if (toasts.length === 0) return null;
   return (

@@ -1,8 +1,9 @@
 import { LogOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/auth-context.js";
+import { showLogoutIncompleteToast } from "../auth/logout-recovery.js";
 import { Avatar } from "./avatar.js";
-import { useToast } from "./ui/toast.js";
+import { useOptionalToast } from "./ui/toast.js";
 
 // Marketing site — where an explicit sign-out lands the browser, so the user
 // leaves the app on the parent brand surface rather than an app route (which
@@ -20,7 +21,7 @@ const PARENT_URL = "https://first-tree.ai";
  */
 export function UserMenu() {
   const { user, logout } = useAuth();
-  const { addToast } = useToast();
+  const { addToast } = useOptionalToast();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -91,22 +92,20 @@ export function UserMenu() {
               onClick={() => {
                 setOpen(false);
                 void (async () => {
+                  let completed = false;
                   try {
-                    await logout();
-                    // Leave the app on the marketing site rather than an app
-                    // route — `logout()` clears local auth state, so staying in
-                    // the SPA would just redirect to the login page.
-                    window.location.href = PARENT_URL;
+                    completed = (await Promise.resolve(logout())) === true;
                   } catch {
-                    // Keep the app open when browser persistence could not be
-                    // purged; navigating away would violate the logout boundary.
-                    addToast({
-                      title: "Sign out incomplete",
-                      description: "Close other First Tree tabs and retry to finish clearing local data.",
-                      action: { label: "Retry", onClick: () => void logout() },
-                      durationMs: null,
-                    });
+                    completed = false;
                   }
+                  if (!completed) {
+                    showLogoutIncompleteToast(addToast, logout);
+                    return;
+                  }
+                  // Leave the app on the marketing site rather than an app
+                  // route — `logout()` clears local auth state, so staying in
+                  // the SPA would just redirect to the login page.
+                  window.location.href = PARENT_URL;
                 })();
               }}
               className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"

@@ -169,12 +169,14 @@ type AuthContextValue = {
   switchingOrg: OrgBrief | null;
   setSwitchingOrg: (org: OrgBrief | null) => void;
   refreshMe: () => Promise<void>;
-  logout: (options?: LogoutOptions) => void | Promise<void>;
+  logout: (options?: LogoutOptions) => undefined | Promise<boolean>;
+  logoutStatus?: "idle" | "purging" | "incomplete";
 };
 
 type LogoutOptions = {
   broadcast?: boolean;
   clearTokens?: boolean;
+  protectReplacementTokens?: boolean;
   scope?: BrowserStorageScope;
 };
 
@@ -260,12 +262,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // row spinner, and the global transition veil). Lives here so the veil
   // (mounted in the layout) and the switcher (in the header) read one source.
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
+  const [logoutStatus, setLogoutStatus] = useState<"idle" | "purging" | "incomplete">("idle");
 
   const logout = useCallback(
-    async (options: LogoutOptions = {}) => {
+    async (options: LogoutOptions = {}): Promise<boolean> => {
       const departingScope = options.scope ?? captureBrowserStorageScope();
       if (options.broadcast !== false) invalidateBrowserStorageScope(departingScope);
       authGenerationRef.current += 1;
+      setLogoutStatus("purging");
+      try {
+        await clearPersistentBrowserStorage(departingScope);
+      } catch {
+        setLogoutStatus("incomplete");
+        return false;
+      }
       setApiSelectedOrganizationId(null);
       queryClient.clear();
       // Drop per-tab onboarding flags so the next login (different user, or
@@ -273,9 +283,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // confirmed" / "Step 3 dismissed" / agent uuid / draft from the prior
       // identity.
       clearOnboardingSessionFlags();
-      await clearPersistentBrowserStorage(departingScope);
       setBrowserStorageUser(null);
-      if (options.clearTokens !== false) clearStoredTokens();
+      // A different tab may have installed a replacement account while this
+      // tab was purging the departing scope. Never clear that newer account's
+      // credential as a side effect of the old logout.
+      const currentTokenOwner = userIdFromToken();
+      const canClearCredential =
+        !options.protectReplacementTokens || !departingScope.userId || currentTokenOwner === departingScope.userId;
+      if (options.clearTokens !== false && canClearCredential) {
+        clearStoredTokens();
+      }
       setIsAuthenticated(false);
       setUser(null);
       setMemberships([]);
@@ -286,6 +303,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setDocsEnabled(false);
       setMeLoaded(false);
       setSwitchingOrg(null);
+      setLogoutStatus("idle");
+      return true;
     },
     [queryClient],
   );
@@ -355,6 +374,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBrowserStorageUser(null);
       queryClient.clear();
       setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+      setLogoutStatus("idle");
       authGenerationRef.current += 1;
       setIsAuthenticated(true);
       await fetchMe();
@@ -369,6 +389,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBrowserStorageUser(null);
       queryClient.clear();
       setStoredTokens(tokens);
+      setLogoutStatus("idle");
       authGenerationRef.current += 1;
       setIsAuthenticated(true);
       await fetchMe();
@@ -540,7 +561,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Listen for auth failure dispatched by the API client
   useEffect(() => {
     const handler = () => {
-      void logout();
+      void Promise.resolve(logout());
     };
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
@@ -549,7 +570,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handler = (event: Event) => {
       const scope = (event as CustomEvent<{ scope?: BrowserStorageScope }>).detail?.scope;
-      void logout({ broadcast: false, scope });
+      void Promise.resolve(logout({ broadcast: false, protectReplacementTokens: true, scope }));
     };
     window.addEventListener(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, handler);
     return () => window.removeEventListener(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, handler);
@@ -585,6 +606,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSwitchingOrg,
         refreshMe: fetchMe,
         logout,
+        logoutStatus,
       }}
     >
       {children}

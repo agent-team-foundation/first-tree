@@ -2,6 +2,7 @@ import { Plus, UserPlus } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
+import { showLogoutIncompleteToast } from "../../auth/logout-recovery.js";
 import { FirstTreeLogo } from "../../components/first-tree-logo.js";
 import { TeamSetupModal } from "../../components/team-setup-modal.js";
 import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
@@ -48,6 +49,13 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
   // First-run users (single membership) keep the deliberately minimal chrome:
   // the menu's only destinations would fork them into a second team mid-setup.
   const isMultiTeam = memberships.length > 1;
+  const signOut = () => {
+    void Promise.resolve(logout())
+      .then((completed) => {
+        if (!completed) showLogoutIncompleteToast(addToast, logout);
+      })
+      .catch(() => showLogoutIncompleteToast(addToast, logout));
+  };
 
   return (
     // h-screen + overflow-hidden pins the app to the viewport, so the page can
@@ -89,12 +97,12 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
           {isMultiTeam ? (
             <>
               <TeamSwitcher />
-              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void logout()}>
+              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={signOut}>
                 Sign out
               </Button>
             </>
           ) : (
-            <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void logout()}>
+            <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={signOut}>
               Sign out
             </Button>
           )}

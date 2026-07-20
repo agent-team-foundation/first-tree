@@ -12,6 +12,8 @@ const KNOWN_DATABASES_KEY = "first-tree:browser-databases:v1";
 const INVALIDATED_SCOPES_KEY = "first-tree:invalidated-scopes:v1";
 export const BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT = "first-tree:browser-scope-invalidated";
 const SCOPE_CHANNEL = "first-tree-browser-scope";
+const invalidatedScopes = new Set<string>();
+let scopeChannel: BroadcastChannel | null = null;
 
 export type BrowserStorageScope = {
   key: string;
@@ -52,6 +54,7 @@ export function isBrowserStorageScopeCurrent(scope: BrowserStorageScope): boolea
 }
 
 function isScopeInvalidated(key: string): boolean {
+  if (invalidatedScopes.has(key)) return true;
   try {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(INVALIDATED_SCOPES_KEY) : null;
     const invalidated = raw ? (JSON.parse(raw) as unknown) : [];
@@ -62,6 +65,7 @@ function isScopeInvalidated(key: string): boolean {
 }
 
 function clearInvalidatedScope(key: string): void {
+  invalidatedScopes.delete(key);
   try {
     if (typeof localStorage === "undefined") return;
     const raw = localStorage.getItem(INVALIDATED_SCOPES_KEY);
@@ -77,6 +81,7 @@ function clearInvalidatedScope(key: string): void {
 
 function invalidateScopeFromOtherDocument(scope: BrowserStorageScope): void {
   if (scope.key !== getBrowserStorageScope() || userId === null) return;
+  invalidatedScopes.add(scope.key);
   window.dispatchEvent(new CustomEvent(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, { detail: { scope } }));
 }
 
@@ -89,6 +94,7 @@ function handleScopeInvalidationMessage(value: unknown): void {
 }
 
 export function invalidateBrowserStorageScope(scope: BrowserStorageScope): void {
+  invalidatedScopes.add(scope.key);
   try {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(INVALIDATED_SCOPES_KEY) : null;
     const invalidated = raw ? (JSON.parse(raw) as unknown) : [];
@@ -102,11 +108,7 @@ export function invalidateBrowserStorageScope(scope: BrowserStorageScope): void 
     // BroadcastChannel below still covers modern browsers if storage is denied.
   }
   try {
-    if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel(SCOPE_CHANNEL);
-      channel.postMessage({ scope });
-      channel.close();
-    }
+    if (scopeChannel) scopeChannel.postMessage({ scope });
   } catch {
     // Storage event is the fallback transport.
   }
@@ -127,8 +129,8 @@ if (typeof window !== "undefined") {
   });
   try {
     if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel(SCOPE_CHANNEL);
-      channel.onmessage = (event) => handleScopeInvalidationMessage(event.data);
+      scopeChannel = new BroadcastChannel(SCOPE_CHANNEL);
+      scopeChannel.onmessage = (event) => handleScopeInvalidationMessage(event.data);
     }
   } catch {
     // BroadcastChannel is optional; storage events remain available.

@@ -354,6 +354,84 @@ describe("AuthProvider", () => {
     expect(scope.isBrowserStorageScopeCurrent(account)).toBe(false);
   });
 
+  it("does not clear replacement credentials when a cross-tab purge completes late", async () => {
+    let currentTokens = {
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh-a",
+    };
+    apiMocks.getStoredTokens.mockImplementation(() => currentTokens);
+    await renderAuth();
+    const scope = await import("../../lib/browser-storage-scope.js");
+    const account = scope.captureBrowserStorageScope();
+    const requests: Array<{ onsuccess: (() => void) | null }> = [];
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      value: {
+        deleteDatabase: () => {
+          const request = { onsuccess: null as (() => void) | null };
+          requests.push(request);
+          return request;
+        },
+      },
+    });
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(scope.BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, { detail: { scope: account } }),
+      );
+      await Promise.resolve();
+    });
+    await flush();
+    expect(requests.length).toBeGreaterThan(0);
+
+    currentTokens = {
+      accessToken: tokenWithPayload({ sub: "user-2" }),
+      refreshToken: "refresh-b",
+    };
+    await act(async () => {
+      for (const request of requests) request.onsuccess?.();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
+    expect(latestAuth?.isAuthenticated).toBe(false);
+    delete (globalThis as { indexedDB?: unknown }).indexedDB;
+  });
+
+  it("keeps the session available for retry when logout purge is blocked", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    await renderAuth();
+    const requests: Array<{ onblocked: (() => void) | null }> = [];
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      value: {
+        deleteDatabase: () => {
+          const request = { onblocked: null as (() => void) | null };
+          requests.push(request);
+          return request;
+        },
+      },
+    });
+
+    let result: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      result = latestAuth?.logout() ?? Promise.resolve(false);
+      await Promise.resolve();
+    });
+    await flush();
+    expect(requests.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const request of requests) request.onblocked?.();
+      await result;
+    });
+    expect(latestAuth?.isAuthenticated).toBe(true);
+    expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
+    delete (globalThis as { indexedDB?: unknown }).indexedDB;
+  });
+
   it("clears persisted browser data on logout before a returning sign-in", async () => {
     // /me's default (most-recent) is org-1, but the user last used org-2.
     localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");

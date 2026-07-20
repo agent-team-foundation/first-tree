@@ -201,6 +201,38 @@ describe("image-store", () => {
     await expect(purge).rejects.toThrow("is still open");
   });
 
+  it("invalidates the issuing scope in memory when storage and broadcast transport are unavailable", async () => {
+    vi.resetModules();
+    const originalBroadcastChannel = globalThis.BroadcastChannel;
+    const originalLocalStorage = globalThis.localStorage;
+    const deniedStorage = {
+      getItem: () => {
+        throw new Error("storage denied");
+      },
+      setItem: () => {
+        throw new Error("storage denied");
+      },
+      removeItem: () => {
+        throw new Error("storage denied");
+      },
+    } as unknown as Storage;
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: deniedStorage });
+    Object.defineProperty(globalThis, "BroadcastChannel", { configurable: true, value: undefined });
+    try {
+      const scope = await import("../../lib/browser-storage-scope.js");
+      scope.setBrowserStorageUser("storage-denied-user");
+      const captured = scope.captureBrowserStorageScope();
+      scope.invalidateBrowserStorageScope(captured);
+      expect(scope.isBrowserStorageScopeCurrent(captured)).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, value: originalLocalStorage });
+      Object.defineProperty(globalThis, "BroadcastChannel", {
+        configurable: true,
+        value: originalBroadcastChannel,
+      });
+    }
+  });
+
   it("rejects writes and returns null when IndexedDB is unavailable", async () => {
     vi.resetModules();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
