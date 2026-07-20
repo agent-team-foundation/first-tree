@@ -2,10 +2,10 @@
  * Unit tests for the chat auto-archive sweeper (`sweepChatArchive`). Covers
  * the two SCM-source branches the sweeper owns:
  *
- *   Mapped branch — provider-owned chats with matching SCM mappings: archive
- *                   when every mapped entity is terminal AND
+ *   Mapped branch — SCM-origin chats with complete attention lines: archive
+ *                   when every active GitHub/GitLab entity is terminal AND
  *                   `last_message_at` is older than the SCM idle threshold.
- *   No-mapping branch — provider-owned chats without an SCM mapping: archive
+ *   No-mapping branch — SCM-origin chats without an SCM mapping: archive
  *                       acknowledged (chat, user) pairs after the same idle
  *                       threshold.
  *
@@ -35,6 +35,17 @@ type ChatMetadata = Record<string, unknown>;
 function githubMetadata(key = `owner/repo#${randomUUID().slice(0, 8)}`): ChatMetadata {
   return { source: "github", entityType: "pull_request", entityKey: key };
 }
+
+function gitlabMetadata(iid: number): ChatMetadata {
+  return {
+    source: "gitlab",
+    entityType: "pull_request",
+    entityKey: `701:pull_request:${iid}`,
+    entityUrl: `https://gitlab.internal/acme/archive/-/merge_requests/${iid}`,
+  };
+}
+
+let nextGitlabEntityIid = 10_000;
 
 async function seedHumanAgent(app: App, orgId: string, memberId: string): Promise<string> {
   const uuid = randomUUID();
@@ -88,6 +99,54 @@ async function addHumanMember(app: App, chatId: string, agentId: string): Promis
     role: "member",
     accessMode: "speaker",
     source: "manual",
+  });
+}
+
+async function seedGitlabConnection(app: App, organizationId: string, memberId: string): Promise<string> {
+  const connection = await createGitlabConnection(app.db, {
+    organizationId,
+    memberId,
+    displayName: `Archive GitLab ${randomUUID().slice(0, 8)}`,
+    instanceOrigin: "https://gitlab.internal",
+  });
+  return connection.connectionId;
+}
+
+async function seedGitlabMapping(
+  app: App,
+  input: {
+    organizationId: string;
+    connectionId: string;
+    chatId: string;
+    declaredByAgentId: string;
+    humanAgentId?: string | null;
+    delegateAgentId?: string | null;
+    entityState: string;
+    active?: boolean;
+  },
+): Promise<void> {
+  const iid = nextGitlabEntityIid++;
+  const hasCompletePair = input.humanAgentId != null && input.delegateAgentId != null;
+  await app.db.insert(gitlabEntityChatMappings).values({
+    id: randomUUID(),
+    organizationId: input.organizationId,
+    connectionId: input.connectionId,
+    chatId: input.chatId,
+    declaredByAgentId: input.declaredByAgentId,
+    boundVia: "agent_declared",
+    humanAgentId: input.humanAgentId ?? null,
+    delegateAgentId: input.delegateAgentId ?? null,
+    attentionMode: hasCompletePair ? "paired" : "legacy_route_only",
+    attentionBackfillVersion: hasCompletePair ? 1 : 0,
+    active: input.active ?? true,
+    entityType: "pull_request",
+    entityIid: iid,
+    projectId: 701,
+    projectPath: "acme/archive",
+    projectPathNormalized: "acme/archive",
+    entityUrl: `https://gitlab.internal/acme/archive/-/merge_requests/${iid}`,
+    title: `Archive MR ${iid}`,
+    entityState: input.entityState,
   });
 }
 
@@ -231,11 +290,116 @@ describe("sweepChatArchive — mapped SCM branch", () => {
     expect(await getEngagement(app, chatId, admin.humanAgentUuid)).toBeNull();
   });
 
-  it("does not archive mapped chats unless their source is github", async () => {
+  it("keeps a GitLab-origin chat active when GitLab is terminal but GitHub is open", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const connectionId = await seedGitlabConnection(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, longAgo(), gitlabMetadata(21));
+    await seedGitlabMapping(app, {
+      organizationId: admin.organizationId,
+      connectionId,
+      chatId,
+      declaredByAgentId: delegate,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityState: "merged",
+    });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#cross-provider-open",
+      chatId,
+      boundVia: "agent_declared",
+      entityState: "open",
+    });
+
+    expect(await sweepChatArchive(app.db)).toMatchObject({ mappedRowsArchived: 0 });
+    expect(await getEngagement(app, chatId, human)).toBeNull();
+  });
+
+  it("keeps a GitHub-origin chat active when GitHub is terminal but GitLab is open", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const connectionId = await seedGitlabConnection(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#cross-provider-merged",
+      chatId,
+      boundVia: "direct",
+      entityState: "merged",
+    });
+    await seedGitlabMapping(app, {
+      organizationId: admin.organizationId,
+      connectionId,
+      chatId,
+      declaredByAgentId: delegate,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityState: "open",
+    });
+
+    expect(await sweepChatArchive(app.db)).toMatchObject({ mappedRowsArchived: 0 });
+    expect(await getEngagement(app, chatId, human)).toBeNull();
+  });
+
+  it("archives a GitLab-origin chat whose only complete terminal line is GitHub", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, longAgo(), gitlabMetadata(22));
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#opposite-only",
+      chatId,
+      boundVia: "agent_declared",
+      entityState: "closed",
+    });
+
+    expect(await sweepChatArchive(app.db)).toMatchObject({ mappedRowsArchived: 1 });
+    expect(await getEngagement(app, chatId, human)).toBe("archived");
+  });
+
+  it("archives a GitHub-origin chat whose only complete terminal line is GitLab", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const connectionId = await seedGitlabConnection(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    await seedGitlabMapping(app, {
+      organizationId: admin.organizationId,
+      connectionId,
+      chatId,
+      declaredByAgentId: delegate,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityState: "merged",
+    });
+
+    expect(await sweepChatArchive(app.db)).toMatchObject({ mappedRowsArchived: 1 });
+    expect(await getEngagement(app, chatId, human)).toBe("archived");
+  });
+
+  it("does not archive mixed-provider mapped chats unless their source is an SCM provider", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const connectionId = await seedGitlabConnection(app, admin.organizationId, admin.memberId);
     const manualChatId = await seedChat(app, admin.organizationId, longAgo(), {});
     const agentChatId = await seedChat(app, admin.organizationId, longAgo(), { source: "agent" });
     await app.db.insert(githubEntityChatMappings).values([
@@ -260,12 +424,164 @@ describe("sweepChatArchive — mapped SCM branch", () => {
         entityState: "merged",
       },
     ]);
+    await seedGitlabMapping(app, {
+      organizationId: admin.organizationId,
+      connectionId,
+      chatId: manualChatId,
+      declaredByAgentId: delegate,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityState: "merged",
+    });
+    await seedGitlabMapping(app, {
+      organizationId: admin.organizationId,
+      connectionId,
+      chatId: agentChatId,
+      declaredByAgentId: delegate,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityState: "merged",
+    });
 
     const result = await sweepChatArchive(app.db);
 
     expect(result.mappedRowsArchived).toBe(0);
     expect(await getEngagement(app, manualChatId, human)).toBeNull();
     expect(await getEngagement(app, agentChatId, human)).toBeNull();
+  });
+
+  it("uses active GitLab legacy route-only rows as state guards without inventing archive targets", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const connectionId = await seedGitlabConnection(app, admin.organizationId, admin.memberId);
+
+    const routeOnlyChatId = await seedChat(app, admin.organizationId, longAgo(), gitlabMetadata(23));
+    await seedGitlabMapping(app, {
+      organizationId: admin.organizationId,
+      connectionId,
+      chatId: routeOnlyChatId,
+      declaredByAgentId: delegate,
+      entityState: "merged",
+    });
+    await addHumanMember(app, routeOnlyChatId, human);
+    await app.db.insert(chatUserState).values({
+      chatId: routeOnlyChatId,
+      agentId: human,
+      engagementStatus: "active",
+      unreadMentionCount: 0,
+      lastReadAt: new Date(Date.now() - 24 * HOURS * 1000),
+    });
+
+    const guardedChatId = await seedChat(
+      app,
+      admin.organizationId,
+      longAgo(),
+      githubMetadata("owner/repo#route-only-guard"),
+    );
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#route-only-guard",
+      chatId: guardedChatId,
+      boundVia: "direct",
+      entityState: "merged",
+    });
+    await seedGitlabMapping(app, {
+      organizationId: admin.organizationId,
+      connectionId,
+      chatId: guardedChatId,
+      declaredByAgentId: delegate,
+      entityState: "open",
+    });
+
+    const result = await sweepChatArchive(app.db);
+
+    expect(result.mappedRowsArchived).toBe(0);
+    expect(result.unmappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, routeOnlyChatId, human)).toBe("active");
+    expect(await getEngagement(app, guardedChatId, human)).toBeNull();
+  });
+
+  it.each([
+    "github",
+    "gitlab",
+  ] as const)("applies unread, open-request, working, and blocked guards to complete $provider lines", async (provider) => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const connectionId =
+      provider === "gitlab" ? await seedGitlabConnection(app, admin.organizationId, admin.memberId) : null;
+    const guardCases = [
+      { guard: "unread", runtimeState: null },
+      { guard: "open-request", runtimeState: null },
+      { guard: "working", runtimeState: "working" },
+      { guard: "blocked", runtimeState: "blocked" },
+    ] as const;
+    const chatIds: string[] = [];
+
+    for (const [index, guardCase] of guardCases.entries()) {
+      const metadata =
+        provider === "github"
+          ? githubMetadata(`owner/repo#${provider}-guard-${guardCase.guard}`)
+          : gitlabMetadata(30 + index);
+      const chatId = await seedChat(app, admin.organizationId, longAgo(), metadata);
+      chatIds.push(chatId);
+
+      if (provider === "github") {
+        await app.db.insert(githubEntityChatMappings).values({
+          organizationId: admin.organizationId,
+          humanAgentId: human,
+          delegateAgentId: delegate,
+          entityType: "pull_request",
+          entityKey: `owner/repo#${provider}-guard-${guardCase.guard}`,
+          chatId,
+          boundVia: "direct",
+          entityState: "merged",
+        });
+      } else {
+        if (!connectionId) throw new Error("GitLab connection missing");
+        await seedGitlabMapping(app, {
+          organizationId: admin.organizationId,
+          connectionId,
+          chatId,
+          declaredByAgentId: delegate,
+          humanAgentId: human,
+          delegateAgentId: delegate,
+          entityState: "merged",
+        });
+      }
+
+      if (guardCase.guard === "unread" || guardCase.guard === "open-request") {
+        await app.db.insert(chatUserState).values({
+          chatId,
+          agentId: human,
+          engagementStatus: "active",
+          unreadMentionCount: guardCase.guard === "unread" ? 1 : 0,
+          openRequestCount: guardCase.guard === "open-request" ? 1 : 0,
+        });
+      }
+      if (guardCase.runtimeState) {
+        await app.db.insert(agentChatSessions).values({
+          agentId: delegate,
+          chatId,
+          state: "active",
+          runtimeState: guardCase.runtimeState,
+          runtimeStateAt: new Date(),
+        });
+      }
+    }
+
+    expect(await sweepChatArchive(app.db)).toMatchObject({ mappedRowsArchived: 0 });
+    await Promise.all(
+      chatIds.map(async (chatId) => {
+        expect(await getEngagement(app, chatId, human)).not.toBe("archived");
+      }),
+    );
   });
 
   it("does not archive mapped chats while any request in the chat is still open", async () => {
@@ -337,7 +653,7 @@ describe("sweepChatArchive — mapped SCM branch", () => {
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
     const chatId = await seedChat(app, admin.organizationId, longAgo());
-    // One merged, one still open → BOOL_AND is false.
+    // One merged, one still open → the non-terminal mapping blocks archive.
     await app.db.insert(githubEntityChatMappings).values([
       {
         organizationId: admin.organizationId,

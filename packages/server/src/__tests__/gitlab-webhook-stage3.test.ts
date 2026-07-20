@@ -30,6 +30,7 @@ import {
 } from "../services/gitlab-identities.js";
 import { applyGitlabPersonnelEvidence, normalizeGitlabWebhook } from "../services/gitlab-webhook.js";
 import { pollInbox } from "../services/inbox.js";
+import { getCallerEngagement, setChatEngagement } from "../services/me-chat.js";
 import { deleteMember } from "../services/member.js";
 import { deactivateMembership, MEMBER_STATUSES, reactivateMembership } from "../services/membership.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -839,10 +840,48 @@ describe("GitLab Stage 3 personnel routing", () => {
     ).toHaveLength(0);
   });
 
-  it("wakes the stored delegate for an ordinary event on an explicit attention line", async () => {
+  it("revives an archived chat when a GitLab card arrives through the shared message path", async () => {
     const app = getApp();
     const setup = await setupTarget(app);
     const iid = 63;
+    const chat = await createChat(app.db, setup.admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [setup.delegate.uuid],
+      topic: `GitLab revive ${iid}`,
+      metadata: {},
+    });
+    await declareGitlabEntityFollow(app.db, {
+      organizationId: setup.admin.organizationId,
+      connectionId: setup.connection.connectionId,
+      chatId: chat.id,
+      declaredByAgentId: setup.delegate.uuid,
+      humanAgentId: setup.admin.humanAgentUuid,
+      delegateAgentId: setup.delegate.uuid,
+      boundVia: "agent_declared",
+      entityUrl: `https://gitlab.internal/Acme/Reviews/-/merge_requests/${iid}`,
+    });
+    await setChatEngagement(app.db, chat.id, setup.admin.humanAgentUuid, "archived");
+
+    const response = await postMr(
+      app,
+      setup.connection.bearer,
+      mergeRequestPayload({ iid, actor: "another.user", reviewers: [] }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      await app.db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.chatId, chat.id), eq(messages.source, "gitlab"))),
+    ).toHaveLength(1);
+    await expect(getCallerEngagement(app.db, chat.id, setup.admin.humanAgentUuid)).resolves.toBe("active");
+  });
+
+  it("wakes the stored delegate for an ordinary event on an explicit attention line", async () => {
+    const app = getApp();
+    const setup = await setupTarget(app);
+    const iid = 64;
     const chat = await createChat(app.db, setup.admin.humanAgentUuid, {
       type: "group",
       participantIds: [setup.delegate.uuid],

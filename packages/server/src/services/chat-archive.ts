@@ -9,10 +9,10 @@
  * eligible for automatic archive. The sweep has two provider-neutral branches,
  * both keyed off `chats.last_message_at` as the idleness anchor:
  *
- *   Mapped branch — chats with at least one matching provider mapping row.
- *     Archive (for every mapped human) once *all* bound entities are
- *     terminal (`entity_state` in `('closed','merged')`) AND the chat has
- *     been silent for `mappedIdleSeconds` (default 1h).
+ *   Mapped branch — chats with at least one complete SCM attention line.
+ *     Archive (for every mapped human) once *all* GitHub mappings and active
+ *     GitLab mappings are terminal (`entity_state` in `('closed','merged')`)
+ *     AND the chat has been silent for `mappedIdleSeconds` (default 1h).
  *
  *   No-mapping branch — SCM-originated chats with no mapping rows. Archive
  *     only acknowledged human views once the chat has been silent for the same
@@ -64,10 +64,15 @@ export async function sweepChatArchive(
 }
 
 /**
- * Mapped branch: SCM-originated chats whose every provider-mapped entity is
- * terminal AND have been silent for at least `idleSeconds`. Archives every
- * (chat, human) pair from the mapping table, minus per-user unread and
- * chat-level open-request guards.
+ * Mapped branch: SCM-originated chats whose every active provider-mapped
+ * entity is terminal AND have been silent for at least `idleSeconds`.
+ * Archives every (chat, human) pair from complete attention lines, minus
+ * per-user unread and chat-level open-request guards.
+ *
+ * Chat origin is only the eligibility gate. Once eligible, entity state and
+ * archive targets are projected across both providers. Active GitLab legacy
+ * route-only rows participate in the entity-state guard but never create an
+ * archive target because they do not identify a human/wake pair.
  *
  * Implemented as a single `INSERT … SELECT … ON CONFLICT` round-trip:
  *  - The CTE enumerates only archivable (chat, human) rows, then applies the
@@ -86,22 +91,37 @@ export async function sweepChatArchive(
  */
 async function sweepMapped(db: Database, idleSeconds: number, batchSize: number): Promise<number> {
   const rows = await db.execute<{ chat_id: string }>(sql`
-    WITH scm_mappings AS (
-      SELECT m.chat_id, m.human_agent_id, m.entity_state
+    WITH scm_chats AS (
+      SELECT c.id AS chat_id
+        FROM chats c
+       WHERE c.metadata->>'source' IN ('github', 'gitlab')
+         AND c.parent_chat_id IS NULL
+    ),
+    scm_entity_states AS (
+      SELECT m.chat_id, m.entity_state
         FROM github_entity_chat_mappings m
-        JOIN chats c ON c.id = m.chat_id
-       WHERE c.metadata->>'source' = 'github'
+        JOIN scm_chats c ON c.chat_id = m.chat_id
       UNION ALL
-      SELECT m.chat_id, m.human_agent_id, m.entity_state
+      SELECT m.chat_id, m.entity_state
         FROM gitlab_entity_chat_mappings m
-        JOIN chats c ON c.id = m.chat_id
-       WHERE c.metadata->>'source' = 'gitlab'
-         AND m.active
+        JOIN scm_chats c ON c.chat_id = m.chat_id
+       WHERE m.active
+    ),
+    scm_archive_targets AS (
+      SELECT m.chat_id, m.human_agent_id
+        FROM github_entity_chat_mappings m
+        JOIN scm_chats c ON c.chat_id = m.chat_id
+      UNION ALL
+      SELECT m.chat_id, m.human_agent_id
+        FROM gitlab_entity_chat_mappings m
+        JOIN scm_chats c ON c.chat_id = m.chat_id
+       WHERE m.active
          AND m.human_agent_id IS NOT NULL
+         AND m.delegate_agent_id IS NOT NULL
     ),
     archivable_rows AS (
       SELECT DISTINCT m.chat_id, m.human_agent_id
-        FROM scm_mappings m
+        FROM scm_archive_targets m
         JOIN chats c ON c.id = m.chat_id
         LEFT JOIN chat_user_state cus
                ON cus.chat_id = m.chat_id AND cus.agent_id = m.human_agent_id
@@ -122,7 +142,7 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
          )
          AND NOT EXISTS (
            SELECT 1
-             FROM scm_mappings open_m
+             FROM scm_entity_states open_m
             WHERE open_m.chat_id = m.chat_id
               AND open_m.entity_state NOT IN ('closed', 'merged')
          )
