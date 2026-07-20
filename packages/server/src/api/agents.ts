@@ -1,5 +1,6 @@
 import {
   AGENT_ACTOR_HEADER,
+  AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   agentPinnedMessageSchema,
   switchAgentRuntimeSchema,
@@ -171,7 +172,11 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     "/:uuid/provisioning-capability",
     { config: { otelRecordBody: true } },
     async (request) => {
-      if (request.headers[AGENT_ACTOR_HEADER] || request.headers[AGENT_SELECTOR_HEADER]) {
+      if (
+        request.headers[AGENT_ACTOR_HEADER] ||
+        request.headers[AGENT_SELECTOR_HEADER] ||
+        request.headers[AGENT_RUNTIME_SESSION_HEADER]
+      ) {
         throw new ForbiddenError("Only a human organization administrator can grant or revoke this capability");
       }
       const { agent, scope } = await requireAgentAccess(request, app.db, "manage");

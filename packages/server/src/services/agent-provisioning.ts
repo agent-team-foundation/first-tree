@@ -2,7 +2,9 @@ import { AGENT_ACTOR_HEADER, AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER
 import { and, eq } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
+import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { ForbiddenError } from "../errors.js";
@@ -11,6 +13,7 @@ import { validateAgentRuntimeSession } from "./agent-runtime-session.js";
 export type ProvisioningAuditContext = {
   actingAgentId: string;
   managingMemberId: string;
+  clientId: string;
   chatId: string | null;
   sessionId: string | null;
 };
@@ -24,12 +27,12 @@ export async function requireProvisioningActor(
 ): Promise<ProvisioningAuditContext | null> {
   const raw = request.headers[AGENT_ACTOR_HEADER] ?? request.headers[AGENT_SELECTOR_HEADER];
   const actorId = Array.isArray(raw) ? raw[0] : raw;
-  if (!actorId) return null;
   const runtimeHeader = request.headers[AGENT_RUNTIME_SESSION_HEADER];
   const runtimeToken = Array.isArray(runtimeHeader) ? runtimeHeader[0] : runtimeHeader;
-  if (!runtimeToken) throw new ForbiddenError("Agent provisioning requires an active runtime session");
+  if (!actorId && !runtimeToken) return null;
+  if (actorId && !runtimeToken) throw new ForbiddenError("Agent provisioning requires an active runtime session");
 
-  const [row] = await db
+  const rows = await db
     .select({
       uuid: agents.uuid,
       organizationId: agents.organizationId,
@@ -44,23 +47,38 @@ export async function requireProvisioningActor(
     .from(agents)
     .innerJoin(members, eq(members.id, agents.managerId))
     .leftJoin(clients, eq(clients.id, agents.clientId))
-    .where(and(eq(agents.uuid, actorId), eq(members.status, "active")))
-    .limit(1);
+    .where(
+      and(
+        eq(members.status, "active"),
+        eq(agents.organizationId, organizationId),
+        eq(members.userId, userId),
+        ...(actorId ? [eq(agents.uuid, actorId)] : []),
+      ),
+    );
 
-  if (
-    !row ||
-    row.organizationId !== organizationId ||
-    row.managerUserId !== userId ||
-    row.type !== "agent" ||
-    row.status !== "active" ||
-    !row.canProvisionAgents ||
-    !row.clientId ||
-    row.clientUserId !== userId
-  ) {
-    throw new ForbiddenError("This agent is not authorized to provision agents");
+  let row: (typeof rows)[number] | undefined;
+  if (runtimeToken) {
+    for (const candidate of rows) {
+      if (
+        candidate.type !== "agent" ||
+        candidate.status !== "active" ||
+        !candidate.clientId ||
+        candidate.clientUserId !== userId
+      ) {
+        continue;
+      }
+      if (await validateAgentRuntimeSession(db, candidate.uuid, candidate.clientId, runtimeToken)) {
+        row = candidate;
+        break;
+      }
+    }
   }
-  if (!(await validateAgentRuntimeSession(db, row.uuid, row.clientId, runtimeToken))) {
+  if (!row || !row.clientId || !runtimeToken) {
+    if (actorId) throw new ForbiddenError("This agent is not authorized to provision agents");
     throw new ForbiddenError("Agent provisioning requires an active runtime session");
+  }
+  if (!row.canProvisionAgents) {
+    throw new ForbiddenError("This agent is not authorized to provision agents");
   }
 
   const header = (name: string): string | null => {
@@ -68,10 +86,31 @@ export async function requireProvisioningActor(
     const single = Array.isArray(value) ? value[0] : value;
     return typeof single === "string" && single.length > 0 ? single : null;
   };
+  const requestedChatId = header("x-first-tree-chat-id");
+  const verifiedChatId = requestedChatId
+    ? ((
+        await db
+          .select({ chatId: chats.id })
+          .from(chats)
+          .innerJoin(agentChatSessions, eq(agentChatSessions.chatId, chats.id))
+          .where(
+            and(
+              eq(chats.id, requestedChatId),
+              eq(chats.organizationId, organizationId),
+              eq(agentChatSessions.agentId, row.uuid),
+            ),
+          )
+          .limit(1)
+      )[0]?.chatId ?? null)
+    : null;
+
   return {
     actingAgentId: row.uuid,
     managingMemberId: row.managerId,
-    chatId: header("x-first-tree-chat-id"),
-    sessionId: header("x-first-tree-session-id"),
+    clientId: row.clientId,
+    chatId: verifiedChatId,
+    // FIRST_TREE_SESSION_ID is not a runtime-owned value. Never persist a
+    // caller-supplied session string as audit provenance.
+    sessionId: null,
   };
 }

@@ -521,27 +521,6 @@ export async function createAgent(
     await validateDelegateMentionTarget(db, data.delegateMention, orgId);
   }
 
-  // Check organization-level agent quota.
-  // NOTE: TOCTOU race — concurrent requests may both pass the check. Acceptable for Phase 1;
-  // enforce with a DB-level CHECK constraint or SELECT ... FOR UPDATE in Phase 2 if needed.
-  const [org] = await db
-    .select({ maxAgents: organizations.maxAgents })
-    .from(organizations)
-    .where(eq(organizations.id, orgId))
-    .limit(1);
-  if (org && org.maxAgents > 0) {
-    const rows = await db
-      .select({ value: count() })
-      .from(agents)
-      .where(and(eq(agents.organizationId, orgId), ne(agents.status, AGENT_STATUSES.DELETED)));
-    const activeCount = rows[0]?.value ?? 0;
-    if (activeCount >= org.maxAgents) {
-      throw new ForbiddenError(
-        `Organization "${orgId}" has reached its agent limit (${org.maxAgents}). Upgrade your plan or delete unused agents.`,
-      );
-    }
-  }
-
   // Phase 2 of the agent-naming refactor promoted `display_name` to NOT NULL
   // and standardized the fallback here so every surface (CLI, server logs,
   // IM bridge, chat roster) sees a populated label without the web-only
@@ -555,6 +534,27 @@ export async function createAgent(
     // Wrap both inserts in a transaction so the agent row is never visible
     // without its companion `agent_configs` row.
     const agent = await db.transaction(async (tx) => {
+      // Serialize the quota decision with the insert. Without the org-row
+      // lock, concurrent agent creates can all observe the same count.
+      const [org] = await tx
+        .select({ maxAgents: organizations.maxAgents })
+        .from(organizations)
+        .where(eq(organizations.id, orgId))
+        .for("update")
+        .limit(1);
+      if (org && org.maxAgents > 0) {
+        const rows = await tx
+          .select({ value: count() })
+          .from(agents)
+          .where(and(eq(agents.organizationId, orgId), ne(agents.status, AGENT_STATUSES.DELETED)));
+        const activeCount = rows[0]?.value ?? 0;
+        if (activeCount >= org.maxAgents) {
+          throw new ForbiddenError(
+            `Organization "${orgId}" has reached its agent limit (${org.maxAgents}). Upgrade your plan or delete unused agents.`,
+          );
+        }
+      }
+
       // Close the leave/remove race for non-human agents: lock the manager's
       // member row and re-confirm it is still active inside the same
       // transaction that inserts the agent. `deactivateMembership` (leave) and

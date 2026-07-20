@@ -38,6 +38,18 @@ describe("agent-executable provisioning", () => {
     expect(denied.statusCode).toBe(403);
     expect(denied.json().error).toMatch(/not authorized to provision/i);
 
+    const missingActorHeader = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/agents`,
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        "x-agent-runtime-session": runtimeToken,
+      },
+      payload: { name: "worker-missing-actor", type: "agent", clientId: admin.clientId },
+    });
+    expect(missingActorHeader.statusCode).toBe(403);
+    expect(missingActorHeader.json().error).toMatch(/not authorized|active runtime session/i);
+
     const grant = await app.inject({
       method: "PUT",
       url: `/api/v1/agents/${actor.uuid}/provisioning-capability`,
@@ -46,6 +58,17 @@ describe("agent-executable provisioning", () => {
     });
     expect(grant.statusCode).toBe(200);
     expect(grant.json().canProvisionAgents).toBe(true);
+
+    const derivedActor = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/agents`,
+      headers: {
+        authorization: `Bearer ${admin.accessToken}`,
+        "x-agent-runtime-session": runtimeToken,
+      },
+      payload: { name: "worker-derived-actor", type: "agent", clientId: admin.clientId, runtimeProvider: "codex" },
+    });
+    expect(derivedActor.statusCode).toBe(201);
 
     const created = await app.inject({
       method: "POST",
@@ -97,8 +120,8 @@ describe("agent-executable provisioning", () => {
       actingAgentId: actor.uuid,
       managingMemberId: admin.memberId,
       createdAgentId: createdBody.uuid,
-      chatId: "chat-provisioning",
-      sessionId: "session-provisioning",
+      chatId: null,
+      sessionId: null,
     });
   });
 

@@ -45,4 +45,18 @@ describe("provisioning actor headers", () => {
       "x-first-tree-session-id": "session-1",
     });
   });
+
+  it("keeps the runtime proof when the optional actor id is absent", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "first-tree-provisioning-"));
+    const tokenFile = join(tempDir, "runtime-token");
+    writeFileSync(tokenFile, "runtime-proof\n");
+    process.env.FIRST_TREE_AGENT_ID = "";
+    process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
+    process.env.FIRST_TREE_CHAT_ID = "";
+    process.env.FIRST_TREE_SESSION_ID = "";
+
+    expect(provisioningActorHeaders()).toEqual({
+      "x-agent-runtime-session": "runtime-proof",
+    });
+  });
 });

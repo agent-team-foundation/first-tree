@@ -145,6 +145,9 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
       throw new BadRequestError("Human agents are created through the member lifecycle");
     }
     assertMetadataDoesNotClaimLandingCampaignTrial(body.metadata);
+    if (provisioningActor && body.clientId !== provisioningActor.clientId) {
+      throw new ForbiddenError("Provisioning must use the acting agent's bound client");
+    }
     // member role: managerId forced to caller's member; admin role may
     // specify any managerId in the same org.
     const managerId = provisioningActor

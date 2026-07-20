@@ -4,8 +4,7 @@ import { AGENT_ACTOR_HEADER, AGENT_RUNTIME_SESSION_HEADER } from "@first-tree/sh
 /** Attach a runtime-bound actor proof when the command runs inside an agent session. */
 export function provisioningActorHeaders(): Record<string, string> {
   const agentId = process.env.FIRST_TREE_AGENT_ID?.trim();
-  if (!agentId) return {};
-  const headers: Record<string, string> = { [AGENT_ACTOR_HEADER]: agentId };
+  const headers: Record<string, string> = agentId ? { [AGENT_ACTOR_HEADER]: agentId } : {};
   const tokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
   if (tokenFile) {
     try {
