@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
-import { createTestAgent, useTestApp } from "./helpers.js";
+import { createAdminContext, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * Issue #1885 — gated agent self-provisioning.
@@ -66,6 +66,21 @@ describe("Agent self-provisioning (#1885)", () => {
     expect(row?.organizationId).toBe(actor.organizationId);
     expect(row?.managerId).toBe(actor.memberId);
     expect(row?.source).toBe("agent-api");
+  });
+
+  it("granted agent cannot pin a teammate to a client owned by another user (403)", async () => {
+    const app = getApp();
+    const actor = await createTestAgent(app, { name: `actor-${crypto.randomUUID().slice(0, 6)}` });
+    await grant(app, actor.accessToken, actor.agent.uuid, [PROVISION]);
+
+    // A claimed client owned by a DIFFERENT user (same org). resolveAgentClient
+    // must refuse pinning across users — R-RUN on the create path.
+    const other = await createAdminContext(app);
+    const res = await actor.request("POST", "/api/v1/agent/managed-agents", {
+      name: `mate-${crypto.randomUUID().slice(0, 6)}`,
+      clientId: other.clientId,
+    });
+    expect(res.statusCode).toBe(403);
   });
 
   it("member create route rejects an SDK-mediated call (X-Agent-Id) but allows the operator (no header)", async () => {
