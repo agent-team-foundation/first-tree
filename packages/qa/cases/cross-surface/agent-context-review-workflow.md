@@ -151,12 +151,22 @@ GitHub, concurrency, and recovery behavior.
   combines the unique takeover plus GitHub trigger into one B-only active wake.
   Remove the managed marker in a PR-body edit and confirm the stable task key
   still routes that scope change and later comments to the same Chat.
-- Publish A's canonical result comment. Confirm an exact body whose marker
-  matches an already authoritative A terminal Chat row is a silent projection
-  reflection, while a copied marker, changed body, different Reviewer/head, or
-  pre-terminal reflection is preserved as new input. Confirm the App creates no
-  review run, GitHub approval, merge, or second verdict. A pre-existing
-  unmanaged PR may still complete the legacy read-only App path.
+- Publish A's canonical result comment. Confirm its created reflection and
+  later self-edits are silent only after the immutable GitHub comment id is
+  captured from A's outbound upsert and bound by the fixed local receipt suffix
+  on an authoritative A terminal Chat row. Send that terminal through the real
+  addressed agent endpoint using `-F`/stdin; require the hidden receipt's
+  `to=@recipient` token to prevent a persisted routing prefix and allow only one
+  explicit LF/CRLF file terminator after the receipt. Require the webhook
+  comment id to equal that receipt and the current GitHub body to equal the
+  terminal content before the receipt byte for byte. Confirm the same
+  author/id/marker with a
+  human-edited meaningful body, an unknown or copied comment id, copied marker,
+  different author/Reviewer/head, removed marker, malformed or edited receipt,
+  legacy receipt absence, ambiguity, or pre-terminal reflection is preserved as
+  new input. Confirm the App creates no review run, GitHub approval, merge, or
+  second verdict. A pre-existing unmanaged PR may still complete the legacy
+  read-only App path.
 - Explicitly follow the same PR from another collaboration Chat and repeat a
   meaningful event. Confirm the managed task receives its protected trigger
   while the followed Chat still receives its ordinary GitHub card. This is not

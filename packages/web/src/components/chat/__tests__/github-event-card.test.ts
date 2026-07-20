@@ -120,8 +120,8 @@ describe("isGithubSystemSenderMetadata", () => {
  * when every signal lines up. These tests pin the conjunctive guard so a
  * future change cannot weaken it back to a metadata-only check without
  * lighting up red — the metadata field alone is forgeable (per the
- * external code review on this PR), so each test inverts exactly one of
- * the four required properties and expects rejection.
+ * external code review on this PR), so each test exercises one required
+ * property of the card or managed-Review trust branch.
  */
 const trustedMsg = {
   source: "github",
@@ -130,9 +130,33 @@ const trustedMsg = {
   metadata: { systemSender: "github" },
 };
 
+const trustedManagedReviewMsg = {
+  source: "github",
+  format: "markdown",
+  content: "GitHub reported meaningful follow-up activity for this managed Agent Review task.",
+  metadata: {
+    source: "github",
+    systemSender: "github",
+    contextReviewManagedEventV1: {
+      schemaVersion: 1,
+      eventType: "issue_comment",
+      action: "edited",
+      triggerEvent: "issue_comment.edited",
+      repository: "owner/repo",
+      pullRequest: 42,
+      senderLogin: "octocat",
+      commentId: "5015744884",
+    },
+  },
+};
+
 describe("isTrustedGithubDispatcherMessage", () => {
   it("accepts a message that matches every dispatcher signal", () => {
     expect(isTrustedGithubDispatcherMessage(trustedMsg)).toBe(true);
+  });
+
+  it("accepts server-authored managed Context Review Markdown", () => {
+    expect(isTrustedGithubDispatcherMessage(trustedManagedReviewMsg)).toBe(true);
   });
 
   it("rejects when source is not 'github' (agent CLI / web / api send)", () => {
@@ -141,7 +165,7 @@ describe("isTrustedGithubDispatcherMessage", () => {
     }
   });
 
-  it("rejects when format is not 'card' (plain text / markdown send)", () => {
+  it("rejects a card payload when its format is not 'card'", () => {
     for (const format of ["text", "markdown", "question", "file"]) {
       expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, format })).toBe(false);
     }
@@ -156,6 +180,28 @@ describe("isTrustedGithubDispatcherMessage", () => {
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: {} })).toBe(false);
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: { systemSender: "other" } })).toBe(false);
     expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: null })).toBe(false);
+  });
+
+  it("rejects managed Review Markdown unless its complete versioned envelope is valid", () => {
+    expect(
+      isTrustedGithubDispatcherMessage({
+        ...trustedManagedReviewMsg,
+        metadata: { systemSender: "github" },
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedGithubDispatcherMessage({
+        ...trustedManagedReviewMsg,
+        metadata: {
+          ...trustedManagedReviewMsg.metadata,
+          contextReviewManagedEventV1: {
+            ...trustedManagedReviewMsg.metadata.contextReviewManagedEventV1,
+            commentId: "copied-marker",
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(isTrustedGithubDispatcherMessage({ ...trustedManagedReviewMsg, source: "api" })).toBe(false);
   });
 });
 

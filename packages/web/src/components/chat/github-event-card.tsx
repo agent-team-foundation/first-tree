@@ -1,4 +1,9 @@
-import { type GithubEntityType, type GithubEventCard, githubEventCardSchema } from "@first-tree/shared";
+import {
+  contextReviewManagedMessageMetadataSchema,
+  type GithubEntityType,
+  type GithubEventCard,
+  githubEventCardSchema,
+} from "@first-tree/shared";
 import { Github } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -27,12 +32,12 @@ export function isGithubSystemSenderMetadata(metadata: unknown): boolean {
  * accepts arbitrary `metadata`, so a malicious agent could otherwise post
  * a normal text message with `{ systemSender: "github" }` and have the UI
  * render it as if from GitHub (sender-impersonation / phishing surface
- * flagged in code review). The dispatcher path uniquely sets
- * ALL of: `source === "github"`, `format === "card"`, a content payload
- * that validates as a `GithubEventCard`, and the metadata marker.
- * Requiring the conjunction makes the override impossible to trigger
- * from regular agent sends and impossible to trigger accidentally even
- * if a future write path mis-copies one flag.
+ * flagged in code review). The ordinary dispatcher path uniquely sets a
+ * valid GitHub card plus the metadata marker. Managed Context Review wakes
+ * are server-authored Markdown, so they instead require the complete
+ * versioned managed-event metadata envelope. The message service reserves
+ * `systemSender` and `contextReview*` keys, keeping both branches unavailable
+ * to regular agent sends.
  */
 type TrustedGithubMessageShape = {
   source: string | null | undefined;
@@ -42,11 +47,14 @@ type TrustedGithubMessageShape = {
 };
 
 export function isTrustedGithubDispatcherMessage(msg: TrustedGithubMessageShape): boolean {
+  if (msg.source !== "github") return false;
+  if (msg.format === "card") {
+    return isGithubEventCardContent(msg.content) && isGithubSystemSenderMetadata(msg.metadata);
+  }
   return (
-    msg.source === "github" &&
-    msg.format === "card" &&
-    isGithubEventCardContent(msg.content) &&
-    isGithubSystemSenderMetadata(msg.metadata)
+    msg.format === "markdown" &&
+    typeof msg.content === "string" &&
+    contextReviewManagedMessageMetadataSchema.safeParse(msg.metadata).success
   );
 }
 
