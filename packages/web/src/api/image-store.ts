@@ -7,7 +7,13 @@
  * dead-end like the old IndexedDB-only design.
  */
 
-import { getBrowserStorageRevision, scopedDatabaseName } from "../lib/browser-storage-scope.js";
+import {
+  type BrowserStorageScope,
+  captureBrowserStorageScope,
+  getBrowserStorageRevision,
+  isBrowserStorageScopeCurrent,
+  scopedDatabaseName,
+} from "../lib/browser-storage-scope.js";
 
 const DB_NAME = "first-tree-images";
 const DB_VERSION = 1;
@@ -23,7 +29,7 @@ type Stored = {
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let dbRevision = -1;
 
-function openDb(): Promise<IDBDatabase | null> {
+function openDb(scope: BrowserStorageScope): Promise<IDBDatabase | null> {
   const revision = getBrowserStorageRevision();
   if (dbPromise && dbRevision === revision) return dbPromise;
   dbRevision = revision;
@@ -32,7 +38,7 @@ function openDb(): Promise<IDBDatabase | null> {
       resolve(null);
       return;
     }
-    const req = indexedDB.open(scopedDatabaseName(DB_NAME), DB_VERSION);
+    const req = indexedDB.open(scopedDatabaseName(DB_NAME, scope), DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -56,11 +62,16 @@ function openDb(): Promise<IDBDatabase | null> {
  * so a rejection is non-fatal — callers should swallow it and let the render
  * path re-fetch from the server on the next view.
  */
-export async function putImage(params: { imageId: string; base64: string; mimeType: string }): Promise<void> {
-  const db = await openDb();
+export async function putImage(
+  params: { imageId: string; base64: string; mimeType: string },
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
+): Promise<void> {
+  if (!isBrowserStorageScopeCurrent(scope)) return;
+  const db = await openDb(scope);
   if (!db) {
     throw new Error("Image storage unavailable (IndexedDB disabled or blocked)");
   }
+  if (!isBrowserStorageScopeCurrent(scope)) return;
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
@@ -77,14 +88,23 @@ export async function putImage(params: { imageId: string; base64: string; mimeTy
   });
 }
 
-export async function getImage(imageId: string): Promise<{ base64: string; mimeType: string } | null> {
-  const db = await openDb();
+export async function getImage(
+  imageId: string,
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
+): Promise<{ base64: string; mimeType: string } | null> {
+  if (!isBrowserStorageScopeCurrent(scope)) return null;
+  const db = await openDb(scope);
   if (!db) return null;
+  if (!isBrowserStorageScopeCurrent(scope)) return null;
   return new Promise((resolve) => {
     const tx = db.transaction(STORE, "readonly");
     const store = tx.objectStore(STORE);
     const req = store.get(imageId);
     req.onsuccess = () => {
+      if (!isBrowserStorageScopeCurrent(scope)) {
+        resolve(null);
+        return;
+      }
       const row = req.result as Stored | undefined;
       if (!row) {
         resolve(null);

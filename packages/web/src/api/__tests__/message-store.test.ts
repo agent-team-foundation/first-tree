@@ -94,6 +94,19 @@ describe("message-store / cacheMessages", () => {
     expect(rows.map((m) => m.id)).toEqual(["a"]);
     expect(await getCachedMessages("chat-other")).toEqual([]);
   });
+
+  it("rejects a stale account write instead of opening the current account database", async () => {
+    const { cacheMessages, getCachedMessages } = await loadStore();
+    const scope = await import("../../lib/browser-storage-scope.js");
+    scope.setBrowserStorageUser("user-a");
+    const accountA = scope.captureBrowserStorageScope();
+    scope.setBrowserStorageUser("user-b");
+
+    await cacheMessages("chat-1", [msg("secret", T(1))], accountA);
+    await expect(getCachedMessages("chat-1")).resolves.toEqual([]);
+    scope.setBrowserStorageUser("user-a");
+    await expect(getCachedMessages("chat-1")).resolves.toEqual([]);
+  });
 });
 
 describe("message-store / clearChatCache", () => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchAttachmentBase64 } from "../api/attachments.js";
 import { getImage, putImage } from "../api/image-store.js";
+import { captureBrowserStorageScope } from "./browser-storage-scope.js";
 
 /**
  * Resolve a chat image reference to a renderable `data:` URL.
@@ -25,10 +26,11 @@ export function useImageSrc(imageId: string | undefined): ImageSrcState {
       setState({ kind: "miss" });
       return;
     }
+    const storageScope = captureBrowserStorageScope();
     let cancelled = false;
     setState({ kind: "loading" });
     (async () => {
-      const hit = await getImage(imageId);
+      const hit = await getImage(imageId, storageScope);
       if (cancelled) return;
       if (hit) {
         setState({ kind: "hit", src: `data:${hit.mimeType};base64,${hit.base64}` });
@@ -38,7 +40,7 @@ export function useImageSrc(imageId: string | undefined): ImageSrcState {
         const fetched = await fetchAttachmentBase64(imageId);
         if (cancelled) return;
         // Warm the cache for subsequent renders; best-effort.
-        putImage({ imageId, base64: fetched.base64, mimeType: fetched.mimeType }).catch(() => {});
+        putImage({ imageId, base64: fetched.base64, mimeType: fetched.mimeType }, storageScope).catch(() => {});
         setState({ kind: "hit", src: `data:${fetched.mimeType};base64,${fetched.base64}` });
       } catch {
         if (!cancelled) setState({ kind: "miss" });

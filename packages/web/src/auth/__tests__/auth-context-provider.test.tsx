@@ -311,22 +311,25 @@ describe("AuthProvider", () => {
   it("clears persisted browser data on logout before a returning sign-in", async () => {
     // /me's default (most-recent) is org-1, but the user last used org-2.
     localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");
-    localStorage.setItem("first-tree:chat-drafts:v1:chat-cache", JSON.stringify({ draft: "secret" }));
-    sessionStorage.setItem("first-tree:pending-image", "secret-image");
     apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
 
     await renderAuth();
     expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
+    const storageScope = await import("../../lib/browser-storage-scope.js");
+    const departingScope = storageScope.captureBrowserStorageScope();
+    const draftKey = storageScope.scopedStorageKey("first-tree:chat-drafts:v1", departingScope);
+    localStorage.setItem(draftKey, JSON.stringify({ draft: "secret" }));
+    localStorage.setItem("other-app:key", "keep");
 
-    // Logout clears all browser-local app data; a returning sign-in starts
-    // from the server's current default rather than stale local state.
+    // Logout clears the departing account's browser-local data; a returning
+    // sign-in starts from the server's current default rather than stale state.
     await act(async () => {
       window.dispatchEvent(new CustomEvent("auth:logout"));
     });
     expect(latestAuth?.isAuthenticated).toBe(false);
     expect(localStorage.getItem("first-tree:selectedOrganizationId:user-1")).toBeNull();
-    expect(localStorage.getItem("first-tree:chat-drafts:v1:chat-cache")).toBeNull();
-    expect(sessionStorage.getItem("first-tree:pending-image")).toBeNull();
+    expect(localStorage.getItem(draftKey)).toBeNull();
+    expect(localStorage.getItem("other-app:key")).toBe("keep");
 
     // Returning sign-in uses the server default org-1.
     apiMocks.setApiSelectedOrganizationId.mockClear();

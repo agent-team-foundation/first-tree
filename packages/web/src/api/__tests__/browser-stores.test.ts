@@ -137,6 +137,47 @@ describe("image-store", () => {
     await expect(getImage("shared-image-id")).resolves.toEqual({ base64: "secret", mimeType: "image/png" });
   });
 
+  it("purges only the departing account scope and legacy stores", async () => {
+    vi.resetModules();
+    globalThis.indexedDB = new IDBFactory();
+    const storage = new Map<string, string>();
+    const local = {
+      get length() {
+        return storage.size;
+      },
+      clear: () => storage.clear(),
+      getItem: (key: string) => storage.get(key) ?? null,
+      key: (index: number) => [...storage.keys()][index] ?? null,
+      removeItem: (key: string) => storage.delete(key),
+      setItem: (key: string, value: string) => storage.set(key, value),
+    } satisfies Storage;
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: local });
+    Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: local });
+
+    const scope = await import("../../lib/browser-storage-scope.js");
+    const { getImage, putImage } = await import("../image-store.js");
+    scope.setBrowserStorageUser("user-a");
+    const accountA = scope.captureBrowserStorageScope();
+    await putImage({ imageId: "a-image", base64: "a", mimeType: "image/png" }, accountA);
+    local.setItem(scope.scopedStorageKey("first-tree:chat-drafts:v1", accountA), "a-draft");
+    scope.setBrowserStorageUser("user-b");
+    const accountB = scope.captureBrowserStorageScope();
+    await putImage({ imageId: "b-image", base64: "b", mimeType: "image/png" }, accountB);
+    local.setItem(scope.scopedStorageKey("first-tree:chat-drafts:v1", accountB), "b-draft");
+    local.setItem("other-app:key", "keep");
+
+    await scope.clearPersistentBrowserStorage(accountA);
+
+    expect(local.getItem(scope.scopedStorageKey("first-tree:chat-drafts:v1", accountA))).toBeNull();
+    expect(local.getItem(scope.scopedStorageKey("first-tree:chat-drafts:v1", accountB))).toBe("b-draft");
+    expect(local.getItem("other-app:key")).toBe("keep");
+    await expect(getImage("a-image", accountA)).resolves.toBeNull();
+    await expect(getImage("b-image", accountB)).resolves.toEqual({ base64: "b", mimeType: "image/png" });
+    const databaseNames = (await globalThis.indexedDB.databases()).map((database) => database.name);
+    expect(databaseNames.some((name) => name?.endsWith(`:${accountA.key}`))).toBe(false);
+    expect(databaseNames.some((name) => name?.endsWith(`:${accountB.key}`))).toBe(true);
+  });
+
   it("rejects writes and returns null when IndexedDB is unavailable", async () => {
     vi.resetModules();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
@@ -220,6 +261,19 @@ describe("read-state-store", () => {
     });
 
     await clearReadState("chat-1");
+    await expect(getReadState("chat-1")).resolves.toBeNull();
+  });
+
+  it("does not write read state after the account scope changes", async () => {
+    const { getReadState, setReadState } = await loadReadStateStore();
+    const scope = await import("../../lib/browser-storage-scope.js");
+    scope.setBrowserStorageUser("user-a");
+    const accountA = scope.captureBrowserStorageScope();
+    scope.setBrowserStorageUser("user-b");
+
+    await setReadState("chat-1", "msg-a", "msg-a", accountA);
+    await expect(getReadState("chat-1")).resolves.toBeNull();
+    scope.setBrowserStorageUser("user-a");
     await expect(getReadState("chat-1")).resolves.toBeNull();
   });
 

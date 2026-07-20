@@ -2,6 +2,7 @@ import type { AttachmentRef, RequestResolution } from "@first-tree/shared";
 import { uploadAttachment, uploadMimeFor } from "../../api/attachments.js";
 import { type ImageRefContent, readFileAsBase64, sendChatMessage, sendFileMessageBatch } from "../../api/chats.js";
 import { putImage } from "../../api/image-store.js";
+import { captureBrowserStorageScope } from "../../lib/browser-storage-scope.js";
 import type { AskAnswer } from "./ask-takeover.js";
 
 export type AskAnswerRequestRef = {
@@ -26,6 +27,7 @@ export async function sendAskAnswer({
   request: AskAnswerRequestRef;
   answer: AskAnswer;
 }): Promise<void> {
+  const storageScope = captureBrowserStorageScope();
   const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
   const resolves: RequestResolution = { request: request.id, kind: "answered" };
   const documentRefs: AttachmentRef[] = [];
@@ -46,7 +48,10 @@ export async function sendAskAnswer({
     for (const file of answer.images) {
       const uploaded = await uploadAttachment(file);
       try {
-        await putImage({ imageId: uploaded.id, base64: await readFileAsBase64(file), mimeType: file.type });
+        await putImage(
+          { imageId: uploaded.id, base64: await readFileAsBase64(file), mimeType: file.type },
+          storageScope,
+        );
       } catch {
         // The server attachment is authoritative; IndexedDB only makes the
         // sender's thumbnail immediate and must never block resolution.

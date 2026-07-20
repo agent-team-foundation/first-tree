@@ -22,7 +22,13 @@
  * issue first-tree-all 119 under parent first-tree-all 118.
  */
 
-import { getBrowserStorageRevision, scopedDatabaseName } from "../lib/browser-storage-scope.js";
+import {
+  type BrowserStorageScope,
+  captureBrowserStorageScope,
+  getBrowserStorageRevision,
+  isBrowserStorageScopeCurrent,
+  scopedDatabaseName,
+} from "../lib/browser-storage-scope.js";
 import type { MessageWithDelivery } from "./chats.js";
 
 const DB_NAME = "first-tree-chat-cache";
@@ -53,7 +59,7 @@ type StoredMessage = {
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let dbRevision = -1;
 
-function openDb(): Promise<IDBDatabase | null> {
+function openDb(scope: BrowserStorageScope): Promise<IDBDatabase | null> {
   const revision = getBrowserStorageRevision();
   if (dbPromise && dbRevision === revision) return dbPromise;
   dbRevision = revision;
@@ -62,7 +68,7 @@ function openDb(): Promise<IDBDatabase | null> {
       resolve(null);
       return;
     }
-    const req = indexedDB.open(scopedDatabaseName(DB_NAME), DB_VERSION);
+    const req = indexedDB.open(scopedDatabaseName(DB_NAME, scope), DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -91,9 +97,14 @@ function openDb(): Promise<IDBDatabase | null> {
  * (oldest first, matching the timeline render order). Returns an empty
  * array on cache miss or if IndexedDB is unavailable — never throws.
  */
-export async function getCachedMessages(chatId: string): Promise<MessageWithDelivery[]> {
-  const db = await openDb();
+export async function getCachedMessages(
+  chatId: string,
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
+): Promise<MessageWithDelivery[]> {
+  if (!isBrowserStorageScopeCurrent(scope)) return [];
+  const db = await openDb(scope);
   if (!db) return [];
+  if (!isBrowserStorageScopeCurrent(scope)) return [];
   return new Promise((resolve) => {
     const tx = db.transaction(STORE, "readonly");
     const store = tx.objectStore(STORE);
@@ -110,9 +121,9 @@ export async function getCachedMessages(chatId: string): Promise<MessageWithDeli
       out.push(row.payload);
       cursor.continue();
     };
-    tx.oncomplete = () => resolve(out);
-    tx.onerror = () => resolve(out);
-    tx.onabort = () => resolve(out);
+    tx.oncomplete = () => resolve(isBrowserStorageScopeCurrent(scope) ? out : []);
+    tx.onerror = () => resolve(isBrowserStorageScopeCurrent(scope) ? out : []);
+    tx.onabort = () => resolve(isBrowserStorageScopeCurrent(scope) ? out : []);
   });
 }
 
@@ -125,10 +136,16 @@ export async function getCachedMessages(chatId: string): Promise<MessageWithDeli
  * Returns silently on IndexedDB unavailability so write-through can be
  * fire-and-forget (`void cacheMessages(...)`) at the call site.
  */
-export async function cacheMessages(chatId: string, messages: readonly MessageWithDelivery[]): Promise<void> {
+export async function cacheMessages(
+  chatId: string,
+  messages: readonly MessageWithDelivery[],
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
+): Promise<void> {
   if (messages.length === 0) return;
-  const db = await openDb();
+  if (!isBrowserStorageScopeCurrent(scope)) return;
+  const db = await openDb(scope);
   if (!db) return;
+  if (!isBrowserStorageScopeCurrent(scope)) return;
   await new Promise<void>((resolve) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
@@ -155,9 +172,14 @@ export async function cacheMessages(chatId: string, messages: readonly MessageWi
  * debug use today (e.g. clearing a corrupt cache); not wired into the
  * UI. Resolves silently on IndexedDB unavailability.
  */
-export async function clearChatCache(chatId: string): Promise<void> {
-  const db = await openDb();
+export async function clearChatCache(
+  chatId: string,
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
+): Promise<void> {
+  if (!isBrowserStorageScopeCurrent(scope)) return;
+  const db = await openDb(scope);
   if (!db) return;
+  if (!isBrowserStorageScopeCurrent(scope)) return;
   await new Promise<void>((resolve) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);

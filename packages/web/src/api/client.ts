@@ -84,10 +84,12 @@ export function getStoredTokens(): StoredTokens | null {
 
 export function setStoredTokens(tokens: StoredTokens): void {
   localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+  authGeneration += 1;
 }
 
 export function clearStoredTokens(): void {
   localStorage.removeItem(TOKEN_KEY);
+  authGeneration += 1;
 }
 
 /**
@@ -117,7 +119,8 @@ export class ApiError extends Error {
   }
 }
 
-let refreshPromise: Promise<StoredTokens | null> | null = null;
+let authGeneration = 0;
+let refreshInFlight: { refreshToken: string; generation: number; promise: Promise<StoredTokens | null> } | null = null;
 
 /**
  * Refresh the stored access token via `/auth/refresh`. Reads the current
@@ -136,10 +139,11 @@ export async function refreshAccessToken(): Promise<StoredTokens | null> {
 }
 
 async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
-  // Deduplicate concurrent refresh attempts
-  if (refreshPromise) return refreshPromise;
-
-  refreshPromise = (async () => {
+  // Deduplicate only callers for the same credential. A new account must not
+  // inherit a refresh promise started by the previous account.
+  if (refreshInFlight?.refreshToken === refreshToken) return refreshInFlight.promise;
+  const generation = authGeneration;
+  const promise = (async () => {
     try {
       const res = await fetch(`${BASE_URL}/auth/refresh`, {
         method: "POST",
@@ -156,16 +160,22 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
         accessToken: body.accessToken,
         refreshToken: body.refreshToken ?? refreshToken,
       };
+      // Logout/login/adoptTokens may have replaced the credential while the
+      // provider request was in flight. Discard the old response before it can
+      // repopulate storage or be used for a retry under the new account.
+      if (generation !== authGeneration || getStoredTokens()?.refreshToken !== refreshToken) return null;
       setStoredTokens(updated);
       return updated;
     } catch {
       return null;
     } finally {
-      refreshPromise = null;
+      if (refreshInFlight?.refreshToken === refreshToken && refreshInFlight.generation === generation) {
+        refreshInFlight = null;
+      }
     }
   })();
-
-  return refreshPromise;
+  refreshInFlight = { refreshToken, generation, promise };
+  return promise;
 }
 
 async function request<T>(
@@ -192,13 +202,19 @@ async function request<T>(
   };
 
   const tokens = getStoredTokens();
+  const requestGeneration = authGeneration;
   let res = await doFetch(tokens?.accessToken);
 
   // Attempt token refresh on 401
   if (res.status === 401 && tokens?.refreshToken) {
     const refreshed = await tryRefresh(tokens.refreshToken);
     if (refreshed) {
+      if (getStoredTokens()?.accessToken !== refreshed.accessToken) {
+        throw new ApiError(401, "Authentication changed while refreshing");
+      }
       res = await doFetch(refreshed.accessToken);
+    } else if (authGeneration !== requestGeneration) {
+      throw new ApiError(401, "Authentication changed while refreshing");
     }
   }
 
@@ -249,12 +265,18 @@ export async function apiFetchRaw(
   };
 
   const tokens = getStoredTokens();
+  const requestGeneration = authGeneration;
   let res = await doFetch(tokens?.accessToken);
 
   if (res.status === 401 && tokens?.refreshToken) {
     const refreshed = await tryRefresh(tokens.refreshToken);
     if (refreshed) {
+      if (getStoredTokens()?.accessToken !== refreshed.accessToken) {
+        throw new ApiError(401, "Authentication changed while refreshing");
+      }
       res = await doFetch(refreshed.accessToken);
+    } else if (authGeneration !== requestGeneration) {
+      throw new ApiError(401, "Authentication changed while refreshing");
     }
   }
 

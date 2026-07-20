@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it } from "vitest";
+import { scopedStorageKey } from "../browser-storage-scope.js";
 import {
   chatDraftScope,
   clearDraft,
@@ -10,7 +11,7 @@ import {
   saveDraft,
 } from "../draft-store.js";
 
-const STORAGE_KEY = "first-tree:chat-drafts:v1";
+const STORAGE_KEY = scopedStorageKey("first-tree:chat-drafts:v1");
 
 beforeEach(() => {
   window.localStorage.clear();

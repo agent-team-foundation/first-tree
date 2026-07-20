@@ -88,11 +88,18 @@ export function UserMenu() {
               role="menuitem"
               onClick={() => {
                 setOpen(false);
-                logout();
-                // Leave the app on the marketing site rather than an app
-                // route — `logout()` clears local auth state, so staying in
-                // the SPA would just redirect to the login page.
-                window.location.href = PARENT_URL;
+                void (async () => {
+                  try {
+                    await logout();
+                    // Leave the app on the marketing site rather than an app
+                    // route — `logout()` clears local auth state, so staying in
+                    // the SPA would just redirect to the login page.
+                    window.location.href = PARENT_URL;
+                  } catch {
+                    // Keep the app open when browser persistence could not be
+                    // purged; navigating away would violate the logout boundary.
+                  }
+                })();
               }}
               className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
               style={{ color: "var(--fg)" }}

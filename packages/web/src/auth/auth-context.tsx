@@ -12,7 +12,11 @@ import {
   setStoredTokens,
 } from "../api/client.js";
 import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
-import { clearPersistentBrowserStorage, setBrowserStorageUser } from "../lib/browser-storage-scope.js";
+import {
+  captureBrowserStorageScope,
+  clearPersistentBrowserStorage,
+  setBrowserStorageUser,
+} from "../lib/browser-storage-scope.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
@@ -162,7 +166,7 @@ type AuthContextValue = {
   switchingOrg: OrgBrief | null;
   setSwitchingOrg: (org: OrgBrief | null) => void;
   refreshMe: () => Promise<void>;
-  logout: () => void;
+  logout: () => void | Promise<void>;
 };
 
 // Exported so DEV-only preview pages (e.g. /preview/resources) can render real
@@ -223,7 +227,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [memberships, setMemberships] = useState<MeMembership[]>([]);
   const [docsEnabled, setDocsEnabled] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(() => {
-    const init = readSelectedOrgId(userIdFromToken());
+    const tokenUserId = userIdFromToken();
+    // Seed the browser cache scope from the JWT before /me resolves so an
+    // early 401/logout can still purge the departing account's stores.
+    setBrowserStorageUser(tokenUserId);
+    const init = readSelectedOrgId(tokenUserId);
     // Sync the API client's module-level override on first paint so the
     // first wave of requests (made before fetchMe resolves) already carries
     // the correct `?organizationId=` query (codex P1 #2 fix).
@@ -244,7 +252,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (mounted in the layout) and the switcher (in the header) read one source.
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const departingScope = captureBrowserStorageScope();
     authGenerationRef.current += 1;
     setBrowserStorageUser(null);
     clearStoredTokens();
@@ -265,7 +274,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDocsEnabled(false);
     setMeLoaded(false);
     setSwitchingOrg(null);
-    void clearPersistentBrowserStorage();
+    await clearPersistentBrowserStorage(departingScope);
   }, [queryClient]);
 
   const fetchMe = useCallback(async () => {
@@ -292,8 +301,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Reconcile selectedOrgId, each candidate only if it's still an active
       // membership: (1) the in-memory selection, (2) this user's persisted
-      // last-used org — survives logout so a returning user lands back in the
-      // org they left — then (3) /me's `defaultOrganizationId` (most-recent),
+      // last-used org — if still present — then (3) /me's
+      // `defaultOrganizationId` (most-recent),
       // (4) the first active membership.
       const userId = data.user?.id ?? null;
       setSelectedOrgId((prev) => {

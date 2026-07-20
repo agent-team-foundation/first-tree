@@ -74,11 +74,14 @@ describe("sendAskAnswer", () => {
       answer: { content: "Evidence attached", mentions: ["reviewer-1"], images: [image] },
     });
 
-    expect(imageStoreMocks.putImage).toHaveBeenCalledWith({
-      imageId: "uploaded-proof.png",
-      base64: "base64-image",
-      mimeType: "image/png",
-    });
+    expect(imageStoreMocks.putImage).toHaveBeenCalledWith(
+      {
+        imageId: "uploaded-proof.png",
+        base64: "base64-image",
+        mimeType: "image/png",
+      },
+      expect.objectContaining({ key: expect.any(String), revision: expect.any(Number) }),
+    );
     expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
       "chat-1",
       {

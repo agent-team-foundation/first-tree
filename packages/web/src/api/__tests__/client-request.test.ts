@@ -79,6 +79,29 @@ describe("api client request flow", () => {
     expect(getStoredTokens()).toEqual({ accessToken: "access-2", refreshToken: "refresh-2" });
   });
 
+  it("does not resurrect an old account when refresh resolves after logout", async () => {
+    const { api, clearStoredTokens, getStoredTokens, setStoredTokens } = await import("../client.js");
+    setStoredTokens({ accessToken: "a-expired", refreshToken: "a-refresh" });
+    let resolveRefresh!: (value: Response) => void;
+    const refreshResponse = new Promise<Response>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    fetchMock.mockResolvedValueOnce(response(401, { error: "expired" })).mockReturnValueOnce(refreshResponse);
+
+    const pending = api.get("/me");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    clearStoredTokens();
+    setStoredTokens({ accessToken: "b-access", refreshToken: "b-refresh" });
+    resolveRefresh(response(200, { accessToken: "a-new", refreshToken: "a-new-refresh" }));
+
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+    expect(getStoredTokens()).toEqual({ accessToken: "b-access", refreshToken: "b-refresh" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("throws ApiError with validation issues and dispatches auth logout on unrecovered 401", async () => {
     const { api, getStoredTokens, setStoredTokens } = await import("../client.js");
     setStoredTokens({ accessToken: "bad", refreshToken: "refresh-bad" });

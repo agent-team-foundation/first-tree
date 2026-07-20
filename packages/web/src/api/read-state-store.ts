@@ -29,7 +29,13 @@
  * 120.
  */
 
-import { getBrowserStorageRevision, scopedDatabaseName } from "../lib/browser-storage-scope.js";
+import {
+  type BrowserStorageScope,
+  captureBrowserStorageScope,
+  getBrowserStorageRevision,
+  isBrowserStorageScopeCurrent,
+  scopedDatabaseName,
+} from "../lib/browser-storage-scope.js";
 
 const DB_NAME = "first-tree-chat-cache";
 const DB_VERSION = 2;
@@ -68,7 +74,7 @@ export type ReadState = {
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let dbRevision = -1;
 
-function openDb(): Promise<IDBDatabase | null> {
+function openDb(scope: BrowserStorageScope): Promise<IDBDatabase | null> {
   const revision = getBrowserStorageRevision();
   if (dbPromise && dbRevision === revision) return dbPromise;
   dbRevision = revision;
@@ -77,7 +83,7 @@ function openDb(): Promise<IDBDatabase | null> {
       resolve(null);
       return;
     }
-    const req = indexedDB.open(scopedDatabaseName(DB_NAME), DB_VERSION);
+    const req = indexedDB.open(scopedDatabaseName(DB_NAME, scope), DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
@@ -103,16 +109,21 @@ function openDb(): Promise<IDBDatabase | null> {
  * cache miss, on IndexedDB unavailability, or on any read error —
  * never throws.
  */
-export async function getReadState(chatId: string): Promise<ReadState | null> {
-  const db = await openDb();
+export async function getReadState(
+  chatId: string,
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
+): Promise<ReadState | null> {
+  if (!isBrowserStorageScopeCurrent(scope)) return null;
+  const db = await openDb(scope);
   if (!db) return null;
+  if (!isBrowserStorageScopeCurrent(scope)) return null;
   return new Promise((resolve) => {
     const tx = db.transaction(READ_STATE_STORE, "readonly");
     const store = tx.objectStore(READ_STATE_STORE);
     const req = store.get(chatId);
     req.onsuccess = () => {
       const row = req.result as ReadState | undefined;
-      resolve(row ?? null);
+      resolve(isBrowserStorageScopeCurrent(scope) ? (row ?? null) : null);
     };
     req.onerror = () => resolve(null);
     tx.onabort = () => resolve(null);
@@ -133,9 +144,12 @@ export async function setReadState(
   chatId: string,
   bottomVisibleMessageId: string,
   latestKnownMessageId: string,
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
 ): Promise<void> {
-  const db = await openDb();
+  if (!isBrowserStorageScopeCurrent(scope)) return;
+  const db = await openDb(scope);
   if (!db) return;
+  if (!isBrowserStorageScopeCurrent(scope)) return;
   await new Promise<void>((resolve) => {
     const tx = db.transaction(READ_STATE_STORE, "readwrite");
     const store = tx.objectStore(READ_STATE_STORE);
@@ -157,9 +171,14 @@ export async function setReadState(
  * diagnostic / debug use today; the production UI never calls this.
  * Resolves silently on IndexedDB unavailability.
  */
-export async function clearReadState(chatId: string): Promise<void> {
-  const db = await openDb();
+export async function clearReadState(
+  chatId: string,
+  scope: BrowserStorageScope = captureBrowserStorageScope(),
+): Promise<void> {
+  if (!isBrowserStorageScopeCurrent(scope)) return;
+  const db = await openDb(scope);
   if (!db) return;
+  if (!isBrowserStorageScopeCurrent(scope)) return;
   await new Promise<void>((resolve) => {
     const tx = db.transaction(READ_STATE_STORE, "readwrite");
     const store = tx.objectStore(READ_STATE_STORE);

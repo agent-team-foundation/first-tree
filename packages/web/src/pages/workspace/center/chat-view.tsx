@@ -127,6 +127,7 @@ import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { useServerChannel } from "../../../hooks/use-server-channel.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
+import { captureBrowserStorageScope } from "../../../lib/browser-storage-scope.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
@@ -1795,7 +1796,7 @@ export function ChatView({
   // bounces between chats.
   const { data: cachedMessages } = useQuery({
     queryKey: ["chat-messages-cache", chatId],
-    queryFn: () => getCachedMessages(chatId),
+    queryFn: () => getCachedMessages(chatId, captureBrowserStorageScope()),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   });
@@ -1822,8 +1823,9 @@ export function ChatView({
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
     queryFn: async () => {
+      const storageScope = captureBrowserStorageScope();
       const fresh = await listChatMessages(chatId, { limit: 50 });
-      void cacheMessages(chatId, fresh.items);
+      void cacheMessages(chatId, fresh.items, storageScope);
       return fresh;
     },
     refetchInterval: 5_000,
@@ -2026,13 +2028,28 @@ export function ChatView({
     // round-trip + follow-up GET take 1–2s. The ctx returned here is threaded
     // to onError / onSuccess so we can reconcile with the server row.
     onMutate: async ({ content, mentions, inReplyTo, resolves }) => {
+      const storageScope = captureBrowserStorageScope();
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
       const previousDraft = draft;
       setDraft("");
       const optimistic = buildOptimisticTextMessage(content, { mentions, inReplyTo, resolves });
-      if (!optimistic) return { tempId: null, previousDraft, sendChatId: chatId, sendUserId: user?.id ?? null };
+      if (!optimistic) {
+        return {
+          tempId: null,
+          previousDraft,
+          sendChatId: chatId,
+          sendUserId: user?.id ?? null,
+          storageScope,
+        };
+      }
       insertOwnOptimisticMessage(optimistic);
-      return { tempId: optimistic.id, previousDraft, sendChatId: chatId, sendUserId: user?.id ?? null };
+      return {
+        tempId: optimistic.id,
+        previousDraft,
+        sendChatId: chatId,
+        sendUserId: user?.id ?? null,
+        storageScope,
+      };
     },
     onSuccess: (saved, _content, ctx) => {
       if (ctx?.tempId) replaceOptimisticMessage(ctx.tempId, saved);
@@ -2058,7 +2075,7 @@ export function ChatView({
         updatedAt: Date.now(),
       };
       queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
-      void setReadState(chatId, saved.id, saved.id);
+      void setReadState(chatId, saved.id, saved.id, ctx?.storageScope);
       // Pre-advance the in-memory high water to the new message id
       // BEFORE initiating the smooth scroll. By the time the new
       // message commits to `mergedMessages`, `sessionHighestIdx`
@@ -2176,6 +2193,7 @@ export function ChatView({
       const previousDraft = draft;
       const sendChatId = chatId;
       const sendUserId = user?.id ?? null;
+      const storageScope = captureBrowserStorageScope();
       setDraft("");
       clearAttachments();
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
@@ -2200,7 +2218,7 @@ export function ChatView({
           // falls back to fetching from the server.
           try {
             const data = await readFileAsBase64(img.file);
-            await putImage({ imageId: uploaded.id, base64: data, mimeType: img.file.type });
+            await putImage({ imageId: uploaded.id, base64: data, mimeType: img.file.type }, storageScope);
           } catch {
             // Cache warm is best-effort; ignore IndexedDB quota / availability
             // failures and let the render path fetch from the server.
@@ -2314,7 +2332,7 @@ export function ChatView({
             updatedAt: Date.now(),
           };
           queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
-          void setReadState(chatId, lastSentMessageId, lastSentMessageId);
+          void setReadState(chatId, lastSentMessageId, lastSentMessageId, storageScope);
           setPendingHighWaterAdvance({ chatId, messageId: lastSentMessageId });
         }
         // Same scroll-on-send as sendMut.onSuccess — the file-send
@@ -2629,7 +2647,7 @@ export function ChatView({
   // chat re-open does not block on IDB.
   const { data: readState } = useQuery({
     queryKey: ["chat-read-state", chatId],
-    queryFn: () => getReadState(chatId),
+    queryFn: () => getReadState(chatId, captureBrowserStorageScope()),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   });

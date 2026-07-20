@@ -25,6 +25,7 @@ import {
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { FileChip } from "../../../components/ui/file-chip.js";
+import { captureBrowserStorageScope } from "../../../lib/browser-storage-scope.js";
 import { clearDraft, type DraftSnapshot, loadDraft, newChatDraftScope, saveDraft } from "../../../lib/draft-store.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
@@ -441,6 +442,7 @@ export function NewChatDraft({
       docs: PendingAttachment[];
       mentions: string[];
     }) => {
+      const storageScope = captureBrowserStorageScope();
       const trimmed = text.trim();
       const contextParticipantAgentIds = participantIds.filter((id) => !mentions.includes(id));
 
@@ -469,7 +471,7 @@ export function NewChatDraft({
           // miss is recoverable on the render path.
           try {
             const data = await readFileAsBase64(img.file);
-            await putImage({ imageId: uploaded.id, base64: data, mimeType: img.file.type });
+            await putImage({ imageId: uploaded.id, base64: data, mimeType: img.file.type }, storageScope);
           } catch {
             // ignore — render path re-fetches from the server on miss
           }

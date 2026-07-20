@@ -1126,11 +1126,14 @@ describe("web DOM interaction coverage", () => {
     await keyDown(textarea, "Enter");
     await waitForCondition(() => meChatMocks.createMeTaskChat.mock.calls.length > 0, "Expected image task create");
     expect(attachmentMocks.uploadAttachment).toHaveBeenCalledWith(dropped);
-    expect(imageStoreMocks.putImage).toHaveBeenCalledWith({
-      imageId: "uploaded-image",
-      base64: "base64",
-      mimeType: "image/png",
-    });
+    expect(imageStoreMocks.putImage).toHaveBeenCalledWith(
+      {
+        imageId: "uploaded-image",
+        base64: "base64",
+        mimeType: "image/png",
+      },
+      expect.objectContaining({ key: expect.any(String), revision: expect.any(Number) }),
+    );
     expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
       mode: "task",
       initialRecipientAgentIds: ["agent-2"],

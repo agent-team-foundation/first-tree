@@ -27,6 +27,7 @@
 
 import { type RefObject, useEffect, useRef } from "react";
 import { setReadState } from "../api/read-state-store.js";
+import { captureBrowserStorageScope } from "../lib/browser-storage-scope.js";
 
 type Message = { id: string; createdAt: string };
 
@@ -146,6 +147,7 @@ export function useReadTracker({
   onBottomVisibleChange,
   writeDebounceMs = 600,
 }: UseReadTrackerOptions): void {
+  const storageScopeRef = useRef(captureBrowserStorageScope());
   // Latest computed bottom-visible id. Kept in a ref so write/flush
   // paths can read it without depending on React state churn.
   const bottomVisibleIdRef = useRef<string | null>(null);
@@ -249,7 +251,9 @@ export function useReadTracker({
         const bv = bottomVisibleIdRef.current;
         const lkAtFire = latestKnownIdRef.current;
         if (!bv || !lkAtFire) return;
-        void setReadState(chatId, bv, lkAtFire).then(() => onWriteRef.current?.(chatId, bv, lkAtFire));
+        void setReadState(chatId, bv, lkAtFire, storageScopeRef.current).then(() =>
+          onWriteRef.current?.(chatId, bv, lkAtFire),
+        );
       }, writeDebounceMs);
     };
 
@@ -292,7 +296,7 @@ export function useReadTracker({
       const bv = bottomVisibleIdRef.current;
       const lk = latestKnownIdRef.current;
       if (!bv || !lk) return;
-      void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
+      void setReadState(chatId, bv, lk, storageScopeRef.current).then(() => onWriteRef.current?.(chatId, bv, lk));
     };
     const onVis = () => {
       if (document.visibilityState === "hidden") flushNow();
