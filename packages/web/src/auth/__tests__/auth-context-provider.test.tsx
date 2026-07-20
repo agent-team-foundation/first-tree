@@ -400,6 +400,7 @@ describe("AuthProvider", () => {
 
     expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
     expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(container?.querySelectorAll('[role="status"]').length).toBe(0);
     delete (globalThis as { indexedDB?: unknown }).indexedDB;
   });
 

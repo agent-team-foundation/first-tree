@@ -313,7 +313,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (authGenerationRef.current !== logoutGeneration) {
         setLogoutStatus("idle");
-        if (options.recovery) publishLogoutIncomplete(retry);
         return "superseded";
       }
       commitLocalLogoutState();
