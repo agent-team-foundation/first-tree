@@ -14,6 +14,7 @@ import {
   installPortableSpec,
   isServiceSupported,
   restartClientService,
+  retireLegacyGithubScanLaunchd,
 } from "../core/index.js";
 import { getChannelInstallCommand } from "../core/install-guidance.js";
 import { print } from "../core/output.js";
@@ -115,6 +116,18 @@ export function registerUpgradeCommand(program: Command): void {
       }
       const installed = installRes.installedVersion ?? target.version;
       print.line(`  Installed ${installed}.\n`);
+
+      // The legacy github-scan runner can survive without a current First Tree
+      // service or credentials. Retire it immediately after installing the new
+      // binary so `upgrade` fixes that first-run state before its service gates.
+      try {
+        retireLegacyGithubScanLaunchd({
+          log: (msg) => print.line(`  warning: github-scan cleanup: ${msg}\n`),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        print.line(`  warning: github-scan cleanup skipped: ${msg}\n`);
+      }
 
       // Restart the service so the new binary actually starts handling
       // connections. Skipped under --no-restart so power users can stage

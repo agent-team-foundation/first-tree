@@ -123,6 +123,20 @@ describe("retireLegacyGithubScanLaunchd", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it("keeps the plist when bootout fails unexpectedly so the next run can retry", () => {
+    spawnSyncMock.mockReturnValue({ status: 1, stdout: "", stderr: "Operation timed out" });
+    const label = "com.first-tree.github-scan.runner.gandy.default";
+    const plistPath = writePlist(`${label}.plist`, label);
+    const log = vi.fn();
+
+    const result = retireLegacyGithubScanLaunchd({ homeDir: home, log });
+
+    expect(result).toEqual({ bootedOut: [], removedPlists: 0 });
+    expect(existsSync(plistPath)).toBe(true);
+    expect(existsSync(launchdDir())).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Operation timed out"));
+  });
+
   it("retires multiple plists", () => {
     const a = "com.first-tree.github-scan.runner.gandy.default";
     const b = "com.first-tree.github-scan.runner.gandy.work";

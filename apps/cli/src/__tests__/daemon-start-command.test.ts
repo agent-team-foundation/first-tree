@@ -39,6 +39,7 @@ const coreMocks = vi.hoisted(() => ({
   reconcileLocalRuntimeProviders: vi.fn(),
   refreshServerUpdateTarget: vi.fn(),
   resolveClientRuntimeStopReason: vi.fn(),
+  retireLegacyGithubScanLaunchd: vi.fn(),
   runRuntimeAuthLogin: vi.fn(),
   startClientService: vi.fn(),
   uploadAgentSkills: vi.fn(),
@@ -185,6 +186,7 @@ beforeEach(() => {
   );
   coreMocks.migrateLocalAgentDirs.mockResolvedValue(undefined);
   coreMocks.reconcileLocalRuntimeProviders.mockResolvedValue(undefined);
+  coreMocks.retireLegacyGithubScanLaunchd.mockReturnValue({ bootedOut: [], removedPlists: 0 });
   coreMocks.runRuntimeAuthLogin.mockResolvedValue(undefined);
   coreMocks.uploadClientCapabilities.mockResolvedValue(undefined);
   coreMocks.uploadAgentSkills.mockResolvedValue(undefined);
@@ -256,6 +258,7 @@ describe("daemon start command", () => {
 
     await expect(runStart()).rejects.toMatchObject({ code: "NO_CREDENTIALS", exitCode: 1 });
     expect(failMock).toHaveBeenCalledWith("NO_CREDENTIALS", expect.stringContaining("no credentials"), 1);
+    expect(coreMocks.retireLegacyGithubScanLaunchd).toHaveBeenCalled();
   });
 
   it("parks daemon startup before reading credentials while a client switch is in progress", async () => {

@@ -34,7 +34,7 @@ import { basename, join } from "node:path";
  * may have written a defensive config there, and inert files do not crash-loop.
  */
 export type RetireGithubScanResult = {
-  /** Labels we asked launchd to bootout. */
+  /** Labels successfully booted out or confirmed absent. */
   bootedOut: string[];
   /** Plist files removed from disk. */
   removedPlists: number;
@@ -49,19 +49,26 @@ function parsePlistLabel(plistBody: string): string | null {
 }
 
 /** `launchctl bootout gui/<uid>/<label>`, swallowing the benign not-loaded case. */
-function bootoutLabel(uid: number, label: string, log?: (msg: string) => void): void {
+function bootoutLabel(uid: number, label: string, log?: (msg: string) => void): boolean {
   const target = `gui/${uid}/${label}`;
-  const res = spawnSync("launchctl", ["bootout", target], {
-    encoding: "utf-8",
-    timeout: 15_000,
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  if (res.status === 0) return;
-  const stderr = (res.stderr ?? "").trim();
+  let res: ReturnType<typeof spawnSync>;
+  try {
+    res = spawnSync("launchctl", ["bootout", target], {
+      encoding: "utf-8",
+      timeout: 15_000,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+  } catch (err) {
+    if (log) log(`launchctl bootout ${label}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+  if (res.status === 0) return true;
+  const stderr = String(res.stderr ?? "").trim();
   // A label that is not currently loaded is the expected happy path on a
   // machine where the zombie was already evicted (or never ran this boot).
-  if (/not find|no such|not loaded/i.test(stderr)) return;
+  if (/not find|no such|not loaded/i.test(stderr)) return true;
   if (log) log(`launchctl bootout ${label}: ${stderr || `exit ${res.status ?? "unknown"}`}`);
+  return false;
 }
 
 /**
@@ -110,7 +117,10 @@ export function retireLegacyGithubScanLaunchd(
     }
     label ??= basename(entry, ".plist");
 
-    bootoutLabel(uid, label, opts.log);
+    // Keep the plist when launchd reports an unexpected failure. It is the
+    // retry artifact for the next daemon start; deleting it while the job is
+    // still loaded would strand the KeepAlive runner permanently.
+    if (!bootoutLabel(uid, label, opts.log)) continue;
     bootedOut.push(label);
 
     try {
