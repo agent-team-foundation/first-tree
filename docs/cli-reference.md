@@ -228,13 +228,29 @@ first-tree agent list --remote --org <id>  # cross-org view (multi-org operators
 ### agent create
 
 ```
-first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|claude-code-tui|codex|cursor|kimi-code]
+first-tree agent create <name> [--type agent|human] --client-id <thisClient> [--runtime claude-code|claude-code-tui|codex|cursor|kimi-code] [--model <alias|id>]
 ```
 
 Creates the agent row on the server and binds it to the given client
 machine. The local `agents/<name>/agent.yaml` is written by the running
 daemon via the server-pushed `agent:pinned` frame; no second command
 needed if the daemon is already up.
+
+`--type` defaults to `agent` (human agents come through the member
+lifecycle). `--client-id` is required from a human terminal. `--model`
+optionally sets the initial model right after create (same alias/id values
+as `agent config set-model`).
+
+**Agent self-provisioning (issue #1885).** Run from **inside a running
+agent session**, `agent create` routes through the gated agent path
+(`POST /api/v1/agent/managed-agents`) instead of the operator route. It
+requires the acting agent to have been granted the `provision-agents`
+capability by an org admin (see `agent config set-capabilities`); the new
+teammate is forced into the acting agent's own org, managed by its own
+managing member, on a client that member owns. `--client-id` is optional
+there (claimed on first bind); `--type` must be `agent`; `--model` is not
+yet applied on this path (set it afterwards with `agent config set-model`).
+Starting the teammate is left to a human/daemon.
 
 ### agent add
 
@@ -274,6 +290,8 @@ through the Admin API.
 first-tree agent config
 ├── show <agent>
 ├── set-model <agent> <model>                       # alias: opus | sonnet | haiku, or full id (e.g. claude-opus-4-7)
+├── set-capabilities <agent> [capabilities...]      # admin only; grant/replace agent capabilities (valid: provision-agents; no args clears)
+├── get-capabilities <agent>                        # show granted capabilities (+ provisioning provenance for admins)
 ├── set-reasoning-effort <agent> <level>
 ├── prompt show <agent> [--raw]                     # per-agent prompt fragment; --raw is verbatim (round-trippable)
 ├── prompt set <agent> [-f <file>] [--force]        # replace the fragment ONLY; reads stdin if no file.

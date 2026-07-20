@@ -1,4 +1,5 @@
 import {
+  AGENT_SELECTOR_HEADER,
   AGENT_TYPES,
   agentPinnedMessageSchema,
   createAgentSchema,
@@ -137,6 +138,19 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request, reply) => {
+    // Funnel agent-initiated creation through the gated, capability-checked
+    // path. This route is `requireOrgMembership`-only, so without this an
+    // SDK-mediated agent (which auto-attaches `X-Agent-Id`) could create agents
+    // with its manager's JWT and bypass the `provision-agents` capability gate.
+    // Human operators (CLI `cliFetch`, web console) never send `X-Agent-Id`, so
+    // this only ever refuses an agent-context call. It does NOT stop a
+    // hand-crafted header-less call carrying the bare manager JWT — that is
+    // indistinguishable from a human admin (see issue #1885 security notes).
+    if (request.headers?.[AGENT_SELECTOR_HEADER]) {
+      throw new ForbiddenError(
+        "Agent-initiated agent creation must use the gated `POST /api/v1/agent/managed-agents` path, not the operator org-create route.",
+      );
+    }
     const scope = await requireOrgMembership(request, app.db);
     const body = createAgentSchema.parse(request.body);
     if (body.type === AGENT_TYPES.HUMAN) {

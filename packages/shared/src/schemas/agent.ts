@@ -59,15 +59,42 @@ export const AGENT_STATUSES = {
 export const AGENT_SOURCES = {
   ADMIN_API: "admin-api",
   PORTAL: "portal",
+  /**
+   * Created by another *agent* through the gated self-provisioning path
+   * (`POST /api/v1/agent/managed-agents`). Distinct from `admin-api` (human
+   * operator / web console) so agent-initiated creates are first-class and
+   * queryable in provenance without reading `metadata.createdBy`.
+   */
+  AGENT_API: "agent-api",
 } as const;
 
-export const agentSourceSchema = z.enum(["admin-api", "portal"]);
+export const agentSourceSchema = z.enum(["admin-api", "portal", "agent-api"]);
 export type AgentSource = z.infer<typeof agentSourceSchema>;
 
 export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
-export const RESERVED_AGENT_METADATA_KEYS = ["runtimeSwitch", "runtimeSession"] as const;
+/**
+ * Metadata keys that are First Tree-managed internal state, never writable
+ * through the free-form `metadata` field on create/update. Two families:
+ *   - runtime state (`runtimeSwitch`, `runtimeSession`) — set by the runtime.
+ *   - provisioning state (`agentCapabilities`, `createdBy`) — `agentCapabilities`
+ *     is an admin-granted capability set (e.g. `provision-agents`); `createdBy`
+ *     is agent-provisioning provenance. Both are write-protected here so a
+ *     manager (or their agent, which holds the manager's JWT) cannot self-grant
+ *     or spoof provenance via `metadata`. They are surfaced for reading through
+ *     dedicated endpoints (see `GET /agents/:uuid/capabilities`), not the
+ *     stripped `metadata` projection.
+ *
+ * NOTE distinct from `clients.metadata.capabilities`, which is a machine's
+ * reported runtime-provider capability blob — unrelated to this per-agent grant.
+ */
+export const RESERVED_AGENT_METADATA_KEYS = [
+  "runtimeSwitch",
+  "runtimeSession",
+  "agentCapabilities",
+  "createdBy",
+] as const;
 
 const reservedAgentMetadataKeySet: ReadonlySet<string> = new Set(RESERVED_AGENT_METADATA_KEYS);
 
@@ -200,6 +227,75 @@ export const updateAgentSchema = z.object({
   avatarColorToken: avatarColorTokenSchema.nullable().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
+
+/**
+ * Per-agent capabilities that a human admin may grant to unlock otherwise
+ * operator-only actions from inside a running agent session. Default-deny:
+ * an agent has no capability unless an admin explicitly grants it.
+ *
+ * v1 defines a single capability:
+ *   - `provision-agents` — may create teammate agents in its own org, managed
+ *     by its own manager, on a human-owned client, via
+ *     `POST /api/v1/agent/managed-agents`.
+ */
+export const AGENT_CAPABILITIES = {
+  PROVISION_AGENTS: "provision-agents",
+} as const;
+
+export const agentCapabilitySchema = z.enum(["provision-agents"]);
+export type AgentCapability = z.infer<typeof agentCapabilitySchema>;
+
+export const agentCapabilitiesSchema = z.array(agentCapabilitySchema);
+export type AgentCapabilities = z.infer<typeof agentCapabilitiesSchema>;
+
+/**
+ * Provenance stamp written to `agents.metadata.createdBy` when an agent is
+ * created through the gated self-provisioning path. `agentId` is the acting
+ * (creator) agent; `memberId` is the managing member both agents share; `at`
+ * is an ISO timestamp.
+ */
+export const agentProvenanceSchema = z.object({
+  agentId: z.string(),
+  memberId: z.string(),
+  at: z.string(),
+});
+export type AgentProvenance = z.infer<typeof agentProvenanceSchema>;
+
+/**
+ * Body for `POST /api/v1/agent/managed-agents` — the agent-scoped teammate
+ * create. Deliberately narrow: `type`, `organizationId`, `managerId`, `source`,
+ * and `metadata` are NOT accepted — the server forces them from the acting
+ * agent's identity so a caller can never widen scope. `type` is always `agent`.
+ */
+export const createManagedAgentSchema = createAgentSchema.pick({
+  name: true,
+  displayName: true,
+  visibility: true,
+  clientId: true,
+  runtimeProvider: true,
+});
+export type CreateManagedAgent = z.infer<typeof createManagedAgentSchema>;
+
+/**
+ * Body for the admin-only `PATCH /api/v1/agents/:uuid/capabilities` grant
+ * route. Replaces the agent's full capability set (empty array clears it).
+ */
+export const setAgentCapabilitiesSchema = z.object({
+  capabilities: agentCapabilitiesSchema,
+});
+export type SetAgentCapabilities = z.infer<typeof setAgentCapabilitiesSchema>;
+
+/**
+ * Read-back shape for the capabilities endpoints. `createdBy` is only populated
+ * for admin callers (provisioning provenance); non-admin managers see the
+ * capability set but not the provenance.
+ */
+export const agentCapabilitiesViewSchema = z.object({
+  agentId: z.string(),
+  agentCapabilities: agentCapabilitiesSchema,
+  createdBy: agentProvenanceSchema.nullable().optional(),
+});
+export type AgentCapabilitiesView = z.infer<typeof agentCapabilitiesViewSchema>;
 
 export const switchAgentRuntimeSchema = z.object({
   /**

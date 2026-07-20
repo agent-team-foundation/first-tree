@@ -21,6 +21,7 @@ import {
   type ContextTreeWritePreflightResponse,
   type CreateDocCommentRequest,
   type CreateKeyedTaskChat,
+  type CreateManagedAgent,
   type CreateTaskChat,
   contextTreeSeedPreflightRequestSchema,
   contextTreeSeedPreflightResponseSchema,
@@ -310,6 +311,21 @@ export class FirstTreeHubSDK {
       delegateMention: agent.delegateMention ?? null,
       metadata: (agent.metadata as Record<string, unknown>) ?? {},
     };
+  }
+
+  /**
+   * Agent-scoped: provision a teammate agent (issue #1885). Hits the gated
+   * `POST /api/v1/agent/managed-agents` path — the SDK auto-attaches
+   * `X-Agent-Id` + the runtime-session token, so the server can attribute the
+   * call to this live agent and enforce the `provision-agents` capability plus
+   * own-org / own-manager / human-owned-client scope. Requires the capability
+   * to have been granted by an org admin (otherwise the server returns 403).
+   */
+  async createManagedAgent(body: CreateManagedAgent): Promise<Agent> {
+    return this.requestJson<Agent>("/api/v1/agent/managed-agents", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   }
 
   /** Fetch Context Tree configuration from the server (public endpoint). */

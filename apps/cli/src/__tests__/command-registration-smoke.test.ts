@@ -163,8 +163,10 @@ describe("CLI command registration", () => {
 
     expect(optionNames(command(root, "login"))).toEqual(["--force-switch", "--no-start"]);
     expect(optionNames(command(command(root, "agent"), "create"))).toEqual([
+      "--agent",
       "--client-id",
       "--display-name",
+      "--model",
       "--org",
       "--runtime",
       "--server",

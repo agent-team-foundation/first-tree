@@ -1,3 +1,5 @@
+// Agent-runtime context detection
+export { isRunningInsideAgent } from "./agent-context.js";
 // Local agent alias hygiene (stale alias detection + deletion)
 export type { PinnedAgent, StaleAlias, StaleAliasReason } from "./agent-prune.js";
 export { findStaleAliases, formatStaleReason, removeLocalAgent } from "./agent-prune.js";

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { registerAgentConfigAddMcpCommand } from "./add-mcp.js";
 import { registerAgentConfigAddRepoCommand } from "./add-repo.js";
+import { registerAgentConfigCapabilitiesCommands } from "./capabilities.js";
 import { registerAgentConfigDryRunCommand } from "./dry-run.js";
 import { registerAgentConfigAppendPromptCommand, registerAgentConfigPromptCommands } from "./prompt.js";
 import { registerAgentConfigSetEnvCommand } from "./set-env.js";
@@ -23,5 +24,6 @@ export function registerAgentConfigCommands(parent: Command): void {
   registerAgentConfigAddMcpCommand(config);
   registerAgentConfigSetEnvCommand(config);
   registerAgentConfigAddRepoCommand(config);
+  registerAgentConfigCapabilitiesCommands(config);
   registerAgentConfigDryRunCommand(config);
 }

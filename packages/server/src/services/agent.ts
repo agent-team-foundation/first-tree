@@ -1,4 +1,6 @@
 import type {
+  AgentCapability,
+  AgentProvenance,
   AgentSkills,
   AgentType,
   AgentVisibility,
@@ -11,6 +13,8 @@ import {
   AGENT_STATUSES,
   AGENT_TYPES,
   AGENT_VISIBILITY,
+  agentCapabilitiesSchema,
+  agentProvenanceSchema,
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
   findReservedAgentMetadataKey,
@@ -72,12 +76,84 @@ export function stripReservedAgentMetadata(metadata: unknown): Record<string, un
   return publicMetadata;
 }
 
-// Callers provide public metadata; internal runtime state is copied from the existing row.
+// Callers provide public metadata; First Tree-managed reserved keys are copied
+// from the existing row so a public-metadata update never drops runtime state
+// or the provisioning grant/provenance (`agentCapabilities`, `createdBy`).
 export function agentMetadataUpdateExpressionPreservingRuntimeState(metadata: Record<string, unknown>) {
   return sql`${JSON.stringify(metadata)}::jsonb || jsonb_strip_nulls(jsonb_build_object(
     'runtimeSwitch', ${agents.metadata}->'runtimeSwitch',
-    'runtimeSession', ${agents.metadata}->'runtimeSession'
+    'runtimeSession', ${agents.metadata}->'runtimeSession',
+    'agentCapabilities', ${agents.metadata}->'agentCapabilities',
+    'createdBy', ${agents.metadata}->'createdBy'
   ))`;
+}
+
+/**
+ * Merge First Tree-managed reserved metadata keys into an agent row without
+ * disturbing user metadata or the other reserved keys. This is the ONLY write
+ * path for `agentCapabilities` / `createdBy`: they are reserved (rejected on the
+ * free-form `metadata` field) so they cannot be self-granted or spoofed by a
+ * manager JWT. `metadata || <patch>` overwrites just the provided keys.
+ */
+export async function setAgentReservedMetadata(
+  db: Database,
+  uuid: string,
+  patch: { agentCapabilities?: AgentCapability[]; createdBy?: AgentProvenance },
+): Promise<void> {
+  const merge: Record<string, unknown> = {};
+  if (patch.agentCapabilities !== undefined) merge.agentCapabilities = patch.agentCapabilities;
+  if (patch.createdBy !== undefined) merge.createdBy = patch.createdBy;
+  if (Object.keys(merge).length === 0) return;
+  await db
+    .update(agents)
+    .set({
+      metadata: sql`COALESCE(${agents.metadata}, '{}'::jsonb) || ${JSON.stringify(merge)}::jsonb`,
+      updatedAt: new Date(),
+    })
+    .where(eq(agents.uuid, uuid));
+}
+
+export type AgentProvisioningContext = {
+  uuid: string;
+  organizationId: string;
+  managerId: string;
+  agentCapabilities: AgentCapability[];
+  createdBy: AgentProvenance | null;
+};
+
+/**
+ * Read an active agent's provisioning context (manager, org, granted
+ * capabilities, provenance) directly from the row — bypassing the public
+ * `stripReservedAgentMetadata` projection, which removes reserved keys. Returns
+ * `null` when the agent is missing or deleted. Unknown capability values are
+ * dropped defensively so a hand-written metadata blob can't smuggle a grant.
+ */
+export async function getAgentProvisioningContext(
+  db: SelectDbLike,
+  uuid: string,
+): Promise<AgentProvisioningContext | null> {
+  const [row] = await db
+    .select({
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      managerId: agents.managerId,
+      status: agents.status,
+      metadata: agents.metadata,
+    })
+    .from(agents)
+    .where(eq(agents.uuid, uuid))
+    .limit(1);
+  if (!row || row.status === AGENT_STATUSES.DELETED) return null;
+  const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  const parsedCaps = agentCapabilitiesSchema.safeParse(metadata.agentCapabilities);
+  const parsedCreatedBy = agentProvenanceSchema.safeParse(metadata.createdBy);
+  return {
+    uuid: row.uuid,
+    organizationId: row.organizationId,
+    managerId: row.managerId,
+    agentCapabilities: parsedCaps.success ? parsedCaps.data : [],
+    createdBy: parsedCreatedBy.success ? parsedCreatedBy.data : null,
+  };
 }
 
 /**
