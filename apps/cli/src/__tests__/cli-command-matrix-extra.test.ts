@@ -46,6 +46,7 @@ const coreMocks = vi.hoisted(() => ({
   printResults: vi.fn(),
   refreshClientServiceUnitForUpdate: vi.fn(),
   removeLocalAgent: vi.fn(),
+  retireLegacyGithubScanLaunchd: vi.fn(),
   restartClientService: vi.fn(),
   stopClientService: vi.fn(),
 }));
@@ -145,6 +146,7 @@ beforeEach(() => {
     unitPath: "/tmp/unit.plist",
     state: "active",
   });
+  coreMocks.retireLegacyGithubScanLaunchd.mockReturnValue({ bootedOut: [], removedPlists: 0 });
   clientMocks.SessionRegistry.mockImplementation(() => ({ load: vi.fn(() => new Map()) }));
   clientMocks.cleanWorkspaces.mockReturnValue([]);
   localAgentMocks.createSdk.mockReturnValue({
@@ -163,6 +165,7 @@ afterEach(() => {
   process.stdout.write = originalStdoutWrite;
   setPlatform(originalPlatform);
   delete process.env.FIRST_TREE_CHAT_ID;
+  delete process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY;
 });
 
 describe("config commands", () => {
@@ -281,6 +284,14 @@ describe("daemon utility commands", () => {
     coreMocks.isServiceSupported.mockReturnValueOnce(false);
     await runDaemon(["ensure-service"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("not supported");
+
+    coreMocks.retireLegacyGithubScanLaunchd.mockClear();
+    coreMocks.loadCredentials.mockClear();
+    process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY = "1";
+    await runDaemon(["ensure-service"]);
+    delete process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY;
+    expect(coreMocks.retireLegacyGithubScanLaunchd).toHaveBeenCalledTimes(1);
+    expect(coreMocks.loadCredentials).not.toHaveBeenCalled();
 
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.loadCredentials.mockReturnValueOnce(null);

@@ -57,7 +57,6 @@ const coreMocks = vi.hoisted(() => ({
   readActiveRootClientId: vi.fn(),
   recordActiveClientOwner: vi.fn(),
   removeLocalAgent: vi.fn(),
-  retireLegacyGithubScanLaunchd: vi.fn(),
   resolveServerUrl: vi.fn(),
   restartClientService: vi.fn(),
   stopClientService: vi.fn(),
@@ -139,7 +138,6 @@ beforeEach(() => {
   coreMocks.listLiveClientRuntimeMarkers.mockReturnValue([]);
   coreMocks.readActiveClientIdFromIndex.mockReturnValue(null);
   coreMocks.readActiveRootClientId.mockReturnValue(null);
-  coreMocks.retireLegacyGithubScanLaunchd.mockReturnValue({ bootedOut: [], removedPlists: 0 });
   coreMocks.stopClientRuntimeProcess.mockResolvedValue({ ok: true });
   cliFetchMock.mockReset();
   promptMocks.confirm.mockResolvedValue(true);
@@ -1198,17 +1196,5 @@ describe("logout and upgrade commands", () => {
     coreMocks.restartClientService.mockReturnValueOnce({ ok: true });
     await runTopLevel(registerUpgradeCommand, ["upgrade"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Service restarted");
-  });
-
-  it("retires legacy github-scan immediately after install without a current service", async () => {
-    const { registerUpgradeCommand } = await import("../commands/upgrade.js");
-    coreMocks.detectInstallMode.mockReturnValue("global");
-    coreMocks.fetchServerCommandVersion.mockResolvedValueOnce({ ok: true, version: "99.0.0" });
-    coreMocks.isServiceSupported.mockReturnValue(false);
-
-    await runTopLevel(registerUpgradeCommand, ["upgrade"]);
-
-    expect(coreMocks.retireLegacyGithubScanLaunchd).toHaveBeenCalledTimes(1);
-    expect(coreMocks.getClientServiceStatus).not.toHaveBeenCalled();
   });
 });
