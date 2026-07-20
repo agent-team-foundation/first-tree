@@ -6,13 +6,12 @@ import {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Brain, ChevronDown, Pencil, Wrench, X } from "lucide-react";
-import { type Ref, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
-import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
+import { viewOf } from "../../lib/agent-status-view.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
-import { LiveTurnAgentsContext } from "./live-turn-context.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
 
 /**
@@ -107,16 +106,19 @@ export function ComposeStatusBar({
   const inspectorRef = useRef<HTMLElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const closeInspector = useCallback(() => setInspectorOpen(false), []);
+  const closeInspectorAndRestoreFocus = useCallback(() => {
+    setInspectorOpen(false);
+    triggerRef.current?.focus();
+  }, []);
   const { data: rawStatuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000,
   });
-  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
-  const statuses = useMemo(
-    () => (rawStatuses ?? []).map((status) => reconcileLiveTurn(status, liveTurnAgentIds.has(status.agentId))),
-    [rawStatuses, liveTurnAgentIds],
-  );
+  // The server's per-chat composite is the working/failed authority. Timeline
+  // events and `activity` only explain that state; an un-ended local workgroup
+  // must never resurrect Working after runtime freshness has expired.
+  const statuses = rawStatuses ?? [];
   const attention = useMemo(() => selectAttention(statuses), [statuses]);
   const mounted = useMountedAnchors();
   const nameOf = useMemo(() => nameFor(agents), [agents]);
@@ -146,8 +148,19 @@ export function ComposeStatusBar({
 
   useEffect(() => {
     if (!inspectorOpen) return;
+    const frame = requestAnimationFrame(() => {
+      inspectorRef.current?.querySelector<HTMLElement>("button")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [inspectorOpen]);
+
+  useEffect(() => {
+    if (!inspectorOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeInspector();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeInspectorAndRestoreFocus();
     };
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
@@ -160,7 +173,7 @@ export function ComposeStatusBar({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown, true);
     };
-  }, [closeInspector, inspectorOpen]);
+  }, [closeInspector, closeInspectorAndRestoreFocus, inspectorOpen]);
 
   if (attention.length === 0) return null;
   const leadRow = (lead && attention.find((status) => status.agentId === lead.agentId)) ?? attention[0];
@@ -177,17 +190,6 @@ export function ComposeStatusBar({
         borderBottom: "var(--hairline) solid var(--border-faint)",
       }}
     >
-      {inspectorOpen ? (
-        <LiveActivityInspector
-          id={inspectorId}
-          ref={inspectorRef}
-          attention={attention}
-          nameOf={nameOf}
-          mounted={mounted}
-          onClose={closeInspector}
-        />
-      ) : null}
-
       <div className="flex min-w-0 items-center" style={{ gap: "var(--sp-2)" }}>
         <LeadSnapshot status={leadRow} name={nameOf(leadRow.agentId)} />
         <button
@@ -195,7 +197,8 @@ export function ComposeStatusBar({
           type="button"
           aria-controls={inspectorId}
           aria-expanded={inspectorOpen}
-          aria-label={inspectorOpen ? "Close live activity" : "Open live activity"}
+          aria-haspopup="dialog"
+          aria-label={inspectorOpen ? "Close agent activity" : "Open agent activity"}
           onClick={() => setInspectorOpen((open) => !open)}
           className="compose-status-activity-trigger text-label inline-flex shrink-0 items-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           style={{
@@ -215,6 +218,20 @@ export function ComposeStatusBar({
           />
         </button>
       </div>
+
+      {/* Keep the panel after its disclosure trigger in DOM order. Its visual
+          position is still above the composer, while forward Tab now enters
+          Close → activity rows instead of skipping the panel entirely. */}
+      {inspectorOpen ? (
+        <LiveActivityInspector
+          id={inspectorId}
+          ref={inspectorRef}
+          attention={attention}
+          nameOf={nameOf}
+          mounted={mounted}
+          onClose={closeInspectorAndRestoreFocus}
+        />
+      ) : null}
     </div>
   );
 }
@@ -267,7 +284,8 @@ const LiveActivityInspector = function LiveActivityInspector({
     <section
       id={id}
       ref={ref}
-      aria-label="Live activity"
+      role="dialog"
+      aria-label="Agent activity"
       className="fade-in"
       data-live-activity-inspector
       style={{
@@ -286,18 +304,18 @@ const LiveActivityInspector = function LiveActivityInspector({
       <div
         className="flex items-center"
         style={{
-          minHeight: 40,
+          minHeight: "var(--sp-10)",
           gap: "var(--sp-2)",
           padding: "var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2_5)",
           borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
       >
         <span className="text-label font-semibold" style={{ color: "var(--fg-2)" }}>
-          Live activity · {attention.length} {attention.length === 1 ? "agent" : "agents"}
+          Agent activity · {attention.length} {attention.length === 1 ? "agent" : "agents"}
         </span>
         <button
           type="button"
-          aria-label="Close live activity"
+          aria-label="Close agent activity"
           onClick={onClose}
           className="compose-status-inspector-close ml-auto inline-flex items-center justify-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--fg-3)" }}
@@ -343,21 +361,30 @@ function InspectorItem({
   const visual = statusVisual(status);
   const snapshot = agentSnapshot(status);
   const anchored = isJumpable(mounted, status.main, status.agentId);
+  const accessibleSummary = [
+    name,
+    stateLabel(status),
+    snapshot.update,
+    snapshot.meta ? formatActivityMeta(snapshot.meta) : null,
+    "View in the timeline",
+  ]
+    .filter((part): part is string => part !== null)
+    .join(". ");
   return (
     <TimelineJumpButton
       agentId={status.agentId}
       main={status.main}
       anchored={anchored}
-      ariaLabel={`View ${name} in the timeline`}
+      ariaLabel={accessibleSummary}
       onNavigate={onNavigate}
       className="w-full text-left"
       interactiveClassName="transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-      style={{ minHeight: 64, padding: "var(--sp-2) var(--sp-2_5)" }}
+      style={{ minHeight: "var(--sp-16)", padding: "var(--sp-2) var(--sp-2_5)" }}
     >
       <div className="min-w-0 flex-1">
         <div className="text-label flex min-w-0 items-center" style={{ gap: "var(--sp-1_5)" }}>
           <StatusGlyph colorVar={visual.colorVar} shape={visual.shape} pulse={visual.pulse} size={7} />
-          <span className="truncate font-semibold" style={{ color: "var(--fg-2)" }}>
+          <span className="font-semibold" style={{ color: "var(--fg-2)", overflowWrap: "anywhere" }}>
             {name}
           </span>
           <span className="shrink-0" style={{ color: "var(--fg-3)" }}>
@@ -371,7 +398,7 @@ function InspectorItem({
             display: "-webkit-box",
             WebkitBoxOrient: "vertical",
             WebkitLineClamp: 2,
-            marginTop: 2,
+            marginTop: "var(--sp-0_5)",
             overflow: "hidden",
             overflowWrap: "anywhere",
             color: "var(--fg-2)",
@@ -386,16 +413,15 @@ function InspectorItem({
 }
 
 function stateLabel(status: AgentChatStatus): string {
-  const reason = visibleStatusReason(status);
-  if (status.main === "failed" || isFatalStatusReason(status)) return "Failed";
-  if (reason?.kind === "terminal") return "Blocked";
-  if (reason?.kind === "waiting") return "Waiting";
-  if (reason?.kind === "retrying") return "Retrying";
   return viewOf(status.main).label;
 }
 
 function statusVisual(status: AgentChatStatus) {
   const view = viewOf(status.main);
+  // Reachability, lifecycle and actual failure keep their server-derived
+  // shape. Reasons may tint ready/working activity, but cannot make an offline
+  // or paused agent visually masquerade as a different main state.
+  if (status.main === "offline" || status.main === "paused" || status.main === "failed") return view;
   const reasonView = statusReasonView(status);
   return {
     colorVar: reasonView?.colorVar ?? view.colorVar,
@@ -443,7 +469,7 @@ function narrationOf(status: AgentChatStatus): string | null {
 function collapsedSummary(status: AgentChatStatus): string | null {
   const reason = visibleStatusReason(status);
   if (reason) return reason.label;
-  if (status.main === "failed") return "Needs attention";
+  if (status.main === "failed") return "Session failed";
   const narration = narrationOf(status);
   if (narration) return narration;
   const action = status.activity ? activityMeta(status.activity, false) : null;
@@ -467,7 +493,7 @@ function agentSnapshot(status: AgentChatStatus): AgentSnapshot {
       meta: detail ? { label: detail, title: detail } : null,
     };
   }
-  if (status.main === "failed") return { update: "Needs attention", meta: null };
+  if (status.main === "failed") return { update: "Session failed", meta: null };
   const action = status.activity ? activityMeta(status.activity, narration !== null) : null;
   if (narration) return { update: narration, meta: action };
   if (action) return { update: formatActivityMeta(action), meta: null };
@@ -501,7 +527,7 @@ function ActivityMetaLine({ meta }: { meta: ActivityMeta }) {
     <div
       className="text-label flex min-w-0 items-center"
       title={meta.title}
-      style={{ gap: 4, marginTop: 2, color: "var(--fg-4)" }}
+      style={{ gap: "var(--sp-1)", marginTop: "var(--sp-0_5)", color: "var(--fg-3)" }}
     >
       {meta.kind ? <ActionIcon kind={meta.kind} /> : null}
       <span className={meta.mono ? "mono shrink-0" : "truncate"}>{meta.label}</span>

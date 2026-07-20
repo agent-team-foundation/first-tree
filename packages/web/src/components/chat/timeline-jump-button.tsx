@@ -47,7 +47,7 @@ export function TimelineJumpButton({
     // outside the 50-message window) → show the status, but don't pretend it's
     // a working jump.
     return (
-      <div className={cn("inline-flex min-w-0 items-center", className)} style={{ gap: 4, ...style }}>
+      <div className={cn("inline-flex min-w-0 items-center", className)} style={{ gap: "var(--sp-1)", ...style }}>
         {children}
       </div>
     );
@@ -62,7 +62,7 @@ export function TimelineJumpButton({
       aria-label={ariaLabel}
       className={cn("group inline-flex min-w-0 items-center", className, interactiveClassName)}
       style={{
-        gap: 4,
+        gap: "var(--sp-1)",
         border: 0,
         background: "transparent",
         padding: 0,
@@ -75,8 +75,8 @@ export function TimelineJumpButton({
       {children}
       <ArrowRight
         aria-hidden="true"
-        className="h-3.5 w-3.5 shrink-0 opacity-40 transition-all group-hover:translate-x-0.5 group-hover:opacity-70 group-focus-visible:translate-x-0.5 group-focus-visible:opacity-70"
-        style={{ color: "var(--fg-4)" }}
+        className="h-3.5 w-3.5 shrink-0 opacity-70 transition-all group-hover:translate-x-0.5 group-hover:opacity-100 group-focus-visible:translate-x-0.5 group-focus-visible:opacity-100"
+        style={{ color: "var(--fg-3)" }}
       />
     </button>
   );

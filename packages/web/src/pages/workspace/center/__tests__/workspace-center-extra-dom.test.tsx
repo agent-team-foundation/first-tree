@@ -572,7 +572,9 @@ beforeEach(() => {
   imageStoreMocks.putImage.mockResolvedValue(undefined);
   readStateMocks.getReadState.mockResolvedValue(null);
   readStateMocks.setReadState.mockResolvedValue(undefined);
-  sessionMocks.listSessionEvents.mockResolvedValue(SESSION_EVENTS);
+  sessionMocks.listSessionEvents.mockImplementation((requestedAgentId: string) =>
+    Promise.resolve(requestedAgentId === "agent-1" ? SESSION_EVENTS : { items: [], nextCursor: null }),
+  );
   sessionMocks.listSessionOutputs.mockResolvedValue({ items: [], nextCursor: null });
 });
 

@@ -8,7 +8,10 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe("scrollToAgentTimeline", () => {
   it("scrolls to the latest matching timeline anchor for actionable states", () => {
@@ -42,8 +45,29 @@ describe("scrollToAgentTimeline", () => {
 
     expect(document.activeElement).toBe(target);
     expect(target.tabIndex).toBe(-1);
+    expect(target.getAttribute("data-timeline-jump-focus")).toBe("true");
+    vi.advanceTimersByTime(1600);
+    expect(target.hasAttribute("data-timeline-jump-highlight")).toBe(false);
+    expect(target.getAttribute("data-timeline-jump-focus")).toBe("true");
     target.blur();
     expect(target.hasAttribute("tabindex")).toBe(false);
+    expect(target.hasAttribute("data-timeline-jump-focus")).toBe(false);
+  });
+
+  it("uses instant scrolling when the user prefers reduced motion", () => {
+    const target = document.createElement("div");
+    target.setAttribute("data-working-agent", "agent-1");
+    target.scrollIntoView = vi.fn();
+    document.body.append(target);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+
+    scrollToAgentTimeline("agent-1", "working");
+
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "center" });
+    vi.unstubAllGlobals();
   });
 
   it("handles errors, inert states, and missing anchors", () => {

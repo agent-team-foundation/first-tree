@@ -19,7 +19,7 @@ import {
   type RuntimeProvider,
   statusReasonFromProviderRetryEvent,
 } from "@first-tree/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowUp,
@@ -1814,15 +1814,6 @@ export function ChatView({
     refetchInterval: 5_000,
   });
 
-  // Fetch newest events first so the turn-grouping filter always sees the
-  // latest `turn_end` even in chats with thousands of total events. The
-  // timeline renderer later sorts by timestamp, so the fetch order is moot
-  // for display — only the contents of the window matter.
-  const { data: eventsData } = useQuery({
-    queryKey: ["session-events", agentId, chatId],
-    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
-  });
-
   const {
     data: chatDetail,
     isLoading: chatDetailLoading,
@@ -1833,6 +1824,30 @@ export function ChatView({
     enabled: !!chatId,
     initialData: initialChatDetail?.id === chatId ? initialChatDetail : undefined,
     staleTime: 10_000,
+  });
+
+  // Fetch newest events first so the turn-grouping filter always sees the
+  // latest `turn_end` even in chats with thousands of total events. The
+  // primary agent keeps its stable query; secondary non-human speakers use
+  // the same chat-scoped event contract so every inspector summary can point
+  // back to mounted timeline evidence when the viewer may see that agent.
+  const { data: eventsData } = useQuery({
+    queryKey: ["session-events", agentId, chatId],
+    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
+  });
+  const secondaryTimelineAgentIds = useMemo(
+    () =>
+      (chatDetail?.participants ?? [])
+        .filter((participant) => participant.type !== "human" && participant.agentId !== agentId)
+        .map((participant) => participant.agentId),
+    [agentId, chatDetail?.participants],
+  );
+  const secondaryEventFeeds = useQueries({
+    queries: secondaryTimelineAgentIds.map((secondaryAgentId) => ({
+      queryKey: ["session-events", secondaryAgentId, chatId] as const,
+      queryFn: () => listSessionEvents(secondaryAgentId, chatId, { limit: 200, direction: "desc" }),
+    })),
+    combine: (results) => results.flatMap((result) => (result.data ? [result.data] : [])),
   });
 
   // The right rail no longer auto-opens per chat: the running summary moved to
@@ -2499,26 +2514,6 @@ export function ChatView({
   // `key`), so chat-view no longer resets per-question selections here.
 
   const items: TimelineItem[] = useMemo(() => {
-    const rawEvents = eventsData?.items ?? [];
-    const visibleEvents = filterEventsForTimeline(rawEvents);
-
-    // Turn anchor: the seq of the last turn_end across all events (including
-    // ones filterEventsForTimeline dropped). Every surviving transient event
-    // has seq > lastTurnEndSeq, so the agent's current turn gets one stable,
-    // remount-safe key that survives toolUseId dedupe (pending → final swaps).
-    let lastTurnEndSeq = -1;
-    for (const e of rawEvents) {
-      if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
-    }
-
-    // Collapse each agent's surviving transient events into ONE workgroup.
-    // filterEventsForTimeline already narrows them to that agent's current
-    // (un-ended) turn, so one workgroup == one in-progress turn. We deliberately
-    // do NOT split on interleaved chat messages: a message landing mid-turn must
-    // not fracture the turn into duplicate "working" cards. Each workgroup is
-    // anchored at its earliest event so it sorts into the timeline where the
-    // turn began; messages and error rows keep their own chronological slots.
-    //
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
     // vanish on chat re-open until the server fetch lands. When the staging
@@ -2532,47 +2527,57 @@ export function ChatView({
       data: m,
     }));
 
-    const turnEventsByAgent = new Map<string, SessionEventRow[]>();
-    for (const e of visibleEvents) {
-      if (e.kind === "tool_call" || e.kind === "thinking" || e.kind === "assistant_text") {
-        const existing = turnEventsByAgent.get(e.agentId);
-        if (existing) existing.push(e);
-        else turnEventsByAgent.set(e.agentId, [e]);
-      } else {
-        // error rows stay standalone and visible across turns.
-        out.push({ kind: "event", at: e.createdAt, key: `e-${e.id}`, data: e });
+    // A seq is monotonic only within one (agent, chat) session, so combine the
+    // independently fetched feeds by agent before finding turn boundaries.
+    // Dedup by event id protects a temporarily duplicated participant/query.
+    const rawEventsByAgent = new Map<string, Map<string, SessionEventRow>>();
+    for (const feed of [...(eventsData ? [eventsData] : []), ...secondaryEventFeeds]) {
+      for (const event of feed.items) {
+        const existing = rawEventsByAgent.get(event.agentId);
+        if (existing) existing.set(event.id, event);
+        else rawEventsByAgent.set(event.agentId, new Map([[event.id, event]]));
       }
     }
-    for (const [agentId, events] of turnEventsByAgent) {
-      events.sort((a, b) => a.seq - b.seq);
-      const first = events[0];
-      if (!first) continue;
-      out.push({ kind: "workgroup", at: first.createdAt, key: `wg-${lastTurnEndSeq}-${agentId}`, events });
+
+    for (const [eventAgentId, eventsById] of rawEventsByAgent) {
+      const rawEvents = [...eventsById.values()];
+      const visibleEvents = filterEventsForTimeline(rawEvents);
+      let lastTurnEndSeq = -1;
+      for (const event of rawEvents) {
+        if (event.kind === "turn_end" && event.seq > lastTurnEndSeq) lastTurnEndSeq = event.seq;
+      }
+
+      const turnEvents: SessionEventRow[] = [];
+      for (const event of visibleEvents) {
+        if (event.kind === "tool_call" || event.kind === "thinking" || event.kind === "assistant_text") {
+          turnEvents.push(event);
+        } else {
+          // Error rows stay standalone and visible across turns.
+          out.push({ kind: "event", at: event.createdAt, key: `e-${event.id}`, data: event });
+        }
+      }
+      turnEvents.sort((a, b) => a.seq - b.seq);
+      const first = turnEvents[0];
+      if (first) {
+        out.push({
+          kind: "workgroup",
+          at: first.createdAt,
+          key: `wg-${lastTurnEndSeq}-${eventAgentId}`,
+          events: turnEvents,
+        });
+      }
     }
 
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [mergedMessages, eventsData]);
+  }, [mergedMessages, eventsData, secondaryEventFeeds]);
 
   const itemCount = items.length;
 
-  // Agents with a live (un-ended) turn: one workgroup == one in-progress turn
-  // (see the `items` builder above). This is the timeline's authoritative
-  // "working" signal — a mounted WorkingTurn. Provided via LiveTurnAgentsContext
-  // so every chat-scoped status surface (roster, compose bar, hovercard)
-  // reconciles the composite against it (`reconcileLiveTurn`) from one source —
-  // a lapsed per-chat runtime heartbeat (or a missed composite invalidation)
-  // can't show Idle while a WorkingTurn is visibly on screen. Derived from
-  // `items` (not `visibleItems`) so a viewer-local blocking truncation never
-  // blanks an agent's work status.
-  //
-  // Scope: `eventsData` is a single-(primary-)agent feed (`["session-events",
-  // agentId, chatId]`), so `items` only ever carries the primary agent's
-  // workgroup and this set covers only that agent — exactly the agent whose
-  // WorkingTurn is on screen. `reconcileLiveTurn` is upgrade-only, so a
-  // secondary agent (no card) is never wrongly forced to working; it just shows
-  // the composite. Fixing idle-while-working for secondary agents would need a
-  // multi-agent events feed and is out of this stopgap's scope.
+  // Mounted evidence anchors for agents whose event feeds are visible in this
+  // chat. Legacy roster/hovercard consumers use this set as an evidence hint;
+  // ComposeStatusBar deliberately does not derive working from it because the
+  // fresh server per-chat runtime projection is authoritative.
   const liveTurnAgentIds = useMemo(
     () =>
       new Set(

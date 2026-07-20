@@ -24,7 +24,8 @@ export function scrollToAgentTimeline(agentId: string, main: AgentMainStatus, op
   const target = els[els.length - 1];
   if (!target) return;
 
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  target.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "center" });
 
   // Restart a brief evidence highlight on repeat jumps. It lives on the target
   // rather than the inspector, so the user's eye lands where the activity came
@@ -44,9 +45,15 @@ export function scrollToAgentTimeline(agentId: string, main: AgentMainStatus, op
   if (options.focus) {
     const hadTabIndex = target.hasAttribute("tabindex");
     if (!hadTabIndex) target.tabIndex = -1;
+    target.setAttribute("data-timeline-jump-focus", "true");
     target.focus({ preventScroll: true });
-    if (!hadTabIndex) {
-      target.addEventListener("blur", () => target.removeAttribute("tabindex"), { once: true });
-    }
+    target.addEventListener(
+      "blur",
+      () => {
+        target.removeAttribute("data-timeline-jump-focus");
+        if (!hadTabIndex) target.removeAttribute("tabindex");
+      },
+      { once: true },
+    );
   }
 }

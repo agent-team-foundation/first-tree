@@ -738,7 +738,16 @@ beforeEach(() => {
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
   readStateMocks.getReadState.mockResolvedValue(null);
   readStateMocks.setReadState.mockResolvedValue(undefined);
-  sessionMocks.listSessionEvents.mockResolvedValue(SESSION_EVENTS);
+  sessionMocks.listSessionEvents.mockImplementation((requestedAgentId: string) =>
+    Promise.resolve(
+      requestedAgentId === "agent-1"
+        ? SESSION_EVENTS
+        : {
+            items: [],
+            nextCursor: null,
+          },
+    ),
+  );
   sessionMocks.listSessionOutputs.mockResolvedValue({ items: [], nextCursor: null });
 });
 
@@ -958,6 +967,65 @@ describe("ChatView", () => {
     await click(buttonByText(readOnly.container, "Join to reply"));
     expect(onJoin).toHaveBeenCalledTimes(1);
     await act(async () => readOnly.root.unmount());
+  });
+
+  it("loads secondary-agent activity into the timeline so inspector summaries have evidence", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const secondaryEvents = {
+      items: [
+        {
+          id: "event-agent-2",
+          agentId: "agent-2",
+          chatId: "chat-1",
+          seq: 1,
+          kind: "assistant_text" as const,
+          payload: { text: "Reviewing the mobile interaction." },
+          createdAt: "2026-05-28T11:59:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    };
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+      queryClient.setQueryData(["session-events", "agent-2", "chat-1"], secondaryEvents);
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [
+          {
+            agentId: "agent-1",
+            main: "ready",
+            reachable: true,
+            engagement: "active",
+            working: false,
+            errored: false,
+            activity: null,
+          },
+          {
+            agentId: "agent-2",
+            main: "working",
+            reachable: true,
+            engagement: "active",
+            working: true,
+            errored: false,
+            activity: {
+              agentId: "agent-2",
+              kind: "assistant_text",
+              label: "Writing",
+              startedAt: NOW,
+              turnText: "Reviewing the mobile interaction.",
+            },
+          },
+        ],
+      );
+    });
+
+    await waitForCondition(
+      () => container.querySelector('[data-working-agent="agent-2"]') !== null,
+      "Expected secondary agent timeline evidence",
+    );
+    await click(container.querySelector('button[aria-label="Open agent activity"]'));
+    expect(container.querySelector('button[aria-label*="Design Critique"][aria-label*="Reviewing"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
   });
 
   it("renders provider retry events as non-fatal timeline rows when severity is not error", async () => {
