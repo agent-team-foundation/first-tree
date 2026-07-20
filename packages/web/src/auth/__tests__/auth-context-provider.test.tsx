@@ -409,12 +409,12 @@ describe("AuthProvider", () => {
       refreshToken: "refresh-a",
     });
     await renderAuth();
-    const requests: Array<{ onsuccess: (() => void) | null }> = [];
+    const requests: Array<{ onsuccess: (() => void) | null; onblocked: (() => void) | null }> = [];
     Object.defineProperty(globalThis, "indexedDB", {
       configurable: true,
       value: {
         deleteDatabase: () => {
-          const request = { onsuccess: null as (() => void) | null };
+          const request = { onsuccess: null as (() => void) | null, onblocked: null as (() => void) | null };
           requests.push(request);
           return request;
         },
@@ -422,8 +422,13 @@ describe("AuthProvider", () => {
     });
 
     let logoutResult: Promise<"completed" | "incomplete" | "superseded"> = Promise.resolve("incomplete");
+    let retryOperation: (() => Promise<"completed" | "incomplete" | "superseded">) | undefined;
     await act(async () => {
-      logoutResult = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve("incomplete");
+      logoutResult =
+        latestAuth?.logout({
+          broadcast: false,
+          onIncomplete: (retry) => (retryOperation = retry),
+        }) ?? Promise.resolve("incomplete");
       await Promise.resolve();
     });
     expect(requests.length).toBeGreaterThan(0);
@@ -436,24 +441,38 @@ describe("AuthProvider", () => {
     });
     expect(latestAuth?.isAuthenticated).toBe(true);
     await act(async () => {
-      for (const request of requests) request.onsuccess?.();
+      for (const request of requests) request.onblocked?.();
       await logoutResult;
     });
 
-    await expect(logoutResult).resolves.toBe("superseded");
+    await expect(logoutResult).resolves.toBe("incomplete");
+    expect(retryOperation).toBeDefined();
     expect(latestAuth?.isAuthenticated).toBe(true);
-    const firstRequestCount = requests.length;
-    let retryResult: Promise<"completed" | "incomplete" | "superseded"> = Promise.resolve("incomplete");
+    const beforeBLogout = requests.length;
+    let bLogout: Promise<"completed" | "incomplete" | "superseded"> = Promise.resolve("incomplete");
     await act(async () => {
-      retryResult = latestAuth?.retryLogout?.() ?? Promise.resolve("incomplete");
+      bLogout = latestAuth?.logout({ broadcast: false }) ?? Promise.resolve("incomplete");
       await Promise.resolve();
     });
-    expect(requests.length).toBeGreaterThan(firstRequestCount);
+    const beforeRetry = requests.length;
+    expect(beforeRetry).toBeGreaterThan(beforeBLogout);
+    let retryResult: Promise<"completed" | "incomplete" | "superseded"> = Promise.resolve("incomplete");
     await act(async () => {
-      for (const request of requests.slice(firstRequestCount)) request.onsuccess?.();
+      retryResult = retryOperation?.() ?? Promise.resolve("incomplete");
+      await Promise.resolve();
+    });
+    expect(requests.length).toBeGreaterThan(beforeRetry);
+    await act(async () => {
+      for (const request of requests.slice(beforeRetry)) request.onsuccess?.();
       await retryResult;
     });
     await expect(retryResult).resolves.toBe("superseded");
+    expect(latestAuth?.isAuthenticated).toBe(true);
+    await act(async () => {
+      for (const request of requests.slice(beforeBLogout, beforeRetry)) request.onblocked?.();
+      await bLogout;
+    });
+    await expect(bLogout).resolves.toBe("incomplete");
     expect(latestAuth?.isAuthenticated).toBe(true);
     expect(apiMocks.clearStoredTokens).not.toHaveBeenCalled();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;

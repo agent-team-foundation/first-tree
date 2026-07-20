@@ -15,7 +15,7 @@ import { isStandalone } from "./install-guide-state.js";
 import { useInstallPrompt } from "./use-install-guide.js";
 
 export function MobileMePage() {
-  const { user, teamDisplayName, role, logout, retryLogout } = useAuth();
+  const { user, teamDisplayName, role, logout } = useAuth();
   const { addToast } = useOptionalToast();
   const displayName = user?.displayName ?? "Signed-in user";
   const username = user?.username ?? "";
@@ -75,19 +75,20 @@ export function MobileMePage() {
           className="min-h-11 justify-start"
           onClick={() => {
             const departingScope = captureBrowserStorageScope();
-            void Promise.resolve(logout({ scope: departingScope }))
+            let retryOperation: (() => Promise<"completed" | "incomplete" | "superseded">) | undefined;
+            void Promise.resolve(logout({ scope: departingScope, onIncomplete: (retry) => (retryOperation = retry) }))
               .then((completed) => {
                 if (completed === "incomplete" || completed === undefined) {
                   showLogoutIncompleteToast(
                     addToast,
-                    retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
+                    retryOperation ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
                   );
                 }
               })
               .catch(() =>
                 showLogoutIncompleteToast(
                   addToast,
-                  retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
+                  retryOperation ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
                 ),
               );
           }}

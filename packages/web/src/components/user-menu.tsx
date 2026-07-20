@@ -21,7 +21,7 @@ const PARENT_URL = "https://first-tree.ai";
  * surfaces (team on the left, account on the right).
  */
 export function UserMenu() {
-  const { user, logout, retryLogout } = useAuth();
+  const { user, logout } = useAuth();
   const { addToast } = useOptionalToast();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -94,16 +94,19 @@ export function UserMenu() {
                 setOpen(false);
                 void (async () => {
                   let result: "completed" | "incomplete" | "superseded" | undefined;
+                  let retryOperation: (() => Promise<"completed" | "incomplete" | "superseded">) | undefined;
                   const departingScope = captureBrowserStorageScope();
                   try {
-                    result = await Promise.resolve(logout({ scope: departingScope }));
+                    result = await Promise.resolve(
+                      logout({ scope: departingScope, onIncomplete: (retry) => (retryOperation = retry) }),
+                    );
                   } catch {
                     result = "incomplete";
                   }
                   if (result === "incomplete" || result === undefined) {
                     showLogoutIncompleteToast(
                       addToast,
-                      retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
+                      retryOperation ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
                     );
                     return;
                   }

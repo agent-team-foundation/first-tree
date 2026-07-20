@@ -31,7 +31,7 @@ import { StepProgress } from "./step-progress.js";
  */
 export function OnboardingShell({ children }: { children: ReactNode }) {
   const { activeStep, finishLater, hasAgent } = useOnboardingFlow();
-  const { logout, retryLogout, memberships } = useAuth();
+  const { logout, memberships } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
@@ -52,19 +52,20 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
   const isMultiTeam = memberships.length > 1;
   const signOut = () => {
     const departingScope = captureBrowserStorageScope();
-    void Promise.resolve(logout({ scope: departingScope }))
+    let retryOperation: (() => Promise<"completed" | "incomplete" | "superseded">) | undefined;
+    void Promise.resolve(logout({ scope: departingScope, onIncomplete: (retry) => (retryOperation = retry) }))
       .then((completed) => {
         if (completed === "incomplete" || completed === undefined) {
           showLogoutIncompleteToast(
             addToast,
-            retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
+            retryOperation ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
           );
         }
       })
       .catch(() =>
         showLogoutIncompleteToast(
           addToast,
-          retryLogout ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
+          retryOperation ?? (() => logout({ protectReplacementTokens: true, scope: departingScope })),
         ),
       );
   };
