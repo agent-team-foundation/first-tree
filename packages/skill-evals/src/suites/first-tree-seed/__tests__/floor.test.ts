@@ -10,6 +10,12 @@ if (!validateFloor) {
 }
 
 const skillMarkdown = readFileSync(join(process.cwd(), "../../skills/first-tree-seed/SKILL.md"), "utf8");
+const durableProgressMarkdown = readFileSync(
+  join(process.cwd(), "../../skills/first-tree-seed/references/durable-progress.md"),
+  "utf8",
+);
+const skillVersion = readFileSync(join(process.cwd(), "../../skills/first-tree-seed/VERSION"), "utf8").trim();
+const openAiMetadata = readFileSync(join(process.cwd(), "../../skills/first-tree-seed/agents/openai.yaml"), "utf8");
 
 describe("first-tree-seed floor invariants", () => {
   it("accepts the shipped lifecycle cases", () => {
@@ -51,17 +57,29 @@ describe("first-tree-seed floor invariants", () => {
     expect(sourceWorktreeSection).not.toContain("worktree add <workspaceRoot>/worktrees/seed-<source> origin/main");
   });
 
-  it("checks same-chat Phase 2 continuation before refusing state C", () => {
-    const continuation = skillMarkdown.indexOf("Check for a Phase 2 continuation before classifying state C");
+  it("checks durable fresh-process Phase 2 recovery before refusing state C", () => {
+    const continuation = skillMarkdown.indexOf("Check durable Phase 2 recovery before classifying state C");
     const stateC = skillMarkdown.indexOf("**C — Already seeded.**");
 
     expect(continuation).toBeGreaterThan(-1);
     expect(stateC).toBeGreaterThan(continuation);
-    expect(skillMarkdown).toContain("this setup chat's visible history");
-    expect(skillMarkdown).toContain("re-resolve the same readable sources and enter Phase 2");
-    expect(skillMarkdown).toContain("applies only to the Context Tree checkout");
-    expect(skillMarkdown).toMatch(/Do not\s+use `git ls-tree`, `git show`, `git grep`/);
-    expect(skillMarkdown).toContain("not a leftover checkout");
+    expect(skillMarkdown).toContain("including from a new process, agent, or chat");
+    expect(skillMarkdown).toContain("The old Chat transcript and private local cache are");
+    expect(skillMarkdown).toContain("first-tree-seed-progress:v1");
+    expect(skillMarkdown).toContain("first-tree tree seed --team");
+    expect(durableProgressMarkdown).toContain("setup-chat history and private local caches");
+    expect(durableProgressMarkdown).toContain("git cat-file -e <commit>^{commit}");
+    expect(durableProgressMarkdown).toContain("Do not write an unchecked Phase 2 item");
+    expect(durableProgressMarkdown).toContain("binding change");
+  });
+
+  it("publishes the portable Seed skill as version 0.4.0", () => {
+    expect(skillVersion).toBe("0.4.0");
+    expect(skillMarkdown).toContain("version: 0.4.0");
+    expect(skillMarkdown).toContain('first-tree: ">=0.5.16 <0.6.0"');
+    expect(openAiMetadata).toContain("$first-tree-seed");
+    expect(openAiMetadata).toContain("merged durable progress");
+    expect(openAiMetadata).not.toContain("in this chat");
   });
 
   it("configures PR-only GitHub branch rules after creating a GitHub Context Repo", () => {
@@ -102,7 +120,7 @@ describe("first-tree-seed floor invariants", () => {
     expect(skillMarkdown).toMatch(/Relay only a recovery URL returned/);
   });
 
-  it("ships behavioral gates for chat-supplied sources and same-chat Phase 2 continuation", () => {
+  it("ships behavioral gates for managed sources and portable durable recovery", () => {
     const chatSource = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "empty-manifest-chat-source");
     expect(chatSource).toMatchObject({
       expected: { action: "propose_phase1_skeleton", requireSourceRead: true, requireWorktree: false },
@@ -124,11 +142,34 @@ describe("first-tree-seed floor invariants", () => {
       },
     });
 
-    const continuation = FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "same-chat-phase2-continuation");
+    const continuation = FIRST_TREE_SEED_GATE_CASES.find(
+      (evalCase) => evalCase.id === "durable-phase2-new-process-continuation",
+    );
     expect(continuation).toMatchObject({
       expected: { action: "continue_phase2", requireSourceRead: true, requireWorktree: true },
-      fixture: { sourceRepoState: "bare-readable", treeState: "phase1-approved" },
+      fixture: {
+        invocationMode: "portable",
+        progressState: "matching-phase1",
+        seedAuthority: "admin",
+        sourceRepoState: "bare-readable",
+        treeState: "phase1-approved",
+      },
     });
     expect(continuation?.forbidden.actions).toContain("refuse_nonempty_tree");
+
+    expect(
+      FIRST_TREE_SEED_GATE_CASES.find((evalCase) => evalCase.id === "portable-ordinary-member-needs-admin"),
+    ).toMatchObject({
+      expected: { action: "report_needs_admin", requireSourceRead: false, requireWorktree: false },
+      fixture: { invocationMode: "portable", seedAuthority: "member", treeState: "empty" },
+    });
+    for (const id of [
+      "phase1-shaped-tree-without-durable-progress-refuses",
+      "durable-phase2-source-identity-mismatch-refuses",
+      "durable-phase2-unreadable-source-commit-refuses",
+      "durable-phase2-binding-mismatch-refuses",
+    ]) {
+      expect(FIRST_TREE_SEED_GATE_CASES.some((evalCase) => evalCase.id === id)).toBe(true);
+    }
   });
 });

@@ -125,7 +125,14 @@ describe("CLI command registration", () => {
     // `verify` survived the 2026-06 cleanup, `tree` is the narrow hierarchy
     // browser added back for agents and scripted consumers, and `init` was
     // reintroduced in 2026-07 as the agent/local-`gh` tree-repo creation path.
-    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "read", "tree", "verify"]);
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual([
+      "init",
+      "read",
+      "seed",
+      "tree",
+      "verify",
+      "write",
+    ]);
   });
 
   it("registers Context Tree set and review-config without changing the parent read options", () => {
@@ -168,6 +175,7 @@ describe("CLI command registration", () => {
     expect(optionNames(command(command(root, "org"), "context-tree"))).toEqual(["--agent"]);
     expect(optionNames(command(command(root, "tree"), "read"))).toEqual(["--snapshot", "--team"]);
     expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--no-pull", "--pattern"]);
+    expect(optionNames(command(command(root, "tree"), "write"))).toEqual(["--github-login", "--snapshot", "--team"]);
   });
 
   it("exposes help for the Context Tree browser command", () => {
@@ -190,5 +198,15 @@ describe("CLI command registration", () => {
     expect(help).toContain("Activate a strict task-scoped Context Tree read snapshot.");
     expect(help).toContain("--team <team-id>");
     expect(help).toContain("--snapshot <directory>");
+  });
+
+  it("exposes stateless help for clean source-backed Write preflight", () => {
+    const root = new Command();
+    registerTreeCommands(root);
+
+    const help = command(command(root, "tree"), "write").helpInformation();
+
+    expect(help).toContain("Preflight a clean source-backed Context Tree Write against one exact snapshot.");
+    expect(help).toContain("--github-login <login>");
   });
 });

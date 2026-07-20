@@ -5,6 +5,10 @@ import type { CommandResult } from "../../core/types.js";
 export type SeedTreeState = "empty" | "nonempty" | "phase1-approved" | "unbound";
 export type SeedSourceRepoState = "bare-readable" | "chat-local-readable" | "missing" | "real-first-tree-bare-readable";
 export type SeedChatHistoryState = "absent" | "approved-phase1";
+export type SeedInvocationMode = "managed" | "portable";
+export type SeedProgressState = "matching-phase1" | "no-marker" | "source-mismatch" | "unreadable-commit";
+export type SeedAuthorityState = "admin" | "member";
+export type SeedBindingState = "matching" | "different";
 export type SeedSourceForge = "github" | "gitlab";
 export type SeedSourceLocalBranchState = "fresh" | "stale";
 export type SeedExpectedAction =
@@ -13,14 +17,21 @@ export type SeedExpectedAction =
   | "report_missing_source"
   | "materialize_bare_worktree"
   | "create_tree_via_init"
+  | "report_needs_admin"
+  | "refuse_phase2_recovery"
   | "continue_phase2";
 
 export type FirstTreeSeedFixture = {
   chatHistoryState?: SeedChatHistoryState;
+  invocationMode?: SeedInvocationMode;
+  progressState?: SeedProgressState;
+  seedAuthority?: SeedAuthorityState;
+  seedBindingState?: SeedBindingState;
   sourceDeclaredRef?: string;
   sourceDefaultBranch?: string;
   sourceForge?: SeedSourceForge;
   sourceLocalBranchState?: SeedSourceLocalBranchState;
+  sourceAdvancesAfterPhase1?: boolean;
   sourceRepoState: SeedSourceRepoState;
   treeState: SeedTreeState;
 };
@@ -90,10 +101,14 @@ export type EvalMetrics = {
   githubGovernanceBootstrapObserved: boolean;
   githubGovernanceRecoveryObserved: boolean;
   githubAppRequirementObserved: boolean;
+  progressReadObserved: boolean;
   phase2ContinuationObserved: boolean;
   phase2LeafContentObserved: boolean;
   phase2RefusalObserved: boolean;
   runnerExitCode: number | null;
+  seedNeedsAdminObserved: boolean;
+  seedPreflightObserved: boolean;
+  seedPreflightSucceeded: boolean;
   seedSkillFileReadObserved: boolean;
   skeletonObserved: boolean;
   sourceEvidenceReadObserved: boolean;
@@ -107,6 +122,7 @@ export type EvalMetrics = {
   sourceWorktreeMaterializedObserved: boolean;
   treeInitObserved: boolean;
   treeInitWithContextTreeDirObserved: boolean;
+  treeStrictFetchObserved: boolean;
   workspaceManifestReadObserved: boolean;
   writeSkillFileReadObserved: boolean;
 };

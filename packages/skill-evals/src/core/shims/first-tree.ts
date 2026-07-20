@@ -14,6 +14,12 @@ export function createFirstTreeShim(
     recordedModelVerifyPath?: string;
     auditFixturePath?: string;
     reviewFixturePath?: string;
+    seedPreflight?: {
+      branch: string;
+      outcome: "bound" | "needs-admin" | "unbound";
+      repo?: string;
+      teamId: string;
+    };
   } = {},
 ): void {
   const tsxBin = join(paths.packageRoot, "node_modules", ".bin", "tsx");
@@ -45,6 +51,7 @@ const RECORDED_MODEL_VERIFY_HEAD = ${JSON.stringify(options.recordedModelVerifyH
 const RECORDED_MODEL_VERIFY_PATH = ${JSON.stringify(options.recordedModelVerifyPath ?? null)};
 const AUDIT_FIXTURE_PATH = ${JSON.stringify(options.auditFixturePath ?? null)};
 const REVIEW_FIXTURE_PATH = ${JSON.stringify(options.reviewFixturePath ?? null)};
+const SEED_PREFLIGHT = ${JSON.stringify(options.seedPreflight ?? null)};
 const BYO_READ_ORIGIN_PATH = ${JSON.stringify(join(paths.runRoot, "context-tree-origin.git"))};
 
 function preview(value) {
@@ -216,6 +223,62 @@ function runTreeRead(argv, phase) {
     shimmedByEval: true,
     snapshotPath,
     strictFetches: 1,
+    teamId,
+  });
+}
+
+function runTreeSeed(argv, phase) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    finish(
+      argv,
+      phase,
+      0,
+      "Usage: first-tree tree seed [options]\\n\\nPreflight Context Tree Seed authority and binding for one explicit Team.\\n\\nOptions:\\n  --team <team-id>       explicit First Tree Team id\\n  -h, --help             display help for command\\n",
+      "",
+      { seedPreflight: true, shimmedByEval: true },
+    );
+  }
+
+  const teamId = optionValueWithEquals(argv, "--team");
+  if (!teamId || teamId !== SEED_PREFLIGHT.teamId) {
+    finish(argv, phase, 2, "", "Explicit Team does not match this Seed eval fixture.\\n", {
+      seedPreflight: true,
+      shimmedByEval: true,
+      teamId,
+    });
+  }
+  if (SEED_PREFLIGHT.outcome === "needs-admin") {
+    const stderr =
+      JSON.stringify({
+        error: {
+          code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+          message:
+            "Context Tree Seed needs an active Admin of the selected Team. Ask a Team Admin to continue with the same Team id.",
+          status: "failed",
+        },
+        ok: false,
+      }) + "\\n";
+    finish(argv, phase, 3, "", stderr, {
+      seedNeedsAdmin: true,
+      seedPreflight: true,
+      shimmedByEval: true,
+      teamId,
+    });
+  }
+
+  const state =
+    SEED_PREFLIGHT.outcome === "bound"
+      ? {
+          binding: { branch: SEED_PREFLIGHT.branch, repo: SEED_PREFLIGHT.repo },
+          status: "bound",
+        }
+      : { branch: SEED_PREFLIGHT.branch, status: "unbound" };
+  const stdout = JSON.stringify({ data: { state, teamId }, ok: true }) + "\\n";
+  finish(argv, phase, 0, stdout, "", {
+    bindingBranch: SEED_PREFLIGHT.branch,
+    bindingRepository: SEED_PREFLIGHT.repo || null,
+    seedPreflight: true,
+    shimmedByEval: true,
     teamId,
   });
 }
@@ -469,7 +532,11 @@ if (argv[0] === "tree" && argv[1] === "init" && governanceEvalCaseId()) {
   runGovernanceTreeInit(argv, phase);
 }
 
-if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(argv[1] || "")) {
+if (argv[0] === "tree" && argv[1] === "seed" && SEED_PREFLIGHT) {
+  runTreeSeed(argv, phase);
+}
+
+if (argv[0] === "tree" && ["bind", "create", "init", "setup"].includes(argv[1] || "")) {
   const exitCode = 1;
   const stderr = "Blocked first-tree tree setup command in skill eval. No real tree setup side effect was attempted.\\n";
   process.stderr.write(stderr);

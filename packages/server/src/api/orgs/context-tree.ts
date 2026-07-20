@@ -4,6 +4,10 @@ import {
   type ContextTreeRecoveryAction,
   contextTreeActiveBindingSchema,
   contextTreeInstallationInfoResponseSchema,
+  contextTreeSeedPreflightRequestSchema,
+  contextTreeSeedPreflightResponseSchema,
+  contextTreeWritePreflightRequestSchema,
+  contextTreeWritePreflightResponseSchema,
   initializeContextTreeRequestSchema,
   initializeContextTreeResponseSchema,
   treeSetupKickoffSchema,
@@ -11,6 +15,10 @@ import {
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ConflictError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import {
+  ContextTreeWritePreflightError,
+  preflightContextTreeWriteAuthority,
+} from "../../services/context-review-task.js";
 import {
   ContextTreeRepoProvisionError,
   ensureInstallationOwnedContextTreeRepo,
@@ -66,6 +74,11 @@ jobs:
 const REPO_SUFFIX = "-context-tree";
 const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 const TREE_SETUP_TOPIC = "Set up shared context";
+const writePreflightRouteOptions = {
+  // `undefined` intentionally preserves @fastify/rate-limit's global shared
+  // bucket while exposing that policy to CodeQL's Fastify route model.
+  config: { rateLimit: undefined },
+};
 const TREE_SETUP_BOOTSTRAP = [
   "Let's build or finish our team's Context Tree.",
   "",
@@ -159,6 +172,67 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       }),
     );
   });
+
+  app.post<{ Params: { orgId: string }; Body: unknown }>("/seed-preflight", async (request, reply) => {
+    contextTreeSeedPreflightRequestSchema.parse(request.body ?? {});
+    const scope = await requireOrgMembership(request, app.db);
+    if (scope.role !== "admin") {
+      return reply.status(403).send({
+        error: "Context Tree Seed requires an active Team Admin.",
+        code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+      });
+    }
+
+    const state = await getOrgContextTreeSettingState(app.db, scope.organizationId);
+    if (state.kind === "invalid") {
+      return reply.status(409).send({
+        error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
+        code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
+      });
+    }
+
+    return reply.status(200).send(
+      contextTreeSeedPreflightResponseSchema.parse({
+        organizationId: scope.organizationId,
+        state:
+          state.kind === "bound"
+            ? { status: "bound", binding: state.binding }
+            : { status: "unbound", branch: state.branch },
+      }),
+    );
+  });
+
+  app.post<{ Params: { orgId: string }; Body: unknown }>(
+    "/write-preflight",
+    writePreflightRouteOptions,
+    async (request, reply) => {
+      const body = contextTreeWritePreflightRequestSchema.parse(request.body ?? {});
+      const scope = await requireOrgMembership(request, app.db);
+
+      try {
+        const authority = await preflightContextTreeWriteAuthority(app.db, {
+          organizationId: scope.organizationId,
+          requester: {
+            userId: scope.userId,
+            memberId: scope.memberId,
+            humanAgentUuid: scope.humanAgentId,
+          },
+          requesterGithubLogin: body.requesterGithubLogin,
+        });
+        return reply.status(200).send(
+          contextTreeWritePreflightResponseSchema.parse({
+            organizationId: scope.organizationId,
+            ...authority,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof ContextTreeWritePreflightError) {
+          return reply.status(error.statusCode).send({ error: error.message, code: error.code });
+        }
+        throw error;
+      }
+    },
+  );
 
   app.post<{ Params: { orgId: string }; Body: unknown }>("/initialize", async (request, reply) => {
     initializeContextTreeRequestSchema.parse(request.body ?? {});
@@ -364,11 +438,15 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       throw err;
     }
 
+    // Re-resolve the current DB-backed role after the remote repository and
+    // files exist. A revoked Admin must not commit the Team binding merely
+    // because the request started while they still had authority.
+    const finalScope = await requireOrgAdmin(request, app.db);
     let setting: ContextTreeActiveBinding;
     try {
-      setting = await putInitializedOrgContextTreeBinding(app.db, scope.organizationId, initializedBinding.data, {
+      setting = await putInitializedOrgContextTreeBinding(app.db, finalScope.organizationId, initializedBinding.data, {
         expectedUnboundBranch: existing.branch,
-        updatedBy: scope.userId,
+        updatedBy: finalScope.userId,
       });
     } catch (error) {
       if (error instanceof ConflictError) {

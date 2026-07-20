@@ -176,6 +176,15 @@ async function dispatch(app: App, admin: Admin, member: MemberContext, payload: 
   });
 }
 
+async function writePreflight(app: App, admin: Admin, member: MemberContext, requesterGithubLogin = "writer") {
+  return app.inject({
+    method: "POST",
+    url: `/api/v1/orgs/${admin.organizationId}/context-tree/write-preflight`,
+    headers: { authorization: `Bearer ${member.accessToken}` },
+    payload: { requesterGithubLogin },
+  });
+}
+
 function managedPullRequestPayload(
   options: {
     action?: "opened" | "synchronize" | "ready_for_review" | "reopened" | "edited";
@@ -283,6 +292,84 @@ async function waitForBlockedRequesterMembershipLock(
 
 describe("member Agent Review task dispatch", () => {
   const getApp = useTestApp();
+
+  it("preflights one explicit Team without creating task state", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    const chatsBefore = await app.db.select({ id: chats.id }).from(chats);
+    const messagesBefore = await app.db.select({ id: messages.id }).from(messages);
+    const deliveriesBefore = await app.db.select({ id: inboxEntries.id }).from(inboxEntries);
+
+    const response = await writePreflight(app, admin, requester);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      organizationId: admin.organizationId,
+      binding: { repo: "https://github.com/owner/context-tree.git", branch: "main" },
+      reviewerAgentUuid: reviewer.uuid,
+      requesterGithubLogin: "writer",
+    });
+    expect(await app.db.select({ id: chats.id }).from(chats)).toHaveLength(chatsBefore.length);
+    expect(await app.db.select({ id: messages.id }).from(messages)).toHaveLength(messagesBefore.length);
+    expect(await app.db.select({ id: inboxEntries.id }).from(inboxEntries)).toHaveLength(deliveriesBefore.length);
+  });
+
+  it("uses the Server current Reviewer at keyed dispatch instead of the preflight result", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const firstReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, firstReviewer.uuid);
+
+    const firstPreflight = await writePreflight(app, admin, requester);
+    expect(firstPreflight.statusCode).toBe(200);
+    expect(firstPreflight.json<{ reviewerAgentUuid: string }>().reviewerAgentUuid).toBe(firstReviewer.uuid);
+
+    const currentReviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, currentReviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json<DispatchResponse>().reviewerAgentUuid).toBe(currentReviewer.uuid);
+    const repeatedPreflight = await writePreflight(app, admin, requester);
+    expect(repeatedPreflight.json<{ reviewerAgentUuid: string }>().reviewerAgentUuid).toBe(currentReviewer.uuid);
+  });
+
+  it("fails preflight before persistence for the wrong Team, identity, or current review authority", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    const chatsBefore = await app.db.select({ id: chats.id }).from(chats);
+
+    const wrongTeam = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${randomUUID()}/context-tree/write-preflight`,
+      headers: { authorization: `Bearer ${requester.accessToken}` },
+      payload: { requesterGithubLogin: "writer" },
+    });
+    expect(wrongTeam.statusCode).toBe(403);
+
+    const wrongIdentity = await writePreflight(app, admin, requester, "impersonated-writer");
+    expect(wrongIdentity.statusCode).toBe(403);
+    expect(wrongIdentity.json()).toMatchObject({ code: "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_MISMATCH" });
+
+    await disableReview(app, admin, reviewer.uuid);
+    const disabled = await writePreflight(app, admin, requester);
+    expect(disabled.statusCode).toBe(409);
+    expect(disabled.json()).toMatchObject({ code: "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE" });
+
+    await configureReview(app, admin, reviewer.uuid);
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, reviewer.uuid));
+    const suspended = await writePreflight(app, admin, requester);
+    expect(suspended.statusCode).toBe(409);
+    expect(suspended.json()).toMatchObject({ code: "CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE" });
+    expect(await app.db.select({ id: chats.id }).from(chats)).toHaveLength(chatsBefore.length);
+  });
 
   it("creates one human-authored task for the configured private Reviewer without a GitHub App", async () => {
     const app = getApp();

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { assertCommandOk, runCommand, writeText } from "../../core/commands.js";
@@ -9,6 +9,7 @@ import type { RunPaths } from "../../core/types.js";
 import type { FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const SEED_SKILL_NAME = "first-tree-seed";
+export const SEED_EVAL_TEAM_ID = "team-seed-eval";
 
 export function sourceDefaultBranch(evalCase: FirstTreeSeedEvalCase): string {
   return evalCase.fixture.sourceDefaultBranch ?? "main";
@@ -27,6 +28,7 @@ function workspaceAgentsMarkdown(
   seedDescription: string,
   evalCase: FirstTreeSeedEvalCase,
 ): string {
+  const portable = evalCase.fixture.invocationMode === "portable";
   const sourceRepoPath = join(workspacePath, "source-repos", "source-repo");
   const sourceWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
   const chatSourcePath = join(workspacePath, "provided-source");
@@ -40,24 +42,29 @@ function workspaceAgentsMarkdown(
 # Resolve this raw declaration with the installed first-tree-seed protocol before materializing ${sourceWorktreePath}.
 # Do not pass the local branch name directly when the fetched remote-tracking branch exists.`
     : null;
+  const sourceLabel = portable ? "The explicit source" : "The manifest source `source-repo`";
   const sourceLine =
     evalCase.fixture.sourceRepoState === "missing"
-      ? `The manifest source \`source-repo\` is intentionally missing from \`${sourceRepoPath}\`.`
+      ? `${sourceLabel} is intentionally missing from \`${sourceRepoPath}\`.`
       : evalCase.fixture.sourceRepoState === "chat-local-readable"
         ? `The workspace manifest intentionally declares no sources. The user supplied the readable local Git checkout \`${chatSourcePath}\` in this setup chat; use it directly without requiring GitHub App installation or team-resource registration.`
         : evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
-          ? `The manifest source \`source-repo\` exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
-          : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`. Its forge is ${sourceForge}, its default branch is \`${sourceBranch}\`${sourceDeclaredRef ? `, and the runtime declaration pins \`ref=${sourceDeclaredRef}\`` : ""}.${sourceLocalBranchState === "stale" ? ` The local branch \`${sourceDeclaredRef ?? sourceBranch}\` is intentionally stale; the freshly fetched remote-tracking ref is current.` : ""}`;
-  const treeLine =
-    evalCase.fixture.treeState === "unbound"
+          ? `${sourceLabel} exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
+          : `${sourceLabel} exists as a bare clone at \`${sourceRepoPath}\`. Its forge is ${sourceForge}, its default branch is \`${sourceBranch}\`${sourceDeclaredRef ? `, and the runtime declaration pins \`ref=${sourceDeclaredRef}\`` : ""}.${sourceLocalBranchState === "stale" ? ` The local branch \`${sourceDeclaredRef ?? sourceBranch}\` is intentionally stale; the freshly fetched remote-tracking ref is current.` : ""}`;
+  const treeLine = portable
+    ? evalCase.fixture.treeState === "phase1-approved"
+      ? "The task-local Context Tree at `./context-tree` contains a merged Phase 1 skeleton. Its shape and any prior conversation are not continuation authority; only current explicit-Team admission plus the merged durable Seed marker and ledger can authorize Phase 2."
+      : "The task-local Context Tree at `./context-tree` is newly provisioned and empty. Use only the explicitly selected Team, Tree path, and source inputs supplied for this invocation."
+    : evalCase.fixture.treeState === "unbound"
       ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
       : evalCase.fixture.treeState === "empty"
         ? "The Context Tree at `./context-tree` is newly provisioned and empty."
         : evalCase.fixture.treeState === "phase1-approved"
           ? "The Context Tree at `./context-tree` has a Phase-1-shaped skeleton. Its shape alone does not prove that this chat owns the setup lifecycle; inspect the visible prior-turn transcript when one is provided."
           : "The Context Tree at `./context-tree` is already populated with durable domains.";
-  const contextTreeStateLine =
-    evalCase.fixture.treeState === "unbound"
+  const contextTreeStateLine = portable
+    ? "- Explicit task-local Context Tree: `./context-tree`"
+    : evalCase.fixture.treeState === "unbound"
       ? "- Context Tree: unbound (no `tree` field in the manifest; conventional path would be `./context-tree`)"
       : "- Context Tree: `./context-tree`";
   const chatHistoryLine =
@@ -66,6 +73,34 @@ function workspaceAgentsMarkdown(
       : evalCase.fixture.chatHistoryState === "absent"
         ? "- Visible prior-turn transcript: absent for this chat"
         : null;
+  const workspaceManifestLine = portable
+    ? "- Workspace manifest: absent by design; do not infer Team, Tree, or sources from managed/default/current state"
+    : "- Workspace manifest: `./.first-tree/workspace.json`";
+  const sourceStateLines = portable
+    ? `- Explicit selected Team: \`${SEED_EVAL_TEAM_ID}\`\n- Explicit source: \`./source-repos/source-repo\``
+    : "- Declared source: `source-repo`";
+  const portableAuthoritySection = portable
+    ? [
+        "## Portable Seed Authority Protocol",
+        "",
+        "This invocation is outside managed Workspace activation. Run",
+        `\`first-tree tree seed --team ${SEED_EVAL_TEAM_ID} --json\` before source or`,
+        "Tree work. Do not read Web/default/current Team state and do not fall back to",
+        "another Team. A stable Needs Admin result ends the attempt without mutation.",
+        "For a bound result, require its repository and branch to match the explicit",
+        "task-local Tree, then refresh that exact branch with:",
+        "",
+        "```bash",
+        "git -C " +
+          join(workspacePath, "context-tree") +
+          " fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main",
+        "```",
+        "",
+        "For Phase 2, inspect merged `.first-tree/progress.md` from that fetched",
+        "branch before using any source. Prior transcripts and private caches are not",
+        "continuation authority.",
+      ].join("\n")
+    : "";
 
   return `# First Tree Seed Eval Workspace
 
@@ -94,11 +129,11 @@ and member content are non-normal classes with narrower authority.
 
 ## Eval Workspace State
 
-- Workspace manifest: \`./.first-tree/workspace.json\`
+${workspaceManifestLine}
 ${contextTreeStateLine}
 ${chatHistoryLine ?? ""}
 - Sources root: \`./source-repos\`
-- Declared source: \`source-repo\`
+${sourceStateLines}
 - Tree state: ${evalCase.fixture.treeState}
 - Source state: ${evalCase.fixture.sourceRepoState}
 - Source forge: ${sourceForge}
@@ -108,6 +143,8 @@ ${sourceLocalBranchState === "stale" ? `- Local source branch state: \`${sourceL
 
 ${treeLine}
 ${sourceLine}
+
+${portableAuthoritySection}
 
 ${
   evalCase.fixture.sourceRepoState === "chat-local-readable"
@@ -164,6 +201,7 @@ function installSeedSkills(repoRoot: string, workspacePath: string, evalCase: Fi
 }
 
 function writeWorkspaceManifest(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): void {
+  if (evalCase.fixture.invocationMode === "portable") return;
   const sources = evalCase.fixture.sourceRepoState === "chat-local-readable" ? [] : ["source-repo"];
   const manifest =
     evalCase.fixture.treeState === "unbound"
@@ -294,6 +332,49 @@ function contextTreeMetadata(): string {
   )}\n`;
 }
 
+function portableSeedProgressMarkdown(sourceRepoPath: string | null, evalCase: FirstTreeSeedEvalCase): string {
+  if (sourceRepoPath === null) {
+    throw new Error(`${evalCase.id}: portable Phase 2 fixture requires a readable explicit source`);
+  }
+  const exactCommit = gitHead(sourceRepoPath, sourceRemoteRef(evalCase));
+  if (exactCommit === null) {
+    throw new Error(`${evalCase.id}: portable Phase 2 fixture source is missing ${sourceRemoteRef(evalCase)}`);
+  }
+  if (evalCase.fixture.progressState === "no-marker") {
+    return "# Progress\n\n- [x] An unrelated project milestone\n";
+  }
+
+  const sourceIdentity =
+    evalCase.fixture.progressState === "source-mismatch"
+      ? "github.com/example/other-source"
+      : `local:${realpathSync(sourceRepoPath)}`;
+  const recordedCommit =
+    evalCase.fixture.progressState === "unreadable-commit" ? "0".repeat(exactCommit.length) : exactCommit;
+  const ledger = JSON.stringify({
+    schemaVersion: 1,
+    teamId: SEED_EVAL_TEAM_ID,
+    sources: [{ identity: sourceIdentity, commit: recordedCommit }],
+    approvedTopLevels: ["product", "system"],
+  });
+  const fence = String.fromCharCode(96).repeat(3);
+  return [
+    "<!-- first-tree-seed-progress:v1 -->",
+    "",
+    "# First Tree Seed Progress",
+    "",
+    "- [x] Seed Phase 1 structure",
+    "",
+    "## Seed identity",
+    "",
+    "<!-- first-tree-seed-ledger:v1 -->",
+    "",
+    `${fence}json`,
+    ledger,
+    fence,
+    "",
+  ].join("\n");
+}
+
 function initGitRepo(repoPath: string, message: string, initialBranch = "main"): void {
   assertCommandOk(runCommand("git", ["init", `--initial-branch=${initialBranch}`], repoPath));
   assertCommandOk(runCommand("git", ["config", "user.email", "eval@example.invalid"], repoPath));
@@ -303,7 +384,11 @@ function initGitRepo(repoPath: string, message: string, initialBranch = "main"):
   assertCommandOk(runCommand("git", ["commit", "-m", message], repoPath));
 }
 
-function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): string {
+function writeContextTreeFixture(
+  paths: RunPaths,
+  evalCase: FirstTreeSeedEvalCase,
+  sourceRepoPath: string | null,
+): string {
   const contextTreePath = join(paths.workspacePath, "context-tree");
   if (evalCase.fixture.treeState === "unbound") {
     // State A: the workspace is genuinely unbound. Do NOT provision a
@@ -325,6 +410,12 @@ function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCas
     writeText(join(contextTreePath, "system", "cloud", "NODE.md"), approvedSkeletonNodeMarkdown("Cloud"));
     writeText(join(contextTreePath, "product", "NODE.md"), approvedSkeletonNodeMarkdown("Product"));
     writeText(join(contextTreePath, "product", "onboarding", "NODE.md"), approvedSkeletonNodeMarkdown("Onboarding"));
+    if (evalCase.fixture.invocationMode === "portable") {
+      writeText(
+        join(contextTreePath, ".first-tree", "progress.md"),
+        portableSeedProgressMarkdown(sourceRepoPath, evalCase),
+      );
+    }
   }
 
   initGitRepo(
@@ -335,7 +426,7 @@ function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCas
         ? "docs: merge approved phase one skeleton"
         : "chore: seed populated context tree",
   );
-  if (evalCase.fixture.treeState === "phase1-approved") {
+  if (evalCase.fixture.treeState === "phase1-approved" || evalCase.fixture.invocationMode === "portable") {
     const treeOriginPath = join(paths.runRoot, "context-tree-origin.git");
     assertCommandOk(runCommand("git", ["clone", "--bare", contextTreePath, treeOriginPath], paths.workspacePath));
     assertCommandOk(runCommand("git", ["remote", "add", "origin", treeOriginPath], contextTreePath));
@@ -417,6 +508,25 @@ function advanceSourceOriginFixture(sourceOriginPath: string, evalCase: FirstTre
   );
   assertCommandOk(runCommand("git", ["add", "docs/current-remote.md"], sourceOriginPath));
   assertCommandOk(runCommand("git", ["commit", "-m", "docs: advance remote source fixture"], sourceOriginPath));
+}
+
+function advancePortableSourceAfterPhase1(
+  paths: RunPaths,
+  evalCase: FirstTreeSeedEvalCase,
+  sourceRepoPath: string | null,
+): void {
+  if (!evalCase.fixture.sourceAdvancesAfterPhase1) return;
+  if (sourceRepoPath === null || evalCase.fixture.sourceRepoState !== "bare-readable") {
+    throw new Error([evalCase.id, "advancing a portable Phase 1 source requires the bare source fixture"].join(": "));
+  }
+  const sourceOriginPath = join(paths.runRoot, "source-origin");
+  writeText(
+    join(sourceOriginPath, "docs", "after-phase1.md"),
+    "# After Phase 1\n\nThe source default branch advanced after the Seed structure merged.\n",
+  );
+  assertCommandOk(runCommand("git", ["add", "docs/after-phase1.md"], sourceOriginPath));
+  assertCommandOk(runCommand("git", ["commit", "-m", "docs: advance source after seed phase one"], sourceOriginPath));
+  assertCommandOk(runCommand("git", ["fetch", "origin"], sourceRepoPath));
 }
 
 function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): string | null {
@@ -506,14 +616,22 @@ export function setupFixture(evalCase: FirstTreeSeedEvalCase, paths: RunPaths, r
   installSeedSkills(paths.repoRoot, paths.workspacePath, evalCase);
   writeWorkspaceManifest(paths, evalCase);
   writeChatHistoryFixture(paths, evalCase);
-  const contextTreePath = writeContextTreeFixture(paths, evalCase);
   const sourceRepoPath = writeBareSourceFixture(paths, evalCase);
+  const seedRecordedSourceCommit =
+    evalCase.fixture.invocationMode === "portable" &&
+    evalCase.fixture.treeState === "phase1-approved" &&
+    sourceRepoPath !== null
+      ? gitHead(sourceRepoPath, sourceRemoteRef(evalCase))
+      : null;
+  const contextTreePath = writeContextTreeFixture(paths, evalCase, sourceRepoPath);
+  advancePortableSourceAfterPhase1(paths, evalCase, sourceRepoPath);
   mkdirSync(join(paths.workspacePath, "worktrees"), { recursive: true });
 
   appendEvent(paths.eventsPath, {
     caseId: evalCase.id,
     contextTreeHead: gitHead(contextTreePath),
     contextTreePath,
+    seedRecordedSourceCommit,
     sourceRepoHead:
       sourceRepoPath === null
         ? null
@@ -617,6 +735,14 @@ function validateTreeEmpty(
     return true;
   }
   if (evalCase.fixture.treeState === "unbound") return validateTreeUnbound(paths, contextTreePath, errors);
+  if (evalCase.fixture.invocationMode === "portable") {
+    const localHead = gitHead(contextTreePath);
+    const remoteHead = gitHead(contextTreePath, "refs/remotes/origin/main");
+    if (localHead === null || remoteHead !== localHead) {
+      errors.push("portable tree fixture must expose the current binding branch through origin/main.");
+      return false;
+    }
+  }
   const forbiddenEntries = readdirSync(contextTreePath).filter((entry) => {
     if (entry === ".git" || entry === ".first-tree" || entry === ".github") return false;
     return !entry.startsWith(".");
@@ -643,10 +769,13 @@ export function validateFixture(
     evalCase.fixture.treeState === "unbound"
       ? [manifestPath]
       : [
-          manifestPath,
+          ...(evalCase.fixture.invocationMode === "portable" ? [] : [manifestPath]),
           join(contextTreePath, ".first-tree", "VERSION"),
           join(contextTreePath, ".first-tree", "tree.json"),
         ];
+  if (evalCase.fixture.invocationMode === "portable" && evalCase.fixture.treeState === "phase1-approved") {
+    requiredFiles.push(join(contextTreePath, ".first-tree", "progress.md"));
+  }
   if (evalCase.fixture.chatHistoryState === "approved-phase1") {
     requiredFiles.push(join(paths.workspacePath, ".first-tree-eval", "chat-history.md"));
   }
@@ -655,6 +784,9 @@ export function validateFixture(
     errors.push(`missing required file: ${missing}`);
   }
   const chatHistoryPath = join(paths.workspacePath, ".first-tree-eval", "chat-history.md");
+  if (evalCase.fixture.invocationMode === "portable" && existsSync(manifestPath)) {
+    errors.push(`portable fixture must not create a workspace manifest: ${manifestPath}`);
+  }
   if (evalCase.fixture.chatHistoryState === "absent" && existsSync(chatHistoryPath)) {
     errors.push(`chat history should be absent but exists: ${chatHistoryPath}`);
   }

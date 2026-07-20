@@ -22,11 +22,45 @@ import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "../types.js";
 
 function findCase(id: string): FirstTreeSeedEvalCase {
-  const evalCase = [...FIRST_TREE_SEED_GATE_CASES, ...FIRST_TREE_SEED_PERIODIC_CASES].find(
-    (candidate) => candidate.id === id,
-  );
-  if (!evalCase) throw new Error(`Missing test case ${id}`);
-  return evalCase;
+  const cases = [...FIRST_TREE_SEED_GATE_CASES, ...FIRST_TREE_SEED_PERIODIC_CASES];
+  const evalCase = cases.find((candidate) => candidate.id === id);
+  if (evalCase) return evalCase;
+
+  // Parser-hardening tests below predate portable Seed and intentionally keep
+  // exercising the legacy transcript detector in isolation. These local
+  // compatibility cases are not part of the shipped eval suite.
+  if (id === "same-chat-phase2-continuation") {
+    const durable = cases.find((candidate) => candidate.id === "durable-phase2-new-process-continuation");
+    if (!durable) throw new Error("Missing durable Phase 2 test case");
+    return {
+      ...durable,
+      expected: { ...durable.expected, requireChatHistoryRead: true },
+      fixture: {
+        chatHistoryState: "approved-phase1",
+        sourceRepoState: "bare-readable",
+        treeState: "phase1-approved",
+      },
+      forbidden: {
+        ...durable.forbidden,
+        actions: durable.forbidden.actions.filter((action) => action !== "require_chat_history"),
+      },
+      id,
+    };
+  }
+  if (id === "phase1-shaped-tree-without-same-chat-history-refuses") {
+    const durable = cases.find((candidate) => candidate.id === "phase1-shaped-tree-without-durable-progress-refuses");
+    if (!durable) throw new Error("Missing durable Phase 2 refusal test case");
+    return {
+      ...durable,
+      fixture: {
+        chatHistoryState: "absent",
+        sourceRepoState: "bare-readable",
+        treeState: "phase1-approved",
+      },
+      id,
+    };
+  }
+  throw new Error(`Missing test case ${id}`);
 }
 
 function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
@@ -45,10 +79,14 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     githubGovernanceBootstrapObserved: false,
     githubGovernanceRecoveryObserved: false,
     githubAppRequirementObserved: false,
+    progressReadObserved: true,
     phase2ContinuationObserved: false,
     phase2LeafContentObserved: false,
     phase2RefusalObserved: false,
     runnerExitCode: 0,
+    seedNeedsAdminObserved: false,
+    seedPreflightObserved: true,
+    seedPreflightSucceeded: true,
     seedSkillFileReadObserved: true,
     skeletonObserved: true,
     sourceEvidenceReadObserved: true,
@@ -58,6 +96,7 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     sourceWorktreeMaterializedObserved: true,
     treeInitObserved: false,
     treeInitWithContextTreeDirObserved: false,
+    treeStrictFetchObserved: true,
     workspaceManifestReadObserved: true,
     writeSkillFileReadObserved: false,
     ...overrides,
@@ -139,6 +178,89 @@ describe("first-tree-seed grader", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("passes durable Phase 2 recovery without managed or transcript state", () => {
+    expect(
+      casePassed(
+        findCase("durable-phase2-new-process-continuation"),
+        baseMetrics({
+          chatHistoryReadObserved: false,
+          finalResponse: "Durable recovery is valid, so I will continue into Phase 2 leaf drafting.",
+          phase2ContinuationObserved: true,
+          phase2RefusalObserved: false,
+          skeletonObserved: false,
+          workspaceManifestReadObserved: false,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("passes stable portable Needs Admin without Tree or source access", () => {
+    expect(
+      casePassed(
+        findCase("portable-ordinary-member-needs-admin"),
+        baseMetrics({
+          chatHistoryReadObserved: false,
+          finalResponse: "Context Tree Seed for team-seed-eval Needs Admin; ask an active Team Admin to continue.",
+          progressReadObserved: false,
+          seedNeedsAdminObserved: true,
+          seedPreflightSucceeded: false,
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
+          sourceWorktreeCreated: false,
+          sourceWorktreeMaterializedObserved: false,
+          treeStrictFetchObserved: false,
+          workspaceManifestReadObserved: false,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "durable-phase2-source-identity-mismatch-refuses",
+    "durable-phase2-unreadable-source-commit-refuses",
+  ])("passes fail-closed durable recovery for %s", (caseId) => {
+    expect(
+      casePassed(
+        findCase(caseId),
+        baseMetrics({
+          chatHistoryReadObserved: false,
+          finalResponse: "Phase 2 cannot continue because the durable source identity or exact commit is invalid.",
+          phase2ContinuationObserved: false,
+          phase2RefusalObserved: true,
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
+          sourceWorktreeCreated: false,
+          sourceWorktreeMaterializedObserved: false,
+          workspaceManifestReadObserved: false,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails closed before progress when the current binding changed", () => {
+    expect(
+      casePassed(
+        findCase("durable-phase2-binding-mismatch-refuses"),
+        baseMetrics({
+          chatHistoryReadObserved: false,
+          finalResponse: "Phase 2 cannot continue because the current binding mismatches this Tree.",
+          phase2ContinuationObserved: false,
+          phase2RefusalObserved: true,
+          progressReadObserved: false,
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
+          sourceWorktreeCreated: false,
+          sourceWorktreeMaterializedObserved: false,
+          treeStrictFetchObserved: false,
+          workspaceManifestReadObserved: false,
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("requires a positive Phase 2 continuation and does not misread no-App prose as an App requirement", () => {
@@ -827,6 +949,36 @@ describe("first-tree-seed grader", () => {
       expect(metrics.phase2RefusalObserved).toBe(true);
       expect(metrics.phase2ContinuationObserved).toBe(false);
       expect(metrics.forbiddenActionHits).not.toContain("continue_phase2");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("classifies a failed-closed Phase 2 recovery as a refusal", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-phase2-failed-closed-refusal-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: "Phase 2 recovery failed closed because the recorded exact source commit is unreadable. No newer source head was substituted.",
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("durable-phase2-unreadable-source-commit-refuses"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.phase2RefusalObserved).toBe(true);
+      expect(metrics.phase2ContinuationObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -1581,6 +1733,129 @@ describe("first-tree-seed grader", () => {
 
       expect(metrics.sourceWorktreeCreated).toBe(true);
       expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("credits a standalone durable-progress read from the clean detached exact Tree worktree", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-detached-progress-"));
+    const contextTree = join(tempRoot, "context-tree");
+    const recoveryPath = join(tempRoot, "worktrees", "seed-tree-recovery");
+    try {
+      mkdirSync(join(contextTree, ".first-tree"), { recursive: true });
+      execFileSync("git", ["init", "-b", "main"], { cwd: contextTree });
+      execFileSync("git", ["config", "user.email", "eval@example.com"], { cwd: contextTree });
+      execFileSync("git", ["config", "user.name", "Eval"], { cwd: contextTree });
+      const progress = "<!-- first-tree-seed-progress:v1 -->\n- [x] Seed Phase 1 structure\n";
+      writeFileSync(join(contextTree, ".first-tree", "progress.md"), progress, "utf8");
+      execFileSync("git", ["add", ".first-tree/progress.md"], { cwd: contextTree });
+      execFileSync("git", ["commit", "-m", "phase 1"], { cwd: contextTree });
+      const contextTreeHead = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: contextTree,
+        encoding: "utf8",
+      }).trim();
+      mkdirSync(join(tempRoot, "worktrees"), { recursive: true });
+      execFileSync("git", ["worktree", "add", "--detach", recoveryPath, contextTreeHead], { cwd: contextTree });
+
+      const metrics = deriveMetrics(
+        [
+          { contextTreeHead, type: "fixture_setup_finished" },
+          {
+            event: {
+              aggregated_output: progress,
+              command: "cat worktrees/seed-tree-recovery/.first-tree/progress.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("durable-phase2-new-process-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        contextTree,
+      );
+
+      expect(metrics.progressReadObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit durable progress read from the mutable primary Tree checkout", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-mutable-progress-"));
+    const contextTree = join(tempRoot, "context-tree");
+    try {
+      mkdirSync(join(contextTree, ".first-tree"), { recursive: true });
+      execFileSync("git", ["init", "-b", "main"], { cwd: contextTree });
+      execFileSync("git", ["config", "user.email", "eval@example.com"], { cwd: contextTree });
+      execFileSync("git", ["config", "user.name", "Eval"], { cwd: contextTree });
+      const progress = "<!-- first-tree-seed-progress:v1 -->\n- [x] Seed Phase 1 structure\n";
+      writeFileSync(join(contextTree, ".first-tree", "progress.md"), progress, "utf8");
+      execFileSync("git", ["add", ".first-tree/progress.md"], { cwd: contextTree });
+      execFileSync("git", ["commit", "-m", "phase 1"], { cwd: contextTree });
+      const contextTreeHead = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: contextTree,
+        encoding: "utf8",
+      }).trim();
+
+      const metrics = deriveMetrics(
+        [
+          { contextTreeHead, type: "fixture_setup_finished" },
+          {
+            event: {
+              aggregated_output: progress,
+              command: "cat context-tree/.first-tree/progress.md",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("durable-phase2-new-process-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        contextTree,
+      );
+
+      expect(metrics.progressReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not report mutation when Phase 2 materializes the recorded commit after the source advances", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-recorded-source-worktree-"));
+    const sourceOrigin = join(tempRoot, "source-origin");
+    const sourceRepo = join(tempRoot, "source-repos", "source-repo");
+    try {
+      const seedRecordedSourceCommit = createManagedSourceFixture(tempRoot);
+      writeFileSync(join(sourceOrigin, "newer.md"), "newer source head\n", "utf8");
+      execFileSync("git", ["add", "newer.md"], { cwd: sourceOrigin });
+      execFileSync("git", ["commit", "-m", "advance source"], { cwd: sourceOrigin });
+      execFileSync("git", ["fetch", "origin"], { cwd: sourceRepo });
+      const sourceRepoHead = execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], {
+        cwd: sourceRepo,
+        encoding: "utf8",
+      }).trim();
+
+      const metrics = deriveMetrics(
+        [{ seedRecordedSourceCommit, sourceRepoHead, type: "fixture_setup_finished" }],
+        findCase("durable-phase2-new-process-continuation"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(sourceRepoHead).not.toBe(seedRecordedSourceCommit);
+      expect(metrics.sourceWorktreeMaterializedObserved).toBe(true);
+      expect(metrics.sourceRepoChanged).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -2565,6 +2840,36 @@ describe("first-tree-seed grader", () => {
       expect(metrics.sourceEvidenceReadObserved).toBe(false);
       expect(metrics.directBareSourceContentReadObserved).toBe(true);
       expect(metrics.forbiddenActionHits).toContain("direct_bare_source_read");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not classify bare-repository identity metadata as source content", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-bare-identity-metadata-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "true\n/fixture/source-repos/source-repo\n",
+              command:
+                "git -C source-repos/source-repo rev-parse --is-bare-repository && git -C source-repos/source-repo rev-parse --show-toplevel 2>/dev/null || (cd source-repos/source-repo && pwd -P)",
+              exit_code: 0,
+              status: "completed",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("durable-phase2-source-identity-mismatch-refuses"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.directBareSourceContentReadObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

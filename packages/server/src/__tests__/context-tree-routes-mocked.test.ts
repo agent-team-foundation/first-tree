@@ -60,6 +60,17 @@ async function setupRoute() {
     }
   }
 
+  class ContextTreeWritePreflightError extends Error {
+    constructor(
+      public readonly code: string,
+      public readonly statusCode: 403 | 409,
+      message: string,
+    ) {
+      super(message);
+      this.name = "ContextTreeWritePreflightError";
+    }
+  }
+
   const requireOrgAdmin = vi.fn().mockResolvedValue(scope);
   const requireOrgMembership = vi.fn().mockResolvedValue(scope);
   const findInstallationByOrg = vi.fn().mockResolvedValue(installation);
@@ -76,11 +87,20 @@ async function setupRoute() {
   const getOrgContextTreeSettingState = vi.fn().mockResolvedValue({ kind: "unbound", branch: "main" });
   const putInitializedOrgContextTreeBinding = vi.fn().mockResolvedValue({ repo: repo.cloneUrl, branch: "main" });
   const getOrganization = vi.fn().mockResolvedValue({ id: scope.organizationId, name: "Acme", displayName: "Acme" });
+  const preflightContextTreeWriteAuthority = vi.fn().mockResolvedValue({
+    binding: { repo: repo.cloneUrl, branch: "main" },
+    reviewerAgentUuid: "reviewer-current",
+    requesterGithubLogin: "writer",
+  });
 
   vi.doMock("../scope/require-org.js", () => ({ requireOrgAdmin, requireOrgMembership }));
   vi.doMock("../services/context-tree-repo-provisioner.js", () => ({
     ContextTreeRepoProvisionError,
     ensureInstallationOwnedContextTreeRepo,
+  }));
+  vi.doMock("../services/context-review-task.js", () => ({
+    ContextTreeWritePreflightError,
+    preflightContextTreeWriteAuthority,
   }));
   vi.doMock("../services/github-app.js", () => ({
     GithubAppApiError,
@@ -105,6 +125,14 @@ async function setupRoute() {
       secrets: { encryptionKey: "test-key" },
     },
   });
+  let writePreflightDeclaresInheritedRateLimit = false;
+  app.addHook("onRoute", (routeOptions) => {
+    if (routeOptions.url === "/write-preflight") {
+      const { config } = routeOptions;
+      writePreflightDeclaresInheritedRateLimit =
+        config !== undefined && Reflect.has(config, "rateLimit") && Reflect.get(config, "rateLimit") === undefined;
+    }
+  });
   await app.register(orgContextTreeRoutes);
   await app.ready();
 
@@ -113,7 +141,13 @@ async function setupRoute() {
     scope,
     installation,
     repo,
-    classes: { ContextTreeRepoProvisionError, GithubAppApiError, GithubUserTokenError },
+    writePreflightDeclaresInheritedRateLimit,
+    classes: {
+      ContextTreeRepoProvisionError,
+      ContextTreeWritePreflightError,
+      GithubAppApiError,
+      GithubUserTokenError,
+    },
     mocks: {
       requireOrgAdmin,
       requireOrgMembership,
@@ -127,6 +161,7 @@ async function setupRoute() {
       getOrgContextTreeSettingState,
       putInitializedOrgContextTreeBinding,
       getOrganization,
+      preflightContextTreeWriteAuthority,
     },
   };
 }
@@ -140,6 +175,136 @@ describe("org context tree routes with mocked service edges", () => {
   async function initialize(ctx: RouteMocks) {
     return ctx.app.inject({ method: "POST", url: "/initialize", payload: {} });
   }
+
+  it("declares the inherited global rate limit for Write preflight", async () => {
+    const ctx = await setupRoute();
+
+    expect(ctx.writePreflightDeclaresInheritedRateLimit).toBe(true);
+  });
+
+  it("passes only the authenticated explicit Team tuple into Write preflight", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/write-preflight",
+      payload: { requesterGithubLogin: "writer" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(ctx.mocks.preflightContextTreeWriteAuthority).toHaveBeenCalledWith(ctx.app.db, {
+      organizationId: ctx.scope.organizationId,
+      requester: {
+        userId: ctx.scope.userId,
+        memberId: ctx.scope.memberId,
+        humanAgentUuid: ctx.scope.humanAgentId,
+      },
+      requesterGithubLogin: "writer",
+    });
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      binding: { repo: ctx.repo.cloneUrl, branch: "main" },
+      reviewerAgentUuid: "reviewer-current",
+      requesterGithubLogin: "writer",
+    });
+  });
+
+  it("preserves typed Write preflight failure state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.preflightContextTreeWriteAuthority.mockRejectedValueOnce(
+      new ctx.classes.ContextTreeWritePreflightError(
+        "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+        409,
+        "Agent Review is unavailable.",
+      ),
+    );
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/write-preflight",
+      payload: { requesterGithubLogin: "writer" },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: "Agent Review is unavailable.",
+      code: "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+    });
+  });
+
+  it("returns the explicit Admin Team's current unbound Seed state without mutation", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      state: { status: "unbound", branch: "main" },
+    });
+    expect(ctx.mocks.requireOrgMembership).toHaveBeenCalledTimes(1);
+    expect(ctx.mocks.getOrgContextTreeSettingState).toHaveBeenCalledWith(ctx.app.db, ctx.scope.organizationId);
+    expect(ctx.mocks.ensureInstallationOwnedContextTreeRepo).not.toHaveBeenCalled();
+    expect(ctx.mocks.putInitializedOrgContextTreeBinding).not.toHaveBeenCalled();
+  });
+
+  it("returns Server current bound state for an Admin Seed retry", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getOrgContextTreeSettingState.mockResolvedValueOnce({
+      kind: "bound",
+      binding: { repo: ctx.repo.cloneUrl, branch: "release" },
+    });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      organizationId: ctx.scope.organizationId,
+      state: { status: "bound", binding: { repo: ctx.repo.cloneUrl, branch: "release" } },
+    });
+  });
+
+  it("returns stable Needs Admin for an active ordinary member before reading binding state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.requireOrgMembership.mockResolvedValueOnce({ ...ctx.scope, role: "member" });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({
+      error: "Context Tree Seed requires an active Team Admin.",
+      code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+    });
+    expect(ctx.mocks.getOrgContextTreeSettingState).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on invalid historical Seed binding state", async () => {
+    const ctx = await setupRoute();
+    ctx.mocks.getOrgContextTreeSettingState.mockResolvedValueOnce({ kind: "invalid", issues: [] });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/seed-preflight", payload: {} });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: "The Team's Context Tree binding contains invalid historical data and must be repaired.",
+      code: "CONTEXT_TREE_SEED_CONFIGURATION_INVALID",
+    });
+  });
+
+  it("rejects caller-selected Seed authority fields", async () => {
+    const ctx = await setupRoute();
+
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/seed-preflight",
+      payload: { role: "admin", binding: null },
+    });
+
+    // The production app maps ZodError to 400; this route-only Fastify harness
+    // intentionally omits the global error handler, so it surfaces as 500 here.
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(ctx.mocks.requireOrgMembership).not.toHaveBeenCalled();
+  });
 
   it("returns no_installation when minting unexpectedly succeeds without an installation row", async () => {
     const ctx = await setupRoute();

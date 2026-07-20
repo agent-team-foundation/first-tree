@@ -38,9 +38,23 @@ describe("first-tree-write Agent Review contract floor", () => {
     }
   });
 
+  it("keeps clean BYO Write bound to explicit Team, exact snapshot, and existing keyed authority", () => {
+    expect(skill).toContain('first-tree --json tree write --team "<team-id>"');
+    expect(skill).toContain('--snapshot "<exact-snapshot>" --github-login "<gh-login>"');
+    expect(skill).toContain("Do not require or reconstruct a Workspace manifest");
+    expect(skill).toContain("separate task worktree and branch from the returned exact base commit");
+    expect(skill).toContain("immediately before the first push");
+    expect(skill).toContain("observability only, never local routing");
+    expect(skill).toContain("keyed dispatch must resolve the Server current Reviewer");
+    expect(skill).toContain("required explicit");
+    expect(skill).toContain('`--org "<team-id>"`');
+    expect(skill).toContain("Once a PR exists, never");
+    expect(skill).toContain("same keyed handoff for that PR");
+  });
+
   it("keeps version metadata and the standalone VERSION file aligned", () => {
     const version = readFileSync(join(skillPath, "VERSION"), "utf8").trim();
-    expect(version).toBe("0.10.0");
+    expect(version).toBe("0.11.0");
     expect(skill).toContain(`version: ${version}`);
     expect(skill.split("\n").length).toBeLessThanOrEqual(500);
   });

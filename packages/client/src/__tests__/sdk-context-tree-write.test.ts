@@ -240,3 +240,89 @@ describe("FirstTreeHubSDK.setAgentContextTreeConfig", () => {
     ]);
   });
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("FirstTreeHubSDK.preflightMemberContextTreeWrite", () => {
+  it("uses only the explicit Team member route and returns Server current authority", async () => {
+    const authority = {
+      organizationId: "team /?#",
+      binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
+      reviewerAgentUuid: "reviewer-current",
+      requesterGithubLogin: "Writer",
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (_input, _init) =>
+      Promise.resolve(
+        new Response(JSON.stringify(authority), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: SERVER_URL,
+      getAccessToken: async () => "member-access-token",
+    });
+
+    await expect(
+      sdk.preflightMemberContextTreeWrite("team /?#", { requesterGithubLogin: " Writer " }, { retry: false }),
+    ).resolves.toEqual(authority);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe(`${SERVER_URL}/api/v1/orgs/team%20%2F%3F%23/context-tree/write-preflight`);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ requesterGithubLogin: "Writer" });
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer member-access-token");
+    expect(headers.has(AGENT_SELECTOR_HEADER)).toBe(false);
+    expect(headers.has(AGENT_RUNTIME_SESSION_HEADER)).toBe(false);
+  });
+
+  it("rejects caller-selected Reviewer authority before transport", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: SERVER_URL,
+      getAccessToken: async () => "member-access-token",
+    });
+
+    await expect(
+      sdk.preflightMemberContextTreeWrite(
+        "team-a",
+        { requesterGithubLogin: "writer", reviewerAgentUuid: "caller-selected" } as never,
+        { retry: false },
+      ),
+    ).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not hide a transport failure behind a second authority check when retries are disabled", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ error: "temporarily unavailable" }, 503))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          organizationId: "team-a",
+          binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
+          reviewerAgentUuid: "reviewer-current",
+          requesterGithubLogin: "writer",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: SERVER_URL,
+      getAccessToken: async () => "member-access-token",
+    });
+
+    await expect(
+      sdk.preflightMemberContextTreeWrite("team-a", { requesterGithubLogin: "writer" }, { retry: false }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

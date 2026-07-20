@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { appendEvent, readEvents } from "../../core/events.js";
 import { deriveRunObservability } from "../../core/observability.js";
 import { createRunPaths } from "../../core/paths.js";
@@ -6,7 +7,7 @@ import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
 import { createFirstTreeStagingShim } from "../../core/shims/first-tree-staging.js";
 import { createGhShim } from "../../core/shims/gh.js";
-import { setupFixture, validateFixture } from "./fixture.js";
+import { SEED_EVAL_TEAM_ID, setupFixture, validateFixture } from "./fixture.js";
 import { casePassed, deriveMetrics, driftNote } from "./grader.js";
 import { buildGrading, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, FirstTreeSeedEvalCase } from "./types.js";
@@ -27,7 +28,19 @@ export async function runFirstTreeSeedCase(
   });
   reporter.caseStarted();
 
-  createFirstTreeShim(paths);
+  const seedPreflight =
+    evalCase.fixture.invocationMode === "portable"
+      ? {
+          branch: "main",
+          outcome: evalCase.fixture.seedAuthority === "member" ? ("needs-admin" as const) : ("bound" as const),
+          repo:
+            evalCase.fixture.seedBindingState === "different"
+              ? "https://git.example.invalid/other-team/context-tree.git"
+              : join(paths.runRoot, "context-tree-origin.git"),
+          teamId: SEED_EVAL_TEAM_ID,
+        }
+      : undefined;
+  createFirstTreeShim(paths, { seedPreflight });
   createFirstTreeStagingShim(paths);
   createGhShim(paths);
   const contextTreePath = setupFixture(evalCase, paths, reporter);

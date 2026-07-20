@@ -98,6 +98,65 @@ describe("first-tree eval shim", () => {
     }
   });
 
+  it("simulates read-only explicit-Team Seed preflight", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-seed-"));
+    try {
+      const packageRoot = join(repoRoot, "packages", "skill-evals");
+      mkdirSync(packageRoot, { recursive: true });
+      const paths = createRunPaths({
+        caseId: "portable-seed-preflight",
+        packageRoot,
+        startedAt: "2026-07-19T00:00:00.000Z",
+      });
+      createFirstTreeShim(paths, {
+        seedPreflight: {
+          branch: "main",
+          outcome: "bound",
+          repo: join(paths.runRoot, "context-tree-origin.git"),
+          teamId: "team-seed-eval",
+        },
+      });
+
+      const result = spawnSync(
+        join(paths.binDir, "first-tree"),
+        ["tree", "seed", "--team", "team-seed-eval", "--json"],
+        {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+            FIRST_TREE_EVAL_PHASE: "model",
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        data: {
+          state: {
+            binding: { branch: "main", repo: join(paths.runRoot, "context-tree-origin.git") },
+            status: "bound",
+          },
+          teamId: "team-seed-eval",
+        },
+        ok: true,
+      });
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            argv: ["tree", "seed", "--team", "team-seed-eval", "--json"],
+            exitCode: 0,
+            seedPreflight: true,
+            type: "first_tree_result",
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   it("uses the built CLI entry when a command is not handled by the shim", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-test-"));
     try {

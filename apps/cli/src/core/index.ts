@@ -96,6 +96,22 @@ export {
   InvalidContextTreeReadSnapshotError,
   readContextTreeReadSnapshotIdentity,
 } from "./context-tree-read.js";
+export type {
+  ContextTreeSeedAuthorityReader,
+  ContextTreeSeedPreflight,
+  ContextTreeSeedPreflightCliErrorCode,
+  ContextTreeSeedStage,
+  PreflightContextTreeSeedInput,
+} from "./context-tree-seed.js";
+export { ContextTreeSeedPreflightCliError, preflightContextTreeSeed } from "./context-tree-seed.js";
+export type {
+  ContextTreeWriteAuthorityReader,
+  ContextTreeWritePreflight,
+  ContextTreeWritePreflightCliErrorCode,
+  ContextTreeWriteStage,
+  PreflightContextTreeWriteInput,
+} from "./context-tree-write.js";
+export { ContextTreeWritePreflightCliError, preflightContextTreeWrite } from "./context-tree-write.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Document review (docloop) CLI helpers

@@ -375,6 +375,41 @@ owners: [${ACCOUNT_LOGIN}]
     await expect(getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toEqual(concurrentBinding);
   });
 
+  it("revalidates current Admin authority after GitHub side effects before committing the binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    let roleRevoked = false;
+    const fetchSpy = mockFetch(async (url) => {
+      if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) return githubRepoResponse(201);
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        await app.db.update(members).set({ role: "member" }).where(eq(members.id, admin.memberId));
+        roleRevoked = true;
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(403);
+    expect(roleRevoked).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+    await expect(getOrgContextTreeBinding(app.db, admin.organizationId)).resolves.toBeNull();
+  });
+
   it("rejects non-admin members before calling GitHub", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -1124,6 +1159,40 @@ owners: [${ACCOUNT_LOGIN}]
   });
 });
 
+describe("POST /orgs/:orgId/context-tree/seed-preflight", () => {
+  const getApp = useTestApp({ githubAppPrivateKeyPem });
+
+  it("uses only the authenticated explicit Team and returns stable Needs Admin after a live role change", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const outsideOrganizationId = await createOrganization(app, `outside-seed-${uuidv7().slice(0, 8)}`);
+    const outsideBinding = {
+      repo: "https://github.com/outside/private-context-tree.git",
+      branch: "outside",
+    };
+    await putOrgSetting(app.db, outsideOrganizationId, "context_tree", outsideBinding, { updatedBy: admin.userId });
+
+    const selected = await seedPreflight(app, admin.organizationId, admin.accessToken);
+    expect(selected.statusCode).toBe(200);
+    expect(selected.json()).toEqual({
+      organizationId: admin.organizationId,
+      state: { status: "unbound", branch: "main" },
+    });
+
+    const outside = await seedPreflight(app, outsideOrganizationId, admin.accessToken);
+    expect(outside.statusCode).toBe(403);
+    expect(outside.body).not.toContain(outsideBinding.repo);
+
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, admin.memberId));
+    const demoted = await seedPreflight(app, admin.organizationId, admin.accessToken);
+    expect(demoted.statusCode).toBe(403);
+    expect(demoted.json()).toEqual({
+      error: "Context Tree Seed requires an active Team Admin.",
+      code: "CONTEXT_TREE_SEED_NEEDS_ADMIN",
+    });
+  });
+});
+
 describe("GET /orgs/:orgId/context-tree/installation", () => {
   const getApp = useTestApp({ githubAppPrivateKeyPem });
 
@@ -1188,6 +1257,15 @@ async function initialize(app: FastifyInstance, admin: Pick<TestAdmin, "organiza
     method: "POST",
     url: `/api/v1/orgs/${admin.organizationId}/context-tree/initialize`,
     headers: { authorization: `Bearer ${admin.accessToken}` },
+    payload: {},
+  });
+}
+
+async function seedPreflight(app: FastifyInstance, organizationId: string, accessToken: string) {
+  return app.inject({
+    method: "POST",
+    url: `/api/v1/orgs/${organizationId}/context-tree/seed-preflight`,
+    headers: { authorization: `Bearer ${accessToken}` },
     payload: {},
   });
 }
