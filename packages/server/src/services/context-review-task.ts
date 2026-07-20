@@ -69,7 +69,16 @@ export type ManagedContextReviewWebhookEvent = {
   title: string;
   htmlUrl: string;
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
-  action: "opened" | "synchronize" | "ready_for_review" | "reopened" | "edited" | "created";
+  action:
+    | "opened"
+    | "synchronize"
+    | "ready_for_review"
+    | "reopened"
+    | "closed"
+    | "review_requested"
+    | "assigned"
+    | "edited"
+    | "created";
   triggerEvent: string;
   deliveryId: string | null;
   senderLogin: string;
@@ -81,12 +90,13 @@ export type ManagedContextReviewWebhookEvent = {
   commentAuthorLogin: string | null;
   commentAuthorType: string | null;
   commentBody: string | null;
+  terminalState: "closed" | "merged" | null;
 };
 
 export type ManagedContextReviewWebhookResult =
   | { outcome: "task_missing" }
   | {
-      outcome: "opened_noop" | "projection_reflection" | "delivery_replay";
+      outcome: "opened_noop" | "projection_reflection" | "delivery_replay" | "terminal_noop";
       chatId: string;
       messageId: string;
     }
@@ -698,6 +708,29 @@ async function loadManagedContextReviewTaskSeed(
   };
 }
 
+export async function inspectManagedContextReviewTask(
+  db: Database,
+  input: { organizationId: string; repository: string; pullRequest: number },
+): Promise<{ outcome: "task_missing" } | { outcome: "task_existing"; chatId: string; messageId: string }> {
+  const repository = canonicalGithubRepository(input.repository);
+  if (!repository) throw new BadRequestError("Managed Agent Review webhook repository is invalid");
+  const seed = await loadManagedContextReviewTaskSeed(
+    db,
+    contextReviewTaskReservationKey({
+      organizationId: input.organizationId,
+      repository,
+      pullRequest: input.pullRequest,
+    }),
+  );
+  if (!seed) return { outcome: "task_missing" };
+  await resolveContextReviewTaskAuthority(db, {
+    organizationId: input.organizationId,
+    requester: seed.requester,
+    metadata: seed.metadata,
+  });
+  return { outcome: "task_existing", chatId: seed.chatId, messageId: seed.openingMessageId };
+}
+
 type ContextReviewResultMarker = { chatId: string; reviewerAgentUuid: string; headSha: string };
 
 function findContextReviewResultMarkers(value: string): ContextReviewResultMarker[] {
@@ -803,11 +836,42 @@ async function findManagedWebhookDeliveryMessageId(
   return message?.id ?? null;
 }
 
+async function findManagedContextReviewTerminalMessageId(db: Database, chatId: string): Promise<string | null> {
+  const rows = await db
+    .select({ id: messages.id, metadata: messages.metadata })
+    .from(messages)
+    .where(and(eq(messages.chatId, chatId), sql`${messages.metadata} ? 'contextReviewManagedEventV1'`))
+    .orderBy(desc(messages.createdAt), desc(messages.id));
+  for (const row of rows) {
+    const parsed = contextReviewManagedMessageMetadataSchema.safeParse(row.metadata);
+    if (!parsed.success) continue;
+    const event = parsed.data.contextReviewManagedEventV1;
+    if (event.action === "reopened") return null;
+    if (event.terminalState) return row.id;
+  }
+  return null;
+}
+
 function renderManagedContextReviewEvent(
   input: ManagedContextReviewWebhookEvent,
   reconciliation: ContextReviewParticipantReconciliation,
 ): string {
   const lines: string[] = [];
+  if (input.terminalState) {
+    lines.push(
+      `GitHub reported that this managed Context Review pull request is now ${input.terminalState}.`,
+      "",
+      `Repository: ${input.repository}`,
+      `Pull request: #${input.pullRequest}`,
+      `Title: ${input.title}`,
+      `URL: ${input.htmlUrl}`,
+      `Trigger event: ${input.triggerEvent}`,
+      `Event sender: ${input.senderLogin}`,
+      "",
+      "This is terminal evidence, not a new review request. Any earlier READY, NEEDS_HUMAN, or FAILURE result is historical and must not be treated as an active managed task result.",
+    );
+    return lines.join("\n");
+  }
   if (reconciliation.takeoverRequired) {
     lines.push(
       "First Tree reassigned this Agent Review to the currently configured Reviewer in the existing task Chat.",
@@ -851,6 +915,7 @@ function managedContextReviewEventMetadata(
   if (input.deliveryId) event.deliveryId = input.deliveryId;
   if (input.headSha) event.headSha = input.headSha;
   if (input.isDraft !== null) event.isDraft = input.isDraft;
+  if (input.terminalState) event.terminalState = input.terminalState;
   if (input.commentAuthorLogin) event.commentAuthorLogin = input.commentAuthorLogin;
   if (input.commentUrl) event.commentUrl = input.commentUrl;
   if (input.commentId) event.commentId = input.commentId;
@@ -899,9 +964,6 @@ export async function dispatchManagedContextReviewWebhookEvent(
   });
   const seed = await loadManagedContextReviewTaskSeed(db, reservationKey);
   if (!seed) return { outcome: "task_missing" };
-  if (input.eventType === "pull_request" && input.action === "opened") {
-    return { outcome: "opened_noop", chatId: seed.chatId, messageId: seed.openingMessageId };
-  }
 
   const result = await db.transaction(async (tx): Promise<ManagedContextReviewWebhookTransactionResult> => {
     const transactionDb = tx as unknown as Database;
@@ -932,6 +994,11 @@ export async function dispatchManagedContextReviewWebhookEvent(
       throw new ConflictError("Managed Agent Review task opening changed during webhook admission");
     }
 
+    const terminalMessageId = await findManagedContextReviewTerminalMessageId(transactionDb, chat.id);
+    if (terminalMessageId && input.action !== "reopened" && input.terminalState === null) {
+      return { outcome: "terminal_noop", chatId: chat.id, messageId: terminalMessageId };
+    }
+
     const reconciliation = await reconcileContextReviewTaskParticipants(transactionDb, {
       chat,
       openingMessage,
@@ -947,6 +1014,23 @@ export async function dispatchManagedContextReviewWebhookEvent(
     if (replayedMessageId) {
       if (!reconciliation.takeoverRequired) {
         return { outcome: "delivery_replay", chatId: chat.id, messageId: replayedMessageId };
+      }
+      const takeover = await sendContextReviewTakeoverMessage(transactionDb, {
+        chatId: chat.id,
+        requesterAgentUuid: seed.requester.humanAgentUuid,
+        reconciliation,
+      });
+      return {
+        outcome: "delivered",
+        chatId: chat.id,
+        messageId: takeover.message.id,
+        recipients: takeover.recipients,
+        effects: takeover.deferredPostCommitEffects,
+      };
+    }
+    if (input.eventType === "pull_request" && input.action === "opened") {
+      if (!reconciliation.takeoverRequired) {
+        return { outcome: "opened_noop", chatId: chat.id, messageId: openingMessage.id };
       }
       const takeover = await sendContextReviewTakeoverMessage(transactionDb, {
         chatId: chat.id,
@@ -989,7 +1073,8 @@ export async function dispatchManagedContextReviewWebhookEvent(
         source: "github",
       },
       {
-        addressedToAgentIds: [reconciliation.reviewerAgentUuid],
+        addressedToAgentIds: input.terminalState ? [] : [reconciliation.reviewerAgentUuid],
+        allowRecipientlessSend: input.terminalState !== null,
         allowContextReviewRun: true,
         allowSystemSender: true,
         deferPostCommitEffects: true,

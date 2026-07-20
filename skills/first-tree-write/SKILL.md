@@ -1,6 +1,6 @@
 ---
 name: first-tree-write
-version: 0.11.0
+version: 0.12.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Source-driven Context Tree write workflow for managed workspaces and clean BYO invocations. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. A clean BYO write also requires an explicit Team, an exact tree-read snapshot, current source/target context, and write intent. If no source artifact is available, there is no write task; ask the user for one.
@@ -275,16 +275,21 @@ first-tree chat create --as-member [--org <org-id>] \
 In BYO mode, replace the bracketed form with the required explicit
 `--org "<team-id>"`; never resolve the Team from `/me`, a default, or cache.
 
-The Server derives the exact Reviewer, human sender, topic, provenance, and
-stable task key. Its logical identity is Team + task type + canonical bound
-repository + PR number; Reviewer, head, enabled state, requester, and any
-generation are not part of the key. The first request atomically creates one
-ordinary task Chat, immutable opening, and Reviewer Inbox delivery. Same-member
-retries and concurrent requests reuse it without another wake; a different
-requester conflicts without revealing the existing Chat. On an unknown
-transport result, regenerate from revalidated live state and run the exact same
-command—never invent another key or send a formal packet through an ordinary
-Chat message.
+The Server derives the exact Reviewer, human sender, topic, provenance, and stable task key. Its logical identity is
+Team + task type + canonical bound repository + PR number; Reviewer, head, enabled state, requester, and generation
+are not part of the key. The first request atomically creates one ordinary task Chat, immutable opening, and Reviewer
+Inbox delivery. Same-member retries and concurrent requests reuse it without another wake; a different requester
+conflicts without revealing the existing Chat. On an unknown transport result, regenerate from revalidated live state
+and run the exact same command—never invent another key or send a formal packet through an ordinary Chat message.
+
+Treat the handoff as delivered only when the command returns one Chat id, an outcome of exactly `created` or `reused`,
+and `managedReviewReceiptV1` with the same repository, PR number, and exact revalidated head. The unique managed marker,
+immutable scope, exact head, packet, passing verification, and keyed receipt are one indivisible delivery contract: if
+any item is absent or inconsistent, report handoff failure and retry only the same keyed task after revalidation. Never
+treat a legacy App review, a PR URL, or passing tree verification by itself as a successful managed handoff.
+
+Do not run `github follow` for a managed Context Review PR from the originating write task Chat, whether dispatch
+succeeds or fails. The stable Review Chat is the sole execution line; observation-only attention must be human-created.
 
 Reassigning A to B keeps the same PR task and Chat. On the next keyed dispatch,
 the Server atomically adds B as a speaker with silent history backfill, appends

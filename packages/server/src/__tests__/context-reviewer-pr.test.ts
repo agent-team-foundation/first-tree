@@ -1,12 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
-import { and, desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { authIdentities } from "../db/schema/auth-identities.js";
-import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
-import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { createAgent } from "../services/agent.js";
@@ -19,7 +16,6 @@ import {
   renderContextReviewerPrPrompt,
 } from "../services/context-reviewer-pr.js";
 import { upsertInstallationFromMetadata } from "../services/github-app-installations.js";
-import { createMember } from "../services/member.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -131,18 +127,6 @@ async function seedReviewerInstallation(app: App, organizationId: string): Promi
       suspendedAt: null,
     },
     hubOrganizationId: organizationId,
-  });
-}
-
-async function seedGithubIdentity(app: App, userId: string, login: string) {
-  await app.db.insert(authIdentities).values({
-    id: randomUUID(),
-    userId,
-    provider: "github",
-    identifier: randomUUID(),
-    email: null,
-    verifiedAt: new Date(),
-    metadata: { login },
   });
 }
 
@@ -342,7 +326,7 @@ describe("handleContextReviewerPrEvent", () => {
       organizationId: admin.organizationId,
     });
 
-    expect(result).toEqual({ handled: false, reason: "repo_mismatch" });
+    expect(result).toEqual({ handled: false, reason: "repo_mismatch", routingDecision: "not_applicable" });
     const rows = await app.db.select({ id: chats.id }).from(chats);
     expect(rows).toHaveLength(0);
   });
@@ -362,7 +346,11 @@ describe("handleContextReviewerPrEvent", () => {
         payload,
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "managed_task_missing" });
+    ).resolves.toEqual({
+      handled: false,
+      reason: "managed_task_missing",
+      routingDecision: "managed_missing",
+    });
     await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 
@@ -384,7 +372,7 @@ describe("handleContextReviewerPrEvent", () => {
         payload: pullRequestPayload(),
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "feature_disabled" });
+    ).resolves.toEqual({ handled: false, reason: "feature_disabled", routingDecision: "not_applicable" });
 
     await seedReviewerInstallation(app, admin.organizationId);
     await putOrgSetting(
@@ -401,7 +389,11 @@ describe("handleContextReviewerPrEvent", () => {
         payload: pullRequestPayload(),
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "reviewer_agent_invalid" });
+    ).resolves.toEqual({
+      handled: false,
+      reason: "reviewer_agent_invalid",
+      routingDecision: "not_applicable",
+    });
 
     await expect(
       handleContextReviewerPrEvent(app, {
@@ -409,7 +401,7 @@ describe("handleContextReviewerPrEvent", () => {
         payload: pullRequestPayload({ action: "labeled" }),
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "unsupported_event" });
+    ).resolves.toEqual({ handled: false, reason: "unsupported_event", routingDecision: "not_applicable" });
   });
 
   it("skips before DB work when the payload is not an object", async () => {
@@ -422,7 +414,7 @@ describe("handleContextReviewerPrEvent", () => {
         payload: null,
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "unsupported_event" });
+    ).resolves.toEqual({ handled: false, reason: "unsupported_event", routingDecision: "not_applicable" });
   });
 
   it("skips when the context tree repo is missing", async () => {
@@ -435,7 +427,11 @@ describe("handleContextReviewerPrEvent", () => {
         payload: pullRequestPayload(),
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "context_tree_repo_unset" });
+    ).resolves.toEqual({
+      handled: false,
+      reason: "context_tree_repo_unset",
+      routingDecision: "not_applicable",
+    });
   });
 
   it("skips when the stored Context Tree binding is not runtime-safe", async () => {
@@ -455,11 +451,15 @@ describe("handleContextReviewerPrEvent", () => {
         payload: pullRequestPayload(),
         organizationId: admin.organizationId,
       }),
-    ).resolves.toEqual({ handled: false, reason: "context_tree_repo_unset" });
+    ).resolves.toEqual({
+      handled: false,
+      reason: "context_tree_repo_unset",
+      routingDecision: "not_applicable",
+    });
     await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 
-  it("creates a reviewer chat, membership, task message, and inbox notification for an opened context repo PR", async () => {
+  it("does not create a legacy Reviewer Chat for an unmanaged Context PR", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin);
@@ -471,571 +471,59 @@ describe("handleContextReviewerPrEvent", () => {
       organizationId: admin.organizationId,
     });
 
-    expect(result).toMatchObject({ handled: true, reused: false });
-    if (!result.handled) throw new Error("expected handled result");
-
-    const [chat] = await app.db.select().from(chats).where(eq(chats.id, result.chatId)).limit(1);
-    expect(chat?.metadata).toMatchObject({
-      source: "github",
-      entityType: "pull_request",
-      entityKey: "owner/context-tree#123",
-      contextTreeReviewer: true,
-      reviewerAgentUuid: reviewer.uuid,
+    expect(result).toEqual({
+      handled: false,
+      reason: "legacy_creation_disabled",
+      routingDecision: "not_applicable",
     });
-
-    const memberships = await app.db
-      .select({ agentId: chatMembership.agentId, accessMode: chatMembership.accessMode })
-      .from(chatMembership)
-      .where(eq(chatMembership.chatId, result.chatId));
-    expect(memberships).toEqual(
-      expect.arrayContaining([
-        { agentId: admin.humanAgentUuid, accessMode: "speaker" },
-        { agentId: reviewer.uuid, accessMode: "speaker" },
-      ]),
-    );
-
-    const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
-    expect(message?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(message?.content).not.toContain("gh pr review");
-    expect(message?.content).not.toContain("Context changes requested");
-    expect(message?.content).toContain("Trigger event: pull_request.opened");
-    expect(message?.content).toContain("Draft status from webhook: ready for review");
-    expect(message?.content).toContain("PR author: writer");
-    expect(message?.metadata).toMatchObject({
-      contextTreeReviewer: true,
-      pullRequestDraft: false,
-      pullRequestAuthorLogin: "writer",
-      mentions: [reviewer.uuid],
-    });
-
-    const [entry] = await app.db
-      .select({ notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.messageId, result.messageId), eq(inboxEntries.inboxId, reviewer.inboxId)))
-      .limit(1);
-    expect(entry?.notify).toBe(true);
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
   });
 
-  it("records host-manager identity for audit without creating a self-author outcome", async () => {
+  it("drains unmanaged follow-ups only into a pre-existing legacy Reviewer Chat", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
-    await seedGithubIdentity(app, admin.userId, "Writer");
     const reviewer = await createReviewer(app, admin);
     await enableReviewer(app, admin, reviewer.uuid);
+    const existing = await createChat(app.db, {
+      mode: "task",
+      initiatorAgentId: admin.humanAgentUuid,
+      organizationId: admin.organizationId,
+      initialRecipientAgentIds: [reviewer.uuid],
+      contextParticipantAgentIds: [],
+      topic: "Legacy Context Review PR #123",
+      initialMessage: { source: "api", format: "markdown", content: "legacy opening", metadata: {} },
+      source: "manual",
+    });
+    await app.db
+      .update(chats)
+      .set({
+        metadata: {
+          source: "github",
+          entityType: "pull_request",
+          entityKey: "owner/context-tree#123",
+          entityUrl: "https://github.com/owner/context-tree/pull/123",
+          contextTreeReviewer: true,
+          reviewerAgentUuid: reviewer.uuid,
+        },
+      })
+      .where(eq(chats.id, existing.chat.id));
 
     const result = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-
-    expect(result).toMatchObject({ handled: true, reused: false });
-    if (!result.handled) throw new Error("expected handled result");
-
-    const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
-    expect(message?.content).toContain("Reviewer manager GitHub login: Writer");
-    expect(message?.content).toContain("Context review run:");
-    expect(message?.content).not.toContain("Known self-approval blocker");
-    expect(message?.content).not.toContain("Independent approval required");
-    expect(message?.metadata).toMatchObject({
-      contextTreeReviewer: true,
-      pullRequestAuthorLogin: "writer",
-      reviewerManagerGithubLogin: "Writer",
-      contextReviewReviewerAgentUuid: reviewer.uuid,
-      contextReviewSubmission: { state: "pending" },
-    });
-  });
-
-  it("reuses an existing reviewer chat for the same PR", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-    const second = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-
-    if (!first.handled || !second.handled) throw new Error("expected handled results");
-    expect(second.chatId).toBe(first.chatId);
-    expect(second).toMatchObject({ handled: true, reused: true });
-
-    const messageRows = await app.db.select({ id: messages.id }).from(messages);
-    expect(messageRows).toHaveLength(2);
-    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: pull_request.opened");
-    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(followUp?.content).not.toContain("gh pr review");
-    const chatRows = await app.db.select({ id: chats.id }).from(chats);
-    expect(chatRows).toHaveLength(1);
-  });
-
-  it("atomically reserves one reviewer chat for concurrent first deliveries", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const opened = pullRequestPayload({
-      pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
-    });
-    const synchronized = pullRequestPayload({
-      action: "synchronize",
-      pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
-    });
-    const [first, second] = await Promise.all([
-      handleContextReviewerPrEvent(app, {
-        eventType: "pull_request",
-        payload: opened,
-        organizationId: admin.organizationId,
-      }),
-      handleContextReviewerPrEvent(app, {
-        eventType: "pull_request",
-        payload: synchronized,
-        organizationId: admin.organizationId,
-      }),
-    ]);
-
-    if (!first.handled || !second.handled) throw new Error("expected concurrent events to be handled");
-    expect(second.chatId).toBe(first.chatId);
-    const chatRows = await app.db.select({ id: chats.id }).from(chats);
-    expect(chatRows).toEqual([{ id: first.chatId }]);
-    const runMessages = await app.db
-      .select({ metadata: messages.metadata })
-      .from(messages)
-      .where(eq(messages.chatId, first.chatId))
-      .orderBy(desc(messages.createdAt), desc(messages.id));
-    expect(runMessages.length).toBeGreaterThanOrEqual(1);
-    expect(runMessages.length).toBeLessThanOrEqual(2);
-    expect(runMessages[0]?.metadata).toMatchObject({
-      triggerEvent: "pull_request.synchronize",
-      contextReviewHeadSha: "b".repeat(40),
-    });
-  });
-
-  it("does not suppress a delayed opened task after the configured reviewer changes", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const firstReviewer = await createReviewer(app, admin, { name: "first-reviewer" });
-    await enableReviewer(app, admin, firstReviewer.uuid);
-
-    const synchronized = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({
-        action: "synchronize",
-        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
-      }),
-      organizationId: admin.organizationId,
-    });
-    if (!synchronized.handled) throw new Error("expected synchronize event handled");
-
-    const currentReviewer = await createReviewer(app, admin, { name: "current-reviewer" });
-    await putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "context_tree_features",
-      { contextReviewer: { enabled: true, agentUuid: currentReviewer.uuid } },
-      { updatedBy: admin.userId, memberId: admin.memberId },
-    );
-    const opened = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({
-        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
-      }),
-      organizationId: admin.organizationId,
-    });
-
-    expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
-    if (!opened.handled) throw new Error("expected delayed opened event handled");
-    const runMessages = await app.db
-      .select({ id: messages.id, metadata: messages.metadata })
-      .from(messages)
-      .where(eq(messages.chatId, synchronized.chatId))
-      .orderBy(desc(messages.createdAt), desc(messages.id));
-    expect(runMessages).toHaveLength(2);
-    expect(runMessages[0]).toMatchObject({
-      id: opened.messageId,
-      metadata: {
-        triggerEvent: "pull_request.opened",
-        contextReviewReviewerAgentUuid: currentReviewer.uuid,
-        contextReviewReviewerManagerHumanAgentId: admin.humanAgentUuid,
-      },
-    });
-  });
-
-  it("does not suppress a delayed opened task after the reviewer manager changes", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const synchronized = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({
-        action: "synchronize",
-        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "b".repeat(40) } },
-      }),
-      organizationId: admin.organizationId,
-    });
-    if (!synchronized.handled) throw new Error("expected synchronize event handled");
-
-    const currentManager = await createMember(app.db, admin.organizationId, {
-      username: `review-manager-${randomUUID().slice(0, 8)}`,
-      displayName: "Current Review Manager",
-      role: "admin",
-    });
-    await app.db.update(agents).set({ managerId: currentManager.id }).where(eq(agents.uuid, reviewer.uuid));
-    const opened = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({
-        pull_request: { ...pullRequestPayload().pull_request, head: { ref: "context-update", sha: "a".repeat(40) } },
-      }),
-      organizationId: admin.organizationId,
-    });
-
-    expect(opened).toMatchObject({ handled: true, reused: true, chatId: synchronized.chatId });
-    if (!opened.handled) throw new Error("expected delayed opened event handled");
-    const runMessages = await app.db
-      .select({ id: messages.id, metadata: messages.metadata })
-      .from(messages)
-      .where(eq(messages.chatId, synchronized.chatId))
-      .orderBy(desc(messages.createdAt), desc(messages.id));
-    expect(runMessages).toHaveLength(2);
-    expect(runMessages[0]).toMatchObject({
-      id: opened.messageId,
-      metadata: {
-        triggerEvent: "pull_request.opened",
-        contextReviewReviewerAgentUuid: reviewer.uuid,
-        contextReviewReviewerManagerHumanAgentId: currentManager.agentId,
-      },
-    });
-  });
-
-  it("reuses the reviewer chat for pull_request.synchronize and notifies the reviewer", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-    if (!first.handled) throw new Error("expected first event handled");
-
-    const second = await handleContextReviewerPrEvent(app, {
       eventType: "pull_request",
       payload: pullRequestPayload({ action: "synchronize" }),
       organizationId: admin.organizationId,
     });
 
-    expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
-    if (!second.handled) throw new Error("expected second event handled");
-
-    const messageRows = await app.db.select().from(messages).where(eq(messages.chatId, first.chatId));
-    expect(messageRows).toHaveLength(2);
-    const followUp = messageRows.find((row) => row.id === second.messageId);
-    expect(followUp?.source).toBe("github");
-    expect(followUp?.format).toBe("markdown");
-    expect(followUp?.content).toContain("Trigger event: pull_request.synchronize");
-    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(followUp?.content).not.toContain("gh pr review");
-    expect(followUp?.metadata).toMatchObject({
-      source: "github",
-      event: "pull_request",
-      action: "synchronize",
-      triggerEvent: "pull_request.synchronize",
-      entityKey: "owner/context-tree#123",
-      contextTreeReviewer: true,
-      pullRequestDraft: false,
-      mentions: [reviewer.uuid],
+    expect(result).toMatchObject({
+      handled: true,
+      chatId: existing.chat.id,
+      reused: true,
+      routingDecision: "legacy_existing",
     });
-
-    const [entry] = await app.db
-      .select({ notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.messageId, second.messageId), eq(inboxEntries.inboxId, reviewer.inboxId)))
-      .limit(1);
-    expect(entry?.notify).toBe(true);
-  });
-
-  it("reuses the reviewer chat for pull_request.ready_for_review and requests a fresh review", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({ pull_request: { ...pullRequestPayload().pull_request, draft: true } }),
-      organizationId: admin.organizationId,
-    });
-    if (!first.handled) throw new Error("expected first event handled");
-
-    const second = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload({ action: "ready_for_review" }),
-      organizationId: admin.organizationId,
-    });
-
-    expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
-    if (!second.handled) throw new Error("expected second event handled");
-
-    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: pull_request.ready_for_review");
-    expect(followUp?.content).toContain("Draft status from webhook: ready for review");
-    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(followUp?.content).not.toContain("gh pr review");
-    expect(followUp?.metadata).toMatchObject({
-      source: "github",
-      event: "pull_request",
-      action: "ready_for_review",
-      triggerEvent: "pull_request.ready_for_review",
-      entityKey: "owner/context-tree#123",
-      contextTreeReviewer: true,
-      pullRequestDraft: false,
-      mentions: [reviewer.uuid],
-    });
-  });
-
-  it("reuses the reviewer chat for PR issue_comment.created and notifies the reviewer", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-    if (!first.handled) throw new Error("expected first event handled");
-
-    const second = await handleContextReviewerPrEvent(app, {
-      eventType: "issue_comment",
-      payload: issueCommentPayload(),
-      organizationId: admin.organizationId,
-    });
-
-    expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
-    if (!second.handled) throw new Error("expected second event handled");
-
-    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: issue_comment.created");
-    expect(followUp?.content).toContain("Comment author: commenter");
-    expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-1");
-    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(followUp?.metadata).toMatchObject({
-      source: "github",
-      event: "issue_comment",
-      action: "created",
-      triggerEvent: "issue_comment.created",
-      entityKey: "owner/context-tree#123",
-      contextTreeReviewer: true,
-      commentAuthorLogin: "commenter",
-      commentUrl: "https://github.com/owner/context-tree/pull/123#issuecomment-1",
-      mentions: [reviewer.uuid],
-    });
-
-    const [entry] = await app.db
-      .select({ notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.messageId, second.messageId), eq(inboxEntries.inboxId, reviewer.inboxId)))
-      .limit(1);
-    expect(entry?.notify).toBe(true);
-  });
-
-  it("reuses the reviewer chat for pull_request_review_comment.created and notifies the reviewer", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-    if (!first.handled) throw new Error("expected first event handled");
-
-    const second = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request_review_comment",
-      payload: reviewCommentPayload(),
-      organizationId: admin.organizationId,
-    });
-
-    expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
-    if (!second.handled) throw new Error("expected second event handled");
-
-    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: pull_request_review_comment.created");
-    expect(followUp?.content).toContain("Comment author: reviewer-user");
-    expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#discussion_r1");
-    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(followUp?.metadata).toMatchObject({
-      source: "github",
-      event: "pull_request_review_comment",
-      action: "created",
-      triggerEvent: "pull_request_review_comment.created",
-      entityKey: "owner/context-tree#123",
-      contextTreeReviewer: true,
-      commentAuthorLogin: "reviewer-user",
-      commentUrl: "https://github.com/owner/context-tree/pull/123#discussion_r1",
-      mentions: [reviewer.uuid],
-    });
-
-    const [entry] = await app.db
-      .select({ notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.messageId, second.messageId), eq(inboxEntries.inboxId, reviewer.inboxId)))
-      .limit(1);
-    expect(entry?.notify).toBe(true);
-  });
-
-  it("creates a follow-up for a manager-authored PR comment after the initial opened task", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin, { name: `context-reviewer-${randomUUID().slice(0, 8)}` });
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-    if (!first.handled) throw new Error("expected first event handled");
-
-    const second = await handleContextReviewerPrEvent(app, {
-      eventType: "issue_comment",
-      payload: issueCommentPayload({
-        comment: {
-          html_url: "https://github.com/owner/context-tree/pull/123#issuecomment-2",
-          user: { login: "MANAGER-LOGIN", type: "User" },
-          body: "Context Reviewer found no blocking gaps.",
-        },
-        sender: { login: "MANAGER-LOGIN", type: "User" },
-      }),
-      organizationId: admin.organizationId,
-    });
-
-    expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
-    if (!second.handled) throw new Error("expected second event handled");
-    expect(second).not.toMatchObject({ suppressed: true });
-    expect(second.messageId).not.toBe(first.messageId);
-
-    const messageRows = await app.db
-      .select({ id: messages.id })
-      .from(messages)
-      .where(eq(messages.chatId, first.chatId));
-    expect(messageRows).toHaveLength(2);
-    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: issue_comment.created");
-    expect(followUp?.content).toContain("Comment author: MANAGER-LOGIN");
-    expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-2");
-    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
-    expect(followUp?.metadata).toMatchObject({
-      source: "github",
-      event: "issue_comment",
-      action: "created",
-      triggerEvent: "issue_comment.created",
-      entityKey: "owner/context-tree#123",
-      contextTreeReviewer: true,
-      commentAuthorLogin: "MANAGER-LOGIN",
-      commentUrl: "https://github.com/owner/context-tree/pull/123#issuecomment-2",
-      mentions: [reviewer.uuid],
-    });
-  });
-
-  it("suppresses the configured GitHub App bot PR comment echo after the initial opened task", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin);
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-    if (!first.handled) throw new Error("expected first event handled");
-
-    const second = await handleContextReviewerPrEvent(app, {
-      eventType: "issue_comment",
-      payload: issueCommentPayload({
-        comment: {
-          html_url: "https://github.com/owner/context-tree/pull/123#issuecomment-4",
-          user: { login: "TEST-APP-SLUG[bot]", type: "Bot" },
-          body: "Posted by the First Tree GitHub App.",
-        },
-        sender: { login: "TEST-APP-SLUG[bot]", type: "Bot" },
-      }),
-      organizationId: admin.organizationId,
-    });
-
-    expect(second).toMatchObject({ handled: true, reused: true, suppressed: true, chatId: first.chatId });
-    if (!second.handled) throw new Error("expected second event handled");
-    expect(second.messageId).toBe(first.messageId);
-
-    const messageRows = await app.db
-      .select({ id: messages.id })
-      .from(messages)
-      .where(eq(messages.chatId, first.chatId));
-    expect(messageRows).toHaveLength(1);
-    const inboxRows = await app.db
-      .select({ messageId: inboxEntries.messageId, notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(eq(inboxEntries.inboxId, reviewer.inboxId));
-    expect(inboxRows).toEqual([{ messageId: first.messageId, notify: true }]);
-  });
-
-  it("does not suppress when only the reviewer agent name matches an unrelated human GitHub login", async () => {
-    const app = getApp();
-    const admin = await createAdminContext(app);
-    const reviewer = await createReviewer(app, admin, { name: "unrelated-human" });
-    await enableReviewer(app, admin, reviewer.uuid);
-
-    const first = await handleContextReviewerPrEvent(app, {
-      eventType: "pull_request",
-      payload: pullRequestPayload(),
-      organizationId: admin.organizationId,
-    });
-    if (!first.handled) throw new Error("expected first event handled");
-
-    const second = await handleContextReviewerPrEvent(app, {
-      eventType: "issue_comment",
-      payload: issueCommentPayload({
-        comment: {
-          html_url: "https://github.com/owner/context-tree/pull/123#issuecomment-3",
-          user: { login: "unrelated-human", type: "User" },
-          body: "This is not the manager.",
-        },
-        sender: { login: "unrelated-human", type: "User" },
-      }),
-      organizationId: admin.organizationId,
-    });
-
-    expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
-    if (!second.handled) throw new Error("expected second event handled");
-    expect(second).not.toMatchObject({ suppressed: true });
-
-    const messageRows = await app.db
-      .select({ id: messages.id })
-      .from(messages)
-      .where(eq(messages.chatId, first.chatId));
-    expect(messageRows).toHaveLength(2);
-    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: issue_comment.created");
-    expect(followUp?.content).toContain("Comment author: unrelated-human");
-    expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-3");
-    expect(followUp?.content).toContain("Load the installed `context-tree-review` skill");
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(1);
+    await expect(
+      app.db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, existing.chat.id)),
+    ).resolves.toHaveLength(2);
   });
 
   it("skips non-PR issue_comment.created without creating a reviewer chat", async () => {
@@ -1056,7 +544,7 @@ describe("handleContextReviewerPrEvent", () => {
       organizationId: admin.organizationId,
     });
 
-    expect(result).toEqual({ handled: false, reason: "malformed_payload" });
+    expect(result).toEqual({ handled: false, reason: "malformed_payload", routingDecision: "not_applicable" });
     const chatRows = await app.db.select({ id: chats.id }).from(chats);
     expect(chatRows).toHaveLength(0);
   });
@@ -1109,7 +597,12 @@ describe("handleContextReviewerPrEvent", () => {
     const { extractPullRequestPayloadInfo } = contextReviewerPrTestInternals;
 
     expect(extractPullRequestPayloadInfo("pull_request", null, "org-1")).toBeNull();
-    expect(extractPullRequestPayloadInfo("pull_request", pullRequestPayload({ action: "closed" }), "org-1")).toBeNull();
+    expect(
+      extractPullRequestPayloadInfo("pull_request", pullRequestPayload({ action: "closed" }), "org-1"),
+    ).toMatchObject({
+      action: "closed",
+      triggerEvent: "pull_request.closed",
+    });
     expect(
       extractPullRequestPayloadInfo("pull_request", pullRequestPayload({ repository: null, sender: null }), "org-1"),
     ).toBeNull();

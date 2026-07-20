@@ -115,8 +115,24 @@ describe("chat write schemas", () => {
         effectiveSenderId: "human-1",
         reviewerAgentUuid: "reviewer-1",
         outcome: "reused",
+        managedReviewReceiptV1: {
+          schemaVersion: 1,
+          repository: "owner/context-tree",
+          pullRequest: 749,
+          expectedHead: "a".repeat(40),
+        },
       }).topic,
     ).toBeNull();
+    expect(
+      keyedTaskChatCreateResponseSchema.safeParse({
+        chatId: "chat-1",
+        messageId: "message-1",
+        topic: null,
+        effectiveSenderId: "human-1",
+        reviewerAgentUuid: "reviewer-1",
+        outcome: "reused",
+      }).success,
+    ).toBe(false);
   });
 
   it("requires update chat requests to change at least one field", () => {

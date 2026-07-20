@@ -37,6 +37,10 @@ export type DeliveryStats = {
 type DeliveryOptions = {
   entityStateSeed?: EntityStateSeed | null;
   actorHumanId?: string | null;
+  /** Deliver observation cards without waking any chat participant. */
+  cardOnly?: boolean;
+  /** Defense in depth: never resolve a personnel target into a fresh chat. */
+  suppressNewChats?: boolean;
 };
 
 /**
@@ -188,7 +192,7 @@ export async function deliverGithubEvent(
       // out by the message service (the card still lands as a silent row via
       // `allowRecipientlessSend`). The unread-mention red dot stays off because
       // delegates are non-human mention targets.
-      const mentions = scmWakeAgentIds(entries);
+      const mentions = options.cardOnly ? [] : scmWakeAgentIds(entries);
       await sendScmSystemCard(app, {
         chatId: delivery.chatId,
         senderId,
@@ -270,6 +274,7 @@ async function resolveChatFor(
   if (target.entry.kind === "legacy_route") {
     return { chatId: target.entry.route.chatId, created: false };
   }
+  if (options.suppressNewChats) return null;
   const humanAgentId = target.entry.humanAgentId;
   const wakeAgentId = target.entry.wakeAgentId;
   const entity: GithubEntity = {

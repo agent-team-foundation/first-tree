@@ -3,7 +3,12 @@ import { githubAppInstallationPermissionsSchema, type ScmIngressContext } from "
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { handleContextReviewerPrEvent, isContextReviewerCandidateEvent } from "../../services/context-reviewer-pr.js";
+import {
+  type ContextReviewerPrResult,
+  handleContextReviewerPrEvent,
+  isContextReviewerCandidateEvent,
+  isManagedContextReviewRoutingDecision,
+} from "../../services/context-reviewer-pr.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
   deleteInstallationByGithubId,
@@ -248,7 +253,8 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     const rawAction = isRecord(payload) ? readString(payload.action) : null;
     const normalized = normalizeGithubWebhook(eventType, payload, ingress);
     const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction, payload);
-    if (!normalized.event && !shouldRunContextReviewer && !normalized.observation) {
+    const shouldInspectContextReviewer = shouldRunContextReviewer || normalized.event?.entity.type === "pull_request";
+    if (!normalized.event && !shouldInspectContextReviewer && !normalized.observation) {
       log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
       return reply.status(200).send({ ok: true, event: eventType, handled: false });
     }
@@ -277,19 +283,28 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         }
       },
       runProviderWork: () =>
-        shouldRunContextReviewer
+        shouldInspectContextReviewer
           ? handleContextReviewerPrEvent(app, {
               eventType,
               payload,
               organizationId,
               deliveryId: ingress.stableDeliveryId,
             })
-          : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
-      resolveAudience: (normalizedEvent) => resolveGithubAudience(app.db, normalizedEvent),
-      deliver: (normalizedEvent, audience) =>
+          : Promise.resolve({
+              handled: false,
+              reason: "unsupported_event",
+              routingDecision: "not_applicable",
+            } satisfies ContextReviewerPrResult),
+      resolveAudience: (normalizedEvent, contextReviewer) =>
+        resolveGithubAudience(app.db, normalizedEvent, {
+          suppressNewIdentityTargets: isManagedContextReviewRoutingDecision(contextReviewer.routingDecision),
+        }),
+      deliver: (normalizedEvent, audience, contextReviewer) =>
         deliverGithubEvent(app, normalizedEvent, audience.targets, {
           entityStateSeed: normalized.entityStateSeed,
           actorHumanId: audience.actorHumanId,
+          cardOnly: isManagedContextReviewRoutingDecision(contextReviewer.routingDecision),
+          suppressNewChats: isManagedContextReviewRoutingDecision(contextReviewer.routingDecision),
         }),
     });
 

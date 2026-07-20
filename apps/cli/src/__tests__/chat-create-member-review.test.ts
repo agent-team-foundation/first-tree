@@ -80,6 +80,12 @@ describe("chat create --as-member Agent Review", () => {
         effectiveSenderId: "human-writer",
         reviewerAgentUuid: "private-reviewer",
         outcome: "created",
+        managedReviewReceiptV1: {
+          schemaVersion: 1,
+          repository: "owner/context-tree",
+          pullRequest: 749,
+          expectedHead: "a".repeat(40),
+        },
       })),
     });
   });
@@ -146,5 +152,26 @@ describe("chat create --as-member Agent Review", () => {
     ).rejects.toBe(error);
     expect(localAgentMocks.handleSdkError).toHaveBeenCalledWith(error);
     expect(outputMocks.fail).not.toHaveBeenCalledWith("CREATE_RESULT_UNKNOWN", expect.anything(), expect.anything());
+  });
+
+  it("rejects a keyed receipt that does not match the exact dispatched head", async () => {
+    const sdk = memberMocks.createMemberSdk();
+    const original = await sdk.createMemberKeyedTaskChat("org-b", {
+      mode: "keyed_task",
+      initialMessage: {
+        format: "markdown",
+        content: "fixture",
+        metadata: JSON.parse(metadataJson()) as never,
+      },
+    });
+    sdk.createMemberKeyedTaskChat.mockResolvedValueOnce({
+      ...original,
+      managedReviewReceiptV1: { ...original.managedReviewReceiptV1, expectedHead: "b".repeat(40) },
+    });
+
+    await expect(
+      runCreate(["create", "opening", "--as-member", "--format", "markdown", "--metadata-file", "packet.json"]),
+    ).rejects.toMatchObject({ code: "MANAGED_REVIEW_RECEIPT_MISMATCH", exitCode: 2 });
+    expect(outputMocks.success).not.toHaveBeenCalled();
   });
 });

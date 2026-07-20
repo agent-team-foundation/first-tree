@@ -335,6 +335,65 @@ describe("resolveAudience", () => {
     ]);
   });
 
+  it("preserves existing managed attention lines while suppressing fresh identity targets", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const existingDelegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `existing-dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const existingHuman = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `existing-human-${randomUUID().slice(0, 6)}`,
+      delegateMention: existingDelegate,
+      type: "human",
+    });
+    const existingChat = await seedChat(app, admin.organizationId, existingHuman);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: existingHuman,
+      delegateId: existingDelegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#managed",
+      chatId: existingChat,
+      boundVia: "agent_declared",
+    });
+    const automaticDelegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `automatic-dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const automaticHumanName = `automatic-human-${randomUUID().slice(0, 6)}`;
+    await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: automaticHumanName,
+      delegateMention: automaticDelegate,
+      type: "human",
+    });
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#managed",
+      actorLogin: "outsider",
+      targets: [{ externalUsername: automaticHumanName, reason: "review_requested" }],
+      kind: "review_requested",
+    });
+
+    const audience = await resolveAudienceResolution(app.db, event, { suppressNewIdentityTargets: true });
+
+    expect(audience.targets).toEqual([
+      expect.objectContaining({
+        humanAgentId: existingHuman,
+        delegateAgentId: existingDelegate,
+        kind: "existing",
+        chatId: existingChat,
+      }),
+    ]);
+  });
+
   it("target human reuses an existing mapping instead of creating a new delegate route", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

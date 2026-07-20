@@ -10,7 +10,17 @@ export const contextReviewManagedEventSchema = z
   .object({
     schemaVersion: z.literal(1),
     eventType: z.enum(["pull_request", "issue_comment", "pull_request_review_comment"]),
-    action: z.enum(["opened", "synchronize", "ready_for_review", "reopened", "edited", "created"]),
+    action: z.enum([
+      "opened",
+      "synchronize",
+      "ready_for_review",
+      "reopened",
+      "closed",
+      "review_requested",
+      "assigned",
+      "edited",
+      "created",
+    ]),
     triggerEvent: z.string().trim().min(1),
     repository: z
       .string()
@@ -24,6 +34,7 @@ export const contextReviewManagedEventSchema = z
       .regex(/^[0-9a-f]{40}$/)
       .optional(),
     isDraft: z.boolean().optional(),
+    terminalState: z.enum(["closed", "merged"]).optional(),
     commentId: z
       .string()
       .regex(/^[1-9]\d*$/)

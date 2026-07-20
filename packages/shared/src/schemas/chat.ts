@@ -119,6 +119,17 @@ export const keyedTaskChatCreateResponseSchema = z.object({
   effectiveSenderId: z.string().min(1),
   reviewerAgentUuid: z.string().min(1),
   outcome: z.enum(["created", "reused"]),
+  managedReviewReceiptV1: z
+    .object({
+      schemaVersion: z.literal(1),
+      repository: z
+        .string()
+        .trim()
+        .regex(/^[^\s/]+\/[^\s/]+$/),
+      pullRequest: z.number().int().positive(),
+      expectedHead: z.string().regex(/^[0-9a-f]{40}$/),
+    })
+    .strict(),
 });
 export type KeyedTaskChatCreateResponse = z.infer<typeof keyedTaskChatCreateResponseSchema>;
 

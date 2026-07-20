@@ -89,6 +89,11 @@ export type AudienceResolution = {
   actorHumanId: string | null;
 };
 
+export type GithubAudienceOptions = {
+  /** Preserve existing attention lines but do not mint identity-target lines. */
+  suppressNewIdentityTargets?: boolean;
+};
+
 /**
  * Compute the Stage 2 audience for a normalized event.
  *
@@ -103,7 +108,11 @@ export type AudienceResolution = {
  * Echo pruning happens in delivery, before fresh-chat resolution, so self-only
  * events do not write cards and mixed events keep the other humans' entries.
  */
-export async function resolveGithubAudience(db: Database, event: NormalizedScmEvent): Promise<AudienceResolution> {
+export async function resolveGithubAudience(
+  db: Database,
+  event: NormalizedScmEvent,
+  options: GithubAudienceOptions = {},
+): Promise<AudienceResolution> {
   const organizationId = event.source.organizationId;
   const entityKeys = githubEntityKeyCandidates(event.entity.type, event.entity.key);
   const actorHumanId = await resolveGithubActorHumanId(db, organizationId, event.actor);
@@ -255,7 +264,7 @@ export async function resolveGithubAudience(db: Database, event: NormalizedScmEv
         continue;
       }
 
-      if (!c.delegateMention) continue;
+      if (options.suppressNewIdentityTargets || !c.delegateMention) continue;
       const verdict = evaluateDelegateTarget(delegateById.get(c.delegateMention), organizationId);
       if (verdict !== "ok") continue;
       involved.push({

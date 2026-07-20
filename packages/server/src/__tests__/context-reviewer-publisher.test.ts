@@ -3,12 +3,14 @@ import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER, CONTEXT_REVIEW_MAN
 import { eq, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgentRuntimeSession, revokeAgentRuntimeSession } from "../services/agent-runtime-session.js";
+import { createChat } from "../services/chat.js";
 import { handleContextReviewerPrEvent } from "../services/context-reviewer-pr.js";
 import { submitContextReviewOutcome } from "../services/context-reviewer-publisher.js";
 import {
@@ -181,10 +183,12 @@ describe("Context Reviewer App publisher", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: expect.stringContaining("reserved") });
     const visibleRuns = await fixture.app.db
-      .select({ id: messages.id })
+      .select({ id: messages.id, metadata: messages.metadata })
       .from(messages)
       .where(eq(messages.chatId, fixture.chatId));
-    expect(visibleRuns).toEqual([{ id: fixture.messageId }]);
+    expect(visibleRuns.filter((message) => typeof message.metadata.contextReviewRunId === "string")).toEqual([
+      expect.objectContaining({ id: fixture.messageId }),
+    ]);
     await expect(
       submitContextReviewOutcome({
         db: fixture.app.db,
@@ -433,10 +437,10 @@ describe("Context Reviewer App publisher", () => {
 
     await expect(createFollowUpRun(fixture)).rejects.toThrow("unresolved GitHub review delivery");
     const visibleRuns = await fixture.app.db
-      .select({ id: messages.id })
+      .select({ id: messages.id, metadata: messages.metadata })
       .from(messages)
       .where(eq(messages.chatId, fixture.chatId));
-    expect(visibleRuns).toHaveLength(1);
+    expect(visibleRuns.filter((message) => typeof message.metadata.contextReviewRunId === "string")).toHaveLength(1);
 
     releasePost();
     await expect(olderSubmission).resolves.toMatchObject({ action: "APPROVE" });
@@ -777,6 +781,29 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
     { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
     { updatedBy: admin.userId, memberId: admin.memberId },
   );
+  const legacy = await createChat(app.db, {
+    mode: "task",
+    initiatorAgentId: admin.humanAgentUuid,
+    organizationId: admin.organizationId,
+    initialRecipientAgentIds: [reviewer.uuid],
+    contextParticipantAgentIds: [],
+    topic: "Legacy Context Review PR #123",
+    initialMessage: { source: "api", format: "markdown", content: "legacy opening", metadata: {} },
+    source: "manual",
+  });
+  await app.db
+    .update(chats)
+    .set({
+      metadata: {
+        source: "github",
+        entityType: "pull_request",
+        entityKey: "owner/context-tree#123",
+        entityUrl: "https://github.com/owner/context-tree/pull/123",
+        contextTreeReviewer: true,
+        reviewerAgentUuid: reviewer.uuid,
+      },
+    })
+    .where(eq(chats.id, legacy.chat.id));
   const result = await handleContextReviewerPrEvent(app, {
     eventType: "pull_request",
     organizationId: admin.organizationId,

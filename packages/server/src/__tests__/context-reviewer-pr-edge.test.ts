@@ -13,6 +13,11 @@ describe("Context Reviewer PR internals", () => {
 
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "opened")).toBe(true);
     expect(contextReviewerPrTestInternals.isSupportedContextReviewerPrEvent("pull_request", "closed")).toBe(false);
+    expect(isContextReviewerCandidateEvent("pull_request", "closed", { action: "closed" })).toBe(true);
+    expect(isContextReviewerCandidateEvent("pull_request", "review_requested", { action: "review_requested" })).toBe(
+      true,
+    );
+    expect(isContextReviewerCandidateEvent("pull_request", "assigned", { action: "assigned" })).toBe(true);
     expect(isContextReviewerCandidateEvent("pull_request", "reopened", { action: "reopened" })).toBe(true);
     expect(
       isContextReviewerCandidateEvent("pull_request", "edited", {

@@ -133,6 +133,18 @@ describe("managed Context Review event metadata", () => {
 
   it("accepts the complete server-authored envelope and passthrough delivery metadata", () => {
     expect(contextReviewManagedMessageMetadataSchema.safeParse(metadata).success).toBe(true);
+    expect(
+      contextReviewManagedMessageMetadataSchema.safeParse({
+        ...metadata,
+        contextReviewManagedEventV1: {
+          ...metadata.contextReviewManagedEventV1,
+          eventType: "pull_request",
+          action: "closed",
+          triggerEvent: "pull_request.closed",
+          terminalState: "merged",
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it("rejects incomplete, malformed, or non-GitHub envelopes", () => {
@@ -150,5 +162,14 @@ describe("managed Context Review event metadata", () => {
       }).success,
     ).toBe(false);
     expect(contextReviewManagedMessageMetadataSchema.safeParse({ ...metadata, source: "api" }).success).toBe(false);
+    expect(
+      contextReviewManagedMessageMetadataSchema.safeParse({
+        ...metadata,
+        contextReviewManagedEventV1: {
+          ...metadata.contextReviewManagedEventV1,
+          terminalState: "open",
+        },
+      }).success,
+    ).toBe(false);
   });
 });

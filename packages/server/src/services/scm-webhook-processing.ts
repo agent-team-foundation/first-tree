@@ -29,9 +29,16 @@ type ProcessScmWebhookDeliveryInput<TTarget, TDeliveryStats, TProviderResult> = 
   /** Provider-owned work covered by the same whole-request claim. */
   runProviderWork: () => Promise<TProviderResult>;
   /** Provider-owned mapping and identity resolver. */
-  resolveAudience: (event: NormalizedScmEvent) => Promise<ScmAudienceResolution<TTarget>>;
+  resolveAudience: (
+    event: NormalizedScmEvent,
+    providerResult: TProviderResult,
+  ) => Promise<ScmAudienceResolution<TTarget>>;
   /** Provider-owned card/chat delivery. Per-target/chat failures stay isolated here. */
-  deliver: (event: NormalizedScmEvent, audience: ScmAudienceResolution<TTarget>) => Promise<TDeliveryStats>;
+  deliver: (
+    event: NormalizedScmEvent,
+    audience: ScmAudienceResolution<TTarget>,
+    providerResult: TProviderResult,
+  ) => Promise<TDeliveryStats>;
 };
 
 /**
@@ -78,7 +85,7 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
     }
     if (!input.event) return { outcome: "provider_only", providerResult };
 
-    const audience = await input.resolveAudience(input.event);
+    const audience = await input.resolveAudience(input.event, providerResult);
     if (audience.targets.length === 0) {
       const reason = input.event.targets.length > 0 ? "audience_empty_with_targets" : "audience_empty_no_targets";
       log.info(
@@ -96,7 +103,7 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
       return { outcome: "audience_empty", reason, providerResult };
     }
 
-    const deliveryStats = await input.deliver(input.event, audience);
+    const deliveryStats = await input.deliver(input.event, audience, providerResult);
     return { outcome: "delivered", deliveryStats, providerResult };
   } catch (err) {
     if (deliveryId) {

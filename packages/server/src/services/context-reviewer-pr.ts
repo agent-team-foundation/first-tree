@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -16,9 +15,9 @@ import { messages } from "../db/schema/messages.js";
 import { AppError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
-import { createChat } from "./chat.js";
 import {
   dispatchManagedContextReviewWebhookEvent,
+  inspectManagedContextReviewTask,
   type ManagedContextReviewWebhookEvent,
 } from "./context-review-task.js";
 import { sendMessage } from "./message.js";
@@ -59,9 +58,31 @@ export type ContextReviewerPrTemplateInput = {
   reviewerManagerGithubLogin: string | null;
 };
 
+export type ContextReviewRoutingDecision =
+  | "managed_handled"
+  | "managed_missing"
+  | "managed_unavailable"
+  | "legacy_existing"
+  | "not_applicable";
+
+export function isManagedContextReviewRoutingDecision(decision: ContextReviewRoutingDecision): boolean {
+  return decision === "managed_handled" || decision === "managed_missing" || decision === "managed_unavailable";
+}
+
 export type ContextReviewerPrResult =
-  | { handled: false; reason: ContextReviewerPrSkipReason }
-  | { handled: true; chatId: string; messageId: string; reused: boolean; suppressed?: boolean };
+  | {
+      handled: false;
+      reason: ContextReviewerPrSkipReason;
+      routingDecision: "managed_missing" | "managed_unavailable" | "not_applicable";
+    }
+  | {
+      handled: true;
+      chatId: string;
+      messageId: string;
+      reused: boolean;
+      suppressed?: boolean;
+      routingDecision: "managed_handled" | "legacy_existing";
+    };
 
 export type ContextReviewerPrSkipReason =
   | "unsupported_event"
@@ -73,7 +94,8 @@ export type ContextReviewerPrSkipReason =
   | "managed_task_unavailable"
   | "feature_disabled"
   | "reviewer_agent_missing"
-  | "reviewer_agent_invalid";
+  | "reviewer_agent_invalid"
+  | "legacy_creation_disabled";
 
 type ContextReviewerPrPayloadInput = Omit<
   ContextReviewerPrTemplateInput,
@@ -82,7 +104,16 @@ type ContextReviewerPrPayloadInput = Omit<
 
 type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
-  action: "opened" | "synchronize" | "ready_for_review" | "reopened" | "created" | "edited";
+  action:
+    | "opened"
+    | "synchronize"
+    | "ready_for_review"
+    | "reopened"
+    | "closed"
+    | "review_requested"
+    | "assigned"
+    | "created"
+    | "edited";
   entityKey: string;
   headSha: string | null;
   senderType: string | null;
@@ -91,12 +122,29 @@ type PullRequestPayloadInfo = ContextReviewerPrPayloadInput & {
   commentBody: string | null;
   prBody: string | null;
   previousPrBody: string | null;
+  terminalState: "closed" | "merged" | null;
+};
+
+type PullRequestIdentity = {
+  repoFullName: string;
+  prNumber: number;
+  entityKey: string;
+  prBody: string | null;
+  previousPrBody: string | null;
 };
 
 type ContextReviewerPrTrigger =
   | {
       eventType: "pull_request";
-      action: "opened" | "synchronize" | "ready_for_review" | "reopened" | "edited";
+      action:
+        | "opened"
+        | "synchronize"
+        | "ready_for_review"
+        | "reopened"
+        | "closed"
+        | "review_requested"
+        | "assigned"
+        | "edited";
       triggerEvent: string;
     }
   | { eventType: "issue_comment"; action: "created" | "edited"; triggerEvent: string }
@@ -217,35 +265,180 @@ export async function handleContextReviewerPrEvent(
 ): Promise<ContextReviewerPrResult> {
   const action = isRecord(input.payload) ? readString(input.payload.action) : null;
   if (!isContextReviewerCandidateEvent(input.eventType, action, input.payload)) {
-    return { handled: false, reason: "unsupported_event" };
+    const identity = extractPullRequestIdentity(input.payload);
+    if (!identity) {
+      return { handled: false, reason: "unsupported_event", routingDecision: "not_applicable" };
+    }
+    const repository = normalizeGithubRepo(identity.repoFullName);
+    if (!repository) return { handled: false, reason: "malformed_payload", routingDecision: "not_applicable" };
+    try {
+      const managedTask = await inspectManagedContextReviewTask(app.db, {
+        organizationId: input.organizationId,
+        repository,
+        pullRequest: identity.prNumber,
+      });
+      if (managedTask.outcome === "task_existing") {
+        log.info(
+          {
+            organizationId: input.organizationId,
+            entityKey: identity.entityKey,
+            chatId: managedTask.chatId,
+            metric: "context_review_routing_total",
+            routingDecision: "managed_handled",
+            managedOutcome: "observation_only",
+            triggerEvent: `${input.eventType}.${action ?? "unknown"}`,
+          },
+          "managed Agent Review event reserved for card-only observation",
+        );
+        return {
+          handled: true,
+          chatId: managedTask.chatId,
+          messageId: managedTask.messageId,
+          reused: true,
+          suppressed: true,
+          routingDecision: "managed_handled",
+        };
+      }
+    } catch (error) {
+      if (error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500) {
+        log.warn(
+          {
+            organizationId: input.organizationId,
+            entityKey: identity.entityKey,
+            metric: "context_review_routing_total",
+            routingDecision: "managed_unavailable",
+            errorClass: error.name,
+            statusCode: error.statusCode,
+          },
+          "managed Agent Review task unavailable; preserving card-only observation routing",
+        );
+        return { handled: false, reason: "managed_task_unavailable", routingDecision: "managed_unavailable" };
+      }
+      throw error;
+    }
+    const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
+    const boundRepository = normalizeGithubRepo(contextTree?.repo);
+    const declaresManagedReview =
+      identity.prBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true ||
+      identity.previousPrBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true;
+    if (repository === boundRepository && declaresManagedReview) {
+      return { handled: false, reason: "managed_task_missing", routingDecision: "managed_missing" };
+    }
+    return { handled: false, reason: "unsupported_event", routingDecision: "not_applicable" };
   }
 
   const info = extractPullRequestPayloadInfo(input.eventType, input.payload, input.organizationId);
   if (!info) {
-    return { handled: false, reason: "malformed_payload" };
+    return { handled: false, reason: "malformed_payload", routingDecision: "not_applicable" };
   }
+  const webhookRepo = normalizeGithubRepo(info.repoFullName);
+  if (!webhookRepo) return { handled: false, reason: "malformed_payload", routingDecision: "not_applicable" };
+
+  // Probe the immutable managed task identity before consulting mutable
+  // routing configuration. If the binding or Reviewer changed, the task's
+  // live authority check must fail closed as managed_unavailable; treating it
+  // as ordinary GitHub traffic could create a competing execution line.
+  let managedResult: Awaited<ReturnType<typeof dispatchManagedContextReviewWebhookEvent>>;
+  try {
+    managedResult = await dispatchManagedContextReviewWebhookEvent(
+      app.db,
+      managedContextReviewWebhookEvent(info, webhookRepo, input.deliveryId ?? null),
+    );
+  } catch (error) {
+    // A 4xx here means the stable managed task was found but its live
+    // authority or stored invariants now fail closed (for example requester
+    // removal or ambiguous history). Do not mutate that task and do not let
+    // its permanent admission failure starve the independent observation-card
+    // surface. The typed routing decision ensures that surface remains silent
+    // and cannot create a competing execution Chat. Unexpected/transient
+    // failures still propagate so GitHub can retry the whole delivery.
+    if (error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500) {
+      log.warn(
+        {
+          organizationId: input.organizationId,
+          entityKey: info.entityKey,
+          metric: "context_review_routing_total",
+          routingDecision: "managed_unavailable",
+          errorClass: error.name,
+          statusCode: error.statusCode,
+        },
+        "managed Agent Review task unavailable; preserving card-only observation routing",
+      );
+      return { handled: false, reason: "managed_task_unavailable", routingDecision: "managed_unavailable" };
+    }
+    throw error;
+  }
+  if (managedResult.outcome !== "task_missing") {
+    if (managedResult.outcome === "delivered") {
+      notifyRecipients(app.notifier, managedResult.recipients, managedResult.messageId);
+    }
+    log.info(
+      {
+        organizationId: input.organizationId,
+        entityKey: info.entityKey,
+        chatId: managedResult.chatId,
+        metric: "context_review_routing_total",
+        routingDecision: "managed_handled",
+        managedOutcome: managedResult.outcome,
+        triggerEvent: info.triggerEvent,
+        terminalState: info.terminalState,
+      },
+      "managed Agent Review event resolved on stable task Chat",
+    );
+    return {
+      handled: true,
+      chatId: managedResult.chatId,
+      messageId: managedResult.messageId,
+      reused: true,
+      routingDecision: "managed_handled",
+      ...(managedResult.outcome === "delivered" ? {} : { suppressed: true }),
+    };
+  }
+
   const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
   const boundRepo = normalizeGithubRepo(contextTree?.repo);
   if (!boundRepo) {
     log.debug({ organizationId: input.organizationId }, "context reviewer skipped: context tree repo unset");
-    return { handled: false, reason: "context_tree_repo_unset" };
+    return { handled: false, reason: "context_tree_repo_unset", routingDecision: "not_applicable" };
   }
-  const webhookRepo = normalizeGithubRepo(info.repoFullName);
-  if (!webhookRepo || webhookRepo !== boundRepo) {
+  if (webhookRepo !== boundRepo) {
     log.debug(
       { organizationId: input.organizationId, webhookRepo, boundRepo },
       "context reviewer skipped: webhook repo is not bound context tree repo",
     );
-    return { handled: false, reason: "repo_mismatch" };
+    return { handled: false, reason: "repo_mismatch", routingDecision: "not_applicable" };
   }
 
+  const declaresManagedReview =
+    info.prBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true ||
+    info.previousPrBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true;
+  if (declaresManagedReview) {
+    log.warn(
+      {
+        organizationId: input.organizationId,
+        entityKey: info.entityKey,
+        metric: "context_review_routing_total",
+        routingDecision: "managed_missing",
+        reason: "managed_task_missing",
+      },
+      "managed Agent Review marker has no stable task; refusing legacy takeover",
+    );
+    return { handled: false, reason: "managed_task_missing", routingDecision: "managed_missing" };
+  }
+  if (!resolveContextReviewerPrTrigger(input.eventType, action)) {
+    return { handled: false, reason: "unsupported_event", routingDecision: "not_applicable" };
+  }
+
+  // Legacy compatibility may drain only into a pre-existing reviewer Chat.
+  // It never creates a second execution line. Managed admission runs first so
+  // a stable task always wins when managed and legacy state coexist.
   const features = await getOrgSetting(app.db, input.organizationId, "context_tree_features");
   if (!features.contextReviewer.enabled) {
-    return { handled: false, reason: "feature_disabled" };
+    return { handled: false, reason: "feature_disabled", routingDecision: "not_applicable" };
   }
   const reviewerAgentUuid = features.contextReviewer.agentUuid;
   if (!reviewerAgentUuid) {
-    return { handled: false, reason: "reviewer_agent_missing" };
+    return { handled: false, reason: "reviewer_agent_missing", routingDecision: "not_applicable" };
   }
 
   const reviewer = await loadValidReviewerAgent(app.db, {
@@ -257,66 +450,7 @@ export async function handleContextReviewerPrEvent(
       { organizationId: input.organizationId, reviewerAgentUuid },
       "context reviewer skipped: configured reviewer agent is no longer valid",
     );
-    return { handled: false, reason: "reviewer_agent_invalid" };
-  }
-
-  let managedResult: Awaited<ReturnType<typeof dispatchManagedContextReviewWebhookEvent>>;
-  try {
-    managedResult = await dispatchManagedContextReviewWebhookEvent(
-      app.db,
-      managedContextReviewWebhookEvent(info, webhookRepo, input.deliveryId ?? null),
-    );
-  } catch (error) {
-    // A 4xx here means the stable managed task was found but its live
-    // authority or stored invariants now fail closed (for example requester
-    // removal or ambiguous history). Do not mutate that task and do not let
-    // its permanent admission failure starve the independent generic GitHub
-    // followed-chat surface. Unexpected/transient failures still propagate so
-    // the whole-delivery claim is released and GitHub can retry.
-    if (error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500) {
-      log.warn(
-        {
-          organizationId: input.organizationId,
-          entityKey: info.entityKey,
-          errorClass: error.name,
-          statusCode: error.statusCode,
-        },
-        "managed Agent Review task unavailable; generic GitHub delivery may continue",
-      );
-      return { handled: false, reason: "managed_task_unavailable" };
-    }
-    throw error;
-  }
-  if (managedResult.outcome !== "task_missing") {
-    if (managedResult.outcome === "delivered") {
-      notifyRecipients(app.notifier, managedResult.recipients, managedResult.messageId);
-      log.info(
-        {
-          organizationId: input.organizationId,
-          entityKey: info.entityKey,
-          chatId: managedResult.chatId,
-          triggerEvent: info.triggerEvent,
-        },
-        "managed Agent Review follow-up sent to stable task Chat",
-      );
-    }
-    return {
-      handled: true,
-      chatId: managedResult.chatId,
-      messageId: managedResult.messageId,
-      reused: true,
-      ...(managedResult.outcome === "delivered" ? {} : { suppressed: true }),
-    };
-  }
-
-  const declaresManagedReview =
-    info.prBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true ||
-    info.previousPrBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true;
-  if (declaresManagedReview) {
-    return { handled: false, reason: "managed_task_missing" };
-  }
-  if (!resolveContextReviewerPrTrigger(input.eventType, action)) {
-    return { handled: false, reason: "unsupported_event" };
+    return { handled: false, reason: "reviewer_agent_invalid", routingDecision: "not_applicable" };
   }
 
   const metadata = chatMetadataSchema.parse({
@@ -333,6 +467,16 @@ export async function handleContextReviewerPrEvent(
   });
 
   if (existingChatId) {
+    log.info(
+      {
+        organizationId: input.organizationId,
+        entityKey: info.entityKey,
+        chatId: existingChatId,
+        metric: "context_review_routing_total",
+        routingDecision: "legacy_existing",
+      },
+      "draining legacy Context Reviewer event into existing task Chat",
+    );
     await app.db.update(chats).set({ metadata }).where(eq(chats.id, existingChatId));
     await applyMembershipWrite(
       app.db,
@@ -362,6 +506,7 @@ export async function handleContextReviewerPrEvent(
         messageId: suppressedEchoMessageId,
         reused: true,
         suppressed: true,
+        routingDecision: "legacy_existing",
       };
     }
     const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
@@ -376,6 +521,7 @@ export async function handleContextReviewerPrEvent(
         messageId: supersedingSynchronizeMessageId,
         reused: true,
         suppressed: true,
+        routingDecision: "legacy_existing",
       };
     }
 
@@ -404,82 +550,61 @@ export async function handleContextReviewerPrEvent(
       },
       "context reviewer task sent to existing chat",
     );
-    return { handled: true, chatId: existingChatId, messageId: message.id, reused: true };
+    return {
+      handled: true,
+      chatId: existingChatId,
+      messageId: message.id,
+      reused: true,
+      routingDecision: "legacy_existing",
+    };
   }
 
-  const contextReviewRunId = uuidv7();
-  const prompt = await renderContextReviewerPrPrompt(buildTemplateInput(info, reviewer, contextReviewRunId));
-  const created = await createChat(app.db, {
-    mode: "task",
-    initiatorAgentId: reviewer.managerHumanAgentId,
-    organizationId: input.organizationId,
-    initialRecipientAgentIds: [reviewer.uuid],
-    contextParticipantAgentIds: [],
-    topic: `Context Review PR #${info.prNumber}: ${info.title}`,
-    onboardingKickoffKey: contextReviewerChatReservationKey(input.organizationId, info.entityKey),
-    initialMessage: {
-      source: "github",
-      format: "markdown",
-      content: prompt,
-      metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
-    },
-    allowContextReviewRun: true,
-    source: "manual",
-  });
-  await app.db.update(chats).set({ metadata }).where(eq(chats.id, created.chat.id));
-  if (!created.initialMessageCreated) {
-    await applyMembershipWrite(
-      app.db,
-      created.chat.id,
-      [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
-      { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
-    );
-    const supersedingSynchronizeMessageId = await findSupersedingSynchronizeMessageId(app.db, {
-      chatId: created.chat.id,
-      info,
-      reviewer,
-    });
-    if (supersedingSynchronizeMessageId) {
-      return {
-        handled: true,
-        chatId: created.chat.id,
-        messageId: supersedingSynchronizeMessageId,
-        reused: true,
-        suppressed: true,
-      };
-    }
-    const { message, recipients } = await sendMessage(
-      app.db,
-      created.chat.id,
-      reviewer.managerHumanAgentId,
-      {
-        source: "github",
-        format: "markdown",
-        content: prompt,
-        metadata: contextReviewerMessageMetadata(info, reviewer, contextReviewRunId),
-      },
-      { normalizeMentionsInContent: false, allowContextReviewRun: true },
-    );
-    notifyRecipients(app.notifier, recipients, message.id);
-    return { handled: true, chatId: created.chat.id, messageId: message.id, reused: true };
-  }
-  notifyRecipients(app.notifier, created.recipients, created.message.id);
   log.info(
     {
       organizationId: input.organizationId,
       entityKey: info.entityKey,
-      chatId: created.chat.id,
-      triggerEvent: info.triggerEvent,
-      isDraft: info.isDraft,
+      metric: "context_review_routing_total",
+      routingDecision: "not_applicable",
+      reason: "legacy_creation_disabled",
     },
-    "context reviewer task chat created",
+    "legacy Context Reviewer creation disabled; no existing task to drain",
   );
-  return { handled: true, chatId: created.chat.id, messageId: created.message.id, reused: false };
+  return { handled: false, reason: "legacy_creation_disabled", routingDecision: "not_applicable" };
 }
 
-function contextReviewerChatReservationKey(organizationId: string, entityKey: string): string {
-  const digest = createHash("sha256").update(`${organizationId}\0${entityKey}`).digest("hex");
-  return `context-review:${digest}`;
+function extractPullRequestIdentity(payload: unknown): PullRequestIdentity | null {
+  if (!isRecord(payload)) return null;
+  const repository = isRecord(payload.repository) ? payload.repository : null;
+  const repoFullName = readString(repository?.full_name);
+  if (!repoFullName) return null;
+  const normalizedRepo = normalizeGithubRepo(repoFullName) ?? repoFullName;
+
+  const pullRequest = isRecord(payload.pull_request) ? payload.pull_request : null;
+  if (pullRequest) {
+    const prNumber = readNumber(pullRequest.number);
+    if (prNumber === null) return null;
+    const changes = isRecord(payload.changes) ? payload.changes : null;
+    const bodyChange = isRecord(changes?.body) ? changes.body : null;
+    return {
+      repoFullName,
+      prNumber,
+      entityKey: `${normalizedRepo}#${prNumber}`,
+      prBody: readString(pullRequest.body),
+      previousPrBody: readString(bodyChange?.from),
+    };
+  }
+
+  const issue = isRecord(payload.issue) ? payload.issue : null;
+  if (!isRecord(issue?.pull_request)) return null;
+  const prNumber = readNumber(issue?.number);
+  if (prNumber === null) return null;
+  return {
+    repoFullName,
+    prNumber,
+    entityKey: `${normalizedRepo}#${prNumber}`,
+    prBody: readString(issue?.body),
+    previousPrBody: null,
+  };
 }
 
 export async function handleContextReviewerPullRequest(
@@ -525,7 +650,15 @@ function resolveManagedContextReviewerPrTrigger(
       if (!changes || !Object.hasOwn(changes, "body")) return null;
       return { eventType, action, triggerEvent: `${eventType}.${action}` };
     }
-    if (action === "opened" || action === "synchronize" || action === "ready_for_review" || action === "reopened") {
+    if (
+      action === "opened" ||
+      action === "synchronize" ||
+      action === "ready_for_review" ||
+      action === "reopened" ||
+      action === "closed" ||
+      action === "review_requested" ||
+      action === "assigned"
+    ) {
       return { eventType, action, triggerEvent: `${eventType}.${action}` };
     }
     return null;
@@ -593,6 +726,7 @@ function extractPullRequestPayloadInfo(
       commentBody: null,
       prBody: readString(pr?.body),
       previousPrBody: readString(bodyChange?.from),
+      terminalState: trigger.action === "closed" ? (pr?.merged === true ? "merged" : "closed") : null,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -623,6 +757,7 @@ function extractPullRequestPayloadInfo(
       commentBody: readString(comment?.body),
       prBody: readString(issue?.body),
       previousPrBody: null,
+      terminalState: null,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -652,6 +787,7 @@ function extractPullRequestPayloadInfo(
       commentBody: readString(comment?.body),
       prBody: readString(pr?.body),
       previousPrBody: null,
+      terminalState: null,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -683,6 +819,7 @@ function managedContextReviewWebhookEvent(
     commentAuthorLogin: info.commentAuthorLogin,
     commentAuthorType: info.commentAuthorType,
     commentBody: info.commentBody,
+    terminalState: info.terminalState,
   };
 }
 

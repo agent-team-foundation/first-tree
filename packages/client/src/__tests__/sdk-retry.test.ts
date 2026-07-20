@@ -53,6 +53,12 @@ function makeKeyedCreateOkResponse(): Response {
       effectiveSenderId: "human-1",
       reviewerAgentUuid: "reviewer-1",
       outcome: "reused",
+      managedReviewReceiptV1: {
+        schemaVersion: 1,
+        repository: "owner/context-tree",
+        pullRequest: 749,
+        expectedHead: "a".repeat(40),
+      },
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
@@ -280,6 +286,12 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
       effectiveSenderId: "human-1",
       reviewerAgentUuid: "reviewer-1",
       outcome: "reused",
+      managedReviewReceiptV1: {
+        schemaVersion: 1,
+        repository: "owner/context-tree",
+        pullRequest: 749,
+        expectedHead: "a".repeat(40),
+      },
     });
   });
 

@@ -15,7 +15,8 @@ export type MemberReviewTaskClient = {
 export type MemberReviewTaskInputErrorCode =
   | "METADATA_FILE_READ_FAILED"
   | "INVALID_METADATA_FILE"
-  | "INVALID_REVIEW_PACKET";
+  | "INVALID_REVIEW_PACKET"
+  | "MANAGED_REVIEW_RECEIPT_MISMATCH";
 
 export class MemberReviewTaskInputError extends Error {
   constructor(
@@ -63,8 +64,21 @@ export async function dispatchMemberReviewTask(
     readMemberReviewTaskMetadata(input.metadataFile),
   ]);
   const organizationId = resolveMemberOrganizationId(profile, input.organizationId);
-  return sdk.createMemberKeyedTaskChat(organizationId, {
+  const result = await sdk.createMemberKeyedTaskChat(organizationId, {
     mode: "keyed_task",
     initialMessage: { format: "markdown", content: input.opening, metadata },
   });
+  const packet = metadata.reviewPacketV1;
+  const receipt = result.managedReviewReceiptV1;
+  if (
+    receipt.repository.toLowerCase() !== packet.repository.toLowerCase() ||
+    receipt.pullRequest !== packet.pullRequest ||
+    receipt.expectedHead !== packet.expectedHead
+  ) {
+    throw new MemberReviewTaskInputError(
+      "MANAGED_REVIEW_RECEIPT_MISMATCH",
+      "Server receipt does not match the revalidated Agent Review repository, pull request, and exact head",
+    );
+  }
+  return result;
 }

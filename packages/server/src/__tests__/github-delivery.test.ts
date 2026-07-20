@@ -192,6 +192,103 @@ describe("deliverGithubEvent", () => {
     expect(content.reason).toBe("subscribed");
   });
 
+  it("delivers managed observation cards to existing speakers without waking them", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+      type: "human",
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(chatMembership).values([
+      {
+        chatId,
+        agentId: human,
+        role: "owner",
+        accessMode: "speaker",
+        mode: "full",
+        source: "manual",
+      },
+      {
+        chatId,
+        agentId: delegate,
+        role: "member",
+        accessMode: "speaker",
+        mode: "full",
+        source: "manual",
+      },
+    ]);
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: "review_requested",
+      involveLogin: "reviewer",
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#managed-card",
+      action: "review_requested",
+      kind: "review_requested",
+    });
+
+    const stats = await deliverGithubEvent(app, event, [target], { cardOnly: true, suppressNewChats: true });
+
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+    const [sent] = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(sent?.metadata).toMatchObject({ mentions: [] });
+    await expect(notifyCount(app, chatId, delegate)).resolves.toBe(0);
+  });
+
+  it("drops managed personnel targets instead of creating a competing Chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+      type: "human",
+    });
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "new",
+      chatId: null,
+      involveReason: "review_requested",
+      involveLogin: "reviewer",
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#managed-new",
+      action: "review_requested",
+      kind: "review_requested",
+    });
+
+    const stats = await deliverGithubEvent(app, event, [target], { cardOnly: true, suppressNewChats: true });
+
+    expect(stats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
+    await expect(app.db.select({ id: chats.id }).from(chats)).resolves.toHaveLength(0);
+    await expect(app.db.select({ id: messages.id }).from(messages)).resolves.toHaveLength(0);
+  });
+
   it("delivers a recipientless card when the delegate is not a live speaker (trusted opt-out, wakes no one)", async () => {
     // Empty-wake-set system path: github-delivery wakes the delegate via native
     // `metadata.mentions`, but on some events that delegate is not an active

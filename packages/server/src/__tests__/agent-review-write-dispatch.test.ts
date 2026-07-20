@@ -36,6 +36,12 @@ type DispatchResponse = {
   effectiveSenderId: string;
   reviewerAgentUuid: string;
   outcome: "created" | "reused";
+  managedReviewReceiptV1: {
+    schemaVersion: 1;
+    repository: string;
+    pullRequest: number;
+    expectedHead: string;
+  };
 };
 
 async function createMember(app: FastifyInstance, admin: Admin, login: string): Promise<MemberContext> {
@@ -187,7 +193,15 @@ async function writePreflight(app: App, admin: Admin, member: MemberContext, req
 
 function managedPullRequestPayload(
   options: {
-    action?: "opened" | "synchronize" | "ready_for_review" | "reopened" | "edited";
+    action?:
+      | "opened"
+      | "synchronize"
+      | "ready_for_review"
+      | "reopened"
+      | "closed"
+      | "review_requested"
+      | "assigned"
+      | "edited";
     body?: string;
     headSha?: string;
     changes?: Record<string, unknown>;
@@ -396,6 +410,12 @@ describe("member Agent Review task dispatch", () => {
       effectiveSenderId: requester.humanAgentUuid,
       reviewerAgentUuid: reviewer.uuid,
       outcome: "created",
+      managedReviewReceiptV1: {
+        schemaVersion: 1,
+        repository: "owner/context-tree",
+        pullRequest: 749,
+        expectedHead: "a".repeat(40),
+      },
     });
 
     const [storedMessage] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
@@ -473,6 +493,7 @@ describe("member Agent Review task dispatch", () => {
       messageId: task.messageId,
       reused: true,
       suppressed: true,
+      routingDecision: "managed_handled",
     });
     for (const [body, authorType] of [
       ["Automated analyzer found a blocking issue.", "Bot"],
@@ -598,7 +619,7 @@ describe("member Agent Review task dispatch", () => {
     expect(chatMessages).toHaveLength(3);
   });
 
-  it("keeps task identity after managed-marker removal and ignores title-only edits", async () => {
+  it("keeps task identity after managed-marker removal and reserves title-only edits without a wake", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const requester = await createMember(app, admin, "writer");
@@ -637,7 +658,14 @@ describe("member Agent Review task dispatch", () => {
       }),
       organizationId: admin.organizationId,
     });
-    expect(titleOnly).toEqual({ handled: false, reason: "unsupported_event" });
+    expect(titleOnly).toEqual({
+      handled: true,
+      chatId: task.chatId,
+      messageId: task.messageId,
+      reused: true,
+      suppressed: true,
+      routingDecision: "managed_handled",
+    });
     const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
     expect(chatMessages).toHaveLength(3);
     expect(
@@ -663,6 +691,8 @@ describe("member Agent Review task dispatch", () => {
         payload: managedPullRequestPayload({ action: "ready_for_review" }),
       },
       { eventType: "pull_request", payload: managedPullRequestPayload({ action: "reopened" }) },
+      { eventType: "pull_request", payload: managedPullRequestPayload({ action: "review_requested" }) },
+      { eventType: "pull_request", payload: managedPullRequestPayload({ action: "assigned" }) },
       {
         eventType: "pull_request_review_comment",
         payload: managedReviewCommentPayload("Please clarify this decision.", "created"),
@@ -670,6 +700,13 @@ describe("member Agent Review task dispatch", () => {
       {
         eventType: "pull_request_review_comment",
         payload: managedReviewCommentPayload("Updated clarification request.", "edited"),
+      },
+      {
+        eventType: "pull_request",
+        payload: {
+          ...managedPullRequestPayload({ action: "closed" }),
+          pull_request: { ...managedPullRequestPayload({ action: "closed" }).pull_request, merged: true },
+        },
       },
     ];
     for (const event of events) {
@@ -679,7 +716,7 @@ describe("member Agent Review task dispatch", () => {
     }
 
     const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
-    expect(chatMessages).toHaveLength(5);
+    expect(chatMessages).toHaveLength(8);
     const triggerEvents = chatMessages.flatMap((message) => {
       const event = message.metadata.contextReviewManagedEventV1 as { triggerEvent?: string } | undefined;
       return event?.triggerEvent ? [event.triggerEvent] : [];
@@ -688,6 +725,9 @@ describe("member Agent Review task dispatch", () => {
       new Set([
         "pull_request.ready_for_review",
         "pull_request.reopened",
+        "pull_request.review_requested",
+        "pull_request.assigned",
+        "pull_request.closed",
         "pull_request_review_comment.created",
         "pull_request_review_comment.edited",
       ]),
@@ -775,6 +815,7 @@ describe("member Agent Review task dispatch", () => {
       messageId: terminal.id,
       reused: true,
       suppressed: true,
+      routingDecision: "managed_handled",
     });
     expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(5);
 
@@ -792,6 +833,7 @@ describe("member Agent Review task dispatch", () => {
       messageId: terminal.id,
       reused: true,
       suppressed: true,
+      routingDecision: "managed_handled",
     });
     expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(5);
 
@@ -950,17 +992,153 @@ describe("member Agent Review task dispatch", () => {
     await app.db.update(members).set({ status: "removed" }).where(eq(members.id, requester.memberId));
     await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, requester.humanAgentUuid));
 
-    await expect(
-      handleContextReviewerPrEvent(app, {
-        eventType: "pull_request",
-        payload: managedPullRequestPayload({ action: "synchronize" }),
-        organizationId: admin.organizationId,
-      }),
-    ).resolves.toEqual({ handled: false, reason: "managed_task_unavailable" });
+    for (const action of ["opened", "synchronize"] as const) {
+      await expect(
+        handleContextReviewerPrEvent(app, {
+          eventType: "pull_request",
+          payload: managedPullRequestPayload({ action }),
+          organizationId: admin.organizationId,
+        }),
+      ).resolves.toEqual({
+        handled: false,
+        reason: "managed_task_unavailable",
+        routingDecision: "managed_unavailable",
+      });
+    }
     expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toEqual(messagesBefore);
     expect(await app.db.select().from(chatMembership).where(eq(chatMembership.chatId, task.chatId))).toEqual(
       membershipBefore,
     );
+  });
+
+  it("keeps a managed task fenced after the live Context Tree binding changes", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+    const messagesBefore = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
+
+    await putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree",
+      { repo: "https://github.com/owner/replacement-context.git", branch: "main" },
+      { updatedBy: admin.userId },
+    );
+
+    await expect(
+      handleContextReviewerPrEvent(app, {
+        eventType: "pull_request",
+        payload: managedPullRequestPayload({ action: "review_requested" }),
+        organizationId: admin.organizationId,
+      }),
+    ).resolves.toEqual({
+      handled: false,
+      reason: "managed_task_unavailable",
+      routingDecision: "managed_unavailable",
+    });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toEqual(messagesBefore);
+    expect(await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId))).toHaveLength(1);
+  });
+
+  it("records merged terminal evidence without waking a Reviewer or preserving an active result", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const requester = await createMember(app, admin, "writer");
+    const reviewer = await createReviewer(app, admin);
+    await configureReview(app, admin, reviewer.uuid);
+    const created = await dispatch(app, admin, requester, dispatchPayload());
+    const task = created.json<DispatchResponse>();
+    const resultMarker = `<!-- first-tree-context-review-result:v1 chat=${task.chatId} reviewer=${reviewer.uuid} head=${"a".repeat(40)} -->`;
+    await sendMessage(
+      app.db,
+      task.chatId,
+      reviewer.uuid,
+      {
+        format: "markdown",
+        content: `${resultMarker}\n\nNEEDS_HUMAN\n\nOwner decision required.`,
+        metadata: { mentions: [requester.humanAgentUuid] },
+        source: "api",
+      },
+      { addressedToAgentIds: [requester.humanAgentUuid] },
+    );
+
+    const terminal = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: {
+        ...managedPullRequestPayload({ action: "closed" }),
+        pull_request: { ...managedPullRequestPayload({ action: "closed" }).pull_request, merged: true },
+      },
+      organizationId: admin.organizationId,
+      deliveryId: randomUUID(),
+    });
+    expect(terminal).toMatchObject({
+      handled: true,
+      chatId: task.chatId,
+      reused: true,
+      routingDecision: "managed_handled",
+    });
+    if (!terminal.handled) throw new Error("expected managed terminal evidence");
+    const [terminalMessage] = await app.db.select().from(messages).where(eq(messages.id, terminal.messageId)).limit(1);
+    expect(terminalMessage?.content).toContain("This is terminal evidence, not a new review request");
+    expect(terminalMessage?.content).toContain("earlier READY, NEEDS_HUMAN, or FAILURE result is historical");
+    expect(terminalMessage?.metadata).toMatchObject({
+      contextReviewManagedEventV1: {
+        action: "closed",
+        terminalState: "merged",
+      },
+    });
+    expect(terminalMessage?.metadata).not.toHaveProperty("addressedAgentIds");
+    expect(await app.db.select().from(inboxEntries).where(eq(inboxEntries.messageId, terminal.messageId))).toEqual([
+      expect.objectContaining({ inboxId: reviewer.inboxId, notify: false }),
+    ]);
+
+    const messageCountAtTerminal = (await app.db.select().from(messages).where(eq(messages.chatId, task.chatId)))
+      .length;
+    const delayed = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({ action: "review_requested" }),
+      organizationId: admin.organizationId,
+      deliveryId: randomUUID(),
+    });
+    expect(delayed).toEqual({
+      handled: true,
+      chatId: task.chatId,
+      messageId: terminal.messageId,
+      reused: true,
+      suppressed: true,
+      routingDecision: "managed_handled",
+    });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(
+      messageCountAtTerminal,
+    );
+
+    const reopened = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({ action: "reopened" }),
+      organizationId: admin.organizationId,
+      deliveryId: randomUUID(),
+    });
+    expect(reopened).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    if (!reopened.handled) throw new Error("expected managed reopen wake");
+    expect(await app.db.select().from(inboxEntries).where(eq(inboxEntries.messageId, reopened.messageId))).toEqual([
+      expect.objectContaining({ inboxId: reviewer.inboxId, notify: true }),
+    ]);
+
+    const afterReopen = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: managedPullRequestPayload({ action: "review_requested" }),
+      organizationId: admin.organizationId,
+      deliveryId: randomUUID(),
+    });
+    expect(afterReopen).toMatchObject({ handled: true, chatId: task.chatId, reused: true });
+    if (!afterReopen.handled) throw new Error("expected post-reopen wake");
+    expect(await app.db.select().from(inboxEntries).where(eq(inboxEntries.messageId, afterReopen.messageId))).toEqual([
+      expect.objectContaining({ inboxId: reviewer.inboxId, notify: true }),
+    ]);
   });
 
   it("converges concurrent retries to one Chat, one opening, and one delivery", async () => {
@@ -1033,7 +1211,7 @@ describe("member Agent Review task dispatch", () => {
     }
   });
 
-  it("keeps the first opening and packet immutable when the same member retries with a new head", async () => {
+  it("returns the durable receipt when the same member retries with a new head", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const requester = await createMember(app, admin, "writer");
@@ -1054,6 +1232,12 @@ describe("member Agent Review task dispatch", () => {
       chatId: firstBody.chatId,
       messageId: firstBody.messageId,
       outcome: "reused",
+      managedReviewReceiptV1: {
+        schemaVersion: 1,
+        repository: "owner/context-tree",
+        pullRequest: 749,
+        expectedHead: "a".repeat(40),
+      },
     });
 
     const rows = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));

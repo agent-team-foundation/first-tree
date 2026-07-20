@@ -71,6 +71,8 @@ describe("processScmWebhookDelivery", () => {
     });
     expect(duplicate).toEqual({ outcome: "duplicate" });
     expect(runProviderWork).toHaveBeenCalledOnce();
+    expect(resolveAudience).toHaveBeenCalledWith(event, "provider-result");
+    expect(deliver).toHaveBeenCalledWith(event, { targets: ["target-1"], actorHumanId: null }, "provider-result");
     expect(deliver).toHaveBeenCalledOnce();
   });
 

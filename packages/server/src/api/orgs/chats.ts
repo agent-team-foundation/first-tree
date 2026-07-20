@@ -1,4 +1,5 @@
 import {
+  contextReviewTaskCreateMetadataSchema,
   createKeyedTaskChatSchema,
   createMeChatSchema,
   createWebTaskChatSchema,
@@ -190,6 +191,10 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
       if (result.notificationMessageId) {
         notifyRecipients(app.notifier, result.recipients, result.notificationMessageId);
       }
+      const acceptedTask = contextReviewTaskCreateMetadataSchema.parse({
+        taskType: result.message.metadata.taskType,
+        reviewPacketV1: result.message.metadata.reviewPacketV1,
+      });
       return reply.status(result.initialMessageCreated ? 201 : 200).send({
         chatId: result.chat.id,
         messageId: result.message.id,
@@ -197,6 +202,12 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
         effectiveSenderId: result.effectiveSenderId,
         reviewerAgentUuid: authority.reviewerAgentUuid,
         outcome: result.initialMessageCreated ? "created" : "reused",
+        managedReviewReceiptV1: {
+          schemaVersion: 1,
+          repository: acceptedTask.reviewPacketV1.repository.toLowerCase(),
+          pullRequest: acceptedTask.reviewPacketV1.pullRequest,
+          expectedHead: acceptedTask.reviewPacketV1.expectedHead,
+        },
       });
     }
     if (rawBody !== null && typeof rawBody === "object" && "mode" in rawBody) {

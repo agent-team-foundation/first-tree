@@ -178,6 +178,12 @@ beforeEach(async () => {
         effectiveSenderId: "human-1",
         reviewerAgentUuid: "reviewer-1",
         outcome: "created",
+        managedReviewReceiptV1: {
+          schemaVersion: 1,
+          repository: "owner/context-tree",
+          pullRequest: 749,
+          expectedHead: "a".repeat(40),
+        },
       });
       return;
     }
