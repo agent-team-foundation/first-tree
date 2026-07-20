@@ -178,6 +178,29 @@ describe("image-store", () => {
     expect(databaseNames.some((name) => name?.endsWith(`:${accountB.key}`))).toBe(true);
   });
 
+  it("rejects promptly when a scoped database deletion is blocked", async () => {
+    vi.resetModules();
+    const deleteRequest: {
+      onsuccess: (() => void) | null;
+      onerror: (() => void) | null;
+      onblocked: (() => void) | null;
+    } = {
+      onsuccess: null,
+      onerror: null,
+      onblocked: null,
+    };
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      value: { deleteDatabase: () => deleteRequest },
+    });
+    const scope = await import("../../lib/browser-storage-scope.js");
+    scope.setBrowserStorageUser("blocked-user");
+    const purge = scope.clearPersistentBrowserStorage(scope.captureBrowserStorageScope());
+    deleteRequest.onblocked?.();
+
+    await expect(purge).rejects.toThrow("is still open");
+  });
+
   it("rejects writes and returns null when IndexedDB is unavailable", async () => {
     vi.resetModules();
     delete (globalThis as { indexedDB?: unknown }).indexedDB;

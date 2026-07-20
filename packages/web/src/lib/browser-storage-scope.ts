@@ -9,6 +9,9 @@
 let userId: string | null = null;
 let revision = 0;
 const KNOWN_DATABASES_KEY = "first-tree:browser-databases:v1";
+const INVALIDATED_SCOPES_KEY = "first-tree:invalidated-scopes:v1";
+export const BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT = "first-tree:browser-scope-invalidated";
+const SCOPE_CHANNEL = "first-tree-browser-scope";
 
 export type BrowserStorageScope = {
   key: string;
@@ -29,6 +32,7 @@ function encode(value: string): string {
 export function setBrowserStorageUser(user: string | null): void {
   if (userId !== user) revision += 1;
   userId = user;
+  if (user) clearInvalidatedScope(getBrowserStorageScope());
 }
 
 export function getBrowserStorageRevision(): number {
@@ -44,7 +48,91 @@ export function captureBrowserStorageScope(): BrowserStorageScope {
 }
 
 export function isBrowserStorageScopeCurrent(scope: BrowserStorageScope): boolean {
-  return scope.revision === revision && scope.key === getBrowserStorageScope();
+  return scope.revision === revision && scope.key === getBrowserStorageScope() && !isScopeInvalidated(scope.key);
+}
+
+function isScopeInvalidated(key: string): boolean {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(INVALIDATED_SCOPES_KEY) : null;
+    const invalidated = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(invalidated) && invalidated.includes(key);
+  } catch {
+    return false;
+  }
+}
+
+function clearInvalidatedScope(key: string): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    const raw = localStorage.getItem(INVALIDATED_SCOPES_KEY);
+    const invalidated = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(invalidated)) return;
+    const remaining = invalidated.filter((value): value is string => typeof value === "string" && value !== key);
+    if (remaining.length === 0) localStorage.removeItem(INVALIDATED_SCOPES_KEY);
+    else localStorage.setItem(INVALIDATED_SCOPES_KEY, JSON.stringify(remaining));
+  } catch {
+    // Storage can be denied in private mode; the in-memory revision remains.
+  }
+}
+
+function invalidateScopeFromOtherDocument(scope: BrowserStorageScope): void {
+  if (scope.key !== getBrowserStorageScope() || userId === null) return;
+  window.dispatchEvent(new CustomEvent(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, { detail: { scope } }));
+}
+
+function handleScopeInvalidationMessage(value: unknown): void {
+  if (typeof value !== "object" || value === null || !("scope" in value)) return;
+  const scope = value.scope;
+  if (typeof scope !== "object" || scope === null) return;
+  if (!("key" in scope) || !("userId" in scope) || typeof scope.key !== "string") return;
+  invalidateScopeFromOtherDocument(scope as BrowserStorageScope);
+}
+
+export function invalidateBrowserStorageScope(scope: BrowserStorageScope): void {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(INVALIDATED_SCOPES_KEY) : null;
+    const invalidated = raw ? (JSON.parse(raw) as unknown) : [];
+    const next = Array.isArray(invalidated)
+      ? invalidated.filter((value): value is string => typeof value === "string")
+      : [];
+    if (!next.includes(scope.key) && typeof localStorage !== "undefined") {
+      localStorage.setItem(INVALIDATED_SCOPES_KEY, JSON.stringify([...next, scope.key]));
+    }
+  } catch {
+    // BroadcastChannel below still covers modern browsers if storage is denied.
+  }
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(SCOPE_CHANNEL);
+      channel.postMessage({ scope });
+      channel.close();
+    }
+  } catch {
+    // Storage event is the fallback transport.
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== INVALIDATED_SCOPES_KEY || !event.newValue) return;
+    try {
+      const invalidated = JSON.parse(event.newValue) as unknown;
+      if (Array.isArray(invalidated) && invalidated.includes(getBrowserStorageScope())) {
+        const scope = captureBrowserStorageScope();
+        invalidateScopeFromOtherDocument(scope);
+      }
+    } catch {
+      // Ignore malformed cross-document markers.
+    }
+  });
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(SCOPE_CHANNEL);
+      channel.onmessage = (event) => handleScopeInvalidationMessage(event.data);
+    }
+  } catch {
+    // BroadcastChannel is optional; storage events remain available.
+  }
 }
 
 export function scopedStorageKey(base: string, scope: BrowserStorageScope = captureBrowserStorageScope()): string {
@@ -75,8 +163,11 @@ export function scopedDatabaseName(base: string, scope: BrowserStorageScope = ca
 export async function clearPersistentBrowserStorage(scope: BrowserStorageScope): Promise<void> {
   const names = new Set<string>();
   const deletedNames = new Set<string>();
-  const scopedSuffix = `:${scope.key}`;
   const legacyDatabaseNames = new Set(["first-tree-chat-cache", "first-tree-images"]);
+  const scopedDatabaseNames = new Set([
+    scopedDatabaseName("first-tree-chat-cache", scope),
+    scopedDatabaseName("first-tree-images", scope),
+  ]);
   const registryNames: string[] = [];
   try {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(KNOWN_DATABASES_KEY) : null;
@@ -85,7 +176,7 @@ export async function clearPersistentBrowserStorage(scope: BrowserStorageScope):
       for (const name of known) {
         if (typeof name !== "string") continue;
         registryNames.push(name);
-        if (name.endsWith(scopedSuffix) || legacyDatabaseNames.has(name)) names.add(name);
+        if (scopedDatabaseNames.has(name) || legacyDatabaseNames.has(name)) names.add(name);
       }
     }
   } catch {
@@ -108,7 +199,7 @@ export async function clearPersistentBrowserStorage(scope: BrowserStorageScope):
     const databases = indexedDB.databases;
     if (typeof databases === "function") {
       for (const database of await databases.call(indexedDB)) {
-        if (database.name && (database.name.endsWith(scopedSuffix) || legacyDatabaseNames.has(database.name))) {
+        if (database.name && (scopedDatabaseNames.has(database.name) || legacyDatabaseNames.has(database.name))) {
           names.add(database.name);
         }
       }
@@ -118,6 +209,7 @@ export async function clearPersistentBrowserStorage(scope: BrowserStorageScope):
   }
   // Older browsers do not expose indexedDB.databases(). These deletes cover
   // only the departing scope and explicitly named legacy databases.
+  for (const name of scopedDatabaseNames) names.add(name);
   for (const name of legacyDatabaseNames) names.add(name);
   await Promise.all(
     [...names].map(
@@ -130,9 +222,10 @@ export async function clearPersistentBrowserStorage(scope: BrowserStorageScope):
               resolve();
             };
             request.onerror = () => reject(request.error ?? new Error(`Failed to delete IndexedDB database ${name}`));
-            // A blocked request is still pending. Open connections receive
-            // `versionchange` and close; only onsuccess proves deletion.
-            request.onblocked = () => undefined;
+            // Treat a blocked request as an incomplete purge so callers can
+            // keep the session available and offer a retry. Only onsuccess
+            // proves deletion.
+            request.onblocked = () => reject(new Error(`IndexedDB database ${name} is still open`));
           } catch {
             reject(new Error(`Failed to delete IndexedDB database ${name}`));
           }

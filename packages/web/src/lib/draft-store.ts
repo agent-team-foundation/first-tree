@@ -13,7 +13,12 @@
  * scanning every key in the namespace.
  */
 
-import { scopedStorageKey } from "./browser-storage-scope.js";
+import {
+  type BrowserStorageScope,
+  captureBrowserStorageScope,
+  isBrowserStorageScopeCurrent,
+  scopedStorageKey,
+} from "./browser-storage-scope.js";
 
 const STORAGE_KEY = "first-tree:chat-drafts:v1";
 
@@ -46,10 +51,11 @@ function isStoredDraft(v: unknown): v is StoredDraft {
   return true;
 }
 
-function readMap(): DraftMap {
+function readMap(browserScope: BrowserStorageScope): DraftMap {
   if (typeof window === "undefined") return {};
+  if (!isBrowserStorageScopeCurrent(browserScope)) return {};
   try {
-    const raw = window.localStorage.getItem(scopedStorageKey(STORAGE_KEY));
+    const raw = window.localStorage.getItem(scopedStorageKey(STORAGE_KEY, browserScope));
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return {};
@@ -64,10 +70,11 @@ function readMap(): DraftMap {
   }
 }
 
-function writeMap(map: DraftMap): void {
+function writeMap(map: DraftMap, browserScope: BrowserStorageScope): void {
   if (typeof window === "undefined") return;
+  if (!isBrowserStorageScopeCurrent(browserScope)) return;
   try {
-    window.localStorage.setItem(scopedStorageKey(STORAGE_KEY), JSON.stringify(map));
+    window.localStorage.setItem(scopedStorageKey(STORAGE_KEY, browserScope), JSON.stringify(map));
   } catch {
     // localStorage may be unavailable (private mode) or full; drafts are a
     // best-effort convenience, so a write failure is silently ignored.
@@ -106,8 +113,11 @@ export function newChatDraftScope(
 }
 
 /** Read the stored draft for `scope`, or `null` when none is stored. */
-export function loadDraft(scope: string): DraftSnapshot | null {
-  const entry = readMap()[scope];
+export function loadDraft(
+  scope: string,
+  browserScope: BrowserStorageScope = captureBrowserStorageScope(),
+): DraftSnapshot | null {
+  const entry = readMap(browserScope)[scope];
   if (!entry) return null;
   return { text: entry.text, participantIds: entry.participantIds ?? [] };
 }
@@ -122,27 +132,28 @@ export function saveDraft(
   scope: string,
   draft: { text: string; participantIds?: readonly string[] },
   now: number = Date.now(),
+  browserScope: BrowserStorageScope = captureBrowserStorageScope(),
 ): void {
-  const map = readMap();
+  const map = readMap(browserScope);
   if (draft.text.trim().length === 0) {
     if (scope in map) {
       delete map[scope];
-      writeMap(map);
+      writeMap(map, browserScope);
     }
     return;
   }
   const participantIds =
     draft.participantIds && draft.participantIds.length > 0 ? [...draft.participantIds] : undefined;
   map[scope] = { text: draft.text, participantIds, updatedAt: now };
-  writeMap(prune(map));
+  writeMap(prune(map), browserScope);
 }
 
 /** Remove any stored draft for `scope` (used on successful send). */
-export function clearDraft(scope: string): void {
-  const map = readMap();
+export function clearDraft(scope: string, browserScope: BrowserStorageScope = captureBrowserStorageScope()): void {
+  const map = readMap(browserScope);
   if (scope in map) {
     delete map[scope];
-    writeMap(map);
+    writeMap(map, browserScope);
   }
 }
 
@@ -162,12 +173,13 @@ export function parkFailedDraftIfSwitched(
   sendChatId: string,
   currentChatId: string,
   text: string,
+  browserScope: BrowserStorageScope = captureBrowserStorageScope(),
 ): boolean {
   if (currentChatId === sendChatId) return false;
   const scope = chatDraftScope(userId, sendChatId);
   // Park the rejected text in the originating chat, but never clobber a newer
   // draft the user has since typed there (mirrors the same-chat rollback's
   // "only restore into an empty composer" guard). saveDraft no-ops on empty.
-  if (loadDraft(scope) === null) saveDraft(scope, { text });
+  if (loadDraft(scope, browserScope) === null) saveDraft(scope, { text }, Date.now(), browserScope);
   return true;
 }

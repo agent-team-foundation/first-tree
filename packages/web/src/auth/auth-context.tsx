@@ -13,8 +13,11 @@ import {
 } from "../api/client.js";
 import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
 import {
+  BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT,
+  type BrowserStorageScope,
   captureBrowserStorageScope,
   clearPersistentBrowserStorage,
+  invalidateBrowserStorageScope,
   setBrowserStorageUser,
 } from "../lib/browser-storage-scope.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
@@ -166,7 +169,13 @@ type AuthContextValue = {
   switchingOrg: OrgBrief | null;
   setSwitchingOrg: (org: OrgBrief | null) => void;
   refreshMe: () => Promise<void>;
-  logout: () => void | Promise<void>;
+  logout: (options?: LogoutOptions) => void | Promise<void>;
+};
+
+type LogoutOptions = {
+  broadcast?: boolean;
+  clearTokens?: boolean;
+  scope?: BrowserStorageScope;
 };
 
 // Exported so DEV-only preview pages (e.g. /preview/resources) can render real
@@ -252,30 +261,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (mounted in the layout) and the switcher (in the header) read one source.
   const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
 
-  const logout = useCallback(async () => {
-    const departingScope = captureBrowserStorageScope();
-    authGenerationRef.current += 1;
-    setBrowserStorageUser(null);
-    clearStoredTokens();
-    setApiSelectedOrganizationId(null);
-    queryClient.clear();
-    // Drop per-tab onboarding flags so the next login (different user, or
-    // same user post-DB-reset in dev) doesn't inherit a stale "Step 1
-    // confirmed" / "Step 3 dismissed" / agent uuid / draft from the prior
-    // identity.
-    clearOnboardingSessionFlags();
-    setIsAuthenticated(false);
-    setUser(null);
-    setMemberships([]);
-    setSelectedOrgId(null);
-    setOnboardingStep(null);
-    setOnboardingDismissedAt(null);
-    setOnboardingCompletedAt(null);
-    setDocsEnabled(false);
-    setMeLoaded(false);
-    setSwitchingOrg(null);
-    await clearPersistentBrowserStorage(departingScope);
-  }, [queryClient]);
+  const logout = useCallback(
+    async (options: LogoutOptions = {}) => {
+      const departingScope = options.scope ?? captureBrowserStorageScope();
+      if (options.broadcast !== false) invalidateBrowserStorageScope(departingScope);
+      authGenerationRef.current += 1;
+      setApiSelectedOrganizationId(null);
+      queryClient.clear();
+      // Drop per-tab onboarding flags so the next login (different user, or
+      // same user post-DB-reset in dev) doesn't inherit a stale "Step 1
+      // confirmed" / "Step 3 dismissed" / agent uuid / draft from the prior
+      // identity.
+      clearOnboardingSessionFlags();
+      await clearPersistentBrowserStorage(departingScope);
+      setBrowserStorageUser(null);
+      if (options.clearTokens !== false) clearStoredTokens();
+      setIsAuthenticated(false);
+      setUser(null);
+      setMemberships([]);
+      setSelectedOrgId(null);
+      setOnboardingStep(null);
+      setOnboardingDismissedAt(null);
+      setOnboardingCompletedAt(null);
+      setDocsEnabled(false);
+      setMeLoaded(false);
+      setSwitchingOrg(null);
+    },
+    [queryClient],
+  );
 
   const fetchMe = useCallback(async () => {
     const generation = authGenerationRef.current;
@@ -323,8 +336,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     } catch {
       if (generation !== authGenerationRef.current) return;
-      setBrowserStorageUser(null);
-      // If /me fails, the UI falls back to hiding admin features.
+      // Keep the JWT-derived scope while a non-auth /me failure is retryable;
+      // logout must still know which account's browser data to purge.
     } finally {
       if (generation === authGenerationRef.current) {
         // Always flip the gate — even on error — so RequireAuth doesn't hang
@@ -337,6 +350,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (username: string, password: string) => {
       const tokens = await loginApi(username, password);
+      const departingScope = captureBrowserStorageScope();
+      if (departingScope.userId) invalidateBrowserStorageScope(departingScope);
       setBrowserStorageUser(null);
       queryClient.clear();
       setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
@@ -349,6 +364,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const adoptTokens = useCallback(
     async (tokens: { accessToken: string; refreshToken: string }) => {
+      const departingScope = captureBrowserStorageScope();
+      if (departingScope.userId) invalidateBrowserStorageScope(departingScope);
       setBrowserStorageUser(null);
       queryClient.clear();
       setStoredTokens(tokens);
@@ -527,6 +544,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
+  }, [logout]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const scope = (event as CustomEvent<{ scope?: BrowserStorageScope }>).detail?.scope;
+      void logout({ broadcast: false, scope });
+    };
+    window.addEventListener(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, handler);
+    return () => window.removeEventListener(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, handler);
   }, [logout]);
 
   return (

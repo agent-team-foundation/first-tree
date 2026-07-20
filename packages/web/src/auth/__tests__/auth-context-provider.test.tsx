@@ -204,6 +204,28 @@ describe("AuthProvider", () => {
     expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
   });
 
+  it("keeps the token-derived scope when /me is temporarily unavailable so logout purges it", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    apiMocks.apiGet.mockRejectedValueOnce(new Error("offline"));
+
+    await renderAuth();
+    const storageScope = await import("../../lib/browser-storage-scope.js");
+    const departingScope = storageScope.captureBrowserStorageScope();
+    const draftKey = storageScope.scopedStorageKey("first-tree:chat-drafts:v1", departingScope);
+    localStorage.setItem(draftKey, "secret");
+    expect(departingScope.userId).toBe("user-1");
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("auth:logout"));
+    });
+
+    expect(localStorage.getItem(draftKey)).toBeNull();
+    expect(latestAuth?.isAuthenticated).toBe(false);
+  });
+
   it("ignores unreadable persisted organization storage and rolls back failed dismiss", async () => {
     const throwingStorage = {
       get length() {
@@ -306,6 +328,30 @@ describe("AuthProvider", () => {
     expect(apiMocks.clearStoredTokens).toHaveBeenCalled();
     expect(flagsMocks.clearOnboardingSessionFlags).toHaveBeenCalled();
     expect(latestAuth?.isAuthenticated).toBe(false);
+  });
+
+  it("invalidates the active account when another tab publishes a storage-scope logout", async () => {
+    apiMocks.getStoredTokens.mockReturnValue({
+      accessToken: tokenWithPayload({ sub: "user-1" }),
+      refreshToken: "refresh",
+    });
+    await renderAuth();
+    const scope = await import("../../lib/browser-storage-scope.js");
+    const account = scope.captureBrowserStorageScope();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "first-tree:invalidated-scopes:v1",
+          newValue: JSON.stringify([account.key]),
+        }),
+      );
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(scope.isBrowserStorageScopeCurrent(account)).toBe(false);
   });
 
   it("clears persisted browser data on logout before a returning sign-in", async () => {

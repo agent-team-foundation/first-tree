@@ -2,6 +2,7 @@ import { LogOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/auth-context.js";
 import { Avatar } from "./avatar.js";
+import { useToast } from "./ui/toast.js";
 
 // Marketing site — where an explicit sign-out lands the browser, so the user
 // leaves the app on the parent brand surface rather than an app route (which
@@ -19,6 +20,7 @@ const PARENT_URL = "https://first-tree.ai";
  */
 export function UserMenu() {
   const { user, logout } = useAuth();
+  const { addToast } = useToast();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -98,6 +100,12 @@ export function UserMenu() {
                   } catch {
                     // Keep the app open when browser persistence could not be
                     // purged; navigating away would violate the logout boundary.
+                    addToast({
+                      title: "Sign out incomplete",
+                      description: "Close other First Tree tabs and retry to finish clearing local data.",
+                      action: { label: "Retry", onClick: () => void logout() },
+                      durationMs: null,
+                    });
                   }
                 })();
               }}

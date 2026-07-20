@@ -1,3 +1,5 @@
+import { BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT } from "../lib/browser-storage-scope.js";
+
 const BASE_URL = "/api/v1";
 const TOKEN_KEY = "first-tree:tokens";
 
@@ -122,6 +124,13 @@ export class ApiError extends Error {
 let authGeneration = 0;
 let refreshInFlight: { refreshToken: string; generation: number; promise: Promise<StoredTokens | null> } | null = null;
 
+if (typeof window !== "undefined") {
+  window.addEventListener(BROWSER_STORAGE_SCOPE_INVALIDATED_EVENT, () => {
+    authGeneration += 1;
+    refreshInFlight = null;
+  });
+}
+
 /**
  * Refresh the stored access token via `/auth/refresh`. Reads the current
  * refresh token from `localStorage` and persists the new pair on success.
@@ -203,6 +212,8 @@ async function request<T>(
 
   const tokens = getStoredTokens();
   const requestGeneration = authGeneration;
+  let responseGeneration = requestGeneration;
+  let responseAccessToken = tokens?.accessToken;
   let res = await doFetch(tokens?.accessToken);
 
   // Attempt token refresh on 401
@@ -212,6 +223,8 @@ async function request<T>(
       if (getStoredTokens()?.accessToken !== refreshed.accessToken) {
         throw new ApiError(401, "Authentication changed while refreshing");
       }
+      responseGeneration = authGeneration;
+      responseAccessToken = refreshed.accessToken;
       res = await doFetch(refreshed.accessToken);
     } else if (authGeneration !== requestGeneration) {
       throw new ApiError(401, "Authentication changed while refreshing");
@@ -220,6 +233,10 @@ async function request<T>(
 
   if (!res.ok) {
     if (res.status === 401) {
+      const current = getStoredTokens();
+      if (authGeneration !== responseGeneration || current?.accessToken !== responseAccessToken) {
+        throw new ApiError(401, "Authentication changed while requesting");
+      }
       clearStoredTokens();
       window.dispatchEvent(new CustomEvent("auth:logout"));
     }
@@ -266,6 +283,8 @@ export async function apiFetchRaw(
 
   const tokens = getStoredTokens();
   const requestGeneration = authGeneration;
+  let responseGeneration = requestGeneration;
+  let responseAccessToken = tokens?.accessToken;
   let res = await doFetch(tokens?.accessToken);
 
   if (res.status === 401 && tokens?.refreshToken) {
@@ -274,6 +293,8 @@ export async function apiFetchRaw(
       if (getStoredTokens()?.accessToken !== refreshed.accessToken) {
         throw new ApiError(401, "Authentication changed while refreshing");
       }
+      responseGeneration = authGeneration;
+      responseAccessToken = refreshed.accessToken;
       res = await doFetch(refreshed.accessToken);
     } else if (authGeneration !== requestGeneration) {
       throw new ApiError(401, "Authentication changed while refreshing");
@@ -282,6 +303,10 @@ export async function apiFetchRaw(
 
   if (!res.ok) {
     if (res.status === 401) {
+      const current = getStoredTokens();
+      if (authGeneration !== responseGeneration || current?.accessToken !== responseAccessToken) {
+        throw new ApiError(401, "Authentication changed while requesting");
+      }
       clearStoredTokens();
       window.dispatchEvent(new CustomEvent("auth:logout"));
     }

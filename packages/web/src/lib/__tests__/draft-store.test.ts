@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { scopedStorageKey } from "../browser-storage-scope.js";
+import {
+  captureBrowserStorageScope,
+  invalidateBrowserStorageScope,
+  scopedStorageKey,
+  setBrowserStorageUser,
+} from "../browser-storage-scope.js";
 import {
   chatDraftScope,
   clearDraft,
@@ -18,6 +23,17 @@ beforeEach(() => {
 });
 
 describe("saveDraft / loadDraft", () => {
+  it("does not persist a draft after its captured browser scope is invalidated", () => {
+    setBrowserStorageUser("user-a");
+    const browserScope = captureBrowserStorageScope();
+    invalidateBrowserStorageScope(browserScope);
+
+    saveDraft("chat-1", { text: "stale secret" }, Date.now(), browserScope);
+
+    expect(localStorage.getItem(scopedStorageKey("first-tree:chat-drafts:v1", browserScope))).toBeNull();
+    setBrowserStorageUser(null);
+  });
+
   it("round-trips body text for a chat scope", () => {
     saveDraft("chat-1", { text: "hello world" });
     expect(loadDraft("chat-1")).toEqual({ text: "hello world", participantIds: [] });

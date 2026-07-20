@@ -1532,6 +1532,19 @@ describe("web DOM interaction coverage", () => {
     api.get = originalGet;
   });
 
+  it("shows a retry when sign-out cannot finish clearing browser data", async () => {
+    const { UserMenu } = await import("../../components/user-menu.js");
+    authMock.value = { ...authMock.value, logout: vi.fn().mockRejectedValueOnce(new Error("blocked")) };
+    const account = await renderDom(<UserMenu />);
+    await click(account.container.querySelector('button[aria-haspopup="menu"]'));
+    await click(
+      [...account.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign out")) ??
+        null,
+    );
+    await waitForText("Sign out incomplete", document.body);
+    expect(document.body.textContent).toContain("Close other First Tree tabs and retry");
+  });
+
   it("shows the current team in the header and lists the other teams without a collapse", async () => {
     const { TeamSwitcher } = await import("../../components/team-switcher.js");
     authMock.value = {

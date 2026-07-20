@@ -89,12 +89,12 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
           {isMultiTeam ? (
             <>
               <TeamSwitcher />
-              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
+              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void logout()}>
                 Sign out
               </Button>
             </>
           ) : (
-            <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
+            <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={() => void logout()}>
               Sign out
             </Button>
           )}

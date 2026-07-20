@@ -102,6 +102,33 @@ describe("api client request flow", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not clear replacement credentials when an old refreshed retry returns 401", async () => {
+    const { api, clearStoredTokens, getStoredTokens, setStoredTokens } = await import("../client.js");
+    setStoredTokens({ accessToken: "a-expired", refreshToken: "a-refresh" });
+    let resolveRetry!: (value: Response) => void;
+    const retryResponse = new Promise<Response>((resolve) => {
+      resolveRetry = resolve;
+    });
+    fetchMock
+      .mockResolvedValueOnce(response(401, { error: "expired" }))
+      .mockResolvedValueOnce(response(200, { accessToken: "a-new", refreshToken: "a-refresh-2" }))
+      .mockReturnValueOnce(retryResponse);
+
+    const pending = api.get("/me");
+    for (let i = 0; i < 10 && fetchMock.mock.calls.length < 3; i += 1) {
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    clearStoredTokens();
+    setStoredTokens({ accessToken: "b-access", refreshToken: "b-refresh" });
+    resolveRetry(response(401, { error: "old account rejected" }));
+
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+    expect(getStoredTokens()).toEqual({ accessToken: "b-access", refreshToken: "b-refresh" });
+  });
+
   it("throws ApiError with validation issues and dispatches auth logout on unrecovered 401", async () => {
     const { api, getStoredTokens, setStoredTokens } = await import("../client.js");
     setStoredTokens({ accessToken: "bad", refreshToken: "refresh-bad" });

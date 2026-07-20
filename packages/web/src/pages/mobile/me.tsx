@@ -65,7 +65,7 @@ export function MobileMePage() {
           />
         </MobileSection>
 
-        <Button type="button" variant="outline" className="min-h-11 justify-start" onClick={logout}>
+        <Button type="button" variant="outline" className="min-h-11 justify-start" onClick={() => void logout()}>
           <LogOut className="h-4 w-4" />
           Sign out
         </Button>

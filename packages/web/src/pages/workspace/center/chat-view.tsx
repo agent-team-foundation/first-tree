@@ -2105,7 +2105,13 @@ export function ChatView({
       // React's commit so we don't race the textarea's controlled value.
       if (
         ctx?.previousDraft &&
-        !parkFailedDraftIfSwitched(ctx.sendUserId, ctx.sendChatId, chatIdRef.current, ctx.previousDraft)
+        !parkFailedDraftIfSwitched(
+          ctx.sendUserId,
+          ctx.sendChatId,
+          chatIdRef.current,
+          ctx.previousDraft,
+          ctx.storageScope,
+        )
       ) {
         setDraft((current) => (current === "" ? ctx.previousDraft : current));
       }
@@ -2348,7 +2354,10 @@ export function ChatView({
         // Only restore the pre-send draft if the user hasn't already started
         // typing something new during the upload window (PR review
         // observation #1).
-        if (previousDraft && !parkFailedDraftIfSwitched(sendUserId, sendChatId, chatIdRef.current, previousDraft)) {
+        if (
+          previousDraft &&
+          !parkFailedDraftIfSwitched(sendUserId, sendChatId, chatIdRef.current, previousDraft, storageScope)
+        ) {
           setDraft((current) => (current === "" ? previousDraft : current));
         }
       } finally {

@@ -1,4 +1,5 @@
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
+import { captureBrowserStorageScope } from "./browser-storage-scope.js";
 import { chatDraftScope, loadDraft, saveDraft } from "./draft-store.js";
 
 /**
@@ -19,7 +20,8 @@ import { chatDraftScope, loadDraft, saveDraft } from "./draft-store.js";
  */
 export function useChatDraftText(userId: string | null, chatId: string): [string, Dispatch<SetStateAction<string>>] {
   const scope = chatDraftScope(userId, chatId);
-  const [draft, setDraft] = useState<string>(() => loadDraft(scope)?.text ?? "");
+  const browserScopeRef = useRef(captureBrowserStorageScope());
+  const [draft, setDraft] = useState<string>(() => loadDraft(scope, browserScopeRef.current)?.text ?? "");
   // The scope the current `draft` value belongs to. Lets the persist effect
   // write under the right scope and detect a switch (the scope changes a
   // render before the state catches up).
@@ -28,11 +30,11 @@ export function useChatDraftText(userId: string | null, chatId: string): [string
   useEffect(() => {
     if (scopeRef.current === scope) return;
     scopeRef.current = scope;
-    setDraft(loadDraft(scope)?.text ?? "");
+    setDraft(loadDraft(scope, browserScopeRef.current)?.text ?? "");
   }, [scope]);
 
   useEffect(() => {
-    saveDraft(scopeRef.current, { text: draft });
+    saveDraft(scopeRef.current, { text: draft }, Date.now(), browserScopeRef.current);
   }, [draft]);
 
   return [draft, setDraft];

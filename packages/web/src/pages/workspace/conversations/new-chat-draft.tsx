@@ -98,6 +98,7 @@ export function NewChatDraft({
   const queryClient = useQueryClient();
   const { agentId: myAgentId, memberId: myMemberId, organizationId, user } = useAuth();
   const agentIdentity = useAgentIdentityMap();
+  const browserScopeRef = useRef(captureBrowserStorageScope());
 
   // Browser-local unsent-draft cache for this compose context (user + org +
   // seed participants, mirroring the center-panel remount key). User-scoped so
@@ -109,7 +110,7 @@ export function NewChatDraft({
   );
   const initialDraftRef = useRef<DraftSnapshot | null | undefined>(undefined);
   if (initialDraftRef.current === undefined) {
-    initialDraftRef.current = loadDraft(draftScope);
+    initialDraftRef.current = loadDraft(draftScope, browserScopeRef.current);
   }
   const restoredDraft = initialDraftRef.current;
   const cachedDefaultAgentId = useMemo(
@@ -367,7 +368,7 @@ export function NewChatDraft({
   // emptying the body clears the entry; we also clear explicitly on send below
   // because onCreated unmounts this component before the effect could flush.
   useEffect(() => {
-    saveDraft(draftScope, { text: draft, participantIds: chips });
+    saveDraft(draftScope, { text: draft, participantIds: chips }, Date.now(), browserScopeRef.current);
   }, [draftScope, draft, chips]);
 
   const bodyMentions = useMemo(() => {
@@ -524,7 +525,7 @@ export function NewChatDraft({
     },
     onSuccess: ({ chatId, cacheableStarterAgentId }) => {
       saveNewChatDefaultAgentId(user?.id ?? null, organizationId, cacheableStarterAgentId);
-      clearDraft(draftScope);
+      clearDraft(draftScope, browserScopeRef.current);
       setDraft("");
       setChips([]);
       clearAttachments();
