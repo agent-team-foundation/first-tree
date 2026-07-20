@@ -13,6 +13,8 @@
  * scanning every key in the namespace.
  */
 
+import { scopedStorageKey } from "./browser-storage-scope.js";
+
 const STORAGE_KEY = "first-tree:chat-drafts:v1";
 
 /** Cap on retained drafts; oldest-by-`updatedAt` are pruned past this. Drafts
@@ -47,7 +49,7 @@ function isStoredDraft(v: unknown): v is StoredDraft {
 function readMap(): DraftMap {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(scopedStorageKey(STORAGE_KEY));
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return {};
@@ -65,7 +67,7 @@ function readMap(): DraftMap {
 function writeMap(map: DraftMap): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    window.localStorage.setItem(scopedStorageKey(STORAGE_KEY), JSON.stringify(map));
   } catch {
     // localStorage may be unavailable (private mode) or full; drafts are a
     // best-effort convenience, so a write failure is silently ignored.
@@ -81,9 +83,8 @@ function prune(map: DraftMap): DraftMap {
 }
 
 /** Per-user prefix so a shared browser never restores another account's draft
- *  after a logout/login on the same profile — `logout()` clears tokens and
- *  query state, not this store. Mirrors the userId-bucketed selected-org
- *  storage in auth-context (`first-tree:selectedOrganizationId:<userId>`). */
+ *  after a logout/login on the same profile. The storage key itself is also
+ *  scoped by account and server origin; logout removes it with other app data. */
 function userPrefix(userId: string | null): string {
   return `u:${userId ?? "anon"}`;
 }

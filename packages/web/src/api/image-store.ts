@@ -7,6 +7,8 @@
  * dead-end like the old IndexedDB-only design.
  */
 
+import { getBrowserStorageRevision, scopedDatabaseName } from "../lib/browser-storage-scope.js";
+
 const DB_NAME = "first-tree-images";
 const DB_VERSION = 1;
 const STORE = "images";
@@ -19,22 +21,28 @@ type Stored = {
 };
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
+let dbRevision = -1;
 
 function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
+  const revision = getBrowserStorageRevision();
+  if (dbPromise && dbRevision === revision) return dbPromise;
+  dbRevision = revision;
   dbPromise = new Promise((resolve) => {
     if (typeof indexedDB === "undefined") {
       resolve(null);
       return;
     }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(scopedDatabaseName(DB_NAME), DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: "imageId" });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      req.result.onversionchange = () => req.result.close();
+      resolve(req.result);
+    };
     req.onerror = () => resolve(null);
     req.onblocked = () => resolve(null);
   });
