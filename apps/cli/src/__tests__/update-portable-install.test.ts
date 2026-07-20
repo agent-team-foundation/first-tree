@@ -58,7 +58,14 @@ async function makeArtifactPayload(options: {
   await mkdir(join(payload, "node", "bin"), { recursive: true });
   await mkdir(join(payload, "app", "cli"), { recursive: true });
   await mkdir(join(payload, "bin"), { recursive: true });
-  await writeFile(join(payload, "node", "bin", "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await writeFile(
+    join(payload, "node", "bin", "node"),
+    String.raw`#!/bin/sh
+if [ -n "\${FIRST_TREE_MIGRATION_MARKER:-}" ]; then printf "%s" "$FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY" > "$FIRST_TREE_MIGRATION_MARKER"; fi
+exit 0
+`,
+    { mode: 0o755 },
+  );
   await writeFile(join(payload, "app", "cli", "index.mjs"), "// fixture\n");
   await writeFile(
     join(payload, "app", "package.json"),
@@ -407,11 +414,13 @@ describe("installPortableSpec", () => {
     const home = tempDir("ft-portable-home-");
     const prefix = join(home, "prefix");
     const binDir = join(home, "bin");
+    const migrationMarker = join(home, "migration-marker");
     mkdirSync(binDir, { recursive: true });
     writeFileSync(join(binDir, "first-tree"), "#!/bin/sh\nexit 0\n");
     await seedOldInstall(prefix);
     vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(prefix, "current"));
     vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", `file://${fixture.root}`);
+    vi.stubEnv("FIRST_TREE_MIGRATION_MARKER", migrationMarker);
     vi.stubEnv("HOME", home);
     vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
 
@@ -427,6 +436,7 @@ describe("installPortableSpec", () => {
     expect(shim).toContain("FIRST_TREE_INSTALL_MODE=portable");
     expect(shim).toContain(`FIRST_TREE_PORTABLE_ROOT="$root"`);
     expect(readFileSync(join(binDir, "ft"), "utf8")).toContain('root="');
+    expect(readFileSync(migrationMarker, "utf8")).toBe("1");
   });
 
   it("downloads portable payloads over HTTP and writes fallback shims when PATH has no existing shim", async () => {
