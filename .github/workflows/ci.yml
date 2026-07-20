@@ -165,12 +165,14 @@ jobs:
       # all 233 tests passed. Building before vitest starts keeps the
       # heavy work outside the worker IPC window.
       - run: pnpm build
-      # Keep a single `vitest run` per package (no multi-batch shell chains).
-      # Memory isolation is: turbo concurrency + VITEST_MAX_FORKS + CLI last.
+      # Memory isolation has three layers: Turbo limits package-task concurrency
+      # (the CLI uses 1 in the final step); the CLI script runs its batches
+      # sequentially; VITEST_MAX_FORKS caps each batch at one worker. Keep the
+      # CLI behind Turbo so an unchanged first-tree-dev#test task can use cache.
       - name: Test packages (excluding CLI)
         run: pnpm exec turbo run test --filter='!first-tree-dev' --concurrency=2
       - name: Test CLI
-        run: pnpm --filter first-tree-dev test
+        run: pnpm exec turbo run test --filter=first-tree-dev --concurrency=1
 
   portable-smoke:
     name: Portable CLI Smoke
