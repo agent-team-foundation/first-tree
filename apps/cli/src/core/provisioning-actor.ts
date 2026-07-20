@@ -16,7 +16,5 @@ export function provisioningActorHeaders(): Record<string, string> {
   }
   const chatId = process.env.FIRST_TREE_CHAT_ID?.trim();
   if (chatId) headers["x-first-tree-chat-id"] = chatId;
-  const sessionId = process.env.FIRST_TREE_SESSION_ID?.trim();
-  if (sessionId) headers["x-first-tree-session-id"] = sessionId;
   return headers;
 }

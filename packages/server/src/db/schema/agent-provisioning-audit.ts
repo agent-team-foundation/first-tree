@@ -20,8 +20,10 @@ export const agentProvisioningAudit = pgTable(
     createdAgentId: text("created_agent_id")
       .notNull()
       .references(() => agents.uuid, { onDelete: "restrict" }),
+    // Optional best-effort association. This is not authoritative proof of
+    // which turn initiated the operation; the runtime has no server-owned
+    // session id for CLI provisioning.
     chatId: text("chat_id"),
-    sessionId: text("session_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

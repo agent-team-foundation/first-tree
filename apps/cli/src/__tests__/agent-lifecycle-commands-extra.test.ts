@@ -35,7 +35,6 @@ const provisioningEnvKeys = [
   "FIRST_TREE_AGENT_ID",
   "FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE",
   "FIRST_TREE_CHAT_ID",
-  "FIRST_TREE_SESSION_ID",
 ] as const;
 const originalProvisioningEnv = new Map(provisioningEnvKeys.map((key) => [key, process.env[key]]));
 

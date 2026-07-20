@@ -26,7 +26,6 @@ describe("agent-executable provisioning", () => {
       "x-first-tree-acting-agent": actor.uuid,
       "x-agent-runtime-session": runtimeToken,
       "x-first-tree-chat-id": "chat-provisioning",
-      "x-first-tree-session-id": "session-provisioning",
     };
 
     const denied = await app.inject({
@@ -121,7 +120,6 @@ describe("agent-executable provisioning", () => {
       managingMemberId: admin.memberId,
       createdAgentId: createdBody.uuid,
       chatId: null,
-      sessionId: null,
     });
   });
 

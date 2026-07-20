@@ -15,7 +15,6 @@ export type ProvisioningAuditContext = {
   managingMemberId: string;
   clientId: string;
   chatId: string | null;
-  sessionId: string | null;
 };
 
 /** Resolve and prove the standing capability carried by a running agent. */
@@ -109,8 +108,5 @@ export async function requireProvisioningActor(
     managingMemberId: row.managerId,
     clientId: row.clientId,
     chatId: verifiedChatId,
-    // FIRST_TREE_SESSION_ID is not a runtime-owned value. Never persist a
-    // caller-supplied session string as audit provenance.
-    sessionId: null,
   };
 }

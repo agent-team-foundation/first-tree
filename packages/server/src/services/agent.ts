@@ -425,7 +425,6 @@ export async function createAgent(
       actingAgentId: string;
       managingMemberId: string;
       chatId: string | null;
-      sessionId: string | null;
     };
   } = {},
 ) {
@@ -641,7 +640,6 @@ export async function createAgent(
           managingMemberId: options.provisioningAudit.managingMemberId,
           createdAgentId: row.uuid,
           chatId: options.provisioningAudit.chatId,
-          sessionId: options.provisioningAudit.sessionId,
         });
       }
 

@@ -5,7 +5,6 @@ CREATE TABLE "agent_provisioning_audit" (
 	"managing_member_id" text NOT NULL,
 	"created_agent_id" text NOT NULL,
 	"chat_id" text,
-	"session_id" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint

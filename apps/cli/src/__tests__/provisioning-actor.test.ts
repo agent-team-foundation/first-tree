@@ -4,12 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { provisioningActorHeaders } from "../core/provisioning-actor.js";
 
-const keys = [
-  "FIRST_TREE_AGENT_ID",
-  "FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE",
-  "FIRST_TREE_CHAT_ID",
-  "FIRST_TREE_SESSION_ID",
-] as const;
+const keys = ["FIRST_TREE_AGENT_ID", "FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE", "FIRST_TREE_CHAT_ID"] as const;
 const original = new Map(keys.map((key) => [key, process.env[key]]));
 let tempDir: string | undefined;
 
@@ -36,13 +31,11 @@ describe("provisioning actor headers", () => {
     process.env.FIRST_TREE_AGENT_ID = "agent-actor";
     process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
     process.env.FIRST_TREE_CHAT_ID = "chat-1";
-    process.env.FIRST_TREE_SESSION_ID = "session-1";
 
     expect(provisioningActorHeaders()).toEqual({
       "x-first-tree-acting-agent": "agent-actor",
       "x-agent-runtime-session": "runtime-proof",
       "x-first-tree-chat-id": "chat-1",
-      "x-first-tree-session-id": "session-1",
     });
   });
 
@@ -53,7 +46,6 @@ describe("provisioning actor headers", () => {
     process.env.FIRST_TREE_AGENT_ID = "";
     process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE = tokenFile;
     process.env.FIRST_TREE_CHAT_ID = "";
-    process.env.FIRST_TREE_SESSION_ID = "";
 
     expect(provisioningActorHeaders()).toEqual({
       "x-agent-runtime-session": "runtime-proof",
