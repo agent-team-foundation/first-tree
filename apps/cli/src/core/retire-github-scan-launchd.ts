@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 /**
  * Retire the stranded legacy `github-scan` launchd runner.
@@ -41,6 +41,17 @@ export type RetireGithubScanResult = {
 };
 
 const EMPTY_RESULT: RetireGithubScanResult = { bootedOut: [], removedPlists: 0 };
+const ROOT_MIGRATION_BUDGET_MS = 1_000;
+const RETRY_INTERVAL_MS = 6 * 60 * 60 * 1_000;
+let rootMigrationAttempted = false;
+
+function legacyHome(homeDir?: string): string {
+  return homeDir ?? join(homedir(), ".first-tree");
+}
+
+function legacyLaunchdDir(homeDir?: string): string {
+  return join(legacyHome(homeDir), "github-scan", "runner", "launchd");
+}
 
 /** Parse the `Label` value out of a launchd plist body, if present. */
 function parsePlistLabel(plistBody: string): string | null {
@@ -49,13 +60,13 @@ function parsePlistLabel(plistBody: string): string | null {
 }
 
 /** `launchctl bootout gui/<uid>/<label>`, swallowing the benign not-loaded case. */
-function bootoutLabel(uid: number, label: string, log?: (msg: string) => void): boolean {
+function bootoutLabel(uid: number, label: string, timeoutMs: number, log?: (msg: string) => void): boolean {
   const target = `gui/${uid}/${label}`;
   let res: ReturnType<typeof spawnSync>;
   try {
     res = spawnSync("launchctl", ["bootout", target], {
       encoding: "utf-8",
-      timeout: 15_000,
+      timeout: timeoutMs,
       stdio: ["ignore", "ignore", "pipe"],
     });
   } catch (err) {
@@ -81,14 +92,13 @@ function bootoutLabel(uid: number, label: string, log?: (msg: string) => void): 
  * @param opts.log Optional sink for non-fatal diagnostics.
  */
 export function retireLegacyGithubScanLaunchd(
-  opts: { homeDir?: string; log?: (msg: string) => void } = {},
+  opts: { homeDir?: string; log?: (msg: string) => void; bootoutTimeoutMs?: number; overallTimeoutMs?: number } = {},
 ): RetireGithubScanResult {
   // launchd is macOS-only; the legacy runner was never a launchd job anywhere
   // else, so there is nothing to retire off-darwin.
   if (process.platform !== "darwin") return EMPTY_RESULT;
 
-  const home = opts.homeDir ?? join(homedir(), ".first-tree");
-  const launchdDir = join(home, "github-scan", "runner", "launchd");
+  const launchdDir = legacyLaunchdDir(opts.homeDir);
   if (!existsSync(launchdDir)) return EMPTY_RESULT;
 
   let entries: string[];
@@ -103,8 +113,12 @@ export function retireLegacyGithubScanLaunchd(
   const uid = userInfo().uid;
   const bootedOut: string[] = [];
   let removedPlists = 0;
+  const bootoutTimeoutMs = opts.bootoutTimeoutMs ?? 15_000;
+  const deadline = Date.now() + (opts.overallTimeoutMs ?? Number.POSITIVE_INFINITY);
 
   for (const entry of entries) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
     const plistPath = join(launchdDir, entry);
     // Prefer the Label recorded inside the plist; fall back to the filename
     // stem so an unparseable plist still gets a bootout attempt (a wrong
@@ -120,7 +134,7 @@ export function retireLegacyGithubScanLaunchd(
     // Keep the plist when launchd reports an unexpected failure. It is the
     // retry artifact for the next daemon start; deleting it while the job is
     // still loaded would strand the KeepAlive runner permanently.
-    if (!bootoutLabel(uid, label, opts.log)) continue;
+    if (!bootoutLabel(uid, label, Math.max(1, Math.min(bootoutTimeoutMs, remainingMs)), opts.log)) continue;
     bootedOut.push(label);
 
     try {
@@ -140,4 +154,63 @@ export function retireLegacyGithubScanLaunchd(
   }
 
   return { bootedOut, removedPlists };
+}
+
+function hasRemainingPlists(homeDir?: string): boolean {
+  try {
+    return readdirSync(legacyLaunchdDir(homeDir)).some((name) => name.endsWith(".plist"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Process-once, durably throttled entrypoint for ordinary CLI startup.
+ *
+ * A retained plist is retried after a cooldown, not on every command. The
+ * launchctl work also has one shared one-second budget regardless of how many
+ * legacy profiles exist.
+ */
+export function runLegacyGithubScanMigration(
+  opts: { homeDir?: string; log?: (msg: string) => void; nowMs?: number; retryIntervalMs?: number } = {},
+): RetireGithubScanResult {
+  if (rootMigrationAttempted) return EMPTY_RESULT;
+  rootMigrationAttempted = true;
+  if (process.platform !== "darwin") return EMPTY_RESULT;
+
+  const home = legacyHome(opts.homeDir);
+  const statePath = join(home, "state", "legacy-github-scan-launchd.json");
+  const nowMs = opts.nowMs ?? Date.now();
+  try {
+    const state = JSON.parse(readFileSync(statePath, "utf-8")) as { retryAfterMs?: unknown };
+    if (typeof state.retryAfterMs === "number" && state.retryAfterMs > nowMs) return EMPTY_RESULT;
+  } catch {
+    // Missing or unreadable state means this process gets one bounded attempt.
+  }
+
+  const result = retireLegacyGithubScanLaunchd({
+    homeDir: home,
+    log: opts.log,
+    bootoutTimeoutMs: ROOT_MIGRATION_BUDGET_MS,
+    overallTimeoutMs: ROOT_MIGRATION_BUDGET_MS,
+  });
+  if (hasRemainingPlists(home)) {
+    try {
+      mkdirSync(dirname(statePath), { recursive: true });
+      writeFileSync(
+        statePath,
+        `${JSON.stringify({ retryAfterMs: nowMs + (opts.retryIntervalMs ?? RETRY_INTERVAL_MS) })}\n`,
+        { mode: 0o600 },
+      );
+    } catch {
+      // A state-write failure only loses throttling; plist retry safety remains.
+    }
+  } else {
+    try {
+      rmSync(statePath, { force: true });
+    } catch {
+      // Best-effort stale throttle cleanup.
+    }
+  }
+  return result;
 }

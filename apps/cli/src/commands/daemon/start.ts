@@ -50,7 +50,6 @@ import {
   refreshServerUpdateTarget,
   registerClientRuntimeMarker,
   resolveClientRuntimeStopReason,
-  retireLegacyGithubScanLaunchd,
   runRuntimeAuthLogin,
   startClientService,
   uploadAgentSkills,
@@ -89,21 +88,6 @@ export function registerDaemonStartCommand(daemon: Command): void {
         }
         process.exit(1);
       };
-      // Retire the removed github-scan launchd runner before any current-client
-      // credential, switch, or service gates. This makes first-run recovery
-      // reachable even when the old runner is the only local state left.
-      try {
-        const retired = retireLegacyGithubScanLaunchd({
-          log: (msg) => writeStatus("⚠️", `github-scan cleanup: ${msg}`),
-        });
-        if (retired.removedPlists > 0) {
-          writeStatus("•", `retired legacy github-scan launchd runner (${retired.removedPlists} plist removed)`);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        writeStatus("⚠️", `github-scan cleanup skipped: ${msg}`);
-      }
-
       // Compatibility, not management: a launchd / systemd daemon does not inherit
       // the user's login-shell environment, so load the user-owned
       // `~/.first-tree/daemon.env` (if present) into our env BEFORE the runtime

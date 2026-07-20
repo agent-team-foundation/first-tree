@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { retireLegacyGithubScanLaunchd } from "../core/retire-github-scan-launchd.js";
+import { retireLegacyGithubScanLaunchd, runLegacyGithubScanMigration } from "../core/retire-github-scan-launchd.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn(() => ({ status: 0, stdout: "", stderr: "" })));
 const userInfoMock = vi.hoisted(() => vi.fn(() => ({ uid: 501, username: "gandy" })));
@@ -175,5 +175,31 @@ describe("retireLegacyGithubScanLaunchd", () => {
     expect(spawnSyncMock).not.toHaveBeenCalled();
     // Left strictly alone on the wrong platform.
     expect(existsSync(plistPath)).toBe(true);
+  });
+
+  it("bounds a retained failure, writes a retry cooldown, and runs once per process", () => {
+    spawnSyncMock.mockReturnValue({ status: 1, stdout: "", stderr: "Operation timed out" });
+    const label = "com.first-tree.github-scan.runner.gandy.default";
+    const plistPath = writePlist(`${label}.plist`, label);
+
+    runLegacyGithubScanMigration({ homeDir: home, nowMs: 1_000, retryIntervalMs: 5_000 });
+    runLegacyGithubScanMigration({ homeDir: home, nowMs: 10_000, retryIntervalMs: 5_000 });
+
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "launchctl",
+      ["bootout", `gui/501/${label}`],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
+    const spawnOptions = (spawnSyncMock.mock.calls[0] as unknown[] | undefined)?.[2] as
+      | { timeout?: number }
+      | undefined;
+    const timeout = spawnOptions?.timeout;
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(1_000);
+    expect(existsSync(plistPath)).toBe(true);
+    expect(JSON.parse(readFileSync(join(home, "state", "legacy-github-scan-launchd.json"), "utf-8"))).toEqual({
+      retryAfterMs: 6_000,
+    });
   });
 });

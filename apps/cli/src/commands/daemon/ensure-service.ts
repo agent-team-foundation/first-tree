@@ -7,7 +7,6 @@ import {
   isServiceUnitDriftDetected,
   loadCredentials,
   restartClientService,
-  retireLegacyGithubScanLaunchd,
 } from "../../core/index.js";
 import { print } from "../../core/output.js";
 
@@ -25,17 +24,9 @@ export function registerDaemonEnsureServiceCommand(daemon: Command): void {
     .description("Ensure the background service is installed and running when credentials already exist")
     .action(() => {
       const binName = channelConfig.binName;
-      try {
-        retireLegacyGithubScanLaunchd({
-          log: (msg) => print.line(`  warning: github-scan cleanup: ${msg}\n`),
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        print.line(`  warning: github-scan cleanup skipped: ${msg}\n`);
-      }
-      // npm postinstall uses this existing hidden entry point to run only the
-      // new-binary migration. Portable installers call ensure-service normally
-      // and continue into their credential/service repair behavior below.
+      // npm postinstall uses this existing hidden entry point to launch the new
+      // CLI. The root entrypoint owns the process-once migration; this flag keeps
+      // the command action from touching credentials or service state afterward.
       if (process.env.FIRST_TREE_LEGACY_GITHUB_SCAN_ONLY === "1") return;
 
       if (!isServiceSupported()) {

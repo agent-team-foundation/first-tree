@@ -32,7 +32,7 @@ const outputMocks = vi.hoisted(() => ({
 }));
 
 const migrationMocks = vi.hoisted(() => ({
-  retireLegacyGithubScanLaunchd: vi.fn(),
+  runLegacyGithubScanMigration: vi.fn(),
 }));
 
 vi.mock("@first-tree/client", () => clientMocks);
@@ -149,11 +149,10 @@ describe("CLI entry and public exports", () => {
     runPreAction({});
     expect(outputMocks.setJsonMode).toHaveBeenLastCalledWith(false);
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenLastCalledWith({ level: "warn" });
-    expect(migrationMocks.retireLegacyGithubScanLaunchd).toHaveBeenCalledTimes(1);
   });
 
   it("keeps help and version-only invocations read-only for startup migration", async () => {
-    for (const args of [["--help"], ["--version"]]) {
+    for (const args of [["--help"], ["--version"], ["help", "status"]]) {
       vi.resetModules();
       vi.clearAllMocks();
       process.argv = ["node", "first-tree", ...args];
@@ -161,9 +160,27 @@ describe("CLI entry and public exports", () => {
         return this;
       });
       await import("../cli/index.js");
-      expect(migrationMocks.retireLegacyGithubScanLaunchd).not.toHaveBeenCalled();
+      expect(migrationMocks.runLegacyGithubScanMigration).not.toHaveBeenCalled();
       parseSpy.mockRestore();
     }
+  });
+
+  it("runs one centralized migration before a daemon action", async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    process.argv = ["node", "first-tree", "daemon", "start"];
+    const parseSpy = vi.spyOn(Command.prototype, "parse").mockImplementation(function parse(this: Command) {
+      return this;
+    });
+
+    await import("../cli/index.js");
+    const program = parseSpy.mock.contexts[0] as Command;
+    const hooks = (program as unknown as { _lifeCycleHooks: { preAction: Array<(cmd: Command) => void> } })
+      ._lifeCycleHooks.preAction;
+    hooks.at(-1)?.(program);
+
+    expect(migrationMocks.runLegacyGithubScanMigration).toHaveBeenCalledTimes(1);
+    parseSpy.mockRestore();
   });
 
   it("runs Y's migration after an old portable updater switches current without a hook", async () => {
@@ -184,7 +201,11 @@ describe("CLI entry and public exports", () => {
 
     await import("../cli/index.js");
 
-    expect(migrationMocks.retireLegacyGithubScanLaunchd).toHaveBeenCalledTimes(1);
+    const program = parseSpy.mock.contexts[0] as Command;
+    const hooks = (program as unknown as { _lifeCycleHooks: { preAction: Array<(cmd: Command) => void> } })
+      ._lifeCycleHooks.preAction;
+    hooks.at(-1)?.(program);
+    expect(migrationMocks.runLegacyGithubScanMigration).toHaveBeenCalledTimes(1);
     parseSpy.mockRestore();
     delete process.env.FIRST_TREE_INSTALL_MODE;
     delete process.env.FIRST_TREE_PORTABLE_ROOT;
