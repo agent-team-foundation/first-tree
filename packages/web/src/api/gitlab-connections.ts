@@ -7,6 +7,9 @@ import type {
 } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
+export const gitlabConnectionsQueryKey = (organizationId: string | null) =>
+  ["gitlab-connections", organizationId] as const;
+
 export async function listGitlabConnections(): Promise<GitlabConnectionSummary[]> {
   const response = await api.get<{ connections: GitlabConnectionSummary[] }>(withOrg("/gitlab-connections"));
   return response.connections;

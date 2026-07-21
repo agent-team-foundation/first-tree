@@ -37,11 +37,13 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
+  createContext,
   memo,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -70,6 +72,7 @@ import {
   sendChatMessage,
   sendFileMessageBatch,
 } from "../../../api/chats.js";
+import { gitlabConnectionsQueryKey, listGitlabConnections } from "../../../api/gitlab-connections.js";
 import { putImage } from "../../../api/image-store.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
@@ -136,6 +139,7 @@ import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
+import { gitlabEntityLinkPresentation } from "../../../lib/gitlab-entity-link.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
 import { formatTokenUsageTitle, processedTokenCount } from "../../../lib/token-usage.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -549,6 +553,8 @@ type MessageRowProps = {
   isTrial: boolean;
 };
 
+const GitlabInstanceOriginContext = createContext<string | null>(null);
+
 type MessageBodyProps = {
   msg: MessageWithDelivery;
   myAgentId: string | null;
@@ -572,6 +578,7 @@ const MessageMarkdown = memo(function MessageMarkdown({ children, components, re
 const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipants }: MessageBodyProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const gitlabInstanceOrigin = useContext(GitlabInstanceOriginContext);
   // Generic attachment refs (doc-preview is the first consumer; kind:
   // "document"). Keyed by attachmentId so the `attachment:<id>` link click can
   // look the ref up and seed the drawer's cache. Old messages (legacy inline
@@ -715,14 +722,35 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
           setSearchParams(next);
         };
 
+        const gitlabPresentation =
+          typeof children === "string" && children === href
+            ? gitlabEntityLinkPresentation(href, gitlabInstanceOrigin)
+            : null;
+
         return (
-          <a {...props} href={href} onClick={onClick} target="_blank" rel="noopener noreferrer">
-            {children}
+          <a
+            {...props}
+            href={href}
+            title={gitlabPresentation?.title ?? props.title}
+            onClick={onClick}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {gitlabPresentation?.label ?? children}
           </a>
         );
       },
     }),
-    [docAttachmentRefs, failedDocMentions, msg.chatId, msg.id, queryClient, searchParams, setSearchParams],
+    [
+      docAttachmentRefs,
+      failedDocMentions,
+      gitlabInstanceOrigin,
+      msg.chatId,
+      msg.id,
+      queryClient,
+      searchParams,
+      setSearchParams,
+    ],
   );
 
   return (
@@ -1516,7 +1544,14 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, memberId: myMemberId, user } = useAuth();
+  const { agentId: myAgentId, memberId: myMemberId, organizationId, user } = useAuth();
+  const gitlabConnections = useQuery({
+    queryKey: gitlabConnectionsQueryKey(organizationId),
+    queryFn: listGitlabConnections,
+    enabled: !!organizationId,
+    staleTime: Infinity,
+  });
+  const gitlabInstanceOrigin = gitlabConnections.data?.[0]?.instanceOrigin ?? null;
   // Unsent draft text, cached per user + chat in browser-local storage so it
   // survives chat switches and reloads (ChatView is not remounted on switch).
   // Clearing the draft on send empties its stored entry.
@@ -4681,7 +4716,9 @@ export function ChatView({
       </div>
     </div>
   );
-  return body;
+  return (
+    <GitlabInstanceOriginContext.Provider value={gitlabInstanceOrigin}>{body}</GitlabInstanceOriginContext.Provider>
+  );
 }
 
 function MobileChatDetailsSheet({
