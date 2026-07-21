@@ -8,7 +8,9 @@ import { useTestApp } from "./helpers.js";
 
 /** Push a claim's expiry into the past, simulating a claim whose TTL lapsed. */
 async function backdateExpiry(db: Database, eventId: string) {
-  await db.execute(sql`UPDATE processed_events SET expires_at = now() - interval '1 second' WHERE event_id = ${eventId}`);
+  await db.execute(
+    sql`UPDATE processed_events SET expires_at = now() - interval '1 second' WHERE event_id = ${eventId}`,
+  );
 }
 
 describe("Event deduplication", () => {
