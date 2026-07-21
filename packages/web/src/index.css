@@ -2175,15 +2175,18 @@ tr[data-interactive]:hover {
  * (see below) because any horizontal padding / background offset on
  * the mirror chip pushes the visual glyphs out of sync with the
  * textarea's caret position underneath. `white-space: nowrap` keeps
- * `@<name>` from wrapping at a hyphen mid-handle. The hard-coded
- * `999px` radius (instead of `--radius-chip`) gives the full capsule
- * shape without touching the shared chip radius. */
+ * `@<displayName>` from wrapping. Inline-block + ellipsis keeps a very long
+ * display name inside the message column on narrow screens. */
 .mention-chip {
-  display: inline;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   background: var(--brand);
   color: var(--fg-on-vivid);
-  padding: 0 6px;
-  border-radius: 999px;
+  padding: 0 var(--sp-1_5);
+  border-radius: var(--radius-full);
   font-weight: 500;
   white-space: nowrap;
 }

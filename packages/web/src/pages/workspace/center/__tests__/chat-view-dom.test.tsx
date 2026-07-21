@@ -1597,6 +1597,59 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("renders sent mentions with displayName while preserving the stored handle and refreshes after rename", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const numericHuman = participant({
+      agentId: "human-agent-alice",
+      type: "human",
+      name: "1736192959",
+      displayName: "李坤阳",
+    });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        numericHuman,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const body = "请 @1736192959 处理";
+    const page = messages([
+      message({
+        id: "display-name-mention",
+        senderId: "agent-1",
+        content: body,
+        metadata: { mentions: [numericHuman.agentId] },
+        source: "api",
+      }),
+    ]);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, "@李坤阳");
+    const chip = container.querySelector<HTMLElement>('.mention-chip[data-mention-name="1736192959"]');
+    expect(chip?.textContent).toBe("@李坤阳");
+    expect(chip?.getAttribute("title")).toBe("@李坤阳 (@1736192959)");
+    expect(chip?.getAttribute("aria-label")).toBe("@李坤阳 (@1736192959)");
+    expect(markdownMocks.render).toHaveBeenCalledWith(body);
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-detail", "chat-1"], {
+        ...detail,
+        participants: detail.participants.map((row) =>
+          row.agentId === numericHuman.agentId ? { ...row, displayName: "李坤阳（新）" } : row,
+        ),
+      });
+    });
+    await waitForText(container, "@李坤阳（新）");
+    expect(chip?.textContent).toBe("@李坤阳（新）");
+
+    await act(async () => root.unmount());
+  });
+
   it("renders a request as a normal message and does not re-render its body when a reply arrives", async () => {
     const { ChatView } = await import("../chat-view.js");
     const request = message({
