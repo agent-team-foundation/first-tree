@@ -1,15 +1,13 @@
 import { type AgentChatStatus, type ChatParticipantDetail, compareMainStatus } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pause, Play } from "lucide-react";
-import { useContext } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { resumeSession, suspendSession } from "../../api/sessions.js";
-import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
+import { viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
 import { Avatar } from "../avatar.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { AgentHovercard } from "./agent-hovercard.js";
-import { LiveTurnAgentsContext } from "./live-turn-context.js";
 
 /**
  * AgentStatusPanel — the chat right sidebar's per-agent composite-status
@@ -46,10 +44,6 @@ export function AgentStatusPanel({
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000, // safety net; the WS invalidation is the live path
   });
-  // Agents with a live timeline turn (a mounted WorkingTurn), from ChatView via
-  // context. `reconcileLiveTurn` uses it to upgrade a stale `ready` row to
-  // `working` so the roster can't show Idle while the turn is visibly running.
-  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
   // Per the per-chat-runtime authority refactor: working is per-chat
   // freshness stamp the server self-heals from; no local stale-clear ticker
   // needed. The admin-WS delta pushes the recomputed status down.
@@ -73,7 +67,6 @@ export function AgentStatusPanel({
           chatId={chatId}
           agent={agent}
           status={byAgent.get(agent.agentId) ?? null}
-          hasLiveTurn={liveTurnAgentIds.has(agent.agentId)}
           canManage={canManage(agent.agentId)}
           compact={compact}
         />
@@ -101,14 +94,12 @@ function AgentStatusRow({
   chatId,
   agent,
   status,
-  hasLiveTurn,
   canManage,
   compact,
 }: {
   chatId: string;
   agent: ChatParticipantDetail;
   status: AgentChatStatus | null;
-  hasLiveTurn: boolean;
   canManage: boolean;
   compact: boolean;
 }) {
@@ -130,16 +121,9 @@ function AgentStatusRow({
     },
   });
 
-  // Reconcile a lapsed runtime heartbeat against the timeline's live-turn
-  // signal: a mounted WorkingTurn upgrades `ready → working` so the row can't
-  // read Idle while the conversation shows the agent working. Everything
-  // downstream (glyph, second line, Pause eligibility) reads this reconciled
-  // status so they stay internally consistent.
-  const displayStatus = status ? reconcileLiveTurn(status, hasLiveTurn) : null;
-
-  const view = displayStatus ? viewOf(displayStatus.main) : null;
-  const showPause = canManage && canPauseStatus(displayStatus);
-  const showResume = canManage && canResumeStatus(displayStatus);
+  const view = status ? viewOf(status.main) : null;
+  const showPause = canManage && canPauseStatus(status);
+  const showResume = canManage && canResumeStatus(status);
 
   return (
     <div
@@ -196,7 +180,7 @@ function AgentStatusRow({
         >
           {agent.displayName}
         </AgentHovercard>
-        <SecondLine status={displayStatus} />
+        <SecondLine status={status} />
       </div>
 
       {showPause ? <PauseButton onClick={() => suspendMut.mutate()} isPending={suspendMut.isPending} /> : null}

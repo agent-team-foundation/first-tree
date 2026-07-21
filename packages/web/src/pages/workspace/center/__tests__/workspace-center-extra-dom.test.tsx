@@ -66,6 +66,7 @@ const readStateMocks = vi.hoisted(() => ({
 }));
 
 const sessionMocks = vi.hoisted(() => ({
+  listChatSessionEvents: vi.fn(),
   listSessionEvents: vi.fn(),
   listSessionOutputs: vi.fn(),
 }));
@@ -109,6 +110,7 @@ vi.mock("../../../../api/read-state-store.js", () => readStateMocks);
 
 vi.mock("../../../../api/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/sessions.js")>()),
+  listChatSessionEvents: sessionMocks.listChatSessionEvents,
   listSessionEvents: sessionMocks.listSessionEvents,
   listSessionOutputs: sessionMocks.listSessionOutputs,
 }));
@@ -406,7 +408,9 @@ function seedChat(
   queryClient.setQueryData(["chat-messages-cache", detail.id], []);
   queryClient.setQueryData(["chat-messages", detail.id], page);
   queryClient.setQueryData(["chat-open-requests", detail.id], { items: [] });
-  queryClient.setQueryData(["session-events", "agent-1", detail.id], SESSION_EVENTS);
+  queryClient.setQueryData(["chat-session-events", detail.id], {
+    feeds: [{ agentId: "agent-1", ...SESSION_EVENTS }],
+  });
   queryClient.setQueryData(["chat-read-state", detail.id], null);
   queryClient.setQueryData(["chat-token-usage", detail.id], {
     inputTokens: 0,
@@ -575,6 +579,9 @@ beforeEach(() => {
   sessionMocks.listSessionEvents.mockImplementation((requestedAgentId: string) =>
     Promise.resolve(requestedAgentId === "agent-1" ? SESSION_EVENTS : { items: [], nextCursor: null }),
   );
+  sessionMocks.listChatSessionEvents.mockResolvedValue({
+    feeds: [{ agentId: "agent-1", ...SESSION_EVENTS }],
+  });
   sessionMocks.listSessionOutputs.mockResolvedValue({ items: [], nextCursor: null });
 });
 

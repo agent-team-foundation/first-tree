@@ -8,7 +8,7 @@ import {
   type LiveActivity,
 } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, type ReactElement } from "react";
+import { act, createRef, type ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
@@ -40,7 +40,6 @@ vi.mock("../../../lib/scroll-to-agent-timeline.js", () => timelineMocks);
 
 import { AgentStatusPanel } from "../agent-status-panel.js";
 import { ComposeStatusBar } from "../compose-status-bar.js";
-import { LiveTurnAgentsContext } from "../live-turn-context.js";
 
 const BASE_STATUS: Omit<AgentChatStatusInput, "agentId"> = {
   reachable: true,
@@ -82,15 +81,16 @@ function agent(agentId: string, displayName: string): ChatParticipantDetail {
   };
 }
 
-function withProviders(ui: ReactElement, liveTurnAgentIds: ReadonlySet<string> = new Set()): ReactElement {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY }, mutations: { retry: false } },
   });
+}
+
+function withProviders(ui: ReactElement, queryClient = createQueryClient()): ReactElement {
   return (
     <MemoryRouter>
-      <QueryClientProvider client={queryClient}>
-        <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{ui}</LiveTurnAgentsContext.Provider>
-      </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
     </MemoryRouter>
   );
 }
@@ -160,8 +160,10 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     h.render(
       withProviders(
-        <ComposeStatusBar chatId="chat-1" agents={[agent("agent-ready", "Ready Agent")]} />,
-        new Set(["agent-ready"]),
+        <>
+          <div data-working-agent="agent-ready" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-ready", "Ready Agent")]} />
+        </>,
       ),
     );
 
@@ -192,7 +194,15 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.textContent).not.toContain("Bash");
     expect(h.container.textContent).not.toContain("Cover the status rail.");
 
-    await click(h, h.container.querySelector('button[aria-label="Open agent activity"]'));
+    const trigger = h.container.querySelector('button[aria-label^="Open agent activity"]');
+    expect(trigger?.getAttribute("aria-label")).toBe("Open agent activity, 1 actionable agent");
+    const liveStatus = h.container.querySelector('[role="status"]');
+    expect(liveStatus?.textContent).toContain("1 actionable agent");
+    expect(liveStatus?.textContent).toContain("Nova Working");
+    expect(liveStatus?.textContent).not.toContain("Bash");
+    expect(liveStatus?.textContent).not.toContain("Write extra DOM tests");
+
+    await click(h, trigger);
     await waitForSettled(h, () => {
       expect(h.container.querySelector('section[aria-label="Agent activity"]')).not.toBeNull();
       expect(h.container.textContent).toContain("Agent activity · 1 agent");
@@ -246,7 +256,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.textContent).toContain("Idle");
     expect(h.container.textContent).not.toContain("Failed");
 
-    await click(h, h.container.querySelector('button[aria-label="Open agent activity"]'));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Offline Agent"));
     expect(h.container.textContent).toContain("Offline");
   });
@@ -271,7 +281,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Waiting for provider capacity"));
     expect(h.container.textContent).toContain("Waiting");
-    await click(h, h.container.querySelector('button[aria-label="Open agent activity"]'));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
     await waitForSettled(h, () => expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull());
     expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull();
     expect(h.container.querySelector('button[aria-label*="timeline"]')).toBeNull();
@@ -294,11 +304,10 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     );
 
     await waitForSettled(h, () => {
-      expect(h.container.textContent).toContain("Atlas");
-      expect(h.container.textContent).not.toContain("Nova");
+      expect(h.container.querySelector(".compose-status-agent-name")?.textContent).toBe("Atlas");
     });
 
-    await click(h, h.container.querySelector('button[aria-label="Open agent activity"]'));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Nova"));
 
     const inspector = h.container.querySelector("[data-live-activity-inspector]");
@@ -327,7 +336,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     );
 
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
-    await click(h, h.container.querySelector('button[aria-label="Open agent activity"]'));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
     await waitForSettled(h, () =>
       expect(
         h.container.querySelector('button[aria-label*="Nova"][aria-label*="Run the focused suite"]'),
@@ -352,7 +361,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     h.render(withProviders(<ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />));
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
 
-    const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label="Open agent activity"]');
+    const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label^="Open agent activity"]');
     trigger?.focus();
     await click(h, trigger);
     const inspector = h.container.querySelector<HTMLElement>("[data-live-activity-inspector]");
@@ -366,6 +375,95 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await keyDown(h, document, "Escape");
     expect(h.container.querySelector("[data-live-activity-inspector]")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("jumps a ready terminal error to its mounted error evidence", async () => {
+    agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
+      status("agent-terminal", {
+        statusReason: {
+          kind: "terminal",
+          severity: "error",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "unknown",
+          reasonCode: "unknown_exhausted",
+          label: "Provider retry exhausted",
+        },
+      }),
+    ]);
+
+    h.render(
+      withProviders(
+        <>
+          <div data-error-agent="agent-terminal" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-terminal", "Terminal Agent")]} />
+        </>,
+      ),
+    );
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    const row = h.container.querySelector(
+      'button[aria-label*="Terminal Agent"][aria-label*="Provider retry exhausted"]',
+    );
+    expect(row).not.toBeNull();
+    await click(h, row);
+    expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-terminal", "failed", { focus: true });
+  });
+
+  it("keeps focus inside a live-updating inspector, then returns it to the composer fallback", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(
+      ["chat-agent-status", "chat-1"],
+      [
+        status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") }),
+        status("agent-atlas", { working: true, engagement: "active", activity: activity("agent-atlas") }),
+      ],
+    );
+    const fallbackRef = createRef<HTMLButtonElement>();
+
+    h.render(
+      withProviders(
+        <>
+          <div data-working-agent="agent-nova" />
+          <div data-working-agent="agent-atlas" />
+          <ComposeStatusBar
+            chatId="chat-1"
+            agents={[agent("agent-nova", "Nova"), agent("agent-atlas", "Atlas")]}
+            fallbackFocusRef={fallbackRef}
+          />
+          <button ref={fallbackRef} type="button">
+            Composer fallback
+          </button>
+        </>,
+        queryClient,
+      ),
+    );
+
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (2)"));
+    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    const novaRow = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Nova"]');
+    novaRow?.focus();
+    expect(document.activeElement).toBe(novaRow);
+
+    await act(async () => {
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [status("agent-atlas", { working: true, engagement: "active", activity: activity("agent-atlas") })],
+      );
+    });
+    await h.flush();
+    await waitForSettled(h, () =>
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Close agent activity"),
+    );
+
+    const atlasRow = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Atlas"]');
+    atlasRow?.focus();
+    await act(async () => {
+      queryClient.setQueryData(["chat-agent-status", "chat-1"], []);
+    });
+    await h.flush();
+    await waitForSettled(h, () => expect(document.activeElement).toBe(fallbackRef.current));
+    expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull();
   });
 });
 
@@ -395,23 +493,24 @@ describe("AgentStatusPanel extra DOM coverage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("upgrades a ready row with a live turn and offers Pause", async () => {
+  it("keeps a server-ready row Idle and does not offer Pause for residual timeline evidence", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([status("agent-nova", { engagement: "active" })]);
 
     h.render(
       withProviders(
-        <AgentStatusPanel chatId="chat-1" agents={[agent("agent-nova", "Nova")]} canManage={() => true} compact />,
-        new Set(["agent-nova"]),
+        <>
+          <div data-working-agent="agent-nova" />
+          <AgentStatusPanel chatId="chat-1" agents={[agent("agent-nova", "Nova")]} canManage={() => true} compact />
+        </>,
       ),
     );
 
     await waitForSettled(h, () => {
       expect(h.container.textContent).toContain("Nova");
-      expect(h.container.textContent).toContain("Working");
+      expect(h.container.textContent).toContain("Idle");
     });
-
-    await click(h, h.container.querySelector('button[aria-label="Pause agent"]'));
-    await waitForSettled(h, () => expect(sessionApiMocks.suspendSession).toHaveBeenCalledWith("agent-nova", "chat-1"));
+    expect(h.container.querySelector('button[aria-label="Pause agent"]')).toBeNull();
+    expect(sessionApiMocks.suspendSession).not.toHaveBeenCalled();
   });
 
   it("keeps working and failed roster statuses static and omits activity detail", async () => {
@@ -431,7 +530,6 @@ describe("AgentStatusPanel extra DOM coverage", () => {
           agents={[agent("agent-worker", "Worker Agent"), agent("agent-failed", "Failed Agent")]}
           canManage={() => false}
         />,
-        new Set(["agent-worker", "agent-failed"]),
       ),
     );
 

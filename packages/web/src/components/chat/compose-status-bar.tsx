@@ -6,7 +6,7 @@ import {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Brain, ChevronDown, Pencil, Wrench, X } from "lucide-react";
-import { type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type Ref, type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
@@ -94,10 +94,13 @@ export function pickLead(
 export function ComposeStatusBar({
   chatId,
   agents,
+  fallbackFocusRef,
 }: {
   chatId: string;
   /** Non-human agent participants, used for stable display-name lookup. */
   agents: ChatParticipantDetail[];
+  /** Stable composer control that receives focus if the activity bar vanishes. */
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
@@ -105,7 +108,11 @@ export function ComposeStatusBar({
   const activeChatIdRef = useRef(chatId);
   const inspectorRef = useRef<HTMLElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const closeInspector = useCallback(() => setInspectorOpen(false), []);
+  const focusWithinRef = useRef(false);
+  const closeInspector = useCallback(() => {
+    focusWithinRef.current = false;
+    setInspectorOpen(false);
+  }, []);
   const closeInspectorAndRestoreFocus = useCallback(() => {
     setInspectorOpen(false);
     triggerRef.current?.focus();
@@ -122,6 +129,7 @@ export function ComposeStatusBar({
   const attention = useMemo(() => selectAttention(statuses), [statuses]);
   const mounted = useMountedAnchors();
   const nameOf = useMemo(() => nameFor(agents), [agents]);
+  const announcement = useMemo(() => activityAnnouncement(attention, nameOf), [attention, nameOf]);
 
   useEffect(() => {
     const priority = attention.filter(
@@ -143,8 +151,30 @@ export function ComposeStatusBar({
   }, [chatId]);
 
   useEffect(() => {
-    if (attention.length === 0) setInspectorOpen(false);
-  }, [attention.length]);
+    if (attention.length === 0) {
+      setInspectorOpen(false);
+      if (!focusWithinRef.current) return;
+      focusWithinRef.current = false;
+      const frame = requestAnimationFrame(() => fallbackFocusRef?.current?.focus());
+      return () => cancelAnimationFrame(frame);
+    }
+    if (!inspectorOpen || !focusWithinRef.current) return;
+    const active = document.activeElement;
+    const activeAgentId = active?.closest<HTMLElement>("[data-live-activity-agent]")?.dataset.liveActivityAgent;
+    const focusedRowSurvives =
+      activeAgentId !== undefined && attention.some((status) => status.agentId === activeAgentId);
+    if (
+      active &&
+      (triggerRef.current?.contains(active) ||
+        (inspectorRef.current?.contains(active) && (activeAgentId === undefined || focusedRowSurvives)))
+    ) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      inspectorRef.current?.querySelector<HTMLElement>(".compose-status-inspector-close")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [attention, fallbackFocusRef, inspectorOpen]);
 
   useEffect(() => {
     if (!inspectorOpen) return;
@@ -160,6 +190,7 @@ export function ComposeStatusBar({
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation();
       closeInspectorAndRestoreFocus();
     };
     const onPointerDown = (event: PointerEvent) => {
@@ -167,10 +198,10 @@ export function ComposeStatusBar({
       if (!target || inspectorRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
       closeInspector();
     };
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", onPointerDown, true);
     };
   }, [closeInspector, closeInspectorAndRestoreFocus, inspectorOpen]);
@@ -183,6 +214,19 @@ export function ComposeStatusBar({
     <div
       className="fade-in"
       data-compose-status-bar
+      onFocusCapture={() => {
+        focusWithinRef.current = true;
+      }}
+      onBlurCapture={(event) => {
+        const next = event.relatedTarget;
+        // Removing the last actionable row temporarily moves browser focus to
+        // body before the fallback-focus effect runs. Preserve the marker for
+        // that removal transition; explicit outside pointer dismissal resets
+        // it through closeInspector.
+        if (next instanceof Node && next !== document.body && !event.currentTarget.contains(next)) {
+          focusWithinRef.current = false;
+        }
+      }}
       style={{
         position: "relative",
         marginBottom: "var(--sp-1)",
@@ -198,7 +242,7 @@ export function ComposeStatusBar({
           aria-controls={inspectorId}
           aria-expanded={inspectorOpen}
           aria-haspopup="dialog"
-          aria-label={inspectorOpen ? "Close agent activity" : "Open agent activity"}
+          aria-label={`${inspectorOpen ? "Close" : "Open"} agent activity, ${attention.length} actionable ${attention.length === 1 ? "agent" : "agents"}`}
           onClick={() => setInspectorOpen((open) => !open)}
           className="compose-status-activity-trigger text-label inline-flex shrink-0 items-center rounded-[var(--radius-input)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           style={{
@@ -219,6 +263,10 @@ export function ComposeStatusBar({
         </button>
       </div>
 
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {announcement}
+      </span>
+
       {/* Keep the panel after its disclosure trigger in DOM order. Its visual
           position is still above the composer, while forward Tab now enters
           Close → activity rows instead of skipping the panel entirely. */}
@@ -238,6 +286,15 @@ export function ComposeStatusBar({
 
 function nameFor(agents: ChatParticipantDetail[]) {
   return (agentId: string) => agents.find((agent) => agent.agentId === agentId)?.displayName ?? agentId.slice(0, 8);
+}
+
+function activityAnnouncement(attention: AgentChatStatus[], nameOf: (agentId: string) => string): string {
+  const count = `${attention.length} actionable ${attention.length === 1 ? "agent" : "agents"}`;
+  const states = [...attention]
+    .sort((a, b) => a.agentId.localeCompare(b.agentId))
+    .map((status) => `${nameOf(status.agentId)} ${visibleStatusReason(status)?.label ?? stateLabel(status)}`)
+    .join(". ");
+  return states ? `Agent activity updated: ${count}. ${states}.` : `Agent activity updated: ${count}.`;
 }
 
 function LeadSnapshot({ status, name }: { status: AgentChatStatus; name: string }) {
@@ -360,7 +417,8 @@ function InspectorItem({
 }) {
   const visual = statusVisual(status);
   const snapshot = agentSnapshot(status);
-  const anchored = isJumpable(mounted, status.main, status.agentId);
+  const jumpMain = isFatalStatusReason(status) ? "failed" : status.main;
+  const anchored = isJumpable(mounted, jumpMain, status.agentId);
   const accessibleSummary = [
     name,
     stateLabel(status),
@@ -373,7 +431,7 @@ function InspectorItem({
   return (
     <TimelineJumpButton
       agentId={status.agentId}
-      main={status.main}
+      main={jumpMain}
       anchored={anchored}
       ariaLabel={accessibleSummary}
       onNavigate={onNavigate}

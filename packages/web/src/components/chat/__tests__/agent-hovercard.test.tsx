@@ -137,7 +137,7 @@ describe("AgentHovercard", () => {
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("shows identity, one chat status, and lightweight navigation without profile/runtime metadata", async () => {
+  it("keeps a server-ready status Idle despite residual timeline evidence", async () => {
     seedPassA(
       "chat-1",
       [AGENT_PARTICIPANT],
@@ -155,9 +155,12 @@ describe("AgentHovercard", () => {
     );
     mocks.getAgent.mockResolvedValue(AGENT_DTO);
     render(
-      <AgentHovercard agentId="a1" chatId="chat-1" name="Aria">
-        <span>Aria</span>
-      </AgentHovercard>,
+      <>
+        <div data-working-agent="a1" />
+        <AgentHovercard agentId="a1" chatId="chat-1" name="Aria">
+          <span>Aria</span>
+        </AgentHovercard>
+      </>,
     );
     await flush();
     const card = await openCard();

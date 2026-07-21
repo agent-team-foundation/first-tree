@@ -19,7 +19,7 @@ import {
   type RuntimeProvider,
   statusReasonFromProviderRetryEvent,
 } from "@first-tree/shared";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowUp,
@@ -76,7 +76,8 @@ import { getReadState, type ReadState, setReadState } from "../../../api/read-st
 import {
   agentSessionsQueryKey,
   asErrorPayload,
-  listSessionEvents,
+  chatSessionEventsQueryKey,
+  listChatSessionEvents,
   type SessionEventRow,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
@@ -101,7 +102,6 @@ import {
   isGitlabEventCardContent,
   isTrustedGitlabDispatcherMessage,
 } from "../../../components/chat/gitlab-event-card.js";
-import { LiveTurnAgentsContext } from "../../../components/chat/live-turn-context.js";
 import {
   findBlockingRequest,
   findThreadableRequestId,
@@ -1697,6 +1697,10 @@ export function ChatView({
     if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // A nested top layer (for example the Activity Inspector) owns the first
+      // Escape and marks it handled. Keep the details rail open until the next
+      // Escape instead of dismissing two layers in one keypress.
+      if (event.defaultPrevented) return;
       const active = document.activeElement;
       if (active instanceof HTMLElement) {
         const tag = active.tagName;
@@ -1709,6 +1713,7 @@ export function ChatView({
   }, [detailsOpen, hasDocPreview, setSidebarByUser]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const readOnlyComposerRef = useRef<HTMLDivElement | null>(null);
   // The composer footer band — wraps BOTH the request dock (with its option
   // radios) and the composer. The Enter-to-resolve backstop binds its keydown
   // listener here, not on `window`, so it only sees keys from inside the
@@ -1826,28 +1831,13 @@ export function ChatView({
     staleTime: 10_000,
   });
 
-  // Fetch newest events first so the turn-grouping filter always sees the
-  // latest `turn_end` even in chats with thousands of total events. The
-  // primary agent keeps its stable query; secondary non-human speakers use
-  // the same chat-scoped event contract so every inspector summary can point
-  // back to mounted timeline evidence when the viewer may see that agent.
-  const { data: eventsData } = useQuery({
-    queryKey: ["session-events", agentId, chatId],
-    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
-  });
-  const secondaryTimelineAgentIds = useMemo(
-    () =>
-      (chatDetail?.participants ?? [])
-        .filter((participant) => participant.type !== "human" && participant.agentId !== agentId)
-        .map((participant) => participant.agentId),
-    [agentId, chatDetail?.participants],
-  );
-  const secondaryEventFeeds = useQueries({
-    queries: secondaryTimelineAgentIds.map((secondaryAgentId) => ({
-      queryKey: ["session-events", secondaryAgentId, chatId] as const,
-      queryFn: () => listSessionEvents(secondaryAgentId, chatId, { limit: 200, direction: "desc" }),
-    })),
-    combine: (results) => results.flatMap((result) => (result.data ? [result.data] : [])),
+  // Fetch one chat-scoped batch with an independent newest-first window per
+  // non-human speaker. Chat membership is the disclosure boundary, so a
+  // private speaker is inspectable here without becoming org-discoverable.
+  // One batch also prevents the old N-query fanout as group size grows.
+  const { data: eventFeedsData } = useQuery({
+    queryKey: chatSessionEventsQueryKey(chatId),
+    queryFn: () => listChatSessionEvents(chatId, { limit: 200, direction: "desc" }),
   });
 
   // The right rail no longer auto-opens per chat: the running summary moved to
@@ -2531,7 +2521,7 @@ export function ChatView({
     // independently fetched feeds by agent before finding turn boundaries.
     // Dedup by event id protects a temporarily duplicated participant/query.
     const rawEventsByAgent = new Map<string, Map<string, SessionEventRow>>();
-    for (const feed of [...(eventsData ? [eventsData] : []), ...secondaryEventFeeds]) {
+    for (const feed of eventFeedsData?.feeds ?? []) {
       for (const event of feed.items) {
         const existing = rawEventsByAgent.get(event.agentId);
         if (existing) existing.set(event.id, event);
@@ -2570,24 +2560,9 @@ export function ChatView({
 
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [mergedMessages, eventsData, secondaryEventFeeds]);
+  }, [mergedMessages, eventFeedsData]);
 
   const itemCount = items.length;
-
-  // Mounted evidence anchors for agents whose event feeds are visible in this
-  // chat. Legacy roster/hovercard consumers use this set as an evidence hint;
-  // ComposeStatusBar deliberately does not derive working from it because the
-  // fresh server per-chat runtime projection is authoritative.
-  const liveTurnAgentIds = useMemo(
-    () =>
-      new Set(
-        items
-          .filter((it): it is Extract<TimelineItem, { kind: "workgroup" }> => it.kind === "workgroup")
-          .map((it) => it.events[0]?.agentId)
-          .filter((id): id is string => id != null),
-      ),
-    [items],
-  );
 
   // Blocking truncation: while a question blocks me (the FIFO-oldest live
   // request directed at me), hide every timeline item AFTER that request's
@@ -3305,7 +3280,7 @@ export function ChatView({
     // so that joining-then-typing skips the greeting on the next mount.
     if (readOnly) return;
     if (prefilledChatsRef.current.has(chatId)) return;
-    if (!messagesData || !eventsData || !chatDetail) return;
+    if (!messagesData || !eventFeedsData || !chatDetail) return;
     if (items.length > 0) return;
     if (draft.length > 0) return;
     if (requiresMention) return;
@@ -3324,7 +3299,7 @@ export function ChatView({
     chatId,
     agentId,
     messagesData,
-    eventsData,
+    eventFeedsData,
     chatDetail,
     items.length,
     draft.length,
@@ -4029,9 +4004,12 @@ export function ChatView({
                 <ComposeStatusBar
                   chatId={chatId}
                   agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                  fallbackFocusRef={readOnly ? readOnlyComposerRef : textareaRef}
                 />
                 {readOnly ? (
                   <div
+                    ref={readOnlyComposerRef}
+                    tabIndex={-1}
                     className="flex items-center"
                     style={{
                       gap: "var(--sp-3)",
@@ -4700,7 +4678,7 @@ export function ChatView({
       </div>
     </div>
   );
-  return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
+  return body;
 }
 
 function MobileChatDetailsSheet({

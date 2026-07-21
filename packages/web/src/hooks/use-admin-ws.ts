@@ -237,14 +237,15 @@ function broadcast(msg: WsMessage) {
       // `session:state` (window defined by `INVALIDATE_THROTTLE_MS`).
       meChatsInvalidator.invalidate(latestQc);
       patchOrInvalidateAgentStatus(latestQc, msg);
-      // Frame carries `agentId` + `chatId` (api/orgs/ws.ts:82 spreads the
-      // notifier payload), so we can target the exact session-events query
-      // ChatView reads (`["session-events", agentId, chatId]`) rather than
-      // fanning out a prefix invalidate.
+      // Frame carries `chatId` (api/orgs/ws.ts:82 spreads the notifier
+      // payload), so target the single chat-scoped batch ChatView reads.
       const agentId = typeof msg.agentId === "string" ? msg.agentId : null;
       const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
       if (agentId && chatId) {
         latestQc.invalidateQueries({ queryKey: ["session-events", agentId, chatId] });
+      }
+      if (chatId) {
+        latestQc.invalidateQueries({ queryKey: ["chat-session-events", chatId] });
       }
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
@@ -348,6 +349,7 @@ function connect() {
       latestQc.invalidateQueries({ queryKey: ["session"] });
       latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
       latestQc.invalidateQueries({ queryKey: ["session-events"] });
+      latestQc.invalidateQueries({ queryKey: ["chat-session-events"] });
       latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });
       // `["chat-messages"]` used to recover from a WS gap via the 5s
       // refetchInterval in ChatView; now that the poll is gone, reconnect

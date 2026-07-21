@@ -1,17 +1,16 @@
 import type { AgentChatStatus } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { MessageSquarePlus, UserRound } from "lucide-react";
-import { type ReactNode, useContext } from "react";
+import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { getAgent } from "../../api/agents.js";
 import { getChat } from "../../api/chats.js";
 import { useAuth } from "../../auth/auth-context.js";
-import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
+import { viewOf } from "../../lib/agent-status-view.js";
 import { Avatar } from "../avatar.js";
 import { HoverCard, type HoverCardPlacement } from "../ui/hover-card.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
-import { LiveTurnAgentsContext } from "./live-turn-context.js";
 
 /**
  * Shared participant identity hovercard. Wraps any trigger (avatar + name
@@ -85,13 +84,7 @@ function AgentHovercardBody({ agentId, chatId, onAction }: { agentId: string; ch
   });
 
   const participant = chatQ.data?.participants.find((p) => p.agentId === agentId);
-  const rawStatus: AgentChatStatus | null = statusQ.data?.find((s) => s.agentId === agentId) ?? null;
-  // Match the roster row from the same context: a live timeline turn upgrades
-  // `ready → working` (at the axis level) so the card's status dot / label
-  // can't disagree with a visibly-working turn — for every hovercard entry
-  // point (roster rows AND message avatars/names) by construction.
-  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
-  const status: AgentChatStatus | null = rawStatus ? reconcileLiveTurn(rawStatus, liveTurnAgentIds.has(agentId)) : null;
+  const status: AgentChatStatus | null = statusQ.data?.find((s) => s.agentId === agentId) ?? null;
 
   // Pass B — lazy: this body only mounts while the card is open. Gated on the
   // chat (Pass A) resolving so the human check is decided from real data —
