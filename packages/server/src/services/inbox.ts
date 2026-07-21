@@ -1,4 +1,9 @@
-import { type InboxEntryWithMessage, inboxEntryStatusSchema, type PrecedingMessage } from "@first-tree/shared";
+import {
+  type InboxEntryWithMessage,
+  inboxEntryStatusSchema,
+  messageSourceSchema,
+  type PrecedingMessage,
+} from "@first-tree/shared";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -530,6 +535,7 @@ async function collectPrecedingContext(
           format: messages.format,
           content: messages.content,
           metadata: messages.metadata,
+          source: messages.source,
           createdAt: messages.createdAt,
         })
         .from(inboxEntries)
@@ -557,6 +563,7 @@ async function collectPrecedingContext(
           format: r.format,
           content: r.content,
           metadata: (r.metadata ?? {}) as Record<string, unknown>,
+          source: messageSourceSchema.nullable().catch(null).parse(r.source),
           createdAt: r.createdAt.toISOString(),
         }))
         .reverse();

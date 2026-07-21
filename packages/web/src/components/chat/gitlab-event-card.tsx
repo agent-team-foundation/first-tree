@@ -1,27 +1,14 @@
-import { type GitlabEventCard, gitlabEventCardSchema } from "@first-tree/shared";
+import {
+  type GitlabEventCard,
+  isGitlabEventCardContent,
+  isTrustedGitlabDispatcherMessage,
+  TRUSTED_SYSTEM_SENDER_NAMES,
+} from "@first-tree/shared";
 import { Gitlab } from "lucide-react";
 
-export const GITLAB_SYSTEM_SENDER_NAME = "GitLab";
+export { isGitlabEventCardContent, isTrustedGitlabDispatcherMessage };
 
-export function isGitlabEventCardContent(content: unknown): content is GitlabEventCard {
-  return gitlabEventCardSchema.safeParse(content).success;
-}
-
-export function isTrustedGitlabDispatcherMessage(msg: {
-  source: string | null | undefined;
-  format: string;
-  content: unknown;
-  metadata: unknown;
-}): boolean {
-  return (
-    msg.source === "gitlab" &&
-    msg.format === "card" &&
-    isGitlabEventCardContent(msg.content) &&
-    typeof msg.metadata === "object" &&
-    msg.metadata !== null &&
-    (msg.metadata as { systemSender?: unknown }).systemSender === "gitlab"
-  );
-}
+export const GITLAB_SYSTEM_SENDER_NAME = TRUSTED_SYSTEM_SENDER_NAMES.gitlab;
 
 export function GitlabSystemAvatar({ size = 20 }: { size?: number }) {
   return (

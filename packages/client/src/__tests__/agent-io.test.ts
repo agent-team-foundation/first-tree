@@ -60,6 +60,41 @@ function reviewPacket() {
   };
 }
 
+const githubCard = {
+  type: "github_event",
+  reason: "subscribed",
+  event: "issues",
+  action: "opened",
+  kind: "opened",
+  repository: "acme/widgets",
+  sender: "octocat",
+  title: "Issue #42: Broken widget",
+  body: "Please investigate",
+  url: "https://github.com/acme/widgets/issues/42",
+  entity: {
+    type: "issue",
+    key: "acme/widgets#42",
+    url: "https://github.com/acme/widgets/issues/42",
+  },
+};
+
+const gitlabCard = {
+  type: "gitlab_event",
+  event: "issue",
+  action: "open",
+  kind: "opened",
+  project: "acme/widgets",
+  sender: "alice",
+  title: "Broken widget",
+  body: "Please investigate",
+  url: "https://gitlab.example/acme/widgets/-/issues/42",
+  entity: {
+    type: "issue",
+    key: "501:issue:42",
+    url: "https://gitlab.example/acme/widgets/-/issues/42",
+  },
+};
+
 afterEach(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
@@ -185,6 +220,47 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "github" },
     };
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nPR opened");
+  });
+
+  it.each([
+    ["GitHub", "github", githubCard],
+    ["GitLab", "gitlab", gitlabCard],
+  ])("attributes a trusted %s dispatcher card as system", async (name, source, content) => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source,
+      format: "card",
+      content,
+      metadata: { systemSender: source },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(`[From: ${name} · type=system]\n\n${JSON.stringify(content)}`);
+  });
+
+  it("does not trust a caller-provided systemSender marker", async () => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source: "api",
+      format: "card",
+      content: githubCard,
+      metadata: { systemSender: "github" },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(`[From: alice · type=agent]\n\n${JSON.stringify(githubCard)}`);
   });
 
   it("renders a schema-validated Context Review task as explicitly untrusted context", async () => {
@@ -600,6 +676,50 @@ describe("formatInboundContent", () => {
     expect(out).toContain(
       `[From: alice · type=agent · sent=2026-01-01T00:00:00.000Z] ${JSON.stringify({ title: "earlier" })}`,
     );
+  });
+
+  it("preserves trusted SCM system attribution in preceding silent context", async () => {
+    const ps = [mkParticipant("agent-a", "alice"), mkParticipant("agent-b", "bob")];
+    const cache = createParticipantCache(
+      mkSdk(async () => ps),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m3",
+      chatId: "chat-1",
+      senderId: "agent-b",
+      source: "api",
+      format: "text",
+      content: "please review",
+      metadata: null,
+      precedingMessages: [
+        {
+          id: "m1",
+          senderId: "agent-a",
+          source: "github",
+          format: "card",
+          content: githubCard,
+          metadata: { systemSender: "github" },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "m2",
+          senderId: "agent-a",
+          source: "gitlab",
+          format: "card",
+          content: gitlabCard,
+          metadata: { systemSender: "gitlab" },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    };
+
+    const out = await formatInboundContent(msg, cache);
+
+    expect(out).toContain("[From: GitHub · type=system · sent=2026-01-01T00:00:00.000Z]");
+    expect(out).toContain("[From: GitLab · type=system · sent=2026-01-01T00:00:01.000Z]");
+    expect(out).toContain("[From: bob · type=agent]\n\nplease review");
   });
 
   it("omits the [Earlier in chat] block when precedingMessages is empty / absent", async () => {

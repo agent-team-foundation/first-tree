@@ -2492,6 +2492,7 @@ export class SessionManager {
       format: msg.format,
       content: msg.content as string | Record<string, unknown>,
       metadata: msg.metadata,
+      source: msg.source,
       createdAt: msg.createdAt,
       precedingMessages: msg.precedingMessages ?? [],
     };

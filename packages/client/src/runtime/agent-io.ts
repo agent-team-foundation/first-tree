@@ -9,6 +9,8 @@ import {
   type ImageRefContent,
   isImageBatchRefContent,
   isImageRefContent,
+  resolveTrustedSystemSender,
+  TRUSTED_SYSTEM_SENDER_NAMES,
 } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { findAttachmentFile } from "./attachment-store.js";
@@ -267,6 +269,29 @@ export function formatFromHeaderLine(
   return `[From: ${parts.join(" · ")}]`;
 }
 
+type AttributedMessage = {
+  senderId: string;
+  source?: string | null;
+  format: string;
+  content: unknown;
+  metadata: Record<string, unknown> | null;
+  createdAt?: string;
+};
+
+/**
+ * Format one inbound sender header using the shared trusted-system gate.
+ * The persisted participant `senderId` remains the delivery carrier; only
+ * the agent-visible attribution changes for server-authored SCM messages.
+ */
+export function formatMessageFromHeaderLine(message: AttributedMessage, participants: ChatParticipantDetail[]): string {
+  const systemSender = resolveTrustedSystemSender(message);
+  if (!systemSender) return formatFromHeaderLine(message.senderId, message.createdAt, participants);
+
+  const parts = [TRUSTED_SYSTEM_SENDER_NAMES[systemSender], "type=system"];
+  if (message.createdAt) parts.push(`sent=${message.createdAt}`);
+  return `[From: ${parts.join(" · ")}]`;
+}
+
 /**
  * SessionContext-facing wrapper: resolve the participant cache and build the
  * `[From: …]` header for `message`, or `""` when it has no sender. Shared by
@@ -275,7 +300,7 @@ export function formatFromHeaderLine(
  */
 export async function buildFromHeader(message: SessionMessage, participants: ParticipantCache): Promise<string> {
   if (!message.senderId) return "";
-  return formatFromHeaderLine(message.senderId, message.createdAt, await participants.get());
+  return formatMessageFromHeaderLine(message, await participants.get());
 }
 
 /**
@@ -426,17 +451,14 @@ export async function formatInboundContent(message: SessionMessage, participants
     for (const p of preceding) {
       const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
       const taskContext = renderAgentTaskContextForLLM(p.metadata);
-      lines.push(
-        `${formatFromHeaderLine(p.senderId, p.createdAt, ps)} ${text}${taskContext ? `\n\n${taskContext}` : ""}`,
-      );
+      lines.push(`${formatMessageFromHeaderLine(p, ps)} ${text}${taskContext ? `\n\n${taskContext}` : ""}`);
     }
     lines.push("", "[Now — message that woke you]");
     header = `${lines.join("\n")}\n\n`;
   }
 
-  const base = message.senderId
-    ? `${header}${formatFromHeaderLine(message.senderId, message.createdAt, await participants.get())}\n\n${rawContent}`
-    : `${header}${rawContent}`;
+  const currentHeader = await buildFromHeader(message, participants);
+  const base = currentHeader ? `${header}${currentHeader}\n\n${rawContent}` : `${header}${rawContent}`;
 
   return base;
 }

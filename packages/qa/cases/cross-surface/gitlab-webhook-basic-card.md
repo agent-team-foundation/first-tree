@@ -37,7 +37,8 @@ completed until a customer-side source mapping exists in a later phase.
 - Confirm the event sent before any follow left no standalone entity record and produced no mapping. Deliver the next
   Issue, Merge Request, and Note events for the followed entity. Confirm each pending declaration binds only
   when project path, numeric project id, entity type, and iid are consistent, and each processing pass writes at most one
-  GitLab card to the existing chat.
+  GitLab card to the existing chat. Inspect the delegate's assembled turn input and confirm both a current GitLab card and
+  a card carried as preceding silent context use `[From: GitLab · type=system ...]`, never the human routing carrier.
 - Before that matching webhook, run `first-tree gitlab following` in both chats and confirm the stable public projection
   reports `pending` without connection, organization, mapping, actor, normalized-path, or timestamp fields. After the
   webhook, confirm both independent chat declarations report `active`, the latest URL/title/state projection is visible,
@@ -111,8 +112,8 @@ stable ids are connection-scoped, exact active identities route to the current e
 a generic at-least-once wake, explicit lines wake on ordinary subscribed events, pair-aware rebind moves rather than
 duplicates a line, agent follow/list/unfollow expose only the stable URL contract, chat-scoped unfollow removes automatic
 and manual bindings while later directed events may route afresh, lifecycle-only observations safely refresh public
-state/topic, terminal chats archive only after all safety guards pass, anomalies fail closed, and no source-review state
-is claimed.
+state/topic, terminal chats archive only after all safety guards pass, webhook turn input identifies GitLab/system without
+changing participant routing, anomalies fail closed, and no source-review state is claimed.
 
 `FAIL`: cross-Team resolution, secret exposure, any outbound request to GitLab, incorrect pending binding, duplicate cards
 for one chat within one pass, a fuzzy personnel match, new personnel routing after its authority was removed, reviewer

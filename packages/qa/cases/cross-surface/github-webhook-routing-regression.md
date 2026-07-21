@@ -26,7 +26,9 @@ together without a GitHub-specific post-delivery branch.
 ## Operate and Observe
 
 - Deliver a valid HMAC-signed webhook for the followed entity with a stable `X-GitHub-Delivery` value. Observe one GitHub
-  card in the followed chat and, for an explicit target, the expected delegate inbox/session wake.
+  card in the followed chat and, for an explicit target, the expected delegate inbox/session wake. Inspect the delegate's
+  assembled turn input and confirm both a current webhook card and a card carried as preceding silent context use
+  `[From: GitHub · type=system ...]`, never the representative human carrier.
 - Redeliver the same signed body with the same stable delivery id. Observe a successful deduplicated response and no
   second card or wake.
 - Deliver an equivalent supported event without `X-GitHub-Delivery`. Confirm it is accepted without creating a
@@ -40,7 +42,8 @@ together without a GitHub-specific post-delivery branch.
 
 `PASS`: signed events resolve through the bound installation, reach the expected chat and wake path, stable delivery ids
 deduplicate the whole request, missing delivery ids do not claim, invalid signatures have no side effects, and optional
-Context Reviewer behavior remains dedicated and claim-covered.
+Context Reviewer behavior remains dedicated and claim-covered. Agent-visible webhook attribution is GitHub/system while
+the existing participant sender, routing, and wake behavior remains unchanged.
 
 `FAIL`: a reproducible regression in authentication, tenant resolution, followed-chat/card delivery, wake routing,
 whole-request deduplication, or Context Reviewer claim coverage.
