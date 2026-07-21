@@ -102,8 +102,8 @@ function failureEnvelope(): unknown {
 
 beforeEach(() => {
   commandMocks.confirm.mockReset().mockResolvedValue(true);
-  commandMocks.defaultConfigDir.mockClear();
-  commandMocks.defaultHome.mockClear();
+  commandMocks.defaultConfigDir.mockReset().mockReturnValue("/state/config");
+  commandMocks.defaultHome.mockReset().mockReturnValue("/state");
   commandMocks.ensureFreshAccessToken.mockReset().mockResolvedValue("access-token");
   commandMocks.findStaleAliases.mockReset().mockResolvedValue([]);
   commandMocks.formatStaleReason.mockReset().mockReturnValue("no longer owned");
@@ -156,6 +156,46 @@ describe("agent remove command safety", () => {
     expect(filesystemProbeMocks.realpathSync).not.toHaveBeenCalled();
     expect(filesystemProbeMocks.statSync).not.toHaveBeenCalled();
     expect(output()).not.toContain(name);
+  });
+
+  it("returns not-found without calling core when the configuration alias is genuinely missing", async () => {
+    filesystemProbeMocks.lstatSync.mockImplementationOnce(() => {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+
+    await expect(runRemove("missing-agent")).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(output()).toContain('Agent "missing-agent" not found.');
+    expect(commandMocks.removeLocalAgent).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes a native configuration presence-check failure", async () => {
+    const sensitivePath = join(tmpdir(), "first-tree-remove-private", "alpha");
+    filesystemProbeMocks.lstatSync.mockImplementationOnce(() => {
+      throw Object.assign(new Error(`lstat failed at ${sensitivePath}`), { code: "EACCES" });
+    });
+
+    await expect(runRemove("alpha")).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(failureEnvelope()).toEqual({
+      ok: false,
+      error: {
+        code: "REMOVE_ERROR",
+        message: "Unable to inspect the local agent configuration safely (EACCES).",
+      },
+    });
+    expect(output()).not.toContain(sensitivePath);
+    expect(commandMocks.removeLocalAgent).not.toHaveBeenCalled();
+  });
+
+  it("reports removed after a successful presence gate without consulting a core return value", async () => {
+    commandMocks.removeLocalAgent.mockReturnValueOnce(false);
+
+    await runRemove("alpha");
+
+    expect(commandMocks.removeLocalAgent).toHaveBeenCalledWith("alpha");
+    expect(output()).toContain('Agent "alpha" removed.');
+    expect(output()).not.toContain("not found");
   });
 
   it("surfaces a typed diagnostic without exposing a filesystem path", async () => {

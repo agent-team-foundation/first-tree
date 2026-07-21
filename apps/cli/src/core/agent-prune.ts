@@ -438,11 +438,10 @@ function removePreflightedTarget(homePath: string, preflight: RemovalProof): voi
  * tree under `data/workspaces/<name>`, and the session-mapping file under
  * `data/sessions/<name>.json`. Mirrors what `agent remove` does, exposed
  * separately so prune and the post-rotation override cleanup can share it.
- * Returns whether the configuration alias existed at preflight time so the
- * direct remove command can preserve its not-found result without probing an
- * untrusted path outside this safety boundary.
+ * Missing targets are per-target no-ops so prune can clean up any remaining
+ * local footprint for a stale alias.
  */
-export function removeLocalAgent(name: string): boolean {
+export function removeLocalAgent(name: string): void {
   const parsedName = persistedAgentNameSchema.safeParse(name);
   if (!parsedName.success) {
     throw new LocalAgentRemovalError("INVALID_AGENT_NAME", INVALID_LOCAL_AGENT_NAME_MESSAGE);
@@ -474,12 +473,11 @@ export function removeLocalAgent(name: string): boolean {
   // later known-unsafe target from leaving an earlier region partially
   // removed. Each present target is then proved again immediately before rm.
   const operationCanonicalHome = canonicalExistingDirectory(homePath, "state home");
-  if (operationCanonicalHome === null) return false;
+  if (operationCanonicalHome === null) return;
   const preflight = specs.map((spec) =>
     inspectRemovalTarget(homePath, spec, { canonicalHome: operationCanonicalHome }),
   );
   for (const proof of preflight) {
     if (proof !== null) removePreflightedTarget(homePath, proof);
   }
-  return preflight[0] !== null;
 }

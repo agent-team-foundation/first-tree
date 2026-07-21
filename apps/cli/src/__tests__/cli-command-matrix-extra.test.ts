@@ -134,7 +134,6 @@ beforeEach(() => {
   resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "nova" });
   doctorChecksMock.mockResolvedValue([{ label: "daemon", ok: true, detail: "ready" }]);
   coreMocks.isServiceSupported.mockReturnValue(true);
-  coreMocks.removeLocalAgent.mockReturnValue(true);
   coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd", detail: "pid 123" });
   coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
   coreMocks.stopClientService.mockReturnValue({ ok: true });
@@ -431,7 +430,6 @@ describe("agent admin and local commands", () => {
     mkdirSync(agentDir, { recursive: true });
     await runAgent(["remove", "nova"]);
     expect(coreMocks.removeLocalAgent).toHaveBeenCalledWith("nova");
-    coreMocks.removeLocalAgent.mockReturnValueOnce(false);
     await expect(runAgent(["remove", "missing"])).rejects.toMatchObject({ code: 1 });
 
     localAgentMocks.createSdk.mockReturnValueOnce({ register: vi.fn(async () => ({ agentId: "agent-1" })) });
