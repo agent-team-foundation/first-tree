@@ -27,7 +27,13 @@ export function registerAgentRemoveCommand(agent: Command): void {
         print.line(`  Agent "${name}" not found.\n`);
         process.exit(1);
       }
-      removeLocalAgent(name);
+      try {
+        removeLocalAgent(name);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        print.line(`  Error: ${msg}\n`);
+        process.exit(1);
+      }
       print.line(`  Agent "${name}" removed.\n`);
     });
 }
