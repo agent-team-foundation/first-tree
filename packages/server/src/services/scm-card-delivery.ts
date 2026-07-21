@@ -39,6 +39,7 @@ export async function sendScmSystemCard(
     {
       allowSystemSender: true,
       allowRecipientlessSend: true,
+      dropInactiveMentionTargets: true,
       deferPostCommitEffects: input.deferPostCommitEffects,
     },
   );

@@ -865,6 +865,96 @@ describe("deliverGithubEvent", () => {
     expect(await notifyCount(app, chatId, followerB)).toBe(1);
   });
 
+  it("keeps a shared card deliverable when one follower is suspended", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const followerA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `follower-active-${randomUUID().slice(0, 6)}`,
+    });
+    const followerB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `follower-suspended-${randomUUID().slice(0, 6)}`,
+    });
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-a-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const humanB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-b-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values(
+      [humanA, humanB, followerA, followerB].map((agentId, index) => ({
+        chatId,
+        agentId,
+        role: index === 0 ? "owner" : "member",
+        accessMode: "speaker" as const,
+        mode: "full" as const,
+        source: "manual" as const,
+      })),
+    );
+
+    const pairA = await resolveAgentScmBindingPair(app.db, chatId, followerA);
+    const pairB = await resolveAgentScmBindingPair(app.db, chatId, followerB);
+    if (!pairA || !pairB) throw new Error("expected both agent follow pairs to resolve");
+    expect(pairB.humanAgentId).toBe(pairA.humanAgentId);
+
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: pairA.humanAgentId,
+        delegateAgentId: pairA.wakeAgentId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#210",
+        chatId,
+        boundVia: "agent_declared",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: pairB.humanAgentId,
+        delegateAgentId: pairB.wakeAgentId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#210",
+        chatId,
+        boundVia: "agent_declared",
+      },
+    ]);
+
+    // Lifecycle changes do not delete the mapping or speaker membership. The
+    // stale wake line must remain routing evidence for the shared card without
+    // being passed to message preflight as a live native mention.
+    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, followerB));
+
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#210",
+      actorLogin: "outsider",
+      eventType: "issue_comment",
+      action: "created",
+      kind: "commented",
+    });
+    const resolution = await resolveGithubAudience(app.db, event);
+    expect(resolution.targets).toHaveLength(2);
+
+    const stats = await deliverGithubEvent(app, event, resolution.targets);
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+    const [message] = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    const metadata = message?.metadata as { mentions?: string[] };
+    expect(metadata.mentions).toEqual([followerA]);
+    expect(await notifyCount(app, chatId, followerA)).toBe(1);
+    expect(await notifyCount(app, chatId, followerB)).toBe(0);
+  });
+
   it("refreshes chats.topic to match the current entity title on each subsequent event for a github-bound chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

@@ -32,6 +32,9 @@ card significance, lifecycle projection, topic protection, and archive behavior.
   takes precedence over the stable fallback, while multiple explicit links fail closed.
 - Deliver an ordinary subscribed comment/Note. Confirm one card per target chat, notifying Inbox entries for every
   surviving delegate, predictive sessions, and wake delivery. Provider actor attribution must not suppress the delegate.
+  When two agent-issued lines share the same fallback human and chat, suspend one wake agent without deleting its mapping
+  or membership, then redeliver. Confirm the card still lands once, the active sibling is the only native mention and wake,
+  and the suspended sibling receives no notifying Inbox entry.
 - Unfollow in one chat and redeliver an ordinary event. Confirm the old chat stays silent. Then deliver an explicit
   reviewer, assignee, or exact body/comment mention and confirm a fresh route may be established without reviving the
   removed line.
