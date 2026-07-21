@@ -25,9 +25,10 @@ export async function requireProvisioningActor(
   organizationId: string,
   userId: string,
 ): Promise<ProvisioningAuditContext | null> {
-  const raw = request.headers[AGENT_ACTOR_HEADER] ?? request.headers[AGENT_SELECTOR_HEADER];
+  const headers = request.headers ?? {};
+  const raw = headers[AGENT_ACTOR_HEADER] ?? headers[AGENT_SELECTOR_HEADER];
   const actorId = Array.isArray(raw) ? raw[0] : raw;
-  const runtimeHeader = request.headers[AGENT_RUNTIME_SESSION_HEADER];
+  const runtimeHeader = headers[AGENT_RUNTIME_SESSION_HEADER];
   const runtimeToken = Array.isArray(runtimeHeader) ? runtimeHeader[0] : runtimeHeader;
   if (!actorId && !runtimeToken) return null;
   if (actorId && !runtimeToken) throw new ForbiddenError("Agent provisioning requires an active runtime session");
@@ -86,7 +87,7 @@ export async function requireProvisioningActor(
   }
 
   const header = (name: string): string | null => {
-    const value = request.headers[name];
+    const value = headers[name];
     const single = Array.isArray(value) ? value[0] : value;
     return typeof single === "string" && single.length > 0 ? single : null;
   };
