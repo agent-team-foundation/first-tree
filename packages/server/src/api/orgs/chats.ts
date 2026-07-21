@@ -163,7 +163,14 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
           metadata: body.initialMessage.metadata,
           source: "api",
         },
-        source: "manual",
+        source: "agent",
+        agentChatMetadata: {
+          taskType: body.initialMessage.metadata.taskType,
+          entityType: "pull_request",
+          entityKey: `${authority.repository}#${body.initialMessage.metadata.reviewPacketV1.pullRequest}`,
+          entityUrl: `https://github.com/${authority.repository}/pull/${body.initialMessage.metadata.reviewPacketV1.pullRequest}`,
+        },
+        normalizeMentionsInContent: false,
         allowContextReviewRun: true,
         beforeTaskResult: async (tx) => {
           await resolveContextReviewTaskAuthority(tx, {

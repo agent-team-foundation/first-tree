@@ -76,7 +76,7 @@ describe("chat create --as-member Agent Review", () => {
       createMemberKeyedTaskChat: vi.fn(async () => ({
         chatId: "chat-review",
         messageId: "msg-review",
-        topic: "Agent Review: owner/context-tree#749",
+        topic: "Context Review · context-tree#749",
         effectiveSenderId: "human-writer",
         reviewerAgentUuid: "private-reviewer",
         outcome: "created",

@@ -12,14 +12,18 @@ import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
-import { AppError } from "../errors.js";
+import { AppError, ServiceUnavailableError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import {
   dispatchManagedContextReviewWebhookEvent,
   inspectManagedContextReviewTask,
+  type ManagedContextReviewLivePullRequestState,
   type ManagedContextReviewWebhookEvent,
 } from "./context-review-task.js";
+import { GithubAppApiError, getPullRequestForReview } from "./github-app.js";
+import { findInstallationByOrg } from "./github-app-installations.js";
+import { mintContextTreeInstallationToken } from "./github-app-token.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
 import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
@@ -261,6 +265,8 @@ export async function handleContextReviewerPrEvent(
     payload: unknown;
     organizationId: string;
     deliveryId?: string | null;
+    /** Deterministic test seam; production resolves through the GitHub App. */
+    livePullRequestResolver?: () => Promise<ManagedContextReviewLivePullRequestState>;
   },
 ): Promise<ContextReviewerPrResult> {
   const action = isRecord(input.payload) ? readString(input.payload.action) : null;
@@ -269,66 +275,26 @@ export async function handleContextReviewerPrEvent(
     if (!identity) {
       return { handled: false, reason: "unsupported_event", routingDecision: "not_applicable" };
     }
-    const repository = normalizeGithubRepo(identity.repoFullName);
-    if (!repository) return { handled: false, reason: "malformed_payload", routingDecision: "not_applicable" };
-    try {
-      const managedTask = await inspectManagedContextReviewTask(app.db, {
-        organizationId: input.organizationId,
-        repository,
-        pullRequest: identity.prNumber,
-      });
-      if (managedTask.outcome === "task_existing") {
-        log.info(
-          {
-            organizationId: input.organizationId,
-            entityKey: identity.entityKey,
-            chatId: managedTask.chatId,
-            metric: "context_review_routing_total",
-            routingDecision: "managed_handled",
-            managedOutcome: "observation_only",
-            triggerEvent: `${input.eventType}.${action ?? "unknown"}`,
-          },
-          "managed Agent Review event reserved for card-only observation",
-        );
-        return {
-          handled: true,
-          chatId: managedTask.chatId,
-          messageId: managedTask.messageId,
-          reused: true,
-          suppressed: true,
-          routingDecision: "managed_handled",
-        };
-      }
-    } catch (error) {
-      if (error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500) {
-        log.warn(
-          {
-            organizationId: input.organizationId,
-            entityKey: identity.entityKey,
-            metric: "context_review_routing_total",
-            routingDecision: "managed_unavailable",
-            errorClass: error.name,
-            statusCode: error.statusCode,
-          },
-          "managed Agent Review task unavailable; preserving card-only observation routing",
-        );
-        return { handled: false, reason: "managed_task_unavailable", routingDecision: "managed_unavailable" };
-      }
-      throw error;
-    }
-    const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
-    const boundRepository = normalizeGithubRepo(contextTree?.repo);
-    const declaresManagedReview =
-      identity.prBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true ||
-      identity.previousPrBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true;
-    if (repository === boundRepository && declaresManagedReview) {
-      return { handled: false, reason: "managed_task_missing", routingDecision: "managed_missing" };
-    }
+    const managedClassification = await classifyManagedPullRequestIdentity(app, {
+      identity,
+      organizationId: input.organizationId,
+      triggerEvent: `${input.eventType}.${action ?? "unknown"}`,
+    });
+    if (managedClassification) return managedClassification;
     return { handled: false, reason: "unsupported_event", routingDecision: "not_applicable" };
   }
 
   const info = extractPullRequestPayloadInfo(input.eventType, input.payload, input.organizationId);
   if (!info) {
+    const identity = extractPullRequestIdentity(input.payload);
+    if (identity) {
+      const managedClassification = await classifyManagedPullRequestIdentity(app, {
+        identity,
+        organizationId: input.organizationId,
+        triggerEvent: `${input.eventType}.${action ?? "unknown"}`,
+      });
+      if (managedClassification) return managedClassification;
+    }
     return { handled: false, reason: "malformed_payload", routingDecision: "not_applicable" };
   }
   const webhookRepo = normalizeGithubRepo(info.repoFullName);
@@ -338,11 +304,20 @@ export async function handleContextReviewerPrEvent(
   // routing configuration. If the binding or Reviewer changed, the task's
   // live authority check must fail closed as managed_unavailable; treating it
   // as ordinary GitHub traffic could create a competing execution line.
+  const injectedLiveResolver = input.livePullRequestResolver;
+  const prepareLivePullRequestResolver = injectedLiveResolver
+    ? async () => injectedLiveResolver
+    : () =>
+        prepareLiveManagedPullRequestResolver(app, {
+          organizationId: input.organizationId,
+          repository: webhookRepo,
+          pullRequest: info.prNumber,
+        });
   let managedResult: Awaited<ReturnType<typeof dispatchManagedContextReviewWebhookEvent>>;
   try {
     managedResult = await dispatchManagedContextReviewWebhookEvent(
       app.db,
-      managedContextReviewWebhookEvent(info, webhookRepo, input.deliveryId ?? null),
+      managedContextReviewWebhookEvent(info, webhookRepo, input.deliveryId ?? null, prepareLivePullRequestResolver),
     );
   } catch (error) {
     // A 4xx here means the stable managed task was found but its live
@@ -572,6 +547,71 @@ export async function handleContextReviewerPrEvent(
   return { handled: false, reason: "legacy_creation_disabled", routingDecision: "not_applicable" };
 }
 
+async function classifyManagedPullRequestIdentity(
+  app: FastifyInstance,
+  input: { identity: PullRequestIdentity; organizationId: string; triggerEvent: string },
+): Promise<ContextReviewerPrResult | null> {
+  const repository = normalizeGithubRepo(input.identity.repoFullName);
+  if (!repository) {
+    return { handled: false, reason: "malformed_payload", routingDecision: "not_applicable" };
+  }
+  try {
+    const managedTask = await inspectManagedContextReviewTask(app.db, {
+      organizationId: input.organizationId,
+      repository,
+      pullRequest: input.identity.prNumber,
+    });
+    if (managedTask.outcome === "task_existing") {
+      log.info(
+        {
+          organizationId: input.organizationId,
+          entityKey: input.identity.entityKey,
+          chatId: managedTask.chatId,
+          metric: "context_review_routing_total",
+          routingDecision: "managed_handled",
+          managedOutcome: "observation_only",
+          triggerEvent: input.triggerEvent,
+        },
+        "managed Agent Review event reserved for card-only observation",
+      );
+      return {
+        handled: true,
+        chatId: managedTask.chatId,
+        messageId: managedTask.messageId,
+        reused: true,
+        suppressed: true,
+        routingDecision: "managed_handled",
+      };
+    }
+  } catch (error) {
+    if (error instanceof AppError && error.statusCode >= 400 && error.statusCode < 500) {
+      log.warn(
+        {
+          organizationId: input.organizationId,
+          entityKey: input.identity.entityKey,
+          metric: "context_review_routing_total",
+          routingDecision: "managed_unavailable",
+          errorClass: error.name,
+          statusCode: error.statusCode,
+        },
+        "managed Agent Review task unavailable; preserving card-only observation routing",
+      );
+      return { handled: false, reason: "managed_task_unavailable", routingDecision: "managed_unavailable" };
+    }
+    throw error;
+  }
+
+  const contextTree = await getOrgContextTreeBinding(app.db, input.organizationId);
+  const boundRepository = normalizeGithubRepo(contextTree?.repo);
+  const declaresManagedReview =
+    input.identity.prBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true ||
+    input.identity.previousPrBody?.includes(CONTEXT_REVIEW_MANAGED_MARKER) === true;
+  if (repository === boundRepository && declaresManagedReview) {
+    return { handled: false, reason: "managed_task_missing", routingDecision: "managed_missing" };
+  }
+  return null;
+}
+
 function extractPullRequestIdentity(payload: unknown): PullRequestIdentity | null {
   if (!isRecord(payload)) return null;
   const repository = isRecord(payload.repository) ? payload.repository : null;
@@ -799,6 +839,7 @@ function managedContextReviewWebhookEvent(
   info: PullRequestPayloadInfo,
   repository: string,
   deliveryId: string | null,
+  prepareLivePullRequestResolver: () => Promise<() => Promise<ManagedContextReviewLivePullRequestState>>,
 ): ManagedContextReviewWebhookEvent {
   return {
     organizationId: info.organizationId,
@@ -820,6 +861,42 @@ function managedContextReviewWebhookEvent(
     commentAuthorType: info.commentAuthorType,
     commentBody: info.commentBody,
     terminalState: info.terminalState,
+    prepareLivePullRequestResolver,
+  };
+}
+
+const MANAGED_REVIEW_GITHUB_TIMEOUT_MS = 10_000;
+
+const managedReviewGithubFetch: typeof fetch = (resource, init) =>
+  fetch(resource, { ...init, signal: AbortSignal.timeout(MANAGED_REVIEW_GITHUB_TIMEOUT_MS) });
+
+async function prepareLiveManagedPullRequestResolver(
+  app: FastifyInstance,
+  input: { organizationId: string; repository: string; pullRequest: number },
+): Promise<() => Promise<ManagedContextReviewLivePullRequestState>> {
+  const installation = await findInstallationByOrg(app.db, input.organizationId);
+  const mint = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp, {
+    fetcher: managedReviewGithubFetch,
+  });
+  if (!mint.ok) {
+    throw new ServiceUnavailableError(
+      `Managed Context Review could not obtain live GitHub state (${mint.reason}); GitHub should retry the webhook.`,
+    );
+  }
+  const [owner, repo] = input.repository.split("/");
+  if (!owner || !repo) throw new ServiceUnavailableError("Managed Context Review repository identity is invalid");
+  return async () => {
+    try {
+      const pullRequest = await getPullRequestForReview(mint.token, owner, repo, input.pullRequest, {
+        fetcher: managedReviewGithubFetch,
+      });
+      return pullRequest.merged ? "merged" : pullRequest.state;
+    } catch (error) {
+      const detail = error instanceof GithubAppApiError ? ` (${error.status})` : "";
+      throw new ServiceUnavailableError(
+        `Managed Context Review could not re-read live GitHub pull request state${detail}; GitHub should retry the webhook.`,
+      );
+    }
   };
 }
 

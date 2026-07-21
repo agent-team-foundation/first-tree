@@ -174,7 +174,7 @@ beforeEach(async () => {
       jsonResponse(res, 200, {
         chatId: "chat-review",
         messageId: "msg-review",
-        topic: "Agent Review: owner/context-tree#749",
+        topic: "Context Review · context-tree#749",
         effectiveSenderId: "human-1",
         reviewerAgentUuid: "reviewer-1",
         outcome: "created",

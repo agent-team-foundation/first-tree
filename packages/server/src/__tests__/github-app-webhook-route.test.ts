@@ -1,7 +1,7 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
 import { CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
@@ -20,6 +20,11 @@ import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
+const TEST_GITHUB_APP_PRIVATE_KEY = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+}).privateKey;
 
 function signBody(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -182,7 +187,11 @@ function contextPullRequestPayload(installationId: number, repoFullName = "owner
 }
 
 describe("POST /webhooks/github-app", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ githubAppPrivateKeyPem: TEST_GITHUB_APP_PRIVATE_KEY });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it("returns 401 on a bad HMAC signature", async () => {
     const app = getApp();
@@ -1619,6 +1628,34 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100040;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const reviewer = await configureContextReviewer(app, admin);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (url, init) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        const target = String(url);
+        if (target.endsWith(`/app/installations/${installationId}/access_tokens`)) {
+          return new Response(JSON.stringify({ token: "installation-token", expires_at: "2099-01-01T00:00:00Z" }), {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (target.endsWith("/repos/owner/context-tree/pulls/42")) {
+          return new Response(
+            JSON.stringify({
+              number: 42,
+              state: "open",
+              draft: false,
+              merged: false,
+              head: { sha: "b".repeat(40) },
+              html_url: "https://github.com/owner/context-tree/pull/42",
+              body: CONTEXT_REVIEW_MANAGED_MARKER,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        throw new Error(`Unexpected GitHub request: ${target}`);
+      }),
+    );
     await app.db.insert(authIdentities).values({
       id: randomUUID(),
       userId: admin.userId,
@@ -1802,6 +1839,30 @@ describe("POST /webhooks/github-app", () => {
       },
     });
 
+    const incompleteReviewRequestedPayload = contextPullRequestPayload(installationId);
+    incompleteReviewRequestedPayload.action = "review_requested";
+    incompleteReviewRequestedPayload.pull_request.body = `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`;
+    Object.assign(incompleteReviewRequestedPayload, {
+      requested_reviewer: { login: automaticHumanName, type: "User" },
+    });
+    const incompletePullRequest = incompleteReviewRequestedPayload.pull_request as Record<string, unknown>;
+    delete incompletePullRequest.title;
+    delete incompletePullRequest.html_url;
+    const incompleteReviewRequested = await postWebhook(app, "pull_request", incompleteReviewRequestedPayload);
+    expect(incompleteReviewRequested.statusCode).toBe(200);
+    expect(incompleteReviewRequested.json()).toMatchObject({
+      delivered: 1,
+      contextReviewer: {
+        handled: true,
+        chatId: task.chatId,
+        messageId: task.messageId,
+        reused: true,
+        suppressed: true,
+        routingDecision: "managed_handled",
+      },
+    });
+    expect(await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId))).toHaveLength(2);
+
     const reviewSubmitted = await postWebhook(app, "pull_request_review", {
       action: "submitted",
       pull_request: {
@@ -1851,7 +1912,7 @@ describe("POST /webhooks/github-app", () => {
         .where(eq(inboxEntries.messageId, eventMessage?.id ?? "missing")),
     ).toHaveLength(1);
     const followedMessages = await app.db.select().from(messages).where(eq(messages.chatId, followedChatId));
-    expect(followedMessages).toHaveLength(4);
+    expect(followedMessages).toHaveLength(5);
     expect(
       followedMessages.every(
         (message) => Array.isArray(message.metadata.mentions) && message.metadata.mentions.length === 0,
@@ -1886,7 +1947,7 @@ describe("POST /webhooks/github-app", () => {
       },
     });
     expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(3);
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(5);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(6);
 
     const revokedReplay = await postWebhook(app, "pull_request", revokedRequesterPayload, {
       deliveryId: revokedDeliveryId,
@@ -1894,7 +1955,7 @@ describe("POST /webhooks/github-app", () => {
     expect(revokedReplay.statusCode).toBe(200);
     expect(revokedReplay.json()).toMatchObject({ ok: true, deduped: true });
     expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(3);
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(5);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(6);
   });
 
   it("does not let the legacy App create a Reviewer Chat for an unmanaged Context PR", async () => {

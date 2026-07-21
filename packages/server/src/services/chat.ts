@@ -3,6 +3,7 @@ import {
   type AddParticipant,
   AGENT_STATUSES,
   AGENT_TYPES,
+  type AgentChatMetadata,
   CHAT_ENGAGEMENT_STATUSES,
   type LegacyCreateChat,
   parseLandingCampaignTrialAgentMetadata,
@@ -66,6 +67,10 @@ export type CreateTaskChatInput = {
   /** Reconciles live task state inside the locked keyed-Chat reuse transaction. */
   onTaskReuse?: (db: Database, context: TaskChatReuseContext) => Promise<TaskChatReuseActivity | null>;
   initialMessage: SendMessage;
+  /** Trusted typed metadata for an agent-started task Chat. */
+  agentChatMetadata?: Omit<AgentChatMetadata, "source" | "initiatedByAgentId" | "effectiveSenderReason">;
+  /** Preserve a server-verified immutable opening without rewriting @mentions. */
+  normalizeMentionsInContent?: boolean;
   /** Trusted internal capability forwarded only for Context Reviewer bootstrap. */
   allowContextReviewRun?: boolean;
   source: "agent" | "manual";
@@ -387,7 +392,8 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
           effectiveSenderReason,
         }
       : {};
-  const chatMetadata = input.source === "agent" ? { source: "agent" as const, ...provenance } : {};
+  const chatMetadata =
+    input.source === "agent" ? { source: "agent" as const, ...input.agentChatMetadata, ...provenance } : {};
   const messageMetadata = {
     ...((input.initialMessage.metadata ?? {}) as Record<string, unknown>),
     ...provenance,
@@ -397,6 +403,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     ...input.initialMessage,
     metadata: messageMetadata,
   };
+  const normalizeMentionsInContent = input.normalizeMentionsInContent ?? input.source === "agent";
 
   preflightMessageSendIntent({
     chatId: "new-task-chat-preflight",
@@ -404,7 +411,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     senderType: effectiveSender.type,
     data: initialMessage,
     options: {
-      normalizeMentionsInContent: input.source === "agent",
+      normalizeMentionsInContent,
       allowContextReviewRun: input.allowContextReviewRun,
     },
     participants: allSpeakerRows.map(toSendIntentParticipant),
@@ -505,7 +512,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
       invalidateChatAudience(activeChat.id);
       const sent = await sendMessage(tx as unknown as Database, activeChat.id, effectiveSenderId, initialMessage, {
         deferPostCommitEffects: true,
-        normalizeMentionsInContent: input.source === "agent",
+        normalizeMentionsInContent,
         allowContextReviewRun: input.allowContextReviewRun,
       });
       if (!sent.deferredPostCommitEffects) {
@@ -565,7 +572,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
   invalidateChatAudience(chatId);
 
   const { message, recipients } = await sendMessage(db, chatId, effectiveSenderId, initialMessage, {
-    normalizeMentionsInContent: input.source === "agent",
+    normalizeMentionsInContent,
     allowContextReviewRun: input.allowContextReviewRun,
   });
   const participants = await db

@@ -46,6 +46,20 @@ export const contextReviewManagedEventSchema = z
 export type ContextReviewManagedEvent = z.infer<typeof contextReviewManagedEventSchema>;
 
 /**
+ * Live GitHub lifecycle observed while the keyed Review Chat is locked.
+ * This intentionally rides beside (rather than inside) the strict V1 event
+ * envelope so an older Server can ignore the new authority record during a
+ * server-first rollout instead of rejecting the whole message metadata.
+ */
+export const contextReviewManagedLifecycleSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    state: z.enum(["open", "closed", "merged"]),
+  })
+  .strict();
+export type ContextReviewManagedLifecycle = z.infer<typeof contextReviewManagedLifecycleSchema>;
+
+/**
  * Server-authored metadata for managed Context Review webhook messages. The
  * message service reserves both `systemSender` and `contextReview*` keys, so
  * clients may use this complete envelope as a synthetic-sender trust signal.
@@ -55,6 +69,7 @@ export const contextReviewManagedMessageMetadataSchema = z
     source: z.literal("github"),
     systemSender: z.literal("github"),
     contextReviewManagedEventV1: contextReviewManagedEventSchema,
+    contextReviewManagedLifecycleV1: contextReviewManagedLifecycleSchema.optional(),
   })
   .passthrough();
 export type ContextReviewManagedMessageMetadata = z.infer<typeof contextReviewManagedMessageMetadataSchema>;

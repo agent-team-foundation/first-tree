@@ -143,6 +143,7 @@ describe("managed Context Review event metadata", () => {
           triggerEvent: "pull_request.closed",
           terminalState: "merged",
         },
+        contextReviewManagedLifecycleV1: { schemaVersion: 1, state: "merged" },
       }).success,
     ).toBe(true);
   });
@@ -162,6 +163,12 @@ describe("managed Context Review event metadata", () => {
       }).success,
     ).toBe(false);
     expect(contextReviewManagedMessageMetadataSchema.safeParse({ ...metadata, source: "api" }).success).toBe(false);
+    expect(
+      contextReviewManagedMessageMetadataSchema.safeParse({
+        ...metadata,
+        contextReviewManagedLifecycleV1: { schemaVersion: 1, state: "draft" },
+      }).success,
+    ).toBe(false);
     expect(
       contextReviewManagedMessageMetadataSchema.safeParse({
         ...metadata,

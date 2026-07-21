@@ -91,12 +91,15 @@ export type ManagedContextReviewWebhookEvent = {
   commentAuthorType: string | null;
   commentBody: string | null;
   terminalState: "closed" | "merged" | null;
+  prepareLivePullRequestResolver: () => Promise<() => Promise<ManagedContextReviewLivePullRequestState>>;
 };
+
+export type ManagedContextReviewLivePullRequestState = "open" | "closed" | "merged";
 
 export type ManagedContextReviewWebhookResult =
   | { outcome: "task_missing" }
   | {
-      outcome: "opened_noop" | "projection_reflection" | "delivery_replay" | "terminal_noop";
+      outcome: "opened_noop" | "projection_reflection" | "delivery_replay" | "terminal_noop" | "stale_lifecycle_noop";
       chatId: string;
       messageId: string;
     }
@@ -327,8 +330,10 @@ async function sendContextReviewTakeoverMessage(
     chatId: string;
     requesterAgentUuid: string;
     reconciliation: ContextReviewParticipantReconciliation;
+    notifyReviewer?: boolean;
   },
 ): Promise<TaskChatReuseActivity> {
+  const notifyReviewer = input.notifyReviewer ?? true;
   const sent = await sendMessage(
     db,
     input.chatId,
@@ -347,7 +352,8 @@ async function sendContextReviewTakeoverMessage(
       source: "api",
     },
     {
-      addressedToAgentIds: [input.reconciliation.reviewerAgentUuid],
+      addressedToAgentIds: notifyReviewer ? [input.reconciliation.reviewerAgentUuid] : [],
+      allowRecipientlessSend: !notifyReviewer,
       allowContextReviewRun: true,
       deferPostCommitEffects: true,
     },
@@ -653,7 +659,7 @@ export async function resolveContextReviewTaskAuthority(
       repository,
       pullRequest: packet.pullRequest,
     }),
-    topic: `Agent Review: ${repository}#${packet.pullRequest}`,
+    topic: `Context Review · ${repository.split("/").at(-1)}#${packet.pullRequest}`,
   };
 }
 
@@ -836,7 +842,16 @@ async function findManagedWebhookDeliveryMessageId(
   return message?.id ?? null;
 }
 
-async function findManagedContextReviewTerminalMessageId(db: Database, chatId: string): Promise<string | null> {
+type ManagedContextReviewLifecycle = {
+  messageId: string;
+  state: ManagedContextReviewLivePullRequestState;
+  action: ManagedContextReviewWebhookEvent["action"];
+};
+
+async function findManagedContextReviewLifecycle(
+  db: Database,
+  chatId: string,
+): Promise<ManagedContextReviewLifecycle | null> {
   const rows = await db
     .select({ id: messages.id, metadata: messages.metadata })
     .from(messages)
@@ -845,9 +860,15 @@ async function findManagedContextReviewTerminalMessageId(db: Database, chatId: s
   for (const row of rows) {
     const parsed = contextReviewManagedMessageMetadataSchema.safeParse(row.metadata);
     if (!parsed.success) continue;
+    const live = parsed.data.contextReviewManagedLifecycleV1;
     const event = parsed.data.contextReviewManagedEventV1;
-    if (event.action === "reopened") return null;
-    if (event.terminalState) return row.id;
+    if (live) return { messageId: row.id, state: live.state, action: event.action };
+
+    // Compatibility for messages written before live lifecycle authority was
+    // added. The first subsequent managed event re-reads GitHub and writes the
+    // new envelope, so this append-order fallback is only a repair seed.
+    if (event.terminalState) return { messageId: row.id, state: event.terminalState, action: event.action };
+    if (event.action === "reopened") return { messageId: row.id, state: "open", action: event.action };
   }
   return null;
 }
@@ -902,6 +923,7 @@ function renderManagedContextReviewEvent(
 function managedContextReviewEventMetadata(
   input: ManagedContextReviewWebhookEvent,
   reconciliation: ContextReviewParticipantReconciliation,
+  liveState: ManagedContextReviewLivePullRequestState,
 ): Record<string, unknown> {
   const event: Record<string, unknown> = {
     schemaVersion: 1,
@@ -924,6 +946,7 @@ function managedContextReviewEventMetadata(
     source: "github",
     systemSender: "github",
     contextReviewManagedEventV1: event,
+    contextReviewManagedLifecycleV1: { schemaVersion: 1, state: liveState },
     ...(reconciliation.takeoverRequired
       ? {
           contextReviewTakeoverV1: {
@@ -964,6 +987,10 @@ export async function dispatchManagedContextReviewWebhookEvent(
   });
   const seed = await loadManagedContextReviewTaskSeed(db, reservationKey);
   if (!seed) return { outcome: "task_missing" };
+  // Installation lookup and token minting use the base DB/pool and therefore
+  // must finish before the keyed transaction takes authority and Chat locks.
+  // Only the ordering-critical live PR read runs inside the locked section.
+  const resolveLivePullRequestState = await input.prepareLivePullRequestResolver();
 
   const result = await db.transaction(async (tx): Promise<ManagedContextReviewWebhookTransactionResult> => {
     const transactionDb = tx as unknown as Database;
@@ -994,11 +1021,55 @@ export async function dispatchManagedContextReviewWebhookEvent(
       throw new ConflictError("Managed Agent Review task opening changed during webhook admission");
     }
 
-    const terminalMessageId = await findManagedContextReviewTerminalMessageId(transactionDb, chat.id);
-    if (terminalMessageId && input.action !== "reopened" && input.terminalState === null) {
-      return { outcome: "terminal_noop", chatId: chat.id, messageId: terminalMessageId };
+    // Resolve current GitHub state only after this keyed Chat is locked. That
+    // serializes concurrent deliveries around the live read, so same-second
+    // close/reopen transitions do not need an invented timestamp tie-break.
+    // A failed read aborts the transaction and lets GitHub retry.
+    const liveState = await resolveLivePullRequestState();
+    const lifecycle = await findManagedContextReviewLifecycle(transactionDb, chat.id);
+    const inputLifecycleState =
+      input.action === "closed" ? (input.terminalState ?? "closed") : input.action === "reopened" ? "open" : null;
+    let lifecycleNoop: { outcome: "terminal_noop" | "stale_lifecycle_noop"; messageId: string } | undefined;
+    if (lifecycle?.state === liveState) {
+      if ((input.action === "closed" || input.action === "reopened") && lifecycle.action === input.action) {
+        lifecycleNoop = { outcome: "stale_lifecycle_noop", messageId: lifecycle.messageId };
+      }
+      if (!lifecycleNoop && input.action === "closed" && liveState === "open") {
+        lifecycleNoop = { outcome: "stale_lifecycle_noop", messageId: lifecycle.messageId };
+      }
+      if (!lifecycleNoop && liveState !== "open") {
+        lifecycleNoop = { outcome: "terminal_noop", messageId: lifecycle.messageId };
+      }
+    }
+    if (
+      !lifecycleNoop &&
+      !lifecycle &&
+      liveState === "open" &&
+      inputLifecycleState !== null &&
+      inputLifecycleState !== liveState
+    ) {
+      lifecycleNoop = { outcome: "stale_lifecycle_noop", messageId: openingMessage.id };
     }
 
+    const effectiveInput: ManagedContextReviewWebhookEvent = {
+      ...input,
+      terminalState: liveState === "open" ? null : liveState,
+    };
+    // Before the first lifecycle envelope, the member-authored opening is the
+    // implicit open baseline. Live terminal state must therefore be recorded
+    // even when the delayed webhook action claims reopened or a different
+    // terminal subtype.
+    const lifecycleRepairRequired = (lifecycle?.state ?? "open") !== liveState;
+    if (lifecycleRepairRequired && liveState === "open") {
+      effectiveInput.eventType = "pull_request";
+      effectiveInput.action = "reopened";
+      effectiveInput.triggerEvent = "pull_request.reopened";
+    }
+    if (lifecycleRepairRequired && liveState !== "open") {
+      effectiveInput.eventType = "pull_request";
+      effectiveInput.action = "closed";
+      effectiveInput.triggerEvent = "pull_request.closed";
+    }
     const reconciliation = await reconcileContextReviewTaskParticipants(transactionDb, {
       chat,
       openingMessage,
@@ -1007,10 +1078,30 @@ export async function dispatchManagedContextReviewWebhookEvent(
       authority,
       metadata: seed.metadata,
     });
-    const replayedMessageId = await findManagedWebhookDeliveryMessageId(transactionDb, {
-      chatId: chat.id,
-      deliveryId: input.deliveryId,
-    });
+    if (lifecycleNoop) {
+      if (!reconciliation.takeoverRequired) {
+        return { ...lifecycleNoop, chatId: chat.id };
+      }
+      const takeover = await sendContextReviewTakeoverMessage(transactionDb, {
+        chatId: chat.id,
+        requesterAgentUuid: seed.requester.humanAgentUuid,
+        reconciliation,
+        notifyReviewer: liveState === "open",
+      });
+      return {
+        outcome: "delivered",
+        chatId: chat.id,
+        messageId: takeover.message.id,
+        recipients: takeover.recipients,
+        effects: takeover.deferredPostCommitEffects,
+      };
+    }
+    const replayedMessageId = lifecycleRepairRequired
+      ? null
+      : await findManagedWebhookDeliveryMessageId(transactionDb, {
+          chatId: chat.id,
+          deliveryId: input.deliveryId,
+        });
     if (replayedMessageId) {
       if (!reconciliation.takeoverRequired) {
         return { outcome: "delivery_replay", chatId: chat.id, messageId: replayedMessageId };
@@ -1028,7 +1119,7 @@ export async function dispatchManagedContextReviewWebhookEvent(
         effects: takeover.deferredPostCommitEffects,
       };
     }
-    if (input.eventType === "pull_request" && input.action === "opened") {
+    if (!lifecycleRepairRequired && effectiveInput.eventType === "pull_request" && effectiveInput.action === "opened") {
       if (!reconciliation.takeoverRequired) {
         return { outcome: "opened_noop", chatId: chat.id, messageId: openingMessage.id };
       }
@@ -1047,15 +1138,16 @@ export async function dispatchManagedContextReviewWebhookEvent(
     }
     if (
       !reconciliation.takeoverRequired &&
-      input.eventType === "issue_comment" &&
-      (input.action === "created" || input.action === "edited")
+      !lifecycleRepairRequired &&
+      effectiveInput.eventType === "issue_comment" &&
+      (effectiveInput.action === "created" || effectiveInput.action === "edited")
     ) {
       const reflectedMessageId = await findMatchingManagedProjectionMessageId(transactionDb, {
         chatId: chat.id,
         reviewerAgentUuid: reconciliation.reviewerAgentUuid,
-        commentId: input.commentId,
-        commentAuthorLogin: input.commentAuthorLogin,
-        commentBody: input.commentBody,
+        commentId: effectiveInput.commentId,
+        commentAuthorLogin: effectiveInput.commentAuthorLogin,
+        commentBody: effectiveInput.commentBody,
       });
       if (reflectedMessageId) {
         return { outcome: "projection_reflection", chatId: chat.id, messageId: reflectedMessageId };
@@ -1068,13 +1160,13 @@ export async function dispatchManagedContextReviewWebhookEvent(
       seed.requester.humanAgentUuid,
       {
         format: "markdown",
-        content: renderManagedContextReviewEvent({ ...input, repository }, reconciliation),
-        metadata: managedContextReviewEventMetadata({ ...input, repository }, reconciliation),
+        content: renderManagedContextReviewEvent({ ...effectiveInput, repository }, reconciliation),
+        metadata: managedContextReviewEventMetadata({ ...effectiveInput, repository }, reconciliation, liveState),
         source: "github",
       },
       {
-        addressedToAgentIds: input.terminalState ? [] : [reconciliation.reviewerAgentUuid],
-        allowRecipientlessSend: input.terminalState !== null,
+        addressedToAgentIds: effectiveInput.terminalState ? [] : [reconciliation.reviewerAgentUuid],
+        allowRecipientlessSend: effectiveInput.terminalState !== null,
         allowContextReviewRun: true,
         allowSystemSender: true,
         deferPostCommitEffects: true,

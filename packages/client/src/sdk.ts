@@ -409,6 +409,13 @@ export class FirstTreeHubSDK {
       },
       { retry: true },
     );
+    if (typeof response === "object" && response !== null && !("managedReviewReceiptV1" in response)) {
+      throw new SdkError(
+        426,
+        "The Server is too old for managed Context Review: its keyed task response is missing managedReviewReceiptV1. Deploy the compatible Server before retrying with this CLI.",
+        { code: "MANAGED_REVIEW_SERVER_TOO_OLD" },
+      );
+    }
     return keyedTaskChatCreateResponseSchema.parse(response);
   }
 

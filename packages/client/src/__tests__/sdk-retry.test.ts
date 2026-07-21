@@ -49,7 +49,7 @@ function makeKeyedCreateOkResponse(): Response {
     JSON.stringify({
       chatId: "chat-review",
       messageId: "msg-review",
-      topic: "Agent Review: owner/context-tree#749",
+      topic: "Context Review · context-tree#749",
       effectiveSenderId: "human-1",
       reviewerAgentUuid: "reviewer-1",
       outcome: "reused",
@@ -59,6 +59,20 @@ function makeKeyedCreateOkResponse(): Response {
         pullRequest: 749,
         expectedHead: "a".repeat(40),
       },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+function makeLegacyKeyedCreateResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      chatId: "chat-review",
+      messageId: "msg-review",
+      topic: "Context Review · context-tree#749",
+      effectiveSenderId: "human-1",
+      reviewerAgentUuid: "reviewer-1",
+      outcome: "created",
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
@@ -282,7 +296,7 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     expect(result).toEqual({
       chatId: "chat-review",
       messageId: "msg-review",
-      topic: "Agent Review: owner/context-tree#749",
+      topic: "Context Review · context-tree#749",
       effectiveSenderId: "human-1",
       reviewerAgentUuid: "reviewer-1",
       outcome: "reused",
@@ -293,6 +307,19 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
         expectedHead: "a".repeat(40),
       },
     });
+  });
+
+  it("identifies an older Server that cannot return the required managed receipt", async () => {
+    const fetchMock = buildFetchMock([makeLegacyKeyedCreateResponse()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(flush(makeSdk().createMemberKeyedTaskChat("org-1", keyedTaskPayload()))).rejects.toMatchObject({
+      name: "SdkError",
+      statusCode: 426,
+      code: "MANAGED_REVIEW_SERVER_TOO_OLD",
+      message: expect.stringContaining("missing managedReviewReceiptV1"),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries on HTTP 500 and succeeds on the second attempt", async () => {

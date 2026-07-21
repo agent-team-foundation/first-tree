@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONTEXT_REVIEW_TASK_TYPE } from "./context-review.js";
 
 /**
  * `chats.metadata` is `jsonb` at the DB layer. Without a typed contract every
@@ -53,6 +54,12 @@ export const agentChatMetadataSchema = z.object({
   source: z.literal("agent"),
   initiatedByAgentId: z.string().min(1).optional(),
   effectiveSenderReason: z.literal("self_target_manager_human").optional(),
+  /** Stable workflow subtype; this does not create a new Source category. */
+  taskType: z.literal(CONTEXT_REVIEW_TASK_TYPE).optional(),
+  /** Optional stable PR identity for subtype-aware presentation. */
+  entityType: z.literal("pull_request").optional(),
+  entityKey: z.string().min(1).optional(),
+  entityUrl: z.string().url().optional(),
 });
 export type AgentChatMetadata = z.infer<typeof agentChatMetadataSchema>;
 

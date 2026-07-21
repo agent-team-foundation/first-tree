@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   addParticipantSchema,
   createKeyedTaskChatSchema,
@@ -133,6 +134,33 @@ describe("chat write schemas", () => {
         outcome: "reused",
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps the new receipt response additive for an older CLI response parser", () => {
+    const legacyResponseSchema = z.object({
+      chatId: z.string(),
+      messageId: z.string(),
+      topic: z.string().nullable(),
+      effectiveSenderId: z.string(),
+      reviewerAgentUuid: z.string(),
+      outcome: z.enum(["created", "reused"]),
+    });
+    expect(
+      legacyResponseSchema.parse({
+        chatId: "chat-1",
+        messageId: "message-1",
+        topic: "Context Review · context-tree#749",
+        effectiveSenderId: "human-1",
+        reviewerAgentUuid: "reviewer-1",
+        outcome: "created",
+        managedReviewReceiptV1: {
+          schemaVersion: 1,
+          repository: "owner/context-tree",
+          pullRequest: 749,
+          expectedHead: "a".repeat(40),
+        },
+      }),
+    ).toMatchObject({ chatId: "chat-1", outcome: "created" });
   });
 
   it("requires update chat requests to change at least one field", () => {
