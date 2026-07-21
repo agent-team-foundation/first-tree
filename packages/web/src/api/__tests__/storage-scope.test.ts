@@ -187,6 +187,41 @@ describe("storage-scope / logout purge", () => {
     expect((await messages.getCachedMessages("chat-1")).map((m) => m.id)).toEqual(["a-new"]);
   });
 
+  it("blocks the purged account's draft writes until re-login; anon stays blocked", async () => {
+    const { scope, drafts } = await loadModules();
+    scope.setStorageNamespace("user-a");
+    drafts.saveDraft(drafts.chatDraftScope("user-a", "chat-1"), { text: "A draft" });
+
+    // Logout: purge marks user-a AND anon draft-write-blocked synchronously.
+    await scope.purgeAccountLocalData("user-a");
+
+    // Late writes for the purged account are dropped — including an in-flight
+    // failed send being parked after the purge.
+    drafts.saveDraft(drafts.chatDraftScope("user-a", "chat-2"), { text: "late A write" });
+    expect(drafts.loadDraft(drafts.chatDraftScope("user-a", "chat-2"))).toBeNull();
+    expect(drafts.parkFailedDraftIfSwitched("user-a", "chat-1", "chat-2", "failed text")).toBe(true);
+    expect(drafts.loadDraft(drafts.chatDraftScope("user-a", "chat-1"))).toBeNull();
+
+    // Post-logout anonymous state: draft writes are blocked too.
+    scope.setStorageNamespace(null);
+    drafts.saveDraft(drafts.chatDraftScope(null, "chat-1"), { text: "anon write" });
+    expect(drafts.loadDraft(drafts.chatDraftScope(null, "chat-1"))).toBeNull();
+
+    // Another account is unaffected, and anon STAYS blocked after a sign-in.
+    scope.setStorageNamespace("user-b");
+    drafts.saveDraft(drafts.chatDraftScope("user-b", "chat-1"), { text: "B draft" });
+    expect(drafts.loadDraft(drafts.chatDraftScope("user-b", "chat-1"))?.text).toBe("B draft");
+    drafts.saveDraft(drafts.chatDraftScope(null, "chat-1"), { text: "anon still blocked" });
+    expect(drafts.loadDraft(drafts.chatDraftScope(null, "chat-1"))).toBeNull();
+
+    // Re-login of A lifts the block; the purged content stays gone, new
+    // drafts land fresh.
+    scope.setStorageNamespace("user-a");
+    expect(drafts.loadDraft(drafts.chatDraftScope("user-a", "chat-1"))).toBeNull();
+    drafts.saveDraft(drafts.chatDraftScope("user-a", "chat-1"), { text: "A again" });
+    expect(drafts.loadDraft(drafts.chatDraftScope("user-a", "chat-1"))?.text).toBe("A again");
+  });
+
   it("purges the token-fallback namespace when it differs from the current one", async () => {
     // One browser profile (one fake IDB), two "sessions" (two module graphs):
     // the first session leaves data under user-a's namespace; the second

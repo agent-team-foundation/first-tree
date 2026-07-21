@@ -113,12 +113,20 @@ function userPrefix(userId: string | null): string {
 
 /**
  * Split a map key into its legacy-vs-current shape. Current keys are
- * `u:<userId>@<origin>:<rest>`; legacy keys are `u:<userId>:<rest>`. The `@`
- * before the first `:` is the discriminator — origins always contain a `:`
- * (`https://…`), so a key whose first `:` comes before any `@` is legacy.
- * Returns null for keys not in the `u:` family (defensive; none exist today).
+ * `u:<userId>@<origin>:<rest>`; legacy keys are `u:<userId>:<rest>`.
+ * The discriminator is the `@` before the first `:`: legacy keys predate the
+ * origin segment, so they contain no `@` at all, while current keys always
+ * carry `@<origin>` right after the userId — so their `@` precedes every
+ * `:` that matters, whether the origin brings its own colons (`https://…`)
+ * or is the colon-less `unknown-origin` fallback.
+ *
+ * Only the legacy branch carries `rest`: the migration rewrite is its sole
+ * consumer, and the current branch has no well-defined `rest` to offer (the
+ * origin's own colons make "the rest after the origin" ambiguous to slice).
  */
-function parseUserScopedKey(key: string): { userId: string; rest: string; legacy: boolean } | null {
+type ParsedUserScopedKey = { userId: string; legacy: true; rest: string } | { userId: string; legacy: false };
+
+function parseUserScopedKey(key: string): ParsedUserScopedKey | null {
   if (!key.startsWith("u:")) return null;
   const body = key.slice(2);
   const at = body.indexOf("@");
@@ -126,11 +134,7 @@ function parseUserScopedKey(key: string): { userId: string; rest: string; legacy
   if (colon === -1) return null;
   const legacy = at === -1 || colon < at;
   if (legacy) return { userId: body.slice(0, colon), rest: body.slice(colon + 1), legacy: true };
-  // Current format: the scope body starts at the first `:` AFTER the origin
-  // (the origin's own `https://` colons come before it).
-  const scopeColon = body.indexOf(":", at);
-  if (scopeColon === -1) return null;
-  return { userId: body.slice(0, at), rest: body.slice(scopeColon + 1), legacy: false };
+  return { userId: body.slice(0, at), legacy: false };
 }
 
 /** Rewrite a legacy `u:<userId>:` map to current `u:<userId>@<origin>:` keys. */
@@ -150,6 +154,38 @@ function migrateLegacyScopes(map: DraftMap): { map: DraftMap; migrated: boolean 
     }
   }
   return { map: migrated ? out : map, migrated };
+}
+
+/**
+ * User ids whose draft writes are blocked after a logout purge (SEC-042).
+ * Mirrors the IndexedDB purged-namespace write-block in `api/storage-scope.ts`:
+ * without it, an in-flight failed send's `parkFailedDraftIfSwitched` (or any
+ * other post-purge `saveDraft`) would re-write the purged account's drafts.
+ * Blocking gates WRITES only — `clearDraft` / `clearDraftsForUser` stay open
+ * so the purge itself can run after the block is in place. The anonymous
+ * owner is tracked as "anon" and, once blocked, never unblocks: anonymous
+ * state has no legitimate draft writer.
+ */
+const blockedDraftUserIds = new Set<string>();
+
+/** Block draft writes for `userId` (`null` → the anonymous owner). */
+export function blockDraftWritesForUser(userId: string | null): void {
+  blockedDraftUserIds.add(userId ?? "anon");
+}
+
+/**
+ * Re-enable draft writes for `userId` after an explicit sign-in (mirrors
+ * storage-scope lifting the IndexedDB write-block on re-login).
+ */
+export function unblockDraftWritesForUser(userId: string): void {
+  blockedDraftUserIds.delete(userId);
+}
+
+/** `true` when the owner of `scope` (current or legacy format) is write-blocked. */
+function isScopeWriteBlocked(scope: string): boolean {
+  const parsed = parseUserScopedKey(scope);
+  if (!parsed) return false;
+  return blockedDraftUserIds.has(parsed.userId);
 }
 
 /** Storage scope for the in-chat composer: per user, per chat. */
@@ -180,12 +216,18 @@ export function loadDraft(scope: string): DraftSnapshot | null {
  * treated as empty and removes the entry — participant chips are remembered
  * only alongside real text, never on their own (an auto-seeded default chip
  * must not masquerade as an unsent draft).
+ *
+ * No-ops when the scope's owner is write-blocked (see
+ * `blockDraftWritesForUser` — the post-logout purge state).
  */
 export function saveDraft(
   scope: string,
   draft: { text: string; participantIds?: readonly string[] },
   now: number = Date.now(),
 ): void {
+  // SEC-042: dropped silently when the scope's owner was purged by a logout —
+  // a late write (e.g. a failed send being parked) must not resurrect drafts.
+  if (isScopeWriteBlocked(scope)) return;
   const map = readMap();
   if (draft.text.trim().length === 0) {
     if (scope in map) {

@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  blockDraftWritesForUser,
   chatDraftScope,
   clearDraft,
   clearDraftsForUser,
@@ -9,6 +10,7 @@ import {
   newChatDraftScope,
   parkFailedDraftIfSwitched,
   saveDraft,
+  unblockDraftWritesForUser,
 } from "../draft-store.js";
 
 const STORAGE_KEY = "first-tree:chat-drafts:v1";
@@ -242,5 +244,54 @@ describe("legacy scope migration (SEC-042)", () => {
     expect(loadDraft(chatDraftScope("user-a", "chat-1"))?.text).toBe("current body");
     const after = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
     expect(after["u:user-a:chat:chat-1"]).toBeUndefined();
+  });
+});
+
+// The write-block is module-level state and this file imports the store
+// statically, so every test here uses its own user id (or unblocks before
+// exiting) to keep the block from leaking into other tests.
+describe("draft write-block after purge (SEC-042)", () => {
+  it("drops saveDraft for a blocked user in both scope formats; other users unaffected", () => {
+    blockDraftWritesForUser("blocked-user");
+
+    saveDraft(chatDraftScope("blocked-user", "chat-1"), { text: "blocked current" });
+    // Legacy-format scope of the same blocked user — also dropped.
+    saveDraft("u:blocked-user:chat:chat-2", { text: "blocked legacy" });
+    saveDraft(chatDraftScope("other-user", "chat-1"), { text: "other" });
+
+    expect(loadDraft(chatDraftScope("blocked-user", "chat-1"))).toBeNull();
+    expect(loadDraft(chatDraftScope("other-user", "chat-1"))?.text).toBe("other");
+    const after = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    expect(Object.keys(after).some((k) => k.startsWith("u:blocked-user:") || k.startsWith("u:blocked-user@"))).toBe(
+      false,
+    );
+    unblockDraftWritesForUser("blocked-user");
+  });
+
+  it("drops parkFailedDraftIfSwitched for a blocked user", () => {
+    blockDraftWritesForUser("blocked-parker");
+
+    // Still reports "user switched" — only the parking write is dropped.
+    expect(parkFailedDraftIfSwitched("blocked-parker", "chat-a", "chat-b", "retry me")).toBe(true);
+    expect(loadDraft(chatDraftScope("blocked-parker", "chat-a"))).toBeNull();
+    unblockDraftWritesForUser("blocked-parker");
+  });
+
+  it("re-enables writes after unblockDraftWritesForUser", () => {
+    blockDraftWritesForUser("returning-user");
+    saveDraft(chatDraftScope("returning-user", "chat-1"), { text: "dropped" });
+    expect(loadDraft(chatDraftScope("returning-user", "chat-1"))).toBeNull();
+
+    unblockDraftWritesForUser("returning-user");
+    saveDraft(chatDraftScope("returning-user", "chat-1"), { text: "kept" });
+    expect(loadDraft(chatDraftScope("returning-user", "chat-1"))?.text).toBe("kept");
+  });
+
+  it("blocks the anonymous owner via blockDraftWritesForUser(null)", () => {
+    blockDraftWritesForUser(null);
+    saveDraft(chatDraftScope(null, "chat-1"), { text: "anon dropped" });
+    expect(loadDraft(chatDraftScope(null, "chat-1"))).toBeNull();
+    // Cleanup: this file shares the module across tests.
+    unblockDraftWritesForUser("anon");
   });
 });

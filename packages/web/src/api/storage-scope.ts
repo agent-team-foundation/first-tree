@@ -32,7 +32,7 @@
  *     pre-namespacing global DBs. Never rejects — purge is fire-and-forget.
  */
 
-import { clearDraftsForUser } from "../lib/draft-store.js";
+import { blockDraftWritesForUser, clearDraftsForUser, unblockDraftWritesForUser } from "../lib/draft-store.js";
 
 /** Base names of the scoped IndexedDBs, before the `@<namespace>` suffix. */
 const CHAT_CACHE_DB_BASE = "first-tree-chat-cache";
@@ -111,11 +111,16 @@ export function currentStorageNamespace(): string {
 /**
  * Switch the active namespace. Closes every registered cached connection so
  * the stores re-open under the new namespace on their next operation, and —
- * when signing in as a real account — lifts that account's write block.
+ * when signing in as a real account — lifts that account's write block (both
+ * the IndexedDB purged set and the draft-store block). Anonymous sign-out
+ * never lifts anything.
  */
 export function setStorageNamespace(userId: string | null): void {
   const next = namespaceForUser(userId);
-  if (userId !== null) purgedNamespaces.delete(next);
+  if (userId !== null) {
+    purgedNamespaces.delete(next);
+    unblockDraftWritesForUser(userId);
+  }
   if (next === currentNamespace) {
     currentUserId = userId;
     return;
@@ -184,8 +189,9 @@ export async function purgeLegacyUnscopedStores(): Promise<void> {
  * are cleared) when it differs — e.g. a session where `/me` never resolved but
  * a previous session's data still sits under that account's namespace.
  *
- * Marks every target purged synchronously (before the first `await`), then
- * deletes asynchronously. Never rejects.
+ * Marks every target purged synchronously (before the first `await`) and
+ * blocks the accounts' draft writes, then deletes asynchronously. Never
+ * rejects.
  */
 export async function purgeAccountLocalData(fallbackUserId?: string | null): Promise<void> {
   const targetNamespaces = new Set<string>([currentNamespace, namespaceForUser(null)]);
@@ -195,6 +201,12 @@ export async function purgeAccountLocalData(fallbackUserId?: string | null): Pro
   const draftUserIds = new Set<string>();
   if (currentUserId) draftUserIds.add(currentUserId);
   if (fallbackUserId) draftUserIds.add(fallbackUserId);
+  // Block draft writes for every purged account — and for the anonymous
+  // owner — synchronously (before the first await), mirroring the
+  // purged-namespace write-block above. Without it a late
+  // `parkFailedDraftIfSwitched` could re-write drafts the purge just removed.
+  blockDraftWritesForUser(null);
+  for (const userId of draftUserIds) blockDraftWritesForUser(userId);
 
   try {
     runCloseHooks();
