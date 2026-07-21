@@ -5,13 +5,21 @@ import type {
   GitlabIdentityLinkCreate,
   GitlabIdentityLinkSummary,
 } from "@first-tree/shared";
-import { api, withOrg } from "./client.js";
+import { api, withOrg, withOrgAt } from "./client.js";
 
 export const gitlabConnectionsQueryKey = (organizationId: string | null) =>
   ["gitlab-connections", organizationId] as const;
 
 export async function listGitlabConnections(): Promise<GitlabConnectionSummary[]> {
   const response = await api.get<{ connections: GitlabConnectionSummary[] }>(withOrg("/gitlab-connections"));
+  return response.connections;
+}
+
+/** Read the connection for a known Team instead of the currently selected shell Team. */
+export async function listGitlabConnectionsAt(organizationId: string): Promise<GitlabConnectionSummary[]> {
+  const response = await api.get<{ connections: GitlabConnectionSummary[] }>(
+    withOrgAt(organizationId, "/gitlab-connections"),
+  );
   return response.connections;
 }
 

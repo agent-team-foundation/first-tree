@@ -8,6 +8,7 @@ import { type AskAnswer, AskTakeover } from "../../components/chat/ask-takeover.
 import { findBlockingRequest, readRequestPayload } from "../../components/chat/request-state.js";
 import type { MentionCandidate } from "../../components/mention-autocomplete.js";
 import { useToast } from "../../components/ui/toast.js";
+import { useGitlabEntityPresentation } from "../../hooks/use-gitlab-entity-presentation.js";
 import { commitMobileAskResolution, locallyResolvedRequestIds } from "./answer-cache.js";
 import { MobileSystemState } from "./components.js";
 
@@ -28,6 +29,7 @@ export function MobileAskSheet({ chatId, onClose }: { chatId: string; onClose: (
     queryFn: () => getChat(chatId),
     staleTime: 10_000,
   });
+  const { markdownComponents } = useGitlabEntityPresentation(detailQuery.data?.organizationId ?? null);
 
   const request = useMemo(() => {
     const locallyResolved = locallyResolvedRequestIds(queryClient, chatId);
@@ -82,6 +84,7 @@ export function MobileAskSheet({ chatId, onClose }: { chatId: string; onClose: (
           sending={sending}
           error={error ?? undefined}
           mentionCandidates={mentionCandidates}
+          markdownComponents={markdownComponents}
           mobile
           onDismiss={onClose}
           onReply={(answer) => {

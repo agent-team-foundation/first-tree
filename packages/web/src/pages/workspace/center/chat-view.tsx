@@ -72,7 +72,6 @@ import {
   sendChatMessage,
   sendFileMessageBatch,
 } from "../../../api/chats.js";
-import { gitlabConnectionsQueryKey, listGitlabConnections } from "../../../api/gitlab-connections.js";
 import { putImage } from "../../../api/image-store.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
@@ -135,6 +134,7 @@ import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { useToast } from "../../../components/ui/toast.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
+import { useGitlabEntityPresentation } from "../../../hooks/use-gitlab-entity-presentation.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
@@ -1544,14 +1544,7 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, memberId: myMemberId, organizationId, user } = useAuth();
-  const gitlabConnections = useQuery({
-    queryKey: gitlabConnectionsQueryKey(organizationId),
-    queryFn: listGitlabConnections,
-    enabled: !!organizationId,
-    staleTime: Infinity,
-  });
-  const gitlabInstanceOrigin = gitlabConnections.data?.[0]?.instanceOrigin ?? null;
+  const { agentId: myAgentId, memberId: myMemberId, user } = useAuth();
   // Unsent draft text, cached per user + chat in browser-local storage so it
   // survives chat switches and reloads (ChatView is not remounted on switch).
   // Clearing the draft on send empties its stored entry.
@@ -1869,6 +1862,14 @@ export function ChatView({
     initialData: initialChatDetail?.id === chatId ? initialChatDetail : undefined,
     staleTime: 10_000,
   });
+
+  // A globally addressed chat may render before the shell finishes switching
+  // Teams. Bind the trust decision to the rendered chat's Team, never to the
+  // transient shell selection, and refresh it so remote connection changes
+  // eventually replace (or remove) the compact-label trust boundary.
+  const chatOrganizationId = chatDetail?.organizationId ?? null;
+  const { instanceOrigin: gitlabInstanceOrigin, markdownComponents: askMarkdownComponents } =
+    useGitlabEntityPresentation(chatOrganizationId);
 
   // Fetch one chat-scoped batch with an independent newest-first window per
   // non-human speaker. Chat membership is the disclosure boundary, so a
@@ -3580,6 +3581,7 @@ export function ChatView({
                 sending={askBusy}
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
+                markdownComponents={askMarkdownComponents}
                 isTrial={isTrial}
                 mobile={composerMobile}
                 onReply={(answer) => {

@@ -33,4 +33,16 @@ describe("parseGitlabEntityPath", () => {
   ] as const)("rejects %s as %s", (pathname, reason) => {
     expect(parseGitlabEntityPath(pathname)).toEqual({ ok: false, reason });
   });
+
+  it.each([
+    "%D8%9C",
+    "%E2%80%8F",
+    "%E2%80%AE",
+    "%E2%81%A7",
+  ])("rejects percent-encoded Unicode bidi control %s", (control) => {
+    expect(parseGitlabEntityPath(`/group/${control}project/-/issues/1`)).toEqual({
+      ok: false,
+      reason: "bidi_control",
+    });
+  });
 });

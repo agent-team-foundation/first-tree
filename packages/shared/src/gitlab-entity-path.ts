@@ -6,7 +6,12 @@ export type GitlabEntityPath = {
 
 export type GitlabEntityPathParseResult =
   | { ok: true; value: GitlabEntityPath }
-  | { ok: false; reason: "route" | "encoding" | "control_character" | "identity" };
+  | { ok: false; reason: "route" | "encoding" | "control_character" | "bidi_control" | "identity" };
+
+// Unicode's Bidi_Control property: ALM, LRM/RLM, embeddings/overrides, and
+// isolates. These format characters can make a compact visible label read in
+// a different order than its href, so decoded project paths must reject them.
+const BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
 const ROUTE_SUFFIXES = [
   { suffix: "/-/merge_requests", entityType: "pull_request" },
@@ -46,6 +51,7 @@ export function parseGitlabEntityPath(pathname: string): GitlabEntityPathParseRe
     return { ok: false, reason: "encoding" };
   }
   if (/\p{Cc}/u.test(projectPath)) return { ok: false, reason: "control_character" };
+  if (BIDI_CONTROL_RE.test(projectPath)) return { ok: false, reason: "bidi_control" };
 
   const entityIid = Number(rawIid);
   if (!projectPath || !Number.isSafeInteger(entityIid) || entityIid <= 0) {

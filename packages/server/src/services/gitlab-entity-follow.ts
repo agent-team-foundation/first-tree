@@ -56,6 +56,9 @@ export function parseGitlabEntityUrl(
     if (parsedPath.reason === "control_character") {
       throw new BadRequestError("GitLab entity URL project path must not contain control characters");
     }
+    if (parsedPath.reason === "bidi_control") {
+      throw new BadRequestError("GitLab entity URL project path must not contain bidirectional control characters");
+    }
     if (parsedPath.reason === "route") {
       throw new BadRequestError("GitLab entity URL must point to an issue or merge request");
     }
