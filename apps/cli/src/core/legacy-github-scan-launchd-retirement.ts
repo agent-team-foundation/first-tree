@@ -616,7 +616,11 @@ function parsePlistLabelWithPlutil(plist: string): string | null {
     throw Object.assign(new Error("plutil terminated by signal"), { code: "EINTR" });
   }
   if (parsed.status !== 0) return null;
-  const label = String(parsed.stdout ?? "").trim();
+  const output = String(parsed.stdout ?? "");
+  // Darwin's `plutil -extract ... raw` appends one LF transport byte. Strip
+  // only that byte: whitespace before it (including a semantic CR) is part
+  // of the plist string value and must not become a different identity.
+  const label = output.endsWith("\n") ? output.slice(0, -1) : output;
   return isLegacyLabel(label) ? label : null;
 }
 
@@ -1145,15 +1149,20 @@ let productionResult: LegacyGithubScanLaunchdRetirementResult | undefined;
  */
 export function runLegacyGithubScanLaunchdRetirementOnce(): LegacyGithubScanLaunchdRetirementResult {
   if (productionResult) return productionResult;
+  const channel = channelConfig.channel;
+  if (process.platform !== "darwin" || (channel !== "prod" && channel !== "staging")) {
+    productionResult = result("not-applicable");
+    return productionResult;
+  }
   try {
     const account = userInfo();
     productionResult = runLegacyGithubScanLaunchdRetirement({
       platform: process.platform,
-      channel: channelConfig.channel,
+      channel,
       effectiveHome: account.homedir,
       effectiveUid: account.uid,
       spawnLaunchctl: (args, timeoutMs) =>
-        spawnSync("launchctl", [...args], {
+        spawnSync("/bin/launchctl", [...args], {
           encoding: "utf8",
           timeout: timeoutMs,
           stdio: ["ignore", "pipe", "pipe"],

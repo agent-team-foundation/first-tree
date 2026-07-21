@@ -213,6 +213,38 @@ describe("legacy github-scan launchd retirement", () => {
     expect(existsSync(candidate)).toBe(false);
   });
 
+  it.runIf(process.platform === "darwin")("does not normalize semantic whitespace from native plist Labels", () => {
+    const paddedLabel = label("native-padded");
+    const carriageReturnLabel = label("native-cr");
+    const paddedCandidate = writeCandidate(home, "native-padded", `  ${paddedLabel}  `);
+    const carriageReturnCandidate = writeCandidate(home, "native-cr", `${carriageReturnLabel}&#13;`);
+    let launchctlCalls = 0;
+
+    const res = runLegacyGithubScanLaunchdRetirement({
+      platform: "darwin",
+      channel: "staging",
+      effectiveHome: home,
+      effectiveUid: UID,
+      spawnLaunchctl: () => {
+        launchctlCalls += 1;
+        return { status: 0, signal: null };
+      },
+      randomToken: () => "0123456789abcdef",
+    });
+
+    expect(res.status).toBe("partial");
+    expect(res.retired).toBe(0);
+    expect(res.diagnostics).toEqual(
+      expect.arrayContaining([
+        { stage: "candidate-read", reason: "invalid-plist-label", label: paddedLabel },
+        { stage: "candidate-read", reason: "invalid-plist-label", label: carriageReturnLabel },
+      ]),
+    );
+    expect(launchctlCalls).toBe(0);
+    expect(existsSync(paddedCandidate)).toBe(true);
+    expect(existsSync(carriageReturnCandidate)).toBe(true);
+  });
+
   it("also runs for the published prod channel", () => {
     const candidate = writeCandidate(home, "prod-user");
     const res = run(home, { channel: "prod" });
