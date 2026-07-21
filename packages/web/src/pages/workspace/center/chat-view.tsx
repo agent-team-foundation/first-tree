@@ -76,7 +76,8 @@ import { getReadState, type ReadState, setReadState } from "../../../api/read-st
 import {
   agentSessionsQueryKey,
   asErrorPayload,
-  listSessionEvents,
+  chatSessionEventsQueryKey,
+  listChatSessionEvents,
   type SessionEventRow,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
@@ -101,7 +102,6 @@ import {
   isGitlabEventCardContent,
   isTrustedGitlabDispatcherMessage,
 } from "../../../components/chat/gitlab-event-card.js";
-import { LiveTurnAgentsContext } from "../../../components/chat/live-turn-context.js";
 import {
   findBlockingRequest,
   findThreadableRequestId,
@@ -460,6 +460,10 @@ function ErrorRow({
     <div
       // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
       data-error-agent={fatal ? event.agentId : undefined}
+      // Every provider reason, including waiting/retrying/warning rows, is
+      // evidence for the Inspector's reason summary without becoming a
+      // failure-status anchor.
+      data-status-reason-agent={retryReason ? event.agentId : undefined}
       style={{
         padding: "var(--sp-1_5) var(--sp-2_5)",
         borderLeft: `var(--hairline-bold) solid ${color}`,
@@ -1697,6 +1701,10 @@ export function ChatView({
     if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // A nested top layer (for example the Activity Inspector) owns the first
+      // Escape and marks it handled. Keep the details rail open until the next
+      // Escape instead of dismissing two layers in one keypress.
+      if (event.defaultPrevented) return;
       const active = document.activeElement;
       if (active instanceof HTMLElement) {
         const tag = active.tagName;
@@ -1709,6 +1717,7 @@ export function ChatView({
   }, [detailsOpen, hasDocPreview, setSidebarByUser]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const readOnlyComposerRef = useRef<HTMLDivElement | null>(null);
   // The composer footer band — wraps BOTH the request dock (with its option
   // radios) and the composer. The Enter-to-resolve backstop binds its keydown
   // listener here, not on `window`, so it only sees keys from inside the
@@ -1814,15 +1823,6 @@ export function ChatView({
     refetchInterval: 5_000,
   });
 
-  // Fetch newest events first so the turn-grouping filter always sees the
-  // latest `turn_end` even in chats with thousands of total events. The
-  // timeline renderer later sorts by timestamp, so the fetch order is moot
-  // for display — only the contents of the window matter.
-  const { data: eventsData } = useQuery({
-    queryKey: ["session-events", agentId, chatId],
-    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
-  });
-
   const {
     data: chatDetail,
     isLoading: chatDetailLoading,
@@ -1833,6 +1833,15 @@ export function ChatView({
     enabled: !!chatId,
     initialData: initialChatDetail?.id === chatId ? initialChatDetail : undefined,
     staleTime: 10_000,
+  });
+
+  // Fetch one chat-scoped batch with an independent newest-first window per
+  // non-human speaker. Chat membership is the disclosure boundary, so a
+  // private speaker is inspectable here without becoming org-discoverable.
+  // One batch also prevents the old N-query fanout as group size grows.
+  const { data: eventFeedsData } = useQuery({
+    queryKey: chatSessionEventsQueryKey(chatId),
+    queryFn: () => listChatSessionEvents(chatId, { limit: 200, direction: "desc" }),
   });
 
   // The right rail no longer auto-opens per chat: the running summary moved to
@@ -2499,26 +2508,6 @@ export function ChatView({
   // `key`), so chat-view no longer resets per-question selections here.
 
   const items: TimelineItem[] = useMemo(() => {
-    const rawEvents = eventsData?.items ?? [];
-    const visibleEvents = filterEventsForTimeline(rawEvents);
-
-    // Turn anchor: the seq of the last turn_end across all events (including
-    // ones filterEventsForTimeline dropped). Every surviving transient event
-    // has seq > lastTurnEndSeq, so the agent's current turn gets one stable,
-    // remount-safe key that survives toolUseId dedupe (pending → final swaps).
-    let lastTurnEndSeq = -1;
-    for (const e of rawEvents) {
-      if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
-    }
-
-    // Collapse each agent's surviving transient events into ONE workgroup.
-    // filterEventsForTimeline already narrows them to that agent's current
-    // (un-ended) turn, so one workgroup == one in-progress turn. We deliberately
-    // do NOT split on interleaved chat messages: a message landing mid-turn must
-    // not fracture the turn into duplicate "working" cards. Each workgroup is
-    // anchored at its earliest event so it sorts into the timeline where the
-    // turn began; messages and error rows keep their own chronological slots.
-    //
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
     // vanish on chat re-open until the server fetch lands. When the staging
@@ -2532,57 +2521,52 @@ export function ChatView({
       data: m,
     }));
 
-    const turnEventsByAgent = new Map<string, SessionEventRow[]>();
-    for (const e of visibleEvents) {
-      if (e.kind === "tool_call" || e.kind === "thinking" || e.kind === "assistant_text") {
-        const existing = turnEventsByAgent.get(e.agentId);
-        if (existing) existing.push(e);
-        else turnEventsByAgent.set(e.agentId, [e]);
-      } else {
-        // error rows stay standalone and visible across turns.
-        out.push({ kind: "event", at: e.createdAt, key: `e-${e.id}`, data: e });
+    // A seq is monotonic only within one (agent, chat) session, so combine the
+    // independently fetched feeds by agent before finding turn boundaries.
+    // Dedup by event id protects a temporarily duplicated participant/query.
+    const rawEventsByAgent = new Map<string, Map<string, SessionEventRow>>();
+    for (const feed of eventFeedsData?.feeds ?? []) {
+      for (const event of feed.items) {
+        const existing = rawEventsByAgent.get(event.agentId);
+        if (existing) existing.set(event.id, event);
+        else rawEventsByAgent.set(event.agentId, new Map([[event.id, event]]));
       }
     }
-    for (const [agentId, events] of turnEventsByAgent) {
-      events.sort((a, b) => a.seq - b.seq);
-      const first = events[0];
-      if (!first) continue;
-      out.push({ kind: "workgroup", at: first.createdAt, key: `wg-${lastTurnEndSeq}-${agentId}`, events });
+
+    for (const [eventAgentId, eventsById] of rawEventsByAgent) {
+      const rawEvents = [...eventsById.values()];
+      const visibleEvents = filterEventsForTimeline(rawEvents);
+      let lastTurnEndSeq = -1;
+      for (const event of rawEvents) {
+        if (event.kind === "turn_end" && event.seq > lastTurnEndSeq) lastTurnEndSeq = event.seq;
+      }
+
+      const turnEvents: SessionEventRow[] = [];
+      for (const event of visibleEvents) {
+        if (event.kind === "tool_call" || event.kind === "thinking" || event.kind === "assistant_text") {
+          turnEvents.push(event);
+        } else {
+          // Error rows stay standalone and visible across turns.
+          out.push({ kind: "event", at: event.createdAt, key: `e-${event.id}`, data: event });
+        }
+      }
+      turnEvents.sort((a, b) => a.seq - b.seq);
+      const first = turnEvents[0];
+      if (first) {
+        out.push({
+          kind: "workgroup",
+          at: first.createdAt,
+          key: `wg-${lastTurnEndSeq}-${eventAgentId}`,
+          events: turnEvents,
+        });
+      }
     }
 
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [mergedMessages, eventsData]);
+  }, [mergedMessages, eventFeedsData]);
 
   const itemCount = items.length;
-
-  // Agents with a live (un-ended) turn: one workgroup == one in-progress turn
-  // (see the `items` builder above). This is the timeline's authoritative
-  // "working" signal — a mounted WorkingTurn. Provided via LiveTurnAgentsContext
-  // so every chat-scoped status surface (roster, compose bar, hovercard)
-  // reconciles the composite against it (`reconcileLiveTurn`) from one source —
-  // a lapsed per-chat runtime heartbeat (or a missed composite invalidation)
-  // can't show Idle while a WorkingTurn is visibly on screen. Derived from
-  // `items` (not `visibleItems`) so a viewer-local blocking truncation never
-  // blanks an agent's work status.
-  //
-  // Scope: `eventsData` is a single-(primary-)agent feed (`["session-events",
-  // agentId, chatId]`), so `items` only ever carries the primary agent's
-  // workgroup and this set covers only that agent — exactly the agent whose
-  // WorkingTurn is on screen. `reconcileLiveTurn` is upgrade-only, so a
-  // secondary agent (no card) is never wrongly forced to working; it just shows
-  // the composite. Fixing idle-while-working for secondary agents would need a
-  // multi-agent events feed and is out of this stopgap's scope.
-  const liveTurnAgentIds = useMemo(
-    () =>
-      new Set(
-        items
-          .filter((it): it is Extract<TimelineItem, { kind: "workgroup" }> => it.kind === "workgroup")
-          .map((it) => it.events[0]?.agentId)
-          .filter((id): id is string => id != null),
-      ),
-    [items],
-  );
 
   // Blocking truncation: while a question blocks me (the FIFO-oldest live
   // request directed at me), hide every timeline item AFTER that request's
@@ -3300,7 +3284,7 @@ export function ChatView({
     // so that joining-then-typing skips the greeting on the next mount.
     if (readOnly) return;
     if (prefilledChatsRef.current.has(chatId)) return;
-    if (!messagesData || !eventsData || !chatDetail) return;
+    if (!messagesData || !eventFeedsData || !chatDetail) return;
     if (items.length > 0) return;
     if (draft.length > 0) return;
     if (requiresMention) return;
@@ -3319,7 +3303,7 @@ export function ChatView({
     chatId,
     agentId,
     messagesData,
-    eventsData,
+    eventFeedsData,
     chatDetail,
     items.length,
     draft.length,
@@ -4018,8 +4002,18 @@ export function ChatView({
               }}
             >
               <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+                {/* Live activity is view-only awareness, so watchers keep the
+                    same stable “what are agents doing?” entry as participants.
+                    Reply controls below remain gated by `readOnly`. */}
+                <ComposeStatusBar
+                  chatId={chatId}
+                  agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                  fallbackFocusRef={readOnly ? readOnlyComposerRef : textareaRef}
+                />
                 {readOnly ? (
                   <div
+                    ref={readOnlyComposerRef}
+                    tabIndex={-1}
                     className="flex items-center"
                     style={{
                       gap: "var(--sp-3)",
@@ -4068,10 +4062,6 @@ export function ChatView({
                         {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
                       </div>
                     ) : null}
-                    <ComposeStatusBar
-                      chatId={chatId}
-                      agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                    />
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
                         the composer. */}
@@ -4692,7 +4682,7 @@ export function ChatView({
       </div>
     </div>
   );
-  return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
+  return body;
 }
 
 function MobileChatDetailsSheet({

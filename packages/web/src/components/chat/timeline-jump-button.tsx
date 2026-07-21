@@ -1,18 +1,18 @@
-import type { AgentMainStatus } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { scrollToAgentTimeline } from "../../lib/scroll-to-agent-timeline.js";
+import type { TimelineAnchorKind } from "../../lib/use-mounted-anchors.js";
 import { cn } from "../../lib/utils.js";
 
 /**
- * A status element that jumps to the agent's place in the timeline, with a
- * hover-revealed `→` so the affordance is discoverable (the bare
- * `cursor:pointer` alone read as plain text). Used by the compose activity rail;
- * the Participants roster intentionally keeps lifecycle labels static.
+ * A status element that jumps to the agent's place in the timeline. A quiet
+ * trailing `→` makes the destination discoverable without introducing a
+ * competing text action. Used by the compose live-activity inspector; the
+ * Participants roster intentionally keeps lifecycle labels static.
  *
  * `anchored` gates the affordance: only when the agent's timeline anchor is
  * actually mounted (see `useMountedAnchors`) is the element clickable and the
- * `→` shown. When it isn't, the children render as a plain static span — no
+ * `→` shown. When it isn't, the children render as a plain static div — no
  * pointer, no arrow, no silent no-op click.
  *
  * Chrome-free (no bg/border): it inherits the surrounding colour and only adds
@@ -20,40 +20,48 @@ import { cn } from "../../lib/utils.js";
  */
 export function TimelineJumpButton({
   agentId,
-  main,
+  target,
   anchored,
   ariaLabel,
+  onNavigate,
   className,
+  interactiveClassName,
   style,
   children,
 }: {
   agentId: string;
-  main: AgentMainStatus;
+  target: TimelineAnchorKind;
   /** Whether this agent's timeline anchor is currently mounted. */
   anchored: boolean;
   ariaLabel: string;
+  /** Runs immediately before the timeline scroll (for example, to close a popover). */
+  onNavigate?: () => void;
   className?: string;
+  /** Classes applied only when the element is an actionable button. */
+  interactiveClassName?: string;
   style?: CSSProperties;
   children: ReactNode;
 }) {
   if (!anchored) {
-    // Anchor not mounted (e.g. a non-primary agent's events, or an old message
-    // outside the 50-message window) → show the status, but don't pretend it's
-    // a working jump.
+    // Anchor not mounted (for example, evidence outside a bounded timeline
+    // window) → show the status, but don't pretend it is a working jump.
     return (
-      <span className={cn("inline-flex min-w-0 items-center", className)} style={{ gap: 4, ...style }}>
+      <div className={cn("inline-flex min-w-0 items-center", className)} style={{ gap: "var(--sp-1)", ...style }}>
         {children}
-      </span>
+      </div>
     );
   }
   return (
     <button
       type="button"
-      onClick={() => scrollToAgentTimeline(agentId, main)}
+      onClick={(event: MouseEvent<HTMLButtonElement>) => {
+        onNavigate?.();
+        scrollToAgentTimeline(agentId, target, { focus: event.detail === 0 });
+      }}
       aria-label={ariaLabel}
-      className={cn("group inline-flex min-w-0 items-center", className)}
+      className={cn("group inline-flex min-w-0 items-center", className, interactiveClassName)}
       style={{
-        gap: 4,
+        gap: "var(--sp-1)",
         border: 0,
         background: "transparent",
         padding: 0,
@@ -66,8 +74,8 @@ export function TimelineJumpButton({
       {children}
       <ArrowRight
         aria-hidden="true"
-        className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60"
-        style={{ color: "var(--fg-4)" }}
+        className="h-3.5 w-3.5 shrink-0 opacity-70 transition-all group-hover:translate-x-0.5 group-hover:opacity-100 group-focus-visible:translate-x-0.5 group-focus-visible:opacity-100"
+        style={{ color: "var(--fg-3)" }}
       />
     </button>
   );

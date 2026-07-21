@@ -167,6 +167,7 @@ describe("useAdminWs", () => {
     });
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-events", "agent-1", "chat-1"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-session-events", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-messages", "chat-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["chat-detail", "chat-1"] });
   });

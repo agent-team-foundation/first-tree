@@ -60,7 +60,7 @@ import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { resolveHumanScmBindingPair } from "../services/scm-attention-line.js";
 import { extractSummary } from "../services/session.js";
-import { summarizeChatTokenUsage } from "../services/session-event.js";
+import { listChatSpeakerEvents, summarizeChatTokenUsage } from "../services/session-event.js";
 import { sendFollowResult } from "./github-entity-reply.js";
 
 /**
@@ -230,6 +230,26 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId/agent-status", async (request) => {
     const { chat } = await requireChatAccess(request, app.db);
     return getChatAgentStatuses(app.db, chat.id);
+  });
+
+  /**
+   * Recent runtime evidence for every non-human speaker in this chat. Chat
+   * access is the disclosure boundary: a private agent invited into the room
+   * is inspectable here without becoming discoverable anywhere else. The
+   * service re-filters event owners against current speaker membership and
+   * applies the limit independently per agent.
+   */
+  app.get<{
+    Params: { chatId: string };
+    Querystring: { limit?: string; direction?: string };
+  }>("/:chatId/session-events", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    const limit = request.query.limit !== undefined ? Number.parseInt(request.query.limit, 10) : undefined;
+    const direction = request.query.direction === "desc" ? "desc" : "asc";
+    return listChatSpeakerEvents(app.db, chat.id, {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      direction,
+    });
   });
 
   /**

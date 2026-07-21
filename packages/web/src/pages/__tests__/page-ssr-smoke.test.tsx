@@ -649,7 +649,9 @@ function createClient(): QueryClient {
   queryClient.setQueryData(["chat-detail", "chat-1"], chatDetail());
   queryClient.setQueryData(["chat-messages-cache", "chat-1"], CHAT_MESSAGES.items.slice(0, 1));
   queryClient.setQueryData(["chat-messages", "chat-1"], CHAT_MESSAGES);
-  queryClient.setQueryData(["session-events", "agent-1", "chat-1"], SESSION_EVENTS);
+  queryClient.setQueryData(["chat-session-events", "chat-1"], {
+    feeds: [{ agentId: "agent-1", ...SESSION_EVENTS }],
+  });
   queryClient.setQueryData(["chat-read-state", "chat-1"], {
     chatId: "chat-1",
     bottomVisibleMessageId: "msg-1",
@@ -1234,7 +1236,9 @@ describe("page SSR smoke coverage", () => {
     emptyClient.setQueryData(["chat-detail", "chat-empty"], chatDetail({ id: "chat-empty", title: "Empty chat" }));
     emptyClient.setQueryData(["chat-messages-cache", "chat-empty"], []);
     emptyClient.setQueryData(["chat-messages", "chat-empty"], { items: [], nextCursor: null });
-    emptyClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+    emptyClient.setQueryData(["chat-session-events", "chat-empty"], {
+      feeds: [{ agentId: "agent-1", items: [], nextCursor: null }],
+    });
     expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-empty" />, emptyClient)).toContain(
       "Send a message to start",
     );

@@ -7,6 +7,7 @@ import {
 } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { createAgent } from "../services/agent.js";
 import {
   computeErrored,
   computeWorking,
@@ -765,6 +766,31 @@ describe("agent-chat-status", () => {
       expect(Array.isArray(body)).toBe(true);
       expect(body.find((x) => x.agentId === peer.agent.uuid)).toBeDefined();
       expect(body.some((x) => x.agentId === admin.humanAgentUuid)).toBe(false);
+    });
+
+    it("a watcher gets the same chat-scoped status projection without reply access", async () => {
+      const app = getApp();
+      const manager = await createTestAdmin(app);
+      const peer = await createTestAdmin(app);
+      const managed = await createAgent(app.db, {
+        name: `acs-watched-${randomUUID().slice(0, 6)}`,
+        type: "agent",
+        displayName: "Watched Agent",
+        managerId: manager.memberId,
+        organizationId: manager.organizationId,
+      });
+      const { chatId } = await createMeChat(app.db, peer.humanAgentUuid, peer.organizationId, {
+        participantIds: [managed.uuid],
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/chats/${chatId}/agent-status`,
+        headers: { authorization: `Bearer ${manager.accessToken}` },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json<Array<{ agentId: string }>>()).toContainEqual(expect.objectContaining({ agentId: managed.uuid }));
     });
 
     it("a non-member (different org) gets 404, not the status set", async () => {

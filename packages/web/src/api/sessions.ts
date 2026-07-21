@@ -116,6 +116,12 @@ export type SessionEventsResponse = {
   nextCursor: number | null;
 };
 
+export type ChatSessionEventsResponse = {
+  feeds: Array<SessionEventsResponse & { agentId: string }>;
+};
+
+export const chatSessionEventsQueryKey = (chatId: string) => ["chat-session-events", chatId] as const;
+
 export function listSessions(params?: {
   limit?: number;
   cursor?: string;
@@ -157,6 +163,19 @@ export function listSessionEvents(
   if (params?.direction) qs.set("direction", params.direction);
   const query = qs.toString();
   return api.get<SessionEventsResponse>(`/agents/${agentId}/sessions/${chatId}/events${query ? `?${query}` : ""}`);
+}
+
+export function listChatSessionEvents(
+  chatId: string,
+  params?: { limit?: number; direction?: "asc" | "desc" },
+): Promise<ChatSessionEventsResponse> {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.direction) qs.set("direction", params.direction);
+  const query = qs.toString();
+  return api.get<ChatSessionEventsResponse>(
+    `/chats/${encodeURIComponent(chatId)}/session-events${query ? `?${query}` : ""}`,
+  );
 }
 
 export type SessionMutationResponse = {

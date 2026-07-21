@@ -13,7 +13,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
-import type { SessionEventRow } from "../../../../api/sessions.js";
+import type { ChatSessionEventsResponse, SessionEventRow } from "../../../../api/sessions.js";
 import { agentSessionsQueryKey } from "../../../../api/sessions.js";
 import { ToastProvider } from "../../../../components/ui/toast.js";
 
@@ -72,6 +72,7 @@ const readStateMocks = vi.hoisted(() => ({
 }));
 
 const sessionMocks = vi.hoisted(() => ({
+  listChatSessionEvents: vi.fn(),
   listSessionEvents: vi.fn(),
   listSessionOutputs: vi.fn(),
 }));
@@ -117,6 +118,7 @@ vi.mock("../../../../api/read-state-store.js", () => readStateMocks);
 
 vi.mock("../../../../api/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/sessions.js")>()),
+  listChatSessionEvents: sessionMocks.listChatSessionEvents,
   listSessionEvents: sessionMocks.listSessionEvents,
   listSessionOutputs: sessionMocks.listSessionOutputs,
 }));
@@ -401,6 +403,17 @@ const SESSION_EVENTS: { items: SessionEventRow[]; nextCursor: number | null } = 
   nextCursor: null,
 };
 
+function chatSessionEvents(
+  ...feeds: Array<{
+    agentId: string;
+    events: { items: SessionEventRow[]; nextCursor: number | null };
+  }>
+): ChatSessionEventsResponse {
+  return {
+    feeds: feeds.map(({ agentId, events }) => ({ agentId, ...events })),
+  };
+}
+
 function installBrowserStubs(): void {
   const storage = createStorage();
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
@@ -524,7 +537,10 @@ function seedChat(
   queryClient.setQueryData(["chat-detail", detail.id], detail);
   queryClient.setQueryData(["chat-messages-cache", detail.id], page.items.slice(0, 1));
   queryClient.setQueryData(["chat-messages", detail.id], page);
-  queryClient.setQueryData(["session-events", "agent-1", detail.id], SESSION_EVENTS);
+  queryClient.setQueryData(
+    ["chat-session-events", detail.id],
+    chatSessionEvents({ agentId: "agent-1", events: SESSION_EVENTS }),
+  );
   queryClient.setQueryData(["chat-read-state", detail.id], {
     chatId: detail.id,
     bottomVisibleMessageId: "msg-1",
@@ -738,7 +754,19 @@ beforeEach(() => {
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
   readStateMocks.getReadState.mockResolvedValue(null);
   readStateMocks.setReadState.mockResolvedValue(undefined);
-  sessionMocks.listSessionEvents.mockResolvedValue(SESSION_EVENTS);
+  sessionMocks.listSessionEvents.mockImplementation((requestedAgentId: string) =>
+    Promise.resolve(
+      requestedAgentId === "agent-1"
+        ? SESSION_EVENTS
+        : {
+            items: [],
+            nextCursor: null,
+          },
+    ),
+  );
+  sessionMocks.listChatSessionEvents.mockResolvedValue(
+    chatSessionEvents({ agentId: "agent-1", events: SESSION_EVENTS }),
+  );
   sessionMocks.listSessionOutputs.mockResolvedValue({ items: [], nextCursor: null });
 });
 
@@ -953,50 +981,189 @@ describe("ChatView", () => {
       />,
     );
     await waitForText(readOnly.container, "watching");
+    expect(readOnly.container.querySelector("[data-compose-status-bar]")).not.toBeNull();
     await waitForText(readOnly.container, "Join failed");
     await click(buttonByText(readOnly.container, "Join to reply"));
     expect(onJoin).toHaveBeenCalledTimes(1);
     await act(async () => readOnly.root.unmount());
   });
 
+  it("loads secondary-agent activity into the timeline so inspector summaries have evidence", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const secondaryEvents = {
+      items: [
+        {
+          id: "event-agent-2",
+          agentId: "agent-2",
+          chatId: "chat-1",
+          seq: 1,
+          kind: "assistant_text" as const,
+          payload: { text: "Reviewing the mobile interaction." },
+          createdAt: "2026-05-28T11:59:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    };
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+      queryClient.setQueryData(
+        ["chat-session-events", "chat-1"],
+        chatSessionEvents(
+          { agentId: "agent-1", events: SESSION_EVENTS },
+          { agentId: "agent-2", events: secondaryEvents },
+        ),
+      );
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [
+          {
+            agentId: "agent-1",
+            main: "ready",
+            reachable: true,
+            engagement: "active",
+            working: false,
+            errored: false,
+            activity: null,
+          },
+          {
+            agentId: "agent-2",
+            main: "working",
+            reachable: true,
+            engagement: "active",
+            working: true,
+            errored: false,
+            activity: {
+              agentId: "agent-2",
+              kind: "assistant_text",
+              label: "Writing",
+              startedAt: NOW,
+              turnText: "Reviewing the mobile interaction.",
+            },
+          },
+        ],
+      );
+    });
+
+    await waitForCondition(
+      () => container.querySelector('[data-working-agent="agent-2"]') !== null,
+      "Expected secondary agent timeline evidence",
+    );
+    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    expect(container.querySelector('button[aria-label*="Design Critique"][aria-label*="Reviewing"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("uses one Escape to close Activity without also dismissing open chat details", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+
+    await waitForCondition(
+      () => container.querySelector('button[aria-label="Show chat details"]') !== null,
+      "Expected chat details trigger",
+    );
+    await click(container.querySelector('button[aria-label="Show chat details"]'));
+    await waitForCondition(
+      () => container.querySelector('aside[aria-label="Chat details"]') !== null,
+      "Expected chat details to be open",
+    );
+    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForCondition(
+      () => container.querySelector("[data-live-activity-inspector]") !== null,
+      "Expected Activity Inspector to open",
+    );
+    await waitForCondition(
+      () => document.activeElement?.getAttribute("aria-label") === "Close agent activity",
+      "Expected focus to enter Activity Inspector",
+    );
+
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    await flush();
+
+    expect(container.querySelector("[data-live-activity-inspector]")).toBeNull();
+    expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("lets a later mention layer consume Escape before the open Activity Inspector", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+
+    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForCondition(
+      () => container.querySelector("[data-live-activity-inspector]") !== null,
+      "Expected Activity Inspector to open",
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await act(async () => textarea.focus());
+    await flush();
+    await waitForCondition(
+      () => container.querySelector('[role="listbox"][aria-label="Mention suggestions"]') !== null,
+      "Expected mention suggestions to open after focus primed @",
+    );
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(container.querySelector('[role="listbox"][aria-label="Mention suggestions"]')).toBeNull();
+    expect(container.querySelector("[data-live-activity-inspector]")).not.toBeNull();
+    expect(document.activeElement).toBe(textarea);
+
+    await act(async () => root.unmount());
+  });
+
   it("renders provider retry events as non-fatal timeline rows when severity is not error", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-      queryClient.setQueryData(["session-events", "agent-1", "chat-1"], {
-        items: [
-          {
-            id: "retry-event",
-            agentId: "agent-1",
-            chatId: "chat-1",
-            seq: 1,
-            kind: "error",
-            payload: {
-              source: "runtime",
-              message: encodeProviderRetryEventMessage({
-                event: "provider_retry_scheduled",
-                provider: "codex",
-                scope: "provider_turn",
-                category: "transient_transport",
-                reasonCode: "provider_transient_transport",
-                attempt: 1,
-                maxAttempts: 2,
-                retryMode: "foreground",
-                delayMs: 500,
-                replaySafety: "pre_visible",
-                userSeverity: "info",
-                messagePreview: "fetch failed",
-              }),
-            },
-            createdAt: "2026-05-28T11:56:30.000Z",
+      queryClient.setQueryData(
+        ["chat-session-events", "chat-1"],
+        chatSessionEvents({
+          agentId: "agent-1",
+          events: {
+            items: [
+              {
+                id: "retry-event",
+                agentId: "agent-1",
+                chatId: "chat-1",
+                seq: 1,
+                kind: "error",
+                payload: {
+                  source: "runtime",
+                  message: encodeProviderRetryEventMessage({
+                    event: "provider_retry_scheduled",
+                    provider: "codex",
+                    scope: "provider_turn",
+                    category: "transient_transport",
+                    reasonCode: "provider_transient_transport",
+                    attempt: 1,
+                    maxAttempts: 2,
+                    retryMode: "foreground",
+                    delayMs: 500,
+                    replaySafety: "pre_visible",
+                    userSeverity: "info",
+                    messagePreview: "fetch failed",
+                  }),
+                },
+                createdAt: "2026-05-28T11:56:30.000Z",
+              },
+            ] satisfies SessionEventRow[],
+            nextCursor: null,
           },
-        ] satisfies SessionEventRow[],
-        nextCursor: null,
-      });
+        }),
+      );
     });
 
     await waitForText(container, "Retrying provider");
     expect(container.textContent).toContain("fetch failed");
     expect(container.querySelector("[data-error-agent]")).toBeNull();
+    expect(container.querySelector('[data-status-reason-agent="agent-1"]')).not.toBeNull();
     await act(async () => root.unmount());
   });
 
@@ -1067,7 +1234,10 @@ describe("ChatView", () => {
       const { ChatView } = await import("../chat-view.js");
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
         // agent-1 has clientId "client-1" in ORG_AGENTS.
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1090,7 +1260,10 @@ describe("ChatView", () => {
     it("does NOT render a Connect button for a non-credential failure (provider capacity)", async () => {
       const { ChatView } = await import("../chat-view.js");
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], capacityErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: capacityErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "at capacity");
@@ -1104,7 +1277,10 @@ describe("ChatView", () => {
       const { ChatView } = await import("../chat-view.js");
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
         // The failing agent is not in the org roster, so clientIdForAgent → null.
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-unbound"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-unbound", events: credentialErrorEvents("agent-unbound") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1123,7 +1299,10 @@ describe("ChatView", () => {
       // `listClients()` (the caller's own computers) returns only client-1, so
       // agent-teammate's client-teammate is resolvable but unowned.
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-teammate"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-teammate", events: credentialErrorEvents("agent-teammate") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1137,7 +1316,10 @@ describe("ChatView", () => {
       const { ChatView } = await import("../chat-view.js");
       // agent-1 → client-1, and listClients() returns client-1 → owned.
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1186,7 +1368,10 @@ describe("ChatView", () => {
       }
 
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], tuiCredentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: tuiCredentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForText(container, "not logged in");
@@ -1247,7 +1432,10 @@ describe("ChatView", () => {
       });
 
       const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
-        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForCondition(
@@ -1319,7 +1507,10 @@ describe("ChatView", () => {
       });
 
       const { container, root, queryClient } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (qc) => {
-        qc.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+        qc.setQueryData(
+          ["chat-session-events", "chat-1"],
+          chatSessionEvents({ agentId: "agent-1", events: credentialErrorEvents("agent-1") }),
+        );
       });
 
       await waitForCondition(
@@ -1995,7 +2186,10 @@ describe("ChatView", () => {
       <ChatView agentId="agent-1" chatId="chat-empty" />,
       (queryClient) => {
         seedChat(queryClient, emptyDetail, messages([]));
-        queryClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-empty"],
+          chatSessionEvents({ agentId: "agent-1", events: { items: [], nextCursor: null } }),
+        );
       },
       "/",
     );
@@ -2028,7 +2222,10 @@ describe("ChatView", () => {
       <ChatView agentId="agent-1" chatId="chat-empty" narrow presentation="mobile" />,
       (queryClient) => {
         seedChat(queryClient, directDetail(), messages([]));
-        queryClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-empty"],
+          chatSessionEvents({ agentId: "agent-1", events: { items: [], nextCursor: null } }),
+        );
       },
       "/",
     );
@@ -2074,7 +2271,10 @@ describe("ChatView", () => {
       <ChatView agentId="agent-1" chatId="chat-empty" />,
       (queryClient) => {
         seedChat(queryClient, directDetail(), messages([]));
-        queryClient.setQueryData(["session-events", "agent-1", "chat-empty"], { items: [], nextCursor: null });
+        queryClient.setQueryData(
+          ["chat-session-events", "chat-empty"],
+          chatSessionEvents({ agentId: "agent-1", events: { items: [], nextCursor: null } }),
+        );
       },
       "/",
     );

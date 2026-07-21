@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { scrollToAgentTimeline } from "../scroll-to-agent-timeline.js";
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("scrollToAgentTimeline", () => {
@@ -23,18 +29,62 @@ describe("scrollToAgentTimeline", () => {
 
     expect(firstScroll).not.toHaveBeenCalled();
     expect(latestScroll).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(latest.getAttribute("data-timeline-jump-highlight")).toBe("true");
+
+    vi.advanceTimersByTime(1600);
+    expect(latest.hasAttribute("data-timeline-jump-highlight")).toBe(false);
   });
 
-  it("handles errors, inert states, and missing anchors", () => {
+  it("moves focus to keyboard-activated evidence without making it a permanent tab stop", () => {
+    const target = document.createElement("div");
+    target.setAttribute("data-working-agent", "agent-1");
+    target.scrollIntoView = vi.fn();
+    document.body.append(target);
+
+    scrollToAgentTimeline("agent-1", "working", { focus: true });
+
+    expect(document.activeElement).toBe(target);
+    expect(target.tabIndex).toBe(-1);
+    expect(target.getAttribute("data-timeline-jump-focus")).toBe("true");
+    vi.advanceTimersByTime(1600);
+    expect(target.hasAttribute("data-timeline-jump-highlight")).toBe(false);
+    expect(target.getAttribute("data-timeline-jump-focus")).toBe("true");
+    target.blur();
+    expect(target.hasAttribute("tabindex")).toBe(false);
+    expect(target.hasAttribute("data-timeline-jump-focus")).toBe(false);
+  });
+
+  it("uses instant scrolling when the user prefers reduced motion", () => {
+    const target = document.createElement("div");
+    target.setAttribute("data-working-agent", "agent-1");
+    target.scrollIntoView = vi.fn();
+    document.body.append(target);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+
+    scrollToAgentTimeline("agent-1", "working");
+
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "center" });
+    vi.unstubAllGlobals();
+  });
+
+  it("handles errors, provider reasons, inert states, and missing anchors", () => {
     const error = document.createElement("div");
     error.setAttribute("data-error-agent", "agent-1");
-    document.body.append(error);
+    const reason = document.createElement("div");
+    reason.setAttribute("data-status-reason-agent", "agent-1");
+    document.body.append(error, reason);
     error.scrollIntoView = vi.fn();
+    reason.scrollIntoView = vi.fn();
 
     scrollToAgentTimeline("agent-1", "failed");
+    scrollToAgentTimeline("agent-1", "reason");
     scrollToAgentTimeline("agent-1", "ready");
     scrollToAgentTimeline("missing", "working");
 
     expect(error.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(reason.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 });
