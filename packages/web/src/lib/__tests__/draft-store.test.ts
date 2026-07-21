@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   chatDraftScope,
   clearDraft,
+  clearDraftsForUser,
   loadDraft,
   newChatDraftScope,
   parkFailedDraftIfSwitched,
@@ -11,6 +12,8 @@ import {
 } from "../draft-store.js";
 
 const STORAGE_KEY = "first-tree:chat-drafts:v1";
+// Draft scopes embed the server identity — see draft-store `userPrefix`.
+const ORIGIN = window.location.origin;
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -107,20 +110,20 @@ describe("robustness", () => {
 });
 
 describe("scope helpers", () => {
-  it("chatDraftScope encodes user + chat", () => {
-    expect(chatDraftScope("user-1", "chat-9")).toBe("u:user-1:chat:chat-9");
+  it("chatDraftScope encodes user + origin + chat", () => {
+    expect(chatDraftScope("user-1", "chat-9")).toBe(`u:user-1@${ORIGIN}:chat:chat-9`);
   });
 
   it("chatDraftScope falls back to anon when no user", () => {
-    expect(chatDraftScope(null, "chat-9")).toBe("u:anon:chat:chat-9");
+    expect(chatDraftScope(null, "chat-9")).toBe(`u:anon@${ORIGIN}:chat:chat-9`);
   });
 
-  it("newChatDraftScope encodes user + org + seed participants", () => {
-    expect(newChatDraftScope("user-1", "org-7", ["a", "b"])).toBe("u:user-1:new:org-7:a,b");
+  it("newChatDraftScope encodes user + origin + org + seed participants", () => {
+    expect(newChatDraftScope("user-1", "org-7", ["a", "b"])).toBe(`u:user-1@${ORIGIN}:new:org-7:a,b`);
   });
 
   it("newChatDraftScope falls back to anon / no-org / empty participants", () => {
-    expect(newChatDraftScope(null, null)).toBe("u:anon:new:no-org:");
+    expect(newChatDraftScope(null, null)).toBe(`u:anon@${ORIGIN}:new:no-org:`);
   });
 
   it("keeps drafts isolated per user (no cross-account leak on a shared browser)", () => {
@@ -165,5 +168,79 @@ describe("parkFailedDraftIfSwitched", () => {
   it("parks under the originating user's scope only", () => {
     parkFailedDraftIfSwitched("user-1", "chat-a", "chat-b", "retry me");
     expect(loadDraft(chatDraftScope("user-2", "chat-a"))).toBeNull();
+  });
+});
+
+describe("clearDraftsForUser (SEC-042)", () => {
+  it("removes only the target user's drafts, in both current and legacy scope formats", () => {
+    saveDraft(chatDraftScope("user-a", "chat-1"), { text: "A current" });
+    saveDraft(chatDraftScope("user-b", "chat-1"), { text: "B current" });
+    // A pre-SEC-042 legacy-format entry for user-a, seeded raw so the
+    // read-path migration cannot rewrite it before the purge runs.
+    const seeded = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    seeded["u:user-a:chat:chat-9"] = { text: "A legacy", updatedAt: 1 };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
+
+    clearDraftsForUser("user-a");
+
+    const after = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    expect(Object.keys(after).some((k) => k.startsWith("u:user-a:") || k.startsWith("u:user-a@"))).toBe(false);
+    // The other account's draft survives untouched.
+    expect(loadDraft(chatDraftScope("user-b", "chat-1"))?.text).toBe("B current");
+  });
+
+  it("is a no-op for a user with no drafts", () => {
+    saveDraft(chatDraftScope("user-b", "chat-1"), { text: "B" });
+    clearDraftsForUser("user-a");
+    expect(loadDraft(chatDraftScope("user-b", "chat-1"))?.text).toBe("B");
+  });
+});
+
+describe("legacy scope migration (SEC-042)", () => {
+  it("rewrites u:<userId>: entries to the origin-aware format on read", () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ "u:user-a:chat:chat-1": { text: "legacy body", updatedAt: 7 } }),
+    );
+
+    // The migrated entry is readable through the current-format scope...
+    expect(loadDraft(chatDraftScope("user-a", "chat-1"))?.text).toBe("legacy body");
+
+    // ...and the stored map was rewritten in place: new key present, legacy gone.
+    const after = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    expect(after[`u:user-a@${ORIGIN}:chat:chat-1`]).toEqual({ text: "legacy body", updatedAt: 7 });
+    expect(after["u:user-a:chat:chat-1"]).toBeUndefined();
+  });
+
+  it("migrates every user's legacy entries (they all belong to this origin)", () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        "u:user-a:chat:chat-1": { text: "A", updatedAt: 1 },
+        "u:user-b:chat:chat-2": { text: "B", updatedAt: 2 },
+      }),
+    );
+
+    // Any read triggers the map-wide migration.
+    loadDraft(chatDraftScope("user-a", "chat-1"));
+
+    expect(loadDraft(chatDraftScope("user-a", "chat-1"))?.text).toBe("A");
+    expect(loadDraft(chatDraftScope("user-b", "chat-2"))?.text).toBe("B");
+    const after = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    expect(Object.keys(after).every((k) => !k.startsWith("u:user-a:") && !k.startsWith("u:user-b:"))).toBe(true);
+  });
+
+  it("keeps the current-format entry when both formats exist for one scope", () => {
+    saveDraft(chatDraftScope("user-a", "chat-1"), { text: "current body" }, 10);
+    const seeded = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    seeded["u:user-a:chat:chat-1"] = { text: "stale legacy", updatedAt: 1 };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
+
+    // Idempotent: repeated reads keep returning the current entry, and the
+    // legacy key never reappears.
+    expect(loadDraft(chatDraftScope("user-a", "chat-1"))?.text).toBe("current body");
+    expect(loadDraft(chatDraftScope("user-a", "chat-1"))?.text).toBe("current body");
+    const after = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    expect(after["u:user-a:chat:chat-1"]).toBeUndefined();
   });
 });

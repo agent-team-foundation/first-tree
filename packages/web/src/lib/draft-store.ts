@@ -55,7 +55,11 @@ function readMap(): DraftMap {
     for (const [k, v] of Object.entries(parsed)) {
       if (isStoredDraft(v)) out[k] = v;
     }
-    return out;
+    // Upgrade pre-SEC-042 `u:<userId>:` scopes to the origin-aware format in
+    // place. Idempotent — after the rewrite nothing matches the legacy shape.
+    const { map: migratedMap, migrated } = migrateLegacyScopes(out);
+    if (migrated) writeMap(migratedMap);
+    return migratedMap;
   } catch {
     // Corrupt JSON or unavailable storage — start from empty rather than throw.
     return {};
@@ -80,12 +84,72 @@ function prune(map: DraftMap): DraftMap {
   return Object.fromEntries(entries.slice(0, MAX_ENTRIES));
 }
 
-/** Per-user prefix so a shared browser never restores another account's draft
- *  after a logout/login on the same profile — `logout()` clears tokens and
- *  query state, not this store. Mirrors the userId-bucketed selected-org
- *  storage in auth-context (`first-tree:selectedOrganizationId:<userId>`). */
+/**
+ * Server identity for draft scoping — the web app is same-origin with its API,
+ * so `window.location.origin` distinguishes drafts written against different
+ * deployments in the same browser profile. Computed locally (rather than
+ * imported from `api/storage-scope.ts`) to keep this module dependency-free:
+ * storage-scope imports THIS module, never the reverse.
+ */
+function currentOrigin(): string {
+  if (typeof window === "undefined" || !window.location?.origin) return "unknown-origin";
+  return window.location.origin;
+}
+
+/**
+ * Per-user, per-server prefix so a shared browser never restores another
+ * account's — or another deployment's — draft after a logout/login on the
+ * same profile. Mirrors the userId-bucketed selected-org storage in
+ * auth-context (`first-tree:selectedOrganizationId:<userId>`).
+ *
+ * Scope format history: pre-SEC-042 scopes were `u:<userId>:...` (no server
+ * dimension). Current scopes are `u:<userId>@<origin>:...`; legacy entries
+ * are migrated forward on read (drafts are user data, so they are rewritten
+ * rather than dropped) and both formats are removed by `clearDraftsForUser`.
+ */
 function userPrefix(userId: string | null): string {
-  return `u:${userId ?? "anon"}`;
+  return `u:${userId ?? "anon"}@${currentOrigin()}`;
+}
+
+/**
+ * Split a map key into its legacy-vs-current shape. Current keys are
+ * `u:<userId>@<origin>:<rest>`; legacy keys are `u:<userId>:<rest>`. The `@`
+ * before the first `:` is the discriminator — origins always contain a `:`
+ * (`https://…`), so a key whose first `:` comes before any `@` is legacy.
+ * Returns null for keys not in the `u:` family (defensive; none exist today).
+ */
+function parseUserScopedKey(key: string): { userId: string; rest: string; legacy: boolean } | null {
+  if (!key.startsWith("u:")) return null;
+  const body = key.slice(2);
+  const at = body.indexOf("@");
+  const colon = body.indexOf(":");
+  if (colon === -1) return null;
+  const legacy = at === -1 || colon < at;
+  if (legacy) return { userId: body.slice(0, colon), rest: body.slice(colon + 1), legacy: true };
+  // Current format: the scope body starts at the first `:` AFTER the origin
+  // (the origin's own `https://` colons come before it).
+  const scopeColon = body.indexOf(":", at);
+  if (scopeColon === -1) return null;
+  return { userId: body.slice(0, at), rest: body.slice(scopeColon + 1), legacy: false };
+}
+
+/** Rewrite a legacy `u:<userId>:` map to current `u:<userId>@<origin>:` keys. */
+function migrateLegacyScopes(map: DraftMap): { map: DraftMap; migrated: boolean } {
+  let migrated = false;
+  const out: DraftMap = {};
+  for (const [key, value] of Object.entries(map)) {
+    const parsed = parseUserScopedKey(key);
+    if (parsed?.legacy) {
+      const nextKey = `u:${parsed.userId}@${currentOrigin()}:${parsed.rest}`;
+      // A current-format entry for the same scope wins — it was written by
+      // newer code and is at least as fresh.
+      if (!(nextKey in map) && !(nextKey in out)) out[nextKey] = value;
+      migrated = true;
+    } else {
+      out[key] = value;
+    }
+  }
+  return { map: migrated ? out : map, migrated };
 }
 
 /** Storage scope for the in-chat composer: per user, per chat. */
@@ -142,6 +206,37 @@ export function clearDraft(scope: string): void {
   if (scope in map) {
     delete map[scope];
     writeMap(map);
+  }
+}
+
+/**
+ * Remove every draft belonging to `userId` — both the current
+ * `u:<userId>@<origin>:` scopes and any not-yet-migrated legacy
+ * `u:<userId>:` ones. Called by the logout purge (SEC-042 /
+ * `api/storage-scope.ts`); other users' drafts are untouched.
+ *
+ * Scans the raw stored object rather than the validated map so malformed
+ * entries (which `readMap` would skip) are purged too — this is a security
+ * path, and skipped entries could still hold the account's plaintext.
+ */
+export function clearDraftsForUser(userId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return;
+    const map = parsed as Record<string, unknown>;
+    let changed = false;
+    for (const key of Object.keys(map)) {
+      if (key.startsWith(`u:${userId}:`) || key.startsWith(`u:${userId}@`)) {
+        delete map[key];
+        changed = true;
+      }
+    }
+    if (changed) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Unavailable storage or corrupt JSON — best-effort purge, never throws.
   }
 }
 
