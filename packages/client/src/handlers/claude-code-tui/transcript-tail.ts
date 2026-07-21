@@ -18,12 +18,12 @@ import { StringDecoder } from "node:string_decoder";
  * `realpath` here so the tailer points at the same file claude writes,
  * even when the caller's `cwd` argument still contains an unresolved
  * symlink component. Falls back to the input on realpath errors so the
- * tailer can still operate against not-yet-created workspaces (the
- * existsSync guard inside drainEntries handles the missing-file window).
+ * tailer can still operate against not-yet-created workspaces (the stat
+ * ENOENT catch inside drainEntries handles the missing-file window).
  *
  * The file is created lazily by claude on first message flush, so consumers
- * must tolerate `existsSync(path) === false` for a brief window after
- * session start.
+ * must tolerate the file not existing for a brief window after session
+ * start.
  */
 export function transcriptPathFor(cwd: string, sessionId: string): string {
   const absCwd = resolve(cwd);

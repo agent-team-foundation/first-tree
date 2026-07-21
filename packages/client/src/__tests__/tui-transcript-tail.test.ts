@@ -2,7 +2,11 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TranscriptTailer, transcriptPathFor } from "../handlers/claude-code-tui/transcript-tail.js";
+import {
+  type RawTranscriptEntry,
+  TranscriptTailer,
+  transcriptPathFor,
+} from "../handlers/claude-code-tui/transcript-tail.js";
 
 describe("transcriptPathFor", () => {
   it("replaces forward-slashes and dots with dashes and prefixes with dash", () => {
@@ -34,8 +38,8 @@ describe("TranscriptTailer", () => {
     return `${JSON.stringify({ type, message: { content } })}\n`;
   }
 
-  async function drainAll(tailer: TranscriptTailer): Promise<unknown[]> {
-    const all: unknown[] = [];
+  async function drainAll(tailer: TranscriptTailer): Promise<RawTranscriptEntry[]> {
+    const all: RawTranscriptEntry[] = [];
     while (true) {
       const batch = await tailer.drainEntries();
       if (batch.length === 0) return all;
@@ -192,7 +196,7 @@ describe("TranscriptTailer", () => {
     expect(first.length).toBeLessThan(contents.length);
 
     const rest = await drainAll(tailer);
-    const all = [...first, ...rest] as Array<{ message?: { content?: unknown } }>;
+    const all = [...first, ...rest];
     expect(all.map((entry) => entry.message?.content)).toEqual(contents);
   });
 
