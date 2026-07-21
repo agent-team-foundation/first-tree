@@ -162,9 +162,9 @@ function rulesetPayloadOk(argv) {
     pullRequestRules.length === 1 &&
     parameterKeys.length === expectedParameterKeys.length &&
     parameterKeys.every((key, index) => key === expectedParameterKeys[index]) &&
-    parameters.required_approving_review_count === 0 &&
+    parameters.required_approving_review_count === 1 &&
     parameters.require_code_owner_review === false &&
-    parameters.dismiss_stale_reviews_on_push === false &&
+    parameters.dismiss_stale_reviews_on_push === true &&
     parameters.require_last_push_approval === false &&
     parameters.required_review_thread_resolution === false
   );
@@ -314,6 +314,41 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
     viewIndex,
   });
   finish(argv, phase, 0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
+}
+
+if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const statePath = REVIEW_FIXTURE_PATH + ".state";
+  let state = { views: 0 };
+  try {
+    state = JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {}
+  const exact =
+    argv[2] === String(fixture.prNumber) &&
+    argAfter(argv, "--repo") === fixture.repo &&
+    argv.includes("--squash") &&
+    argAfter(argv, "--match-head-commit") === fixture.reviewHeadOid &&
+    !argv.includes("--admin") &&
+    !argv.includes("--auto") &&
+    !argv.includes("--merge") &&
+    !argv.includes("--rebase") &&
+    state.approvedHead === fixture.reviewHeadOid;
+  if (!exact) {
+    finish(argv, phase, 2, "", "Review fixture rejected a non-approved or non-exact merge.\\n", {
+      reviewFixture: true,
+      reviewFixtureViolation: true,
+    });
+  }
+  append({
+    type: "github_pr_merged",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    commitOid: fixture.reviewHeadOid,
+    prNumber: fixture.prNumber,
+    repo: fixture.repo,
+  });
+  finish(argv, phase, 0, "✓ Pull request merged\\n", "", { reviewFixture: true, recordedOnly: true });
 }
 
 const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;

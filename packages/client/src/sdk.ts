@@ -20,7 +20,6 @@ import {
   type ContextTreeWritePreflightRequest,
   type ContextTreeWritePreflightResponse,
   type CreateDocCommentRequest,
-  type CreateKeyedTaskChat,
   type CreateTaskChat,
   contextTreeSeedPreflightRequestSchema,
   contextTreeSeedPreflightResponseSchema,
@@ -36,8 +35,6 @@ import {
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
-  type KeyedTaskChatCreateResponse,
-  keyedTaskChatCreateResponseSchema,
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
@@ -390,26 +387,6 @@ export class FirstTreeHubSDK {
       },
       { retry: false },
     );
-  }
-
-  /**
-   * Create or recover the member-authenticated Agent Review task for a PR.
-   * The strict request carries no recipient, topic, sender, or idempotency
-   * key; the server derives all authority-bearing fields from live state.
-   */
-  async createMemberKeyedTaskChat(
-    organizationId: string,
-    data: CreateKeyedTaskChat,
-  ): Promise<KeyedTaskChatCreateResponse> {
-    const response = await this.requestJson<unknown>(
-      `/api/v1/orgs/${encodeURIComponent(organizationId)}/chats`,
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-      { retry: true },
-    );
-    return keyedTaskChatCreateResponseSchema.parse(response);
   }
 
   /**

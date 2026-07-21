@@ -290,7 +290,7 @@ and `Commit repo@sha` unchanged; the owner still maintains the description.
 
 ## CLI Overview
 
-Use `<%- bin %> chat …` for messaging, `<%- bin %> agent …` for self-introspection, `<%- bin %> daemon …` for read-only daemon status/doctor, `<%- bin %> github …` and `<%- bin %> gitlab …` for provider-specific entity attention, `<%- bin %> tree read` for explicit-Team BYO task snapshots, `<%- bin %> tree write` for clean BYO write preflight, `<%- bin %> tree verify` for Context Tree validation, and `<%- bin %> tree tree` for hierarchy browsing.
+Use `<%- bin %> chat …` for messaging, `<%- bin %> agent …` for self-introspection, `<%- bin %> daemon …` for read-only daemon status/doctor, `<%- bin %> github …` and `<%- bin %> gitlab …` for provider-specific entity attention, `<%- bin %> tree read` for explicit-Team BYO task snapshots, `<%- bin %> tree write` for clean BYO write preflight, `<%- bin %> tree review` for trusted Context Reviewer App publication, `<%- bin %> tree verify` for Context Tree validation, and `<%- bin %> tree tree` for hierarchy browsing.
 Operator-only commands (`login`, `daemon install`, `agent create / bind`) run from the web console or a human terminal — **never from inside a running agent**. Context Tree binding is operator-owned too, with one sanctioned in-agent exception: on a **build / set up the Context Tree** task, load `first-tree-seed` and run its `tree init` path directly. The command validates admin/auth and fails closed; do not pre-confirm admin or ask who will bind. Surface the exact gap only if the command actually fails. Full surface: `docs/cli-reference.md`.
 
 # Context Tree (First Tree Managed)
@@ -550,7 +550,7 @@ harness skills (`tdoc`, `review`, `simplify`, `update-config`, …).
 | `first-tree-seed`    | bootstrap the team's Context Tree from readable sources (declared repos or a local Git repo / GitHub URL supplied in chat); create + bind if none exists, fill a bound-but-empty tree, or continue Phase 2 in the same setup chat after Phase 1 merges |
 | `first-tree-qa` | test, validate, reproduce, release-qualify, or assess performance by establishing the complete product harness before task-specific execution |
 | `first-tree-file-bug` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's `gh` CLI |
-| `context-tree-review` | a managed Context Review task, a legacy Cloud App review wake-up, or an explicit request to review a Context Tree pull request |
+| `context-tree-review` | a trusted GitHub App Context Review run or an explicit request to review a Context Tree pull request |
 | `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems |<% } else { %>
 
 ## First Tree Family
@@ -567,5 +567,5 @@ binding, follow the Tree Location guidance before proceeding.
 | `first-tree-seed` | set up the team's Context Tree from readable sources — declared workspace repos or a local Git repo / GitHub URL supplied in chat; creates + binds the tree if none exists, fills a bound-but-empty tree, and can continue Phase 2 in the same setup chat after Phase 1 merges |
 | `first-tree-qa` | test, validate, reproduce, release-qualify, or assess performance by establishing the complete product harness before task-specific execution |
 | `first-tree-file-bug` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on First Tree's own repo (not the user's own/bound repo) via the user's `gh` CLI |
-| `context-tree-review` | a managed Context Review task, a legacy Cloud App review wake-up, or an explicit request to review a Context Tree pull request |
+| `context-tree-review` | a trusted GitHub App Context Review run or an explicit request to review a Context Tree pull request |
 | `context-tree-audit` | a human explicitly asks to audit the whole stored Context Tree, a domain, or selected normal paths for drift, contradictions, duplication, density, metadata, placement, or relationship problems; without a binding, the audit fails closed |<% } %>

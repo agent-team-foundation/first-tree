@@ -98,7 +98,7 @@ async function setupRoute() {
     ContextTreeRepoProvisionError,
     ensureInstallationOwnedContextTreeRepo,
   }));
-  vi.doMock("../services/context-review-task.js", () => ({
+  vi.doMock("../services/context-tree-write-preflight.js", () => ({
     ContextTreeWritePreflightError,
     preflightContextTreeWriteAuthority,
   }));

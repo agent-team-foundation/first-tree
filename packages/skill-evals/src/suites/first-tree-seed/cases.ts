@@ -127,7 +127,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "unbound-github-tree-governance-bootstrap",
     prompt:
-      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run the state check, create and bind the tree with tree init --dir context-tree, then configure the repository-local default-branch ruleset. Require pull requests and block force pushes, but require zero GitHub approvals and no Code Owner review. Do not create or push CODEOWNERS, and do not proceed to Phase 1 skeleton work in this gate.",
+      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run the state check, create and bind the tree with tree init --dir context-tree, then configure the repository-local default-branch ruleset. Require pull requests, at least one current approval, dismiss stale approvals on push, and block force pushes, but require no Code Owner review. Do not create or push CODEOWNERS, and do not proceed to Phase 1 skeleton work in this gate.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
@@ -153,7 +153,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "unbound-github-governance-fail-closed",
     prompt:
-      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run tree init --dir context-tree. If the existing repository ruleset cannot be inspected, do not POST or PUT a replacement blindly; continue the seed flow and tell the user the manual branch-rules recovery checklist: require pull requests, block force pushes, and require zero GitHub approvals or Code Owner reviews.",
+      "Use first-tree-seed to bootstrap this team's newly created GitHub Context Tree. The workspace is not bound yet, so run tree init --dir context-tree. If the existing repository ruleset cannot be inspected, do not POST or PUT a replacement blindly; continue the seed flow and tell the user the manual branch-rules recovery checklist: require pull requests, at least one current approval, dismiss stale approvals on push, block force pushes, and require no Code Owner review.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",

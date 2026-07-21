@@ -140,13 +140,6 @@ export {
   MemberOrganizationResolutionError,
   resolveMemberOrganizationId,
 } from "./member-org.js";
-export {
-  dispatchMemberReviewTask,
-  type MemberReviewTaskClient,
-  MemberReviewTaskInputError,
-  type MemberReviewTaskInputErrorCode,
-  readMemberReviewTaskMetadata,
-} from "./member-review-task.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationLog, AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";

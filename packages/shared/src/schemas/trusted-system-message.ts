@@ -1,4 +1,7 @@
-import { contextReviewManagedMessageMetadataSchema } from "./context-review.js";
+import {
+  contextReviewerRunMessageMetadataSchema,
+  legacyContextReviewManagedMessageMetadataSchema,
+} from "./context-review.js";
 import {
   type GithubEventCard,
   type GitlabEventCard,
@@ -45,7 +48,8 @@ export function isTrustedGithubDispatcherMessage(message: TrustedSystemMessageSh
   return (
     message.format === "markdown" &&
     typeof message.content === "string" &&
-    contextReviewManagedMessageMetadataSchema.safeParse(message.metadata).success
+    (contextReviewerRunMessageMetadataSchema.safeParse(message.metadata).success ||
+      legacyContextReviewManagedMessageMetadataSchema.safeParse(message.metadata).success)
   );
 }
 

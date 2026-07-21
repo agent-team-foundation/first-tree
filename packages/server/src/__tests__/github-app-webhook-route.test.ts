@@ -1,9 +1,7 @@
-import { createHmac, randomUUID } from "node:crypto";
-import { CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
+import { createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { authIdentities } from "../db/schema/auth-identities.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
@@ -20,6 +18,11 @@ import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
+const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+});
 
 function signBody(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -171,7 +174,7 @@ function contextPullRequestPayload(installationId: number, repoFullName = "owner
       html_url: `https://github.com/${repoFullName}/pull/42`,
       body: "",
       base: { ref: "main" },
-      head: { ref: "context-reviewer" },
+      head: { ref: "context-reviewer", sha: "a".repeat(40) },
       draft: false,
       user: { login: "context-writer", type: "User" },
     },
@@ -202,8 +205,44 @@ function contextIssueCommentPayload(installationId: number, repoFullName = "owne
   };
 }
 
+function contextReviewerGithubFetch(liveHead = "a".repeat(40)) {
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/access_tokens") && init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          token: "installation-token",
+          expires_at: "2030-01-01T00:00:00.000Z",
+          permissions: { metadata: "read", pull_requests: "write" },
+          repository_selection: "selected",
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/repos/owner/context-tree/pulls/42")) {
+      return new Response(
+        JSON.stringify({
+          number: 42,
+          state: "open",
+          draft: false,
+          merged: false,
+          head: { sha: liveHead },
+          html_url: "https://github.com/owner/context-tree/pull/42",
+          body: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
 describe("POST /webhooks/github-app", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ githubAppPrivateKeyPem: TEST_APP_PRIVATE_KEY_PEM });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it("returns 401 on a bad HMAC signature", async () => {
     const app = getApp();
@@ -1634,214 +1673,13 @@ describe("POST /webhooks/github-app", () => {
     expect(res.json()).toMatchObject({ ok: true, audience: 0, reason: "audience_empty_with_involves" });
   });
 
-  it("routes installed-App follow-ups to an existing member-authored managed task with delivery dedupe", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const installationId = 100040;
-    await seedInstallation(app, { installationId, orgId: admin.organizationId });
-    const reviewer = await configureContextReviewer(app, admin);
-    await app.db.insert(authIdentities).values({
-      id: randomUUID(),
-      userId: admin.userId,
-      provider: "github",
-      identifier: `github-${randomUUID()}`,
-      email: null,
-      verifiedAt: new Date(),
-      metadata: { login: "context-writer" },
-    });
-
-    const taskResponse = await app.inject({
-      method: "POST",
-      url: `/api/v1/orgs/${admin.organizationId}/chats`,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: {
-        mode: "keyed_task",
-        initialMessage: {
-          format: "markdown",
-          content: "Please review this managed Context Tree PR.",
-          metadata: {
-            taskType: "context_tree_pr_review",
-            reviewPacketV1: {
-              schemaVersion: 1,
-              repository: "owner/context-tree",
-              pullRequest: 42,
-              expectedHead: "a".repeat(40),
-              baseRef: "main",
-              sourceRef: "context-reviewer",
-              requesterGithubLogin: "context-writer",
-              goal: "Verify the managed Context Tree change.",
-              source: { label: "Task source", reference: "first-tree-chat:test" },
-              decisionSummary: "Keep one stable task Chat.",
-              rationale: "The App is an event bridge, not a second task producer.",
-              targetPaths: ["system/context-tree-pr-reviewer.md"],
-              repairScope: ["system/context-tree-pr-reviewer.md"],
-              relevantContextRefs: [],
-              unresolvedQuestions: [],
-              verify: { status: "passed", summary: "tree verification passed" },
-              evidence: [],
-            },
-          },
-        },
-      },
-    });
-    expect(taskResponse.statusCode).toBe(201);
-    const task = taskResponse.json<{ chatId: string; messageId: string }>();
-
-    const followedDelegate = await seedAgent(app, {
-      orgId: admin.organizationId,
-      memberId: admin.memberId,
-      name: `followed-delegate-${randomUUID().slice(0, 6)}`,
-    });
-    const followedHuman = await seedAgent(app, {
-      orgId: admin.organizationId,
-      memberId: admin.memberId,
-      name: `followed-human-${randomUUID().slice(0, 6)}`,
-      delegateMention: followedDelegate,
-      type: "human",
-    });
-    const followedChatId = `chat_${randomUUID()}`;
-    await app.db.insert(chats).values({
-      id: followedChatId,
-      organizationId: admin.organizationId,
-      type: "direct",
-    });
-    await app.db.insert(githubEntityChatMappings).values({
-      organizationId: admin.organizationId,
-      humanAgentId: followedHuman,
-      delegateAgentId: followedDelegate,
-      entityType: "pull_request",
-      entityKey: "owner/context-tree#42",
-      chatId: followedChatId,
-      boundVia: "agent_declared",
-    });
-
-    const synchronizePayload = contextPullRequestPayload(installationId);
-    synchronizePayload.action = "synchronize";
-    synchronizePayload.pull_request.body = `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`;
-    (synchronizePayload.pull_request.head as { ref: string; sha?: string }).sha = "b".repeat(40);
-    const deliveryId = randomUUID();
-
-    const audienceSpy = vi
-      .spyOn(githubAudienceService, "resolveGithubAudience")
-      .mockRejectedValueOnce(new Error("audience down after managed dispatch"));
-    try {
-      const failedSynchronize = await postWebhook(app, "pull_request", synchronizePayload, { deliveryId });
-      expect(failedSynchronize.statusCode).toBe(500);
-    } finally {
-      audienceSpy.mockRestore();
-    }
-    const taskMessagesAfterFailure = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
-    expect(taskMessagesAfterFailure).toHaveLength(2);
-    const committedEvent = taskMessagesAfterFailure.find((message) => message.id !== task.messageId);
-    expect(committedEvent?.metadata).toMatchObject({
-      contextReviewManagedEventV1: {
-        triggerEvent: "pull_request.synchronize",
-        deliveryId,
-      },
-    });
-    expect(
-      await app.db
-        .select()
-        .from(inboxEntries)
-        .where(eq(inboxEntries.messageId, committedEvent?.id ?? "missing")),
-    ).toHaveLength(1);
-
-    const synchronize = await postWebhook(app, "pull_request", synchronizePayload, { deliveryId });
-    expect(synchronize.statusCode).toBe(200);
-    expect(synchronize.json()).toMatchObject({
-      delivered: 1,
-      contextReviewer: {
-        handled: true,
-        chatId: task.chatId,
-        messageId: committedEvent?.id,
-        reused: true,
-        suppressed: true,
-      },
-    });
-    const followedMessagesAfterSynchronize = await app.db
-      .select()
-      .from(messages)
-      .where(eq(messages.chatId, followedChatId));
-    expect(followedMessagesAfterSynchronize).toEqual([expect.objectContaining({ format: "card", source: "github" })]);
-
-    const duplicate = await postWebhook(app, "pull_request", synchronizePayload, { deliveryId });
-    expect(duplicate.statusCode).toBe(200);
-    expect(duplicate.json()).toMatchObject({ ok: true, deduped: true });
-
-    const delayedOpenedPayload = contextPullRequestPayload(installationId);
-    delayedOpenedPayload.pull_request.body = `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`;
-    (delayedOpenedPayload.pull_request.head as { ref: string; sha?: string }).sha = "b".repeat(40);
-    const delayedOpened = await postWebhook(app, "pull_request", delayedOpenedPayload);
-    expect(delayedOpened.statusCode).toBe(200);
-    expect(delayedOpened.json()).toMatchObject({
-      contextReviewer: {
-        handled: true,
-        chatId: task.chatId,
-        messageId: task.messageId,
-        reused: true,
-        suppressed: true,
-      },
-    });
-
-    const orgChats = await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId));
-    expect(orgChats).toHaveLength(2);
-    const taskMessages = await app.db.select().from(messages).where(eq(messages.chatId, task.chatId));
-    expect(taskMessages).toHaveLength(2);
-    const eventMessage = taskMessages.find((message) => message.id !== task.messageId);
-    expect(eventMessage?.metadata).toMatchObject({
-      addressedAgentIds: [reviewer],
-      contextReviewManagedEventV1: { triggerEvent: "pull_request.synchronize", deliveryId },
-    });
-    expect(
-      await app.db
-        .select()
-        .from(inboxEntries)
-        .where(eq(inboxEntries.messageId, eventMessage?.id ?? "missing")),
-    ).toHaveLength(1);
-    const followedMessages = await app.db.select().from(messages).where(eq(messages.chatId, followedChatId));
-    expect(followedMessages).toHaveLength(2);
-
-    const [activeReviewerManager] = await app.db
-      .select({ id: members.id })
-      .from(members)
-      .where(eq(members.agentId, followedHuman))
-      .limit(1);
-    if (!activeReviewerManager) throw new Error("followed human member missing");
-    await app.db.update(agents).set({ managerId: activeReviewerManager.id }).where(eq(agents.uuid, reviewer));
-    await app.db.update(members).set({ status: "removed" }).where(eq(members.id, admin.memberId));
-    await app.db.update(agents).set({ status: "suspended" }).where(eq(agents.uuid, admin.humanAgentUuid));
-    const revokedRequesterPayload = contextPullRequestPayload(installationId);
-    revokedRequesterPayload.action = "synchronize";
-    revokedRequesterPayload.pull_request.body = `${CONTEXT_REVIEW_MANAGED_MARKER}\n\nRepair scope: system/`;
-    (revokedRequesterPayload.pull_request.head as { ref: string; sha?: string }).sha = "c".repeat(40);
-    const revokedDeliveryId = randomUUID();
-
-    const revokedRequester = await postWebhook(app, "pull_request", revokedRequesterPayload, {
-      deliveryId: revokedDeliveryId,
-    });
-    expect(revokedRequester.statusCode).toBe(200);
-    expect(revokedRequester.json()).toMatchObject({
-      delivered: 1,
-      contextReviewer: { handled: false, reason: "managed_task_unavailable" },
-    });
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(2);
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(3);
-
-    const revokedReplay = await postWebhook(app, "pull_request", revokedRequesterPayload, {
-      deliveryId: revokedDeliveryId,
-    });
-    expect(revokedReplay.statusCode).toBe(200);
-    expect(revokedReplay.json()).toMatchObject({ ok: true, deduped: true });
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, task.chatId))).toHaveLength(2);
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, followedChatId))).toHaveLength(3);
-  });
-
   it("pull_request.opened on the bound context repo creates a Context Reviewer task message", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100041;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const reviewer = await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const res = await postWebhook(app, "pull_request", contextPullRequestPayload(installationId));
 
@@ -1888,11 +1726,14 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100043;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const reviewer = await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const opened = await postWebhook(app, "pull_request", contextPullRequestPayload(installationId));
     expect(opened.statusCode).toBe(200);
     expect(opened.json()).toMatchObject({ contextReviewer: { handled: true, reused: false } });
 
+    const liveHead = "b".repeat(40);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch(liveHead));
     const followUp = await postWebhook(app, "issue_comment", contextIssueCommentPayload(installationId));
 
     expect(followUp.statusCode).toBe(200);
@@ -1926,6 +1767,7 @@ describe("POST /webhooks/github-app", () => {
       entityType: "pull_request",
       entityKey: "owner/context-tree#42",
       contextTreeReviewer: true,
+      contextReviewHeadSha: liveHead,
       commentAuthorLogin: "context-commenter",
       commentUrl: "https://github.com/owner/context-tree/pull/42#issuecomment-2",
       mentions: [reviewer],
@@ -1945,6 +1787,7 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100044;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     const reviewer = await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const draftOpenedPayload = contextPullRequestPayload(installationId);
     draftOpenedPayload.pull_request.draft = true;
@@ -1997,6 +1840,7 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100042;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
 
     const res = await postWebhook(app, "pull_request", contextPullRequestPayload(installationId, "owner/code"));
 
@@ -2045,6 +1889,7 @@ describe("POST /webhooks/github-app", () => {
     const installationId = 100043;
     await seedInstallation(app, { installationId, orgId: admin.organizationId });
     await configureContextReviewer(app, admin);
+    vi.stubGlobal("fetch", contextReviewerGithubFetch());
     const deliveryId = randomUUID();
     const payload = contextPullRequestPayload(installationId);
 

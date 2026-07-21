@@ -788,7 +788,7 @@ describe("org-settings service", () => {
     expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
   });
 
-  it("context_tree_features can enable the assigned Reviewer without a GitHub App installation", async () => {
+  it("context_tree_features rejects enabling the Reviewer without a writable GitHub App installation", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewerAgent(app, {
@@ -803,7 +803,18 @@ describe("org-settings service", () => {
         { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
         { updatedBy: admin.userId, memberId: admin.memberId },
       ),
-    ).resolves.toMatchObject({ contextReviewer: { enabled: true, agentUuid: reviewer.uuid } });
+    ).rejects.toThrow(/Pull requests: write permission/);
+
+    await seedReviewerInstallation(app, admin.organizationId, { pullRequests: "read" });
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree_features",
+        { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+        { updatedBy: admin.userId, memberId: admin.memberId },
+      ),
+    ).rejects.toThrow(/Pull requests: write permission/);
   });
 
   it("context_tree_features rejects enabled reviewer input without agentUuid", async () => {

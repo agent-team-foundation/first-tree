@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import {
-  CONTEXT_REVIEW_MANAGED_MARKER,
   type ContextReviewEvent,
+  type ContextReviewSubmissionState,
   type ContextReviewSubmitRequest,
   type ContextReviewSubmitResponse,
+  contextReviewSubmissionStateSchema,
   contextReviewSubmitRequestSchema,
 } from "@first-tree/shared";
 import { and, desc, eq, sql } from "drizzle-orm";
@@ -30,41 +31,7 @@ import {
 } from "./github-app.js";
 import { getOrgContextTreeBinding, getOrgSetting } from "./org-settings.js";
 
-type SubmissionState =
-  | { state: "pending" }
-  | {
-      state: "submitting";
-      payloadHash: string;
-      attemptId: string;
-      reviewedHead: string;
-      event: ContextReviewEvent;
-      claimedAt: string;
-      reviewerClientId: string;
-    }
-  | {
-      state: "unknown";
-      payloadHash: string;
-      attemptId: string;
-      reviewedHead: string;
-      event: ContextReviewEvent;
-      failedAt: string;
-      reviewerClientId: string;
-    }
-  | {
-      state: "submitted";
-      payloadHash: string;
-      reviewedHead: string;
-      event: ContextReviewEvent;
-      reviewId: number;
-      reviewUrl: string;
-      appActor: string;
-      submittedAt: string;
-      reviewerAgentUuid: string;
-      reviewerManagerHumanAgentId: string;
-      reviewerClientId: string;
-      reviewerManagerGithubLogin: string | null;
-    }
-  | { state: "failed"; payloadHash: string; code: string; failedAt: string };
+type SubmissionState = ContextReviewSubmissionState;
 
 type RunFacts = {
   messageId: string;
@@ -73,6 +40,7 @@ type RunFacts = {
   organizationId: string;
   repository: string;
   prNumber: number;
+  headSha: string;
   reviewerAgentUuid: string;
   reviewerManagerHumanAgentId: string;
   reviewerManagerGithubLogin: string | null;
@@ -109,6 +77,7 @@ export async function submitContextReviewOutcome(input: {
     await lockReviewChat(db, input.chatId);
     const run = await loadRunFacts(db, input.chatId, input.runId);
     authorizeRun(run, input.callerAgentUuid);
+    assertRunHead(run, request.reviewedHead);
     await assertCurrentRun(db, run);
 
     if (run.submission.state === "submitted") {
@@ -181,6 +150,7 @@ export async function submitContextReviewOutcome(input: {
     await lockReviewChat(db, input.chatId);
     const run = await loadRunFacts(db, input.chatId, input.runId);
     authorizeRun(run, input.callerAgentUuid);
+    assertRunHead(run, request.reviewedHead);
     await assertCurrentRun(db, run);
     await assertCurrentAuthority(db, run, {
       callerAgentUuid: input.callerAgentUuid,
@@ -358,6 +328,7 @@ async function loadRunFacts(db: Database, chatId: string, runId: string): Promis
   const chatMetadata = row.chatMetadata;
   const repository = readNonEmptyString(metadata.contextReviewRepository);
   const prNumber = readPositiveInteger(metadata.contextReviewPrNumber);
+  const headSha = normalizeCommitOid(readNonEmptyString(metadata.contextReviewHeadSha));
   const reviewerAgentUuid = readNonEmptyString(metadata.contextReviewReviewerAgentUuid);
   const reviewerManagerHumanAgentId = readNonEmptyString(metadata.contextReviewReviewerManagerHumanAgentId);
   const metadataOrg = readNonEmptyString(metadata.contextReviewOrganizationId);
@@ -370,6 +341,7 @@ async function loadRunFacts(db: Database, chatId: string, runId: string): Promis
     chatMetadata.entityKey !== entityKey ||
     !repository ||
     !prNumber ||
+    !headSha ||
     !reviewerAgentUuid ||
     !reviewerManagerHumanAgentId ||
     !metadataRunId ||
@@ -389,6 +361,7 @@ async function loadRunFacts(db: Database, chatId: string, runId: string): Promis
     organizationId: row.organizationId,
     repository,
     prNumber,
+    headSha,
     reviewerAgentUuid,
     reviewerManagerHumanAgentId,
     reviewerManagerGithubLogin: readNonEmptyString(metadata.reviewerManagerGithubLogin),
@@ -403,6 +376,16 @@ function authorizeRun(run: RunFacts, callerAgentUuid: string): void {
       403,
       "CONTEXT_REVIEW_RUN_FORBIDDEN",
       "Only the configured reviewer recorded on this run can submit its outcome.",
+    );
+  }
+}
+
+function assertRunHead(run: RunFacts, reviewedHead: string): void {
+  if (run.headSha !== reviewedHead.toLowerCase()) {
+    throw new ContextReviewPublisherError(
+      409,
+      "CONTEXT_REVIEW_STALE_HEAD",
+      "This Context Reviewer run is bound to a different pull request head. Wait for the successor run.",
     );
   }
 }
@@ -763,13 +746,6 @@ function assertPullRequestReviewable(
   pullRequest: { state: string; merged: boolean; draft: boolean; headSha: string; body: string | null },
   request: ContextReviewSubmitRequest,
 ): void {
-  if (pullRequest.body?.includes(CONTEXT_REVIEW_MANAGED_MARKER)) {
-    throw new ContextReviewPublisherError(
-      409,
-      "CONTEXT_REVIEW_RUN_FORBIDDEN",
-      "Managed Context Review PRs are owned by the assigned Reviewer Agent, not the legacy App publisher.",
-    );
-  }
   if (pullRequest.state !== "open" || pullRequest.merged || (request.event === "APPROVE" && pullRequest.draft)) {
     throw new ContextReviewPublisherError(
       422,
@@ -885,53 +861,8 @@ async function setSubmissionForPayload(
 }
 
 function parseSubmission(value: unknown): SubmissionState {
-  if (!value || typeof value !== "object") return invalidSubmission();
-  const candidate = value as Record<string, unknown>;
-  if (candidate.state === "pending") return { state: "pending" };
-  if (
-    candidate.state === "submitting" &&
-    hasStrings(candidate, ["payloadHash", "attemptId", "reviewedHead", "event", "claimedAt", "reviewerClientId"]) &&
-    isContextReviewEvent(candidate.event)
-  ) {
-    return candidate as SubmissionState;
-  }
-  if (
-    candidate.state === "unknown" &&
-    hasStrings(candidate, ["payloadHash", "attemptId", "reviewedHead", "event", "failedAt", "reviewerClientId"]) &&
-    isContextReviewEvent(candidate.event)
-  ) {
-    return candidate as SubmissionState;
-  }
-  if (candidate.state === "failed" && hasStrings(candidate, ["payloadHash", "code", "failedAt"])) {
-    return candidate as SubmissionState;
-  }
-  if (
-    candidate.state === "submitted" &&
-    hasStrings(candidate, [
-      "payloadHash",
-      "reviewedHead",
-      "event",
-      "reviewUrl",
-      "appActor",
-      "submittedAt",
-      "reviewerAgentUuid",
-      "reviewerManagerHumanAgentId",
-      "reviewerClientId",
-    ]) &&
-    typeof candidate.reviewId === "number" &&
-    Number.isInteger(candidate.reviewId)
-  ) {
-    return candidate as SubmissionState;
-  }
-  return invalidSubmission();
-}
-
-function hasStrings(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => typeof value[key] === "string" && value[key].length > 0);
-}
-
-function isContextReviewEvent(value: unknown): value is ContextReviewEvent {
-  return value === "APPROVE" || value === "REQUEST_CHANGES" || value === "COMMENT";
+  const parsed = contextReviewSubmissionStateSchema.safeParse(value);
+  return parsed.success ? parsed.data : invalidSubmission();
 }
 
 function invalidSubmission(): never {
@@ -948,6 +879,10 @@ function readNonEmptyString(value: unknown): string | null {
 
 function readPositiveInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function normalizeCommitOid(value: string | null): string | null {
+  return value && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
 }
 
 function hashPayload(request: ContextReviewSubmitRequest): string {

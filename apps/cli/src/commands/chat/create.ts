@@ -3,10 +3,7 @@ import type { MessageFormat } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
-import { MemberOrganizationResolutionError } from "../../core/member-org.js";
-import { dispatchMemberReviewTask, MemberReviewTaskInputError } from "../../core/member-review-task.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { createMemberSdk } from "../_shared/member.js";
 import { guardInlineDescription, readStdin } from "./_shared/io.js";
 import { buildRequestMetadata } from "./_shared/request.js";
 
@@ -21,9 +18,6 @@ interface CreateOptions {
   request?: boolean;
   options?: string;
   multiSelect?: boolean;
-  asMember?: boolean;
-  org?: string;
-  metadataFile?: string;
 }
 
 function collect(value: string, previous: string[]): string[] {
@@ -79,60 +73,13 @@ function parseFormat(value: string): MessageFormat {
   fail("INVALID_FORMAT", "Format must be one of: text, markdown, card.", 2);
 }
 
-async function createMemberReviewTask(message: string | undefined, options: CreateOptions): Promise<void> {
-  const disallowed = [
-    options.to && options.to.length > 0 ? "--to" : null,
-    options.with && options.with.length > 0 ? "--with" : null,
-    options.topic !== undefined ? "--topic" : null,
-    options.description !== undefined ? "--description" : null,
-    options.metadata !== undefined ? "--metadata" : null,
-    options.agent !== undefined ? "--agent" : null,
-    options.request ? "--request" : null,
-    options.options !== undefined ? "--options" : null,
-    options.multiSelect ? "--multi-select" : null,
-  ].filter((value): value is string => value !== null);
-  if (disallowed.length > 0) {
-    fail(
-      "KEYED_TASK_OPTIONS",
-      `--as-member derives routing from live Agent Review configuration; remove ${disallowed.join(", ")}`,
-      2,
-    );
-  }
-  if (options.format !== "markdown") {
-    fail("KEYED_TASK_FORMAT", "--as-member requires --format markdown", 2);
-  }
-  if (!options.metadataFile) {
-    fail("MISSING_METADATA_FILE", "--as-member requires --metadata-file <packet.json>", 2);
-  }
-
-  const content = message ?? (await readStdin());
-  if (!content || content.trim().length === 0) {
-    fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
-  }
-  const sdk = createMemberSdk();
-  try {
-    const result = await dispatchMemberReviewTask(sdk, {
-      opening: content,
-      metadataFile: options.metadataFile,
-      organizationId: options.org,
-    });
-    success(result);
-  } catch (error) {
-    if (error instanceof MemberOrganizationResolutionError || error instanceof MemberReviewTaskInputError) {
-      fail(error.code, error.message, 2);
-    }
-    handleSdkError(error);
-  }
-}
-
 export function registerChatCreateCommand(chat: Command): void {
   chat
     .command("create [message]")
     .description(
       "Create a separate task chat and send its first message. --to recipients are mentioned and woken; --with " +
         "participants are added for context without being woken by the first message. This command does not create " +
-        "empty chats and is not idempotent. The dedicated --as-member Agent Review mode is keyed and retry-safe. " +
-        "For same-task agent handoffs, use `chat invite` in the current chat.",
+        "empty chats and is not idempotent. For same-task agent handoffs, use `chat invite` in the current chat.",
     )
     .option("--to <name>", "Initial recipient to @mention and wake; repeatable", collect, [])
     .option("--with <name>", "Context participant to add without waking on the first message; repeatable", collect, [])
@@ -154,17 +101,7 @@ export function registerChatCreateCommand(chat: Command): void {
       "Answer options as a JSON array, 2–4 items of {label (1–5 words), description, preview?} (with --request)",
     )
     .option("--multi-select", "Allow picking more than one option (with --request; requires --options)")
-    .option("--as-member", "Dispatch a configured Agent Review task as the signed-in human member")
-    .option("--org <orgId>", "Team for --as-member; defaults to your current /me selection")
-    .option("--metadata-file <path>", "Strict Agent Review opening metadata JSON (with --as-member)")
     .action(async (message: string | undefined, options: CreateOptions) => {
-      if (options.asMember) {
-        await createMemberReviewTask(message, options);
-        return;
-      }
-      if (options.org || options.metadataFile) {
-        fail("MEMBER_OPTION_REQUIRES_MODE", "--org and --metadata-file require --as-member", 2);
-      }
       try {
         const to = options.to ?? [];
         if (to.length === 0) {

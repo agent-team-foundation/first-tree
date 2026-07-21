@@ -249,11 +249,11 @@ function serverPreflightFailure(
       "The selected Team could not authorize Context Tree Write for the signed-in member.",
     CONTEXT_TREE_WRITE_BINDING_UNAVAILABLE: "The selected Team does not have a valid current Context Tree binding.",
     CONTEXT_TREE_WRITE_BINDING_UNSUPPORTED:
-      "Managed Agent Review currently requires the selected Team's Context Tree binding to be on GitHub.",
+      "GitHub App Context Review requires the selected Team's Context Tree binding to be on GitHub.",
     CONTEXT_TREE_WRITE_CONFIGURATION_INVALID:
       "The selected Team's Context Tree Write configuration is invalid and must be repaired.",
     CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE:
-      "The selected Team does not currently have Agent Review enabled with an assigned Reviewer.",
+      "The selected Team does not currently have Context Reviewer enabled with an assigned Reviewer.",
     CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE: "The selected Team's current Reviewer is unavailable.",
     CONTEXT_TREE_WRITE_GITHUB_IDENTITY_REQUIRED:
       "Connect your GitHub identity to First Tree before starting Context Tree Write.",

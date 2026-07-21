@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
-import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER, CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
+import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -108,9 +108,29 @@ describe("Context Reviewer App publisher", () => {
     );
   });
 
-  it("refuses legacy App publication when the live PR has become managed", async () => {
+  it("rejects a successor live head when the trusted run was minted for its predecessor", async () => {
     const fixture = await createRunFixture(getApp());
-    const fetcher = successfulGithubFetcher({ body: CONTEXT_REVIEW_MANAGED_MARKER });
+    const fetcher = successfulGithubFetcher({ headSha: "b".repeat(40) });
+
+    await expect(
+      submitContextReviewOutcome({
+        db: fixture.app.db,
+        chatId: fixture.chatId,
+        runId: fixture.runId,
+        callerAgentUuid: fixture.reviewer.uuid,
+        callerClientId: fixture.admin.clientId,
+        callerRuntimeSessionToken: fixture.runtimeToken,
+        request: { reviewedHead: "b".repeat(40), event: "APPROVE", body: "Successor head" },
+        appCredentials: fixture.app.config.oauth?.githubApp,
+        fetcher,
+      }),
+    ).rejects.toMatchObject({ code: "CONTEXT_REVIEW_STALE_HEAD" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("publishes for PRs carrying the historical managed marker", async () => {
+    const fixture = await createRunFixture(getApp());
+    const fetcher = successfulGithubFetcher({ body: "<!-- first-tree-context-review:managed-v1 -->" });
 
     await expect(
       submitContextReviewOutcome({
@@ -124,9 +144,9 @@ describe("Context Reviewer App publisher", () => {
         appCredentials: fixture.app.config.oauth?.githubApp,
         fetcher,
       }),
-    ).rejects.toMatchObject({ code: "CONTEXT_REVIEW_RUN_FORBIDDEN" });
+    ).resolves.toMatchObject({ action: "APPROVE", reviewedHead: "a".repeat(40) });
     expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/reviews") && init?.method === "POST")).toBe(
-      false,
+      true,
     );
   });
 
@@ -170,6 +190,7 @@ describe("Context Reviewer App publisher", () => {
           contextReviewRunId: forgedRunId,
           contextReviewRepository: "owner/context-tree",
           contextReviewPrNumber: 123,
+          contextReviewHeadSha: "a".repeat(40),
           contextReviewOrganizationId: fixture.admin.organizationId,
           contextReviewReviewerAgentUuid: fixture.reviewer.uuid,
           contextReviewReviewerManagerHumanAgentId: fixture.admin.humanAgentUuid,
@@ -590,6 +611,7 @@ describe("Context Reviewer App publisher", () => {
       eventType: "pull_request",
       organizationId: fixture.admin.organizationId,
       payload: synchronizePayload("b".repeat(40)),
+      fetcher: successfulGithubFetcher({ headSha: "b".repeat(40) }),
     });
 
     expect(newer).toMatchObject({ handled: true, reused: true });
@@ -691,6 +713,7 @@ describe("Context Reviewer App publisher", () => {
         eventType: "pull_request",
         organizationId: fixture.admin.organizationId,
         payload: synchronizePayload("a".repeat(40)),
+        fetcher: successfulGithubFetcher(),
       }),
     ).rejects.toThrow("unresolved GitHub review delivery for this head");
   });
@@ -794,6 +817,7 @@ async function createRunFixture(app: ReturnType<ReturnType<typeof useTestApp>>) 
       repository: { full_name: "owner/context-tree" },
       sender: { login: "writer", type: "User" },
     },
+    fetcher: successfulGithubFetcher(),
   });
   if (!result.handled) throw new Error("review run was not created");
   const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId));
@@ -855,6 +879,7 @@ async function createSynchronizeRun(fixture: Awaited<ReturnType<typeof createRun
     eventType: "pull_request",
     organizationId: fixture.admin.organizationId,
     payload: synchronizePayload(headSha),
+    fetcher: successfulGithubFetcher({ headSha }),
   });
   if (!result.handled) throw new Error("synchronize review run was not created");
   const [message] = await fixture.app.db.select().from(messages).where(eq(messages.id, result.messageId));
@@ -884,6 +909,7 @@ async function createFollowUpRun(fixture: Awaited<ReturnType<typeof createRunFix
       repository: { full_name: "owner/context-tree" },
       sender: { login: "commenter", type: "User" },
     },
+    fetcher: successfulGithubFetcher(),
   });
   if (!result.handled) throw new Error("follow-up review run was not created");
   const [message] = await fixture.app.db.select().from(messages).where(eq(messages.id, result.messageId));

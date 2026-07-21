@@ -221,12 +221,13 @@ new Context Repo is a GitHub repository. Do not run it for an already-bound tree
 a non-GitHub remote, or a failed/partial `tree init`. Use host `gh`; do not send
 the user to the browser first.
 
-GitHub owns only the repository-shape guard here: changes go through pull
-requests and force / non-fast-forward pushes are blocked. Context Review owns
-the review verdict, so bootstrap must not create a root `CODEOWNERS` mapping or
-require a GitHub approving review. Keep this rule independent of the
-organization's current Context Review workflow; that setting may change after
-bootstrap without rewriting repository governance.
+GitHub owns the repository merge gate here: changes go through pull requests,
+force / non-fast-forward pushes are blocked, and the current diff requires at
+least one approval. The gate is intentionally generic: do not bind it to a
+specific GitHub App or Code Owner, and do not create a root `CODEOWNERS`
+mapping. Keep this rule independent of the organization's current Context
+Review workflow; changing that workflow never removes the repository approval
+gate.
 
 Resolve the repository from the new tree checkout:
 
@@ -258,9 +259,9 @@ The payload must keep these exact semantics:
     {
       "type": "pull_request",
       "parameters": {
-        "required_approving_review_count": 0,
+        "required_approving_review_count": 1,
         "require_code_owner_review": false,
-        "dismiss_stale_reviews_on_push": false,
+        "dismiss_stale_reviews_on_push": true,
         "require_last_push_approval": false,
         "required_review_thread_resolution": false
       }
@@ -269,13 +270,19 @@ The payload must keep these exact semantics:
 }
 ```
 
-The ruleset blocks force / non-fast-forward pushes and requires changes through
-pull requests. It deliberately requires zero GitHub approvals and no Code Owner
-review; the remaining review parameters are disabled. If any `gh` or ruleset
+The ruleset blocks force / non-fast-forward pushes, requires changes through a
+pull request, and requires at least one current approval. Pushing a new commit
+dismisses stale approvals. Code Owner and last-push approval remain disabled.
+This intentionally means a single GitHub user cannot self-merge while the App
+Reviewer is unavailable; the PR needs either the App approval or another human
+approval. Do not compensate by broadening App permissions, restoring
+CODEOWNERS, or adding a ruleset bypass.
+If any `gh` or ruleset
 step fails after you know the repo is a GitHub Context Repo, continue with the
 seed flow and tell the user automatic GitHub branch-rule setup failed. Give a
-manual checklist in plain words: require pull requests, block force pushes, and
-require zero approving or Code Owner reviews. Do not treat this setup failure as
+manual checklist in plain words: require pull requests, require at least one
+current approval, dismiss stale approvals on push, block force pushes, and do
+not require Code Owner review. Do not treat this setup failure as
 a reason to delete or recreate the Context Repo.
 
 **Delay integration coverage guidance until there is a reviewable milestone —

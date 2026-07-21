@@ -16,6 +16,7 @@ import {
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
@@ -465,6 +466,17 @@ async function assertContextReviewerAgentAllowed(
 
   if (!agent || agent.organizationId !== orgId || agent.type === "human" || agent.status !== "active") {
     throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
+  }
+
+  const [installation] = await db
+    .select({ permissions: githubAppInstallations.permissions, suspendedAt: githubAppInstallations.suspendedAt })
+    .from(githubAppInstallations)
+    .where(eq(githubAppInstallations.hubOrganizationId, orgId))
+    .limit(1);
+  if (!installation || installation.suspendedAt || installation.permissions.pull_requests !== "write") {
+    throw new BadRequestError(
+      "Context Reviewer requires an active GitHub App installation with Pull requests: write permission accepted",
+    );
   }
 }
 

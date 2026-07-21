@@ -575,12 +575,7 @@ describe("github command helpers and actions", () => {
     registerGithubCommands(root);
 
     const github = subcommand(root, "github");
-    expect(github.commands.map((entry) => entry.name()).sort()).toEqual([
-      "context-review",
-      "follow",
-      "following",
-      "unfollow",
-    ]);
+    expect(github.commands.map((entry) => entry.name()).sort()).toEqual(["follow", "following", "unfollow"]);
     expect(resolveTargetChatId("chat_explicit")).toBe("chat_explicit");
     process.env.FIRST_TREE_CHAT_ID = "chat_env";
     expect(resolveTargetChatId(undefined)).toBe("chat_env");
