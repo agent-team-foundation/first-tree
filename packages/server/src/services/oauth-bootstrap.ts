@@ -52,7 +52,7 @@ export async function completeExternalAccountBootstrap(
       .select({ id: users.id })
       .from(users)
       .where(eq(users.id, account.userId))
-      .for("update")
+      .for("no key update")
       .limit(1);
     if (!lockedUser) throw new Error("External account bootstrap references a missing user");
 

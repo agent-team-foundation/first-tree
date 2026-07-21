@@ -30,7 +30,7 @@ import { computeWorking } from "../agent-chat-status.js";
 import { pickDefaultMembership } from "../auth.js";
 import { createChat } from "../chat.js";
 import { sendToClient } from "../connection-manager.js";
-import { MEMBER_STATUSES, reactivateMembership } from "../membership.js";
+import { MEMBER_STATUSES, reactivateMembership, syncCurrentUserDisplayName } from "../membership.js";
 import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
 import { assertOfficialLandingCampaignClient, assertTrialQuota, isLandingCampaignServiceOrg } from "./guards.js";
@@ -161,7 +161,7 @@ async function ensureServiceMember(
   serviceUserId: string,
 ): Promise<typeof members.$inferSelect> {
   const [serviceUser] = await db
-    .select({ id: users.id, username: users.username, displayName: users.displayName })
+    .select({ id: users.id, username: users.username })
     .from(users)
     .where(eq(users.id, serviceUserId))
     .limit(1);
@@ -169,56 +169,61 @@ async function ensureServiceMember(
     throw new ServiceUnavailableError("Landing campaign service user is not configured");
   }
 
-  const [existing] = await db
-    .select()
-    .from(members)
-    .where(and(eq(members.userId, serviceUserId), eq(members.organizationId, organizationId)))
-    .limit(1);
-  if (existing) {
-    if (existing.status !== MEMBER_STATUSES.ACTIVE) {
-      await reactivateMembership(db, existing, {
-        displayName: serviceUser.displayName,
-        username: serviceUser.username,
-        role: "member",
-        resetOnboarding: false,
-      });
-      return { ...existing, status: MEMBER_STATUSES.ACTIVE, role: "member" };
+  return syncCurrentUserDisplayName(db, serviceUserId, async (effectiveDisplayName) => {
+    const [existing] = await db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, serviceUserId), eq(members.organizationId, organizationId)))
+      .limit(1);
+    if (existing) {
+      if (existing.status !== MEMBER_STATUSES.ACTIVE) {
+        await reactivateMembership(db, existing, {
+          username: serviceUser.username,
+          role: "member",
+          resetOnboarding: false,
+        });
+        return { ...existing, status: MEMBER_STATUSES.ACTIVE, role: "member" };
+      }
+      if (existing.role !== "member") {
+        const [updated] = await db
+          .update(members)
+          .set({ role: "member" })
+          .where(eq(members.id, existing.id))
+          .returning();
+        if (!updated) throw new Error("Unexpected: service member role update returned no row");
+        return updated;
+      }
+      return existing;
     }
-    if (existing.role !== "member") {
-      const [updated] = await db.update(members).set({ role: "member" }).where(eq(members.id, existing.id)).returning();
-      if (!updated) throw new Error("Unexpected: service member role update returned no row");
-      return updated;
-    }
-    return existing;
-  }
 
-  const memberId = uuidv7();
-  const agentId = uuidv7();
-  const agentName = await resolveAvailableServiceAgentName(db, organizationId);
-  await db.insert(agents).values({
-    uuid: agentId,
-    name: agentName,
-    organizationId,
-    type: "human",
-    displayName: serviceUser.displayName || "First Tree",
-    inboxId: `inbox_${agentId}`,
-    source: "admin-api",
-    visibility: "private",
-    managerId: memberId,
-    metadata: { landingCampaignServiceUser: true },
-  });
-  const [created] = await db
-    .insert(members)
-    .values({
-      id: memberId,
-      userId: serviceUserId,
+    const memberId = uuidv7();
+    const agentId = uuidv7();
+    const agentName = await resolveAvailableServiceAgentName(db, organizationId);
+    await db.insert(agents).values({
+      uuid: agentId,
+      name: agentName,
       organizationId,
-      agentId,
-      role: "member",
-    })
-    .returning();
-  if (!created) throw new Error("Unexpected: INSERT RETURNING produced no service member row");
-  return created;
+      type: "human",
+      displayName: effectiveDisplayName || "First Tree",
+      inboxId: `inbox_${agentId}`,
+      source: "admin-api",
+      visibility: "private",
+      managerId: memberId,
+      metadata: { landingCampaignServiceUser: true },
+    });
+    const [created] = await db
+      .insert(members)
+      .values({
+        id: memberId,
+        userId: serviceUserId,
+        organizationId,
+        agentId,
+        role: "member",
+      })
+      .returning();
+    if (!created) throw new Error("Unexpected: INSERT RETURNING produced no service member row");
+    return created;
+  });
 }
 
 async function createCampaignAgentWithFallbackName(

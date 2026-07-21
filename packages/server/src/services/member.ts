@@ -12,7 +12,7 @@ import { uuidv7 } from "../uuid.js";
 import { createAgent } from "./agent.js";
 import { forceDisconnect } from "./connection-manager.js";
 import { suspendGitlabLinksForMembership } from "./gitlab-identities.js";
-import { MEMBER_STATUSES, reactivateMembership } from "./membership.js";
+import { MEMBER_STATUSES, reactivateMembership, syncUserDisplayName } from "./membership.js";
 import * as presenceService from "./presence.js";
 import { recomputeWatchersForAgent, recomputeWatchersForMember } from "./watcher.js";
 
@@ -67,7 +67,6 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       }
 
       await db.transaction(async (tx) => {
-        await tx.update(users).set({ displayName: data.displayName }).where(eq(users.id, existingUser.id));
         await reactivateMembership(tx, existingMember, {
           displayName: data.displayName,
           username: data.username,
@@ -103,48 +102,61 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       });
     }
 
-    // Compute the member id up-front so we can set `agents.manager_id` to it
-    // at insert time (managerId is NOT NULL since the unified-user-token
-    // milestone). The human agent self-manages.
-    const memberId = uuidv7();
-    const agentName = data.username.replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
-    const agent = await createAgent(tx as unknown as Database, {
-      name: agentName,
-      type: "human",
-      displayName: data.displayName,
-      organizationId: orgId,
-      source: "admin-api",
-      managerId: memberId,
-    });
+    return syncUserDisplayName(tx, userId, data.displayName, async () => {
+      // Another membership lifecycle may have committed while the initial
+      // pre-check waited on this user's identity lock. Re-check under that
+      // lock before touching the unique (user, organization) slot.
+      if (existingUser) {
+        const [membershipCollision] = await tx
+          .select({ id: members.id })
+          .from(members)
+          .where(and(eq(members.userId, userId), eq(members.organizationId, orgId)))
+          .limit(1);
+        if (membershipCollision) {
+          throw new ConflictError(`User "${data.username}" is already a member of this organization`);
+        }
+      }
 
-    const [member] = await tx
-      .insert(members)
-      .values({
-        id: memberId,
-        userId,
+      // Compute the member id up-front so the human mirror self-manages.
+      const memberId = uuidv7();
+      const agentName = data.username.replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+      const agent = await createAgent(tx as unknown as Database, {
+        name: agentName,
+        type: "human",
+        displayName: data.displayName,
         organizationId: orgId,
-        agentId: agent.uuid,
-        role: data.role ?? "member",
-      })
-      .returning();
+        source: "admin-api",
+        managerId: memberId,
+      });
 
-    if (!member) throw new Error("Unexpected: INSERT RETURNING produced no row");
+      const [member] = await tx
+        .insert(members)
+        .values({
+          id: memberId,
+          userId,
+          organizationId: orgId,
+          agentId: agent.uuid,
+          role: data.role ?? "member",
+        })
+        .returning();
 
-    return {
-      id: member.id,
-      userId: member.userId,
-      organizationId: member.organizationId,
-      agentId: member.agentId,
-      role: member.role,
-      createdAt: member.createdAt.toISOString(),
-      // Freshly created — no messages yet, so no derived activity.
-      lastActiveAt: null,
-      username: data.username,
-      displayName: data.displayName,
-      avatarUrl: existingUser?.avatarUrl ?? null,
-      // Only return password for new users
-      ...(password ? { password } : { notice: "Existing user — use their current password to log in" }),
-    };
+      if (!member) throw new Error("Unexpected: INSERT RETURNING produced no row");
+      return {
+        id: member.id,
+        userId: member.userId,
+        organizationId: member.organizationId,
+        agentId: member.agentId,
+        role: member.role,
+        createdAt: member.createdAt.toISOString(),
+        // Freshly created — no messages yet, so no derived activity.
+        lastActiveAt: null,
+        username: data.username,
+        displayName: data.displayName,
+        avatarUrl: existingUser?.avatarUrl ?? null,
+        // Only return password for new users
+        ...(password ? { password } : { notice: "Existing user — use their current password to log in" }),
+      };
+    });
   });
 }
 
@@ -225,22 +237,19 @@ export async function updateMember(db: Database, id: string, data: UpdateMember,
   }
 
   await db.transaction(async (tx) => {
-    if (data.role !== undefined && data.role !== current.role) {
-      await tx.update(members).set({ role: data.role }).where(eq(members.id, id));
-    }
+    const updateRole = async () => {
+      if (data.role !== undefined && data.role !== current.role) {
+        await tx.update(members).set({ role: data.role }).where(eq(members.id, id));
+      }
+    };
     // displayName is user-global: members have no display_name column and
     // listMembers reads users.display_name. Keep every membership-scoped
     // human agent mirror aligned so chat detail never disagrees with the
     // member/AuthProvider identity after an admin rename in any organization.
-    if (data.displayName !== undefined && data.displayName !== current.displayName) {
-      await tx.update(users).set({ displayName: data.displayName }).where(eq(users.id, current.userId));
-      const memberRows = await tx
-        .select({ agentId: members.agentId })
-        .from(members)
-        .where(eq(members.userId, current.userId));
-      for (const member of memberRows) {
-        await tx.update(agents).set({ displayName: data.displayName }).where(eq(agents.uuid, member.agentId));
-      }
+    if (data.displayName !== undefined) {
+      await syncUserDisplayName(tx, current.userId, data.displayName, updateRole);
+    } else {
+      await updateRole();
     }
   });
 
@@ -256,11 +265,7 @@ export async function updateMember(db: Database, id: string, data: UpdateMember,
  */
 export async function updateOwnProfile(db: Database, userId: string, displayName: string) {
   await db.transaction(async (tx) => {
-    await tx.update(users).set({ displayName }).where(eq(users.id, userId));
-    const memberRows = await tx.select({ agentId: members.agentId }).from(members).where(eq(members.userId, userId));
-    for (const m of memberRows) {
-      await tx.update(agents).set({ displayName }).where(eq(agents.uuid, m.agentId));
-    }
+    await syncUserDisplayName(tx, userId, displayName);
   });
   return { id: userId, displayName };
 }
