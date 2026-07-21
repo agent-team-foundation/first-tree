@@ -1016,6 +1016,25 @@
   border-top: var(--hairline) solid var(--border-faint);
 }
 
+.compose-status-output {
+  position: relative;
+}
+
+.compose-status-identity {
+  padding-right: var(--sp-6);
+}
+
+.compose-status-jump {
+  position: absolute;
+  z-index: 1;
+  top: var(--sp-3);
+  right: var(--sp-3);
+}
+
+.compose-status-narration-with-jump > :first-child {
+  padding-right: var(--sp-6);
+}
+
 [data-compose-status-bar] + .composer-card {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
@@ -2468,7 +2487,7 @@ tr[data-interactive]:hover {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .compose-status-state {
+  .compose-status-state:not(.compose-status-state-expanded) {
     position: absolute;
     width: 1px;
     height: 1px;

@@ -222,7 +222,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.textContent).not.toContain("Activity");
 
     const trigger = h.container.querySelector('button[aria-label^="Expand current agent output"]');
-    expect(trigger?.getAttribute("aria-label")).toBe("Expand current agent output, 1 actionable agent");
+    expect(trigger?.getAttribute("aria-label")).toBe("Expand current agent output, 1 actionable agent, Nova, Working");
     const liveStatus = h.container.querySelector('[role="status"]');
     expect(liveStatus?.textContent).toContain("1 actionable agent");
     expect(liveStatus?.textContent).toContain("Nova Working");
@@ -237,6 +237,14 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.querySelector('section[aria-label="Current agent output"]')?.getAttribute("tabindex")).toBe("0");
     expect(h.container.textContent).not.toContain("Bash");
     expect(h.container.textContent).not.toContain("doc-page.tsx");
+    expect(trigger?.textContent).not.toContain("Write extra DOM tests");
+    expect(trigger?.querySelector(".compose-status-state-expanded")?.textContent).toContain("Working");
+    expect(trigger?.getAttribute("aria-label")).toBe(
+      "Collapse current agent output, 1 actionable agent, Nova, Working",
+    );
+    expect(h.container.querySelector("[data-current-output-identity]")).toBeNull();
+    expect(h.container.querySelector("[data-current-agent-output]")?.textContent).not.toContain("Nova");
+    expect(h.container.querySelector("[data-current-agent-output]")?.textContent).not.toContain("Working");
     expect(h.container.querySelector(".compose-status-narration strong")?.textContent).toBe("extra");
 
     await click(h, trigger);
@@ -285,9 +293,12 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.textContent).toContain("Idle");
     expect(h.container.textContent).not.toContain("Failed");
 
-    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const trigger = h.container.querySelector('button[aria-label^="Expand current agent output"]');
+    await click(h, trigger);
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Offline Agent"));
     expect(h.container.textContent).toContain("Offline");
+    expect(trigger?.textContent).toContain("2 status updates");
+    expect(trigger?.textContent).not.toContain("failed");
   });
 
   it("shows a current reason in the compact row and its detail inline", async () => {
@@ -310,10 +321,13 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Waiting for provider capacity"));
     expect(h.container.textContent).toContain("Waiting");
-    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const trigger = h.container.querySelector('button[aria-label^="Expand current agent output"]');
+    expect(trigger?.getAttribute("aria-label")).toContain("Beacon, Idle, Waiting for provider capacity");
+    await click(h, trigger);
     await waitForSettled(h, () => expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull());
+    expect(trigger?.getAttribute("aria-label")).toContain("Beacon, Idle, Waiting for provider capacity");
     expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull();
-    expect(h.container.querySelector('button[aria-label*="timeline"]')).toBeNull();
+    expect(h.container.querySelector('.compose-status-jump[aria-label*="timeline"]')).toBeNull();
   });
 
   it("opens all agents in one lightly divided inline region without duplicating the lead", async () => {
@@ -342,8 +356,21 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     const inspector = h.container.querySelector("[data-current-agent-output]");
     const atlasCount = inspector?.textContent?.match(/Atlas/g)?.length ?? 0;
     expect(atlasCount).toBe(1);
+    expect(h.container.querySelector('button[aria-label^="Collapse current agent output"]')?.textContent).toContain(
+      "2 agents",
+    );
+    expect(h.container.querySelector('button[aria-label^="Collapse current agent output"]')?.textContent).toContain(
+      "1 failed",
+    );
+    expect(
+      h.container.querySelector('button[aria-label^="Collapse current agent output"]')?.getAttribute("aria-label"),
+    ).toContain("1 failed");
+    expect(h.container.querySelector('button[aria-label^="Collapse current agent output"]')?.textContent).not.toContain(
+      "Atlas",
+    );
     expect(h.container.querySelectorAll("[data-current-agent-output]")).toHaveLength(1);
     expect(h.container.querySelectorAll("[data-current-output-agent]")).toHaveLength(2);
+    expect(h.container.querySelectorAll("[data-current-output-identity]")).toHaveLength(2);
   });
 
   it("keeps a quiet timeline jump inside the expanded output", async () => {
@@ -368,11 +395,14 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForSettled(h, () =>
       expect(
-        h.container.querySelector('button[aria-label*="Nova"][aria-label*="Run the focused suite"]'),
+        h.container.querySelector('.compose-status-jump[aria-label*="Nova"][aria-label*="Run the focused suite"]'),
       ).not.toBeNull(),
     );
 
-    await click(h, h.container.querySelector('button[aria-label*="Nova"][aria-label*="Run the focused suite"]'));
+    await click(
+      h,
+      h.container.querySelector('.compose-status-jump[aria-label*="Nova"][aria-label*="Run the focused suite"]'),
+    );
 
     expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-nova", "working", { focus: true });
     expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
@@ -499,7 +529,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     const row = h.container.querySelector(
-      'button[aria-label*="Terminal Agent"][aria-label*="Provider retry exhausted"]',
+      '.compose-status-jump[aria-label*="Terminal Agent"][aria-label*="Provider retry exhausted"]',
     );
     expect(row).not.toBeNull();
     await click(h, row);
@@ -561,14 +591,18 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       ),
     );
     await waitForSettled(h, () => expect(h.container.textContent).toContain("3 agents"));
-    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
+    const trigger = h.container.querySelector('button[aria-label^="Expand current agent output"]');
+    await click(h, trigger);
+    expect(trigger?.textContent).toContain("3 status updates");
+    expect(trigger?.getAttribute("aria-label")).toContain("3 status updates");
+    expect(trigger?.textContent).not.toContain("needs attention");
 
     for (const [agentId, name] of [
       ["agent-waiting", "Waiting Agent"],
       ["agent-retrying", "Retrying Agent"],
       ["agent-warning", "Warning Agent"],
     ]) {
-      await click(h, h.container.querySelector(`button[aria-label*="${name}"][aria-label*="timeline"]`));
+      await click(h, h.container.querySelector(`.compose-status-jump[aria-label*="${name}"][aria-label*="timeline"]`));
       expect(timelineMocks.scrollToAgentTimeline).toHaveBeenLastCalledWith(agentId, "reason", { focus: true });
     }
   });
@@ -603,8 +637,9 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     );
 
     await waitForSettled(h, () => expect(h.container.textContent).toContain("2 agents"));
-    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
-    const novaRow = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Nova"]');
+    const trigger = h.container.querySelector('button[aria-label^="Expand current agent output"]');
+    await click(h, trigger);
+    const novaRow = h.container.querySelector<HTMLButtonElement>('.compose-status-jump[aria-label*="Nova"]');
     novaRow?.focus();
     expect(document.activeElement).toBe(novaRow);
 
@@ -617,18 +652,66 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await h.flush();
     await waitForSettled(h, () =>
       expect(document.activeElement?.getAttribute("aria-label")).toBe(
-        "Collapse current agent output, 1 actionable agent",
+        "Collapse current agent output, 1 actionable agent, Atlas, Working",
       ),
     );
 
-    const atlasRow = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Atlas"]');
-    atlasRow?.focus();
+    const atlasRow = h.container.querySelector<HTMLButtonElement>('.compose-status-jump[aria-label*="Atlas"]');
+    if (!atlasRow) throw new Error("Expected Atlas timeline jump");
+    atlasRow.focus();
+    expect(document.activeElement).toBe(atlasRow);
     await act(async () => {
       queryClient.setQueryData(["chat-agent-status", "chat-1"], []);
     });
     await h.flush();
     await waitForSettled(h, () => expect(document.activeElement).toBe(fallbackRef.current));
     expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull();
+  });
+
+  it("keeps a focused surviving timeline jump mounted when a group becomes one agent", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(
+      ["chat-agent-status", "chat-1"],
+      [
+        status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") }),
+        status("agent-atlas", { working: true, engagement: "active", activity: activity("agent-atlas") }),
+      ],
+    );
+
+    h.render(
+      withProviders(
+        <>
+          <div data-working-agent="agent-nova" />
+          <div data-working-agent="agent-atlas" />
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova"), agent("agent-atlas", "Atlas")]} />
+        </>,
+        queryClient,
+      ),
+    );
+
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("2 agents"));
+    const trigger = h.container.querySelector('button[aria-label^="Expand current agent output"]');
+    await click(h, trigger);
+    const atlasJump = h.container.querySelector<HTMLButtonElement>('.compose-status-jump[aria-label*="Atlas"]');
+    if (!atlasJump) throw new Error("Expected Atlas timeline jump");
+    atlasJump.focus();
+
+    await act(async () => {
+      queryClient.setQueryData(
+        ["chat-agent-status", "chat-1"],
+        [status("agent-atlas", { working: true, engagement: "active", activity: activity("agent-atlas") })],
+      );
+    });
+    await h.flush();
+
+    await waitForSettled(h, () =>
+      expect(trigger?.getAttribute("aria-label")).toBe(
+        "Collapse current agent output, 1 actionable agent, Atlas, Working",
+      ),
+    );
+    expect(h.container.querySelector('.compose-status-jump[aria-label*="Atlas"]')).toBe(atlasJump);
+    expect(document.activeElement).toBe(atlasJump);
+    expect(h.container.querySelector("[data-current-output-identity]")).toBeNull();
   });
 
   it("moves focus to the disclosure when a focused jump loses its timeline anchor", async () => {
@@ -651,7 +734,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     h.render(withProviders(<AnchorHarness />));
     await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
     await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
-    const row = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Nova"]');
+    const row = h.container.querySelector<HTMLButtonElement>('.compose-status-jump[aria-label*="Nova"]');
     row?.focus();
     expect(document.activeElement).toBe(row);
 
@@ -660,10 +743,10 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await waitForSettled(h, () =>
       expect(document.activeElement?.getAttribute("aria-label")).toBe(
-        "Collapse current agent output, 1 actionable agent",
+        "Collapse current agent output, 1 actionable agent, Nova, Working",
       ),
     );
-    expect(h.container.querySelector('button[aria-label*="Nova"]')).toBeNull();
+    expect(h.container.querySelector('.compose-status-jump[aria-label*="Nova"]')).toBeNull();
   });
 });
 

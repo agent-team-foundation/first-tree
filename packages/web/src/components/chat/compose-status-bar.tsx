@@ -155,8 +155,8 @@ export function ComposeStatusBar({
       setExpanded(false);
       if (!focusWithinRef.current) return;
       focusWithinRef.current = false;
-      const frame = requestAnimationFrame(() => fallbackFocusRef?.current?.focus());
-      return () => cancelAnimationFrame(frame);
+      fallbackFocusRef?.current?.focus();
+      return;
     }
     if (!expanded || !focusWithinRef.current) return;
     const active = document.activeElement;
@@ -172,6 +172,11 @@ export function ComposeStatusBar({
   }, [attention, expanded, fallbackFocusRef, mounted]);
 
   const leadRow = (lead && attention.find((status) => status.agentId === lead.agentId)) ?? attention[0];
+  const disclosureStatus = leadRow
+    ? expanded && attention.length > 1
+      ? expandedGroupState(attention)
+      : [nameOf(leadRow.agentId), stateLabel(leadRow), visibleStatusReason(leadRow)?.label].filter(Boolean).join(", ")
+    : "";
 
   return (
     <>
@@ -199,12 +204,16 @@ export function ComposeStatusBar({
             type="button"
             aria-controls={detailsId}
             aria-expanded={expanded}
-            aria-label={`${expanded ? "Collapse" : "Expand"} current agent output, ${attention.length} actionable ${attention.length === 1 ? "agent" : "agents"}`}
+            aria-label={`${expanded ? "Collapse" : "Expand"} current agent output, ${attention.length} actionable ${attention.length === 1 ? "agent" : "agents"}, ${disclosureStatus}`}
             onClick={() => setExpanded((open) => !open)}
             className="compose-status-summary flex w-full min-w-0 items-center text-left transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            <LeadSnapshot status={leadRow} name={nameOf(leadRow.agentId)} />
-            {attention.length > 1 ? (
+            {expanded && attention.length > 1 ? (
+              <ExpandedGroupSnapshot statuses={attention} />
+            ) : (
+              <LeadSnapshot status={leadRow} name={nameOf(leadRow.agentId)} showSummary={!expanded} />
+            )}
+            {!expanded && attention.length > 1 ? (
               <span className="text-caption shrink-0" style={{ color: "var(--fg-3)" }}>
                 {attention.length} agents
               </span>
@@ -238,7 +247,7 @@ function activityAnnouncement(attention: AgentChatStatus[], nameOf: (agentId: st
   return states ? `Agent status updated: ${count}. ${states}.` : `Agent status updated: ${count}.`;
 }
 
-function LeadSnapshot({ status, name }: { status: AgentChatStatus; name: string }) {
+function LeadSnapshot({ status, name, showSummary }: { status: AgentChatStatus; name: string; showSummary: boolean }) {
   const visual = statusVisual(status);
   const summary = collapsedSummary(status);
   return (
@@ -247,11 +256,14 @@ function LeadSnapshot({ status, name }: { status: AgentChatStatus; name: string 
       <span className="compose-status-agent-name shrink-0 font-semibold" style={{ color: "var(--fg-2)" }}>
         {name}
       </span>
-      <span className="compose-status-state inline-flex shrink-0 items-center" style={{ gap: "var(--sp-1_5)" }}>
+      <span
+        className={`compose-status-state inline-flex shrink-0 items-center${showSummary ? "" : " compose-status-state-expanded"}`}
+        style={{ gap: "var(--sp-1_5)" }}
+      >
         <Sep />
         <span style={{ color: "var(--fg-3)" }}>{stateLabel(status)}</span>
       </span>
-      {summary ? (
+      {showSummary && summary ? (
         <>
           <Sep />
           <span className="truncate" title={summary} style={{ color: "var(--fg-2)" }}>
@@ -261,6 +273,34 @@ function LeadSnapshot({ status, name }: { status: AgentChatStatus; name: string 
       ) : null}
     </div>
   );
+}
+
+function ExpandedGroupSnapshot({ statuses }: { statuses: AgentChatStatus[] }) {
+  const lead = statuses[0];
+  if (!lead) return null;
+  const visual = statusVisual(lead);
+  const state = expandedGroupState(statuses);
+
+  return (
+    <div className="text-caption flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
+      <StatusGlyph colorVar={visual.colorVar} shape={visual.shape} pulse={visual.pulse} size={8} />
+      <span className="shrink-0 font-semibold" style={{ color: "var(--fg-2)" }}>
+        {statuses.length} agents
+      </span>
+      <Sep />
+      <span className="truncate" style={{ color: "var(--fg-3)" }}>
+        {state}
+      </span>
+    </div>
+  );
+}
+
+function expandedGroupState(statuses: AgentChatStatus[]): string {
+  const failures = statuses.filter((status) => status.main === "failed").length;
+  if (failures > 0) return `${failures} failed`;
+  const statusUpdates = statuses.filter((status) => visibleStatusReason(status) !== undefined).length;
+  if (statusUpdates > 0) return `${statusUpdates} status ${statusUpdates === 1 ? "update" : "updates"}`;
+  return "Active";
 }
 
 function CurrentOutputDetails({
@@ -274,6 +314,7 @@ function CurrentOutputDetails({
   nameOf: (agentId: string) => string;
   mounted: ReadonlySet<string>;
 }) {
+  const showIdentity = attention.length > 1;
   return (
     <section
       id={id}
@@ -290,7 +331,12 @@ function CurrentOutputDetails({
             data-current-output-agent={status.agentId}
             style={{ borderTop: index === 0 ? 0 : "var(--hairline) solid var(--border-faint)" }}
           >
-            <CurrentOutputItem status={status} name={nameOf(status.agentId)} mounted={mounted} />
+            <CurrentOutputItem
+              status={status}
+              name={nameOf(status.agentId)}
+              mounted={mounted}
+              showIdentity={showIdentity}
+            />
           </li>
         ))}
       </ul>
@@ -302,10 +348,12 @@ function CurrentOutputItem({
   status,
   name,
   mounted,
+  showIdentity,
 }: {
   status: AgentChatStatus;
   name: string;
   mounted: ReadonlySet<string>;
+  showIdentity: boolean;
 }) {
   const visual = statusVisual(status);
   const snapshot = agentSnapshot(status);
@@ -321,31 +369,49 @@ function CurrentOutputItem({
     .filter((part): part is string => part !== null)
     .join(". ");
   return (
-    <article style={{ padding: "var(--sp-2_5) var(--sp-3)" }} title={snapshot.updateTitle}>
-      <div className="text-label flex min-w-0 items-center" style={{ gap: "var(--sp-1_5)" }}>
-        <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
-          <StatusGlyph colorVar={visual.colorVar} shape={visual.shape} pulse={visual.pulse} size={7} />
-          <span className="font-semibold" style={{ color: "var(--fg-2)", overflowWrap: "anywhere" }}>
-            {name}
-          </span>
-          <span className="shrink-0" style={{ color: "var(--fg-3)" }}>
-            {stateLabel(status)}
-          </span>
+    <article
+      className="compose-status-output"
+      style={{ padding: "var(--sp-2_5) var(--sp-3)" }}
+      title={snapshot.updateTitle}
+    >
+      {showIdentity ? (
+        <div
+          key="identity"
+          className="compose-status-identity text-label flex min-w-0 items-center"
+          style={{ gap: "var(--sp-1_5)" }}
+          data-current-output-identity
+        >
+          <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
+            <StatusGlyph colorVar={visual.colorVar} shape={visual.shape} pulse={visual.pulse} size={7} />
+            <span className="font-semibold" style={{ color: "var(--fg-2)", overflowWrap: "anywhere" }}>
+              {name}
+            </span>
+            <span className="shrink-0" style={{ color: "var(--fg-3)" }}>
+              {stateLabel(status)}
+            </span>
+          </div>
         </div>
-        {anchored ? (
-          <TimelineJumpButton
-            agentId={status.agentId}
-            target={jumpTarget}
-            anchored
-            ariaLabel={accessibleSummary}
-            interactiveClassName="rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <span className="sr-only">View in the timeline</span>
-          </TimelineJumpButton>
-        ) : null}
-      </div>
+      ) : null}
+      {anchored ? (
+        <TimelineJumpButton
+          key="timeline-jump"
+          agentId={status.agentId}
+          target={jumpTarget}
+          anchored
+          ariaLabel={accessibleSummary}
+          className="compose-status-jump"
+          interactiveClassName="rounded-[var(--radius-input)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <span className="sr-only">View in the timeline</span>
+        </TimelineJumpButton>
+      ) : null}
 
-      <Markdown className="compose-status-narration text-body">{snapshot.update}</Markdown>
+      <Markdown
+        key="narration"
+        className={`compose-status-narration text-body${!showIdentity && anchored ? " compose-status-narration-with-jump" : ""}`}
+      >
+        {snapshot.update}
+      </Markdown>
       {snapshot.meta ? <ActivityMetaLine meta={snapshot.meta} /> : null}
     </article>
   );
