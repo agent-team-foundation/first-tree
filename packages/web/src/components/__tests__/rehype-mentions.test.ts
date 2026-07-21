@@ -132,6 +132,21 @@ describe("rehypeMentions", () => {
     expect(children?.[5]?.children).toHaveLength(1);
   });
 
+  it("counts collisions across the roster while allowing only persisted mention identities to resolve", () => {
+    const participants: RenderedMentionParticipant[] = [
+      { agentId: "agent-alice", name: "alice", displayName: "Sam" },
+      { agentId: "agent-bob", name: "bob", displayName: "Sam" },
+    ];
+    const tree = makeRoot(paragraph(text("hi @alice and @bob")));
+    const transform = rehypeMentions(participants, { allowedAgentIds: new Set(["agent-alice"]) })();
+    transform(tree as unknown as Parameters<typeof transform>[0]);
+
+    const children = tree.children?.[0]?.children;
+    expect(visibleChipText(children?.[1])).toBe("@Sam(@alice)");
+    expect(children?.[1]?.children?.[1]?.properties?.className).toEqual(["mention-chip-handle"]);
+    expect(children?.[2]).toEqual(text(" and @bob"));
+  });
+
   it("adds the `is-self` class when the mention resolves to the viewer", () => {
     // Regression: the fix only works if the resolvable participant set
     // passed to the plugin actually includes self. The view layer is

@@ -20,9 +20,10 @@ export type RenderedMentionParticipant = MentionParticipant & {
  * formatting and a chip inside a link would double-style.
  *
  * The participant list is captured by closure and resolved
- * case-insensitively, matching the server's `extractMentions` resolver
- * so the chip appears for exactly the same tokens the router would
- * fan out to.
+ * case-insensitively, matching the server's `extractMentions` resolver.
+ * Historical callers can additionally restrict resolution to persisted
+ * recipient IDs without shrinking the full-roster collision universe used to
+ * disambiguate duplicate display names.
  *
  * Returns a function compatible with react-markdown's `rehypePlugins`
  * prop. Local minimal hast types avoid pulling in `@types/hast` and
@@ -150,12 +151,15 @@ function walk(node: HastNode, nameMap: Map<string, RenderedMentionIdentity>, sel
 
 export function rehypeMentions(
   participants: RenderedMentionParticipant[],
-  options?: { selfAgentId?: string | null },
+  options?: { selfAgentId?: string | null; allowedAgentIds?: ReadonlySet<string> },
 ): () => (tree: HastRoot) => void {
   const selfAgentId = options?.selfAgentId ?? null;
+  const allowedAgentIds = options?.allowedAgentIds;
   const nameMap = new Map<string, RenderedMentionIdentity>();
   const displayNameCounts = new Map<string, number>();
 
+  // Count across the full visible speaker roster. A message that mentions only
+  // one of two people called "Sam" still needs to expose that person's handle.
   for (const participant of participants) {
     if (!participant.name) continue;
     const displayName = participant.displayName.trim() || participant.name;
@@ -164,7 +168,10 @@ export function rehypeMentions(
   }
 
   for (const p of participants) {
-    if (p.name) {
+    // Resolution is a separate identity decision. Historical callers allow
+    // only the IDs persisted for this message, so handle reuse cannot relabel
+    // an old token even though the new owner remains in the collision roster.
+    if (p.name && (!allowedAgentIds || allowedAgentIds.has(p.agentId))) {
       const displayName = p.displayName.trim() || p.name;
       nameMap.set(p.name.toLowerCase(), {
         name: p.name,

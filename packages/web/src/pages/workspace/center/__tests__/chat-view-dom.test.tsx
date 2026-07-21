@@ -1713,6 +1713,44 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("disambiguates one persisted recipient against duplicate display names in the full chat roster", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const duplicateLabel = "Sam with an intentionally long shared display name for narrow screens";
+    const alice = participant({ agentId: "agent-alice-sam", name: "alice-sam", displayName: duplicateLabel });
+    const bob = participant({ agentId: "agent-bob-sam", name: "bob-sam", displayName: duplicateLabel });
+    const detail = chatDetail({
+      participants: [
+        participant({ agentId: "human-agent-self", type: "human", name: "gandy", displayName: "Gandy" }),
+        alice,
+        bob,
+        participant({ agentId: "agent-1", name: "nova", displayName: "Nova" }),
+      ],
+    });
+    const page = messages([
+      message({
+        id: "duplicate-display-single-recipient",
+        senderId: "agent-1",
+        content: "请 @alice-sam 处理",
+        metadata: { mentions: [alice.agentId] },
+        source: "api",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, detail, page),
+      "/",
+    );
+
+    await waitForText(container, duplicateLabel);
+    const chip = container.querySelector<HTMLElement>('.mention-chip[data-mention-name="alice-sam"]');
+    expect(chip?.querySelector(".mention-chip-display")?.textContent).toBe(`@${duplicateLabel}`);
+    expect(chip?.querySelector(".mention-chip-handle")?.textContent).toBe("(@alice-sam)");
+    expect(chip?.getAttribute("title")).toBe(`@${duplicateLabel} (@alice-sam)`);
+    expect(container.querySelector('.mention-chip[data-mention-name="bob-sam"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("copies canonical handles when copy targets the composer or body, including cross-message rich text", async () => {
     const { ChatView } = await import("../chat-view.js");
     const numericHuman = participant({

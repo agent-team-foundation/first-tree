@@ -614,10 +614,7 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
   // current name map alone would then visibly reassign the old mention to a
   // different person. Legacy rows without structured mentions degrade safely
   // to their original `@handle` text.
-  const historicalMentionParticipants = useMemo(() => {
-    const targetIds = new Set(readMentions(msg.metadata));
-    return mentionParticipants.filter((participant) => targetIds.has(participant.agentId));
-  }, [mentionParticipants, msg.metadata]);
+  const historicalMentionAgentIds = useMemo(() => new Set(readMentions(msg.metadata)), [msg.metadata]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
   // bare tokens any more. The only scanner-driven rewrite left is wrapping the
@@ -645,8 +642,13 @@ const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipa
   // original rendering. `selfAgentId` flips chips that target the viewer
   // into a higher-priority tone — see `.mention-chip.is-self` in index.css.
   const messageRehypePlugins = useMemo(
-    () => [rehypeMentions(historicalMentionParticipants, { selfAgentId: myAgentId })],
-    [historicalMentionParticipants, myAgentId],
+    () => [
+      rehypeMentions(mentionParticipants, {
+        selfAgentId: myAgentId,
+        allowedAgentIds: historicalMentionAgentIds,
+      }),
+    ],
+    [historicalMentionAgentIds, mentionParticipants, myAgentId],
   );
   const markdownComponents = useMemo<Components>(
     () => ({
