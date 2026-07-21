@@ -320,28 +320,36 @@ describe("small API route handlers", () => {
     );
   });
 
-  it("returns health and healthz success and degraded responses", async () => {
+  it("returns database health diagnostics and database-free healthz liveness", async () => {
     const { healthRoutes } = await import("../api/health.js");
     const { healthzRoutes } = await import("../api/healthz.js");
-    const execute = vi.fn().mockResolvedValue(undefined);
-    const { app, routes } = makeApp({ db: { execute } });
+    const check = vi.fn(async (): Promise<"connected" | "disconnected"> => "connected");
+    const execute = vi.fn().mockRejectedValue(new Error("db down"));
+    const { app, routes } = makeApp({ databaseReadinessProbe: { check }, db: { execute } });
 
     await healthRoutes(app as never);
     await healthzRoutes(app as never);
     await expect(route(routes, "GET", "/health").handler()).resolves.toEqual({ db: "connected", status: "ok" });
+    expect(check).toHaveBeenCalledTimes(1);
 
     const okReply = makeReply();
     await route(routes, "GET", "/healthz").handler({}, okReply);
     expect(okReply).toMatchObject({ body: { status: "ok" }, code: 200 });
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
 
-    execute.mockRejectedValueOnce(new Error("db down")).mockRejectedValueOnce(new Error("db down"));
+    check.mockResolvedValueOnce("disconnected");
     await expect(route(routes, "GET", "/health").handler()).resolves.toEqual({
       db: "disconnected",
       status: "degraded",
     });
-    const degradedReply = makeReply();
-    await route(routes, "GET", "/healthz").handler({}, degradedReply);
-    expect(degradedReply).toMatchObject({ body: { message: "database unreachable", status: "error" }, code: 503 });
+    expect(check).toHaveBeenCalledTimes(2);
+
+    const stillLiveReply = makeReply();
+    await route(routes, "GET", "/healthz").handler({}, stillLiveReply);
+    expect(stillLiveReply).toMatchObject({ body: { status: "ok" }, code: 200 });
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("serves agent runtime config and context tree info", async () => {

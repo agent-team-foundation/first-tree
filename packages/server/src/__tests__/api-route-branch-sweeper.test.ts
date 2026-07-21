@@ -30,6 +30,7 @@ function createApp(overrides: Record<string, unknown> = {}): { app: Record<strin
     return app;
   };
   const app = {
+    databaseReadinessProbe: { check: vi.fn(async () => "connected" as const) },
     db: { execute: vi.fn(async () => [{ one: 1 }]) },
     get: registerRoute("GET"),
     ...overrides,
@@ -74,37 +75,35 @@ describe("API route branch contracts", () => {
   it("reports degraded /health when the database probe fails", async () => {
     const healthy = await registerSingleRoute(healthRoutes);
     await expect(healthy.route.handler({}, replyDouble())).resolves.toEqual({ status: "ok", db: "connected" });
-    expect((healthy.app.db as { execute: ReturnType<typeof vi.fn> }).execute).toHaveBeenCalledTimes(1);
+    expect((healthy.app.databaseReadinessProbe as { check: ReturnType<typeof vi.fn> }).check).toHaveBeenCalledTimes(1);
 
-    const execute = vi.fn(async () => {
-      throw new Error("db unavailable");
-    });
-    const degraded = await registerSingleRoute(healthRoutes, { db: { execute } });
+    const check = vi.fn(async () => "disconnected" as const);
+    const degraded = await registerSingleRoute(healthRoutes, { databaseReadinessProbe: { check } });
 
     await expect(degraded.route.handler({}, replyDouble())).resolves.toEqual({
       status: "degraded",
       db: "disconnected",
     });
-    expect(execute).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledTimes(1);
   });
 
-  it("maps /healthz database reachability to explicit status codes", async () => {
-    const ok = await registerSingleRoute(healthzRoutes);
-    const okReply = replyDouble();
-    await ok.route.handler({}, okReply);
-
-    expect(okReply.status).toHaveBeenCalledWith(200);
-    expect(okReply.send).toHaveBeenCalledWith({ status: "ok" });
-
+  it("keeps /healthz as a database-free liveness check", async () => {
     const execute = vi.fn(async () => {
       throw new Error("connection refused");
     });
-    const failing = await registerSingleRoute(healthzRoutes, { db: { execute } });
-    const failingReply = replyDouble();
-    await failing.route.handler({}, failingReply);
+    const check = vi.fn(async () => "disconnected" as const);
+    const live = await registerSingleRoute(healthzRoutes, {
+      databaseReadinessProbe: { check },
+      db: { execute },
+    });
+    const reply = replyDouble();
+    await live.route.handler({}, reply);
 
-    expect(failingReply.status).toHaveBeenCalledWith(503);
-    expect(failingReply.send).toHaveBeenCalledWith({ status: "error", message: "database unreachable" });
+    expect(live.route.options).toEqual({ config: { rateLimit: false } });
+    expect(reply.status).toHaveBeenCalledWith(200);
+    expect(reply.send).toHaveBeenCalledWith({ status: "ok" });
+    expect(execute).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
   });
 
   it("keeps /readyz unavailable until every bootstrap stage is done", async () => {
@@ -116,14 +115,16 @@ describe("API route branch contracts", () => {
       buildApp: { status: "pending" },
       appListen: { status: "pending" },
     };
-    const { route } = await registerSingleRoute(readyzRoutes);
+    const { app, route } = await registerSingleRoute(readyzRoutes);
     const reply = replyDouble();
 
     await route.handler({}, reply);
 
+    expect(route.options).toEqual({ config: { rateLimit: false } });
     expect(reply.status).toHaveBeenCalledWith(503);
     expect(reply.send).toHaveBeenCalledWith(
       expect.objectContaining({
+        db: "unchecked",
         ready: false,
         startedAt: "2026-01-01T00:00:00.000Z",
         readyAt: null,
@@ -132,6 +133,7 @@ describe("API route branch contracts", () => {
         }),
       }),
     );
+    expect((app.databaseReadinessProbe as { check: ReturnType<typeof vi.fn> }).check).not.toHaveBeenCalled();
   });
 
   it("previews public invitations without exposing tokenless requests", async () => {
