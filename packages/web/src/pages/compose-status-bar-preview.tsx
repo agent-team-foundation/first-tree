@@ -11,14 +11,14 @@ import { chatAgentStatusQueryKey } from "../api/agent-status.js";
 import { ComposeStatusBar } from "../components/chat/compose-status-bar.js";
 
 /**
- * DEV-only visual review for the stable composer activity strip and its shared
- * live-activity inspector.
+ * DEV-only visual review for the current-output surface connected to the
+ * composer.
  *
  * The rail is `useQuery`-driven (the shared `/agent-status` query), so each
  * variant primes its own entry in a local `QueryClient` cache keyed by a unique
  * `chatId`; the production component is then rendered against it inside a box
  * that mimics the real composer column width, so spacing, truncation, and the
- * snapshot → Activity entry structure is faithful to prod. No backend / no auth — same
+ * collapsed → current-output structure is faithful to prod. No backend / no auth — same
  * gating as `/preview/chat-row-avatar` (DEV-only in `app.tsx`).
  *
  * Covers concise narration, tool-only fallback, markdown stripping, long
@@ -75,7 +75,7 @@ type Variant = {
 const VARIANTS: Variant[] = [
   {
     name: "working · narration + tool",
-    subtitle: "collapsed strip shows narration; Activity opens the current tool as secondary context",
+    subtitle: "collapsed row shows narration; expanded output avoids repeating the tool when text exists",
     chatId: "v-goal-tool",
     agents: [DEV],
     statuses: [
@@ -89,8 +89,8 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · markdown in narration (stripped)",
-    subtitle: "raw turnText `issue 669` / **hex-color** renders as plain text",
+    name: "working · markdown narration",
+    subtitle: "collapsed text is plain; expanded output preserves Markdown",
     chatId: "v-markdown",
     agents: [DEV],
     statuses: [
@@ -105,7 +105,7 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "working · long narration",
-    subtitle: "the strip truncates; the inspector clamps the latest update to two visual lines",
+    subtitle: "the collapsed row truncates; expanded output keeps the available text without a line clamp",
     chatId: "v-long",
     agents: [DEV],
     statuses: [
@@ -120,9 +120,8 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · full narration stays in timeline",
-    subtitle:
-      "turnTextFull is deliberately not copied into the inspector; Activity shows only the latest concise snapshot",
+    name: "working · full narration in composer",
+    subtitle: "expanded output uses the existing turnTextFull field and preserves its multi-line structure",
     chatId: "v-expand",
     agents: [DEV],
     statuses: [
@@ -132,7 +131,7 @@ const VARIANTS: Variant[] = [
         detail: "pnpm typecheck",
         turnText: "Reworking the compose status bar so a long narration can expand to its full multi-line form",
         turnTextFull:
-          "Reworking the compose status bar so a long narration can expand to its full multi-line form.\n\nPlan:\n1. Server derives a newline-preserving turnTextFull (capped at 2000), only when it carries more than the one-line goal.\n2. The rail keeps its single line; a dedicated ⌃ chevron opens a floating card.\n3. The card floats over the stream (absolute, out of flow) so the live ~1s refresh never reflows the conversation.",
+          "Reworking the compose status bar so a long narration can expand to its full multi-line form.\n\n**Plan**\n\n1. Keep token usage above the live status.\n2. Connect the current output directly to the composer.\n3. Preserve Markdown and remove the two-line clamp.",
         startedAt: ago(23),
       }),
     ],
@@ -146,7 +145,7 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "working · thinking",
-    subtitle: "narration in the strip; Thinking appears as the current action in Activity",
+    subtitle: "narration is enough context, so the redundant Thinking label stays hidden",
     chatId: "v-thinking",
     agents: [NOVA],
     statuses: [
@@ -190,14 +189,14 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "failed",
-    subtitle: "failure leads the strip; an anchored inspector item jumps to timeline evidence",
+    subtitle: "failure leads the row; expanded output can jump to timeline evidence",
     chatId: "v-failed",
     agents: [RESEARCH],
     statuses: [build({ agentId: "agent-res", errored: true })],
   },
   {
-    name: "multi-agent · one shared inspector",
-    subtitle: "failure leads the stable strip; Activity (3) opens one container with lightly divided agent items",
+    name: "multi-agent · one connected output",
+    subtitle: "failure leads the stable row; expanding shows all actionable agents in one connected section",
     chatId: "v-multi",
     agents: [DEV, NOVA, RESEARCH],
     statuses: [
@@ -251,7 +250,7 @@ export function ComposeStatusBarPreviewPage() {
       <div style={{ background: "var(--bg)", minHeight: "100vh", padding: "var(--sp-6)" }}>
         <div style={{ maxWidth: 980, margin: "0 auto" }}>
           <h1 className="text-title" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1)" }}>
-            ComposeStatusBar — stable strip + live activity inspector
+            ComposeStatusBar — connected composer
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-6)" }}>
             DEV preview. Each card mimics the composer column; the real component renders against a primed status
@@ -268,21 +267,28 @@ export function ComposeStatusBarPreviewPage() {
                     {v.subtitle}
                   </div>
                 </div>
-                {/* Composer-column mimic: same max-width + raised surface as the
-                    real chat-bottom composer card. */}
+                {/* Composer-column mimic: same token → status → composer order,
+                    width, connected seam and raised surface as the real footer. */}
                 <div
                   style={{
                     maxWidth: "clamp(55rem, 75%, 70rem)",
-                    background: "var(--bg-raised)",
-                    border: "var(--hairline) solid var(--border)",
-                    borderRadius: 6,
-                    padding: "var(--sp-2) var(--sp-3)",
                   }}
                 >
+                  <div
+                    className="mono text-caption"
+                    style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
+                  >
+                    18.4K processed tokens in this chat
+                  </div>
                   <ComposeStatusBar chatId={v.chatId} agents={v.agents} />
                   <div
-                    className="text-caption"
-                    style={{ color: "var(--fg-4)", paddingTop: "var(--sp-1)" }}
+                    className="composer-card text-caption"
+                    style={{
+                      color: "var(--fg-4)",
+                      padding: "var(--sp-3)",
+                      background: "var(--bg-raised)",
+                      border: "var(--hairline) solid var(--border)",
+                    }}
                     aria-hidden="true"
                   >
                     Message {v.agents[0]?.displayName ?? "the team"}…

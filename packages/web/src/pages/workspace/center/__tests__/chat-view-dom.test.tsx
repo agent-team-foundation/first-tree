@@ -981,14 +981,47 @@ describe("ChatView", () => {
       />,
     );
     await waitForText(readOnly.container, "watching");
-    expect(readOnly.container.querySelector("[data-compose-status-bar]")).not.toBeNull();
+    const readOnlyStatus = readOnly.container.querySelector("[data-compose-status-bar]");
+    const readOnlyComposer = readOnly.container.querySelector(".composer-card");
+    expect(readOnlyStatus).not.toBeNull();
+    expect(readOnlyStatus?.nextElementSibling).toBe(readOnlyComposer);
+    expect(readOnlyComposer?.getAttribute("style")).not.toContain("border-radius");
     await waitForText(readOnly.container, "Join failed");
     await click(buttonByText(readOnly.container, "Join to reply"));
     expect(onJoin).toHaveBeenCalledTimes(1);
     await act(async () => readOnly.root.unmount());
   });
 
-  it("loads secondary-agent activity into the timeline so inspector summaries have evidence", async () => {
+  it("places token usage above the connected status and composer surfaces", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+      queryClient.setQueryData(["chat-token-usage", "chat-1"], {
+        inputTokens: 100,
+        cachedInputTokens: 250,
+        outputTokens: 50,
+        totalTokens: 400,
+      });
+    });
+
+    await waitForText(container, "400 processed tokens in this chat");
+    const tokenUsage = container.querySelector<HTMLElement>('[title^="Processed 400"]');
+    const statusSurface = container.querySelector<HTMLElement>("[data-compose-status-bar]");
+    const composer = container.querySelector<HTMLElement>(".composer-card");
+    expect(tokenUsage).not.toBeNull();
+    expect(statusSurface).not.toBeNull();
+    expect(composer).not.toBeNull();
+    expect(tokenUsage?.compareDocumentPosition(statusSurface ?? document.body) ?? 0).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(statusSurface?.compareDocumentPosition(composer ?? document.body) ?? 0).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(statusSurface?.nextElementSibling).toBe(composer);
+
+    await act(async () => root.unmount());
+  });
+
+  it("loads secondary-agent activity into the timeline so current-output links have evidence", async () => {
     const { ChatView } = await import("../chat-view.js");
     const secondaryEvents = {
       items: [
@@ -1047,13 +1080,13 @@ describe("ChatView", () => {
       () => container.querySelector('[data-working-agent="agent-2"]') !== null,
       "Expected secondary agent timeline evidence",
     );
-    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    await click(container.querySelector('button[aria-label^="Expand current agent output"]'));
     expect(container.querySelector('button[aria-label*="Design Critique"][aria-label*="Reviewing"]')).not.toBeNull();
 
     await act(async () => root.unmount());
   });
 
-  it("uses one Escape to close Activity without also dismissing open chat details", async () => {
+  it("keeps chat details open while current output expands and collapses inline", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
 
@@ -1066,37 +1099,29 @@ describe("ChatView", () => {
       () => container.querySelector('aside[aria-label="Chat details"]') !== null,
       "Expected chat details to be open",
     );
-    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    const outputTrigger = container.querySelector('button[aria-label^="Expand current agent output"]');
+    await click(outputTrigger);
     await waitForCondition(
-      () => container.querySelector("[data-live-activity-inspector]") !== null,
-      "Expected Activity Inspector to open",
+      () => container.querySelector("[data-current-agent-output]") !== null,
+      "Expected current output to expand",
     );
-    await waitForCondition(
-      () => document.activeElement?.getAttribute("aria-label") === "Close agent activity",
-      "Expected focus to enter Activity Inspector",
-    );
+    expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
 
-    await act(async () => {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-      );
-    });
-    await flush();
-
-    expect(container.querySelector("[data-live-activity-inspector]")).toBeNull();
+    await click(outputTrigger);
+    expect(container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(container.querySelector('aside[aria-label="Chat details"]')).not.toBeNull();
 
     await act(async () => root.unmount());
   });
 
-  it("lets a later mention layer consume Escape before the open Activity Inspector", async () => {
+  it("lets a later mention layer consume Escape while inline current output stays open", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
 
-    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    await click(container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForCondition(
-      () => container.querySelector("[data-live-activity-inspector]") !== null,
-      "Expected Activity Inspector to open",
+      () => container.querySelector("[data-current-agent-output]") !== null,
+      "Expected current output to expand",
     );
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
@@ -1113,7 +1138,7 @@ describe("ChatView", () => {
     await flush();
 
     expect(container.querySelector('[role="listbox"][aria-label="Mention suggestions"]')).toBeNull();
-    expect(container.querySelector("[data-live-activity-inspector]")).not.toBeNull();
+    expect(container.querySelector("[data-current-agent-output]")).not.toBeNull();
     expect(document.activeElement).toBe(textarea);
 
     await act(async () => root.unmount());

@@ -198,7 +198,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.querySelector('[role="status"]')).toBe(liveStatus);
   });
 
-  it("keeps the collapsed snapshot concise and opens one live activity inspector", async () => {
+  it("keeps the compact row concise and expands the existing full narration inline", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -216,13 +216,13 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       expect(h.container.textContent).toContain("Nova");
       expect(h.container.textContent).toContain("Working");
       expect(h.container.textContent).toContain("Write extra DOM tests");
-      expect(h.container.textContent).toContain("Activity (1)");
     });
     expect(h.container.textContent).not.toContain("Bash");
     expect(h.container.textContent).not.toContain("Cover the status rail.");
+    expect(h.container.textContent).not.toContain("Activity");
 
-    const trigger = h.container.querySelector('button[aria-label^="Open agent activity"]');
-    expect(trigger?.getAttribute("aria-label")).toBe("Open agent activity, 1 actionable agent");
+    const trigger = h.container.querySelector('button[aria-label^="Expand current agent output"]');
+    expect(trigger?.getAttribute("aria-label")).toBe("Expand current agent output, 1 actionable agent");
     const liveStatus = h.container.querySelector('[role="status"]');
     expect(liveStatus?.textContent).toContain("1 actionable agent");
     expect(liveStatus?.textContent).toContain("Nova Working");
@@ -231,18 +231,18 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await click(h, trigger);
     await waitForSettled(h, () => {
-      expect(h.container.querySelector('section[aria-label="Agent activity"]')).not.toBeNull();
-      expect(h.container.textContent).toContain("Agent activity · 1 agent");
-      expect(h.container.textContent).toContain("Bash");
-      expect(h.container.textContent).toContain("doc-page.tsx");
+      expect(h.container.querySelector('section[aria-label="Current agent output"]')).not.toBeNull();
+      expect(h.container.textContent).toContain("Cover the status rail.");
     });
-    // `turnTextFull` is timeline evidence, not duplicated into the live snapshot.
-    expect(h.container.textContent).not.toContain("Cover the status rail.");
+    expect(h.container.querySelector('section[aria-label="Current agent output"]')?.getAttribute("tabindex")).toBe("0");
+    expect(h.container.textContent).not.toContain("Bash");
+    expect(h.container.textContent).not.toContain("doc-page.tsx");
+    expect(h.container.querySelector(".compose-status-narration strong")?.textContent).toBe("extra");
 
-    const focusedControl = document.activeElement;
-    if (!(focusedControl instanceof HTMLElement)) throw new Error("Expected a focused Inspector control");
-    await keyDown(h, focusedControl, "Escape");
-    await waitForSettled(h, () => expect(h.container.querySelector('section[aria-label="Agent activity"]')).toBeNull());
+    await click(h, trigger);
+    await waitForSettled(h, () =>
+      expect(h.container.querySelector('section[aria-label="Current agent output"]')).toBeNull(),
+    );
   });
 
   it("keeps the server-derived main state while presenting status reasons as explanation", async () => {
@@ -285,12 +285,12 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.textContent).toContain("Idle");
     expect(h.container.textContent).not.toContain("Failed");
 
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Offline Agent"));
     expect(h.container.textContent).toContain("Offline");
   });
 
-  it("shows a current reason in the strip and its detail inside the inspector", async () => {
+  it("shows a current reason in the compact row and its detail inline", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-waiting", {
         statusReason: {
@@ -310,13 +310,13 @@ describe("ComposeStatusBar extra DOM coverage", () => {
 
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Waiting for provider capacity"));
     expect(h.container.textContent).toContain("Waiting");
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForSettled(h, () => expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull());
     expect(h.container.querySelector('[title="capacity queue"]')).not.toBeNull();
     expect(h.container.querySelector('button[aria-label*="timeline"]')).toBeNull();
   });
 
-  it("opens all agents in one lightly divided inspector without duplicating the lead", async () => {
+  it("opens all agents in one lightly divided inline region without duplicating the lead", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-atlas", { errored: true }),
       status("agent-nova", {
@@ -336,17 +336,17 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       expect(h.container.querySelector(".compose-status-agent-name")?.textContent).toBe("Atlas");
     });
 
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForSettled(h, () => expect(h.container.textContent).toContain("Nova"));
 
-    const inspector = h.container.querySelector("[data-live-activity-inspector]");
+    const inspector = h.container.querySelector("[data-current-agent-output]");
     const atlasCount = inspector?.textContent?.match(/Atlas/g)?.length ?? 0;
     expect(atlasCount).toBe(1);
-    expect(h.container.querySelectorAll("[data-live-activity-inspector]")).toHaveLength(1);
-    expect(h.container.querySelectorAll("[data-live-activity-agent]")).toHaveLength(2);
+    expect(h.container.querySelectorAll("[data-current-agent-output]")).toHaveLength(1);
+    expect(h.container.querySelectorAll("[data-current-output-agent]")).toHaveLength(2);
   });
 
-  it("makes the whole anchored agent item close the inspector and jump to evidence", async () => {
+  it("keeps a quiet timeline jump inside the expanded output", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -364,8 +364,8 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       ),
     );
 
-    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     await waitForSettled(h, () =>
       expect(
         h.container.querySelector('button[aria-label*="Nova"][aria-label*="Run the focused suite"]'),
@@ -375,10 +375,10 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await click(h, h.container.querySelector('button[aria-label*="Nova"][aria-label*="Run the focused suite"]'));
 
     expect(timelineMocks.scrollToAgentTimeline).toHaveBeenCalledWith("agent-nova", "working", { focus: true });
-    expect(h.container.querySelector("[data-live-activity-inspector]")).toBeNull();
+    expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
   });
 
-  it("places the inspector after its trigger and restores trigger focus on Escape", async () => {
+  it("places inline output after its trigger and keeps focus on the disclosure", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -388,27 +388,23 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     ]);
 
     h.render(withProviders(<ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} />));
-    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
 
-    const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label^="Open agent activity"]');
+    const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label^="Expand current agent output"]');
     trigger?.focus();
     await click(h, trigger);
-    const inspector = h.container.querySelector<HTMLElement>("[data-live-activity-inspector]");
+    const inspector = h.container.querySelector<HTMLElement>("[data-current-agent-output]");
     expect(inspector).not.toBeNull();
     const domPosition = trigger?.compareDocumentPosition(inspector ?? document.body) ?? 0;
     expect(domPosition & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-    await waitForSettled(h, () =>
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Close agent activity"),
-    );
+    expect(document.activeElement).toBe(trigger);
 
-    const focusedControl = document.activeElement;
-    if (!(focusedControl instanceof HTMLElement)) throw new Error("Expected a focused Inspector control");
-    await keyDown(h, focusedControl, "Escape");
-    expect(h.container.querySelector("[data-live-activity-inspector]")).toBeNull();
+    await click(h, trigger);
+    expect(h.container.querySelector("[data-current-agent-output]")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("leaves Escape to a later focused keyboard layer outside the inspector", async () => {
+  it("leaves Escape to a later focused keyboard layer outside the inline output", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", {
         working: true,
@@ -431,8 +427,8 @@ describe("ComposeStatusBar extra DOM coverage", () => {
         </>,
       ),
     );
-    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     const laterLayer = h.container.querySelector<HTMLInputElement>('input[aria-label="Mention autocomplete"]');
     if (!laterLayer) throw new Error("Expected later keyboard layer");
     laterLayer.focus();
@@ -440,8 +436,41 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await keyDown(h, laterLayer, "Escape");
 
     expect(externalEscape).toHaveBeenCalledTimes(1);
-    expect(h.container.querySelector("[data-live-activity-inspector]")).not.toBeNull();
+    expect(h.container.querySelector("[data-current-agent-output]")).not.toBeNull();
     expect(document.activeElement).toBe(laterLayer);
+  });
+
+  it("does not steal focus after a pointer leaves the status surface", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(
+      ["chat-agent-status", "chat-1"],
+      [status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") })],
+    );
+    const fallbackRef = createRef<HTMLButtonElement>();
+
+    h.render(
+      withProviders(
+        <>
+          <ComposeStatusBar chatId="chat-1" agents={[agent("agent-nova", "Nova")]} fallbackFocusRef={fallbackRef} />
+          <button ref={fallbackRef} type="button">
+            Composer fallback
+          </button>
+        </>,
+        queryClient,
+      ),
+    );
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    const trigger = h.container.querySelector<HTMLButtonElement>('button[aria-label^="Expand current agent output"]');
+    trigger?.focus();
+    await act(async () => {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      queryClient.setQueryData(["chat-agent-status", "chat-1"], []);
+    });
+    await h.flush();
+
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull());
+    expect(document.activeElement).not.toBe(fallbackRef.current);
   });
 
   it("jumps a ready terminal error to its mounted error evidence", async () => {
@@ -467,8 +496,8 @@ describe("ComposeStatusBar extra DOM coverage", () => {
         </>,
       ),
     );
-    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     const row = h.container.querySelector(
       'button[aria-label*="Terminal Agent"][aria-label*="Provider retry exhausted"]',
     );
@@ -531,20 +560,20 @@ describe("ComposeStatusBar extra DOM coverage", () => {
         </>,
       ),
     );
-    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (3)"));
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("3 agents"));
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
 
     for (const [agentId, name] of [
       ["agent-waiting", "Waiting Agent"],
       ["agent-retrying", "Retrying Agent"],
       ["agent-warning", "Warning Agent"],
     ]) {
-      await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
       await click(h, h.container.querySelector(`button[aria-label*="${name}"][aria-label*="timeline"]`));
       expect(timelineMocks.scrollToAgentTimeline).toHaveBeenLastCalledWith(agentId, "reason", { focus: true });
     }
   });
 
-  it("keeps focus inside a live-updating inspector, then returns it to the composer fallback", async () => {
+  it("recovers focus from live-updating output, then returns it to the composer fallback", async () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(
       ["chat-agent-status", "chat-1"],
@@ -573,8 +602,8 @@ describe("ComposeStatusBar extra DOM coverage", () => {
       ),
     );
 
-    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (2)"));
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForSettled(h, () => expect(h.container.textContent).toContain("2 agents"));
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     const novaRow = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Nova"]');
     novaRow?.focus();
     expect(document.activeElement).toBe(novaRow);
@@ -587,7 +616,9 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     });
     await h.flush();
     await waitForSettled(h, () =>
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Close agent activity"),
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(
+        "Collapse current agent output, 1 actionable agent",
+      ),
     );
 
     const atlasRow = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Atlas"]');
@@ -600,7 +631,7 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     expect(h.container.querySelector("[data-compose-status-bar]")).toBeNull();
   });
 
-  it("moves focus to Close when a focused row loses only its timeline anchor", async () => {
+  it("moves focus to the disclosure when a focused jump loses its timeline anchor", async () => {
     agentStatusApiMocks.fetchChatAgentStatuses.mockResolvedValue([
       status("agent-nova", { working: true, engagement: "active", activity: activity("agent-nova") }),
     ]);
@@ -618,8 +649,8 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     }
 
     h.render(withProviders(<AnchorHarness />));
-    await waitForSettled(h, () => expect(h.container.textContent).toContain("Activity (1)"));
-    await click(h, h.container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForSettled(h, () => expect(h.container.querySelector("[data-compose-status-bar]")).not.toBeNull());
+    await click(h, h.container.querySelector('button[aria-label^="Expand current agent output"]'));
     const row = h.container.querySelector<HTMLButtonElement>('button[aria-label*="Nova"]');
     row?.focus();
     expect(document.activeElement).toBe(row);
@@ -628,7 +659,9 @@ describe("ComposeStatusBar extra DOM coverage", () => {
     await h.flush();
 
     await waitForSettled(h, () =>
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Close agent activity"),
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(
+        "Collapse current agent output, 1 actionable agent",
+      ),
     );
     expect(h.container.querySelector('button[aria-label*="Nova"]')).toBeNull();
   });
