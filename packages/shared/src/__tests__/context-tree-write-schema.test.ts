@@ -14,13 +14,11 @@ describe("Context Tree Write preflight schemas", () => {
       contextTreeWritePreflightResponseSchema.parse({
         organizationId: "team-a",
         binding: { repo: "git@github.com:acme/context-tree.git", branch: "main" },
-        reviewerAgentUuid: "reviewer-a",
         requesterGithubLogin: "Writer",
       }),
     ).toEqual({
       organizationId: "team-a",
       binding: { repo: "git@github.com:acme/context-tree.git", branch: "main" },
-      reviewerAgentUuid: "reviewer-a",
       requesterGithubLogin: "Writer",
     });
   });
@@ -36,15 +34,14 @@ describe("Context Tree Write preflight schemas", () => {
       contextTreeWritePreflightResponseSchema.safeParse({
         organizationId: "team-a",
         binding: { repo: "not-a-git-url", branch: "main" },
-        reviewerAgentUuid: "reviewer-a",
         requesterGithubLogin: "writer",
       }).success,
     ).toBe(false);
   });
 
   it("keeps preflight error codes on the shared wire contract", () => {
-    expect(contextTreeWritePreflightErrorCodeSchema.parse("CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE")).toBe(
-      "CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE",
+    expect(contextTreeWritePreflightErrorCodeSchema.parse("CONTEXT_TREE_WRITE_CONFIGURATION_INVALID")).toBe(
+      "CONTEXT_TREE_WRITE_CONFIGURATION_INVALID",
     );
     expect(contextTreeWritePreflightErrorCodeSchema.safeParse("CONTEXT_TREE_WRITE_TASK_KEY").success).toBe(false);
   });

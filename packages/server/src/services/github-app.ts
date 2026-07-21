@@ -303,6 +303,9 @@ export type GithubPullRequestForReview = {
   draft: boolean;
   merged: boolean;
   headSha: string;
+  baseRef: string | null;
+  headRef: string | null;
+  headRepository: string | null;
   htmlUrl: string;
   body: string | null;
 };
@@ -347,7 +350,8 @@ export async function getPullRequestForReview(
     draft?: boolean;
     merged?: boolean;
     merged_at?: string | null;
-    head: { sha: string };
+    base?: { ref?: string };
+    head: { sha: string; ref?: string; repo?: { full_name?: string } | null };
     html_url: string;
     body?: string | null;
   };
@@ -357,6 +361,9 @@ export async function getPullRequestForReview(
     draft: body.draft === true,
     merged: body.merged === true || body.merged_at != null,
     headSha: body.head.sha,
+    baseRef: body.base?.ref ?? null,
+    headRef: body.head.ref ?? null,
+    headRepository: body.head.repo?.full_name?.toLowerCase() ?? null,
     htmlUrl: body.html_url,
     body: typeof body.body === "string" ? body.body : null,
   };

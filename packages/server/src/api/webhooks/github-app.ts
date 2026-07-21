@@ -3,7 +3,11 @@ import { githubAppInstallationPermissionsSchema, type ScmIngressContext } from "
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { handleContextReviewerPrEvent, isContextReviewerCandidateEvent } from "../../services/context-reviewer-pr.js";
+import {
+  handleContextReviewerPrEvent,
+  isBoundContextTreePullRequest,
+  isContextReviewerCandidateEvent,
+} from "../../services/context-reviewer-pr.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
   deleteInstallationByGithubId,
@@ -247,8 +251,11 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
 
     const rawAction = isRecord(payload) ? readString(payload.action) : null;
     const normalized = normalizeGithubWebhook(eventType, payload, ingress);
-    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction, payload);
-    if (!normalized.event && !shouldRunContextReviewer && !normalized.observation) {
+    const boundContextTreePullRequest = await isBoundContextTreePullRequest(app.db, { payload, organizationId });
+    const shouldRunContextReviewer =
+      boundContextTreePullRequest && isContextReviewerCandidateEvent(eventType, rawAction, payload);
+    const genericEvent = boundContextTreePullRequest ? null : normalized.event;
+    if (!genericEvent && !shouldRunContextReviewer && !normalized.observation) {
       log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
       return reply.status(200).send({ ok: true, event: eventType, handled: false });
     }
@@ -257,7 +264,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
       db: app.db,
       ingress,
       observation: normalized.observation,
-      event: normalized.event,
+      event: genericEvent,
       applyObservation: async (current) => {
         if (current.state) {
           await setEntityState(app.db, {
@@ -282,7 +289,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
               eventType,
               payload,
               organizationId,
-              deliveryId: ingress.stableDeliveryId,
+              installationId,
             })
           : Promise.resolve({ handled: false, reason: "unsupported_event" } as const),
       resolveAudience: (normalizedEvent) => resolveGithubAudience(app.db, normalizedEvent),

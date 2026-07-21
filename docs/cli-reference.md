@@ -64,12 +64,12 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── doc ...                  Org document library (publish, comments, reply, resolve, status)
-├── github ...               GitHub entity attention and context review
+├── github ...               GitHub entity attention
 ├── gitlab ...               GitLab Issue/MR entity attention
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
-└── tree ...                 Validate and browse Context Trees
+└── tree ...                 Read, write, review, validate, and browse Context Trees
 ```
 
 ---
@@ -328,13 +328,11 @@ Day-to-day messaging.
 ```
 first-tree chat
 ├── create [message]                               # create a separate task chat and write its first message
-│     --to <name>                                  #   initial recipient to mention + wake; repeatable, required unless --as-member
+│     --to <name>                                  #   initial recipient to mention + wake; repeatable
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
 │     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
-│     --as-member [--org <orgId>]                  #   signed-in member; no running Client Runtime, local Agent, or active Computer connection required
-│     --metadata-file <path>                       #   strict context_tree_pr_review opening metadata; with --as-member + markdown
 ├── send <name> [message]                            # wake a participant — agent or human (a send to a human is informational only; a question the next step depends on goes through `chat ask`)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
 │     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
@@ -365,12 +363,6 @@ first-tree chat
 first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent \
   --topic "rollout review" \
   --description "reviewing rollout plan; waiting on code-agent"
-
-# Dedicated Agent Review producer. Recipient, topic, human sender, provenance,
-# and the internal stable PR task key are all derived by the Server from live Team
-# configuration; callers cannot supply them. This mode is safe to retry.
-first-tree chat create --as-member --format markdown \
-  --metadata-file /tmp/review-packet.json < /tmp/review-opening.md
 
 # Start a new task chat with a tracked question. The first request must target
 # exactly one human. The message body IS the ask and must be
@@ -524,16 +516,6 @@ stays in the current chat; invite the next agent and send the handoff there.
 Ordinary task creation is intentionally not idempotent. There is no operation
 id, and the CLI does not automatically retry it. If an ordinary create reports
 an unknown result, check `chat list` or the Web UI before running it again.
-
-The narrow `--as-member` mode is the exception: it accepts only a Markdown
-opening plus strict `context_tree_pr_review` metadata. The Server derives the
-current configured Reviewer and a stable Team + task type + repository + PR
-key, then atomically creates or reuses one Chat and opening. Changing Reviewer
-keeps that Chat and reconciles its current Reviewer on the next retry. The SDK
-retries transient failures; a caller may also rerun the exact command.
-`--as-member` rejects `--to`,
-`--with`, `--topic`, `--description`, inline `--metadata`, `--agent`, and
-request-option flags. `--org` and `--metadata-file` are invalid without it.
 
 If a non-human agent includes itself in `chat create --to`, the server records
 the originating agent in metadata and uses that agent's manager human as the
@@ -790,7 +772,7 @@ daemon, local First Tree Agent, or active Computer connection is required.
 `--as-member` conflicts with `--agent`; `--org` requires `--as-member`.
 
 The command contains no review mode, generation, governance, or merge-method
-setting: Agent Review uses the currently assigned Reviewer and current-state
+setting: Context Review uses the currently assigned Reviewer and current-state
 configuration semantics.
 
 ### org context-tree set
@@ -970,12 +952,12 @@ server-side `agent_configs` row through the Admin API.
 ## tree
 
 Context Tree task-read activation, source-backed write and Seed preflight,
-creation, structural validation, and hierarchy browsing. The `tree` namespace
-carries `read`, `write`, `seed`, `verify`, `tree`, and `init`; the rest (`migrate` /
-`upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
-`automation` / `skill` groups) was retired in the 2026-06 cleanup because the
-cloud now owns workspace + tree provisioning and the client runtime inlines its
-own skill payload install (see PR following #844).
+App-backed review publication, creation, structural validation, and hierarchy
+browsing. The `tree` namespace carries `read`, `write`, `review`, `seed`,
+`verify`, `tree`, and `init`; the rest (`migrate` / `upgrade` / `status` /
+`codeowners` / `claude-hook` / `inject` / `automation` / `skill` groups) was
+retired in the 2026-06 cleanup because the cloud now owns workspace + tree
+provisioning and the client runtime inlines its own skill payload install.
 
 ```
 first-tree tree
@@ -983,6 +965,9 @@ first-tree tree
 ├── read --team ID --snapshot DIR            # activate one exact task read snapshot
 ├── write --team ID --snapshot DIR \
 │        --github-login LOGIN                 # preflight clean source-backed authoring
+├── review --run ID --head SHA --event EVENT \
+│        --body-file PATH                      # publish one exact-head App review
+├── review --run ID --head SHA --check          # verify live run authority without mutation
 ├── seed --team ID                            # preflight clean Team Seed authority/binding
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
@@ -1045,10 +1030,10 @@ default/current Team, local Agent, or prior task receipt.
 
 The command sends one member-authenticated request to
 `POST /api/v1/orgs/:orgId/context-tree/write-preflight`. The Server reads the
-live bound Tree and assigned Context Reviewer as one current tuple, verifies
-the requester's active Team/human identity and linked GitHub login, and checks
-that the Reviewer is an active non-human Agent. The request cannot select a
-Reviewer, task key, Chat, sender, topic, review, or merge authority.
+live bound Tree and verifies the requester's active Team/human identity and
+linked GitHub login. Reviewer availability is deliberately not Writer
+authority and does not gate authoring. The request cannot select a Reviewer,
+task key, Chat, sender, topic, review, or merge authority.
 
 After Server admission, the CLI requires the current binding to match the
 snapshot identity (canonical repository plus exact branch), strictly fetches
@@ -1056,22 +1041,41 @@ the bound branch into temporary state, and requires its remote tip to equal the
 snapshot commit. It then re-verifies that the snapshot is still clean and fixed
 at the same commit. The command removes temporary fetch state and performs no
 remote mutation. It is safe to run at activation and repeat immediately before
-the first push or PR creation; each run observes Server current Reviewer state.
+the first push or PR creation; each run observes Server current binding state.
 
 With global `--json`, success returns
-`{ teamId, binding, baseCommit, snapshotPath, reviewerAgentUuid,
-requesterGithubLogin }`. Human output reports the same tuple. Stable local and
+`{ teamId, binding, baseCommit, snapshotPath, requesterGithubLogin }`. Human
+output reports the same tuple. Stable local and
 Server failure codes distinguish invalid input/snapshot, explicit-Team
 mismatch, authority or identity denial, unavailable/unsupported binding,
-invalid configuration, unavailable review/Reviewer, changed binding, fetch
-failure, and a stale snapshot base. Failure creates no PR or Agent Review task.
-The returned Reviewer UUID is diagnostic only: callers must not cache or route
-from it, because keyed dispatch resolves the Server current Reviewer again.
+invalid configuration, changed binding, fetch
+failure, and a stale snapshot base. Failure creates no PR or Context Reviewer run.
 
 Authoring happens in a separate task worktree/branch created from
-`baseCommit`; the exact read snapshot remains immutable. After a PR exists,
-the existing member keyed Chat-create flow remains the sole task/Reviewer
-handoff authority and reuses the same stable PR Chat on retry.
+`baseCommit`; the exact read snapshot remains immutable. After a ready PR
+exists, GitHub App webhooks create or reuse its stable PR-scoped Reviewer Chat
+and trusted exact-head run. Writers do not create or wake a review Chat.
+
+The PR body remains human-readable source, decision, rationale, and verification
+context. It carries no repair-consent sentence, parser block, or path authority.
+The Reviewer derives repairable paths from the live base-to-head changed files
+intersected with non-protected policy, and repeats the Server authority
+preflight before semantic reads and every edit, commit, push, review
+publication, and merge boundary. Body-only `pull_request.edited` events
+retrigger review; other PR metadata edits and edited issue comments do not.
+
+`first-tree tree review` is available only inside the active Context Reviewer
+runtime session. It accepts a Server-authored run id, the exact inspected
+40-character head OID, one of `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`, and a
+UTF-8 body file (`-` reads stdin). `--check` performs the same strict read-only
+authority preflight without publishing. The Server binds each run to the
+dispatch-time installation, Reviewer client/runtime generation, repository,
+pull request, and head, then re-resolves all live authority before either
+operation. Stale or unauthorized calls fail closed. The command never merges.
+Only a successful `APPROVE` response with `publicationDisposition: created`
+permits the Reviewer to use its local GitHub identity for one
+`gh pr merge --squash --match-head-commit <sha>` attempt; `existing` and
+`reconciled` responses authorize no merge attempt, and `--admin` is forbidden.
 
 `first-tree tree seed --team <team-id>` is the stateless admission boundary for
 portable Context Tree setup. The Team is required and explicit; this command

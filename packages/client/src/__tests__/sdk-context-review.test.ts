@@ -18,6 +18,7 @@ describe("FirstTreeHubSDK.submitContextReview", () => {
           reviewId: 42,
           reviewUrl: "https://github.com/o/r/pull/7#pullrequestreview-42",
           appActor: "first-tree[bot]",
+          publicationDisposition: "created",
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
@@ -46,6 +47,43 @@ describe("FirstTreeHubSDK.submitContextReview", () => {
       event: "APPROVE",
       body: "Approved.",
     });
+  });
+
+  it("sends runtime proof to the read-only run authority endpoint without retry", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authorized: true,
+          repository: "o/r",
+          prNumber: 7,
+          reviewedHead: "a".repeat(40),
+          state: "open",
+          draft: false,
+          baseRef: "main",
+          headRef: "context-update",
+          headRepository: "o/r",
+          sameRepository: true,
+          installationId: 42,
+          reviewerClientId: "client-1",
+          runtimeSessionBoundAt: "2026-07-21T00:00:00.000Z",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    globalThis.fetch = fetchMock;
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: "https://cloud.example",
+      getAccessToken: () => "member-jwt",
+      agentId: "agent/reviewer",
+      runtimeSessionToken: "runtime-proof",
+    });
+
+    await sdk.inspectContextReviewAuthority("chat/id", "run/id", { reviewedHead: "a".repeat(40) });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://cloud.example/api/v1/agent/chats/chat%2Fid/context-review-runs/run%2Fid/authority");
+    expect(new Headers(init?.headers).get("x-agent-runtime-session")).toBe("runtime-proof");
+    expect(JSON.parse(String(init?.body))).toEqual({ reviewedHead: "a".repeat(40) });
   });
 
   it("does not retry a transient response for the mutation endpoint", async () => {

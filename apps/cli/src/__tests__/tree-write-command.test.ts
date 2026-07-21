@@ -57,7 +57,6 @@ describe("tree write command action", () => {
       binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       baseCommit: "a".repeat(40),
       snapshotPath: "/tmp/task-snapshot",
-      reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "writer",
     };
     coreMocks.preflightContextTreeWrite.mockImplementationOnce(async (reader, input) => {
@@ -95,7 +94,6 @@ describe("tree write command action", () => {
       binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
       baseCommit: "b".repeat(40),
       snapshotPath: "/tmp/task-snapshot",
-      reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "writer",
     };
     coreMocks.preflightContextTreeWrite.mockResolvedValueOnce(preflight);
@@ -111,7 +109,6 @@ describe("tree write command action", () => {
       ["Binding", "https://github.com/acme/context-tree.git#main"],
       ["Exact base", preflight.baseCommit],
       ["Snapshot", preflight.snapshotPath],
-      ["Current Reviewer", "reviewer-current"],
       ["GitHub identity", "writer"],
     ]);
   });

@@ -252,7 +252,6 @@ describe("FirstTreeHubSDK.preflightMemberContextTreeWrite", () => {
     const authority = {
       organizationId: "team /?#",
       binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
-      reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "Writer",
     };
     const fetchMock = vi.fn<typeof fetch>(async (_input, _init) =>
@@ -310,7 +309,6 @@ describe("FirstTreeHubSDK.preflightMemberContextTreeWrite", () => {
         jsonResponse({
           organizationId: "team-a",
           binding: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
-          reviewerAgentUuid: "reviewer-current",
           requesterGithubLogin: "writer",
         }),
       );

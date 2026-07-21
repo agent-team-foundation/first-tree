@@ -39,6 +39,7 @@ export type CliOptions = {
 export type ReviewEvent = {
   action: SubmittedReviewAction;
   body: string;
+  bodyFilePath: string;
   bodyFileUsed: boolean;
   commitOid: string;
   currentHeadOid: string;
@@ -49,14 +50,18 @@ export type ReviewEvent = {
 };
 
 export type ReviewFixtureExpectation = {
+  agentId: string;
   baseOid: string;
+  chatId: string;
   expectedFinalDraft: boolean;
   expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
   governedPaths: readonly string[];
+  headRefName: string;
   headOid: string;
   prNumber: number;
   repo: string;
+  reviewerLogin: string;
   runId: string;
   submissionHeadOid: string;
   workspacePath: string;
@@ -66,6 +71,7 @@ export type ReviewFixtureIntegrity = {
   mainHeadUnchanged: boolean;
   mainWorktreeClean: boolean;
   originRefsUnchanged: boolean;
+  reviewBodyCleaned: boolean;
   reviewWorktreeCleaned: boolean;
   treeConfigUnchanged: boolean;
   treeRefsUnchanged: boolean;
@@ -81,10 +87,18 @@ export type ViewEvent = {
   state: string;
 };
 
+export type LocalMergeEvent = {
+  commitOid: string;
+  eventIndex: number;
+  prNumber: number;
+  repo: string;
+};
+
 export type EvalMetrics = {
   bodyHintsObserved: boolean;
   blockedGithubAttempts: number;
   expectedHeadingObserved: boolean;
+  fetchHeadChecksCompletionOrdered: boolean;
   finalViewFresh: boolean;
   firstTreeReadLoaded: boolean;
   firstTreeVerifyCalls: number;
@@ -93,11 +107,14 @@ export type EvalMetrics = {
   identityReadObserved: boolean;
   initialViewObserved: boolean;
   mainTreeReadAttempted: boolean;
+  localMergeAttempts: number;
+  localMergeValid: boolean;
   mutationAttempted: boolean;
   reviewAfterFinalView: boolean;
   reviewCommitBound: boolean;
   reviewEvents: readonly ReviewEvent[];
   runnerExitCode: number | null;
+  runtimeIdentityChecksObserved: boolean;
   skillFileReadObserved: boolean;
   semanticReadAfterVerify: boolean;
   semanticReadAfterFailedVerify: boolean;

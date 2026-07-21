@@ -89,7 +89,6 @@ async function setupRoute() {
   const getOrganization = vi.fn().mockResolvedValue({ id: scope.organizationId, name: "Acme", displayName: "Acme" });
   const preflightContextTreeWriteAuthority = vi.fn().mockResolvedValue({
     binding: { repo: repo.cloneUrl, branch: "main" },
-    reviewerAgentUuid: "reviewer-current",
     requesterGithubLogin: "writer",
   });
 
@@ -98,7 +97,7 @@ async function setupRoute() {
     ContextTreeRepoProvisionError,
     ensureInstallationOwnedContextTreeRepo,
   }));
-  vi.doMock("../services/context-review-task.js", () => ({
+  vi.doMock("../services/context-tree-write-preflight.js", () => ({
     ContextTreeWritePreflightError,
     preflightContextTreeWriteAuthority,
   }));
@@ -204,7 +203,6 @@ describe("org context tree routes with mocked service edges", () => {
     expect(res.json()).toEqual({
       organizationId: ctx.scope.organizationId,
       binding: { repo: ctx.repo.cloneUrl, branch: "main" },
-      reviewerAgentUuid: "reviewer-current",
       requesterGithubLogin: "writer",
     });
   });
@@ -213,9 +211,9 @@ describe("org context tree routes with mocked service edges", () => {
     const ctx = await setupRoute();
     ctx.mocks.preflightContextTreeWriteAuthority.mockRejectedValueOnce(
       new ctx.classes.ContextTreeWritePreflightError(
-        "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+        "CONTEXT_TREE_WRITE_CONFIGURATION_INVALID",
         409,
-        "Agent Review is unavailable.",
+        "The Context Tree binding is invalid.",
       ),
     );
 
@@ -227,8 +225,8 @@ describe("org context tree routes with mocked service edges", () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
-      error: "Agent Review is unavailable.",
-      code: "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
+      error: "The Context Tree binding is invalid.",
+      code: "CONTEXT_TREE_WRITE_CONFIGURATION_INVALID",
     });
   });
 

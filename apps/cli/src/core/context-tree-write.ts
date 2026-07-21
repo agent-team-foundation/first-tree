@@ -50,7 +50,6 @@ export type ContextTreeWritePreflight = {
   binding: { repo: string; branch: string };
   baseCommit: string;
   snapshotPath: string;
-  reviewerAgentUuid: string;
   requesterGithubLogin: string;
 };
 
@@ -162,7 +161,6 @@ export async function preflightContextTreeWrite(
     binding: authority.binding,
     baseCommit: snapshot.commit,
     snapshotPath: snapshot.snapshotPath,
-    reviewerAgentUuid: authority.reviewerAgentUuid,
     requesterGithubLogin: authority.requesterGithubLogin,
   };
 }
@@ -252,9 +250,6 @@ function serverPreflightFailure(
       "Managed Agent Review currently requires the selected Team's Context Tree binding to be on GitHub.",
     CONTEXT_TREE_WRITE_CONFIGURATION_INVALID:
       "The selected Team's Context Tree Write configuration is invalid and must be repaired.",
-    CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE:
-      "The selected Team does not currently have Agent Review enabled with an assigned Reviewer.",
-    CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE: "The selected Team's current Reviewer is unavailable.",
     CONTEXT_TREE_WRITE_GITHUB_IDENTITY_REQUIRED:
       "Connect your GitHub identity to First Tree before starting Context Tree Write.",
     CONTEXT_TREE_WRITE_GITHUB_IDENTITY_MISMATCH:

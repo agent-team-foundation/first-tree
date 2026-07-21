@@ -36,7 +36,7 @@ const DEFAULT_SKILL_NAMES = [
 
 function workspaceAgents(skills: readonly { description: string; name: string }[]): string {
   const rows = skills.map((skill) => `| \`${skill.name}\` | ${skill.description} |`).join("\n");
-  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for ownership changes and \`decisionLocksCode\`. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review is read-only.\n`;
+  return `# Eval Workspace Instructions\n\n## Available Skills\n\n| Skill | Load when |\n|---|---|\n${rows}\n\nA Cloud Context Reviewer wake-up or an explicit Context Tree PR review loads \`context-tree-review\` exclusively. Do not load \`first-tree-read\` first; the review skill owns detached PR-head discovery, validation, and semantic reads. Load \`.agents/skills/context-tree-review/SKILL.md\` before reviewing the Context Tree PR.\n\n## Context Tree Policy\n\nThe Context Tree stores durable current decisions, constraints, ownership, and cross-domain relationships with surviving rationale. Source repositories store implementation details and delivery history. Normal content is canonical current truth; archive/supporting content is evidence only; member content routes ownership. Normal nodes must remain self-contained without archive material. Apply What / Why / Who, edit rather than duplicate, and require explicit human authority for ownership changes and \`decisionLocksCode\`. Do not put source mirrors, PR provenance, implementation detail, or actionable future work in normal nodes.\n\nThe bound Context Tree is \`./context-tree\`. Review may repair only when the installed skill live-scope gates permit it.\n`;
 }
 
 function changedBody(scenario: ContextTreeReviewEvalCase["fixture"]["scenario"]): { path: string; content: string } {
@@ -71,7 +71,7 @@ function changedBody(scenario: ContextTreeReviewEvalCase["fixture"]["scenario"])
     path: "system/review-contract.md",
     content: node(
       "Review Contract",
-      "## Decision\n\nContext Tree pull request reviews are bound to the current head and produce one explicit verdict.\n\n## Rationale\n\nA single head-bound verdict prevents stale approvals and gives owners one auditable semantic outcome.\n\n## Constraints\n\nReviewers do not edit or merge the proposed tree change.",
+      "## Decision\n\nContext Tree pull request reviews are bound to the current head and produce one explicit verdict.\n\n## Rationale\n\nA single head-bound verdict prevents stale approvals and gives owners one auditable semantic outcome.\n\n## Constraints\n\nAny permitted local repair or merge attempt remains gated by the exact-head review policy.",
     ),
   };
 }
@@ -140,6 +140,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
     verifyResultPath,
     `${JSON.stringify({ exitCode: verifyResult.exitCode, stderr: verifyResult.stderr, stdout: verifyResult.stdout }, null, 2)}\n`,
   );
+  assertCommandOk(runCommand("git", ["push", "origin", "HEAD:refs/heads/review-change"], treePath));
   assertCommandOk(runCommand("git", ["push", "origin", `HEAD:refs/pull/42/head`], treePath));
   assertCommandOk(runCommand("git", ["switch", "main"], treePath));
 
@@ -175,14 +176,18 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
   const treeWorktrees = runCommand("git", ["worktree", "list", "--porcelain"], treePath).stdout;
   return {
     expectation: {
+      agentId: "reviewer-eval-agent",
       baseOid,
+      chatId: "review-eval-chat",
       expectedFinalDraft: view.isDraft,
       expectedFinalHeadOid: secondView.headRefOid,
       expectedFinalState: "OPEN",
       governedPaths: evalCase.fixture.scenario === "archive-only" ? [] : [changed.path],
+      headRefName: view.headRefName,
       headOid,
       prNumber,
       repo,
+      reviewerLogin,
       runId,
       submissionHeadOid,
       workspacePath: paths.workspacePath,
@@ -208,6 +213,9 @@ export function inspectFixtureIntegrity(fixture: ReviewFixture): ReviewFixtureIn
     originRefsUnchanged:
       runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], fixture.originPath).stdout ===
       fixture.originRefs,
+    reviewBodyCleaned: !existsSync(
+      join(fixture.expectation.workspacePath, `.review-body-${fixture.expectation.prNumber}.md`),
+    ),
     reviewWorktreeCleaned: !existsSync(fixture.reviewWorktreePath) && !worktrees.includes(fixture.reviewWorktreePath),
     treeConfigUnchanged:
       runCommand("git", ["config", "--local", "--list"], fixture.treePath).stdout === fixture.treeConfig,

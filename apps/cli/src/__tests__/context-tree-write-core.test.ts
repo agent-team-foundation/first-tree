@@ -115,7 +115,6 @@ function currentAuthority(remote: RemoteFixture, overrides: Record<string, unkno
   return {
     organizationId: "team-a",
     binding: { repo: remote.bindingRepo, branch: "main" },
-    reviewerAgentUuid: "reviewer-a",
     requesterGithubLogin: "writer",
     ...overrides,
   };
@@ -148,7 +147,6 @@ describe("clean BYO Context Tree Write preflight", () => {
       binding: { repo: sshBinding, branch: "main" },
       baseCommit: git(remote.seed, "rev-parse", "HEAD"),
       snapshotPath: realpathSync(snapshotPath),
-      reviewerAgentUuid: "reviewer-a",
       requesterGithubLogin: "writer",
     });
     expect(preflight).toHaveBeenCalledWith("team-a", { requesterGithubLogin: "writer" }, { retry: false });
@@ -156,24 +154,20 @@ describe("clean BYO Context Tree Write preflight", () => {
     expect(events.some((args) => args[0] === "push" || args[0] === "pull" || args[0] === "clone")).toBe(false);
   });
 
-  it("is stateless across keyed repeats and observes the latest Server Reviewer", async () => {
+  it("is stateless across keyed repeats and observes the latest Server binding", async () => {
     const root = tempRoot("ft-byo-write-repeat-");
     const remote = createRemote(root);
     const events: string[][] = [];
     const runGit = createRunner(remote, events);
     const snapshotPath = await activateSnapshot(root, remote, runGit);
-    let call = 0;
-    const { reader, preflight } = authorityReader(() =>
-      currentAuthority(remote, { reviewerAgentUuid: call++ === 0 ? "reviewer-a" : "reviewer-b" }),
-    );
+    const { reader, preflight } = authorityReader(() => currentAuthority(remote));
     const input = { teamId: "team-a", snapshotPath, requesterGithubLogin: "writer" };
 
     const first = await preflightContextTreeWrite(reader, input, runGit);
     process.chdir(tempRoot("ft-byo-write-new-process-"));
     const second = await preflightContextTreeWrite(reader, input, runGit);
 
-    expect(first.reviewerAgentUuid).toBe("reviewer-a");
-    expect(second.reviewerAgentUuid).toBe("reviewer-b");
+    expect(first.binding).toEqual(second.binding);
     expect(first.baseCommit).toBe(second.baseCommit);
     expect(preflight).toHaveBeenCalledTimes(2);
   });

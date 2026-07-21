@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -332,6 +341,111 @@ describe("first-tree eval shim", () => {
         expect.arrayContaining([
           expect.objectContaining({ recordedRealVerify: true, verifyBindingValid: true }),
           expect.objectContaining({ recordedRealVerify: false, verifyBindingValid: false }),
+        ]),
+      );
+    } finally {
+      rmSync(repoRoot, { force: true, recursive: true });
+    }
+  }, 15_000);
+
+  it("requires real chat, agent, and runtime-token authority for Context Review publication", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-context-review-runtime-"));
+    try {
+      const packageRoot = join(repoRoot, "packages", "skill-evals");
+      mkdirSync(packageRoot, { recursive: true });
+      const paths = createRunPaths({
+        caseId: "context-review-runtime-authority",
+        packageRoot,
+        startedAt: "2026-07-21T00:00:00.000Z",
+      });
+      const head = "a".repeat(40);
+      const fixturePath = join(paths.workspacePath, "review-fixture.json");
+      const bodyFile = ".review-body-42.md";
+      const bodyPath = join(paths.workspacePath, bodyFile);
+      const tokenPath = join(paths.workspacePath, "runtime-token");
+      writeFileSync(
+        fixturePath,
+        JSON.stringify({
+          prNumber: 42,
+          repo: "owner/context-tree",
+          reviewHeadOid: head,
+          runId: "run-42",
+          submissionHeadOid: head,
+          views: [],
+        }),
+        "utf8",
+      );
+      writeFileSync(bodyPath, "Approved\n", "utf8");
+      writeFileSync(tokenPath, "eval-runtime-session-proof\n", "utf8");
+      createFirstTreeShim(paths, { reviewFixturePath: fixturePath });
+      const argv = ["tree", "review", "--run", "run-42", "--head", head, "--event", "APPROVE", "--body-file", bodyFile];
+      const firstTree = join(paths.binDir, "first-tree");
+      const baseEnv = {
+        ...process.env,
+        FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+        FIRST_TREE_EVAL_PHASE: "model",
+      };
+
+      const authorityArgv = ["tree", "review", "--check", "--run", "run-42", "--head", head];
+      expect(
+        spawnSync(firstTree, authorityArgv, {
+          cwd: paths.workspacePath,
+          encoding: "utf8",
+          env: baseEnv,
+        }).status,
+      ).toBe(2);
+      const authority = spawnSync(firstTree, authorityArgv, {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...baseEnv,
+          FIRST_TREE_AGENT_ID: "reviewer-eval-agent",
+          FIRST_TREE_CHAT_ID: "review-eval-chat",
+          FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: tokenPath,
+        },
+      });
+      expect(authority.status).toBe(0);
+      expect(JSON.parse(authority.stdout)).toMatchObject({
+        authorized: true,
+        reviewedHead: head,
+        installationId: 4242,
+        reviewerClientId: "reviewer-eval-client",
+      });
+
+      const missingAuthority = spawnSync(firstTree, argv, {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: baseEnv,
+      });
+      expect(missingAuthority.status).toBe(2);
+
+      const valid = spawnSync(firstTree, argv, {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...baseEnv,
+          FIRST_TREE_AGENT_ID: "reviewer-eval-agent",
+          FIRST_TREE_CHAT_ID: "review-eval-chat",
+          FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: tokenPath,
+        },
+      });
+      expect(valid.status).toBe(0);
+      expect(JSON.parse(readFileSync(`${fixturePath}.state`, "utf8"))).toMatchObject({
+        approvedHead: head,
+        currentHeadOid: head,
+      });
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            action: "approve",
+            runtimeAuthorityValid: true,
+            type: "context_review_submitted",
+          }),
+          expect.objectContaining({
+            commitOid: head,
+            runtimeAuthorityValid: true,
+            type: "context_review_authority_checked",
+          }),
         ]),
       );
     } finally {

@@ -45,7 +45,6 @@ export async function runTreeWriteCommand(context: CommandContext): Promise<void
     print.status("Binding", `${preflight.binding.repo}#${preflight.binding.branch}`);
     print.status("Exact base", preflight.baseCommit);
     print.status("Snapshot", preflight.snapshotPath);
-    print.status("Current Reviewer", preflight.reviewerAgentUuid);
     print.status("GitHub identity", preflight.requesterGithubLogin);
   } catch (error) {
     if (error instanceof ContextTreeWritePreflightCliError) {

@@ -6,8 +6,6 @@ export const CONTEXT_TREE_WRITE_PREFLIGHT_ERROR_CODES = [
   "CONTEXT_TREE_WRITE_BINDING_UNAVAILABLE",
   "CONTEXT_TREE_WRITE_BINDING_UNSUPPORTED",
   "CONTEXT_TREE_WRITE_CONFIGURATION_INVALID",
-  "CONTEXT_TREE_WRITE_REVIEW_UNAVAILABLE",
-  "CONTEXT_TREE_WRITE_REVIEWER_UNAVAILABLE",
   "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_REQUIRED",
   "CONTEXT_TREE_WRITE_GITHUB_IDENTITY_MISMATCH",
 ] as const;
@@ -28,7 +26,6 @@ export const contextTreeWritePreflightResponseSchema = z
   .object({
     organizationId: z.string().min(1),
     binding: contextTreeActiveBindingSchema,
-    reviewerAgentUuid: z.string().min(1),
     requesterGithubLogin: githubLoginSchema,
   })
   .strict();

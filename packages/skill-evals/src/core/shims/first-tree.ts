@@ -470,19 +470,108 @@ const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
 trace("first-tree call: " + commandLine(argv));
 
-if (argv[0] === "github" && argv[1] === "context-review" && argv[2] === "submit" && REVIEW_FIXTURE_PATH) {
+if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && argv[2] === "review-config") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  finish(
+    argv,
+    phase,
+    0,
+    JSON.stringify({
+      repo: "https://github.com/" + fixture.repo,
+      branch: "main",
+      enabled: true,
+      assigned: true,
+      agentUuid: "reviewer-eval-agent",
+    }) + "\\n",
+    "",
+    { recordedOnly: true },
+  );
+}
+
+if (argv[0] === "tree" && argv[1] === "review" && argv.includes("--check") && REVIEW_FIXTURE_PATH) {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const runId = optionValue(argv, "--run");
+  const commitOid = optionValue(argv, "--head");
+  const runtimeTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE || "";
+  let runtimeToken = "";
+  try {
+    runtimeToken = runtimeTokenFile ? readFileSync(runtimeTokenFile, "utf8").trim() : "";
+  } catch {}
+  const runtimeAuthorityValid =
+    process.env.FIRST_TREE_CHAT_ID === "review-eval-chat" &&
+    process.env.FIRST_TREE_AGENT_ID === "reviewer-eval-agent" &&
+    runtimeToken === "eval-runtime-session-proof" &&
+    !argv.includes("--agent");
+  const valid =
+    argv.length === 7 &&
+    runtimeAuthorityValid &&
+    runId === fixture.runId &&
+    commitOid === fixture.reviewHeadOid;
+  if (!valid) {
+    finish(argv, phase, 2, "", "Invalid Context Reviewer authority fixture.\\n", { blockedByEval: true });
+  }
+  append({
+    type: "context_review_authority_checked",
+    phase,
+    commitOid,
+    runId,
+    runtimeAuthorityValid,
+  });
+  finish(
+    argv,
+    phase,
+    0,
+    JSON.stringify({
+      authorized: true,
+      repository: fixture.repo,
+      prNumber: fixture.prNumber,
+      reviewedHead: commitOid,
+      state: "open",
+      draft: fixture.draft === true,
+      baseRef: "main",
+      headRef: "review-change",
+      headRepository: fixture.repo,
+      sameRepository: true,
+      installationId: 4242,
+      reviewerClientId: "reviewer-eval-client",
+      runtimeSessionBoundAt: "2026-07-21T00:00:00.000Z",
+    }) + "\\n",
+    "",
+    { recordedOnly: true },
+  );
+}
+
+if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const runId = optionValue(argv, "--run");
   const commitOid = optionValue(argv, "--head");
   const event = optionValue(argv, "--event");
   const bodyFile = optionValue(argv, "--body-file");
-  const exactOptions = argv.length === 11;
+  const expectedBodyFile = ".review-body-" + fixture.prNumber + ".md";
+  const exactOptions = argv.length === 10;
+  const runtimeTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE || "";
+  let runtimeToken = "";
+  try {
+    runtimeToken = runtimeTokenFile ? readFileSync(runtimeTokenFile, "utf8").trim() : "";
+  } catch {}
+  const runtimeAuthorityValid =
+    process.env.FIRST_TREE_CHAT_ID === "review-eval-chat" &&
+    process.env.FIRST_TREE_AGENT_ID === "reviewer-eval-agent" &&
+    runtimeToken === "eval-runtime-session-proof" &&
+    !argv.includes("--agent");
   const action = event === "APPROVE" ? "approve" : event === "COMMENT" ? "comment" : event === "REQUEST_CHANGES" ? "request-changes" : null;
   let body = "";
   try {
     body = bodyFile && bodyFile !== "-" ? readFileSync(bodyFile, "utf8") : "";
   } catch {}
-  const valid = exactOptions && runId === fixture.runId && commitOid === fixture.reviewHeadOid && action && body.length > 0;
+  const valid =
+    exactOptions &&
+    runtimeAuthorityValid &&
+    runId === fixture.runId &&
+    commitOid === fixture.reviewHeadOid &&
+    bodyFile === expectedBodyFile &&
+    action &&
+    body.length > 0;
   if (!valid) {
     finish(argv, phase, 2, "", "Invalid Context Reviewer App submission fixture.\\n", { blockedByEval: true });
   }
@@ -492,18 +581,34 @@ if (argv[0] === "github" && argv[1] === "context-review" && argv[2] === "submit"
     action,
     appActor: "first-tree-eval[bot]",
     body,
+    bodyFile,
     bodyFileUsed: true,
     commitOid,
     currentHeadOid: fixture.submissionHeadOid,
     prNumber: fixture.prNumber,
     repo: fixture.repo,
     runId,
+    runtimeAuthorityValid,
   });
+  const statePath = REVIEW_FIXTURE_PATH + ".state";
+  let state = { views: 0 };
+  try {
+    state = JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {}
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      ...state,
+      currentHeadOid: fixture.submissionHeadOid,
+      ...(action === "approve" ? { approvedHead: commitOid } : {}),
+    }),
+    "utf8",
+  );
   finish(
     argv,
     phase,
     0,
-    JSON.stringify({ action: event, reviewedHead: commitOid, reviewId: 4242, reviewUrl: "https://github.com/owner/context-tree/pull/42#pullrequestreview-4242", appActor: "first-tree-eval[bot]" }) + "\\n",
+    JSON.stringify({ action: event, reviewedHead: commitOid, reviewId: 4242, reviewUrl: "https://github.com/owner/context-tree/pull/42#pullrequestreview-4242", appActor: "first-tree-eval[bot]", publicationDisposition: "created" }) + "\\n",
     "",
     { recordedOnly: true },
   );

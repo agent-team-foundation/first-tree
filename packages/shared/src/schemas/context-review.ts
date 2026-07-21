@@ -1,12 +1,120 @@
 import { z } from "zod";
 
-export const CONTEXT_REVIEW_TASK_TYPE = "context_tree_pr_review" as const;
-export const CONTEXT_REVIEW_MANAGED_MARKER = "<!-- first-tree-context-review:managed-v1 -->" as const;
-export const CONTEXT_REVIEW_PACKET_MAX_BYTES = 32 * 1024;
-export const CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH = 64;
-const CONTEXT_REVIEW_TASK_METADATA_MAX_NODES = 8 * 1024;
+export const CONTEXT_REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const;
+export const CONTEXT_REVIEW_BODY_MAX_BYTES = 64 * 1024;
 
-export const contextReviewManagedEventSchema = z
+export const contextReviewEventSchema = z.enum(CONTEXT_REVIEW_EVENTS);
+export type ContextReviewEvent = z.infer<typeof contextReviewEventSchema>;
+
+const commitOidSchema = z
+  .string()
+  .regex(/^[0-9a-f]{40}$/i, "expected a full 40-character commit OID")
+  .transform((value) => value.toLowerCase());
+
+const submissionCommonSchema = {
+  payloadHash: z.string().min(1),
+};
+
+/** Every durable state written by the App review publisher. */
+export const contextReviewSubmissionStateSchema = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("pending") }).strict(),
+  z
+    .object({
+      state: z.literal("submitting"),
+      ...submissionCommonSchema,
+      attemptId: z.string().min(1),
+      reviewedHead: commitOidSchema,
+      event: contextReviewEventSchema,
+      claimedAt: z.string().datetime(),
+      reviewerClientId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal("unknown"),
+      ...submissionCommonSchema,
+      attemptId: z.string().min(1),
+      reviewedHead: commitOidSchema,
+      event: contextReviewEventSchema,
+      failedAt: z.string().datetime(),
+      reviewerClientId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal("failed"),
+      ...submissionCommonSchema,
+      code: z.string().min(1),
+      failedAt: z.string().datetime(),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal("submitted"),
+      ...submissionCommonSchema,
+      reviewedHead: commitOidSchema,
+      event: contextReviewEventSchema,
+      reviewId: z.number().int().positive(),
+      reviewUrl: z.string().url(),
+      appActor: z.string().min(1),
+      submittedAt: z.string().datetime(),
+      reviewerAgentUuid: z.string().min(1),
+      reviewerManagerHumanAgentId: z.string().min(1),
+      reviewerClientId: z.string().min(1),
+      reviewerManagerGithubLogin: z.string().min(1).nullable(),
+    })
+    .strict(),
+]);
+export type ContextReviewSubmissionState = z.infer<typeof contextReviewSubmissionStateSchema>;
+
+/**
+ * Server-authored metadata for a trusted GitHub App Context Reviewer run.
+ * Ordinary message writes cannot set the reserved `contextReview*` namespace,
+ * so clients may use this complete shape as a synthetic GitHub sender signal.
+ */
+export const contextReviewerRunMessageMetadataSchema = z
+  .object({
+    source: z.literal("github"),
+    contextTreeReviewer: z.literal(true),
+    contextReviewRunId: z.string().min(1),
+    contextReviewRepository: z
+      .string()
+      .trim()
+      .regex(/^[^\s/]+\/[^\s/]+$/),
+    contextReviewPrNumber: z.number().int().positive(),
+    // Historical App-created rows can be headless. For those rows the
+    // immutable reviewed head is recovered from the durable submission
+    // claim; new runs always write this top-level field.
+    contextReviewHeadSha: commitOidSchema.optional(),
+    contextReviewOrganizationId: z.string().min(1),
+    contextReviewReviewerAgentUuid: z.string().min(1),
+    contextReviewReviewerManagerHumanAgentId: z.string().min(1),
+    contextReviewInstallationId: z.number().int().positive().optional(),
+    contextReviewReviewerClientId: z.string().min(1).optional(),
+    contextReviewRuntimeSessionBoundAt: z.string().datetime().optional(),
+    contextReviewSubmission: contextReviewSubmissionStateSchema,
+  })
+  .passthrough()
+  .superRefine((value, ctx) => {
+    if (
+      value.contextReviewHeadSha === undefined &&
+      (value.contextReviewSubmission.state === "pending" || value.contextReviewSubmission.state === "failed")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["contextReviewHeadSha"],
+        message: "a pending or failed run requires its server-authored exact head",
+      });
+    }
+  });
+export type ContextReviewerRunMessageMetadata = z.infer<typeof contextReviewerRunMessageMetadataSchema>;
+
+/**
+ * Read-only compatibility for messages produced by the retired managed
+ * dispatcher. This preserves historical GitHub attribution without exposing
+ * any managed task or dispatch API.
+ */
+const legacyContextReviewManagedEventSchema = z
   .object({
     schemaVersion: z.literal(1),
     eventType: z.enum(["pull_request", "issue_comment", "pull_request_review_comment"]),
@@ -19,10 +127,7 @@ export const contextReviewManagedEventSchema = z
     pullRequest: z.number().int().positive(),
     senderLogin: z.string().trim().min(1),
     deliveryId: z.string().trim().min(1).optional(),
-    headSha: z
-      .string()
-      .regex(/^[0-9a-f]{40}$/)
-      .optional(),
+    headSha: commitOidSchema.optional(),
     isDraft: z.boolean().optional(),
     commentId: z
       .string()
@@ -32,260 +137,52 @@ export const contextReviewManagedEventSchema = z
     commentUrl: z.string().url().optional(),
   })
   .strict();
-export type ContextReviewManagedEvent = z.infer<typeof contextReviewManagedEventSchema>;
 
-/**
- * Server-authored metadata for managed Context Review webhook messages. The
- * message service reserves both `systemSender` and `contextReview*` keys, so
- * clients may use this complete envelope as a synthetic-sender trust signal.
- */
-export const contextReviewManagedMessageMetadataSchema = z
+export const legacyContextReviewManagedMessageMetadataSchema = z
   .object({
     source: z.literal("github"),
     systemSender: z.literal("github"),
-    contextReviewManagedEventV1: contextReviewManagedEventSchema,
+    contextReviewManagedEventV1: legacyContextReviewManagedEventSchema,
   })
   .passthrough();
-export type ContextReviewManagedMessageMetadata = z.infer<typeof contextReviewManagedMessageMetadataSchema>;
 
-const githubRepositorySchema = z
-  .string()
-  .trim()
-  .regex(/^[^\s/]+\/[^\s/]+$/, "repository must use owner/name form");
-const gitRefSchema = z.string().trim().min(1).max(1024);
-const commitOidSchema = z
-  .string()
-  .regex(/^[0-9a-f]{40}$/i, "expectedHead must be a full 40-character commit OID")
-  .transform((value) => value.toLowerCase());
-const repositoryPathSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(4096)
-  .refine(
-    (value) =>
-      !value.startsWith("/") &&
-      !value.includes("\\") &&
-      value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== ".."),
-    "path must be a normalized repository-relative path",
-  );
-
-const contextReviewEvidenceSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("reference"),
-      label: z.string().trim().min(1),
-      reference: z.string().trim().min(1),
-      revision: z.string().trim().min(1).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("excerpt"),
-      label: z.string().trim().min(1),
-      provenance: z.string().trim().min(1),
-      text: z.string().trim().min(1),
-    })
-    .strict(),
-]);
-
-/**
- * Versioned evidence delivered with a managed Context Review task. GitHub and
- * the live Context Tree binding remain authoritative; this packet supplies
- * discovery context and the PR author's declared repair scope.
- */
-export const reviewPacketV1Schema = z
+export const contextReviewSubmitRequestSchema = z
   .object({
-    schemaVersion: z.literal(1),
-    repository: githubRepositorySchema,
-    pullRequest: z.number().int().positive(),
-    expectedHead: commitOidSchema,
-    baseRef: gitRefSchema,
-    sourceRef: gitRefSchema,
-    requesterGithubLogin: z.string().trim().min(1).max(255),
-    goal: z.string().trim().min(1),
-    source: z
-      .object({
-        label: z.string().trim().min(1),
-        reference: z.string().trim().min(1),
-        revision: z.string().trim().min(1).optional(),
-      })
-      .strict(),
-    decisionSummary: z.string().trim().min(1),
-    rationale: z.string().trim().min(1),
-    targetPaths: z.array(repositoryPathSchema).default([]),
-    repairScope: z.array(repositoryPathSchema).min(1),
-    relevantContextRefs: z.array(z.string().trim().min(1)).default([]),
-    unresolvedQuestions: z.array(z.string().trim().min(1)).default([]),
-    verify: z
-      .object({
-        status: z.enum(["passed", "failed", "not_run"]),
-        summary: z.string().trim().min(1),
-      })
-      .strict(),
-    evidence: z.array(contextReviewEvidenceSchema).default([]),
+    reviewedHead: commitOidSchema,
+    event: contextReviewEventSchema,
+    body: z
+      .string()
+      .refine((value) => value.trim().length > 0, "body must not be empty")
+      .refine((value) => new TextEncoder().encode(value).byteLength <= CONTEXT_REVIEW_BODY_MAX_BYTES, {
+        message: `body must not exceed ${CONTEXT_REVIEW_BODY_MAX_BYTES} bytes`,
+      }),
   })
   .strict();
-export type ReviewPacketV1 = z.infer<typeof reviewPacketV1Schema>;
-
-type TaskMetadataInspection = {
-  serializedBytes: number;
-  exceedsMaxDepth: boolean;
-  exceedsMaxNodes: boolean;
-};
-
-function inspectTaskMetadata(value: unknown): TaskMetadataInspection {
-  const encoder = new TextEncoder();
-  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
-  let nodeCount = 0;
-
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) break;
-    nodeCount += 1;
-    if (nodeCount > CONTEXT_REVIEW_TASK_METADATA_MAX_NODES) {
-      return { serializedBytes: 0, exceedsMaxDepth: false, exceedsMaxNodes: true };
-    }
-    if (current.depth > CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH) {
-      return { serializedBytes: 0, exceedsMaxDepth: true, exceedsMaxNodes: false };
-    }
-    if (Array.isArray(current.value)) {
-      for (const item of current.value) pending.push({ value: item, depth: current.depth + 1 });
-      continue;
-    }
-    if (typeof current.value !== "object" || current.value === null) continue;
-    for (const item of Object.values(current.value)) {
-      pending.push({ value: item, depth: current.depth + 1 });
-    }
-  }
-
-  const serialized = JSON.stringify(value);
-  if (serialized === undefined) throw new Error("task metadata is not JSON-serializable");
-  return {
-    serializedBytes: encoder.encode(serialized).byteLength,
-    exceedsMaxDepth: false,
-    exceedsMaxNodes: false,
-  };
-}
-
-const contextReviewTaskMetadataShape = z
-  .object({
-    taskType: z.literal(CONTEXT_REVIEW_TASK_TYPE),
-    reviewPacketV1: reviewPacketV1Schema,
-  })
-  .strict();
-
-function inspectTaskMetadataRefinement(value: unknown, ctx: z.RefinementCtx): void {
-  let inspection: TaskMetadataInspection;
-  try {
-    inspection = inspectTaskMetadata(value);
-  } catch {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Context Review task metadata could not be safely inspected",
-    });
-    return;
-  }
-  if (inspection.exceedsMaxDepth) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_TASK_METADATA_MAX_DEPTH} levels`,
-    });
-    return;
-  }
-  if (inspection.exceedsMaxNodes) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Context Review task metadata is too structurally complex",
-    });
-    return;
-  }
-  if (inspection.serializedBytes > CONTEXT_REVIEW_PACKET_MAX_BYTES) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `Context Review task metadata must not exceed ${CONTEXT_REVIEW_PACKET_MAX_BYTES} serialized UTF-8 bytes`,
-    });
-  }
-}
-
-/** Generic task metadata consumed by the Reviewer runtime. */
-export const contextReviewTaskMetadataSchema = z
-  .unknown()
-  .superRefine(inspectTaskMetadataRefinement)
-  .pipe(contextReviewTaskMetadataShape)
-  .superRefine(inspectTaskMetadataRefinement);
-export type ContextReviewTaskMetadata = z.infer<typeof contextReviewTaskMetadataSchema>;
-
-function isSortedUnique(values: readonly string[]): boolean {
-  return values.every((value, index) => index === 0 || (values[index - 1] ?? "") < value);
-}
-
-/**
- * Stricter producer admission for a Write-created Agent Review task. The
- * Phase 2 consumer intentionally accepts failed/not-run verification packets;
- * dispatch only accepts a verified, deterministic file set.
- */
-export const contextReviewTaskCreateMetadataSchema = contextReviewTaskMetadataSchema.superRefine((value, ctx) => {
-  const packet = value.reviewPacketV1;
-  if (packet.verify.status !== "passed") {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["reviewPacketV1", "verify", "status"],
-      message: "Agent Review dispatch requires Context Tree verification to pass",
-    });
-  }
-  if (packet.targetPaths.length === 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["reviewPacketV1", "targetPaths"],
-      message: "Agent Review dispatch requires at least one target path",
-    });
-  }
-  if (!isSortedUnique(packet.targetPaths)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["reviewPacketV1", "targetPaths"],
-      message: "Agent Review target paths must be sorted and unique",
-    });
-  }
-  if (!isSortedUnique(packet.repairScope)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["reviewPacketV1", "repairScope"],
-      message: "Agent Review repair scope must be sorted and unique",
-    });
-  }
-  const repairScope = new Set(packet.repairScope);
-  if (packet.targetPaths.some((path) => !repairScope.has(path))) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["reviewPacketV1", "targetPaths"],
-      message: "Agent Review target paths must be contained in repair scope",
-    });
-  }
-});
-export type ContextReviewTaskCreateMetadata = z.infer<typeof contextReviewTaskCreateMetadataSchema>;
-
-export const CONTEXT_REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const;
-export const CONTEXT_REVIEW_BODY_MAX_BYTES = 64 * 1024;
-
-export const contextReviewEventSchema = z.enum(CONTEXT_REVIEW_EVENTS);
-export type ContextReviewEvent = z.infer<typeof contextReviewEventSchema>;
-
-export const contextReviewSubmitRequestSchema = z.object({
-  reviewedHead: z
-    .string()
-    .regex(/^[0-9a-f]{40}$/i, "reviewedHead must be a full 40-character commit OID")
-    .transform((value) => value.toLowerCase()),
-  event: contextReviewEventSchema,
-  body: z
-    .string()
-    .refine((value) => value.trim().length > 0, "body must not be empty")
-    .refine((value) => new TextEncoder().encode(value).byteLength <= CONTEXT_REVIEW_BODY_MAX_BYTES, {
-      message: `body must not exceed ${CONTEXT_REVIEW_BODY_MAX_BYTES} bytes`,
-    }),
-});
 export type ContextReviewSubmitRequest = z.infer<typeof contextReviewSubmitRequestSchema>;
+
+export const contextReviewAuthorityRequestSchema = z.object({ reviewedHead: commitOidSchema }).strict();
+export type ContextReviewAuthorityRequest = z.infer<typeof contextReviewAuthorityRequestSchema>;
+
+export const contextReviewAuthorityResponseSchema = z.object({
+  authorized: z.literal(true),
+  repository: z.string().regex(/^[^\s/]+\/[^\s/]+$/),
+  prNumber: z.number().int().positive(),
+  reviewedHead: commitOidSchema,
+  state: z.literal("open"),
+  draft: z.boolean(),
+  baseRef: z.string().min(1),
+  headRef: z.string().min(1),
+  headRepository: z.string().regex(/^[^\s/]+\/[^\s/]+$/),
+  sameRepository: z.boolean(),
+  installationId: z.number().int().positive(),
+  reviewerClientId: z.string().min(1),
+  runtimeSessionBoundAt: z.string().datetime(),
+});
+export type ContextReviewAuthorityResponse = z.infer<typeof contextReviewAuthorityResponseSchema>;
+
+export const CONTEXT_REVIEW_PUBLICATION_DISPOSITIONS = ["created", "existing", "reconciled"] as const;
+export const contextReviewPublicationDispositionSchema = z.enum(CONTEXT_REVIEW_PUBLICATION_DISPOSITIONS);
+export type ContextReviewPublicationDisposition = z.infer<typeof contextReviewPublicationDispositionSchema>;
 
 export const contextReviewSubmitResponseSchema = z.object({
   action: contextReviewEventSchema,
@@ -293,6 +190,7 @@ export const contextReviewSubmitResponseSchema = z.object({
   reviewId: z.number().int().positive(),
   reviewUrl: z.string().url(),
   appActor: z.string().min(1),
+  publicationDisposition: contextReviewPublicationDispositionSchema,
 });
 export type ContextReviewSubmitResponse = z.infer<typeof contextReviewSubmitResponseSchema>;
 
@@ -301,6 +199,7 @@ export const CONTEXT_REVIEW_ERROR_CODES = [
   "CONTEXT_REVIEW_RUNTIME_SESSION_REQUIRED",
   "CONTEXT_REVIEW_RUN_NOT_FOUND",
   "CONTEXT_REVIEW_RUN_FORBIDDEN",
+  "CONTEXT_REVIEW_RUN_SUPERSEDED",
   "CONTEXT_REVIEW_RUN_ALREADY_SUBMITTED",
   "CONTEXT_REVIEW_RUN_PAYLOAD_MISMATCH",
   "CONTEXT_REVIEW_STALE_HEAD",

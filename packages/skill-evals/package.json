@@ -12,7 +12,7 @@
     "eval:select": "tsx src/index.ts select",
     "eval:summary": "tsx src/index.ts summary",
     "eval:compare": "tsx src/index.ts compare",
-    "test": "vitest run --passWithNoTests --exclude '.runs/**'",
+    "test": "vitest run --no-file-parallelism --passWithNoTests --exclude '.runs/**'",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

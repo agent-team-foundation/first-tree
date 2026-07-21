@@ -8,21 +8,125 @@ import { readEvents } from "../events.js";
 import { createRunPaths } from "../paths.js";
 import { createGhShim } from "../shims/gh.js";
 
-function createShim(caseId: string): { repoRoot: string; ghPath: string; eventsPath: string; workspacePath: string } {
+function createShim(
+  caseId: string,
+  reviewFixture?: Record<string, unknown>,
+): { repoRoot: string; ghPath: string; eventsPath: string; reviewFixturePath?: string; workspacePath: string } {
   const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-gh-shim-test-"));
   const packageRoot = join(repoRoot, "packages", "skill-evals");
   mkdirSync(packageRoot, { recursive: true });
   const paths = createRunPaths({ caseId, packageRoot, startedAt: "2026-06-30T00:00:00.000Z" });
-  createGhShim(paths);
+  const reviewFixturePath = reviewFixture ? join(paths.workspacePath, "review-fixture.json") : undefined;
+  if (reviewFixturePath) writeFileSync(reviewFixturePath, JSON.stringify(reviewFixture), "utf8");
+  createGhShim(paths, { reviewFixturePath });
   return {
     repoRoot,
     ghPath: join(paths.binDir, "gh"),
     eventsPath: paths.eventsPath,
+    reviewFixturePath,
     workspacePath: paths.workspacePath,
   };
 }
 
 describe("gh eval shim", () => {
+  it("records only the narrow read-only local GitHub identity lookup", () => {
+    const shim = createShim("context-review-github-identity", {
+      prNumber: 42,
+      repo: "owner/context-tree",
+      reviewerLogin: "read-only-reviewer",
+    });
+    try {
+      const env = {
+        ...process.env,
+        FIRST_TREE_EVAL_CASE_ID: "context-review-github-identity",
+        FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+        FIRST_TREE_EVAL_PHASE: "model",
+      };
+      const accepted = spawnSync(shim.ghPath, ["api", "user", "--jq", ".login"], {
+        cwd: shim.workspacePath,
+        encoding: "utf8",
+        env,
+      });
+      expect(accepted.status).toBe(0);
+      expect(accepted.stdout).toBe("read-only-reviewer\n");
+      expect(readEvents(shim.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ login: "read-only-reviewer", type: "github_identity_read" }),
+        ]),
+      );
+
+      const broad = spawnSync(shim.ghPath, ["api", "user"], {
+        cwd: shim.workspacePath,
+        encoding: "utf8",
+        env,
+      });
+      expect(broad.status).toBe(2);
+      expect(broad.stderr).toContain("narrow local GitHub identity read");
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("allows only a locally authenticated exact-head squash merge after App approval", () => {
+    const head = "a".repeat(40);
+    const shim = createShim("context-review-local-merge", {
+      prNumber: 42,
+      repo: "owner/context-tree",
+      reviewHeadOid: head,
+      views: [{ headRefOid: head, url: "https://github.com/owner/context-tree/pull/42" }],
+    });
+    try {
+      if (!shim.reviewFixturePath) throw new Error("review fixture path missing");
+      writeFileSync(`${shim.reviewFixturePath}.state`, JSON.stringify({ approvedHead: head, views: 0 }), "utf8");
+      const env = {
+        ...process.env,
+        FIRST_TREE_EVAL_CASE_ID: "context-review-local-merge",
+        FIRST_TREE_EVAL_EVENTS: shim.eventsPath,
+        FIRST_TREE_EVAL_PHASE: "model",
+      };
+      const accepted = spawnSync(
+        shim.ghPath,
+        ["pr", "merge", "https://github.com/owner/context-tree/pull/42", "--squash", "--match-head-commit", head],
+        { cwd: shim.workspacePath, encoding: "utf8", env },
+      );
+      expect(accepted.status).toBe(0);
+      expect(readEvents(shim.eventsPath)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ commitOid: head, prNumber: 42, type: "github_pr_merged" })]),
+      );
+
+      const bypass = spawnSync(
+        shim.ghPath,
+        ["pr", "merge", "42", "--repo", "owner/context-tree", "--squash", "--match-head-commit", head, "--admin"],
+        { cwd: shim.workspacePath, encoding: "utf8", env },
+      );
+      expect(bypass.status).toBe(2);
+      expect(bypass.stderr).toContain("rejected");
+
+      const successorHead = "b".repeat(40);
+      writeFileSync(
+        `${shim.reviewFixturePath}.state`,
+        JSON.stringify({ approvedHead: head, currentHeadOid: successorHead, views: 0 }),
+        "utf8",
+      );
+      const racedView = spawnSync(
+        shim.ghPath,
+        ["pr", "view", "42", "--repo", "owner/context-tree", "--json", "headRefOid"],
+        { cwd: shim.workspacePath, encoding: "utf8", env },
+      );
+      expect(racedView.status).toBe(0);
+      expect(JSON.parse(racedView.stdout)).toMatchObject({ headRefOid: successorHead });
+      const racedMerge = spawnSync(
+        shim.ghPath,
+        ["pr", "merge", "https://github.com/owner/context-tree/pull/42", "--squash", "--match-head-commit", head],
+        { cwd: shim.workspacePath, encoding: "utf8", env },
+      );
+      expect(racedMerge.status).toBe(2);
+      expect(racedMerge.stderr).toContain("rejected");
+    } finally {
+      rmSync(shim.repoRoot, { force: true, recursive: true });
+    }
+  });
+
   it("simulates successful GitHub governance bootstrap calls", () => {
     const shim = createShim("unbound-github-tree-governance-bootstrap");
     try {
@@ -36,10 +140,10 @@ describe("gh eval shim", () => {
             { type: "non_fast_forward" },
             {
               parameters: {
-                dismiss_stale_reviews_on_push: false,
+                dismiss_stale_reviews_on_push: true,
                 require_code_owner_review: false,
                 require_last_push_approval: false,
-                required_approving_review_count: 0,
+                required_approving_review_count: 1,
                 required_review_thread_resolution: false,
               },
               type: "pull_request",
@@ -89,7 +193,7 @@ describe("gh eval shim", () => {
     }
   });
 
-  it("rejects ruleset payloads that require GitHub approvals", () => {
+  it("rejects ruleset payloads that require Code Owner approval", () => {
     const shim = createShim("unbound-github-tree-governance-bootstrap");
     try {
       writeFileSync(
@@ -102,7 +206,7 @@ describe("gh eval shim", () => {
             { type: "non_fast_forward" },
             {
               parameters: {
-                dismiss_stale_reviews_on_push: false,
+                dismiss_stale_reviews_on_push: true,
                 require_code_owner_review: true,
                 require_last_push_approval: false,
                 required_approving_review_count: 1,
@@ -150,10 +254,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                 },
                 type: "pull_request",
@@ -172,10 +276,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                 },
                 type: "pull_request",
@@ -194,10 +298,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                 },
                 type: "pull_request",
@@ -217,10 +321,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                 },
                 type: "pull_request",
@@ -239,10 +343,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                   required_reviewers: [
                     {
@@ -268,10 +372,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                 },
                 type: "pull_request",
@@ -291,10 +395,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                 },
                 type: "pull_request",
@@ -304,7 +408,7 @@ describe("gh eval shim", () => {
                   dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: true,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: true,
                 },
                 type: "pull_request",
@@ -323,10 +427,10 @@ describe("gh eval shim", () => {
               { type: "non_fast_forward" },
               {
                 parameters: {
-                  dismiss_stale_reviews_on_push: false,
+                  dismiss_stale_reviews_on_push: true,
                   require_code_owner_review: false,
                   require_last_push_approval: false,
-                  required_approving_review_count: 0,
+                  required_approving_review_count: 1,
                   required_review_thread_resolution: false,
                 },
                 type: "pull_request",
@@ -358,7 +462,7 @@ describe("gh eval shim", () => {
     } finally {
       rmSync(shim.repoRoot, { force: true, recursive: true });
     }
-  });
+  }, 15_000);
 
   it("blocks destructive methods on governance read endpoints", () => {
     const shim = createShim("unbound-github-tree-governance-bootstrap");

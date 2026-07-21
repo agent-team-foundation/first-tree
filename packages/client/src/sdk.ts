@@ -13,6 +13,8 @@ import {
   type ChatGitlabEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type ContextReviewAuthorityRequest,
+  type ContextReviewAuthorityResponse,
   type ContextReviewSubmitRequest,
   type ContextReviewSubmitResponse,
   type ContextTreeSeedPreflightRequest,
@@ -20,7 +22,6 @@ import {
   type ContextTreeWritePreflightRequest,
   type ContextTreeWritePreflightResponse,
   type CreateDocCommentRequest,
-  type CreateKeyedTaskChat,
   type CreateTaskChat,
   contextTreeSeedPreflightRequestSchema,
   contextTreeSeedPreflightResponseSchema,
@@ -36,8 +37,6 @@ import {
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
-  type KeyedTaskChatCreateResponse,
-  keyedTaskChatCreateResponseSchema,
   type ListDocCommentsResponse,
   type ListDocsResponse,
   type Message,
@@ -393,26 +392,6 @@ export class FirstTreeHubSDK {
   }
 
   /**
-   * Create or recover the member-authenticated Agent Review task for a PR.
-   * The strict request carries no recipient, topic, sender, or idempotency
-   * key; the server derives all authority-bearing fields from live state.
-   */
-  async createMemberKeyedTaskChat(
-    organizationId: string,
-    data: CreateKeyedTaskChat,
-  ): Promise<KeyedTaskChatCreateResponse> {
-    const response = await this.requestJson<unknown>(
-      `/api/v1/orgs/${encodeURIComponent(organizationId)}/chats`,
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
-      { retry: true },
-    );
-    return keyedTaskChatCreateResponseSchema.parse(response);
-  }
-
-  /**
    * Member-scoped, stateless admission check for a clean Context Tree Write.
    * The explicit Team stays in the URL; Server live state supplies the
    * binding and Reviewer. This call creates no task, Chat, PR, or review.
@@ -616,6 +595,19 @@ export class FirstTreeHubSDK {
     return this.requestJson<UnfollowChatGitlabEntityResponse>(
       `/api/v1/agent/chats/${chatId}/gitlab-entities?entity=${encodeURIComponent(entityUrl)}`,
       { method: "DELETE" },
+    );
+  }
+
+  /** Verify one server-authored run against live runtime, App, binding, PR, and head authority. */
+  async inspectContextReviewAuthority(
+    chatId: string,
+    runId: string,
+    body: ContextReviewAuthorityRequest,
+  ): Promise<ContextReviewAuthorityResponse> {
+    return this.requestJson<ContextReviewAuthorityResponse>(
+      `/api/v1/agent/chats/${encodeURIComponent(chatId)}/context-review-runs/${encodeURIComponent(runId)}/authority`,
+      { method: "POST", body: JSON.stringify(body) },
+      { retry: false },
     );
   }
 

@@ -38,28 +38,6 @@ function mkSdk(listImpl?: () => Promise<ChatParticipantDetail[]>): FirstTreeHubS
   return sdk;
 }
 
-function reviewPacket() {
-  return {
-    schemaVersion: 1,
-    repository: "acme/context",
-    pullRequest: 42,
-    expectedHead: "a".repeat(40),
-    baseRef: "main",
-    sourceRef: "feature/context",
-    requesterGithubLogin: "alice",
-    goal: "Review this Context Tree PR",
-    source: { label: "Design", reference: "https://example.test/design" },
-    decisionSummary: "Use one Reviewer Agent",
-    rationale: "Keep the workflow small",
-    targetPaths: ["system/reviewer.md"],
-    repairScope: ["system/reviewer.md"],
-    relevantContextRefs: [],
-    unresolvedQuestions: [],
-    verify: { status: "passed", summary: "tree verify passed" },
-    evidence: [],
-  };
-}
-
 const githubCard = {
   type: "github_event",
   reason: "subscribed",
@@ -244,6 +222,111 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe(`[From: ${name} · type=system]\n\n${JSON.stringify(content)}`);
   });
 
+  it.each([
+    { state: "pending" },
+    {
+      state: "submitting",
+      payloadHash: "hash",
+      attemptId: "attempt-1",
+      reviewedHead: "a".repeat(40),
+      event: "APPROVE",
+      claimedAt: "2026-07-21T00:00:00.000Z",
+      reviewerClientId: "client-1",
+    },
+    {
+      state: "unknown",
+      payloadHash: "hash",
+      attemptId: "attempt-1",
+      reviewedHead: "a".repeat(40),
+      event: "COMMENT",
+      failedAt: "2026-07-21T00:00:00.000Z",
+      reviewerClientId: "client-1",
+    },
+    {
+      state: "failed",
+      payloadHash: "hash",
+      code: "CONTEXT_REVIEW_GITHUB_REJECTED",
+      failedAt: "2026-07-21T00:00:00.000Z",
+    },
+    {
+      state: "submitted",
+      payloadHash: "hash",
+      reviewedHead: "a".repeat(40),
+      event: "APPROVE",
+      reviewId: 42,
+      reviewUrl: "https://github.com/acme/context-tree/pull/42#pullrequestreview-42",
+      appActor: "first-tree[bot]",
+      submittedAt: "2026-07-21T00:00:00.000Z",
+      reviewerAgentUuid: "reviewer-1",
+      reviewerManagerHumanAgentId: "human-1",
+      reviewerClientId: "client-1",
+      reviewerManagerGithubLogin: null,
+    },
+  ])("keeps a trusted Context Reviewer run attributed to GitHub in $state", async (contextReviewSubmission) => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source: "github",
+      format: "markdown",
+      content: "Review this exact Context Tree head.",
+      metadata: {
+        source: "github",
+        contextTreeReviewer: true,
+        contextReviewRunId: "run-1",
+        contextReviewRepository: "acme/context-tree",
+        contextReviewPrNumber: 42,
+        contextReviewHeadSha: "a".repeat(40),
+        contextReviewOrganizationId: "org-1",
+        contextReviewReviewerAgentUuid: "reviewer-1",
+        contextReviewReviewerManagerHumanAgentId: "human-1",
+        contextReviewSubmission,
+      },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(
+      "[From: GitHub · type=system]\n\nReview this exact Context Tree head.",
+    );
+  });
+
+  it("preserves GitHub attribution for retired managed-review history", async () => {
+    const cache = createParticipantCache(
+      mkSdk(async () => participants),
+      "chat-1",
+      () => {},
+    );
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      source: "github",
+      format: "markdown",
+      content: "Historical managed review task.",
+      metadata: {
+        source: "github",
+        systemSender: "github",
+        contextReviewManagedEventV1: {
+          schemaVersion: 1,
+          eventType: "pull_request",
+          action: "opened",
+          triggerEvent: "pull_request.opened",
+          repository: "acme/context-tree",
+          pullRequest: 42,
+          senderLogin: "writer",
+        },
+      },
+    };
+
+    expect(await formatInboundContent(msg, cache)).toBe(
+      "[From: GitHub · type=system]\n\nHistorical managed review task.",
+    );
+  });
+
   it("does not trust a caller-provided systemSender marker", async () => {
     const cache = createParticipantCache(
       mkSdk(async () => participants),
@@ -261,47 +344,6 @@ describe("formatInboundContent", () => {
     };
 
     expect(await formatInboundContent(msg, cache)).toBe(`[From: alice · type=agent]\n\n${JSON.stringify(githubCard)}`);
-  });
-
-  it("renders a schema-validated Context Review task as explicitly untrusted context", async () => {
-    const cache = createParticipantCache(
-      mkSdk(async () => participants),
-      "chat-1",
-      () => {},
-    );
-    const msg: SessionMessage = {
-      id: "m1",
-      chatId: "chat-1",
-      senderId: "agent-a",
-      format: "markdown",
-      content: "Review the managed PR.",
-      metadata: { taskType: "context_tree_pr_review", reviewPacketV1: reviewPacket() },
-    };
-
-    const out = await formatInboundContent(msg, cache);
-    expect(out).toContain('<first-tree-task-context format="json">');
-    expect(out).toContain('"pullRequest": 42');
-    expect(out).toContain("untrusted task data");
-  });
-
-  it("fails closed for malformed or deeply nested Context Review task metadata", async () => {
-    const cache = createParticipantCache(
-      mkSdk(async () => participants),
-      "chat-1",
-      () => {},
-    );
-    let nested: unknown = "leaf";
-    for (let i = 0; i < 3_000; i += 1) nested = [nested];
-    const msg: SessionMessage = {
-      id: "m1",
-      chatId: "chat-1",
-      senderId: "agent-a",
-      format: "markdown",
-      content: "Review the managed PR.",
-      metadata: { taskType: "context_tree_pr_review", reviewPacketV1: nested },
-    };
-
-    await expect(formatInboundContent(msg, cache)).resolves.toContain("<first-tree-task-context-error");
   });
 
   it("annotates the header with the sender type and send time when both are known", async () => {

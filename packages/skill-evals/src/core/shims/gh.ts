@@ -162,9 +162,9 @@ function rulesetPayloadOk(argv) {
     pullRequestRules.length === 1 &&
     parameterKeys.length === expectedParameterKeys.length &&
     parameterKeys.every((key, index) => key === expectedParameterKeys[index]) &&
-    parameters.required_approving_review_count === 0 &&
+    parameters.required_approving_review_count === 1 &&
     parameters.require_code_owner_review === false &&
-    parameters.dismiss_stale_reviews_on_push === false &&
+    parameters.dismiss_stale_reviews_on_push === true &&
     parameters.require_last_push_approval === false &&
     parameters.required_review_thread_resolution === false
   );
@@ -284,6 +284,30 @@ if (AUDIT_FIXTURE_PATH) {
   }
 }
 
+if (REVIEW_FIXTURE_PATH && argv[0] === "api" && endpointArg(argv) === "user") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const exactIdentityRead =
+    ghMethod(argv) === "GET" &&
+    argv.length === 4 &&
+    argv[1] === "user" &&
+    argv[2] === "--jq" &&
+    argv[3] === ".login";
+  if (!exactIdentityRead) {
+    finish(argv, phase, 2, "", "Review fixture requires the narrow local GitHub identity read.\\n", {
+      reviewFixture: true,
+      reviewFixtureViolation: true,
+    });
+  }
+  append({
+    type: "github_identity_read",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    login: fixture.reviewerLogin,
+  });
+  finish(argv, phase, 0, fixture.reviewerLogin + "\\n", "", { reviewFixture: true });
+}
+
 if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
   const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
   const statePath = REVIEW_FIXTURE_PATH + ".state";
@@ -297,7 +321,8 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
       reviewFixtureViolation: true,
     });
   }
-  const view = fixture.views[Math.min(state.views, fixture.views.length - 1)];
+  const recordedView = fixture.views[Math.min(state.views, fixture.views.length - 1)];
+  const view = state.currentHeadOid ? { ...recordedView, headRefOid: state.currentHeadOid } : recordedView;
   const viewIndex = state.views;
   state.views += 1;
   writeFileSync(statePath, JSON.stringify(state), "utf8");
@@ -314,6 +339,45 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "view") {
     viewIndex,
   });
   finish(argv, phase, 0, JSON.stringify(view) + "\\n", "", { reviewFixture: true });
+}
+
+if (REVIEW_FIXTURE_PATH && argv[0] === "pr" && argv[1] === "merge") {
+  const fixture = JSON.parse(readFileSync(REVIEW_FIXTURE_PATH, "utf8"));
+  const statePath = REVIEW_FIXTURE_PATH + ".state";
+  let state = { views: 0 };
+  try {
+    state = JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {}
+  const pullRequestUrl = fixture.views?.[0]?.url || "https://github.com/" + fixture.repo + "/pull/" + fixture.prNumber;
+  const targetMatches =
+    argv[2] === pullRequestUrl ||
+    (argv[2] === String(fixture.prNumber) && argAfter(argv, "--repo") === fixture.repo);
+  const exact =
+    targetMatches &&
+    argv.includes("--squash") &&
+    argAfter(argv, "--match-head-commit") === fixture.reviewHeadOid &&
+    !argv.includes("--admin") &&
+    !argv.includes("--auto") &&
+    !argv.includes("--merge") &&
+    !argv.includes("--rebase") &&
+    state.approvedHead === fixture.reviewHeadOid &&
+    (!state.currentHeadOid || state.currentHeadOid === fixture.reviewHeadOid);
+  if (!exact) {
+    finish(argv, phase, 2, "", "Review fixture rejected a non-approved or non-exact merge.\\n", {
+      reviewFixture: true,
+      reviewFixtureViolation: true,
+    });
+  }
+  append({
+    type: "github_pr_merged",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    commitOid: fixture.reviewHeadOid,
+    prNumber: fixture.prNumber,
+    repo: fixture.repo,
+  });
+  finish(argv, phase, 0, "✓ Pull request merged\\n", "", { reviewFixture: true, recordedOnly: true });
 }
 
 const simulated = isGovernanceBootstrapCase() ? bootstrapResponse(argv) : isGovernanceRecoveryCase() ? recoveryResponse(argv) : null;

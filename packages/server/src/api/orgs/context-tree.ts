@@ -16,10 +16,6 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { ConflictError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import {
-  ContextTreeWritePreflightError,
-  preflightContextTreeWriteAuthority,
-} from "../../services/context-review-task.js";
-import {
   ContextTreeRepoProvisionError,
   ensureInstallationOwnedContextTreeRepo,
 } from "../../services/context-tree-repo-provisioner.js";
@@ -28,6 +24,10 @@ import {
   getContextTreeSnapshot,
   isGithubRemoteBinding,
 } from "../../services/context-tree-snapshot.js";
+import {
+  ContextTreeWritePreflightError,
+  preflightContextTreeWriteAuthority,
+} from "../../services/context-tree-write-preflight.js";
 import { createRepoFileWithToken, GithubAppApiError, getRepoFileWithToken } from "../../services/github-app.js";
 import { findInstallationByOrg } from "../../services/github-app-installations.js";
 import {

@@ -4,7 +4,29 @@ import type { ContextTreeReviewEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "context-tree-review-static-coverage";
 const prompt =
-  "Use context-tree-review to review pull request owner/context-tree#42 for server-authored Context review run 01900000-0000-7000-8000-000000000042. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42`, run validation only with that worktree as the current directory, and make every semantic file read explicitly resolve through that registered worktree path. Submit the single correct outcome only through `first-tree github context-review submit`.";
+  'Use context-tree-review to review pull request owner/context-tree#42 for server-authored Context review run 01900000-0000-7000-8000-000000000042. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Before verification, check the trusted live source ref only with `git -C context-tree fetch origin refs/heads/review-change` followed by an exact `git -C context-tree rev-parse FETCH_HEAD` test, then fetch `refs/pull/42/head` and repeat that exact test. Run all four as separate synchronous commands, and wait for each fetch to exit 0 before starting its test; never issue a fetch and its test in parallel, in one tool-call batch, in one shell command, or in the background. Do not use `ls-remote`, awk, another parser, a pipeline, or another ref. From the workspace root, pass exactly `$PWD/.review-worktrees/42` or its resolved absolute path to `git -C context-tree worktree add --detach`; never pass `.review-worktrees/42` or create `context-tree/.review-worktrees/42`. Change into the registered workspace-root review worktree and run the standalone exact command `first-tree tree verify --json`; an invalid or failed verify attempt is terminal and cannot be repaired by rebuilding elsewhere. For every semantic content read, return the command tool to the workspace root and put `$PWD/.review-worktrees/42`, its resolved absolute path, or `git -C "$PWD/.review-worktrees/42"` in the command itself. Tool working-directory state alone is not evidence: never use bare readers such as `cat NODE.md`, `rg --files .`, or bare `git diff`. Remove the worktree before the terminal report. Write the verdict body only to the workspace-root temporary file `.review-body-42.md`, submit the single correct outcome only through `first-tree tree review`, and remove that temporary body before the terminal report.';
+
+/**
+ * Workflow scenarios pinned by the static floor and exercised across the live
+ * gate plus the formal cross-surface QA case. Repair/merge provider effects are
+ * intentionally not simulated as successful GitHub mutations outside their
+ * narrow deterministic shims.
+ */
+export const CONTEXT_TREE_REVIEW_WORKFLOW_SCENARIOS = [
+  "validator-failure",
+  "semantic-failure",
+  "safe-repair",
+  "protected-repair-refusal",
+  "successor-head-review",
+  "draft",
+  "stale-run",
+  "head-race",
+  "fork",
+  "approve-and-local-merge",
+  "approved-not-merged",
+  "request-changes",
+  "comment",
+] as const;
 
 export const CONTEXT_TREE_REVIEW_GATE_CASES: readonly ContextTreeReviewEvalCase[] = [
   {

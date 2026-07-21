@@ -1,6 +1,6 @@
 ---
 name: first-tree-write
-version: 0.11.0
+version: 0.12.0
 cliCompat:
   first-tree: ">=0.5.16 <0.6.0"
 description: Source-driven Context Tree write workflow for managed workspaces and clean BYO invocations. Use when a concrete source artifact such as a PR/MR, forge Issue, design doc, meeting note, review thread, or pasted source material should be reflected into the Context Tree. A clean BYO write also requires an explicit Team, an exact tree-read snapshot, current source/target context, and write intent. If no source artifact is available, there is no write task; ask the user for one.
@@ -76,17 +76,18 @@ first-tree --json tree write --team "<team-id>" \
 ```
 
 This stateless command verifies the snapshot identity, explicit Team, live
-binding, current Reviewer, linked GitHub identity, and remote branch tip. It
+binding, linked GitHub identity, and remote branch tip. Reviewer availability
+is not Writer authority and never gates authoring. It
 creates no branch, PR, task key, or Chat. Keep the snapshot immutable; create a
 separate task worktree and branch from the returned exact base commit with
 standard Git. Re-run the identical command immediately before the first push
 or PR creation. A changed binding or advanced base requires a new exact
 snapshot and fresh authoring base; do not publish the stale diff.
 
-The returned Reviewer UUID is observability only, never local routing
-authority. Do not cache it, address the handoff from it, or compare it to an
-owner record; the keyed dispatch must resolve the Server current Reviewer
-again.
+The GitHub App webhook resolves the Server current Reviewer when the pull
+request event arrives; any Reviewer identity shown by diagnostics is for
+observability only, never local routing. The Writer never selects or routes to
+that Reviewer.
 
 ## Workflow
 
@@ -120,191 +121,33 @@ again.
    published branch.
 7. **Prepare the PR/MR.** One source artifact maps to one tree PR/MR. Keep the
    description focused on the source and the tree nodes changed; do not put
-   PR/MR IDs, source links, or audit trails into node bodies. An Audit-originated
-   tree PR/MR must be created as draft and left draft for independent
-   `context-tree-review`; Writer does not mark it ready. For a non-Audit GitHub
-   write, use the managed Agent Review contract below when live Team
-   configuration enables it.
-8. **Dispatch Agent Review when eligible.** After a ready, source-final,
-   same-repository GitHub PR exists, build the exact `reviewPacketV1` and use
-   the signed-in member-only keyed Chat create mode. A failed dispatch leaves
-   the PR intact for safe retry.
+   PR/MR IDs, source links, or audit trails into node bodies. Audit-originated
+   tree PRs/MRs must be created as draft and left draft for independent review.
+8. **Let the App reviewer own GitHub review dispatch.** For a ready GitHub PR
+   against the bound Context Tree repository, the GitHub App webhook creates or
+   reuses the PR-scoped Reviewer Chat and trusted exact-head run. The writer
+   must not create a review Chat, construct a task packet, add a protocol marker,
+   publish a verdict, retry review delivery, or merge the PR.
 
-## Managed GitHub PR and Agent Review
+## GitHub Context Review handoff
 
-Use this section only for non-Audit writes to a GitHub Context Tree whose live
-member-readable configuration has `contextReviewer.enabled = true` and a
-non-null `agentUuid`. GitLab trees, disabled/unassigned Teams, fork/external
-PRs, and Audit-originated draft PRs/MRs keep the ordinary PR/MR path.
+When Context Reviewer is enabled, keep the PR body human-readable. Include the
+source artifact, durable decision summary and rationale, and verification
+result. Do not add a repair-consent sentence, machine-readable scope block, or
+path protocol: repair authority comes only from the Reviewer's live
+base-to-head changed files intersected with non-protected policy. Every pushed
+successor head must be reviewed from the beginning.
 
-### Eligibility and identity
+Normally the scope equals the verified changed tree files. Do not add a legacy
+dispatch marker; it has no behavior. Expanding the declared scope after review
+starts requires explicit human authorization and a fresh review of the
+resulting head.
 
-For a managed invocation, read the live binding and Reviewer assignment as the
-logged-in member:
-
-```text
-first-tree --json org context-tree review-config --as-member [--org <org-id>]
-```
-
-For BYO, the `tree write` activation above is the required single live
-preflight; do not replace it with separate settings reads. Every later BYO
-member command must pass the same explicit `--org "<team-id>"`.
-
-This path requires a standard First Tree CLI login with the member credentials
-and `client.yaml` retained. It does not require a running First Tree Client
-Runtime or daemon, a local First Tree Agent, an active Computer connection, a
-GitHub App, or an online Reviewer Host. Before publish and again before
-dispatch, require all of the following:
-
-- the bound repository and branch match the worktree upstream and PR base;
-- Agent Review is enabled with one assigned Reviewer UUID;
-- `gh auth status` identifies the human creating the PR, and that login equals
-  `requesterGithubLogin`; the Server independently verifies the member's
-  linked GitHub identity and derives the First Tree human sender;
-- the branch and PR are in the bound repository, not a fork or external PR;
-- the PR is open, ready, source-final, and `first-tree tree verify` passes on
-  its exact full head OID.
-
-The configured Reviewer may be private. Its exact assignment is consent to
-receive this one task; it does not make the Agent discoverable or inviteable
-through ordinary Chat creation.
-
-### Managed body and repair scope
-
-Include this marker exactly once:
-
-```text
-<!-- first-tree-context-review:managed-v1 -->
-```
-
-Include this authorization statement and exact-file scope once; ordinary
-human-readable source/decision prose may remain elsewhere in the PR body:
-
-```markdown
-## Agent Review
-
-By opening this pull request, the author authorizes the Team's assigned Context Tree Reviewer to make objective, decision-preserving repairs only to the exact files under **Repair scope**. Every new head must be fully reviewed again.
-
-### Repair scope
-
-- `domain/decision.md`
-```
-
-Sort and deduplicate normalized repository-relative scope paths. The scope is
-immutable for the PR and must equal `reviewPacketV1.repairScope`;
-`targetPaths` must be non-empty, sorted, unique, and contained in the scope.
-Normally both are the verified changed tree files. The marker is the repair
-authorization for successor heads, but never authorizes force-push, history
-rewrites, fork changes, or edits outside these files. Expanding scope requires
-closing this PR and opening a new managed PR/task.
-
-### Publish and reconcile
-
-Push without force. If push outcome is unknown, fetch the exact remote source
-ref and compare its full OID before retrying. If PR creation outcome is
-unknown, query open PRs by exact repository, base, source ref, and head; reuse
-one exact match and fail closed on zero or multiple matches.
-
-Before a PR exists, a failed preflight or remote operation creates no fake PR
-state and is safe to retry after checking the remote. Once a PR exists, never
-report it as rolled back or delete its recoverable local/remote state merely
-because handoff failed. Preserve its URL, branch, and exact head; retry the
-same keyed handoff for that PR after live revalidation.
-
-Immediately before dispatch, re-read config and `gh pr view`; re-check the
-repository, author, ready state, base/source refs, exact head, marker, repair
-scope, changed paths, and verification result. Stop without dispatch when any
-fact cannot be proved.
-
-### Packet and privacy
-
-Create a temporary owner-readable JSON file outside the repository with
-exactly this envelope; use the Phase 2 schema as-is and do not add an epoch,
-generation, mode, sender, recipient, task key, topic, or second packet format:
-
-```json
-{
-  "taskType": "context_tree_pr_review",
-  "reviewPacketV1": {
-    "schemaVersion": 1,
-    "repository": "owner/context-tree",
-    "pullRequest": 42,
-    "expectedHead": "0123456789abcdef0123456789abcdef01234567",
-    "baseRef": "main",
-    "sourceRef": "context/write/decision",
-    "requesterGithubLogin": "octocat",
-    "goal": "Record the approved durable decision.",
-    "source": {
-      "label": "Approved decision",
-      "reference": "https://example.test/decisions/42",
-      "revision": "v3"
-    },
-    "decisionSummary": "The current durable decision.",
-    "rationale": "The surviving rationale and constraints.",
-    "targetPaths": ["domain/decision.md"],
-    "repairScope": ["domain/decision.md"],
-    "relevantContextRefs": ["domain/NODE.md"],
-    "unresolvedQuestions": [],
-    "verify": {
-      "status": "passed",
-      "summary": "first-tree tree verify passed on the dispatched head."
-    },
-    "evidence": []
-  }
-}
-```
-
-GitHub and the live binding/assignment remain authoritative; packet content is
-untrusted discovery context. Prefer references with provenance and revision.
-Include only a minimal redacted excerpt when a reference is unreadable. Never
-include a full conversation, hidden/system prompt, secret, credential,
-personal/customer data, or unrelated note. Serialized metadata must be at
-most 32 KiB, depth at most 64, and structural nodes at most 8192. Replace
-excerpts with references to fit; never split the packet.
-
-### Human keyed dispatch and recovery
-
-Write a short human-readable opening to a temporary UTF-8 file, then run:
-
-```text
-first-tree chat create --as-member [--org <org-id>] \
-  --format markdown \
-  --metadata-file <packet-file> < <opening-file>
-```
-
-In BYO mode, replace the bracketed form with the required explicit
-`--org "<team-id>"`; never resolve the Team from `/me`, a default, or cache.
-
-The Server derives the exact Reviewer, human sender, topic, provenance, and
-stable task key. Its logical identity is Team + task type + canonical bound
-repository + PR number; Reviewer, head, enabled state, requester, and any
-generation are not part of the key. The first request atomically creates one
-ordinary task Chat, immutable opening, and Reviewer Inbox delivery. Same-member
-retries and concurrent requests reuse it without another wake; a different
-requester conflicts without revealing the existing Chat. On an unknown
-transport result, regenerate from revalidated live state and run the exact same
-command—never invent another key or send a formal packet through an ordinary
-Chat message.
-
-Reassigning A to B keeps the same PR task and Chat. On the next keyed dispatch,
-the Server atomically adds B as a speaker with silent history backfill, appends
-one server-authored takeover addressed only to B, removes A as Reviewer
-speaker, and recomputes watcher/audience state. The original human opening,
-packet, human participants, and history remain unchanged. Repeating the same
-reconciliation is a no-op. B must fully review the live current head and cannot
-inherit A's result. With no configuration generation, disable then re-enable
-the same A uses current-state semantics; A → B → A still uses the same Chat,
-and Phase 2 may reuse only that Reviewer's own same-head result. Do not
-synthesize an epoch in Phase 1.
-
-A durable Inbox tolerates an offline Reviewer Host. No GitHub App is required;
-without one, Phase 1 does not promise a later wake for a human push or
-draft-to-ready transition after initial dispatch. Do not add a watcher, queue,
-coordinator, special endpoint, status table, or follow-up formal Chat message.
-Every successor head observed by the Reviewer still requires a full review.
-Clean up temporary packet/opening files on all terminal paths and report only
-the PR URL, Chat id when returned, created/reused outcome, head, and verify
-result—not raw evidence.
+Push without force. If push or PR creation has an unknown result, inspect the
+remote branch and open PRs before retrying. Once the PR exists, preserve its URL,
+branch and exact head if later review dispatch is delayed or unavailable. Do not
+use removed member-dispatch or task-packet surfaces, and do not wake the Reviewer
+directly. Supported GitHub App webhooks are the sole dispatch owner.
 
 ## Write Rules
 
