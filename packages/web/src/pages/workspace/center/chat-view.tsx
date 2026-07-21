@@ -1701,7 +1701,7 @@ export function ChatView({
     if (!detailsOpen || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      // A nested top layer (for example the Activity Inspector) owns the first
+      // A nested top layer (for example a dialog or autocomplete) owns the first
       // Escape and marks it handled. Keep the details rail open until the next
       // Escape instead of dismissing two layers in one keypress.
       if (event.defaultPrevented) return;
@@ -4002,7 +4002,16 @@ export function ChatView({
               }}
             >
               <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-                {/* Live activity is view-only awareness, so watchers keep the
+                {!readOnly && chatTokenUsage && chatProcessedTokens > 0 ? (
+                  <div
+                    className="mono text-caption"
+                    style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
+                    title={formatTokenUsageTitle(chatTokenUsage)}
+                  >
+                    {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
+                  </div>
+                ) : null}
+                {/* Live status is view-only awareness, so watchers keep the
                     same stable “what are agents doing?” entry as participants.
                     Reply controls below remain gated by `readOnly`. */}
                 <ComposeStatusBar
@@ -4014,12 +4023,11 @@ export function ChatView({
                   <div
                     ref={readOnlyComposerRef}
                     tabIndex={-1}
-                    className="flex items-center"
+                    className="composer-card flex items-center"
                     style={{
                       gap: "var(--sp-3)",
                       padding: "var(--sp-2) var(--sp-3)",
                       border: "var(--hairline) solid var(--border)",
-                      borderRadius: 6,
                       // Raised surface (`--bg-raised`) so the slot reads as a
                       // distinct input card lifted above the timeline (`--bg`),
                       // sharing the header chrome's surface. Mirrors the editable
@@ -4053,15 +4061,6 @@ export function ChatView({
                   </div>
                 ) : (
                   <>
-                    {chatTokenUsage && chatProcessedTokens > 0 ? (
-                      <div
-                        className="mono text-caption"
-                        style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
-                        title={formatTokenUsageTitle(chatTokenUsage)}
-                      >
-                        {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
-                      </div>
-                    ) : null}
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
                         the composer. */}

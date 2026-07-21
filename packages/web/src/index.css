@@ -929,7 +929,7 @@
     box-shadow: inset 0 0 0 var(--hairline) var(--fg-info-strong);
   }
   [data-compose-status-bar].fade-in,
-  [data-live-activity-inspector].fade-in {
+  [data-current-agent-output].fade-in {
     animation: none;
   }
 }
@@ -986,6 +986,61 @@
    above it. */
 .composer-card {
   border-radius: var(--radius-panel);
+}
+
+/* Live status is the composer's connected top section, not a floating
+   inspector. The composer keeps the shared seam and supplies the lower
+   corners; when no status is present its normal four-corner shape remains. */
+.compose-status-surface {
+  overflow: hidden;
+  background: var(--bg-raised);
+  border: var(--hairline) solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+}
+
+.compose-status-summary {
+  min-height: var(--sp-10);
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.compose-status-details {
+  max-height: min(42vh, 28rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-top: var(--hairline) solid var(--border-faint);
+}
+
+.compose-status-output {
+  position: relative;
+}
+
+.compose-status-identity {
+  padding-right: var(--sp-8);
+}
+
+.compose-status-jump {
+  position: absolute;
+  z-index: 1;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  width: var(--sp-7);
+  height: var(--sp-7);
+  justify-content: center;
+}
+
+.compose-status-narration-with-jump > :first-child {
+  padding-right: var(--sp-8);
+}
+
+[data-compose-status-bar] + .composer-card {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* Shared base for the composer picker popovers — the `@`mention list and the
@@ -2420,15 +2475,6 @@ tr[data-interactive]:hover {
   --composer-font-size: var(--text-subtitle);
 }
 
-.compose-status-activity-trigger {
-  min-height: var(--sp-8);
-}
-
-.compose-status-inspector-close {
-  width: var(--sp-8);
-  height: var(--sp-8);
-}
-
 @media (max-width: 47.999rem) {
   input,
   textarea,
@@ -2444,7 +2490,7 @@ tr[data-interactive]:hover {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .compose-status-state {
+  .compose-status-state:not(.compose-status-state-expanded) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2455,10 +2501,16 @@ tr[data-interactive]:hover {
     white-space: nowrap;
     border: 0;
   }
-  .compose-status-activity-trigger {
+  .compose-status-summary {
     min-height: var(--sp-11);
   }
-  .compose-status-inspector-close {
+  .compose-status-identity,
+  .compose-status-narration-with-jump > :first-child {
+    padding-right: var(--sp-11);
+  }
+  .compose-status-jump {
+    top: 0;
+    right: 0;
     width: var(--sp-11);
     height: var(--sp-11);
   }
