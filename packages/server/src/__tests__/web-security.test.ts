@@ -268,6 +268,23 @@ describe("assertWebSecurityContract", () => {
     ).toThrow(/bounded, sorted, unique exact browser origins/);
   });
 
+  it("validates a supplied API-only public URL without reflecting rejected credentials or paths", () => {
+    const publicUrl = "https://user:secret@api.first-tree.example/private?token=sensitive";
+    let message = "";
+    try {
+      assertWebSecurityContract(
+        config(undefined, { publicUrl, scriptOrigins: [], connectOrigins: [], imageOrigins: [] }),
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("canonical exact HTTP(S) origin");
+    expect(message).not.toContain(publicUrl);
+    expect(message).not.toContain("secret");
+    expect(message).not.toContain("sensitive");
+  });
+
   it("requires exact embedded public URL and HTTPS-only production sources", () => {
     const webRoot = makeWebRoot();
     expect(() =>
@@ -279,6 +296,12 @@ describe("assertWebSecurityContract", () => {
     vi.stubEnv("NODE_ENV", "production");
     expect(() =>
       assertWebSecurityContract(
+        config(undefined, { publicUrl: undefined, scriptOrigins: [], connectOrigins: [], imageOrigins: [] }),
+      ),
+    ).toThrow(/PUBLIC_URL is required in production/u);
+
+    expect(() =>
+      assertWebSecurityContract(
         config(webRoot, {
           publicUrl: "http://cloud.first-tree.ai",
           scriptOrigins: [],
@@ -286,7 +309,18 @@ describe("assertWebSecurityContract", () => {
           imageOrigins: [],
         }),
       ),
-    ).toThrow(/must use HTTPS when serving the embedded Web SPA in production/);
+    ).toThrow(/must use HTTPS in production/);
+
+    expect(() =>
+      assertWebSecurityContract(
+        config(undefined, {
+          publicUrl: "http://api.first-tree.example",
+          scriptOrigins: [],
+          connectOrigins: [],
+          imageOrigins: [],
+        }),
+      ),
+    ).toThrow(/PUBLIC_URL must use HTTPS in production/);
 
     expect(() =>
       assertWebSecurityContract(

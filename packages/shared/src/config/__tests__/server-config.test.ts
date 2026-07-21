@@ -95,13 +95,16 @@ describe("server config", () => {
 
   it("canonicalizes, deduplicates, and sorts browser CSP origins from CSV and YAML", async () => {
     expect(
-      browserSecurityOriginListConfigSchema.parse(" https://z.example:443/,https://a.example,https://z.example "),
+      browserSecurityOriginListConfigSchema.parse(" HTTPS://Z.EXAMPLE:443/,https://a.example,https://z.example "),
     ).toEqual(["https://a.example", "https://z.example"]);
     expect(
       browserSecurityConnectOriginListConfigSchema.parse(
-        "wss://socket.example:443/,https://api.example,wss://socket.example",
+        "WSS://SOCKET.EXAMPLE:443/,https://api.example,wss://socket.example",
       ),
     ).toEqual(["https://api.example", "wss://socket.example"]);
+    expect(browserSecurityOriginListConfigSchema.parse("https://cdn.example:8443/")).toEqual([
+      "https://cdn.example:8443",
+    ]);
     expect(browserSecurityOriginListConfigSchema.safeParse("wss://socket.example").success).toBe(false);
 
     const configDir = makeTempConfigDir();
@@ -116,6 +119,22 @@ describe("server config", () => {
       configDir,
     });
     expect(config.security.csp.imageOrigins).toEqual(["https://avatars.example", "https://images.example"]);
+  });
+
+  it("rejects CSP inputs that only become origins after URL normalization", () => {
+    const invalidOrigins = [
+      "https://cdn.example/private/..",
+      "https://cdn.example?",
+      "https://cdn.example#",
+      "https://%63dn.example",
+      "https://127.1",
+      "https://K.com",
+    ];
+
+    for (const origin of invalidOrigins) {
+      expect(browserSecurityOriginListConfigSchema.safeParse(origin).success).toBe(false);
+      expect(browserSecurityConnectOriginListConfigSchema.safeParse(origin).success).toBe(false);
+    }
   });
 
   it("rejects non-origin CSP input without reflecting the rejected value", async () => {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { assertBuildHtmlSecurity, inspectBuildHtmlSecuritySurface } from "../../build-html-security.js";
 import { sanitizePath } from "../analytics.js";
 
 const indexHtml = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
@@ -8,13 +9,24 @@ const themeInit = readFileSync(new URL("../../public/theme-init.js", import.meta
 
 describe("production gtag bootstrap", () => {
   it("uses only external scripts and keeps the blocking theme bootstrap first", () => {
-    const scripts = [...indexHtml.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu)];
+    expect(() => assertBuildHtmlSecurity(indexHtml)).not.toThrow();
+    const { scripts, hasInlineEventHandler, hasStyleElement } = inspectBuildHtmlSecuritySurface(indexHtml);
     expect(scripts).toHaveLength(3);
-    expect(scripts.every((match) => /\bsrc=/u.test(match[1] ?? "") && !(match[2] ?? "").trim())).toBe(true);
-    expect(scripts[0]?.[1]).toContain('src="/theme-init.js"');
-    expect(scripts[0]?.[1]).not.toMatch(/\b(?:async|defer)\b/u);
-    expect(scripts[1]?.[1]).toContain('src="/src/browser-bootstrap-entry.ts"');
-    expect(indexHtml).not.toMatch(/\son[a-z][a-z0-9:_-]*\s*=/iu);
+    expect(scripts.every((script) => script.src && !script.body.trim())).toBe(true);
+    expect(scripts[0]).toMatchObject({ src: "/theme-init.js", async: false, defer: false });
+    expect(scripts[1]?.src).toBe("/src/browser-bootstrap-entry.ts");
+    expect(hasInlineEventHandler).toBe(false);
+    expect(hasStyleElement).toBe(false);
+  });
+
+  it("rejects inline script hidden behind a browser-recognized malformed end tag", () => {
+    const adversarialHtml = [
+      '<script src="/theme-init.js"></script x>',
+      '<script src="/safe.js"></script x>',
+      "<script>alert(document.domain)</script bogus>",
+    ].join("");
+
+    expect(() => assertBuildHtmlSecurity(adversarialHtml)).toThrow(/emitted index contains an inline script/u);
   });
 });
 

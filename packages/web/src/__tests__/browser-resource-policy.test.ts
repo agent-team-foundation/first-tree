@@ -6,6 +6,7 @@ import {
   GOOGLE_ANALYTICS_INTEGRATION_ID,
   isBrowserIntegrationActive,
   MICROSOFT_CLARITY_INTEGRATION_ID,
+  materializeBrowserSecuritySources,
   resolveEffectiveSentryIntegration,
   resolveViteBrowserEnvironment,
   WEB_SENTRY_INTEGRATION_ID,
@@ -70,6 +71,38 @@ describe("browser integration registry", () => {
       capability: "connect",
       originFrom: "sentry-dsn",
       resourceType: "fetch-or-beacon",
+    });
+  });
+
+  it("fails closed when a loader origin drifts from its required script row", () => {
+    for (const integration of Object.values(BROWSER_INTEGRATION_REGISTRY)) {
+      if (!("loaderUrl" in integration)) continue;
+      expect(materializeBrowserSecuritySources(integration).script).toContain(new URL(integration.loaderUrl).origin);
+    }
+
+    expect(() =>
+      materializeBrowserSecuritySources({
+        ...BROWSER_INTEGRATION_REGISTRY.googleAnalytics,
+        loaderUrl: "https://drifted-loader.example.test/gtag.js",
+      }),
+    ).toThrowError("must declare its loader origin as a required script");
+  });
+
+  it("materializes dynamic origins using the capability declared by the registry row", () => {
+    const dynamicRow = BROWSER_INTEGRATION_REGISTRY.webSentry.dynamicRows[0];
+    if (!dynamicRow) throw new Error("Sentry registry must declare its dynamic policy row");
+    expect(
+      materializeBrowserSecuritySources(
+        {
+          ...BROWSER_INTEGRATION_REGISTRY.webSentry,
+          dynamicRows: [{ ...dynamicRow, capability: "image" }],
+        },
+        { "sentry-dsn": "https://capture.example.test" },
+      ),
+    ).toEqual({
+      script: [],
+      connect: [],
+      image: ["https://capture.example.test"],
     });
   });
 });

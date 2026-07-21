@@ -48,6 +48,7 @@
     "@vitest/coverage-v8": "3.2.4",
     "fake-indexeddb": "^6.2.5",
     "happy-dom": "^20.9.0",
+    "parse5": "^8.0.1",
     "tailwindcss": "^4.2.2",
     "tailwindcss-animate": "^1.0.7",
     "vite": "^6.3.0",

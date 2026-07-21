@@ -12,6 +12,7 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { assertBuildHtmlSecurity } from "./build-html-security.js";
 import { buildBrowserSecurityManifest } from "./src/browser-resource-policy.js";
 import { loadViteBrowserEnvironment } from "./vite-environment.js";
 
@@ -127,25 +128,6 @@ async function readableBuildFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-function verifyNoExecutableHtml(indexHtml: string): void {
-  const scriptPattern = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu;
-  const scripts = [...indexHtml.matchAll(scriptPattern)];
-  if (scripts.length === 0) throw new Error("Browser security build verification failed: index has no scripts");
-  for (const match of scripts) {
-    const attributes = match[1] ?? "";
-    const body = match[2] ?? "";
-    if (!/(?:^|\s)src\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)/iu.test(attributes) || body.trim().length > 0) {
-      throw new Error("Browser security build verification failed: emitted index contains an inline script");
-    }
-  }
-  if (/\son[a-z][a-z0-9:_-]*\s*=/iu.test(indexHtml)) {
-    throw new Error("Browser security build verification failed: emitted index contains an inline event handler");
-  }
-  if (/<style\b/iu.test(indexHtml)) {
-    throw new Error("Browser security build verification failed: emitted index contains an inline style element");
-  }
-}
-
 function browserSecurityBuildVerifierPlugin(distRoot: string, expectedBuildId: string): Plugin {
   return {
     name: "first-tree:verify-browser-security-build",
@@ -154,19 +136,7 @@ function browserSecurityBuildVerifierPlugin(distRoot: string, expectedBuildId: s
     async closeBundle() {
       const indexPath = join(distRoot, "index.html");
       const indexHtml = await readFile(indexPath, "utf8");
-      verifyNoExecutableHtml(indexHtml);
-
-      const themeScriptTag = indexHtml.match(/<script\b[^>]*\bsrc=["']\/theme-init\.js["'][^>]*>/iu)?.[0];
-      const firstScriptOffset = indexHtml.search(/<script\b/iu);
-      if (
-        !themeScriptTag ||
-        /\b(?:async|defer)\b/iu.test(themeScriptTag) ||
-        indexHtml.indexOf(themeScriptTag) !== firstScriptOffset
-      ) {
-        throw new Error(
-          "Browser security build verification failed: theme bootstrap is not a blocking external script",
-        );
-      }
+      assertBuildHtmlSecurity(indexHtml);
       await readFile(join(distRoot, "theme-init.js"), "utf8");
 
       const manifestText = await readFile(join(distRoot, BROWSER_SECURITY_MANIFEST_FILENAME), "utf8");

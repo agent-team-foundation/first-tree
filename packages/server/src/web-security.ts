@@ -160,17 +160,22 @@ function assertRequiredOriginsIncluded(
  */
 export function assertWebSecurityContract(config: Config): void {
   const configured = assertRuntimeOriginsValid(config);
+  const configuredPublicUrl = config.server.publicUrl;
+  const publicOrigin = configuredPublicUrl === undefined ? undefined : exactPublicOriginUrl(configuredPublicUrl);
+  if (process.env.NODE_ENV === "production" && publicOrigin?.protocol !== "https:") {
+    throw new Error(
+      publicOrigin === undefined
+        ? "FIRST_TREE_PUBLIC_URL is required in production."
+        : "FIRST_TREE_PUBLIC_URL must use HTTPS in production.",
+    );
+  }
+
   if (config.webDistPath === undefined) return;
   if (config.webDistPath.trim().length === 0) {
     throw new Error("FIRST_TREE_WEB_DIST_PATH must not be blank when configured.");
   }
-  if (config.server.publicUrl === undefined) {
+  if (publicOrigin === undefined) {
     throw new Error("FIRST_TREE_PUBLIC_URL is required when serving the embedded Web SPA.");
-  }
-
-  const publicOrigin = exactPublicOriginUrl(config.server.publicUrl);
-  if (process.env.NODE_ENV === "production" && publicOrigin.protocol !== "https:") {
-    throw new Error("FIRST_TREE_PUBLIC_URL must use HTTPS when serving the embedded Web SPA in production.");
   }
 
   const manifest = loadBrowserSecurityManifest(config.webDistPath);

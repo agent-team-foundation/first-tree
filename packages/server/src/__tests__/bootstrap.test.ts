@@ -182,6 +182,40 @@ describe("server bootstrap", () => {
     expect(buildAppFn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["missing production API-only public URL", undefined, /PUBLIC_URL is required in production/u],
+    [
+      "malformed API-only public URL",
+      "https://user:secret@api.first-tree.example/private?token=sensitive",
+      /canonical exact HTTP\(S\) origin/u,
+    ],
+    ["insecure production API-only public URL", "http://api.first-tree.example", /must use HTTPS in production/u],
+  ] as const)("rejects %s before telemetry, migrations, build, or listen", async (_label, publicUrl, error) => {
+    vi.stubEnv("NODE_ENV", "production");
+    const initTelemetryFn = vi.fn(async () => undefined);
+    const runMigrationsFn = vi.fn(async () => 0);
+    const listenFn = vi.fn(async () => "http://127.0.0.1:0");
+    const buildAppFn = vi.fn(async () => ({ listen: listenFn, close: vi.fn(async () => undefined) }));
+
+    await expect(
+      startServer({
+        initServerConfig: async () => ({
+          ...baseServerConfig,
+          server: { ...baseServerConfig.server, publicUrl },
+        }),
+        webDistPath: "",
+        initTelemetry: initTelemetryFn,
+        runMigrations: runMigrationsFn,
+        buildApp: buildAppFn as never,
+      }),
+    ).rejects.toThrow(error);
+
+    expect(initTelemetryFn).not.toHaveBeenCalled();
+    expect(runMigrationsFn).not.toHaveBeenCalled();
+    expect(buildAppFn).not.toHaveBeenCalled();
+    expect(listenFn).not.toHaveBeenCalled();
+  });
+
   it("starts the server through telemetry, migrations, app build, listen, and ready stages", async () => {
     const initTelemetryFn = vi.fn(async () => undefined);
     const runMigrationsFn = vi.fn(async () => 12);

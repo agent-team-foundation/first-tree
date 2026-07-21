@@ -19,6 +19,31 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
 
+const RAW_BROWSER_ORIGIN_PATTERN = /^([a-z][a-z0-9+.-]*):\/\/([^/?#\\\s]+)\/?$/iu;
+const RAW_IPV6_AUTHORITY_PATTERN = /^(\[[0-9a-f:.]+\])(?::([0-9]+))?$/iu;
+const RAW_HOST_AUTHORITY_PATTERN = /^([^:]+)(?::([0-9]+))?$/u;
+
+function rawAuthorityMatchesParsedOrigin(rawAuthority: string, parsed: URL): boolean {
+  const authority = rawAuthority.startsWith("[")
+    ? RAW_IPV6_AUTHORITY_PATTERN.exec(rawAuthority)
+    : RAW_HOST_AUTHORITY_PATTERN.exec(rawAuthority);
+  if (!authority) return false;
+
+  const rawHostname = authority[1];
+  const rawPort = authority[2];
+  if (
+    !rawHostname ||
+    [...rawHostname].some((character) => character.charCodeAt(0) > 0x7f) ||
+    rawHostname.toLowerCase() !== parsed.hostname.toLowerCase()
+  ) {
+    return false;
+  }
+  if (rawPort === undefined || rawPort === parsed.port) return true;
+
+  const defaultPort = parsed.protocol === "http:" || parsed.protocol === "ws:" ? "80" : "443";
+  return parsed.port === "" && rawPort === defaultPort;
+}
+
 function canonicalConfigOriginSchema(
   protocols: ReadonlySet<string>,
   outputSchema: typeof browserSecurityOriginSchema | typeof browserSecurityConnectOriginSchema,
@@ -30,9 +55,19 @@ function canonicalConfigOriginSchema(
     .max(BROWSER_SECURITY_MAX_ORIGIN_LENGTH)
     .transform((value, context) => {
       try {
+        // Check the operator's raw value before WHATWG normalization. URL
+        // parsing intentionally collapses dot segments and drops empty query
+        // or fragment markers, which would otherwise turn non-origin inputs
+        // such as `/private/..`, `?`, or `#` into an apparently exact origin.
+        const rawOrigin = RAW_BROWSER_ORIGIN_PATTERN.exec(value);
+        if (!rawOrigin) {
+          context.addIssue({ code: "custom", message: "must be an exact browser origin" });
+          return z.NEVER;
+        }
         const parsed = new URL(value);
         if (
           value.includes("*") ||
+          !rawAuthorityMatchesParsedOrigin(rawOrigin[2] ?? "", parsed) ||
           !protocols.has(parsed.protocol) ||
           parsed.username.length > 0 ||
           parsed.password.length > 0 ||

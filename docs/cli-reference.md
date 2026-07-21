@@ -1377,14 +1377,15 @@ and are not used by the CLI. They are listed here for ops reference.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `FIRST_TREE_CSP_SCRIPT_ORIGINS` | Comma-separated exact origins allowed to supply scripts to the embedded Web SPA. | empty |
-| `FIRST_TREE_CSP_CONNECT_ORIGINS` | Comma-separated exact HTTP(S)/WS(S) origins allowed for browser fetch, beacon, and WebSocket connections. | empty |
-| `FIRST_TREE_CSP_IMAGE_ORIGINS` | Comma-separated exact origins allowed to supply browser images. | empty |
+| `FIRST_TREE_CSP_SCRIPT_ORIGINS` | Comma-separated exact origins allowed to supply scripts to the embedded Web SPA. Production accepts HTTPS only. | empty |
+| `FIRST_TREE_CSP_CONNECT_ORIGINS` | Comma-separated exact origins allowed for browser fetch, beacon, and WebSocket connections. Production accepts HTTPS/WSS only. | empty |
+| `FIRST_TREE_CSP_IMAGE_ORIGINS` | Comma-separated exact origins allowed to supply browser images. Production accepts HTTPS only. | empty |
 
 Each value is an origin only: scheme, host, and optional port. Wildcards,
 credentials, paths, queries, fragments, protocol-relative values, CSP keywords,
 and raw directive fragments are rejected. Script and image lists accept only
-HTTP(S); connect additionally accepts WS(S). The embedded SPA's same-origin
+HTTP(S); connect additionally accepts WS(S). Production narrows these schemes
+to HTTPS for script/image and HTTPS/WSS for connect. The embedded SPA's same-origin
 WS(S) source is derived from the validated `FIRST_TREE_PUBLIC_URL`, so it does
 not need to be duplicated in the connect list. Never put a Sentry DSN,
 presigned object URL, token, or other credential-bearing URL in these lists—

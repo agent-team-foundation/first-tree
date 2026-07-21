@@ -250,19 +250,47 @@ export function isBrowserIntegrationActive(integration: BrowserIntegrationPolicy
   return integration.activation.kind === "hosts" && integration.activation.hosts.includes(hostname.toLowerCase());
 }
 
-function emptySources(): BrowserSecuritySources {
-  return { script: [], connect: [], image: [] };
-}
+type BrowserDynamicOriginValues = Partial<Record<BrowserDynamicResourcePolicyRow["originFrom"], string>>;
 
-function requiredSources(rows: readonly BrowserResourcePolicyRow[]): BrowserSecuritySources {
+/**
+ * Materialize one registry entry into its required CSP sources. Loader URLs
+ * stay coupled to the directive matrix, while dynamic requirements take their
+ * capability from the registry row instead of integration-specific code.
+ */
+export function materializeBrowserSecuritySources(
+  integration: BrowserIntegrationPolicy,
+  dynamicOrigins: Readonly<BrowserDynamicOriginValues> = {},
+): BrowserSecuritySources {
   const sourceSets: Record<BrowserResourceCapability, Set<string>> = {
     script: new Set(),
     connect: new Set(),
     image: new Set(),
   };
-  for (const row of rows) {
+  for (const row of integration.rows) {
     if (row.requirement === "required") sourceSets[row.capability].add(row.origin);
   }
+
+  for (const row of integration.dynamicRows ?? []) {
+    if (row.requirement !== "required") continue;
+    const origin = dynamicOrigins[row.originFrom];
+    if (!origin) {
+      throw new Error(`Browser integration ${integration.id} is missing a required dynamic origin`);
+    }
+    sourceSets[row.capability].add(origin);
+  }
+
+  if (integration.loaderUrl) {
+    let loaderOrigin: string;
+    try {
+      loaderOrigin = new URL(integration.loaderUrl).origin;
+    } catch {
+      throw new Error(`Browser integration ${integration.id} has an invalid loader URL`);
+    }
+    if (!sourceSets.script.has(loaderOrigin)) {
+      throw new Error(`Browser integration ${integration.id} must declare its loader origin as a required script`);
+    }
+  }
+
   return {
     script: [...sourceSets.script].sort(),
     connect: [...sourceSets.connect].sort(),
@@ -283,7 +311,7 @@ function staticManifestIntegration(integration: BrowserIntegrationPolicy): Brows
   return {
     id: integration.id,
     activation,
-    required: requiredSources(integration.rows),
+    required: materializeBrowserSecuritySources(integration),
   };
 }
 
@@ -296,12 +324,12 @@ export function buildBrowserSecurityManifest(buildId: string, env: SentryBuildEn
 
   const sentry = resolveEffectiveSentryIntegration(env);
   if (sentry.active) {
-    const required = emptySources();
-    required.connect = [sentry.origin];
     staticIntegrations.push({
       id: BROWSER_INTEGRATION_REGISTRY.webSentry.id,
       activation: { allHosts: true },
-      required,
+      required: materializeBrowserSecuritySources(BROWSER_INTEGRATION_REGISTRY.webSentry, {
+        "sentry-dsn": sentry.origin,
+      }),
     });
   }
 
