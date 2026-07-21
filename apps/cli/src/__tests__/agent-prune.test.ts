@@ -290,6 +290,27 @@ describe("removeLocalAgent path safety", () => {
     expect(existsSync(join(localAgentsDir(), "real", "agent.yaml"))).toBe(true);
   });
 
+  it("preflights every target before the first deletion", (ctx) => {
+    // The unsafe target (the alias dir) iterates last; the real workspace
+    // and session state validated before it must survive the refusal —
+    // per-target validate-then-delete would have removed them already.
+    mkdirSync(join(home, "data", "workspaces", "victim"), { recursive: true });
+    writeFileSync(join(home, "data", "workspaces", "victim", "note.txt"), "keep");
+    mkdirSync(join(home, "data", "sessions"), { recursive: true });
+    writeFileSync(join(home, "data", "sessions", "victim.json"), "{}");
+    mkdirSync(localAgentsDir(), { recursive: true });
+    mkdirSync(join(outside, "alias-target"), { recursive: true });
+    try {
+      symlinkSync(join(outside, "alias-target"), join(localAgentsDir(), "victim"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+    expect(() => removeLocalAgent("victim")).toThrow('Refusing to remove "victim": resolves outside First Tree state');
+    expect(existsSync(join(home, "data", "workspaces", "victim", "note.txt"))).toBe(true);
+    expect(existsSync(join(home, "data", "sessions", "victim.json"))).toBe(true);
+    expect(existsSync(join(outside, "alias-target"))).toBe(true);
+  });
+
   it("refuses an alias symlink that resolves outside First Tree state", (ctx) => {
     mkdirSync(localAgentsDir(), { recursive: true });
     mkdirSync(join(outside, "target"), { recursive: true });

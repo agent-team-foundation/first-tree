@@ -198,21 +198,30 @@ function resolveContainedTarget(baseDir: string, entryName: string, agentName: s
  *
  * `name` reaches this function as raw user input, so it is gated twice
  * before anything is deleted: the whitelist rejects every traversal-capable
- * name, and each target must realpath-resolve inside its base dir
- * immediately before deletion, so an alias symlink pointing outside First
- * Tree state is refused rather than removed.
+ * name, and every target must realpath-resolve inside its base dir, so an
+ * alias symlink pointing outside First Tree state is refused rather than
+ * removed.
+ *
+ * All targets are containment-validated before the first `rmSync`, and the
+ * alias dir is deleted last: a refused or failed later target must not
+ * strand workspace/session state behind an already-removed alias, because
+ * the alias dir is what `agent prune` discovers and retries by.
  */
 export function removeLocalAgent(name: string): void {
   assertRemovableAgentName(name);
   const targets: Array<{ baseDir: string; entryName: string; options: RmOptions }> = [
-    { baseDir: join(defaultConfigDir(), "agents"), entryName: name, options: { recursive: true, force: true } },
     { baseDir: join(defaultDataDir(), "workspaces"), entryName: name, options: { recursive: true, force: true } },
     { baseDir: join(defaultDataDir(), "sessions"), entryName: `${name}.json`, options: { force: true } },
+    { baseDir: join(defaultConfigDir(), "agents"), entryName: name, options: { recursive: true, force: true } },
   ];
+  const deletions: Array<{ target: string; options: RmOptions }> = [];
   for (const { baseDir, entryName, options } of targets) {
     // A base dir that does not exist yet (fresh install) has nothing to
     // delete; the remaining targets are still processed independently.
     if (!existsSync(baseDir)) continue;
-    rmSync(resolveContainedTarget(baseDir, entryName, name), options);
+    deletions.push({ target: resolveContainedTarget(baseDir, entryName, name), options });
+  }
+  for (const { target, options } of deletions) {
+    rmSync(target, options);
   }
 }
