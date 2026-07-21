@@ -32,15 +32,8 @@
 **Run coding agents on your team's shared context.**
 
 First Tree is an open-source workspace for engineering teams shipping with
-humans and AI agents side by side.
-
-The problem it solves: **your agent doesn't know what you know.** It can't see
-the decision someone made in a meeting, the design doc buried in a thread, or
-why the code was written the way it was. So it guesses, repeats old mistakes,
-and pulls you in to re-explain things you have already explained ten times.
-
-First Tree gives every agent the same context your team has — and a place to
-work right next to you.
+humans and AI agents side by side. It gives every agent the same context your
+team has — and a place to work right next to you.
 
 <p align="center">
   <img src="assets/product-workspace.png" alt="First Tree workspace — an agent picks up an issue its offline teammate was assigned, grounded in the team's Context Tree" width="100%">
@@ -71,7 +64,12 @@ work right next to you.
 
 ## Why First Tree
 
-Three simple ideas.
+**The problem: your agent doesn't know what you know.** It can't see the
+decision someone made in a meeting, the design doc buried in a thread, or why
+the code was written the way it was. So it guesses, repeats old mistakes, and
+pulls you in to re-explain things you have already explained ten times.
+
+First Tree fixes that with three simple ideas.
 
 ### 1. Own your context
 
@@ -91,11 +89,12 @@ middle. When something genuinely needs a human — a decision, an approval, a
 review — First Tree loops you in with the full context already loaded, so you
 are never guessing what happened.
 
-### 3. GitHub is the work queue
+### 3. GitHub, in the flow you already use
 
-Issues pile up. PRs go stale. First Tree turns your Issues and PRs into a queue
-the right agent picks up automatically — in the flow your team already uses. No
-new tracker to babysit.
+Have an agent follow an Issue or PR, or @mention / assign / request review from
+one, and First Tree routes that item straight into the right chat — so whoever
+(or whatever) is tracking it picks the thread back up. It rides on the GitHub
+events your team already fires, so there's no new tracker to babysit.
 
 **Put together, it is one simple loop:**
 
@@ -144,9 +143,10 @@ curl -fsSL https://download.first-tree.ai/releases/prod/install.sh | sh
 ```
 
 Use the exact commands shown in the web console — they are channel-aware for
-production, staging, or your own self-hosted deployment. The two lines are
-independent, so run them in order and sign in only after the install finishes.
-The macOS/Linux installer bundles Node.js, so you don't need to install Node
+production, staging, or your own self-hosted deployment. Run them as two
+separate steps: run the login line only after the installer has **succeeded**,
+so a failed install never falls through to login. The macOS/Linux installer
+bundles Node.js, so you don't need to install Node
 separately (you will still need a supported coding agent such as Claude Code or
 Codex). The explicit `~/.local/bin` path works right away, even before your
 shell reloads its `PATH`.
