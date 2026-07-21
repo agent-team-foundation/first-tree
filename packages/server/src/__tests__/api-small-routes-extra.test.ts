@@ -737,6 +737,7 @@ describe("small API route handlers", () => {
     await route(routes, "POST", "/").handler(
       {
         body: { type: "agent", name: "bad-runtime", displayName: "Bad Runtime", clientId: "client_1" },
+        headers: {},
       },
       reply,
     );
