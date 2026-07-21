@@ -211,6 +211,7 @@ export {
   BROWSER_SECURITY_MAX_ORIGIN_LENGTH,
   BROWSER_SECURITY_MAX_ORIGINS_PER_CAPABILITY,
   type BrowserSecurityActivation,
+  type BrowserSecurityAuthority,
   type BrowserSecurityIntegration,
   type BrowserSecurityManifest,
   type BrowserSecuritySources,
@@ -221,6 +222,7 @@ export {
   browserSecurityManifestSchema,
   browserSecurityOriginSchema,
   browserSecuritySourcesSchema,
+  parseBrowserSecurityAuthority,
   WEB_VERSION_MANIFEST_FILENAME,
 } from "./schemas/browser-security-manifest.js";
 export {

@@ -107,6 +107,27 @@ describe("loadBrowserSecurityManifest", () => {
     expect(message).not.toContain(sensitive);
     expect(message).not.toContain("super-secret");
   });
+
+  it.each([
+    "https://cdn.example;upgrade-insecure-requests",
+    "https://cdn.example,https://evil.example",
+  ])("rejects a CSP-delimiter hostname in the generated manifest without reflecting it", (origin) => {
+    const manifest = validManifest();
+    const integration = manifest.integrations[0];
+    if (integration === undefined) throw new Error("fixture integration is missing");
+    integration.required.script = [origin];
+    const root = makeWebRoot(manifest);
+
+    let message = "";
+    try {
+      loadBrowserSecurityManifest(root);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("failed schema validation");
+    expect(message).not.toContain(origin);
+  });
 });
 
 describe("embedded Web public origin", () => {
@@ -115,6 +136,8 @@ describe("embedded Web public origin", () => {
     expect(webSocketOriginFromPublicUrl("https://cloud.first-tree.ai")).toBe("wss://cloud.first-tree.ai");
     expect(webSocketOriginFromPublicUrl("https://cloud.first-tree.ai:8443")).toBe("wss://cloud.first-tree.ai:8443");
     expect(webSocketOriginFromPublicUrl("http://localhost:3000")).toBe("ws://localhost:3000");
+    expect(webSocketOriginFromPublicUrl("https://192.0.2.1:8443")).toBe("wss://192.0.2.1:8443");
+    expect(webSocketOriginFromPublicUrl("https://[2001:db8::1]:8443")).toBe("wss://[2001:db8::1]:8443");
   });
 
   it("rejects non-origin, credentialed, and non-canonical public URLs without reflecting them", () => {
@@ -123,6 +146,8 @@ describe("embedded Web public origin", () => {
       "https://cloud.first-tree.ai/app",
       "https://user:secret@cloud.first-tree.ai",
       "https://cloud.first-tree.ai?token=secret",
+      "https://app;upgrade-insecure-requests",
+      "https://app,evil.example",
       "wss://cloud.first-tree.ai",
     ];
     for (const publicUrl of invalid) {

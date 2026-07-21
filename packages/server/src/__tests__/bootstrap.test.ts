@@ -41,12 +41,28 @@ function makeWebDist(): string {
   return dir;
 }
 
-function makeBrokenWebDist(kind: "missing-manifest" | "missing-version" | "mismatched-build-id"): string {
+function makeBrokenWebDist(
+  kind: "delimiter-manifest" | "missing-manifest" | "missing-version" | "mismatched-build-id",
+): string {
   const dir = makeTempConfigDir();
   if (kind !== "missing-manifest") {
+    const integrations =
+      kind === "delimiter-manifest"
+        ? [
+            {
+              id: "conditional-edge",
+              activation: { allHosts: true },
+              required: {
+                script: ["https://cdn.example;upgrade-insecure-requests"],
+                connect: [],
+                image: [],
+              },
+            },
+          ]
+        : [];
     writeFileSync(
       join(dir, "browser-security-manifest.json"),
-      JSON.stringify({ schemaVersion: 1, buildId: "browser-security-build", integrations: [] }),
+      JSON.stringify({ schemaVersion: 1, buildId: "browser-security-build", integrations }),
     );
   }
   if (kind !== "missing-version") {
@@ -157,58 +173,93 @@ describe("server bootstrap", () => {
     ["missing browser-security-manifest.json", "missing-manifest"],
     ["missing version.json", "missing-version"],
     ["mismatched Web build IDs", "mismatched-build-id"],
+    ["CSP-delimiter origin in browser-security-manifest.json", "delimiter-manifest"],
   ] as const)("rejects %s before telemetry, migrations, build, or listen", async (_label, kind) => {
     const webDistPath = makeBrokenWebDist(kind);
     const initTelemetryFn = vi.fn(async () => undefined);
     const runMigrationsFn = vi.fn(async () => 0);
-    const buildAppFn = vi.fn();
+    const listenFn = vi.fn(async () => "http://127.0.0.1:0");
+    const buildAppFn = vi.fn(async () => ({ listen: listenFn, close: vi.fn(async () => undefined) }));
 
-    await expect(
-      startServer({
+    let message = "";
+    try {
+      await startServer({
         initServerConfig: async () => baseServerConfig,
         webDistPath,
         initTelemetry: initTelemetryFn,
         runMigrations: runMigrationsFn,
-        buildApp: buildAppFn,
-      }),
-    ).rejects.toThrow(
+        buildApp: buildAppFn as never,
+      });
+    } catch (caught) {
+      message = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    const expectedError =
       kind === "mismatched-build-id"
         ? /browser security manifest build id does not match version\.json/u
-        : /(?:browser security|version) manifest.*missing/u,
-    );
+        : kind === "delimiter-manifest"
+          ? /browser security manifest failed schema validation/u
+          : /(?:browser security|version) manifest.*missing/u;
+    expect(message).toMatch(expectedError);
+    expect(message).not.toContain("cdn.example;upgrade-insecure-requests");
 
     expect(initTelemetryFn).not.toHaveBeenCalled();
     expect(runMigrationsFn).not.toHaveBeenCalled();
     expect(buildAppFn).not.toHaveBeenCalled();
+    expect(listenFn).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["missing production API-only public URL", undefined, /PUBLIC_URL is required in production/u],
+    ["missing production API-only public URL", undefined, /PUBLIC_URL is required in production/u, false],
     [
       "malformed API-only public URL",
       "https://user:secret@api.first-tree.example/private?token=sensitive",
       /canonical exact HTTP\(S\) origin/u,
+      false,
     ],
-    ["insecure production API-only public URL", "http://api.first-tree.example", /must use HTTPS in production/u],
-  ] as const)("rejects %s before telemetry, migrations, build, or listen", async (_label, publicUrl, error) => {
+    [
+      "semicolon-delimited embedded Web public URL",
+      "https://api.first-tree.example;upgrade-insecure-requests",
+      /canonical exact HTTP\(S\) origin/u,
+      true,
+    ],
+    [
+      "comma-delimited API-only public URL",
+      "https://api.first-tree.example,https://evil.example",
+      /canonical exact HTTP\(S\) origin/u,
+      false,
+    ],
+    [
+      "insecure production API-only public URL",
+      "http://api.first-tree.example",
+      /must use HTTPS in production/u,
+      false,
+    ],
+  ] as const)("rejects %s before telemetry, migrations, build, or listen", async (_label, publicUrl, error, embeddedWeb) => {
     vi.stubEnv("NODE_ENV", "production");
     const initTelemetryFn = vi.fn(async () => undefined);
     const runMigrationsFn = vi.fn(async () => 0);
     const listenFn = vi.fn(async () => "http://127.0.0.1:0");
     const buildAppFn = vi.fn(async () => ({ listen: listenFn, close: vi.fn(async () => undefined) }));
 
-    await expect(
-      startServer({
+    let message = "";
+    try {
+      await startServer({
         initServerConfig: async () => ({
           ...baseServerConfig,
           server: { ...baseServerConfig.server, publicUrl },
         }),
-        webDistPath: "",
+        webDistPath: embeddedWeb ? makeWebDist() : "",
         initTelemetry: initTelemetryFn,
         runMigrations: runMigrationsFn,
         buildApp: buildAppFn as never,
-      }),
-    ).rejects.toThrow(error);
+      });
+    } catch (caught) {
+      message = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    expect(message).toMatch(error);
+    if (publicUrl !== undefined) expect(message).not.toContain(publicUrl);
 
     expect(initTelemetryFn).not.toHaveBeenCalled();
     expect(runMigrationsFn).not.toHaveBeenCalled();

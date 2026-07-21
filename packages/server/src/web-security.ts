@@ -9,6 +9,7 @@ import {
   browserSecurityBuildIdSchema,
   browserSecurityManifestSchema,
   browserSecuritySourcesSchema,
+  parseBrowserSecurityAuthority,
   WEB_VERSION_MANIFEST_FILENAME,
 } from "@first-tree/shared";
 import { z } from "zod";
@@ -16,6 +17,7 @@ import type { Config } from "./config.js";
 
 const MAX_VERSION_MANIFEST_BYTES = 4 * 1024;
 const versionManifestSchema = z.object({ buildId: browserSecurityBuildIdSchema }).strict();
+const EXACT_PUBLIC_ORIGIN_PATTERN = /^(https?):\/\/([^/?#\\\s]+)$/u;
 
 function readBoundedJson(path: string, maxBytes: number, label: string): unknown {
   try {
@@ -61,9 +63,15 @@ export function loadBrowserSecurityManifest(webDistPath: string): BrowserSecurit
 
 function exactPublicOriginUrl(publicUrl: string): URL {
   try {
+    const rawOrigin = EXACT_PUBLIC_ORIGIN_PATTERN.exec(publicUrl);
+    const authority = rawOrigin?.[2] ? parseBrowserSecurityAuthority(rawOrigin[2]) : undefined;
+    if (authority === undefined) throw new Error("unsafe authority");
+
     const parsed = new URL(publicUrl);
     if (
       (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+      parsed.hostname !== authority.hostname ||
+      parsed.port !== authority.port ||
       parsed.username.length > 0 ||
       parsed.password.length > 0 ||
       parsed.pathname !== "/" ||

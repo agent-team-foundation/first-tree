@@ -6,6 +6,7 @@ import {
   browserSecurityConnectOriginSchema,
   browserSecurityManifestSchema,
   browserSecurityOriginSchema,
+  parseBrowserSecurityAuthority,
 } from "../schemas/browser-security-manifest.js";
 
 function integration(id = "ga4") {
@@ -21,6 +22,42 @@ function integration(id = "ga4") {
 }
 
 describe("browserSecurityManifestSchema", () => {
+  it("parses only CSP-safe canonical browser authorities", () => {
+    expect(parseBrowserSecurityAuthority("LOCALHOST:8443")).toEqual({
+      hostname: "localhost",
+      port: "8443",
+    });
+    expect(parseBrowserSecurityAuthority("xn--bcher-kva.example")).toEqual({
+      hostname: "xn--bcher-kva.example",
+      port: "",
+    });
+    expect(parseBrowserSecurityAuthority("192.0.2.1:443")).toEqual({
+      hostname: "192.0.2.1",
+      port: "443",
+    });
+    expect(parseBrowserSecurityAuthority("[2001:DB8::1]:9443")).toEqual({
+      hostname: "[2001:db8::1]",
+      port: "9443",
+    });
+
+    for (const authority of [
+      "cdn.example;upgrade-insecure-requests",
+      "cdn.example,https://evil.example",
+      "user@cdn.example",
+      "under_score.example",
+      "bücher.example",
+      "cdn.example.",
+      "127.1",
+      "127.00.0.1",
+      "[0:0:0:0:0:0:0:1]",
+      "cdn.example:0",
+      "cdn.example:065535",
+      "cdn.example:65536",
+    ]) {
+      expect(parseBrowserSecurityAuthority(authority)).toBeUndefined();
+    }
+  });
+
   it("accepts the strict version-1 contract", () => {
     expect(
       browserSecurityManifestSchema.parse({
@@ -83,6 +120,36 @@ describe("browserSecurityManifestSchema", () => {
     ).toBe(false);
   });
 
+  it("rejects activation hosts that cannot match a canonical public hostname", () => {
+    for (const rejected of [
+      "127.1",
+      "127.00.0.1",
+      "[0:0:0:0:0:0:0:1]",
+      "[:::]",
+      "[.]",
+      "cdn_example.test",
+      "cdn.example:443",
+    ]) {
+      expect(
+        browserSecurityManifestSchema.safeParse({
+          schemaVersion: 1,
+          buildId: "build-1",
+          integrations: [{ ...integration(), activation: { hosts: [rejected] } }],
+        }).success,
+      ).toBe(false);
+    }
+
+    for (const accepted of ["127.0.0.1", "[::1]", "localhost", "xn--bcher-kva.example"]) {
+      expect(
+        browserSecurityManifestSchema.safeParse({
+          schemaVersion: 1,
+          buildId: "build-1",
+          integrations: [{ ...integration(), activation: { hosts: [accepted] } }],
+        }).success,
+      ).toBe(true);
+    }
+  });
+
   it("rejects wildcard, credentialed, path, query, fragment, and non-canonical origins", () => {
     const invalid = [
       "https://*.example.com",
@@ -100,6 +167,30 @@ describe("browserSecurityManifestSchema", () => {
     expect(browserSecurityConnectOriginSchema.safeParse("wss://socket.example").success).toBe(true);
     expect(browserSecurityConnectOriginSchema.safeParse("ws://socket.example").success).toBe(true);
     expect(browserSecurityConnectOriginSchema.safeParse("wss://socket.example/").success).toBe(false);
+  });
+
+  it("rejects and redacts CSP-delimiter authorities in manifest origins", () => {
+    for (const rejected of [
+      "https://cdn.example;upgrade-insecure-requests",
+      "https://cdn.example,https://evil.example",
+    ]) {
+      const result = browserSecurityManifestSchema.safeParse({
+        schemaVersion: 1,
+        buildId: "build-1",
+        integrations: [
+          {
+            ...integration(),
+            required: { ...integration().required, script: [rejected] },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.message).not.toContain(rejected);
+        expect(result.error.message).not.toContain("upgrade-insecure-requests");
+      }
+    }
   });
 
   it("enforces conservative integration, host, and per-capability bounds", () => {

@@ -6,6 +6,7 @@ import {
   BROWSER_SECURITY_MAX_ORIGINS_PER_CAPABILITY,
   browserSecurityConnectOriginSchema,
   browserSecurityOriginSchema,
+  parseBrowserSecurityAuthority,
 } from "../schemas/browser-security-manifest.js";
 import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
@@ -20,28 +21,16 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
 }, z.string().min(1).optional());
 
 const RAW_BROWSER_ORIGIN_PATTERN = /^([a-z][a-z0-9+.-]*):\/\/([^/?#\\\s]+)\/?$/iu;
-const RAW_IPV6_AUTHORITY_PATTERN = /^(\[[0-9a-f:.]+\])(?::([0-9]+))?$/iu;
-const RAW_HOST_AUTHORITY_PATTERN = /^([^:]+)(?::([0-9]+))?$/u;
 
-function rawAuthorityMatchesParsedOrigin(rawAuthority: string, parsed: URL): boolean {
-  const authority = rawAuthority.startsWith("[")
-    ? RAW_IPV6_AUTHORITY_PATTERN.exec(rawAuthority)
-    : RAW_HOST_AUTHORITY_PATTERN.exec(rawAuthority);
-  if (!authority) return false;
-
-  const rawHostname = authority[1];
-  const rawPort = authority[2];
-  if (
-    !rawHostname ||
-    [...rawHostname].some((character) => character.charCodeAt(0) > 0x7f) ||
-    rawHostname.toLowerCase() !== parsed.hostname.toLowerCase()
-  ) {
-    return false;
-  }
-  if (rawPort === undefined || rawPort === parsed.port) return true;
+function authorityMatchesParsedOrigin(
+  authority: ReturnType<typeof parseBrowserSecurityAuthority>,
+  parsed: URL,
+): boolean {
+  if (!authority || authority.hostname !== parsed.hostname) return false;
+  if (authority.port === parsed.port) return true;
 
   const defaultPort = parsed.protocol === "http:" || parsed.protocol === "ws:" ? "80" : "443";
-  return parsed.port === "" && rawPort === defaultPort;
+  return parsed.port === "" && authority.port === defaultPort;
 }
 
 function canonicalConfigOriginSchema(
@@ -64,10 +53,11 @@ function canonicalConfigOriginSchema(
           context.addIssue({ code: "custom", message: "must be an exact browser origin" });
           return z.NEVER;
         }
+        const authority = parseBrowserSecurityAuthority(rawOrigin[2] ?? "");
         const parsed = new URL(value);
         if (
           value.includes("*") ||
-          !rawAuthorityMatchesParsedOrigin(rawOrigin[2] ?? "", parsed) ||
+          !authorityMatchesParsedOrigin(authority, parsed) ||
           !protocols.has(parsed.protocol) ||
           parsed.username.length > 0 ||
           parsed.password.length > 0 ||

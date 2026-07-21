@@ -137,6 +137,50 @@ describe("server config", () => {
     }
   });
 
+  it("rejects and redacts a CSP-delimiter authority from CSV environment input", async () => {
+    const configDir = makeTempConfigDir();
+    const rejected = "https://safe.example,https://cdn.example;upgrade-insecure-requests";
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_CSP_SCRIPT_ORIGINS", rejected);
+
+    let message = "";
+    try {
+      await initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("security.csp.scriptOrigins");
+    expect(message).not.toContain(rejected);
+    expect(message).not.toContain("upgrade-insecure-requests");
+  });
+
+  it("rejects and redacts a CSP-delimiter authority from a YAML array", async () => {
+    const configDir = makeTempConfigDir();
+    const rejected = "https://cdn.example,upgrade-insecure-requests";
+    stubRequiredProductionConfig();
+    writeFileSync(join(configDir, "server.yaml"), `security:\n  csp:\n    imageOrigins:\n      - "${rejected}"\n`);
+
+    let message = "";
+    try {
+      await initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("security.csp.imageOrigins");
+    expect(message).not.toContain(rejected);
+    expect(message).not.toContain("upgrade-insecure-requests");
+  });
+
   it("rejects non-origin CSP input without reflecting the rejected value", async () => {
     const configDir = makeTempConfigDir();
     const rejected = "https://user:super-secret@example.com/path?token=secret";
