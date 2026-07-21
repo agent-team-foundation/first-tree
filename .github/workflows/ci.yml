@@ -108,16 +108,14 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
 
-  test:
-    name: Test
+  test_server:
+    name: Test Server
     needs: changes
     if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
-    # Sidecar Postgres started by the runner in parallel with checkout / install,
-    # so the test process never pays a `docker pull postgres:17` cost on its
-    # critical path. `global-setup.ts` reads `CI_DATABASE_URL` and skips the
-    # testcontainers spin-up; locally that env is unset and the original
-    # testcontainers path stays intact.
+    # Server tests own the only PostgreSQL sidecar. Keeping them on a dedicated
+    # runner restores the proven two-fork layout without stacking Fastify's
+    # module graph next to the CLI, Client, or Web suites.
     services:
       postgres:
         image: postgres:17
@@ -134,11 +132,35 @@ jobs:
           --health-retries 10
     env:
       CI_DATABASE_URL: postgres://test:test@localhost:5432/test
-      # GitHub-hosted runners are ~7GB. Node's default heap is ~4GB/process;
-      # stacking turbo package suites + multi-fork vitest OOM'd CLI workers
-      # (Mark-Compact ~4057MB, then tinypool `Channel closed`). Cap forks
-      # package-wide; the steps below also limit turbo concurrency and run
-      # the CLI suite alone so it never shares the runner with server/web.
+      VITEST_MAX_FORKS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          # Each parallel test job owns its cache namespace. That preserves
+          # incremental Turbo hits without making every runner upload the
+          # previous combined test/build archive.
+          key: ${{ runner.os }}-turbo-test-server-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-test-server-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec turbo run test --filter=@first-tree/server --concurrency=1
+
+  test_client_web:
+    name: Test Client & Web
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      # One fork per package keeps the two-package Turbo fan-out inside the
+      # GitHub-hosted runner's memory budget.
       VITEST_MAX_FORKS: "1"
     steps:
       - uses: actions/checkout@v4
@@ -151,9 +173,41 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .turbo
-          key: ${{ runner.os }}-turbo-test-${{ github.sha }}
+          key: ${{ runner.os }}-turbo-test-client-web-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-turbo-test-
+            ${{ runner.os }}-turbo-test-client-web-
+      - run: pnpm install --frozen-lockfile
+      # Skill-eval fixtures invoke the built CLI while validating real tree
+      # workflows, so this group needs the same workspace dist artifacts as
+      # the CLI suite even though first-tree-dev#test itself is excluded.
+      - run: pnpm build
+      - name: Test packages except Server and CLI
+        run: pnpm exec turbo run test --filter='!@first-tree/server' --filter='!first-tree-dev' --concurrency=2
+
+  test_cli:
+    name: Test CLI
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      # The CLI suite previously exhausted a single worker's ~4GB V8 heap.
+      # Keep its bounded batches serial and isolate them from every other
+      # package on a dedicated runner.
+      VITEST_MAX_FORKS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-test-cli-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-test-cli-
       - run: pnpm install --frozen-lockfile
       # `post-bundle-channel-home.test.ts` spawns the built CLI dist
       # binary to verify channel-home resolution. Without an explicit
@@ -165,14 +219,36 @@ jobs:
       # all 233 tests passed. Building before vitest starts keeps the
       # heavy work outside the worker IPC window.
       - run: pnpm build
-      # Memory isolation has three layers: Turbo limits package-task concurrency
-      # (the CLI uses 1 in the final step); the CLI script runs its batches
-      # sequentially; VITEST_MAX_FORKS caps each batch at one worker. Keep the
-      # CLI behind Turbo so an unchanged first-tree-dev#test task can use cache.
-      - name: Test packages (excluding CLI)
-        run: pnpm exec turbo run test --filter='!first-tree-dev' --concurrency=2
-      - name: Test CLI
-        run: pnpm exec turbo run test --filter=first-tree-dev --concurrency=1
+      # Keep the CLI behind Turbo so an unchanged first-tree-dev#test task can
+      # use cache while its package script releases heap between batches.
+      - run: pnpm exec turbo run test --filter=first-tree-dev --concurrency=1
+
+  test:
+    name: Test
+    needs: [changes, test_server, test_client_web, test_cli]
+    if: >-
+      always() &&
+      (needs.changes.result != 'success' ||
+       needs.changes.outputs.code == 'true' ||
+       github.event_name == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      # Preserve one stable branch-protection check while the resource-specific
+      # suites run in parallel. A failed, cancelled, or unexpectedly skipped
+      # child suite fails closed here.
+      - name: Verify parallel test jobs
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          SERVER_RESULT: ${{ needs.test_server.result }}
+          CLIENT_WEB_RESULT: ${{ needs.test_client_web.result }}
+          CLI_RESULT: ${{ needs.test_cli.result }}
+        run: |
+          for result in "$CHANGES_RESULT" "$SERVER_RESULT" "$CLIENT_WEB_RESULT" "$CLI_RESULT"; do
+            if [ "$result" != "success" ]; then
+              echo "::error::A required test job finished with result: $result"
+              exit 1
+            fi
+          done
 
   portable-smoke:
     name: Portable CLI Smoke
