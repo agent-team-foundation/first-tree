@@ -1089,6 +1089,36 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("lets a later mention layer consume Escape before the open Activity Inspector", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />);
+
+    await click(container.querySelector('button[aria-label^="Open agent activity"]'));
+    await waitForCondition(
+      () => container.querySelector("[data-live-activity-inspector]") !== null,
+      "Expected Activity Inspector to open",
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await act(async () => textarea.focus());
+    await flush();
+    await waitForCondition(
+      () => container.querySelector('[role="listbox"][aria-label="Mention suggestions"]') !== null,
+      "Expected mention suggestions to open after focus primed @",
+    );
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(container.querySelector('[role="listbox"][aria-label="Mention suggestions"]')).toBeNull();
+    expect(container.querySelector("[data-live-activity-inspector]")).not.toBeNull();
+    expect(document.activeElement).toBe(textarea);
+
+    await act(async () => root.unmount());
+  });
+
   it("renders provider retry events as non-fatal timeline rows when severity is not error", async () => {
     const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
@@ -1133,6 +1163,7 @@ describe("ChatView", () => {
     await waitForText(container, "Retrying provider");
     expect(container.textContent).toContain("fetch failed");
     expect(container.querySelector("[data-error-agent]")).toBeNull();
+    expect(container.querySelector('[data-status-reason-agent="agent-1"]')).not.toBeNull();
     await act(async () => root.unmount());
   });
 
