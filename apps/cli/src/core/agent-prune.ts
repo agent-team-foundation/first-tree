@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, type RmOptions, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { defaultConfigDir, defaultDataDir } from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -136,13 +136,83 @@ export function formatStaleReason(reason: StaleAliasReason): string {
 }
 
 /**
+ * Deletion-side agent-name gate for `removeLocalAgent`. Intentionally wider
+ * than the create-side `AGENT_NAME_REGEX`: the server grandfathers rows
+ * created under the previous 1–100 rule and `migrateLocalAgentDirs` renames
+ * local dirs to those server-authoritative names, so grandfathered names
+ * must stay removable here. The character set contains no `/`, `\` or `.`,
+ * so a matching name can never form `.`, `..`, an absolute path, or any
+ * other traversal segment.
+ */
+const REMOVABLE_AGENT_NAME_REGEX = /^[a-z0-9_-]{1,100}$/;
+
+/**
+ * Reject names that could steer the deletion paths below outside First Tree
+ * state. `agent remove` also calls this before touching the filesystem so an
+ * invalid name fails as a clean CLI error.
+ */
+export function assertRemovableAgentName(name: string): void {
+  if (!REMOVABLE_AGENT_NAME_REGEX.test(name)) {
+    throw new Error(`Invalid agent name ${JSON.stringify(name)}: expected 1-100 characters of [a-z0-9_-]`);
+  }
+}
+
+// Verbatim copy of the private helper in core/context-tree-read.ts and
+// commands/tree/context-links.ts — keep all three in sync.
+function pathIsInside(root: string, target: string): boolean {
+  const relativePath = relative(root, target);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+/**
+ * Resolve `entryName` against `baseDir` and enforce — lexically and on
+ * realpaths — that the target stays inside `baseDir`; throws without
+ * deleting anything otherwise. `resolve` (not `join`) so an absolute
+ * `entryName` replaces the base wholesale and the lexical check rejects it.
+ *
+ * Returns the resolved path, never its realpath: `rmSync` must operate on
+ * the symlink itself, so unlinking a link that points elsewhere inside
+ * `baseDir` cannot delete the link's target.
+ *
+ * A missing target (including a dangling symlink — `existsSync` follows
+ * links) is checked as its parent's realpath plus its own basename, so
+ * stale links stay removable and `realpathSync` never sees ENOENT here.
+ */
+function resolveContainedTarget(baseDir: string, entryName: string, agentName: string): string {
+  const outsideError = () =>
+    new Error(`Refusing to remove ${JSON.stringify(agentName)}: resolves outside First Tree state`);
+  const candidate = resolve(baseDir, entryName);
+  if (!pathIsInside(baseDir, candidate)) throw outsideError();
+  const realBase = realpathSync(baseDir);
+  const realCandidate = existsSync(candidate)
+    ? realpathSync(candidate)
+    : join(realpathSync(dirname(candidate)), basename(candidate));
+  if (!pathIsInside(realBase, realCandidate)) throw outsideError();
+  return candidate;
+}
+
+/**
  * Remove an agent's local footprint: the YAML alias dir, the workspace
  * tree under `data/workspaces/<name>`, and the session-mapping file under
- * `data/sessions/<name>.json`. Mirrors what `agent remove` does, exposed
- * separately so prune and the post-rotation override cleanup can share it.
+ * `data/sessions/<name>.json`. Shared by `agent remove` and `agent prune`.
+ *
+ * `name` reaches this function as raw user input, so it is gated twice
+ * before anything is deleted: the whitelist rejects every traversal-capable
+ * name, and each target must realpath-resolve inside its base dir
+ * immediately before deletion, so an alias symlink pointing outside First
+ * Tree state is refused rather than removed.
  */
 export function removeLocalAgent(name: string): void {
-  rmSync(join(defaultConfigDir(), "agents", name), { recursive: true, force: true });
-  rmSync(join(defaultDataDir(), "workspaces", name), { recursive: true, force: true });
-  rmSync(join(defaultDataDir(), "sessions", `${name}.json`), { force: true });
+  assertRemovableAgentName(name);
+  const targets: Array<{ baseDir: string; entryName: string; options: RmOptions }> = [
+    { baseDir: join(defaultConfigDir(), "agents"), entryName: name, options: { recursive: true, force: true } },
+    { baseDir: join(defaultDataDir(), "workspaces"), entryName: name, options: { recursive: true, force: true } },
+    { baseDir: join(defaultDataDir(), "sessions"), entryName: `${name}.json`, options: { force: true } },
+  ];
+  for (const { baseDir, entryName, options } of targets) {
+    // A base dir that does not exist yet (fresh install) has nothing to
+    // delete; the remaining targets are still processed independently.
+    if (!existsSync(baseDir)) continue;
+    rmSync(resolveContainedTarget(baseDir, entryName, name), options);
+  }
 }
