@@ -279,6 +279,7 @@ export {
   CHAT_SOURCES,
   type ChatMetadata,
   type ChatSource,
+  callerWritableChatMetadataSchema,
   chatMetadataSchema,
   chatSourceSchema,
   GITHUB_ENTITY_TYPES,

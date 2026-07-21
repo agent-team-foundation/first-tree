@@ -481,7 +481,7 @@ if (REVIEW_FIXTURE_PATH && argv[0] === "org" && argv[1] === "context-tree" && ar
       branch: "main",
       enabled: true,
       assigned: true,
-      agentUuid: "reviewer-eval-agent",
+      agentUuid: fixture.reviewerAgentUuid,
     }) + "\\n",
     "",
     { recordedOnly: true },
@@ -500,7 +500,16 @@ if (argv[0] === "tree" && argv[1] === "review" && REVIEW_FIXTURE_PATH) {
   try {
     body = bodyFile && bodyFile !== "-" ? readFileSync(bodyFile, "utf8") : "";
   } catch {}
-  const valid = exactOptions && runId === fixture.runId && action && body.length > 0;
+  const runtimeSessionTokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE;
+  let runtimeSessionToken = "";
+  try {
+    runtimeSessionToken = runtimeSessionTokenFile ? readFileSync(runtimeSessionTokenFile, "utf8").trim() : "";
+  } catch {}
+  const trustedRuntime =
+    process.env.FIRST_TREE_CHAT_ID === fixture.chatId &&
+    process.env.FIRST_TREE_AGENT_ID === fixture.reviewerAgentUuid &&
+    runtimeSessionToken === fixture.runtimeSessionToken;
+  const valid = exactOptions && trustedRuntime && runId === fixture.runId && action && body.length > 0;
   if (!valid) {
     finish(argv, phase, 2, "", "Invalid Context Reviewer App submission fixture.\\n", { blockedByEval: true });
   }

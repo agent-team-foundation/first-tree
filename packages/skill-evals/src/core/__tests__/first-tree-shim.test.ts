@@ -9,6 +9,71 @@ import { createRunPaths } from "../paths.js";
 import { createFirstTreeShim } from "../shims/first-tree.js";
 
 describe("first-tree eval shim", () => {
+  it("requires trusted runtime authority for Context Review submission fixtures", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-review-"));
+    try {
+      const packageRoot = join(repoRoot, "packages", "skill-evals");
+      mkdirSync(packageRoot, { recursive: true });
+      const paths = createRunPaths({
+        caseId: "context-review-runtime-authority",
+        packageRoot,
+        startedAt: "2026-07-21T00:00:00.000Z",
+      });
+      const fixturePath = join(paths.workspacePath, ".first-tree-eval", "review-fixture.json");
+      const bodyPath = join(paths.workspacePath, "review.md");
+      const tokenPath = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
+      const fixture = {
+        chatId: "review-chat",
+        prNumber: 42,
+        repo: "owner/context-tree",
+        reviewerAgentUuid: "reviewer-agent",
+        runId: "01900000-0000-7000-8000-000000000042",
+        runtimeSessionToken: "runtime-session-token",
+        submissionHeadOid: "a".repeat(40),
+      };
+      writeFileSync(fixturePath, `${JSON.stringify(fixture)}\n`, "utf8");
+      writeFileSync(bodyPath, "## Approved\n", "utf8");
+      writeFileSync(tokenPath, `${fixture.runtimeSessionToken}\n`, "utf8");
+      createFirstTreeShim(paths, { reviewFixturePath: fixturePath });
+      const argv = ["tree", "review", "--run", fixture.runId, "--event", "APPROVE", "--body-file", bodyPath];
+      const baseEnv = {
+        ...process.env,
+        FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
+        FIRST_TREE_EVAL_PHASE: "model",
+      };
+
+      const untrusted = spawnSync(join(paths.binDir, "first-tree"), argv, {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: baseEnv,
+      });
+      expect(untrusted.status).toBe(2);
+
+      const trusted = spawnSync(join(paths.binDir, "first-tree"), argv, {
+        cwd: paths.workspacePath,
+        encoding: "utf8",
+        env: {
+          ...baseEnv,
+          FIRST_TREE_AGENT_ID: fixture.reviewerAgentUuid,
+          FIRST_TREE_CHAT_ID: fixture.chatId,
+          FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: tokenPath,
+        },
+      });
+      expect(trusted.status).toBe(0);
+      expect(readEvents(paths.eventsPath)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            action: "approve",
+            runId: fixture.runId,
+            type: "context_review_submitted",
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(repoRoot, { force: true, recursive: true });
+    }
+  });
+
   it("handles tree tree help without spawning the real CLI", () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "skill-evals-first-tree-shim-test-"));
     try {

@@ -6,6 +6,7 @@ import type { ContextTreeReviewEvalCase, ReviewFixtureExpectation, ReviewFixture
 
 const expectation: ReviewFixtureExpectation = {
   baseOid: "base",
+  chatId: "review-chat",
   expectedFinalDraft: false,
   expectedFinalHeadOid: "head",
   expectedFinalState: "OPEN",
@@ -13,7 +14,10 @@ const expectation: ReviewFixtureExpectation = {
   headOid: "head",
   prNumber: 42,
   repo: "owner/context-tree",
+  reviewerAgentUuid: "reviewer-agent",
   runId: "019review-run",
+  runtimeSessionToken: "runtime-session-token",
+  runtimeSessionTokenFile: "/workspace/.first-tree-eval/runtime-session.token",
   submissionHeadOid: "head",
   workspacePath: "/workspace",
 };

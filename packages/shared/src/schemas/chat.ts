@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { optionalChatMetadataSchema } from "./chat-metadata.js";
+import { callerWritableChatMetadataSchema } from "./chat-metadata.js";
 import { landingCampaignActionContextSchema, landingCampaignRepoSlugSchema } from "./landing-campaign.js";
 import { sendMessageSchema } from "./message.js";
 
@@ -47,7 +47,7 @@ export const legacyCreateChatSchema = z.object({
   type: z.literal("group"),
   topic: z.string().max(500).optional(),
   participantIds: z.array(z.string()).min(1),
-  metadata: optionalChatMetadataSchema.optional(),
+  metadata: callerWritableChatMetadataSchema.optional(),
 });
 export type LegacyCreateChat = z.infer<typeof legacyCreateChatSchema>;
 

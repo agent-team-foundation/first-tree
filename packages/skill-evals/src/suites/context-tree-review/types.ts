@@ -48,6 +48,7 @@ export type ReviewEvent = {
 
 export type ReviewFixtureExpectation = {
   baseOid: string;
+  chatId: string;
   expectedFinalDraft: boolean;
   expectedFinalHeadOid: string;
   expectedFinalState: "OPEN";
@@ -55,7 +56,10 @@ export type ReviewFixtureExpectation = {
   headOid: string;
   prNumber: number;
   repo: string;
+  reviewerAgentUuid: string;
   runId: string;
+  runtimeSessionToken: string;
+  runtimeSessionTokenFile: string;
   submissionHeadOid: string;
   workspacePath: string;
 };

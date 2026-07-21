@@ -78,6 +78,22 @@ export const optionalChatMetadataSchema = z.union([z.object({}).strict(), chatMe
 export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
 
 /**
+ * Chat creation callers may describe a GitHub entity, but only the server's
+ * GitHub App webhook path may claim that a chat is a Context Reviewer chat.
+ */
+export const callerWritableChatMetadataSchema = z
+  .record(z.string(), z.unknown())
+  .superRefine((metadata, ctx) => {
+    for (const key of ["contextTreeReviewer", "reviewerAgentUuid"] as const) {
+      if (key in metadata) {
+        ctx.addIssue({ code: "custom", message: `Chat metadata field '${key}' is server-owned.`, path: [key] });
+      }
+    }
+  })
+  .pipe(optionalChatMetadataSchema);
+export type CallerWritableChatMetadata = z.infer<typeof callerWritableChatMetadataSchema>;
+
+/**
  * Conversation-list origin tag. Coarse-grained "where does this chat come
  * from" classifier — one per integration, NOT per entity type within an
  * integration. GitHub PR / Issue / Discussion / Commit all collapse to

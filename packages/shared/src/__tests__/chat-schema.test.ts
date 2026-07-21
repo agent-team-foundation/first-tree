@@ -3,6 +3,7 @@ import {
   addParticipantSchema,
   createTaskChatSchema,
   createWebTaskChatSchema,
+  legacyCreateChatSchema,
   updateChatSchema,
 } from "../schemas/chat.js";
 
@@ -12,6 +13,32 @@ const initialMessage = {
 };
 
 describe("chat write schemas", () => {
+  it("rejects server-owned Context Reviewer metadata from legacy chat callers", () => {
+    const base = {
+      type: "group" as const,
+      participantIds: ["agent-1"],
+      metadata: {
+        source: "github" as const,
+        entityType: "pull_request" as const,
+        entityKey: "owner/context-tree#42",
+      },
+    };
+
+    expect(legacyCreateChatSchema.safeParse(base).success).toBe(true);
+    expect(
+      legacyCreateChatSchema.safeParse({
+        ...base,
+        metadata: { ...base.metadata, contextTreeReviewer: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      legacyCreateChatSchema.safeParse({
+        ...base,
+        metadata: { ...base.metadata, reviewerAgentUuid: "reviewer-agent" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires at least one initial recipient when creating task chats", () => {
     expect(
       createTaskChatSchema.safeParse({

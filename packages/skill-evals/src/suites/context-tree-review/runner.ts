@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { appendEvent, readEvents } from "../../core/events.js";
 import { deriveRunObservability } from "../../core/observability.js";
-import { createRunPaths } from "../../core/paths.js";
+import { createRunPaths, writeShellPathBootstrap } from "../../core/paths.js";
 import { runAgentProvider } from "../../core/provider/index.js";
 import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
@@ -35,6 +35,11 @@ export async function runContextTreeReviewCase(
     reviewFixturePath: fixture.fixturePath,
   });
   createGhShim(modelPaths, { reviewFixturePath: fixture.fixturePath });
+  writeShellPathBootstrap(modelPaths, {
+    FIRST_TREE_AGENT_ID: fixture.expectation.reviewerAgentUuid,
+    FIRST_TREE_CHAT_ID: fixture.expectation.chatId,
+    FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: fixture.expectation.runtimeSessionTokenFile,
+  });
   const runner = await runAgentProvider(
     {
       caseId: evalCase.id,

@@ -152,6 +152,30 @@ describe("Context Reviewer App publisher", () => {
     ).toHaveLength(1);
   });
 
+  it("reconciles an accepted unknown write after the pull request closes", async () => {
+    const fixture = await createRunFixture(getApp());
+    const fetcher = unknownThenReconciledGithubFetcher(fixture.runId, { closeAfterUnknownWrite: true });
+    const input = {
+      db: fixture.app.db,
+      chatId: fixture.chatId,
+      runId: fixture.runId,
+      callerAgentUuid: fixture.reviewer.uuid,
+      callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
+      request: { event: "COMMENT" as const, body: "Deferred" },
+      appCredentials: fixture.app.config.oauth?.githubApp,
+      fetcher,
+    };
+
+    await expect(submitContextReviewOutcome(input)).rejects.toMatchObject({ code: "CONTEXT_REVIEW_GITHUB_UNKNOWN" });
+    await expect(submitContextReviewOutcome(input)).resolves.toMatchObject({
+      action: "COMMENT",
+      reviewedHead: "a".repeat(40),
+      reviewId: 9002,
+    });
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/pulls/123"))).toHaveLength(1);
+  });
+
   it("requires runtime-session proof on the narrow agent route", async () => {
     const fixture = await createRunFixture(getApp());
     const missingProof = await fixture.app.inject({
@@ -347,7 +371,8 @@ function successfulGithubFetcher(overrides: { headSha?: string } = {}) {
   });
 }
 
-function unknownThenReconciledGithubFetcher(runId: string) {
+function unknownThenReconciledGithubFetcher(runId: string, options: { closeAfterUnknownWrite?: boolean } = {}) {
+  let pullRequestReads = 0;
   return vi.fn<typeof fetch>(async (url, init) => {
     const target = String(url);
     if (target.endsWith("/access_tokens")) {
@@ -362,11 +387,13 @@ function unknownThenReconciledGithubFetcher(runId: string) {
       );
     }
     if (target.endsWith("/pulls/123") && (!init?.method || init.method === "GET")) {
+      pullRequestReads += 1;
+      const closed = options.closeAfterUnknownWrite === true && pullRequestReads > 1;
       return jsonResponse({
         number: 123,
-        state: "open",
+        state: closed ? "closed" : "open",
         draft: false,
-        merged: false,
+        merged: closed,
         head: { sha: "a".repeat(40) },
         html_url: "https://github.com/owner/context-tree/pull/123",
       });

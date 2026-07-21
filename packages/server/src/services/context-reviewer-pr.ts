@@ -627,18 +627,11 @@ async function findExistingReviewerChat(
   db: Database,
   input: { organizationId: string; entityKey: string },
 ): Promise<string | null> {
+  const reservationKey = contextReviewerChatReservationKey(input.organizationId, input.entityKey);
   const [row] = await db
     .select({ id: chats.id })
     .from(chats)
-    .where(
-      and(
-        eq(chats.organizationId, input.organizationId),
-        sql`${chats.metadata}->>'source' = 'github'`,
-        sql`${chats.metadata}->>'entityType' = 'pull_request'`,
-        sql`${chats.metadata}->>'entityKey' = ${input.entityKey}`,
-        sql`${chats.metadata}->>'contextTreeReviewer' = 'true'`,
-      ),
-    )
+    .where(and(eq(chats.organizationId, input.organizationId), eq(chats.onboardingKickoffKey, reservationKey)))
     .limit(1);
   return row?.id ?? null;
 }

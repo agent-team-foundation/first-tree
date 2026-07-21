@@ -605,6 +605,37 @@ describe("handleContextReviewerPrEvent", () => {
     expect(chatRows).toHaveLength(1);
   });
 
+  it("does not reuse caller-spoofable reviewer chat metadata", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+    const spoofedChatId = randomUUID();
+    await app.db.insert(chats).values({
+      id: spoofedChatId,
+      organizationId: admin.organizationId,
+      type: "group",
+      metadata: {
+        source: "github",
+        entityType: "pull_request",
+        entityKey: "owner/context-tree#123",
+        contextTreeReviewer: true,
+        reviewerAgentUuid: reviewer.uuid,
+      },
+    });
+
+    const result = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload(),
+      organizationId: admin.organizationId,
+    });
+
+    expect(result).toMatchObject({ handled: true, reused: false });
+    if (!result.handled) throw new Error("expected handled result");
+    expect(result.chatId).not.toBe(spoofedChatId);
+    expect(await app.db.select({ id: chats.id }).from(chats)).toHaveLength(2);
+  });
+
   it("atomically reserves one reviewer chat for concurrent first deliveries", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);

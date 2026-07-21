@@ -114,16 +114,6 @@ export async function submitContextReviewOutcome(input: {
     appCredentials: input.appCredentials,
     fetcher: input.fetcher,
   });
-  const pullRequest = await getPullRequestForReview(
-    github.token,
-    inspection.current.owner,
-    inspection.current.repo,
-    inspection.run.prNumber,
-    { fetcher: input.fetcher },
-  ).catch((error: unknown) => {
-    throw mapGithubPreflightError(error);
-  });
-  assertPullRequestReviewable(pullRequest, request);
 
   if (inspection.kind === "reconcile") {
     return reconcileUnknownSubmission({
@@ -137,6 +127,17 @@ export async function submitContextReviewOutcome(input: {
       fetcher: input.fetcher,
     });
   }
+
+  const pullRequest = await getPullRequestForReview(
+    github.token,
+    inspection.current.owner,
+    inspection.current.repo,
+    inspection.run.prNumber,
+    { fetcher: input.fetcher },
+  ).catch((error: unknown) => {
+    throw mapGithubPreflightError(error);
+  });
+  assertPullRequestReviewable(pullRequest, request);
 
   const reviewedHead = normalizeCommitOid(pullRequest.headSha);
   if (!reviewedHead) {
@@ -562,12 +563,6 @@ async function reconcileUnknownSubmission(input: {
 }): Promise<ContextReviewSubmitResponse> {
   const [owner, repo] = input.run.repository.split("/");
   if (!owner || !repo) throw new ContextReviewPublisherError(403, "CONTEXT_REVIEW_RUN_FORBIDDEN", "Invalid repo.");
-  const pullRequest = await getPullRequestForReview(input.github.token, owner, repo, input.run.prNumber, {
-    fetcher: input.fetcher,
-  }).catch((error: unknown) => {
-    throw mapGithubPreflightError(error);
-  });
-  assertPullRequestReviewable(pullRequest, input.request);
   const reviews = await listPullRequestReviewsForRun(
     input.github.token,
     { owner, repo, prNumber: input.run.prNumber, marker: runMarker(input.runId), appSlug: input.github.appSlug },

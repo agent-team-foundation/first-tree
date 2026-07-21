@@ -4,7 +4,7 @@ import type { ContextTreeReviewEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "context-tree-review-static-coverage";
 const prompt =
-  "Use context-tree-review to review pull request owner/context-tree#42 for server-authored Context review run 01900000-0000-7000-8000-000000000042. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42`, run validation only with that worktree as the current directory, and make every semantic file read explicitly resolve through that registered worktree path. Submit the single correct outcome only through `first-tree tree review`.";
+  "A trusted server-authored GitHub Context Reviewer wake-up is active in this eval runtime for pull request owner/context-tree#42 and run 01900000-0000-7000-8000-000000000042. Use context-tree-review to perform the review. This eval workspace contains the full default First Tree skill family, the bound Context Tree, and a deterministic local mirror whose origin exposes `refs/pull/42/head`. Keep the detached review worktree at `.review-worktrees/42`, run validation only with that worktree as the current directory, and make every semantic file read explicitly resolve through that registered worktree path. Submit the single correct outcome only through `first-tree tree review`.";
 
 /**
  * Workflow scenarios pinned by the static floor and exercised across the live

@@ -161,13 +161,18 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
   const submissionHeadOid = secondView.headRefOid;
   const reviewerLogin = "read-only-reviewer";
   const runId = "01900000-0000-7000-8000-000000000042";
+  const chatId = "review-eval-chat";
+  const reviewerAgentUuid = "reviewer-eval-agent";
+  const runtimeSessionToken = "review-eval-runtime-session";
+  const runtimeSessionTokenFile = join(paths.workspacePath, ".first-tree-eval", "runtime-session.token");
+  writeText(runtimeSessionTokenFile, `${runtimeSessionToken}\n`);
   const fixturePath = join(paths.workspacePath, ".first-tree-eval", "gh-review-fixture.json");
   const repo = "owner/context-tree";
   const prNumber = 42;
   const reviewWorktreePath = join(paths.workspacePath, ".review-worktrees", "42");
   writeText(
     fixturePath,
-    `${JSON.stringify({ prNumber, repo, reviewHeadOid: headOid, reviewerLogin, reviewWorktreePath, runId, submissionHeadOid, views: [view, secondView] }, null, 2)}\n`,
+    `${JSON.stringify({ chatId, prNumber, repo, reviewHeadOid: headOid, reviewerAgentUuid, reviewerLogin, reviewWorktreePath, runId, runtimeSessionToken, submissionHeadOid, views: [view, secondView] }, null, 2)}\n`,
   );
   const originRefs = runCommand("git", ["for-each-ref", "--format=%(refname):%(objectname)"], originPath).stdout;
   const treeConfig = runCommand("git", ["config", "--local", "--list"], treePath).stdout;
@@ -176,6 +181,7 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
   return {
     expectation: {
       baseOid,
+      chatId,
       expectedFinalDraft: view.isDraft,
       expectedFinalHeadOid: secondView.headRefOid,
       expectedFinalState: "OPEN",
@@ -183,7 +189,10 @@ export function setupFixture(evalCase: ContextTreeReviewEvalCase, paths: RunPath
       headOid,
       prNumber,
       repo,
+      reviewerAgentUuid,
       runId,
+      runtimeSessionToken,
+      runtimeSessionTokenFile,
       submissionHeadOid,
       workspacePath: paths.workspacePath,
     },
