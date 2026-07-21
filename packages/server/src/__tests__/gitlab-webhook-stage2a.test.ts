@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { formatHttpSpanName } from "../app.js";
 import { agents } from "../db/schema/agents.js";
@@ -13,6 +13,7 @@ import { messages } from "../db/schema/messages.js";
 import { processedEvents } from "../db/schema/processed-events.js";
 import { createAgent } from "../services/agent.js";
 import {
+  buildClaimReadyGitlabDeliveryId,
   createGitlabConnection,
   deleteGitlabConnection,
   findActiveGitlabEndpoint,
@@ -31,6 +32,7 @@ import {
 } from "../services/gitlab-entity-follow.js";
 import { createOrganization } from "../services/organization.js";
 import * as scmCardDelivery from "../services/scm-card-delivery.js";
+import { processScmWebhookDelivery } from "../services/scm-webhook-processing.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -290,6 +292,104 @@ describe("GitLab Stage 2A backend", () => {
     );
     const afterWebhookId = await app.db.select().from(processedEvents).where(eq(processedEvents.platform, "gitlab"));
     expect(afterWebhookId).toHaveLength(before + 1);
+  });
+
+  it("returns 503 for a committed pending delivery without deferred effects or a health failure", async () => {
+    const app = getApp();
+    const first = await connection(app);
+    const stableId = `pending-${randomUUID()}`;
+    const claimReadyId = buildClaimReadyGitlabDeliveryId(first.connectionId, stableId);
+    await app.db.execute(sql`
+      INSERT INTO processed_events (event_id, platform, status, expires_at)
+      VALUES (
+        ${claimReadyId},
+        'gitlab',
+        'pending',
+        date_trunc('milliseconds', statement_timestamp()) + interval '5 minutes'
+      )
+    `);
+    const before = await getGitlabConnectionSummary(app.db, first.connectionId);
+    const effectsSpy = vi.spyOn(scmCardDelivery, "runDeferredScmCardPostCommitEffects");
+
+    try {
+      const response = await postWebhook(app, first.bearer, issuePayload(), { stableId });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({
+        ok: false,
+        outcome: "in_flight",
+        retryAfterSeconds: expect.any(Number),
+      });
+      expect(response.headers["retry-after"]).toMatch(/^[1-9]\d*$/);
+      expect(Number(response.headers["retry-after"])).toBeLessThanOrEqual(300);
+      expect(effectsSpy).not.toHaveBeenCalled();
+      expect((await getGitlabConnectionSummary(app.db, first.connectionId)).health).toEqual(before.health);
+    } finally {
+      effectsSpy.mockRestore();
+    }
+  });
+
+  it("rolls back the complete claim lifecycle with a failed GitLab ingress transaction", async () => {
+    const app = getApp();
+    const first = await connection(app);
+    const deliveryId = buildClaimReadyGitlabDeliveryId(first.connectionId, `rollback-${randomUUID()}`);
+    const tokenHash = hashGitlabUrlBearer(first.bearer);
+    const before = await app.db
+      .select({
+        endpointFirstSeenAt: gitlabConnections.endpointFirstSeenAt,
+        lastValidInboundAt: gitlabConnections.lastValidInboundAt,
+      })
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.id, first.connectionId));
+
+    await expect(
+      withGitlabIngressFence(app.db, first.connectionId, tokenHash, async (tx) => {
+        const processed = await processScmWebhookDelivery({
+          db: tx,
+          ingress: {
+            provider: "gitlab",
+            source: { organizationId: first.admin.organizationId, externalId: first.connectionId },
+            stableDeliveryId: deliveryId,
+            ingressAuthority: "url_bearer",
+          },
+          observation: null,
+          event: null,
+          applyObservation: async () => undefined,
+          runProviderWork: async () => {
+            await markGitlabInboundSeen(tx, first.connectionId, tokenHash);
+            return { endpointSeen: true };
+          },
+          resolveAudience: async () => ({ targets: [], actorHumanId: null }),
+          deliver: async () => ({ delivered: 0 }),
+        });
+        expect(processed).toEqual({ outcome: "provider_only", providerResult: { endpointSeen: true } });
+
+        const lifecycleRows = await tx.execute<{ status: string; expires_at: Date | null }>(sql`
+          SELECT status, expires_at
+          FROM processed_events
+          WHERE event_id = ${deliveryId}
+            AND platform = 'gitlab'
+        `);
+        expect(lifecycleRows).toEqual([expect.objectContaining({ status: "done", expires_at: null })]);
+        throw new Error("force GitLab ingress rollback");
+      }),
+    ).rejects.toThrow("force GitLab ingress rollback");
+
+    const lifecycleRows = await app.db.execute(sql`
+      SELECT id
+      FROM processed_events
+      WHERE event_id = ${deliveryId}
+        AND platform = 'gitlab'
+    `);
+    expect(lifecycleRows).toHaveLength(0);
+    const after = await app.db
+      .select({
+        endpointFirstSeenAt: gitlabConnections.endpointFirstSeenAt,
+        lastValidInboundAt: gitlabConnections.lastValidInboundAt,
+      })
+      .from(gitlabConnections)
+      .where(eq(gitlabConnections.id, first.connectionId));
+    expect(after).toEqual(before);
   });
 
   it("resolves a pending follow and delivers one basic card per chat with wake and no outbound fetch", async () => {

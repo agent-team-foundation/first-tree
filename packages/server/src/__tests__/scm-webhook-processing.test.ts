@@ -1,4 +1,5 @@
 import type { NormalizedScmEvent, ScmIngressContext } from "@first-tree/shared";
+import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { processScmWebhookDelivery } from "../services/scm-webhook-processing.js";
 import { useTestApp } from "./helpers.js";
@@ -97,7 +98,7 @@ describe("processScmWebhookDelivery", () => {
 
   it("applies an observation without resolving audience or delivering a card", async () => {
     const app = getApp();
-    const ingress = makeIngress(null);
+    const ingress = makeIngress("delivery-provider-only");
     const applyObservation = vi.fn(async () => undefined);
     const resolveAudience = vi.fn(async () => ({ targets: ["unexpected"], actorHumanId: null }));
     const deliver = vi.fn(async () => ({ delivered: 1 }));
@@ -126,6 +127,18 @@ describe("processScmWebhookDelivery", () => {
     expect(applyObservation).toHaveBeenCalledOnce();
     expect(resolveAudience).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
+    await expect(
+      processScmWebhookDelivery({
+        db: app.db,
+        ingress,
+        observation: null,
+        event: null,
+        applyObservation: async () => undefined,
+        runProviderWork: async () => "unexpected",
+        resolveAudience,
+        deliver,
+      }),
+    ).resolves.toEqual({ outcome: "duplicate" });
   });
 
   it("does not suppress semantic delivery when projection refresh fails", async () => {
@@ -155,7 +168,7 @@ describe("processScmWebhookDelivery", () => {
     expect(deliver).toHaveBeenCalledOnce();
   });
 
-  it("best-effort unclaims a stable delivery after an uncaught top-level failure", async () => {
+  it("leaves a failed delivery pending until an expired generation can be taken over", async () => {
     const app = getApp();
     const ingress = makeIngress("delivery-retryable");
     const event = makeEvent(ingress);
@@ -175,7 +188,7 @@ describe("processScmWebhookDelivery", () => {
       }),
     ).rejects.toThrow("audience unavailable");
 
-    const retried = await processScmWebhookDelivery({
+    const immediateRetry = await processScmWebhookDelivery({
       db: app.db,
       ingress,
       observation: null,
@@ -185,7 +198,110 @@ describe("processScmWebhookDelivery", () => {
       resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
       deliver: async () => ({ delivered: 1 }),
     });
-    expect(retried.outcome).toBe("delivered");
+    expect(immediateRetry).toMatchObject({ outcome: "in_flight", retryAfterSeconds: expect.any(Number) });
+
+    await app.db.execute(sql`
+      UPDATE processed_events
+      SET expires_at = statement_timestamp() - interval '1 second'
+      WHERE event_id = ${ingress.stableDeliveryId}
+        AND platform = 'github'
+        AND status = 'pending'
+    `);
+    const recovered = await processScmWebhookDelivery({
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+      deliver: async () => ({ delivered: 1 }),
+    });
+    expect(recovered.outcome).toBe("delivered");
+    await expect(
+      processScmWebhookDelivery({
+        db: app.db,
+        ingress,
+        observation: null,
+        event,
+        applyObservation: async () => undefined,
+        runProviderWork: async () => null,
+        resolveAudience: async () => ({ targets: ["target-1"], actorHumanId: null }),
+        deliver: async () => ({ delivered: 1 }),
+      }),
+    ).resolves.toEqual({ outcome: "duplicate" });
+  });
+
+  it("keeps concurrent work behind the pending generation until the owner completes", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-gated-concurrency");
+    const event = makeEvent(ingress);
+    let releaseOwner!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    let ownerEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      ownerEntered = resolve;
+    });
+    const deliver = vi.fn(async () => ({ delivered: 1 }));
+    const resolveAudience = vi.fn(async () => {
+      ownerEntered();
+      await release;
+      return { targets: ["target-1"], actorHumanId: null };
+    });
+    const input = {
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => null,
+      resolveAudience,
+      deliver,
+    };
+
+    const owner = processScmWebhookDelivery(input);
+    try {
+      await entered;
+      await expect(processScmWebhookDelivery(input)).resolves.toMatchObject({
+        outcome: "in_flight",
+        retryAfterSeconds: expect.any(Number),
+      });
+      expect(resolveAudience).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      releaseOwner();
+      await expect(owner).resolves.toMatchObject({ outcome: "delivered" });
+      await expect(processScmWebhookDelivery(input)).resolves.toEqual({ outcome: "duplicate" });
+      expect(resolveAudience).toHaveBeenCalledOnce();
+      expect(deliver).toHaveBeenCalledOnce();
+    } finally {
+      releaseOwner();
+      await Promise.allSettled([owner]);
+    }
+  });
+
+  it("completes an audience-empty terminal result before reporting success", async () => {
+    const app = getApp();
+    const ingress = makeIngress("delivery-audience-empty");
+    const event = makeEvent(ingress);
+    event.targets = [];
+    const input = {
+      db: app.db,
+      ingress,
+      observation: null,
+      event,
+      applyObservation: async () => undefined,
+      runProviderWork: async () => "provider-result",
+      resolveAudience: async () => ({ targets: [], actorHumanId: null }),
+      deliver: async () => ({ delivered: 0 }),
+    };
+
+    await expect(processScmWebhookDelivery(input)).resolves.toMatchObject({
+      outcome: "audience_empty",
+      reason: "audience_empty_no_targets",
+    });
+    await expect(processScmWebhookDelivery(input)).resolves.toEqual({ outcome: "duplicate" });
   });
 
   it("keeps the whole-request claim when provider delivery isolates a per-chat failure", async () => {

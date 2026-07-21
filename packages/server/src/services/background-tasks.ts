@@ -2,11 +2,13 @@ import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
+import * as eventDedupService from "./event-dedup.js";
 import * as inboxService from "./inbox.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
 
 const log = createLogger("BackgroundTasks");
+const EVENT_CLAIM_SWEEP_INTERVAL_MS = 60_000;
 
 export type BackgroundTasks = {
   start(): void;
@@ -17,6 +19,23 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let eventClaimSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let eventClaimSweepInProgress = false;
+
+  async function runEventClaimSweep(): Promise<void> {
+    if (eventClaimSweepInProgress) return;
+    eventClaimSweepInProgress = true;
+    try {
+      const count = await eventDedupService.sweepExpiredEventClaims(app.db);
+      if (count > 0) {
+        log.info({ count }, "swept expired webhook event claims");
+      }
+    } catch (err) {
+      log.error({ err }, "failed to sweep expired webhook event claims");
+    } finally {
+      eventClaimSweepInProgress = false;
+    }
+  }
 
   return {
     start() {
@@ -40,6 +59,14 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
           log.error({ err }, "failed to prune silent inbox rows");
         }
       }, 60_000);
+
+      // Expired webhook claim GC. Atomic takeover remains the correctness
+      // path for redelivery; this bounded periodic sweep prevents abandoned
+      // pending rows from accumulating. Each server instance may run it, and
+      // the local guard avoids overlapping ticks when one sweep runs long.
+      eventClaimSweepTimer = setInterval(() => {
+        void runEventClaimSweep();
+      }, EVENT_CLAIM_SWEEP_INTERVAL_MS);
 
       // Server instance heartbeat — runs every 30 seconds
       heartbeatTimer = setInterval(async () => {
@@ -101,6 +128,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (eventClaimSweepTimer) {
+        clearInterval(eventClaimSweepTimer);
+        eventClaimSweepTimer = null;
       }
     },
   };

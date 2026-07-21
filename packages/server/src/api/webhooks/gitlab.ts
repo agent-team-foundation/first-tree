@@ -83,7 +83,7 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
         }
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const endpoint = endpointByRequest.get(request);
       if (!endpoint) throw new NotFoundError("GitLab webhook endpoint not found");
       const eventHeader = eventHeaderByRequest.get(request);
@@ -175,6 +175,14 @@ export async function gitlabWebhookRoutes(app: FastifyInstance): Promise<void> {
             return processed;
           },
         );
+        if (result.outcome === "in_flight") {
+          reply.header("Retry-After", String(result.retryAfterSeconds));
+          return reply.status(503).send({
+            ok: false,
+            outcome: "in_flight",
+            retryAfterSeconds: result.retryAfterSeconds,
+          });
+        }
         if (result.outcome === "delivered") {
           for (const effects of result.deliveryStats.postCommitEffects) {
             await runDeferredScmCardPostCommitEffects(app, effects);

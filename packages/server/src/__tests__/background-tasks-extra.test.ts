@@ -15,12 +15,14 @@ const serviceMocks = {
   notifyAgentEvent: vi.fn(),
   pruneStaleSilentEntries: vi.fn(),
   sweepChatArchive: vi.fn(),
+  sweepExpiredEventClaims: vi.fn(),
 };
 
 const mockedModules = [
   "../observability/index.js",
   "../services/chat-archive.js",
   "../services/client.js",
+  "../services/event-dedup.js",
   "../services/inbox.js",
   "../services/notification.js",
   "../services/presence.js",
@@ -35,6 +37,9 @@ function mockBackgroundTaskDependencies(): void {
   }));
   vi.doMock("../services/client.js", () => ({
     cleanupStaleClients: serviceMocks.cleanupStaleClients,
+  }));
+  vi.doMock("../services/event-dedup.js", () => ({
+    sweepExpiredEventClaims: serviceMocks.sweepExpiredEventClaims,
   }));
   vi.doMock("../services/inbox.js", () => ({
     pruneStaleSilentEntries: serviceMocks.pruneStaleSilentEntries,
@@ -74,6 +79,7 @@ beforeEach(() => {
   serviceMocks.notifyAgentEvent.mockResolvedValue(undefined);
   serviceMocks.pruneStaleSilentEntries.mockResolvedValue({ ackedDeleted: 0, stalePendingDeleted: 0 });
   serviceMocks.sweepChatArchive.mockResolvedValue({ mappedRowsArchived: 0, unmappedRowsArchived: 0 });
+  serviceMocks.sweepExpiredEventClaims.mockResolvedValue(0);
 });
 
 afterEach(() => {
@@ -85,11 +91,12 @@ afterEach(() => {
 });
 
 describe("createBackgroundTasks", () => {
-  it("runs heartbeat, inbox prune, archive sweep, and stale-agent notification intervals", async () => {
+  it("runs heartbeat, inbox prune, event claim sweep, archive sweep, and stale-agent notification intervals", async () => {
     const { createBackgroundTasks } = await import("../services/background-tasks.js");
     serviceMocks.pruneStaleSilentEntries.mockResolvedValue({ ackedDeleted: 2, stalePendingDeleted: 1 });
     serviceMocks.markStaleAgents.mockResolvedValue(["agent_1", "agent_2"]);
     serviceMocks.sweepChatArchive.mockResolvedValue({ mappedRowsArchived: 1, unmappedRowsArchived: 1 });
+    serviceMocks.sweepExpiredEventClaims.mockResolvedValue(3);
     const app = makeApp(30);
     const tasks = createBackgroundTasks(app, "srv_1");
 
@@ -101,6 +108,7 @@ describe("createBackgroundTasks", () => {
     expect(serviceMocks.cleanupStalePresence).toHaveBeenCalledWith(app.db, 60);
     expect(serviceMocks.cleanupStaleClients).toHaveBeenCalledWith(app.db, 60);
     expect(serviceMocks.pruneStaleSilentEntries).toHaveBeenCalledWith(app.db);
+    expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledWith(app.db);
     expect(serviceMocks.sweepChatArchive).toHaveBeenCalledWith(app.db, { mappedIdleSeconds: 3_600 });
     expect(serviceMocks.notifyAgentEvent).toHaveBeenCalledWith(app.db, "agent_1", "agent_stale", "medium");
     expect(serviceMocks.notifyAgentEvent).toHaveBeenCalledWith(app.db, "agent_2", "agent_stale", "medium");
@@ -116,9 +124,13 @@ describe("createBackgroundTasks", () => {
       { mappedRowsArchived: 1, unmappedRowsArchived: 1 },
       "chat auto-archive sweep flipped rows to archived",
     );
+    expect(loggerMocks.info).toHaveBeenCalledWith({ count: 3 }, "swept expired webhook event claims");
 
+    const eventClaimSweepCalls = serviceMocks.sweepExpiredEventClaims.mock.calls.length;
     tasks.stop();
     expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledTimes(eventClaimSweepCalls);
   });
 
   it("logs timer errors, catches rejected notifications, and allows archive sweep disablement", async () => {
@@ -144,5 +156,51 @@ describe("createBackgroundTasks", () => {
     );
 
     tasks.stop();
+  });
+
+  it("contains a rejected event claim sweep and resets its in-progress guard", async () => {
+    const { createBackgroundTasks } = await import("../services/background-tasks.js");
+    const sweepError = new Error("claim sweep failed");
+    serviceMocks.sweepExpiredEventClaims.mockRejectedValueOnce(sweepError).mockResolvedValueOnce(2);
+    const tasks = createBackgroundTasks(makeApp(0), "srv_claim_error");
+
+    tasks.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.error).toHaveBeenCalledWith({ err: sweepError }, "failed to sweep expired webhook event claims");
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledTimes(2);
+    expect(loggerMocks.info).toHaveBeenCalledWith({ count: 2 }, "swept expired webhook event claims");
+    tasks.stop();
+  });
+
+  it("suppresses overlapping event claim sweep ticks within one server instance", async () => {
+    const { createBackgroundTasks } = await import("../services/background-tasks.js");
+    let finishFirstSweep = (_count: number): void => {};
+    const firstSweep = new Promise<number>((resolve) => {
+      finishFirstSweep = resolve;
+    });
+    serviceMocks.sweepExpiredEventClaims.mockReturnValueOnce(firstSweep).mockResolvedValueOnce(0);
+    const tasks = createBackgroundTasks(makeApp(0), "srv_claim_overlap");
+
+    try {
+      tasks.start();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledTimes(1);
+
+      finishFirstSweep(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(serviceMocks.sweepExpiredEventClaims).toHaveBeenCalledTimes(2);
+    } finally {
+      finishFirstSweep(0);
+      tasks.stop();
+    }
   });
 });

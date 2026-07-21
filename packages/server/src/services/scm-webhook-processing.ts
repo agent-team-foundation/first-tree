@@ -1,7 +1,7 @@
 import type { NormalizedScmEvent, ScmEntityObservation, ScmIngressContext } from "@first-tree/shared";
 import type { Database } from "../db/connection.js";
 import { createLogger } from "../observability/index.js";
-import { claimEvent, unclaimEvent } from "./event-dedup.js";
+import { claimEvent, completeEventClaim } from "./event-dedup.js";
 
 const log = createLogger("ScmWebhookProcessing");
 
@@ -12,6 +12,7 @@ export type ScmAudienceResolution<TTarget> = {
 
 export type ScmProcessingResult<TDeliveryStats, TProviderResult> =
   | { outcome: "duplicate" }
+  | { outcome: "in_flight"; retryAfterSeconds: number }
   | { outcome: "provider_only"; providerResult: TProviderResult }
   | {
       outcome: "audience_empty";
@@ -38,10 +39,10 @@ type ProcessScmWebhookDeliveryInput<TTarget, TDeliveryStats, TProviderResult> = 
  * Narrow provider-neutral SCM processing seam.
  *
  * The ingress adapter authenticates and normalizes first. This kernel owns
- * only the existing optional whole-request claim, provider work covered by
- * that claim, audience orchestration, and best-effort unclaim on an uncaught
- * top-level failure. Provider payloads, stores, mapping rules, card shapes,
- * and per-chat failure guards remain behind the supplied callbacks.
+ * only the optional whole-request lifecycle claim, provider work covered by
+ * that claim, audience orchestration, and fenced completion. Provider
+ * payloads, stores, mapping rules, card shapes, and per-chat failure guards
+ * remain behind the supplied callbacks.
  */
 export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProviderResult>(
   input: ProcessScmWebhookDeliveryInput<TTarget, TDeliveryStats, TProviderResult>,
@@ -49,35 +50,46 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
   assertEventMatchesIngress(input.ingress, input.event);
 
   const deliveryId = input.ingress.stableDeliveryId;
+  let claimExpiresAt: Date | null = null;
   if (deliveryId) {
-    const claimed = await claimEvent(input.db, deliveryId, input.ingress.provider);
-    if (!claimed) {
-      log.info({ provider: input.ingress.provider, deliveryId }, "duplicate SCM webhook delivery, skipping");
+    const claim = await claimEvent(input.db, deliveryId, input.ingress.provider);
+    if (claim.outcome === "done") {
+      log.info({ provider: input.ingress.provider, deliveryId }, "completed SCM webhook delivery, skipping replay");
       return { outcome: "duplicate" };
     }
+    if (claim.outcome === "in_flight") {
+      log.info(
+        { provider: input.ingress.provider, deliveryId, retryAfterSeconds: claim.retryAfterSeconds },
+        "SCM webhook delivery is already in flight",
+      );
+      return { outcome: "in_flight", retryAfterSeconds: claim.retryAfterSeconds };
+    }
+    claimExpiresAt = claim.expiresAt;
   }
 
-  try {
-    const providerResult = await input.runProviderWork();
-    if (input.observation) {
-      await input.applyObservation(input.observation).catch((err) => {
-        // Projection refresh is deliberately independent from notification
-        // delivery. A temporary projection failure must not suppress an
-        // otherwise valid card or make a provider retry duplicate it.
-        log.error(
-          {
-            err,
-            provider: input.ingress.provider,
-            organizationId: input.ingress.source.organizationId,
-            entityType: input.observation?.entity.type,
-            entityKey: input.observation?.entity.key,
-          },
-          "failed to apply SCM entity observation",
-        );
-      });
-    }
-    if (!input.event) return { outcome: "provider_only", providerResult };
+  const providerResult = await input.runProviderWork();
+  if (input.observation) {
+    await input.applyObservation(input.observation).catch((err) => {
+      // Projection refresh is deliberately independent from notification
+      // delivery. A temporary projection failure must not suppress an
+      // otherwise valid card or make a provider redelivery duplicate it.
+      log.error(
+        {
+          err,
+          provider: input.ingress.provider,
+          organizationId: input.ingress.source.organizationId,
+          entityType: input.observation?.entity.type,
+          entityKey: input.observation?.entity.key,
+        },
+        "failed to apply SCM entity observation",
+      );
+    });
+  }
 
+  let terminalResult: ScmProcessingResult<TDeliveryStats, TProviderResult>;
+  if (!input.event) {
+    terminalResult = { outcome: "provider_only", providerResult };
+  } else {
     const audience = await input.resolveAudience(input.event);
     if (audience.targets.length === 0) {
       const reason = input.event.targets.length > 0 ? "audience_empty_with_targets" : "audience_empty_no_targets";
@@ -93,22 +105,17 @@ export async function processScmWebhookDelivery<TTarget, TDeliveryStats, TProvid
         },
         "SCM webhook audience empty, skipping",
       );
-      return { outcome: "audience_empty", reason, providerResult };
+      terminalResult = { outcome: "audience_empty", reason, providerResult };
+    } else {
+      const deliveryStats = await input.deliver(input.event, audience);
+      terminalResult = { outcome: "delivered", deliveryStats, providerResult };
     }
-
-    const deliveryStats = await input.deliver(input.event, audience);
-    return { outcome: "delivered", deliveryStats, providerResult };
-  } catch (err) {
-    if (deliveryId) {
-      await unclaimEvent(input.db, deliveryId, input.ingress.provider).catch((unclaimErr) => {
-        log.error(
-          { err: unclaimErr, provider: input.ingress.provider, deliveryId },
-          "failed to unclaim SCM webhook delivery after handler error",
-        );
-      });
-    }
-    throw err;
   }
+
+  if (deliveryId && claimExpiresAt) {
+    await completeEventClaim(input.db, deliveryId, input.ingress.provider, claimExpiresAt);
+  }
+  return terminalResult;
 }
 
 function assertEventMatchesIngress(ingress: ScmIngressContext, event: NormalizedScmEvent | null): void {

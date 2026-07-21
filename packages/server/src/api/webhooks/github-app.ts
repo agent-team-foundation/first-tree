@@ -157,12 +157,15 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
  *      the normalize pipeline (these events shouldn't fan out as cards)
  *   4. other events → installation.id → hub_organization_id reverse-lookup,
  *      then GitHub normalize → provider-neutral SCM processing seam →
- *      GitHub audience/delivery adapters. The seam best-effort unclaims on
- *      uncaught handler failure so GitHub's retry has a chance to clear.
+ *      GitHub audience/delivery adapters. A delivery already being processed
+ *      returns 503 + Retry-After rather than being acknowledged as a completed
+ *      duplicate. GitHub does not automatically retry failed webhook
+ *      deliveries, so recovery still depends on manual/operator redelivery;
+ *      once the pending claim expires, that redelivery can take it over.
  *
  * Routes return 200 for "ignored" cases (no installation context, not
- * bound, suspended, duplicate delivery) so GitHub doesn't accumulate
- * retries for events the operator can't act on.
+ * bound, suspended, completed duplicate delivery) so GitHub doesn't
+ * accumulate failures for events the operator can't act on.
  */
 export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void> {
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
@@ -294,6 +297,14 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     });
 
     switch (result.outcome) {
+      case "in_flight":
+        reply.header("Retry-After", String(result.retryAfterSeconds));
+        return reply.status(503).send({
+          ok: false,
+          event: eventType,
+          outcome: "in_flight",
+          retryAfterSeconds: result.retryAfterSeconds,
+        });
       case "duplicate":
         return reply.status(200).send({ ok: true, event: eventType, deduped: true });
       case "provider_only":
