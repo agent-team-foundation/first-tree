@@ -52,6 +52,7 @@ const coreMocks = vi.hoisted(() => ({
   listLiveClientRuntimeMarkers: vi.fn(),
   loadCredentials: vi.fn(),
   PACKAGE_NAME: "first-tree",
+  assertRemovableAgentName: vi.fn(),
   promptAddAgent: vi.fn(),
   readActiveClientIdFromIndex: vi.fn(),
   readActiveRootClientId: vi.fn(),

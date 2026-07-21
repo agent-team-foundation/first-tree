@@ -193,4 +193,75 @@ describe("findStaleAliases", () => {
     expect(existsSync(join(home, "data", "sessions", "stale.json"))).toBe(false);
     rmSync(home, { recursive: true, force: true });
   });
+
+  it("rejects traversal and non-slug names without touching the filesystem", () => {
+    const home = mkdtempSync(join(tmpdir(), "fthub-remove-home-"));
+    process.env.FIRST_TREE_HOME = home;
+    // Canary outside the deletion roots but reachable via `../` from config/agents.
+    const canary = join(home, "config", "canary");
+    mkdirSync(canary, { recursive: true });
+    writeFileSync(join(canary, "keep.txt"), "safe");
+    mkdirSync(join(home, "config", "agents"), { recursive: true });
+
+    const badNames = [
+      "",
+      ".",
+      "..",
+      "../canary",
+      "../../etc",
+      "a/b",
+      "/abs/path",
+      "a\\b",
+      "Foo",
+      "with space",
+      "x.json",
+    ];
+    for (const name of badNames) {
+      expect(() => removeLocalAgent(name)).toThrow(/Invalid agent name/);
+    }
+
+    // "" would previously have matched config/agents itself; "../canary" the canary.
+    expect(existsSync(join(home, "config", "agents"))).toBe(true);
+    expect(existsSync(join(canary, "keep.txt"))).toBe(true);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("accepts grandfathered legacy names (leading - or _, up to 100 chars)", () => {
+    const home = mkdtempSync(join(tmpdir(), "fthub-remove-home-"));
+    process.env.FIRST_TREE_HOME = home;
+
+    for (const name of ["_legacy-agent", "-dash-name", `a${"b".repeat(99)}`]) {
+      mkdirSync(join(home, "config", "agents", name), { recursive: true });
+      mkdirSync(join(home, "data", "workspaces", name), { recursive: true });
+      mkdirSync(join(home, "data", "sessions"), { recursive: true });
+      writeFileSync(join(home, "data", "sessions", `${name}.json`), "{}");
+
+      removeLocalAgent(name);
+
+      expect(existsSync(join(home, "config", "agents", name))).toBe(false);
+      expect(existsSync(join(home, "data", "workspaces", name))).toBe(false);
+      expect(existsSync(join(home, "data", "sessions", `${name}.json`))).toBe(false);
+    }
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("unlinks a symlinked alias dir without touching the link target", (ctx) => {
+    const home = mkdtempSync(join(tmpdir(), "fthub-remove-home-"));
+    process.env.FIRST_TREE_HOME = home;
+    const outside = mkdtempSync(join(tmpdir(), "fthub-remove-outside-"));
+    writeFileSync(join(outside, "keep.txt"), "safe");
+    mkdirSync(join(home, "config", "agents"), { recursive: true });
+    try {
+      symlinkSync(outside, join(home, "config", "agents", "linked"));
+    } catch {
+      ctx.skip("Symlink creation is not supported in this environment.");
+    }
+
+    removeLocalAgent("linked");
+
+    expect(existsSync(join(outside, "keep.txt"))).toBe(true);
+    expect(existsSync(join(home, "config", "agents", "linked"))).toBe(false);
+    rmSync(outside, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  });
 });
