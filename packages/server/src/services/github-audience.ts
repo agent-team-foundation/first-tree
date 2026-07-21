@@ -127,12 +127,12 @@ export async function resolveGithubAudience(db: Database, event: NormalizedScmEv
       ),
     );
 
-  // Dedup subscribed rows by `(humanAgentId, chatId)` (keep earliest
-  // `bound_at`). A single `(human, entity)` pair can carry multiple mapping
-  // rows pointing at the *same* chat (one per delegate that ever drove an
-  // event for this entity under this human); collapsing those to one row is
-  // loss-free and stops `deliverGithubEvent` posting N identical cards
-  // to that chat.
+  // Dedup subscribed rows by `(humanAgentId, delegateAgentId, chatId)` (keep
+  // earliest `bound_at`). Alias entity keys can leave duplicate rows for the
+  // same logical attention line, but distinct delegates are distinct wake
+  // lines even when they share one human carrier and chat. The per-chat
+  // delivery planner collapses those lines into one card and unions every
+  // wake agent.
   //
   // The key MUST include `chatId`. Deduping by `humanAgentId` alone assumed
   // every row for a human shared one chat — false once the same human is
@@ -141,14 +141,16 @@ export async function resolveGithubAudience(db: Database, event: NormalizedScmEv
   // another, each under a different delegate). Collapsing across chats kept
   // only the earliest chat's row and silently dropped every *other* followed
   // chat from the audience — that chat never received the entity's events at
-  // all. "The chat follows, not the person", so the surviving unit is one
-  // row per (human, chat), never one per human.
-  const earliestByHumanChat = new Map<string, (typeof subscribedRows)[number]>();
+  // all. The key also includes `delegateAgentId`: two agent-issued follows can
+  // share the same fallback human and chat while carrying distinct wake
+  // agents. "The chat follows, not the person", so the surviving unit is one
+  // row per (human, delegate, chat).
+  const earliestByAttentionLine = new Map<string, (typeof subscribedRows)[number]>();
   for (const row of subscribedRows) {
-    const key = `${row.humanAgentId}:${row.chatId}`;
-    const current = earliestByHumanChat.get(key);
+    const key = `${row.humanAgentId}:${row.delegateAgentId}:${row.chatId}`;
+    const current = earliestByAttentionLine.get(key);
     if (!current || row.boundAt < current.boundAt) {
-      earliestByHumanChat.set(key, row);
+      earliestByAttentionLine.set(key, row);
     }
   }
   // #766: A `pull_request.opened` delivery reaching a reviewer purely through
@@ -178,19 +180,21 @@ export async function resolveGithubAudience(db: Database, event: NormalizedScmEv
     return row.humanAgentName !== null && involvedLogins.has(row.humanAgentName.toLowerCase());
   };
 
-  const subscribed: AudienceTarget[] = [...earliestByHumanChat.values()].filter(keepSubscribedOpened).map((row) => ({
-    humanAgentId: row.humanAgentId,
-    delegateAgentId: row.delegateAgentId,
-    kind: "existing",
-    chatId: row.chatId,
-    involveReason: null,
-    involveLogin: null,
-    provenance: isDeclaredBoundVia(row.boundVia)
-      ? "explicit"
-      : row.boundVia === "fixes_link"
-        ? "related_entity"
-        : "identity_target",
-  }));
+  const subscribed: AudienceTarget[] = [...earliestByAttentionLine.values()]
+    .filter(keepSubscribedOpened)
+    .map((row) => ({
+      humanAgentId: row.humanAgentId,
+      delegateAgentId: row.delegateAgentId,
+      kind: "existing",
+      chatId: row.chatId,
+      involveReason: null,
+      involveLogin: null,
+      provenance: isDeclaredBoundVia(row.boundVia)
+        ? "explicit"
+        : row.boundVia === "fixes_link"
+          ? "related_entity"
+          : "identity_target",
+    }));
 
   const subscribedByHuman = new Map<string, AudienceTarget[]>();
   for (const target of subscribed) {

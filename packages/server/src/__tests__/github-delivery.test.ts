@@ -12,6 +12,7 @@ import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
 import { type AudienceTarget, resolveGithubAudience } from "../services/github-audience.js";
 import { deliverGithubEvent } from "../services/github-delivery.js";
+import { resolveAgentScmBindingPair } from "../services/scm-attention-line.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -775,6 +776,93 @@ describe("deliverGithubEvent", () => {
     expect(metadata.reason).toBe("mentioned");
     expect(await notifyCount(app, chatId, delegateA)).toBe(0);
     expect(await notifyCount(app, chatId, delegateB)).toBe(1);
+  });
+
+  it("delivers one card and wakes both unlinked agent followers sharing a human carrier", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const followerA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `follower-a-${randomUUID().slice(0, 6)}`,
+    });
+    const followerB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `follower-b-${randomUUID().slice(0, 6)}`,
+    });
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-a-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const humanB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-b-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values(
+      [humanA, humanB, followerA, followerB].map((agentId, index) => ({
+        chatId,
+        agentId,
+        role: index === 0 ? "owner" : "member",
+        accessMode: "speaker" as const,
+        mode: "full" as const,
+        source: "manual" as const,
+      })),
+    );
+
+    const pairA = await resolveAgentScmBindingPair(app.db, chatId, followerA);
+    const pairB = await resolveAgentScmBindingPair(app.db, chatId, followerB);
+    expect(pairA).not.toBeNull();
+    expect(pairB).not.toBeNull();
+    expect(pairB?.humanAgentId).toBe(pairA?.humanAgentId);
+    if (!pairA || !pairB) throw new Error("expected both agent follow pairs to resolve");
+
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: pairA.humanAgentId,
+        delegateAgentId: pairA.wakeAgentId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#209",
+        chatId,
+        boundVia: "agent_declared",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: pairB.humanAgentId,
+        delegateAgentId: pairB.wakeAgentId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#209",
+        chatId,
+        boundVia: "agent_declared",
+      },
+    ]);
+
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#209",
+      actorLogin: "outsider",
+      eventType: "issue_comment",
+      action: "created",
+      kind: "commented",
+    });
+    const resolution = await resolveGithubAudience(app.db, event);
+    expect(resolution.targets).toHaveLength(2);
+
+    const stats = await deliverGithubEvent(app, event, resolution.targets);
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+    const [message] = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    const metadata = message?.metadata as { mentions?: string[] };
+    expect(metadata.mentions).toEqual([followerA, followerB].sort());
+    expect(await notifyCount(app, chatId, followerA)).toBe(1);
+    expect(await notifyCount(app, chatId, followerB)).toBe(1);
   });
 
   it("refreshes chats.topic to match the current entity title on each subsequent event for a github-bound chat", async () => {
