@@ -25,28 +25,29 @@
   English | <a href="README_zh-CN.md">中文</a>
 </p>
 
-> Try [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) **free** — the fastest way to give every agent your team's shared context.
+> Try [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) **free** — run more coding agents at once and ship faster, on your own.
 
 # First-Tree
 
-**Run coding agents on your team's shared context.**
+**Run more coding agents at once — and ship software faster.**
 
-First Tree is an open-source workspace for engineering teams shipping with
-humans and AI agents side by side. It gives every agent the same context your
-team has — and a place to work right next to you.
+First Tree is an open-source workspace for open-source maintainers, indie
+developers, and one-person companies who work with coding agents. Spin up
+several at once, put each on its own task, and move more work in parallel —
+without losing track of what they are all doing.
 
 <p align="center">
-  <img src="assets/product-workspace.png" alt="First Tree workspace — an agent picks up an issue its offline teammate was assigned, grounded in the team's Context Tree" width="100%">
+  <img src="assets/product-workspace.png" alt="First Tree workspace — one engineer running several coding agents in parallel, each on its own task" width="100%">
 </p>
 
 <p align="center">
-  <sub><strong>Alex is offline, so his assistant picks up issue #142</strong> — it reads the payments code, checks the idempotency key, runs the tests, and drafts a fix on a branch. Grounded in the team's Context Tree, visible while it works, ready for human review.</sub>
+  <sub><strong>Three work streams, three agents, one engineer.</strong> Issue triage, a release, and an eval report all move at once — here one agent picks up issue #142, reproduces the bug, runs the tests, and drafts the fix on a branch while you watch and steer.</sub>
 </p>
 
-> **Open source and yours to run.** First Tree is Apache-2.0 — the source is
-> yours to read, fork, and audit. Your Context Tree lives in your own Git, and
-> agents run on your own machines. Self-hosting the server is supported as an
-> advanced path.
+> **Open source, and yours to run.** First Tree is Apache-2.0 — read it, fork
+> it, audit it. Agents run on your own machine and plug into the GitHub repos
+> you already work in, with no lock-in. Self-hosting the server is supported as
+> an advanced path.
 
 <div align="center">
 <table>
@@ -64,66 +65,47 @@ team has — and a place to work right next to you.
 
 ## Why First Tree
 
-**The problem: your agent doesn't know what you know.** It can't see the
-decision someone made in a meeting, the design doc buried in a thread, or why
-the code was written the way it was. So it guesses, repeats old mistakes, and
-pulls you in to re-explain things you have already explained ten times.
+Running one agent is easy. Running five is where it falls apart — you lose
+track of what each one is doing, they drift, and reviewing their work eats the
+time you saved. First Tree is built for that moment.
 
-First Tree fixes that with three simple ideas.
+### 1. Many agents, in parallel
 
-### 1. Own your context
+Start a separate work stream for each task — triage, a bug fix, a release, a
+refactor — and let an agent drive each one. They run at the same time, on your
+own machine, so you get through far more work without cloning yourself.
 
-Your team's memory lives in your own Git repo — the decisions, designs,
-ownership, and notes that usually live only in someone's head or a chat thread.
-We call it the **Context Tree**: a folder of plain `.md` files any agent can
-read before it starts work. You own it, you version it in Git, and it never
-gets locked inside one vendor or one person's terminal.
+### 2. Stay in control without drowning
 
-Every agent starts from the same page your team is on.
+Every agent works in a thread you can open any time: what it read, what it ran,
+what it changed. You step in when a decision or review actually needs you, and
+stay out of the way when it does not — so more agents does not mean more chaos.
 
-### 2. Humans and agents in the same threads
-
-Agents work in shared chats right alongside people — picking up tasks, asking
-questions, and handing off to each other without you having to sit in the
-middle. When something genuinely needs a human — a decision, an approval, a
-review — First Tree loops you in with the full context already loaded, so you
-are never guessing what happened.
-
-### 3. GitHub, in the flow you already use
+### 3. Native to GitHub
 
 Have an agent follow an Issue or PR, or @mention / assign / request review from
-one, and First Tree routes that item straight into the right chat — so whoever
-(or whatever) is tracking it picks the thread back up. It rides on the GitHub
-events your team already fires, so there's no new tracker to babysit.
+one, and First Tree routes it straight to the agent working that thread. It
+rides on the GitHub events you already fire — no new tracker to babysit.
 
-**Put together, it is one simple loop:**
-
-```text
-1. The agent reads your team's context (the Context Tree)
-2. It does the work — in a thread you can watch
-3. You review and guide at the moments that matter
-4. Useful results flow back into the Context Tree
-   ↳ so the next task starts with more than the last one did
-```
-
-The more your team uses it, the more every agent knows.
+The result: one person keeps several agents productive at once, and ships a lot
+more software.
 
 ## How It Works
 
-First Tree connects five pieces around Context Tree:
+First Tree is five pieces working together:
 
-1. **Context Tree** — a Git-native team memory layer for decisions, ownership,
-   responsibilities, constraints, and shared context.
-2. **Web workspace** — the daily surface for chats, agents, team members,
-   computers, GitHub, and context-backed work.
-3. **CLI + daemon** — signs a computer in and keeps local agents connected.
-4. **Agent runtime** — runs agents on your machine and routes messages through
-   First Tree.
-5. **GitHub integration** — connects code work, pull requests, and review back
-   to the workspace.
+1. **Web workspace** — the daily surface where you start agents, watch their
+   threads, and steer them.
+2. **CLI + daemon** — signs a computer in and keeps your local agents connected.
+3. **Agent runtime** — runs agents on your own machine and routes their messages
+   through First Tree.
+4. **GitHub integration** — wires Issues, PRs, and reviews into the agent
+   working that thread.
+5. **Context Tree** — a Git-native memory layer agents can read before they
+   work (decisions, conventions, gotchas), so they stay consistent as you run
+   more of them.
 
-Together, these pieces keep agent work connected to team context before,
-during, and after execution.
+Together, these keep several agents productive and reviewable at once.
 
 ## Get Started
 
@@ -216,7 +198,7 @@ workflow.
 
 Questions, ideas, or want to show what you built? Join the
 [Discussions](https://github.com/agent-team-foundation/first-tree/discussions).
-If First Tree is useful to your team, a ⭐ helps others find it.
+If First Tree is useful to you, a ⭐ helps others find it.
 
 ## License
 
