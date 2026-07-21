@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  CONTEXT_REVIEW_RUN_MARKER_PREFIX,
   type ContextReviewEvent,
   type ContextReviewSubmissionState,
   type ContextReviewSubmitRequest,
@@ -210,7 +211,7 @@ export async function submitContextReviewOutcome(input: {
     });
   }
 
-  const marker = runMarker(input.runId);
+  const body = reviewBody(request.body, input.runId);
   let review: GithubPullRequestReview;
   try {
     review = await createPullRequestReview(
@@ -221,7 +222,7 @@ export async function submitContextReviewOutcome(input: {
         prNumber: claim.run.prNumber,
         commitId: preparedRequest.reviewedHead,
         event: request.event,
-        body: `${request.body}\n\n${marker}`,
+        body,
       },
       { fetcher: input.fetcher },
     );
@@ -574,7 +575,14 @@ async function reconcileUnknownSubmission(input: {
       "Unable to reconcile the unknown GitHub review delivery.",
     );
   });
-  const matching = reviews.filter((review) => review.commitId === input.request.reviewedHead);
+  const expectedBody = reviewBody(input.request.body, input.runId);
+  const expectedState = reviewStateForEvent(input.request.event);
+  const matching = reviews.filter(
+    (review) =>
+      review.commitId === input.request.reviewedHead &&
+      review.body === expectedBody &&
+      review.state?.toUpperCase() === expectedState,
+  );
   if (matching.length !== 1) {
     throw new ContextReviewPublisherError(
       502,
@@ -739,7 +747,17 @@ function hashPayload(request: PreparedReviewRequest): string {
 }
 
 function runMarker(runId: string): string {
-  return `<!-- first-tree-context-review-run:${runId} -->`;
+  return `${CONTEXT_REVIEW_RUN_MARKER_PREFIX}${runId} -->`;
+}
+
+function reviewBody(body: string, runId: string): string {
+  return `${body.trimEnd()}\n\n${runMarker(runId)}`;
+}
+
+function reviewStateForEvent(event: ContextReviewEvent): "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" {
+  if (event === "APPROVE") return "APPROVED";
+  if (event === "REQUEST_CHANGES") return "CHANGES_REQUESTED";
+  return "COMMENTED";
 }
 
 function payloadMismatch(): ContextReviewPublisherError {

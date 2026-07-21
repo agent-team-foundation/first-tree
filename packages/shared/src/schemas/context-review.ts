@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const CONTEXT_REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const;
 export const CONTEXT_REVIEW_BODY_MAX_BYTES = 64 * 1024;
+export const CONTEXT_REVIEW_RUN_MARKER_PREFIX = "<!-- first-tree-context-review-run:";
 
 export const contextReviewEventSchema = z.enum(CONTEXT_REVIEW_EVENTS);
 export type ContextReviewEvent = z.infer<typeof contextReviewEventSchema>;
@@ -97,6 +98,10 @@ export const contextReviewSubmitRequestSchema = z
     body: z
       .string()
       .refine((value) => value.trim().length > 0, "body must not be empty")
+      .refine(
+        (value) => !value.includes(CONTEXT_REVIEW_RUN_MARKER_PREFIX),
+        "body must not contain the reserved Context Review run marker",
+      )
       .refine((value) => new TextEncoder().encode(value).byteLength <= CONTEXT_REVIEW_BODY_MAX_BYTES, {
         message: `body must not exceed ${CONTEXT_REVIEW_BODY_MAX_BYTES} bytes`,
       }),

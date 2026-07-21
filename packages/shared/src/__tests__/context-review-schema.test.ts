@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CONTEXT_REVIEW_BODY_MAX_BYTES,
+  CONTEXT_REVIEW_RUN_MARKER_PREFIX,
   contextReviewerRunMessageMetadataSchema,
   contextReviewSubmitRequestSchema,
 } from "../schemas/context-review.js";
@@ -112,6 +113,12 @@ describe("Context Review schemas", () => {
       contextReviewSubmitRequestSchema.safeParse({
         event: "COMMENT",
         body: "x".repeat(CONTEXT_REVIEW_BODY_MAX_BYTES + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      contextReviewSubmitRequestSchema.safeParse({
+        event: "COMMENT",
+        body: `Review text\n\n${CONTEXT_REVIEW_RUN_MARKER_PREFIX}another-run -->`,
       }).success,
     ).toBe(false);
   });

@@ -32,7 +32,9 @@ GitHub review and repository gate.
 - Configure the default-branch ruleset to require pull requests, at least one
   current approval, stale-review dismissal on push, and non-fast-forward
   protection. Disable Code Owner and last-push approval requirements. Do not
-  configure the App as a bypass actor.
+  configure the App as a bypass actor. For a migrated repository, confirm no
+  effective ruleset still requires the retired `first-tree/context-review`
+  status, which the App-review-only workflow no longer publishes.
 - Prepare ready, draft, fork, validator-failing, semantic-failing, repairable,
   check-failing and merge-failing PRs. The PR body needs no repair-consent or
   machine-readable scope block.

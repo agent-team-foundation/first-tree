@@ -176,6 +176,25 @@ describe("Context Reviewer App publisher", () => {
     expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/pulls/123"))).toHaveLength(1);
   });
 
+  it("does not reconcile an unknown write against another run's marker-bearing review", async () => {
+    const fixture = await createRunFixture(getApp());
+    const fetcher = unknownThenReconciledGithubFetcher(fixture.runId, { collidingReview: true });
+    const input = {
+      db: fixture.app.db,
+      chatId: fixture.chatId,
+      runId: fixture.runId,
+      callerAgentUuid: fixture.reviewer.uuid,
+      callerClientId: fixture.admin.clientId,
+      callerRuntimeSessionToken: fixture.runtimeToken,
+      request: { event: "COMMENT" as const, body: "Deferred" },
+      appCredentials: fixture.app.config.oauth?.githubApp,
+      fetcher,
+    };
+
+    await expect(submitContextReviewOutcome(input)).rejects.toMatchObject({ code: "CONTEXT_REVIEW_GITHUB_UNKNOWN" });
+    await expect(submitContextReviewOutcome(input)).rejects.toMatchObject({ code: "CONTEXT_REVIEW_GITHUB_UNKNOWN" });
+  });
+
   it("requires runtime-session proof on the narrow agent route", async () => {
     const fixture = await createRunFixture(getApp());
     const missingProof = await fixture.app.inject({
@@ -371,7 +390,10 @@ function successfulGithubFetcher(overrides: { headSha?: string } = {}) {
   });
 }
 
-function unknownThenReconciledGithubFetcher(runId: string, options: { closeAfterUnknownWrite?: boolean } = {}) {
+function unknownThenReconciledGithubFetcher(
+  runId: string,
+  options: { closeAfterUnknownWrite?: boolean; collidingReview?: boolean } = {},
+) {
   let pullRequestReads = 0;
   return vi.fn<typeof fetch>(async (url, init) => {
     const target = String(url);
@@ -408,8 +430,10 @@ function unknownThenReconciledGithubFetcher(runId: string, options: { closeAfter
           html_url: "https://github.com/owner/context-tree/pull/123#pullrequestreview-9002",
           user: { login: "test-app-slug[bot]" },
           commit_id: "a".repeat(40),
-          body: `Deferred\n\n<!-- first-tree-context-review-run:${runId} -->`,
-          state: "COMMENTED",
+          body: options.collidingReview
+            ? `Different outcome\n\n<!-- first-tree-context-review-run:${runId} -->`
+            : `Deferred\n\n<!-- first-tree-context-review-run:${runId} -->`,
+          state: options.collidingReview ? "APPROVED" : "COMMENTED",
         },
       ]);
     }

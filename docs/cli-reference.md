@@ -1077,48 +1077,89 @@ current approval, and stale-review dismissal after every push. An administrator
 must update an existing repository ruleset with local `gh api`; the GitHub App
 does not change repository rules. Preserve non-fast-forward protection, disable
 Code Owner and last-push approval requirements, and verify the resulting live
-ruleset before relying on the merge gate.
+ruleset before relying on the merge gate. Also remove the retired
+`first-tree/context-review` required status check from every effective ruleset:
+the App-review-only workflow no longer publishes that status, so merely adding
+the approval ruleset while retaining the old check leaves the repository
+unmergeable.
 
 The one-approval gate intentionally prevents a single GitHub user from
 self-merging while the App Reviewer is unavailable; the PR needs the App or
 another human approval. Do not compensate by broadening App permissions,
 restoring CODEOWNERS, or adding a bypass actor.
 
-From the Context Tree checkout, an administrator can upsert the same
-repository-local ruleset used by Seed:
+From the Context Tree checkout, an administrator should first identify the
+existing effective rulesets. Repository rulesets are edited in place; do not
+create a second named ruleset when the repository already has a default-branch
+ruleset such as `protect main`:
 
 ```bash
 remote=$(git remote get-url origin)
 repo=$(gh repo view "$remote" --json nameWithOwner --jq .nameWithOwner)
-ruleset_id=$(gh api "repos/$repo/rulesets?includes_parents=false&per_page=100" --jq 'map(select(.name == "First Tree Context Repo branch rules" and (.source_type == null or .source_type == "Repository")))[0].id // empty')
-method=POST
-endpoint="repos/$repo/rulesets"
-if [ -n "$ruleset_id" ]; then
-  method=PUT
-  endpoint="repos/$repo/rulesets/$ruleset_id"
-fi
-gh api --method "$method" "$endpoint" --input - <<'JSON'
-{
-  "name": "First Tree Context Repo branch rules",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
-  "rules": [
-    { "type": "non_fast_forward" },
-    {
-      "type": "pull_request",
-      "parameters": {
-        "required_approving_review_count": 1,
-        "require_code_owner_review": false,
-        "dismiss_stale_reviews_on_push": true,
-        "require_last_push_approval": false,
-        "required_review_thread_resolution": false
-      }
-    }
-  ]
-}
-JSON
+gh api "repos/$repo/rulesets?includes_parents=true&per_page=100" \
+  --jq '.[] | [.id, .name, .source_type, .source, .enforcement] | @tsv'
 ```
+
+For each repository-owned ruleset that targets the default branch and contains
+the pull-request gate or retired status, set its id explicitly and update it
+without replacing unrelated rules. The transformation below preserves the
+ruleset name, enforcement, conditions, bypass actors, deletion/creation/
+non-fast-forward rules, and unrelated required status checks. Repeat it for
+each applicable repository-owned ruleset:
+
+```bash
+ruleset_id=<repository-ruleset-id>
+ruleset_input=$(mktemp)
+ruleset_update=$(mktemp)
+gh api "repos/$repo/rulesets/$ruleset_id" >"$ruleset_input"
+
+jq '
+  .rules |= (
+    map(
+      if .type == "pull_request" then
+        .parameters |= (. + {
+          required_approving_review_count: 1,
+          require_code_owner_review: false,
+          dismiss_stale_reviews_on_push: true,
+          require_last_push_approval: false,
+          required_review_thread_resolution: false
+        })
+      elif .type == "required_status_checks" then
+        .parameters.required_status_checks |=
+          map(select(.context != "first-tree/context-review"))
+      else . end
+    )
+    | map(select(
+        .type != "required_status_checks" or
+        (.parameters.required_status_checks | length) > 0
+      ))
+  )
+  | {
+      name,
+      target,
+      enforcement,
+      bypass_actors,
+      conditions,
+      rules
+    }
+' "$ruleset_input" >"$ruleset_update"
+
+gh api --method PUT "repos/$repo/rulesets/$ruleset_id" \
+  --input "$ruleset_update"
+rm -f -- "$ruleset_input" "$ruleset_update"
+```
+
+If no repository-owned default-branch ruleset exists, create the Seed ruleset
+instead of running the update above. A ruleset whose `source_type` is
+`Organization` is inherited and cannot be changed through the repository API;
+its organization ruleset owner must apply the same approval/stale-review and
+retired-status changes.
+
+After the update, inspect every effective default-branch ruleset and confirm
+that the combined policy requires at least one approval, dismisses stale
+reviews on push, blocks non-fast-forward updates, and contains no
+`first-tree/context-review` required status. Do not delete or overwrite
+unrelated organization policy while removing the retired check.
 
 `first-tree tree seed --team <team-id>` is the stateless admission boundary for
 portable Context Tree setup. The Team is required and explicit; this command
