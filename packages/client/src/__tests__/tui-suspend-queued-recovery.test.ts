@@ -25,10 +25,12 @@ const state = vi.hoisted(() => ({
   discardStarted: false,
   discardGate: null as Promise<void> | null,
   discardError: null as Error | null,
+  discardErrors: [] as Error[],
   createError: null as Error | null,
   drainResults: [] as MockDrainResult[],
   captureEnqueueResults: [] as MockDrainResult[],
   drainCalls: 0,
+  captureWatermarkCalls: 0,
   drainCallsAtFirstCapture: null as number | null,
   drainForever: false,
   chatContext: {
@@ -114,11 +116,14 @@ vi.mock("../handlers/claude-code-tui/transcript-tail.js", () => ({
       state.callOrder.push("discard:start");
       state.discardStarted = true;
       if (state.discardGate) await state.discardGate;
+      const queuedError = state.discardErrors.shift();
+      if (queuedError) throw queuedError;
       if (state.discardError) throw state.discardError;
       state.callOrder.push("discard:end");
     }
 
     async captureWatermark() {
+      state.captureWatermarkCalls += 1;
       return 1;
     }
 
@@ -234,10 +239,12 @@ beforeEach(() => {
   state.discardStarted = false;
   state.discardGate = null;
   state.discardError = null;
+  state.discardErrors.length = 0;
   state.createError = null;
   state.drainResults.length = 0;
   state.captureEnqueueResults.length = 0;
   state.drainCalls = 0;
+  state.captureWatermarkCalls = 0;
   state.drainCallsAtFirstCapture = null;
   state.drainForever = false;
 });
@@ -352,6 +359,88 @@ describe("claude-code-tui suspend queued recovery", () => {
     await handler.shutdown();
   });
 
+  it.each([
+    "start",
+    "resume",
+  ] as const)("retries the bootstrap prefix and queued suffix when %s preflush fails", async (mode) => {
+    let releaseDiscard!: () => void;
+    state.discardGate = new Promise<void>((resolve) => {
+      releaseDiscard = resolve;
+    });
+    state.discardErrors.push(new Error("first discard denied"));
+    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const ctx = makeContext();
+    const firstToken = makeToken();
+    const queuedToken = makeToken();
+    const first = makeMessage("m121", "failed prefix");
+    const queued = makeMessage("m122", "queued suffix");
+
+    const bootstrap =
+      mode === "start"
+        ? handler.start(first, ctx, firstToken)
+        : handler.resume(first, "existing-session", ctx, firstToken);
+    await waitFor(() => state.discardStarted);
+    expect(handler.inject(queued, queuedToken)).toEqual({ kind: "owned", mode: "queued" });
+
+    releaseDiscard();
+    const result = await bootstrap;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(typeof result === "string" ? null : result.route).toEqual({ kind: "owned", mode: "queued" });
+    expect(state.callOrder.filter((call) => call === "discard:start")).toHaveLength(1);
+    expect(state.pasteTexts).toEqual([]);
+    expect(firstToken.processingStarted).not.toHaveBeenCalled();
+    expect(firstToken.complete).not.toHaveBeenCalled();
+    expect(firstToken.retry).toHaveBeenCalledTimes(1);
+    expect(firstToken.retry).toHaveBeenCalledWith([first], "tui_transcript_preflush_failed");
+    expect(queuedToken.processingStarted).not.toHaveBeenCalled();
+    expect(queuedToken.complete).not.toHaveBeenCalled();
+    expect(queuedToken.retry).toHaveBeenCalledTimes(1);
+    expect(queuedToken.retry).toHaveBeenCalledWith(queued, "tui_bootstrap_recovery_required");
+
+    await handler.shutdown();
+    expect(firstToken.retry).toHaveBeenCalledTimes(1);
+    expect(queuedToken.retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a pumped queued prefix and suffix when preflush fails", async () => {
+    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const ctx = makeContext();
+    await handler.resume(undefined, "existing-session", ctx);
+
+    let releaseDiscard!: () => void;
+    state.discardGate = new Promise<void>((resolve) => {
+      releaseDiscard = resolve;
+    });
+    state.discardErrors.push(new Error("queued discard denied"));
+    const prefixToken = makeToken();
+    const suffixToken = makeToken();
+    const prefix = makeMessage("m123", "pumped failed prefix");
+    const suffix = makeMessage("m124", "pumped queued suffix");
+
+    expect(handler.inject(prefix, prefixToken)).toEqual({ kind: "owned", mode: "queued" });
+    await waitFor(() => state.discardStarted);
+    expect(handler.inject(suffix, suffixToken)).toEqual({ kind: "owned", mode: "queued" });
+    releaseDiscard();
+
+    await waitFor(() => prefixToken.retry.mock.calls.length === 1 && suffixToken.retry.mock.calls.length === 1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(state.callOrder.filter((call) => call === "discard:start")).toHaveLength(1);
+    expect(state.pasteTexts).toEqual([]);
+    expect(prefixToken.processingStarted).not.toHaveBeenCalled();
+    expect(prefixToken.complete).not.toHaveBeenCalled();
+    expect(prefixToken.retry).toHaveBeenCalledWith([prefix], "tui_transcript_preflush_failed");
+    expect(suffixToken.processingStarted).not.toHaveBeenCalled();
+    expect(suffixToken.complete).not.toHaveBeenCalled();
+    expect(suffixToken.retry).toHaveBeenCalledWith(suffix, "tui_queued_recovery_required");
+
+    await handler.shutdown();
+    expect(prefixToken.retry).toHaveBeenCalledTimes(1);
+    expect(suffixToken.retry).toHaveBeenCalledTimes(1);
+  });
+
   it("cleans the tmux session when resume EOF initialization fails", async () => {
     state.createError = new Error("transcript stat failed");
     const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
@@ -378,12 +467,15 @@ describe("claude-code-tui suspend queued recovery", () => {
 
     const resume = handler.resume(message, "existing-session", ctx, token);
     await waitFor(() => state.drainCalls >= 3);
-    const callsAtSuspend = state.drainCalls;
-    await handler.suspend();
+    const suspend = handler.suspend();
+    const callsAtClosedFence = state.drainCalls;
+    const capturesAtClosedFence = state.captureWatermarkCalls;
+    await suspend;
     await resume;
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(state.drainCalls).toBeLessThanOrEqual(callsAtSuspend + 1);
+    expect(state.drainCalls).toBe(callsAtClosedFence);
+    expect(state.captureWatermarkCalls).toBe(capturesAtClosedFence);
     expect(token.processingStarted).toHaveBeenCalledTimes(1);
     expect(token.complete).not.toHaveBeenCalled();
     expect(token.retry).toHaveBeenCalledWith([message], "turn_aborted");
@@ -424,6 +516,98 @@ describe("claude-code-tui suspend queued recovery", () => {
     expect(token.complete).not.toHaveBeenCalled();
     expect(token.retry).toHaveBeenCalledTimes(1);
     expect(token.retry).toHaveBeenCalledWith([expect.objectContaining({ id: "m14" })], "turn_timeout");
+    await handler.shutdown();
+  });
+
+  it("retries without forwarding or completing when final-flush backlog reaches the turn deadline", async () => {
+    state.workingOrdinals.clear();
+    state.emitFromOrdinal = Number.POSITIVE_INFINITY;
+    state.drainResults.push({
+      entries: [
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "partial output before final backlog" }] },
+        },
+      ],
+      bytesRead: 1,
+      hasMore: false,
+      skippedOversizedLines: 0,
+    });
+    state.drainForever = true;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      if (state.drainCalls >= 3) return 600_000;
+      if (state.drainCalls >= 2) return 1_500;
+      return 0;
+    });
+    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const ctx = makeContext();
+    const forwardResult = vi.fn(async () => undefined);
+    ctx.forwardResult = forwardResult;
+    const token = makeToken();
+    const message = makeMessage("m141", "idle then final backlog");
+
+    try {
+      await handler.resume(message, "existing-session", ctx, token);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(state.drainCalls).toBe(3);
+    expect(forwardResult).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
+    expect(token.retry).toHaveBeenCalledTimes(1);
+    expect(token.retry).toHaveBeenCalledWith([message], "turn_timeout");
+    await handler.shutdown();
+  });
+
+  it("retries a queued suffix when its provider-entered prefix times out", async () => {
+    state.workingOrdinals.clear();
+    state.emitFromOrdinal = Number.POSITIVE_INFINITY;
+    state.drainResults.push({
+      entries: [
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "partial prefix output" }] },
+        },
+      ],
+      bytesRead: 1,
+      hasMore: false,
+      skippedOversizedLines: 0,
+    });
+    state.drainForever = true;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      if (state.drainCalls >= 3) return 600_000;
+      if (state.drainCalls >= 2) return 1_500;
+      return 0;
+    });
+    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const ctx = makeContext();
+    const prefixToken = makeToken();
+    const queuedToken = makeToken();
+    const prefix = makeMessage("m142", "timeout prefix");
+    const queued = makeMessage("m143", "must not overtake prefix");
+
+    try {
+      const resume = handler.resume(prefix, "existing-session", ctx, prefixToken);
+      await waitFor(() => state.drainCalls >= 2);
+      expect(handler.inject(queued, queuedToken)).toEqual({ kind: "owned", mode: "queued" });
+      await resume;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(state.pasteTexts).toHaveLength(1);
+    expect(state.pasteTexts[0]).toContain("timeout prefix");
+    expect(state.pasteTexts[0]).not.toContain("must not overtake prefix");
+    expect(prefixToken.complete).not.toHaveBeenCalled();
+    expect(prefixToken.retry).toHaveBeenCalledTimes(1);
+    expect(prefixToken.retry).toHaveBeenCalledWith([prefix], "turn_timeout");
+    expect(queuedToken.processingStarted).not.toHaveBeenCalled();
+    expect(queuedToken.complete).not.toHaveBeenCalled();
+    expect(queuedToken.retry).toHaveBeenCalledTimes(1);
+    expect(queuedToken.retry).toHaveBeenCalledWith(queued, "tui_bootstrap_recovery_required");
     await handler.shutdown();
   });
 

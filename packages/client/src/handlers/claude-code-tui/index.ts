@@ -336,6 +336,13 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     finalTexts: string[];
   };
 
+  type TurnResult = {
+    /** Whether this delivery crossed the processing/paste boundary. */
+    enteredProvider: boolean;
+    /** Whether later handler-local deliveries may safely overtake this turn. */
+    canPump: boolean;
+  };
+
   function consumeEntry(entry: RawTranscriptEntry, sessionCtx: SessionContext, state: TurnState): void {
     // Feed the shared processor — it emits all the session events we'd
     // otherwise have to reimplement (assistant_text / thinking / tool_call
@@ -381,6 +388,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
 
   async function drainAndConsume(sessionCtx: SessionContext, state: TurnState, deadline: number): Promise<boolean> {
     if (!transcriptTailer) return true;
+    // Do not start a new metadata or content I/O operation after the lifecycle
+    // fence or this drain's deadline has already closed. Returning false is
+    // conservative: without a fresh watermark we cannot certify catch-up.
+    if (turnAborted || lifecycleFence.stopRequested || Date.now() >= deadline) return false;
     const watermark = await transcriptTailer.captureWatermark();
     while (!turnAborted && !lifecycleFence.stopRequested && Date.now() < deadline) {
       const drained = await transcriptTailer.drainEntries(watermark);
@@ -405,7 +416,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     messages: readonly SessionMessage[],
     token: DeliveryToken,
-  ): Promise<boolean> {
+  ): Promise<TurnResult> {
     if (!tmuxSessionName || !transcriptTailer) {
       throw new Error("runTurn called before session was prepared");
     }
@@ -437,11 +448,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         );
       }
       token.retry(messages, "tui_transcript_preflush_failed");
-      return false;
+      return { enteredProvider: false, canPump: false };
     }
     if (turnAborted || lifecycleFence.stopRequested) {
       token.retry(messages, "tui_turn_stopped_before_paste");
-      return false;
+      return { enteredProvider: false, canPump: false };
     }
     token.processingStarted(messages);
 
@@ -490,8 +501,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         await sleep(TURN_POLL_MS);
       }
 
-      // One last pass in case the timeout-or-break left entries behind.
-      await drainAndConsume(sessionCtx, state, turnDeadline);
+      // One last fixed-watermark pass in case the timeout-or-break left entries
+      // behind. Pane idle is only a clean completion when this pass catches up;
+      // otherwise forwarding/ACKing partial output would permanently lose the
+      // unread tail.
+      const finalCaughtUp = await drainAndConsume(sessionCtx, state, turnDeadline);
 
       // Loop hit the TURN_TIMEOUT ceiling (not a clean idle break, not an
       // explicit abort): claude may still be working. Interrupt it so its
@@ -500,7 +514,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       // `turn_end: error`, stays un-acked (so the inbox entries are redelivered
       // for a real retry instead of being silently consumed), and settles the
       // runtime into `error` (see resolveTurnDisposition).
-      if (!brokeOnIdle && !turnAborted) {
+      if ((!brokeOnIdle || !finalCaughtUp) && !turnAborted) {
         timedOut = true;
         sessionCtx.log(`tui turn exceeded ${TURN_TIMEOUT_MS}ms without completing; interrupting claude`);
         try {
@@ -559,13 +573,15 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     // withholds the ack so the message gets a real retry.
     const disposition = resolveTurnDisposition({ aborted: turnAborted, timedOut, turnFailed, forwardFailed });
     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: disposition.status } });
+    let canPump = false;
     if (disposition.action.kind === "complete") {
       await token.complete(messages, disposition.action.outcome);
+      canPump = true;
     } else {
       token.retry(messages, disposition.action.reason);
     }
     resetProcessor();
-    return true;
+    return { enteredProvider: true, canPump };
   }
 
   /**
@@ -588,6 +604,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
     const token = drained[0]?.token;
     if (!token) return;
     turnRunning = true;
+    let queuedTurnCanPump = false;
     const promise = (async () => {
       const inputs: string[] = [];
       let hadFormatFailure = false;
@@ -611,7 +628,8 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         retryDrainedMessagesForRecovery(sessionCtx, drained, "tui_queued_turn_format_failed");
         return;
       }
-      await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+      const result = await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+      queuedTurnCanPump = result.canPump;
     })();
     currentTurnPromise = promise;
     void promise
@@ -620,6 +638,11 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         retryDrainedMessagesForRecovery(sessionCtx, drained, "tui_queued_turn_failed");
       })
       .finally(() => {
+        // Any retryable prefix (whether pre-provider or after a timeout/abort)
+        // puts this chat into inbox recovery. Retry every later delivery
+        // already accepted into this handler before clearing the serialisation
+        // gate, so no scheduled pump can overtake that prefix.
+        if (!queuedTurnCanPump) retryQueuedMessages("tui_queued_recovery_required");
         turnRunning = false;
         currentTurnPromise = null;
         // Drain anything injected while this turn ran. setImmediate keeps the
@@ -703,6 +726,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         // the session is still being prepared queues instead of racing pump()
         // into a second turn the instant startClaude sets tmuxSessionName.
         turnRunning = true;
+        let bootstrapCanPump = false;
         try {
           await orphanSweep(clientId);
           ctx = sessionCtx;
@@ -749,16 +773,18 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           }
           const turnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
           currentTurnPromise = turnPromise;
-          let enteredProvider: boolean;
+          let turnResult: TurnResult;
           try {
-            enteredProvider = await turnPromise;
+            turnResult = await turnPromise;
           } finally {
             currentTurnPromise = null;
           }
+          bootstrapCanPump = turnResult.canPump;
           return hasExplicitDeliveryToken
-            ? { sessionId, route: { kind: "owned", mode: enteredProvider ? "processing" : "queued" } }
+            ? { sessionId, route: { kind: "owned", mode: turnResult.enteredProvider ? "processing" : "queued" } }
             : sessionId;
         } finally {
+          if (!bootstrapCanPump) retryQueuedMessages("tui_bootstrap_recovery_required");
           turnRunning = false;
           // Drain any messages injected during bootstrap / the first turn.
           setImmediate(pump);
@@ -771,6 +797,7 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
         const hasExplicitDeliveryToken = token !== undefined;
         const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
         turnRunning = true;
+        let bootstrapCanPump = false;
         try {
           await orphanSweep(clientId);
           ctx = sessionCtx;
@@ -818,22 +845,28 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
             }
             const turnPromise = runTurn(inputText, sessionCtx, [message], deliveryToken);
             currentTurnPromise = turnPromise;
-            let enteredProvider: boolean;
+            let turnResult: TurnResult;
             try {
-              enteredProvider = await turnPromise;
+              turnResult = await turnPromise;
             } finally {
               currentTurnPromise = null;
             }
-            if (!enteredProvider) {
+            bootstrapCanPump = turnResult.canPump;
+            if (!turnResult.enteredProvider) {
               return hasExplicitDeliveryToken
                 ? { sessionId: restartedId, route: { kind: "owned", mode: "queued" } }
                 : restartedId;
             }
+          } else {
+            // Administrative resume has no provider turn or failed inbox
+            // prefix; queued deliveries may run once bootstrap completes.
+            bootstrapCanPump = true;
           }
           return hasExplicitDeliveryToken
             ? { sessionId: restartedId, route: message ? { kind: "owned", mode: "processing" } : null }
             : restartedId;
         } finally {
+          if (!bootstrapCanPump) retryQueuedMessages("tui_bootstrap_recovery_required");
           turnRunning = false;
           setImmediate(pump);
         }
