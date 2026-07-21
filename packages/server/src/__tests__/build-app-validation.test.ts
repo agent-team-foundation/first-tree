@@ -215,6 +215,16 @@ describe("buildApp — retired feedback route boundary", () => {
       app = await buildApp({
         ...baseConfig,
         server: { ...baseConfig.server, publicUrl: "https://first-tree.example" },
+        oauth: {
+          githubApp: {
+            appId: "test-app-id",
+            clientId: "test-app-client-id",
+            clientSecret: "test-app-client-secret",
+            privateKeyPem: "-----BEGIN PRIVATE KEY-----\nstub\n-----END PRIVATE KEY-----\n",
+            webhookSecret: "test-app-webhook-secret",
+            slug: undefined,
+          },
+        },
         webDistPath: webRoot,
       });
 
