@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   pasteTexts: [] as string[],
   lastPasteOrdinal: 0,
   emittedOrdinals: new Set<number>(),
+  seekToEnd: vi.fn(),
   chatContext: {
     chatId: "chat-tui-suspend-queued-recovery",
     title: "queued recovery",
@@ -77,6 +78,7 @@ vi.mock("../handlers/claude-code-tui/tmux-session.js", () => ({
 vi.mock("../handlers/claude-code-tui/transcript-tail.js", () => ({
   transcriptPathFor: vi.fn(() => "/tmp/fake-transcript.jsonl"),
   TranscriptTailer: class {
+    seekToEnd = state.seekToEnd;
     drainEntries() {
       const ordinal = state.lastPasteOrdinal;
       if (ordinal < 2 || state.emittedOrdinals.has(ordinal)) return [];
@@ -189,6 +191,10 @@ describe("claude-code-tui suspend queued recovery", () => {
 
     const start = handler.start(first, ctx);
     await waitFor(() => state.pasteTexts.some((text) => text.includes("active turn")));
+
+    // The run-turn pre-flush seeks past existing transcript content instead
+    // of reading/parsing and discarding it.
+    expect(state.seekToEnd).toHaveBeenCalled();
 
     handler.inject(recovered);
     await handler.suspend();
