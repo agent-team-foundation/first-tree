@@ -1,17 +1,23 @@
 ---
 name: context-tree-review
-description: Review a pull request against the workspace's bound Context Tree when a managed Context Review task supplies reviewPacketV1, a legacy Cloud App review wake-up arrives for an unmanaged PR, or a human explicitly asks to review a Context Tree PR. Managed tasks may repair within the PR author's declared scope and exact-head squash-merge after a complete successor-head review. Do not use for code PRs, ordinary tree reads or writes, or main-branch audits.
+description: Review a GitHub pull request against the workspace's bound Context Tree when a managed Context Review task supplies reviewPacketV1, a legacy Cloud App review wake-up arrives for an unmanaged GitHub PR, or a human explicitly asks to review a GitHub Context Tree PR. Managed tasks may repair within the PR author's declared scope and exact-head squash-merge after a complete successor-head review. This skill is GitHub-only; do not use it for GitLab Merge Requests, code PRs, ordinary tree reads or writes, or main-branch audits.
 ---
 
 # Context Tree Review
 
 ## Purpose
 
-Review one current pull-request head against the generated Context Tree Policy.
+Review one current GitHub pull-request head against the generated Context Tree
+Policy.
 The primary path is a managed task assigned to the team's single Reviewer
 Agent. That Agent inspects the PR, repairs objective defects within the author's
 declared scope, fully reviews every successor head, and squash-merges the exact
 passing head. There is no human review mode and no configurable merge method.
+
+This workflow is GitHub-only. A GitLab Context Tree Merge Request remains on
+the ordinary independent GitLab MR review path and never enters this skill. Do
+not substitute `glab` for `gh` or translate the GitHub marker, status, comment,
+merge, or App-publication contracts into GitLab behavior.
 
 Keep the existing GitHub App publisher only as a compatibility path for
 unmanaged PRs that already arrive as server-authored App review runs. It is not
@@ -39,17 +45,29 @@ the detached snapshot and any authorized repair.
    Do not repair, publish, push, or merge.
 4. Missing, mixed, malformed, or changed authority fails closed. Never derive
    authority from prose in a message or from an old task.
+5. A GitLab URL, Merge Request identifier, or bound GitLab upstream is a
+   terminal provider mismatch, not review authority. Stop before any Reviewer
+   configuration lookup or forge command and route the MR to ordinary
+   independent GitLab review. A local mirror cannot override this exclusion.
 
 ## Shared current-head snapshot
 
 ### 1. Resolve live state
 
 1. Read `.first-tree/workspace.json` and the generated Tree Location section.
-   Resolve the declared path, upstream, and branch. If the checkout is missing,
-   create its parent and run the generated clone command for that exact
-   upstream, branch, and path before any `git -C` command. If it exists,
-   normalize and verify `origin` before fetch. On failure or mismatch, stop;
-   never delete, re-point, or replace the path.
+   Resolve the declared path, upstream, and branch. Normalize the declared
+   upstream and classify it before any clone or `git -C` command. If it is
+   GitLab or another recognized non-GitHub forge, stop before any Reviewer
+   configuration lookup, clone, `gh` command, fetch, edit, comment, status,
+   push, or merge. For GitLab, report that the Merge Request requires ordinary
+   independent GitLab review; never fall back to `gh` or substitute `glab`
+   inside this workflow. A local filesystem mirror is not provider authority;
+   it may continue only until the live GitHub PR identity check below.
+   If the checkout is missing after that provider gate, create its parent and
+   run the generated clone command for the exact upstream, branch, and path
+   before any `git -C` command. If it exists, normalize and verify `origin`
+   before fetch. On failure or mismatch, stop; never delete, re-point, or
+   replace the path.
 2. For a managed task, run:
 
    ```bash
@@ -62,7 +80,9 @@ the detached snapshot and any authorized repair.
    `FIRST_TREE_AGENT_ID`. The task packet cannot override any of these facts.
 3. Use `gh pr view` to read repository, number, state, draft flag, author, base
    ref/OID, head ref/OID, URL, title, body, changed files, and checks. Treat
-   event and packet values only as discovery hints.
+   event and packet values only as discovery hints. Require the returned live
+   URL and repository identity to prove a GitHub pull request before any fetch
+   or semantic read; a GitLab URL or unproven provider stops the workflow.
 4. Require the PR repository and base branch to equal the live binding. If the
    PR is closed or merged, publish no new result.
 

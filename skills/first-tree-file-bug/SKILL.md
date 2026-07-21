@@ -1,6 +1,6 @@
 ---
 name: first-tree-file-bug
-description: File a GitHub issue about a defect in First Tree itself — the CLI, agent runtime, chat, web app, GitHub integration, or Context Tree tooling — onto First Tree's own GitHub-hosted public tracker (agent-team-foundation/first-tree). Use only when the user reports that First Tree the platform is broken, errored, crashed, or misbehaving and wants it reported (e.g. "First Tree has a bug", "chat send keeps failing", "the CLI crashed", "给 First Tree 开个 issue 反馈这个 bug"). The skill gathers reproduction steps, the First Tree client/CLI version, the chat ID, the reporting user's ID, OS, and error output, then opens the issue with the user's `gh` CLI. NOT for filing an issue into the user's own or bound source repo — that is an ordinary source-repo issue using the target forge CLI (`gh` for GitHub, `glab` for GitLab), not this skill — and not for bugs in the user's project code or third-party tools.
+description: File a GitHub issue about a defect in First Tree itself — the CLI, agent runtime, chat, web app, GitHub integration, GitLab integration, or Context Tree tooling — onto First Tree's own GitHub-hosted public tracker (agent-team-foundation/first-tree). Use only when the user reports that First Tree the platform is broken, errored, crashed, or misbehaving and wants it reported (e.g. "First Tree has a bug", "chat send keeps failing", "the CLI crashed", "给 First Tree 开个 issue 反馈这个 bug"). The skill gathers reproduction steps, the First Tree client/CLI version, the chat ID, the reporting user's ID, OS, and error output, then opens the issue with the user's `gh` CLI. NOT for filing an issue into the user's own or bound source repo — that is an ordinary source-repo issue using the target forge CLI (`gh` for GitHub, `glab` for GitLab), not this skill — and not for bugs in the user's project code or third-party tools.
 ---
 
 # First Tree File Bug
@@ -22,7 +22,7 @@ secrets (see **Guardrails**).
 
 - The defect is in **First Tree** — the CLI (`first-tree …`), the agent
   runtime / client, chat delivery, the web app, notifications, GitHub
-  integration, or Context Tree tooling.
+  integration, GitLab integration, or Context Tree tooling.
 - The user wants it **reported / filed / logged**, not just diagnosed.
 
 ## When NOT to use
@@ -92,7 +92,7 @@ Body:
 
 ## Surface Area
 
-<which part of First Tree: CLI / runtime / chat / web / GitHub integration / Context Tree>
+<which part of First Tree: CLI / runtime / chat / web / GitHub integration / GitLab integration / Context Tree>
 
 ## Environment
 

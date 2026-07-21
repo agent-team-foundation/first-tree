@@ -169,6 +169,18 @@ function addAgentBriefingRecommendations(recommendations: Map<string, EvalRecomm
     suite: "first-tree-read",
   });
   addRecommendation(recommendations, {
+    command: gateCommand("first-tree-welcome"),
+    kind: "gate",
+    reason,
+    suite: "first-tree-welcome",
+  });
+  addRecommendation(recommendations, {
+    command: gateCommand("first-tree-seed"),
+    kind: "gate",
+    reason,
+    suite: "first-tree-seed",
+  });
+  addRecommendation(recommendations, {
     command: gateCommand("context-tree-audit"),
     kind: "gate",
     reason,

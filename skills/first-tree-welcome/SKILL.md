@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.2.1
+version: 1.2.2
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR/MR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -376,8 +376,12 @@ Key mechanics — read these carefully, they are easy to get wrong:
   choose the review CLI from that repository's remote. For a GitHub PR, include
   that the task should run `first-tree github follow` and report whether live
   tracking is active or blocked by missing GitHub App coverage. For a GitLab MR,
-  do not run that GitHub-only command; report the MR URL and only use a GitLab
-  tracking/integration surface when First Tree returns one explicitly.
+  include that the task should run `first-tree gitlab follow <url>` after
+  creation or reuse and report the returned pending or active attention state.
+  GitLab attention is inbound-only; only a pending declaration waits for the
+  next matching valid webhook. A follow failure does not invalidate the MR;
+  report only the First Tree chat attention gap. Never substitute `first-tree
+  github follow` or GitHub App setup guidance for GitLab.
 - **For "Build your Context Tree"**: the brief is user-visible, so write it in
   plain product language and **name no skill in it** — e.g. "Build our team's
   Context Tree from the connected code — propose an initial structure for me to
@@ -400,10 +404,14 @@ back into chat. The welcome launcher owns one concise install/coverage guidance
 at this moment; do not rely only on the generic PR-following failure text that a
 spawned task may have shown.
 
-This section is GitHub-only. For a GitLab MR, do not call `first-tree github
-follow`, send the user to **Settings -> GitHub**, or imply live MR tracking.
-Relay a GitLab integration URL/settings target only when First Tree itself
-returns one; otherwise report the MR without a tracking/setup claim.
+This section's App-install guidance is GitHub-only. For a GitLab MR, do not call
+`first-tree github follow`, send the user to **Settings -> GitHub**, or imply
+that the First Tree GitHub App is involved. Instead, consume the spawned task's
+`first-tree gitlab follow <url>` result and preserve its returned pending or
+active state. GitLab attention is inbound-only; explain the webhook wait only
+when the declaration is pending. If that follow fails, report only the First
+Tree chat attention gap; the failure does not invalidate the MR. Do not invent
+a GitLab integration URL or settings target.
 
 - The spawned value task owns following its PR in its own task chat
   (`first-tree github follow <url>`) and reporting whether live tracking is
@@ -581,10 +589,13 @@ surface; involve the responsible admin.
 - When the first value result is a GitHub PR, consume the task chat's
   follow/tracking status and, only for a confirmed admin when App coverage is
   missing, surface the one-time App-install guidance from **After a GitHub value
-  PR opens** in this launcher. A GitLab MR has no documented equivalent here;
-  use only an authoritative First Tree result and never substitute
-  `first-tree github follow` or **Settings -> GitHub**. This does not replace the
-  tree offer; if both apply, keep each to a short sentence and do not repeat
+  PR opens** in this launcher. For a GitLab MR, consume the task chat's
+  `first-tree gitlab follow <url>` result and report its returned pending or
+  active state. Attention is inbound-only; only pending waits for a matching
+  valid webhook. If follow failed, report only that chat attention gap and do
+  not treat the MR as invalid. Never substitute `first-tree github follow`,
+  **Settings -> GitHub**, or other GitHub App guidance. This does not replace
+  the tree offer; if both apply, keep each to a short sentence and do not repeat
   either later.
 - Present choices as a multi-select ask with **2–4 options** — the value tasks
   bundled with the tree-build option when tree build is offered, otherwise the

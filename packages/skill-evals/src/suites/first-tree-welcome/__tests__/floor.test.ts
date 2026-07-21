@@ -114,10 +114,16 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).not.toContain("First Tree sent it");
   });
 
-  it("keeps GitHub-only follow guidance out of the GitLab MR path", () => {
-    expect(skillMarkdown).toContain("This section is GitHub-only");
-    expect(skillMarkdown).toContain("For a GitLab MR, do not call `first-tree github");
-    expect(skillMarkdown).toContain("A GitLab MR has no documented equivalent here");
+  it("keeps GitLab MR attention provider-native and independent of the GitHub App", () => {
+    expect(skillMarkdown).toContain("`first-tree gitlab follow <url>`");
+    expect(skillMarkdown).toContain("returned pending or active attention state");
+    expect(skillMarkdown).toContain("only a pending declaration waits");
+    expect(skillMarkdown).toContain("preserve its returned pending or\nactive state");
+    expect(skillMarkdown).toMatch(/A follow failure does not\s+invalidate the MR/u);
+    expect(skillMarkdown).toMatch(/report\s+only the First Tree chat attention gap/u);
+    expect(skillMarkdown).toContain("do not call\n`first-tree github follow`, send the user to **Settings -> GitHub**");
+    expect(skillMarkdown).toContain("Never substitute `first-tree github follow`");
+    expect(skillMarkdown).not.toContain("A GitLab MR has no documented equivalent here");
   });
 
   it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {
