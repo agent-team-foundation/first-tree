@@ -206,7 +206,8 @@ debug helpers.
 first-tree agent
 ├── list [--remote] [--org <id>]
 ├── add --agent-id <uuid>
-├── create <name> --type <t> --client-id <id> [--runtime <r>] [--display-name <s>] [--org <id>]
+├── create <name> --client-id <id> [--type <t>] [--runtime <r>] [--model <model>] [--display-name <s>] [--org <id>]
+├── capability grant|revoke <agent> [--org <id>]
 ├── remove <name>
 ├── prune [--yes] [--dry-run]
 ├── status [name]
@@ -228,13 +229,23 @@ first-tree agent list --remote --org <id>  # cross-org view (multi-org operators
 ### agent create
 
 ```
-first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|claude-code-tui|codex|cursor|kimi-code]
+first-tree agent create <name> --client-id <thisClient> [--type <human|agent>] [--runtime claude-code|claude-code-tui|codex|cursor|kimi-code] [--model <model>]
 ```
 
 Creates the agent row on the server and binds it to the given client
 machine. The local `agents/<name>/agent.yaml` is written by the running
 daemon via the server-pushed `agent:pinned` frame; no second command
-needed if the daemon is already up.
+needed if the daemon is already up. `--type` defaults to `agent`; `--model`
+sets the initial runtime configuration rather than requiring a follow-up edit.
+
+An organization admin can grant or revoke the standing agent-provisioning
+capability with `agent capability grant <agent> [--org <id>]` and
+`agent capability revoke <agent> [--org <id>]`. The command resolves the
+target from the org-admin agent listing, so an admin can address an agent
+managed by another member. Pass `--org` when the signed-in user administers
+more than one organization. A capable agent running in a bound session can
+then execute `agent create` itself; the server still enforces the target
+organization, manager-owned client, organization quota, and audit record.
 
 ### agent add
 

@@ -166,6 +166,8 @@ export const createAgentSchema = z.object({
    * pinned client's reported capabilities (or be force-overridden).
    */
   runtimeProvider: runtimeProviderSchema.optional(),
+  /** Optional creation-time model override for the initial runtime config. */
+  model: z.string().min(1).max(200).optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
@@ -240,6 +242,8 @@ export const agentSchema = z.object({
   managerId: z.string().nullable(),
   /** Physical client this agent is pinned to. NULL for human agents only. */
   clientId: z.string().nullable(),
+  /** Admin-granted standing capability to provision additional agents. */
+  canProvisionAgents: z.boolean().optional(),
   /** Which runtime provider drives this agent. NOT NULL post-0026. */
   runtimeProvider: runtimeProviderSchema,
   /**

@@ -183,6 +183,14 @@ describe("buildAgentBriefing — generated skeleton", () => {
     );
     expect(orgBriefing).toContain("# Identity\n\nYou are Aly, an autonomous agent.");
   });
+
+  it("describes capability-aware provisioning for running agents", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    expect(briefing).toContain("may-provision-agents capability");
+    expect(briefing).toContain("agent config prompt set");
+    expect(briefing).toContain("Without that capability, surface the authorization error");
+    expect(briefing).not.toContain("agent create / bind`) run from the web console or a human terminal — **never");
+  });
 });
 
 describe("buildAgentBriefing — prompt provenance sections", () => {

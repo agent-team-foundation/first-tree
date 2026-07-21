@@ -24,6 +24,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { agentProvisioningAudit } from "../db/schema/agent-provisioning-audit.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
@@ -417,7 +418,15 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
 export async function createAgent(
   db: Database,
   data: CreateAgent & { managerId?: string },
-  options: { force?: boolean; adoptAsDelegateIfFirst?: boolean } = {},
+  options: {
+    force?: boolean;
+    adoptAsDelegateIfFirst?: boolean;
+    provisioningAudit?: {
+      actingAgentId: string;
+      managingMemberId: string;
+      chatId: string | null;
+    };
+  } = {},
 ) {
   const uuid = uuidv7();
   const name = data.name ?? null;
@@ -511,27 +520,6 @@ export async function createAgent(
     await validateDelegateMentionTarget(db, data.delegateMention, orgId);
   }
 
-  // Check organization-level agent quota.
-  // NOTE: TOCTOU race — concurrent requests may both pass the check. Acceptable for Phase 1;
-  // enforce with a DB-level CHECK constraint or SELECT ... FOR UPDATE in Phase 2 if needed.
-  const [org] = await db
-    .select({ maxAgents: organizations.maxAgents })
-    .from(organizations)
-    .where(eq(organizations.id, orgId))
-    .limit(1);
-  if (org && org.maxAgents > 0) {
-    const rows = await db
-      .select({ value: count() })
-      .from(agents)
-      .where(and(eq(agents.organizationId, orgId), ne(agents.status, AGENT_STATUSES.DELETED)));
-    const activeCount = rows[0]?.value ?? 0;
-    if (activeCount >= org.maxAgents) {
-      throw new ForbiddenError(
-        `Organization "${orgId}" has reached its agent limit (${org.maxAgents}). Upgrade your plan or delete unused agents.`,
-      );
-    }
-  }
-
   // Phase 2 of the agent-naming refactor promoted `display_name` to NOT NULL
   // and standardized the fallback here so every surface (CLI, server logs,
   // IM bridge, chat roster) sees a populated label without the web-only
@@ -545,6 +533,27 @@ export async function createAgent(
     // Wrap both inserts in a transaction so the agent row is never visible
     // without its companion `agent_configs` row.
     const agent = await db.transaction(async (tx) => {
+      // Serialize the quota decision with the insert. Without the org-row
+      // lock, concurrent agent creates can all observe the same count.
+      const [org] = await tx
+        .select({ maxAgents: organizations.maxAgents })
+        .from(organizations)
+        .where(eq(organizations.id, orgId))
+        .for("update")
+        .limit(1);
+      if (org && org.maxAgents > 0) {
+        const rows = await tx
+          .select({ value: count() })
+          .from(agents)
+          .where(and(eq(agents.organizationId, orgId), ne(agents.status, AGENT_STATUSES.DELETED)));
+        const activeCount = rows[0]?.value ?? 0;
+        if (activeCount >= org.maxAgents) {
+          throw new ForbiddenError(
+            `Organization "${orgId}" has reached its agent limit (${org.maxAgents}). Upgrade your plan or delete unused agents.`,
+          );
+        }
+      }
+
       // Close the leave/remove race for non-human agents: lock the manager's
       // member row and re-confirm it is still active inside the same
       // transaction that inserts the agent. `deactivateMembership` (leave) and
@@ -609,7 +618,10 @@ export async function createAgent(
 
       if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
 
-      const initialPayload = defaultRuntimeConfigPayload(runtimeProvider);
+      const initialPayload = {
+        ...defaultRuntimeConfigPayload(runtimeProvider),
+        ...(data.model ? { model: data.model } : {}),
+      };
       await tx
         .insert(agentConfigs)
         .values({
@@ -619,6 +631,17 @@ export async function createAgent(
           updatedBy: "system",
         })
         .onConflictDoNothing();
+
+      if (options.provisioningAudit) {
+        await tx.insert(agentProvisioningAudit).values({
+          id: uuidv7(),
+          organizationId: orgId,
+          actingAgentId: options.provisioningAudit.actingAgentId,
+          managingMemberId: options.provisioningAudit.managingMemberId,
+          createdAgentId: row.uuid,
+          chatId: options.provisioningAudit.chatId,
+        });
+      }
 
       // First-agent → delegate adoption. When a member creates their FIRST
       // non-human agent and hasn't picked a delegate yet, adopt it as their
@@ -769,6 +792,20 @@ export async function getAgent(db: Database, uuid: string): Promise<AgentRowWith
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   return agent;
+}
+
+export async function setAgentProvisioningCapability(db: Database, uuid: string, enabled: boolean) {
+  const existing = await getAgent(db, uuid);
+  if (existing.type !== AGENT_TYPES.AGENT) {
+    throw new BadRequestError("Provisioning capability can only be granted to non-human agents");
+  }
+  const [updated] = await db
+    .update(agents)
+    .set({ canProvisionAgents: enabled, updatedAt: new Date() })
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .returning();
+  if (!updated) throw new NotFoundError(`Agent "${uuid}" not found`);
+  return updated;
 }
 
 export async function getAgentByName(db: Database, orgId: string, name: string) {

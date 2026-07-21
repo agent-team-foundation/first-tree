@@ -4,15 +4,16 @@ import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../..
 import { channelConfig } from "../../core/channel.js";
 import { cliFetch } from "../../core/cli-fetch.js";
 import { print } from "../../core/output.js";
+import { provisioningActorHeaders } from "../../core/provisioning-actor.js";
 
 export function registerAgentCreateCommand(agent: Command): void {
   agent
     .command("create <name>")
     .description("Create an agent in First Tree and bind it locally")
-    .requiredOption("--type <type>", "Agent type (human, agent)")
+    .option("--type <type>", "Agent type (human, agent)", "agent")
     .requiredOption(
       "--client-id <id>",
-      `Client (machine) that will run this agent — must be owned by you. Run \`${channelConfig.binName} login <code>\` on that machine first.`,
+      `(required) Client (machine) that will run this agent — must be owned by you. Run \`${channelConfig.binName} login <code>\` on that machine first.`,
     )
     .option(
       "--runtime <runtime>",
@@ -20,6 +21,7 @@ export function registerAgentCreateCommand(agent: Command): void {
       "claude-code",
     )
     .option("--display-name <name>", "Display name")
+    .option("--model <model>", "Initial model alias or provider model id")
     .option("--org <id>", "Target organization id (required when you belong to multiple orgs)")
     .option("--server <url>", "First Tree server URL")
     .action(
@@ -30,6 +32,7 @@ export function registerAgentCreateCommand(agent: Command): void {
           clientId: string;
           runtime: string;
           displayName?: string;
+          model?: string;
           org?: string;
           server?: string;
         },
@@ -40,6 +43,7 @@ export function registerAgentCreateCommand(agent: Command): void {
           const headers = {
             Authorization: `Bearer ${adminToken}`,
             "Content-Type": "application/json",
+            ...provisioningActorHeaders(),
           };
 
           // Resolve target org. Single-org users are auto-selected; multi-org
@@ -76,6 +80,7 @@ export function registerAgentCreateCommand(agent: Command): void {
             runtimeProvider: options.runtime,
           };
           if (options.displayName) createBody.displayName = options.displayName;
+          if (options.model) createBody.model = options.model;
 
           const createRes = await cliFetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
             method: "POST",

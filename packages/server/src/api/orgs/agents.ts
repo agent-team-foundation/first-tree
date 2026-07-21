@@ -11,6 +11,7 @@ import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import * as agentService from "../../services/agent.js";
 import { resolveAvatarImageUrl } from "../../services/agent.js";
+import { requireProvisioningActor } from "../../services/agent-provisioning.js";
 import { sendToClient } from "../../services/connection-manager.js";
 import { assertMetadataDoesNotClaimLandingCampaignTrial } from "../../services/landing-campaigns/guards.js";
 
@@ -138,14 +139,22 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
+    const provisioningActor = await requireProvisioningActor(app.db, request, scope.organizationId, scope.userId);
     const body = createAgentSchema.parse(request.body);
     if (body.type === AGENT_TYPES.HUMAN) {
       throw new BadRequestError("Human agents are created through the member lifecycle");
     }
     assertMetadataDoesNotClaimLandingCampaignTrial(body.metadata);
+    if (provisioningActor && body.clientId !== provisioningActor.clientId) {
+      throw new ForbiddenError("Provisioning must use the acting agent's bound client");
+    }
     // member role: managerId forced to caller's member; admin role may
     // specify any managerId in the same org.
-    const managerId = scope.role === "admin" ? (body.managerId ?? scope.memberId) : scope.memberId;
+    const managerId = provisioningActor
+      ? provisioningActor.managingMemberId
+      : scope.role === "admin"
+        ? (body.managerId ?? scope.memberId)
+        : scope.memberId;
     // First-agent → delegate adoption fires ONLY for a self-create. Delegate is
     // a personal choice (the PATCH path rejects an admin setting another
     // member's delegate), so an admin creating an agent FOR another member must
@@ -159,7 +168,10 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
         source: body.source ?? "admin-api",
         managerId,
       },
-      { adoptAsDelegateIfFirst: managerId === scope.memberId },
+      {
+        adoptAsDelegateIfFirst: managerId === scope.memberId,
+        provisioningAudit: provisioningActor ?? undefined,
+      },
     );
     notifyClientAgentPinned(agent);
     return reply.status(201).send({

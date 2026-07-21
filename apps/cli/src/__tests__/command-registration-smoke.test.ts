@@ -70,6 +70,7 @@ describe("CLI command registration", () => {
     expect(subcommands(root, "agent")).toEqual([
       "add",
       "bind",
+      "capability",
       "config",
       "create",
       "debug",
@@ -165,11 +166,22 @@ describe("CLI command registration", () => {
     expect(optionNames(command(command(root, "agent"), "create"))).toEqual([
       "--client-id",
       "--display-name",
+      "--model",
       "--org",
       "--runtime",
       "--server",
       "--type",
     ]);
+    const capability = command(command(root, "agent"), "capability");
+    expect(capability.commands.map((entry) => entry.name())).toEqual(["grant", "revoke"]);
+    expect(capability.commands.map((entry) => entry.options.map((option) => option.long))).toEqual([
+      ["--org"],
+      ["--org"],
+    ]);
+    const createHelp = command(command(root, "agent"), "create").helpInformation();
+    expect(createHelp).toContain("create [options] <name>");
+    expect(createHelp).toContain("(required) Client");
+    expect(createHelp).toContain('default: "agent"');
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
     expect(optionNames(command(command(root, "org"), "bind-tree"))).toEqual(["--branch", "--org"]);
     expect(optionNames(command(command(root, "org"), "context-tree"))).toEqual(["--agent"]);
