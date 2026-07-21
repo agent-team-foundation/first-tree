@@ -50,6 +50,28 @@ describe("/readyz", () => {
     expect(body.ready).toBe(true);
     expect(body.readyAt).toBeTruthy();
     expect(body.stages.appListen?.status).toBe("done");
+    expect(body.db.ok).toBe(true);
+  });
+
+  it("returns 503 with db detail when the database probe reports not ok", async () => {
+    markAllStagesDone();
+    markReady();
+
+    // The test app runs against a live DB, so the only stable way to exercise
+    // the gate is stubbing the decorated checker.
+    const app = getApp();
+    const originalCheck = app.dbHealth.check;
+    app.dbHealth.check = async () => ({ ok: false, checkedAt: new Date().toISOString() });
+    try {
+      const res = await app.inject({ method: "GET", url: "/readyz" });
+      expect(res.statusCode).toBe(503);
+      const body = res.json();
+      expect(body.ready).toBe(false);
+      expect(body.db.ok).toBe(false);
+      expect(body.stages.appListen?.status).toBe("done");
+    } finally {
+      app.dbHealth.check = originalCheck;
+    }
   });
 
   it("returns 503 when any required stage failed", async () => {

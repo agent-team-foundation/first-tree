@@ -320,11 +320,12 @@ describe("small API route handlers", () => {
     );
   });
 
-  it("returns health and healthz success and degraded responses", async () => {
+  it("serves /health from the shared probe and keeps /healthz database-free", async () => {
     const { healthRoutes } = await import("../api/health.js");
     const { healthzRoutes } = await import("../api/healthz.js");
     const execute = vi.fn().mockResolvedValue(undefined);
-    const { app, routes } = makeApp({ db: { execute } });
+    const check = vi.fn().mockResolvedValue({ ok: true, checkedAt: "2026-01-01T00:00:00.000Z", latencyMs: 1 });
+    const { app, routes } = makeApp({ db: { execute }, dbHealth: { check } });
 
     await healthRoutes(app as never);
     await healthzRoutes(app as never);
@@ -334,14 +335,16 @@ describe("small API route handlers", () => {
     await route(routes, "GET", "/healthz").handler({}, okReply);
     expect(okReply).toMatchObject({ body: { status: "ok" }, code: 200 });
 
-    execute.mockRejectedValueOnce(new Error("db down")).mockRejectedValueOnce(new Error("db down"));
+    check.mockResolvedValueOnce({ ok: false, checkedAt: "2026-01-01T00:00:05.000Z" });
     await expect(route(routes, "GET", "/health").handler()).resolves.toEqual({
       db: "disconnected",
       status: "degraded",
     });
-    const degradedReply = makeReply();
-    await route(routes, "GET", "/healthz").handler({}, degradedReply);
-    expect(degradedReply).toMatchObject({ body: { message: "database unreachable", status: "error" }, code: 503 });
+
+    const stillOkReply = makeReply();
+    await route(routes, "GET", "/healthz").handler({}, stillOkReply);
+    expect(stillOkReply).toMatchObject({ body: { status: "ok" }, code: 200 });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("serves agent runtime config and context tree info", async () => {

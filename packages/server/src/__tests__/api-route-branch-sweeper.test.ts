@@ -31,6 +31,7 @@ function createApp(overrides: Record<string, unknown> = {}): { app: Record<strin
   };
   const app = {
     db: { execute: vi.fn(async () => [{ one: 1 }]) },
+    dbHealth: { check: vi.fn(async () => ({ ok: true, checkedAt: "2026-01-01T00:00:00.000Z", latencyMs: 1 })) },
     get: registerRoute("GET"),
     ...overrides,
   };
@@ -74,37 +75,30 @@ describe("API route branch contracts", () => {
   it("reports degraded /health when the database probe fails", async () => {
     const healthy = await registerSingleRoute(healthRoutes);
     await expect(healthy.route.handler({}, replyDouble())).resolves.toEqual({ status: "ok", db: "connected" });
-    expect((healthy.app.db as { execute: ReturnType<typeof vi.fn> }).execute).toHaveBeenCalledTimes(1);
+    expect((healthy.app.dbHealth as { check: ReturnType<typeof vi.fn> }).check).toHaveBeenCalledTimes(1);
 
-    const execute = vi.fn(async () => {
-      throw new Error("db unavailable");
-    });
-    const degraded = await registerSingleRoute(healthRoutes, { db: { execute } });
+    const check = vi.fn(async () => ({ ok: false, checkedAt: "2026-01-01T00:00:00.000Z" }));
+    const degraded = await registerSingleRoute(healthRoutes, { dbHealth: { check } });
 
     await expect(degraded.route.handler({}, replyDouble())).resolves.toEqual({
       status: "degraded",
       db: "disconnected",
     });
-    expect(execute).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledTimes(1);
   });
 
-  it("maps /healthz database reachability to explicit status codes", async () => {
-    const ok = await registerSingleRoute(healthzRoutes);
-    const okReply = replyDouble();
-    await ok.route.handler({}, okReply);
-
-    expect(okReply.status).toHaveBeenCalledWith(200);
-    expect(okReply.send).toHaveBeenCalledWith({ status: "ok" });
-
+  it("keeps /healthz at 200 without touching the database", async () => {
     const execute = vi.fn(async () => {
       throw new Error("connection refused");
     });
-    const failing = await registerSingleRoute(healthzRoutes, { db: { execute } });
-    const failingReply = replyDouble();
-    await failing.route.handler({}, failingReply);
+    const { app, route } = await registerSingleRoute(healthzRoutes, { db: { execute } });
+    const reply = replyDouble();
+    await route.handler({}, reply);
 
-    expect(failingReply.status).toHaveBeenCalledWith(503);
-    expect(failingReply.send).toHaveBeenCalledWith({ status: "error", message: "database unreachable" });
+    expect(reply.status).toHaveBeenCalledWith(200);
+    expect(reply.send).toHaveBeenCalledWith({ status: "ok" });
+    expect(execute).not.toHaveBeenCalled();
+    expect((app.dbHealth as { check: ReturnType<typeof vi.fn> }).check).not.toHaveBeenCalled();
   });
 
   it("keeps /readyz unavailable until every bootstrap stage is done", async () => {
@@ -131,6 +125,36 @@ describe("API route branch contracts", () => {
           runMigrations: { status: "failed", error: "migration lock contention" },
         }),
       }),
+    );
+  });
+
+  it("gates /readyz on the shared database probe once all stages are done", async () => {
+    bootstrapState.startedAt = new Date("2026-01-01T00:00:00.000Z");
+    bootstrapState.readyAt = new Date("2026-01-01T00:00:10.000Z");
+    bootstrapState.stages = {
+      initTelemetry: { status: "done" },
+      runMigrations: { status: "done" },
+      buildApp: { status: "done" },
+      appListen: { status: "done" },
+    };
+
+    const check = vi.fn(async () => ({ ok: false, checkedAt: "2026-01-01T00:00:11.000Z" }));
+    const gated = await registerSingleRoute(readyzRoutes, { dbHealth: { check } });
+    const gatedReply = replyDouble();
+    await gated.route.handler({}, gatedReply);
+
+    expect(gatedReply.status).toHaveBeenCalledWith(503);
+    expect(gatedReply.send).toHaveBeenCalledWith(
+      expect.objectContaining({ ready: false, db: expect.objectContaining({ ok: false }) }),
+    );
+
+    const healthy = await registerSingleRoute(readyzRoutes);
+    const healthyReply = replyDouble();
+    await healthy.route.handler({}, healthyReply);
+
+    expect(healthyReply.status).toHaveBeenCalledWith(200);
+    expect(healthyReply.send).toHaveBeenCalledWith(
+      expect.objectContaining({ ready: true, db: expect.objectContaining({ ok: true }) }),
     );
   });
 

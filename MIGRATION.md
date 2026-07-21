@@ -303,8 +303,9 @@ first-tree status                 # CLI version + service + server + auth + agen
 first-tree daemon doctor          # service + agent configs + WS reachability
 first-tree --help                 # 5 top-level verbs + 7 namespaces
 
-# Server side — usual health check:
+# Server side — liveness (process) and readiness (boot stages + DB):
 curl -sf https://<server-public-url>/healthz | jq
+curl -sf https://<server-public-url>/readyz | jq
 ```
 
 If `daemon doctor` reports "service installed, inactive" persistently

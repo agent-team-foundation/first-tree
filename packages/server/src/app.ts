@@ -95,6 +95,7 @@ import { invalidateChatAudienceLocal, registerChatAudienceDispatcher } from "./s
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
+import { createDbHealthChecker } from "./services/db-health.js";
 import { backfillGitlabAttentionPairs } from "./services/gitlab-attention-backfill.js";
 import { repairMembershipHumanMirrors } from "./services/membership.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
@@ -276,7 +277,7 @@ export async function buildApp(config: Config) {
     //     We emit a dedicated long-running `ws.connection` span from
     //     `ws-tracing.ts` instead.
     ignoreRoutes: (path: string) => {
-      if (path === "/" || path === "/healthz") return true;
+      if (path === "/" || path === "/healthz" || path === "/readyz") return true;
       if (path.startsWith("/assets/") || path.startsWith("/fonts/")) return true;
       if (path === "/api/v1/agent/ws/client") return true;
       // Org WS upgrade: `/api/v1/orgs/:orgId/ws/`. Use a startsWith check so
@@ -292,6 +293,7 @@ export async function buildApp(config: Config) {
   // Decorate with config and db
   const db = connectDatabase(config.database.url);
   app.decorate("db", db);
+  app.decorate("dbHealth", createDbHealthChecker(db));
   app.decorate("config", config);
 
   // Advisory Command-package version broadcast to every Client via the
@@ -486,8 +488,9 @@ export async function buildApp(config: Config) {
   });
 
   // Root-level health checks for container orchestration (outside /api/v1).
-  // `/healthz` checks process + DB reachability (used by Docker HEALTHCHECK).
-  // `/readyz` checks full readiness — all bootstrap stages done.
+  // `/healthz` is pure process liveness — no DB round trip (used by Docker
+  // HEALTHCHECK). `/readyz` checks full readiness — all bootstrap stages done
+  // and the DB reachable via the shared cached probe (`app.dbHealth`).
   // See docs/server-bootstrap-resilience-design.md §3 (T6).
   await app.register(healthzRoutes);
   await app.register(readyzRoutes);

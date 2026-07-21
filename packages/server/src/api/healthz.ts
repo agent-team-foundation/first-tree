@@ -1,18 +1,15 @@
-import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
 /**
- * Root-level health check endpoint for container orchestration.
- * Returns 200 when healthy, 503 when degraded.
- * Used by Docker HEALTHCHECK, Railway, Fly.io, Kubernetes liveness/readiness probes.
+ * Process liveness endpoint for container orchestration.
+ * Used by Docker HEALTHCHECK, Railway, Fly.io, Kubernetes liveness probes.
+ * Answers 200 from process memory only — no database round trip — so public
+ * traffic cannot be amplified into PG load and a database outage never makes
+ * an orchestrator restart a healthy process. Database readiness lives in
+ * `/readyz`; a structured status body lives in `/api/v1/health`.
  */
 export async function healthzRoutes(app: FastifyInstance): Promise<void> {
   app.get("/healthz", { config: { rateLimit: false } }, async (_request, reply) => {
-    try {
-      await app.db.execute(sql`SELECT 1`);
-      return reply.status(200).send({ status: "ok" });
-    } catch {
-      return reply.status(503).send({ status: "error", message: "database unreachable" });
-    }
+    return reply.status(200).send({ status: "ok" });
   });
 }
