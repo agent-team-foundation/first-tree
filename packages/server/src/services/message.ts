@@ -293,6 +293,18 @@ export type SendMessageOptions = {
    */
   allowRecipientlessSend?: boolean;
   /**
+   * Trusted-internal opt-in that drops suspended or deleted participants from
+   * `metadata.mentions` instead of rejecting the entire send. SCM mappings can
+   * outlive a wake agent's active lifecycle; their cards must still reach the
+   * bound chat and any other active wake agents without a stale sibling line
+   * poisoning the shared delivery. The normalized metadata persists only the
+   * surviving active mentions.
+   *
+   * Keep this off for ordinary human/agent sends: an explicitly addressed
+   * inactive recipient is normally a caller error that should fail closed.
+   */
+  dropInactiveMentionTargets?: boolean;
+  /**
    * When true and `data.content` is a string, prepend `@<name>` tokens for
    * any participant in `metadata.mentions` whose name is missing from the
    * content. Used by the agent endpoint so the rendered message stays in
@@ -412,7 +424,12 @@ export function preflightMessageSendIntent(input: {
     ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
     : [];
   const participantsById = new Map(participants.map((p) => [p.agentId, p]));
-  const explicitMentions = explicitMentionsRawList.filter((id) => id === senderId || participantsById.has(id));
+  const explicitMentions = explicitMentionsRawList.filter((id) => {
+    if (id === senderId) return true;
+    const participant = participantsById.get(id);
+    if (!participant) return false;
+    return !options.dropInactiveMentionTargets || participant.status === "active";
+  });
 
   const receiverNames = data.receiverNames ?? [];
   const speakersByName = new Map<string, string>();
@@ -492,7 +509,11 @@ export function preflightMessageSendIntent(input: {
     : [];
   const metadataToStore: Record<string, unknown> = {
     ...incomingMeta,
-    ...(mergedMentions.length > 0 ? { mentions: mergedMentions } : {}),
+    ...(options.dropInactiveMentionTargets
+      ? { mentions: mergedMentions }
+      : mergedMentions.length > 0
+        ? { mentions: mergedMentions }
+        : {}),
     ...(addressedAgentIds.length > 0 ? { [ADDRESSED_AGENT_IDS_METADATA_KEY]: addressedAgentIds } : {}),
   };
 

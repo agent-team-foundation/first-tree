@@ -246,7 +246,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   // an agent that wants the entity's events in this chat declares it here,
   // immediately after creation. The human side of the binding pair is the
   // chat's representative human (see `resolveBindingPair`); the caller is
-  // the delegate side.
+  // the wake side.
 
   app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
     const identity = requireAgent(request);
@@ -265,8 +265,9 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       const pair = await resolveBindingPair(app.db, request.params.chatId, identity.uuid);
       if (!pair) {
         throw new BadRequestError(
-          "No eligible (human, delegate) binding pair: following from an agent session needs at least one " +
-            "active human member in the chat (and a non-human caller). Humans follow via the web UI instead.",
+          "No eligible (human, wake-agent) binding pair: the caller must be an active same-Team agent speaker, " +
+            "the chat needs an active same-Team human member, and no more than one human may link the caller " +
+            "as delegate. Humans follow via the web UI instead.",
         );
       }
 
@@ -316,8 +317,9 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       const pair = await resolveAgentScmBindingPair(app.db, request.params.chatId, identity.uuid);
       if (!pair) {
         throw new BadRequestError(
-          "No eligible (human, wake-agent) attention pair: following from an agent session needs an active " +
-            "non-human caller and at least one active human speaker in the chat.",
+          "No eligible (human, wake-agent) attention pair: the caller must be an active same-Team agent speaker, " +
+            "the chat needs an active same-Team human member, and no more than one human may link the caller " +
+            "as delegate.",
         );
       }
       const result = await declareCurrentGitlabEntityFollow(app.db, {

@@ -37,9 +37,9 @@ describe("SCM attention binding pair policy", () => {
     });
   });
 
-  it("fails closed when the human delegate is absent or the agent owner is ambiguous", async () => {
+  it("uses a stable active-human fallback for agent follow without relaxing human follow", async () => {
     const app = getApp();
-    const runtime = await createTestAgent(app, { name: `pair-ambiguous-${randomUUID().slice(0, 8)}` });
+    const runtime = await createTestAgent(app, { name: `pair-fallback-${randomUUID().slice(0, 8)}` });
     const other = await createTestAgent(app, { name: `pair-other-${randomUUID().slice(0, 8)}` });
     const { chatId } = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
       participantIds: [runtime.agent.uuid],
@@ -52,6 +52,37 @@ describe("SCM attention binding pair policy", () => {
       role: "member",
       accessMode: "speaker",
     });
+    const representativeHumanId =
+      runtime.humanAgentUuid < other.humanAgentUuid ? runtime.humanAgentUuid : other.humanAgentUuid;
+    await expect(resolveAgentScmBindingPair(app.db, chatId, runtime.agent.uuid)).resolves.toEqual({
+      organizationId: runtime.organizationId,
+      humanAgentId: representativeHumanId,
+      wakeAgentId: runtime.agent.uuid,
+    });
+  });
+
+  it("fails closed when multiple humans explicitly link the same wake agent", async () => {
+    const app = getApp();
+    const runtime = await createTestAgent(app, { name: `pair-linked-${randomUUID().slice(0, 8)}` });
+    const other = await createTestAgent(app, { name: `pair-linked-other-${randomUUID().slice(0, 8)}` });
+    const { chatId } = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
+      participantIds: [runtime.agent.uuid],
+    });
+    await app.db
+      .update(agents)
+      .set({ delegateMention: runtime.agent.uuid })
+      .where(eq(agents.uuid, runtime.humanAgentUuid));
+    await app.db
+      .update(agents)
+      .set({ delegateMention: runtime.agent.uuid })
+      .where(eq(agents.uuid, other.humanAgentUuid));
+    await app.db.insert(chatMembership).values({
+      chatId,
+      agentId: other.humanAgentUuid,
+      role: "member",
+      accessMode: "speaker",
+    });
+
     await expect(resolveAgentScmBindingPair(app.db, chatId, runtime.agent.uuid)).resolves.toBeNull();
   });
 });

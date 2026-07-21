@@ -381,13 +381,10 @@ describe("resolveAudience", () => {
     expect(audience[0]?.involveLogin).toBe(humanName.toLowerCase());
   });
 
-  it("collapses subscribed rows by human (sibling mappings on same chat → one audience target)", async () => {
-    // Once `resolveTargetChat` step (a.5) lands sibling mapping rows
-    // (same chat, different delegate under the same human), naive subscribed
-    // expansion would post the same card to the chat N times. Subscribed
-    // dedup collapses by humanAgentId; sibling rows always share chatId by
-    // construction, so we keep the earliest bound_at row as the
-    // representative.
+  it("preserves distinct wake agents carried by the same human in one chat", async () => {
+    // Each (human, delegate) mapping is a distinct wake line. The audience
+    // must preserve both; the delivery planner, not this resolver, owns
+    // collapsing them into one card for the shared chat.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegateOriginal = await seedAgent(app, {
@@ -407,11 +404,6 @@ describe("resolveAudience", () => {
     });
     const chatId = await seedChat(app, admin.organizationId, human);
 
-    // Original row first (earlier bound_at), then sibling — simulates the
-    // (a.5) write order. We do not control bound_at directly; the default
-    // `now()` clock + serial insert order suffices because the assertions
-    // only require the representative to be one of the two rows sharing
-    // chatId, and both point at the same chat.
     await seedMapping(app, {
       orgId: admin.organizationId,
       humanId: human,
@@ -440,10 +432,12 @@ describe("resolveAudience", () => {
       }),
     );
 
-    expect(audience).toHaveLength(1);
-    expect(audience[0]?.kind).toBe("existing");
-    expect(audience[0]?.humanAgentId).toBe(human);
-    expect(audience[0]?.chatId).toBe(chatId);
+    expect(audience).toHaveLength(2);
+    expect(audience.every((target) => target.kind === "existing")).toBe(true);
+    expect(audience.every((target) => target.humanAgentId === human && target.chatId === chatId)).toBe(true);
+    expect(new Set(audience.map((target) => target.delegateAgentId))).toEqual(
+      new Set([delegateOriginal, delegateSibling]),
+    );
   });
 
   it("M2: does NOT collapse subscribed rows across different chats for the same human", async () => {
@@ -452,8 +446,9 @@ describe("resolveAudience", () => {
     // `human_fallback` row in chat A under delegateA plus an explicit follow
     // row in chat B under delegateB). Deduping by `humanAgentId` alone kept
     // only the earliest chat and silently dropped the *other* followed chat
-    // from the audience. Dedup is keyed by `(human, chat)`, so BOTH chats
-    // receive the event.
+    // from the audience. Dedup is keyed by `(human, delegate, chat)`, so BOTH
+    // chats receive the event while distinct wake lines inside either chat are
+    // preserved for the delivery planner.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegateA = await seedAgent(app, {

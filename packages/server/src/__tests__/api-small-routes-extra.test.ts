@@ -773,7 +773,7 @@ describe("small API route handlers", () => {
         body: { entity: "https://github.com/acme/api/pull/42" },
         params: { chatId: "chat_1" },
       }),
-    ).rejects.toThrow("No eligible (human, delegate) binding pair");
+    ).rejects.toThrow("No eligible (human, wake-agent) binding pair");
     expect(resolveBindingPair).toHaveBeenCalledWith({ name: "db" }, "chat_1", "agent_1");
 
     const followReply = makeReply();

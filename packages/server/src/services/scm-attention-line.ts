@@ -91,8 +91,9 @@ export async function executeScmFollowLine<TRecord extends ScmFollowLineRecord>(
  * Resolve the durable attention owner for an agent-issued follow.
  *
  * The selected agent is always the wake side. The human side is its linked
- * active human in the chat, or the chat's sole active human when no explicit
- * delegate relationship exists. Ambiguous ownership fails closed.
+ * active human in the chat, or the id-sorted-first active human when no
+ * explicit delegate relationship exists. Multiple explicit links are
+ * ambiguous and fail closed.
  */
 export async function resolveAgentScmBindingPair(
   db: Database,
@@ -132,7 +133,7 @@ export async function resolveAgentScmBindingPair(
   );
   const linkedHumans = humans.filter((human) => human.delegateMention === wakeAgentId);
   const representative = linkedHumans.length === 1 ? linkedHumans[0] : linkedHumans.length === 0 ? humans[0] : null;
-  if (!representative || (linkedHumans.length === 0 && humans.length !== 1)) return null;
+  if (!representative) return null;
   return {
     organizationId: representative.chatOrganizationId,
     humanAgentId: representative.agentId,

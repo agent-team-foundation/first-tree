@@ -24,11 +24,17 @@ card significance, lifecycle projection, topic protection, and archive behavior.
 
 ## Operate and Observe
 
-- For each provider, create an agent explicit follow and a human explicit follow. Confirm the stored public behavior is a
-  complete human/delegate attention line, repeated same-pair follow is idempotent, a second-chat follow conflicts, and
-  `--rebind` atomically moves only that pair.
+- For each provider, create an agent explicit follow in a chat with two active human members where neither human links the
+  caller as delegate. Confirm the follow succeeds, the id-sorted-first active human is the stable line representative, and
+  the calling agent remains the wake target. Then create a human explicit follow with a configured delegate. Confirm both
+  paths store a complete human/wake-agent attention line, repeated same-pair follow is idempotent, a second-chat follow
+  conflicts, and `--rebind` atomically moves only that pair. Also confirm exactly one explicit human-to-agent delegate link
+  takes precedence over the stable fallback, while multiple explicit links fail closed.
 - Deliver an ordinary subscribed comment/Note. Confirm one card per target chat, notifying Inbox entries for every
   surviving delegate, predictive sessions, and wake delivery. Provider actor attribution must not suppress the delegate.
+  When two agent-issued lines share the same fallback human and chat, suspend one wake agent without deleting its mapping
+  or membership, then redeliver. Confirm the card still lands once, the active sibling is the only native mention and wake,
+  and the suspended sibling receives no notifying Inbox entry.
 - Unfollow in one chat and redeliver an ordinary event. Confirm the old chat stays silent. Then deliver an explicit
   reviewer, assignee, or exact body/comment mention and confirm a fresh route may be established without reviving the
   removed line.
