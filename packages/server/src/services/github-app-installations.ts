@@ -316,7 +316,8 @@ export async function markInstallationUnsuspended(
  * The original race the grace was meant to solve doesn't actually exist:
  * GitHub mints a fresh `installation.id` per install, so a delayed
  * `deleted` for id N cannot wipe a fresh re-install (which has id M ≠ N).
- * Same-id replays are handled by the `processed_events` dedup table.
+ * Same-id replays are handled by the `processed_events` claim table (a
+ * completed delivery dedupes against its `done` claim).
  *
  * The remaining "stale `created` after `deleted` resurrects the row" risk
  * is a pre-existing hole in `upsertInstallationFromMetadata` (not
