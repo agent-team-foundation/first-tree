@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { CONTEXT_REVIEW_MANAGED_MARKER } from "@first-tree/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
@@ -774,7 +774,7 @@ describe("POST /webhooks/github-app", () => {
     }
   });
 
-  it("unclaims a delivery when downstream handling fails and logs unclaim failures", async () => {
+  it("leaves a failed delivery pending so an immediate redelivery receives 503", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100017;
@@ -783,10 +783,9 @@ describe("POST /webhooks/github-app", () => {
     const audienceSpy = vi
       .spyOn(githubAudienceService, "resolveGithubAudience")
       .mockRejectedValueOnce(new Error("audience down"));
-    const unclaimSpy = vi.spyOn(eventDedupService, "unclaimEvent").mockRejectedValueOnce(new Error("unclaim down"));
 
     try {
-      const res = await postWebhook(
+      const failed = await postWebhook(
         app,
         "issues",
         {
@@ -804,12 +803,44 @@ describe("POST /webhooks/github-app", () => {
         { deliveryId },
       );
 
-      expect(res.statusCode).toBe(500);
-      expect(audienceSpy).toHaveBeenCalled();
-      expect(unclaimSpy).toHaveBeenCalledWith(app.db, deliveryId, "github");
+      expect(failed.statusCode).toBe(500);
+      const [pendingClaim] = await app.db.execute<{ status: string; expires_at: Date | null }>(sql`
+        SELECT status, expires_at
+          FROM processed_events
+         WHERE event_id = ${deliveryId}
+           AND platform = 'github'
+      `);
+      expect(pendingClaim?.status).toBe("pending");
+      expect(pendingClaim?.expires_at).not.toBeNull();
+
+      const immediateRedelivery = await postWebhook(
+        app,
+        "issues",
+        {
+          action: "opened",
+          issue: {
+            number: 913,
+            title: "Issue",
+            html_url: "https://github.com/owner/repo/issues/913",
+            body: "",
+          },
+          repository: { full_name: "owner/repo" },
+          sender: { login: "author", type: "User" },
+          installation: { id: installationId },
+        },
+        { deliveryId },
+      );
+      expect(immediateRedelivery.statusCode).toBe(503);
+      expect(immediateRedelivery.json()).toMatchObject({
+        ok: false,
+        event: "issues",
+        outcome: "in_flight",
+        retryAfterSeconds: expect.any(Number),
+      });
+      expect(immediateRedelivery.headers["retry-after"]).toMatch(/^[1-9]\d*$/);
+      expect(audienceSpy).toHaveBeenCalledOnce();
     } finally {
       audienceSpy.mockRestore();
-      unclaimSpy.mockRestore();
     }
   });
 
@@ -1746,6 +1777,18 @@ describe("POST /webhooks/github-app", () => {
         .where(eq(inboxEntries.messageId, committedEvent?.id ?? "missing")),
     ).toHaveLength(1);
 
+    const inFlight = await postWebhook(app, "pull_request", synchronizePayload, { deliveryId });
+    expect(inFlight.statusCode).toBe(503);
+    expect(inFlight.json()).toMatchObject({ outcome: "in_flight" });
+    expect(inFlight.headers["retry-after"]).toMatch(/^[1-9]\d*$/);
+
+    await app.db.execute(sql`
+      UPDATE processed_events
+         SET expires_at = statement_timestamp() - interval '1 second'
+       WHERE event_id = ${deliveryId}
+         AND platform = 'github'
+         AND status = 'pending'
+    `);
     const synchronize = await postWebhook(app, "pull_request", synchronizePayload, { deliveryId });
     expect(synchronize.statusCode).toBe(200);
     expect(synchronize.json()).toMatchObject({
@@ -2037,6 +2080,140 @@ describe("POST /webhooks/github-app", () => {
     const second = await postWebhook(app, "issues", payload, { deliveryId });
     expect(second.statusCode).toBe(200);
     expect(second.json().deduped).toBe(true);
+  });
+
+  it("returns 503 for a concurrent signed delivery until the first request completes", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100044;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const deliveryId = randomUUID();
+    const payload = {
+      action: "opened",
+      issue: {
+        number: 944,
+        title: "Concurrent webhook",
+        html_url: "https://github.com/owner/repo/issues/944",
+        body: "",
+        assignees: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    };
+    let signalAudienceEntered = (): void => undefined;
+    const audienceEntered = new Promise<void>((resolve) => {
+      signalAudienceEntered = resolve;
+    });
+    let releaseAudience = (): void => undefined;
+    const audienceGate = new Promise<void>((resolve) => {
+      releaseAudience = resolve;
+    });
+    const audienceSpy = vi.spyOn(githubAudienceService, "resolveGithubAudience").mockImplementationOnce(async () => {
+      signalAudienceEntered();
+      await audienceGate;
+      return { targets: [], actorHumanId: null };
+    });
+    const firstRequest = postWebhook(app, "issues", payload, { deliveryId });
+
+    try {
+      // resolveGithubAudience runs after the durable claim, so holding it open
+      // gives the second signed HTTP request a deterministic in-flight window.
+      await audienceEntered;
+      const concurrent = await postWebhook(app, "issues", payload, { deliveryId });
+
+      expect(concurrent.statusCode).toBe(503);
+      expect(concurrent.json()).toEqual({
+        ok: false,
+        event: "issues",
+        outcome: "in_flight",
+        retryAfterSeconds: expect.any(Number),
+      });
+      const retryAfter = concurrent.headers["retry-after"];
+      expect(retryAfter).toMatch(/^[1-9]\d*$/);
+      expect(Number(retryAfter)).toBeLessThanOrEqual(300);
+      expect(audienceSpy).toHaveBeenCalledOnce();
+
+      releaseAudience();
+      const first = await firstRequest;
+      expect(first.statusCode).toBe(200);
+
+      const completedReplay = await postWebhook(app, "issues", payload, { deliveryId });
+      expect(completedReplay.statusCode).toBe(200);
+      expect(completedReplay.json()).toMatchObject({ ok: true, event: "issues", deduped: true });
+      expect(audienceSpy).toHaveBeenCalledOnce();
+    } finally {
+      releaseAudience();
+      await firstRequest.catch(() => undefined);
+      audienceSpy.mockRestore();
+    }
+  });
+
+  it("recovers a committed pending claim left by a crashed handler after its lease expires", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100045;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const deliveryId = randomUUID();
+    const payload = {
+      action: "opened",
+      issue: {
+        number: 945,
+        title: "Recover crashed webhook",
+        html_url: "https://github.com/owner/repo/issues/945",
+        body: "",
+        assignees: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    };
+
+    // A process dying after claim commit leaves exactly this durable state:
+    // no handler is alive, but the unexpired pending lease remains.
+    await app.db.execute(sql`
+      INSERT INTO processed_events (event_id, platform, status, expires_at)
+      VALUES (
+        ${deliveryId},
+        'github',
+        'pending',
+        date_trunc('milliseconds', statement_timestamp()) + interval '5 minutes'
+      )
+    `);
+
+    const immediate = await postWebhook(app, "issues", payload, { deliveryId });
+    expect(immediate.statusCode).toBe(503);
+    expect(immediate.json()).toMatchObject({
+      ok: false,
+      event: "issues",
+      outcome: "in_flight",
+      retryAfterSeconds: expect.any(Number),
+    });
+    expect(immediate.json()).not.toHaveProperty("deduped");
+    expect(immediate.headers["retry-after"]).toMatch(/^[1-9]\d*$/);
+
+    await app.db.execute(sql`
+      UPDATE processed_events
+         SET expires_at = statement_timestamp() - interval '1 second'
+       WHERE event_id = ${deliveryId}
+         AND platform = 'github'
+         AND status = 'pending'
+    `);
+
+    const recovered = await postWebhook(app, "issues", payload, { deliveryId });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ ok: true, event: "issues", audience: 0 });
+    const [completedClaim] = await app.db.execute<{ status: string; expires_at: Date | null }>(sql`
+      SELECT status, expires_at
+        FROM processed_events
+       WHERE event_id = ${deliveryId}
+         AND platform = 'github'
+    `);
+    expect(completedClaim).toEqual({ status: "done", expires_at: null });
+
+    const completedReplay = await postWebhook(app, "issues", payload, { deliveryId });
+    expect(completedReplay.statusCode).toBe(200);
+    expect(completedReplay.json()).toMatchObject({ ok: true, event: "issues", deduped: true });
   });
 
   it("duplicate context reviewer delivery is deduped and does not send another task", async () => {
