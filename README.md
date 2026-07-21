@@ -29,10 +29,18 @@
 
 # First-Tree
 
-**Context-grounded agentic work for teams.**
+**Run coding agents on your team's shared context.**
 
-First Tree is an open-source workspace where AI agents work from your team's
-shared context, not isolated prompts.
+First Tree is an open-source workspace for engineering teams shipping with
+humans and AI agents side by side.
+
+The problem it solves: **your agent doesn't know what you know.** It can't see
+the decision someone made in a meeting, the design doc buried in a thread, or
+why the code was written the way it was. So it guesses, repeats old mistakes,
+and pulls you in to re-explain things you have already explained ten times.
+
+First Tree gives every agent the same context your team has — and a place to
+work right next to you.
 
 <p align="center">
   <img src="assets/product-workspace.png" alt="First Tree workspace — an agent picks up an issue its offline teammate was assigned, grounded in the team's Context Tree" width="100%">
@@ -41,13 +49,6 @@ shared context, not isolated prompts.
 <p align="center">
   <sub><strong>Alex is offline, so his assistant picks up issue #142</strong> — it reads the payments code, checks the idempotency key, runs the tests, and drafts a fix on a branch. Grounded in the team's Context Tree, visible while it works, ready for human review.</sub>
 </p>
-
-At the center is Context Tree: a team-maintained memory of decisions,
-ownership, repos, responsibilities, constraints, and prior work. Agents read it
-before they work; useful outcomes can flow back into it after the work is done.
-
-The result is a human-agent work loop where every task can start with more team
-context, and every useful outcome can make the next task smarter.
 
 > **Open source and yours to run.** First Tree is Apache-2.0 — the source is
 > yours to read, fork, and audit. Your Context Tree lives in your own Git, and
@@ -70,45 +71,43 @@ context, and every useful outcome can make the next task smarter.
 
 ## Why First Tree
 
-There are many AI agent workspaces. First Tree's core difference is the context
-loop:
+Three simple ideas.
+
+### 1. Own your context
+
+Your team's memory lives in your own Git repo — the decisions, designs,
+ownership, and notes that usually live only in someone's head or a chat thread.
+We call it the **Context Tree**: a folder of plain `.md` files any agent can
+read before it starts work. You own it, you version it in Git, and it never
+gets locked inside one vendor or one person's terminal.
+
+Every agent starts from the same page your team is on.
+
+### 2. Humans and agents in the same threads
+
+Agents work in shared chats right alongside people — picking up tasks, asking
+questions, and handing off to each other without you having to sit in the
+middle. When something genuinely needs a human — a decision, an approval, a
+review — First Tree loops you in with the full context already loaded, so you
+are never guessing what happened.
+
+### 3. GitHub is the work queue
+
+Issues pile up. PRs go stale. First Tree turns your Issues and PRs into a queue
+the right agent picks up automatically — in the flow your team already uses. No
+new tracker to babysit.
+
+**Put together, it is one simple loop:**
 
 ```text
-user intent -> read team context -> context-aware agent work
--> human review/control -> durable outcome -> updated team context
+1. The agent reads your team's context (the Context Tree)
+2. It does the work — in a thread you can watch
+3. You review and guide at the moments that matter
+4. Useful results flow back into the Context Tree
+   ↳ so the next task starts with more than the last one did
 ```
 
-This loop solves the part that usually breaks when teams start using agents:
-
-- context stays private in one person's terminal, prompt, or notes
-- agents repeat old decisions because they cannot see team memory
-- work finishes in a chat, PR, or document but never updates the shared context
-- humans get pulled in without enough background to make a good decision
-- each new agent task starts cold, even when the team already learned something
-
-First Tree is built around a different assumption:
-
-> Agent work should be grounded in team context, visible while it runs, guided
-> by humans at the right moments, and turned into durable outcomes that can
-> update team memory.
-
-That makes First Tree useful in two modes:
-
-- **Focused copilot work** - collaborate deeply with an agent in a persistent
-  work stream for design, coding, writing, research, or problem solving.
-- **Parallel review work** - let agents move multiple tasks forward and involve
-  you only when a decision, blocker, approval, or review is needed.
-
-In both modes, First Tree gives teams one place to:
-
-- give agents the same Context Tree your team uses
-- start and continue agent work in persistent chats
-- see active work, blocked states, and human review points
-- inspect the process, artifacts, and rationale behind a request
-- turn useful outcomes back into updated team context
-
-It is not another agent, and not just another workspace. It is a context loop
-for human-agent teams.
+The more your team uses it, the more every agent knows.
 
 ## How It Works
 
